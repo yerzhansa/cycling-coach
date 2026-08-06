@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
-import type {
-  TelegramControlStatus,
-  TelegramSettingsState,
+import {
+  hasActiveTelegramPairingCode,
+  type TelegramControlStatus,
+  type TelegramSettingsState,
 } from "../../settings/telegram-controller.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
@@ -391,7 +392,7 @@ export function TelegramSection(): ReactElement {
           </div>
         ) : null}
 
-        {telegram?.bot.state === "ready" && telegram.pairing.state === "awaiting-code" ? (
+        {telegram !== null && hasActiveTelegramPairingCode(telegram) ? (
           <div className={styles.pairingCard}>
             <p className={styles.confirmationTitle}>Pair your Telegram account</p>
             <p className={styles.confirmationCopy}>

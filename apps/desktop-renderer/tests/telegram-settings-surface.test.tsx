@@ -139,6 +139,35 @@ describe("Telegram settings surface", () => {
     ).toBeVisible();
   });
 
+  it.each([
+    ["disabled intent", { desiredState: "disabled" as const, state: "disabled" as const }, true],
+    ["failed channel", { desiredState: "enabled" as const, state: "failed" as const }, true],
+    ["polling conflict", { desiredState: "enabled" as const, state: "conflict" as const }, true],
+    [
+      "transfer requirement",
+      { desiredState: "enabled" as const, state: "transfer-required" as const },
+      true,
+    ],
+    ["missing credential", { desiredState: "enabled" as const, state: "starting" as const }, false],
+  ])("hides an unusable pairing code after %s", (_reason, channel, credentialConfigured) => {
+    setup(
+      readyState(
+        status({
+          channel,
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          pairing: {
+            state: "awaiting-code",
+            code: "A1B2C3",
+            expiresAt: "2098-07-06T12:01:00.000Z",
+          },
+          credentialConfigured,
+        }),
+      ),
+    );
+
+    expect(screen.queryByLabelText("Telegram pairing code")).toBeNull();
+  });
+
   it("manages paired users without offering removal for the primary user", async () => {
     const user = userEvent.setup();
     const port = setup(
@@ -326,6 +355,30 @@ describe("Telegram settings surface", () => {
     expect(screen.getByText("Online")).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("Telegram is online.");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("publishes one polite announcement when pairing completes", () => {
+    const message = "Telegram is paired with its primary user.";
+    setup({
+      ...readyState(
+        status({
+          channel: { desiredState: "enabled", state: "online" },
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          pairing: { state: "paired" },
+          credentialConfigured: true,
+        }),
+      ),
+      healthAnnouncement: message,
+      feedback: null,
+    });
+
+    const announcements = screen
+      .getAllByRole("status")
+      .filter((element) => element.textContent === message);
+    expect(announcements).toHaveLength(1);
+    expect(announcements[0]).toHaveAttribute("aria-live", "polite");
+    expect(announcements[0]).toHaveAttribute("aria-atomic", "true");
+    expect(screen.getAllByText(message)).toHaveLength(1);
   });
 
   it("exposes uncertain replacement feedback as a polite live warning", () => {
