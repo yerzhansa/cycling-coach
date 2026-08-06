@@ -5,6 +5,7 @@ export interface BuilderAuthority {
 
 export interface PackageLayoutOptions {
   readonly desktopRoot?: string;
+  readonly development?: true;
   readonly release?: {
     readonly version: string;
     readonly feedUrl: string;

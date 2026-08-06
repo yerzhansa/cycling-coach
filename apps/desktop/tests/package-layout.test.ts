@@ -6,6 +6,7 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEVELOPMENT_PACKAGE_NAME } from "../scripts/development-package-plan.mjs";
 import { readBuilderAuthority, verifyPackageLayout } from "../scripts/verify-package-layout.mjs";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -323,6 +324,37 @@ describe("desktop package layout", () => {
     await expect(
       verifyPackageLayout(configured.app, { desktopRoot: configured.desktop }),
     ).rejects.toThrow("undeclared package resource");
+  });
+
+  it("accepts only the sealed development manifest overlay", async () => {
+    const development = await syntheticPackage();
+    await development.writeArchive(
+      "package.json",
+      JSON.stringify(
+        {
+          ...sourceManifest,
+          name: DEVELOPMENT_PACKAGE_NAME,
+          enduragentDesktopDevelopment: true,
+        },
+        null,
+        2,
+      ),
+    );
+    await development.rebuild();
+    await expect(
+      verifyPackageLayout(development.app, {
+        desktopRoot: development.desktop,
+        development: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    const production = await syntheticPackage();
+    await expect(
+      verifyPackageLayout(production.app, {
+        desktopRoot: production.desktop,
+        development: true,
+      }),
+    ).rejects.toThrow("development packaged manifest has unexpected drift");
   });
 
   it("accepts only the exact release manifest and app-update overlay", async () => {

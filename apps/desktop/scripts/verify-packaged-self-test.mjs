@@ -3,6 +3,10 @@ import { connect } from "node:net";
 import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  DEVELOPMENT_PRODUCT_NAME,
+  createDevelopmentPackagePlan,
+} from "./development-package-plan.mjs";
 
 const APP_READY_TIMEOUT_MS = 30_000;
 const SELF_TEST_TIMEOUT_MS = 120_000;
@@ -12,6 +16,7 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDirectory, "..");
 const repositoryRoot = resolve(desktopRoot, "../..");
 const cliEntry = join(repositoryRoot, "packages/coach/dist/enduragent.js");
+const developmentPackagePlan = createDevelopmentPackagePlan({ desktopRoot });
 
 function delay(ms) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
@@ -111,15 +116,12 @@ async function createAthleteHome(root, name) {
   return athleteHome;
 }
 
-async function packagedApplication() {
-  const entries = await readdir(join(desktopRoot, "dist"), { recursive: true });
-  const relative = entries.find((entry) => entry.endsWith("Enduragent.app"));
-  if (relative === undefined) throw new Error("packaged application was not found");
-  return join(desktopRoot, "dist", relative);
+function packagedApplication() {
+  return developmentPackagePlan.applicationPath;
 }
 
 function executableFor(application) {
-  return join(application, "Contents/MacOS/Enduragent");
+  return join(application, "Contents", "MacOS", DEVELOPMENT_PRODUCT_NAME);
 }
 
 function launchApplication(application, athleteHome, screenshotPath) {
@@ -273,18 +275,12 @@ async function main() {
   checked(process.platform === "darwin", "packaged self-test verification requires macOS");
   checked(process.argv.length === 2, "arguments are not supported");
   await runChecked("pnpm", ["--filter", "@enduragent/desktop...", "build"]);
-  await runChecked("pnpm", [
-    "--filter",
-    "@enduragent/desktop",
-    "package:dir",
-    "--config.mac.identity=-",
-    "--config.mac.hardenedRuntime=false",
-  ]);
+  await runChecked("pnpm", ["--filter", "@enduragent/desktop", "package:dir"]);
   const { SelfTestCommandTerminalSchema } = await import("@enduragent/coach-contract");
   const base = await realpath("/tmp");
   const scratch = await mkdtemp(join(base, "ea7-"));
   try {
-    const originalApplication = await packagedApplication();
+    const originalApplication = packagedApplication();
     const firstHome = await createAthleteHome(scratch, "h1");
     const success = await runApplicationCase({
       name: "success",
@@ -301,7 +297,7 @@ async function main() {
       "packaged Node version was unexpected",
     );
 
-    const copiedApplication = join(scratch, "c/Enduragent.app");
+    const copiedApplication = join(scratch, `c/${DEVELOPMENT_PRODUCT_NAME}.app`);
     await mkdir(dirname(copiedApplication), { recursive: true });
     await cp(originalApplication, copiedApplication, {
       recursive: true,

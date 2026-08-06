@@ -8,7 +8,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "check": "tsc --noEmit",
-    "package:dir": "pnpm build:self-test-resources && electron-vite build && electron-builder --dir",
+    "package:dir": "pnpm build:self-test-resources && electron-vite build && node scripts/development-package-plan.mjs",
     "package:mac": "pnpm build:self-test-resources && electron-vite build && node scripts/macos-release-plan.mjs",
     "build:self-test-resources": "tsx scripts/build-self-test-resources.ts",
     "stage:extra-resources": "node scripts/stage-extra-resources.mjs",

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { connect } from "node:net";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -14,9 +14,11 @@ import {
   createSecuritySmokeEnvironment,
   createSecuritySmokeLaunchEnvironment,
 } from "../smoke/security-smoke-environment.mjs";
+import { createDevelopmentPackagePlan } from "./development-package-plan.mjs";
 
 const require = createRequire(import.meta.url);
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const developmentPackagePlan = createDevelopmentPackagePlan({ desktopRoot });
 const command = process.argv[2];
 const options = Object.fromEntries(
   process.argv
@@ -29,18 +31,12 @@ const options = Object.fromEntries(
 );
 const mode = options.mode ?? "development";
 
-async function packagedExecutable() {
-  const root = join(desktopRoot, "dist");
-  const entries = await readdir(root, { recursive: true });
-  const relative = entries.find((entry) =>
-    entry.endsWith("Enduragent.app/Contents/MacOS/Enduragent"),
-  );
-  if (relative === undefined) throw new Error("packaged Enduragent executable not found");
-  return join(root, relative);
+function packagedExecutable() {
+  return developmentPackagePlan.executablePath;
 }
 
 async function startElectron(flag, env, extraArgs = []) {
-  const executable = mode === "packaged" ? await packagedExecutable() : require("electron");
+  const executable = mode === "packaged" ? packagedExecutable() : require("electron");
   const args = createElectronLaunchArguments(mode, desktopRoot, flag, extraArgs);
   const child = spawn(executable, args, { env, stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "";

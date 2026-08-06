@@ -10,10 +10,16 @@ import {
   requireGenericFeedUrl,
   requireStableCalVer,
 } from "./macos-release-plan.mjs";
+import {
+  DEVELOPMENT_PACKAGE_NAME,
+  createDevelopmentPackagePlan,
+} from "./development-package-plan.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const canonicalDesktopRoot = resolve(scriptDirectory, "..");
-const canonicalApplication = join(canonicalDesktopRoot, "dist/mac-arm64/Enduragent.app");
+const canonicalApplication = createDevelopmentPackagePlan({
+  desktopRoot: canonicalDesktopRoot,
+}).applicationPath;
 const requiredAsarFiles = [
   "out/main/index.js",
   "out/main/daemon-utility.js",
@@ -579,19 +585,26 @@ function validateSandboxedPreloads(asar) {
   }
 }
 
-function validateManifest(asar, sourceBytes, release) {
+function validateManifest(asar, sourceBytes, release, development) {
   const packagedBytes = asar.get("package.json").bytes;
   const source = parseManifest(sourceBytes, "package.json");
   const packaged = parseManifest(packagedBytes, "app.asar/package.json");
   if (Object.hasOwn(source, "enduragentDesktopRelease")) {
     fail("source manifest contains a release marker", "package.json");
   }
+  if (Object.hasOwn(source, "enduragentDesktopDevelopment")) {
+    fail("source manifest contains a development marker", "package.json");
+  }
   const expected = structuredClone(source);
   if (release !== undefined) {
     expected.version = release.version;
     expected.enduragentDesktopRelease = true;
   }
-  let transformed = release !== undefined;
+  if (development) {
+    expected.name = DEVELOPMENT_PACKAGE_NAME;
+    expected.enduragentDesktopDevelopment = true;
+  }
+  let transformed = release !== undefined || development;
   for (const key of Object.keys(expected)) {
     if (key.startsWith("_") || removedMainManifestKeys.has(key)) {
       delete expected[key];
@@ -608,6 +621,9 @@ function validateManifest(asar, sourceBytes, release) {
   }
   const expectedBytes = transformed ? Buffer.from(JSON.stringify(expected, null, 2)) : sourceBytes;
   if (!expectedBytes.equals(packagedBytes) || !isDeepStrictEqual(packaged, expected)) {
+    if (development) {
+      fail("development packaged manifest has unexpected drift", "app.asar/package.json");
+    }
     if (release === undefined) {
       fail("ordinary packaged manifest differs from source", "app.asar/package.json");
     }
@@ -615,7 +631,7 @@ function validateManifest(asar, sourceBytes, release) {
   }
 }
 
-function validateRequiredAsarFiles(asar, sourceManifest, release) {
+function validateRequiredAsarFiles(asar, sourceManifest, release, development) {
   for (const path of requiredAsarFiles) {
     const entry = asar.get(path);
     if (entry === undefined || entry.type !== "file" || entry.unpacked === true) {
@@ -628,7 +644,7 @@ function validateRequiredAsarFiles(asar, sourceManifest, release) {
     }
   }
 
-  validateManifest(asar, sourceManifest, release);
+  validateManifest(asar, sourceManifest, release, development);
   validateTelegramRuntimeClosure(asar);
   validateSandboxedPreloads(asar);
 
@@ -696,6 +712,10 @@ export async function verifyPackageLayout(application, options = {}) {
   }
   const desktopRoot = options.desktopRoot ?? canonicalDesktopRoot;
   if (!isAbsolute(desktopRoot)) fail("desktop root must be absolute");
+  const development = options.development === true;
+  if (options.development !== undefined && options.development !== true) {
+    fail("invalid development package-layout option");
+  }
   let release;
   if (options.release !== undefined) {
     if (
@@ -710,6 +730,9 @@ export async function verifyPackageLayout(application, options = {}) {
       version: requireStableCalVer(options.release.version),
       feedUrl: requireGenericFeedUrl(options.release.feedUrl),
     };
+  }
+  if (development && release !== undefined) {
+    fail("package layout cannot be both development and release");
   }
 
   try {
@@ -734,7 +757,7 @@ export async function verifyPackageLayout(application, options = {}) {
     const archiveStat = await safeLstat(archivePath, "Contents/Resources/app.asar");
     assertRegularFile(archiveStat, "Contents/Resources/app.asar");
     const asar = collectAsar(archivePath);
-    validateRequiredAsarFiles(asar, sourceManifest, release);
+    validateRequiredAsarFiles(asar, sourceManifest, release, development);
     compareAsarStaging(asarStaging, asar);
 
     const externalPackaged = new Map();
@@ -778,7 +801,10 @@ function applicationArgument(args) {
 
 async function main() {
   try {
-    await verifyPackageLayout(applicationArgument(process.argv.slice(2)));
+    const arguments_ = process.argv.slice(2);
+    await verifyPackageLayout(applicationArgument(arguments_), {
+      development: arguments_.length === 0 ? true : undefined,
+    });
     process.stdout.write("package layout verified\n");
   } catch (error) {
     const message =
