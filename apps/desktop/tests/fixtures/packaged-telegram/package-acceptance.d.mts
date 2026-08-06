@@ -1,0 +1,16 @@
+export const TELEGRAM_ACCEPTANCE_APP_ID: "icu.enduragent.desktop.telegram-acceptance";
+export const TELEGRAM_ACCEPTANCE_PACKAGE_NAME: "enduragent-desktop-telegram-acceptance";
+export const TELEGRAM_ACCEPTANCE_PRODUCT_NAME: "Enduragent Telegram Acceptance";
+export const TELEGRAM_ACCEPTANCE_MARKER: "enduragentDesktopTelegramAcceptance";
+export const TELEGRAM_ACCEPTANCE_ENTITLEMENTS: Readonly<{
+  readonly "com.apple.security.cs.allow-jit": true;
+}>;
+
+export function createTelegramAcceptanceBuilderConfiguration(
+  canonical: Record<string, unknown>,
+): Record<string, unknown>;
+export function verifyTelegramAcceptanceSignature(description: unknown): void;
+export function verifyTelegramAcceptanceInfoPlist(value: unknown): void;
+export function verifyTelegramAcceptanceEntitlements(value: unknown): void;
+export function verifyTelegramAcceptanceDesignatedRequirement(value: unknown): void;
+export function verifyTelegramAcceptanceManifest(value: unknown, expectedVersion: unknown): void;

@@ -89,7 +89,7 @@ const disabledTelegram: DesktopTelegramController = {
   close: async () => disabledTelegramSnapshot,
 };
 
-function reservePort(): Promise<number> {
+export function reservePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
     const server = createServer();
     server.once("error", reject);
@@ -148,7 +148,7 @@ function eventFrames(frames: readonly unknown[]): readonly unknown[] {
   return frames.length < 2 ? [] : frames.slice(0, -1).map(frameEvent);
 }
 
-async function waitForPage(port: number): Promise<string> {
+export async function waitForPage(port: number): Promise<string> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     try {
@@ -174,7 +174,7 @@ async function waitForPage(port: number): Promise<string> {
   throw new Error("timed out waiting for the desktop renderer");
 }
 
-function connectCdp(
+export function connectCdp(
   url: string,
   onEvent: (message: CdpResponse) => void,
 ): Promise<{
@@ -235,7 +235,7 @@ function connectCdp(
   });
 }
 
-function processAlive(pid: number): boolean {
+export function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -244,7 +244,7 @@ function processAlive(pid: number): boolean {
   }
 }
 
-async function stopProcess(child: ChildProcess): Promise<void> {
+export async function stopProcess(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
   const exited = await Promise.race([

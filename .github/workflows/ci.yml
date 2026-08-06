@@ -100,7 +100,7 @@ jobs:
 
   desktop-packaged-self-test:
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       CI: macos
     steps:
@@ -119,3 +119,7 @@ jobs:
       - run: pnpm --filter @enduragent/desktop test:packaged-self-test
       - run: pnpm --filter @enduragent/desktop verify:package-layout
       - run: pnpm --filter @enduragent/desktop run smoke:security -- --mode=packaged --output=/tmp/desktop-security-packaged
+      - run: pnpm --filter @enduragent/desktop package:telegram-acceptance
+      - run: pnpm --filter @enduragent/desktop test:telegram-packaged
+        env:
+          ENDURAGENT_DISPOSABLE_SAFE_STORAGE_CONTEXT: "1"
