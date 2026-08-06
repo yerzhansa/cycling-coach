@@ -9,8 +9,22 @@ export const TELEGRAM_ACCEPTANCE_ENTITLEMENTS: Readonly<{
 export function createTelegramAcceptanceBuilderConfiguration(
   canonical: Record<string, unknown>,
 ): Record<string, unknown>;
-export function verifyTelegramAcceptanceSignature(description: unknown): void;
+export function verifyTelegramAcceptanceSignature(description: unknown): string;
+export function verifyTelegramAcceptanceNestedSignature(description: unknown): void;
 export function verifyTelegramAcceptanceInfoPlist(value: unknown): void;
 export function verifyTelegramAcceptanceEntitlements(value: unknown): void;
-export function verifyTelegramAcceptanceDesignatedRequirement(value: unknown): void;
+export function verifyTelegramAcceptanceNestedEntitlements(value: unknown): void;
+export function verifyTelegramAcceptanceNestedListing(description: unknown): Readonly<{
+  executable: string;
+  nested: readonly string[];
+}>;
+export function selectTelegramAcceptanceNestedTarget(
+  applicationRoot: unknown,
+  candidates: unknown,
+): string;
+export function verifyTelegramAcceptanceDesignatedRequirement(
+  value: unknown,
+  expectedCdHash: unknown,
+): void;
 export function verifyTelegramAcceptanceManifest(value: unknown, expectedVersion: unknown): void;
+export function verifyTelegramAcceptanceMainEntry(value: unknown): string;

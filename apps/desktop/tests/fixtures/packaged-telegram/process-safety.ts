@@ -1,3 +1,5 @@
+import type { ChildProcess } from "node:child_process";
+
 export interface DarwinProcessCommandResult {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -5,26 +7,76 @@ export interface DarwinProcessCommandResult {
   readonly stderr: Buffer;
 }
 
-export interface DarwinProcessBirthIdentity {
-  readonly pid: number;
-  readonly startToken: string;
-  readonly command: string;
-  readonly bundleRoot: string;
+export const TELEGRAM_ACCEPTANCE_ACCOUNTING_NAME = "Enduragent Teleg";
+
+export type TelegramAcceptanceApplicationLaunch =
+  | { readonly state: "spawned"; readonly pid: number }
+  | { readonly state: "spawn-error"; readonly error: Error };
+
+export type TelegramAcceptanceApplicationTerminal =
+  | {
+      readonly state: "closed";
+      readonly code: number | null;
+      readonly signal: NodeJS.Signals | null;
+    }
+  | { readonly state: "spawn-error" | "child-error"; readonly error: Error };
+
+export function observeTelegramAcceptanceChild(child: ChildProcess): {
+  readonly launch: Promise<TelegramAcceptanceApplicationLaunch>;
+  readonly terminal: Promise<TelegramAcceptanceApplicationTerminal>;
+} {
+  let didSpawn = false;
+  let resolveLaunch!: (result: TelegramAcceptanceApplicationLaunch) => void;
+  let resolveTerminal!: (result: TelegramAcceptanceApplicationTerminal) => void;
+  const launch = new Promise<TelegramAcceptanceApplicationLaunch>((resolve) => {
+    resolveLaunch = resolve;
+  });
+  const terminal = new Promise<TelegramAcceptanceApplicationTerminal>((resolve) => {
+    resolveTerminal = resolve;
+  });
+  child.once("spawn", () => {
+    const pid = child.pid;
+    if (pid === undefined) {
+      const error = new Error("packaged Desktop spawn produced no process ID");
+      resolveLaunch({ state: "spawn-error", error });
+      resolveTerminal({ state: "spawn-error", error });
+      return;
+    }
+    didSpawn = true;
+    resolveLaunch({ state: "spawned", pid });
+  });
+  child.once("error", (error) => {
+    if (didSpawn) {
+      resolveTerminal({ state: "child-error", error });
+    } else {
+      resolveLaunch({ state: "spawn-error", error });
+      resolveTerminal({ state: "spawn-error", error });
+    }
+  });
+  child.once("close", (code, signal) => {
+    resolveTerminal({ state: "closed", code, signal });
+  });
+  return { launch, terminal };
 }
 
-export type DarwinProcessObservation =
-  | { readonly state: "absent" }
-  | { readonly state: "running"; readonly identity: DarwinProcessBirthIdentity };
+export function telegramAcceptanceDirectExitIsClean(
+  launch: TelegramAcceptanceApplicationLaunch,
+  terminal: TelegramAcceptanceApplicationTerminal,
+): boolean {
+  return (
+    launch.state === "spawned" &&
+    terminal.state === "closed" &&
+    terminal.code === 0 &&
+    terminal.signal === null
+  );
+}
 
-const DARWIN_START_TOKEN = /^[A-Z][a-z]{2} [A-Z][a-z]{2} [ 0-9][0-9] \d{2}:\d{2}:\d{2} \d{4}$/u;
-
-export function parseDarwinProcessObservation(
+export function telegramAcceptanceBundleTextIsClear(
   result: DarwinProcessCommandResult,
-  expectedPid: number,
   bundleRoot: string,
-): DarwinProcessObservation {
-  if (!Number.isSafeInteger(expectedPid) || expectedPid < 1 || !bundleRoot.endsWith(".app")) {
-    throw new TypeError("tracked process authority is invalid");
+): boolean {
+  if (typeof bundleRoot !== "string" || !bundleRoot.endsWith(".app")) {
+    throw new TypeError("packaged bundle-text authority is invalid");
   }
   if (
     result.code === 1 &&
@@ -32,45 +84,150 @@ export function parseDarwinProcessObservation(
     result.stdout.length === 0 &&
     result.stderr.length === 0
   ) {
-    return { state: "absent" };
+    return true;
   }
-  if (result.code !== 0 || result.signal !== null) {
-    throw new TypeError("tracked process observation failed");
-  }
-  const lines = result.stdout
-    .toString("utf8")
-    .split(/\r?\n/u)
-    .filter((line) => line.trim() !== "");
-  if (lines.length !== 1) throw new TypeError("tracked process observation is ambiguous");
-  const match = /^\s*(\d+)\s+(.{24})\s+(.+)$/u.exec(lines[0] as string);
-  if (match === null) throw new TypeError("tracked process observation is malformed");
-  const pid = Number(match[1]);
-  const startToken = match[2] as string;
-  const command = (match[3] as string).trim();
   if (
-    pid !== expectedPid ||
-    !DARWIN_START_TOKEN.test(startToken) ||
-    !command.startsWith(`${bundleRoot}/Contents/`)
+    result.code !== 0 ||
+    result.signal !== null ||
+    result.stderr.length !== 0 ||
+    result.stdout.length === 0
   ) {
-    throw new TypeError("tracked process identity is outside the acceptance bundle");
+    throw new TypeError("packaged bundle-text observation failed");
   }
-  return {
-    state: "running",
-    identity: { pid, startToken, command, bundleRoot },
-  };
+
+  const seen = new Set<number>();
+  let currentPid: number | undefined;
+  let currentDescriptorIsText = false;
+  let paths = 0;
+  for (const rawField of result.stdout.toString("utf8").split("\0")) {
+    const field = rawField.replace(/^[\r\n]+|[\r\n]+$/gu, "");
+    if (field === "") continue;
+    if (field.includes("\n") || field.includes("\r")) {
+      throw new TypeError("packaged bundle-text observation is malformed");
+    }
+    if (field.startsWith("p")) {
+      const pid = Number(field.slice(1));
+      if (!Number.isSafeInteger(pid) || pid < 1 || seen.has(pid)) {
+        throw new TypeError("packaged bundle-text observation is ambiguous");
+      }
+      seen.add(pid);
+      currentPid = pid;
+      currentDescriptorIsText = false;
+      continue;
+    }
+    if (field === "ftxt") {
+      if (currentPid === undefined) {
+        throw new TypeError("packaged bundle-text observation is malformed");
+      }
+      currentDescriptorIsText = true;
+      continue;
+    }
+    if (field.startsWith("n")) {
+      const path = field.slice(1);
+      if (
+        currentPid === undefined ||
+        !currentDescriptorIsText ||
+        (path !== bundleRoot && !path.startsWith(`${bundleRoot}/`))
+      ) {
+        throw new TypeError("packaged bundle-text observation is outside authority");
+      }
+      paths += 1;
+      currentDescriptorIsText = false;
+      continue;
+    }
+    throw new TypeError("packaged bundle-text observation is malformed");
+  }
+  if (seen.size === 0 || paths === 0) {
+    throw new TypeError("packaged bundle-text observation is empty");
+  }
+  return false;
 }
 
-export function classifyDarwinProcessObservation(
-  tracked: DarwinProcessBirthIdentity,
-  observation: DarwinProcessObservation,
-): "same" | "exited" | "reused" {
-  if (observation.state === "absent") return "exited";
-  return observation.identity.pid === tracked.pid &&
-    observation.identity.startToken === tracked.startToken &&
-    observation.identity.command === tracked.command &&
-    observation.identity.bundleRoot === tracked.bundleRoot
-    ? "same"
-    : "reused";
+export function telegramAcceptanceProcessTableIsClear(result: DarwinProcessCommandResult): boolean {
+  if (
+    result.code !== 0 ||
+    result.signal !== null ||
+    result.stderr.length !== 0 ||
+    result.stdout.length === 0
+  ) {
+    throw new TypeError("packaged process-table observation failed");
+  }
+
+  const seen = new Set<number>();
+  const lines = result.stdout.toString("utf8").split(/\r?\n/u);
+  let observations = 0;
+  for (const line of lines) {
+    if (line.trim() === "") continue;
+    const match = /^\s*(\d+)\s+(.+?)\s*$/u.exec(line);
+    if (match === null) throw new TypeError("packaged process-table observation is malformed");
+    const pid = Number(match[1]);
+    const accountingName = match[2];
+    if (!Number.isSafeInteger(pid) || pid < 1 || seen.has(pid) || accountingName === undefined) {
+      throw new TypeError("packaged process-table observation is ambiguous");
+    }
+    seen.add(pid);
+    observations += 1;
+    if (accountingName === TELEGRAM_ACCEPTANCE_ACCOUNTING_NAME) return false;
+  }
+  if (observations === 0) {
+    throw new TypeError("packaged process-table observation is empty");
+  }
+  return true;
+}
+
+export function telegramAcceptanceDebuggerListenerOwner(
+  result: DarwinProcessCommandResult,
+): number | undefined {
+  if (
+    result.code === 1 &&
+    result.signal === null &&
+    result.stdout.length === 0 &&
+    result.stderr.length === 0
+  ) {
+    return undefined;
+  }
+  if (
+    result.code !== 0 ||
+    result.signal !== null ||
+    result.stderr.length !== 0 ||
+    result.stdout.length === 0
+  ) {
+    throw new TypeError("Desktop debugger-listener observation failed");
+  }
+  const pids = new Set<number>();
+  const descriptors = new Set<string>();
+  for (const rawField of result.stdout.toString("utf8").split("\0")) {
+    const field = rawField.replace(/^[\r\n]+|[\r\n]+$/gu, "");
+    if (field === "") continue;
+    const processMatch = /^p(\d+)$/u.exec(field);
+    if (processMatch !== null) {
+      const pid = Number(processMatch[1]);
+      if (!Number.isSafeInteger(pid) || pid < 1 || pids.has(pid)) {
+        throw new TypeError("Desktop debugger-listener observation is ambiguous");
+      }
+      pids.add(pid);
+      continue;
+    }
+    if (/^f\d+[A-Za-z]?$/u.test(field) && pids.size === 1 && !descriptors.has(field)) {
+      descriptors.add(field);
+      continue;
+    }
+    throw new TypeError("Desktop debugger-listener observation is malformed");
+  }
+  if (pids.size !== 1 || descriptors.size === 0) {
+    throw new TypeError("Desktop debugger-listener observation is ambiguous");
+  }
+  return pids.values().next().value;
+}
+
+export function telegramAcceptanceShutdownIsProven(input: {
+  readonly executionSucceeded: boolean;
+  readonly directApplicationsExitedCleanly: boolean;
+  readonly processTableClear: boolean;
+}): boolean {
+  return (
+    input.executionSucceeded && input.directApplicationsExitedCleanly && input.processTableClear
+  );
 }
 
 export async function releaseAcceptanceStorage(input: {

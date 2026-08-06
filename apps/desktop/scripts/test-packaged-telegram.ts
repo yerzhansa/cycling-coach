@@ -13,11 +13,15 @@ import {
   type DisposableKeychain,
 } from "../tests/fixtures/packaged-telegram/disposable-keychain.js";
 import {
-  classifyDarwinProcessObservation,
-  parseDarwinProcessObservation,
+  observeTelegramAcceptanceChild,
   releaseAcceptanceStorage,
-  type DarwinProcessBirthIdentity,
-  type DarwinProcessObservation,
+  telegramAcceptanceDirectExitIsClean,
+  telegramAcceptanceBundleTextIsClear,
+  telegramAcceptanceDebuggerListenerOwner,
+  telegramAcceptanceProcessTableIsClear,
+  telegramAcceptanceShutdownIsProven,
+  type TelegramAcceptanceApplicationLaunch,
+  type TelegramAcceptanceApplicationTerminal,
 } from "../tests/fixtures/packaged-telegram/process-safety.js";
 import {
   ACCEPTANCE_OS_LOGIN_MARKER_ENV,
@@ -38,6 +42,20 @@ const BACKGROUND_PREFERENCE_FILE = "background-at-login.json";
 const ONBOARDING_STORAGE_KEY = "enduragent.desktop.onboarding";
 const ONBOARDING_STORAGE_VALUE = '{"version":1,"completed":true}';
 const GENERIC_FAILURE = "Sorry, something went wrong. Please try again.";
+const EXPECTED_WELCOME_MESSAGE =
+  "Welcome to Cycling Coach!\n\n" +
+  "I'm your AI cycling coach. I can build training plans, suggest workouts, " +
+  "and track your fitness using intervals.icu data.\n\n" +
+  "Commands:\n" +
+  "/plan — Generate a training plan\n" +
+  "/workout — Get today's workout\n" +
+  "/status — Check current fitness, fatigue, and form\n" +
+  "/review — Review your last session\n" +
+  "/sync — Force-refresh training data from intervals.icu\n" +
+  "/version — Show current version\n" +
+  "/whatsnew — See what changed in the latest version\n" +
+  "/update — Check for updates in the Desktop app\n\n" +
+  "Or just chat with me about your training!";
 const BOT_USERNAME = "EnduragentAcceptanceBot";
 const BOT_ID = 71_234_567;
 const SENDER_ID = 42_424_242;
@@ -52,11 +70,16 @@ interface CommandResult {
 interface RunningApplication {
   readonly child: ChildProcess;
   readonly debugPort: number;
-  readonly exited: Promise<{
-    readonly code: number | null;
-    readonly signal: NodeJS.Signals | null;
-  }>;
+  readonly launch: Promise<TelegramAcceptanceApplicationLaunch>;
+  readonly terminal: Promise<TelegramAcceptanceApplicationTerminal>;
+  browserConnection: Awaited<ReturnType<typeof connectCdp>> | undefined;
   readonly output: () => { readonly stdout: string; readonly stderr: string };
+}
+
+interface DebuggerAuthority {
+  readonly pid: number;
+  readonly connection: Awaited<ReturnType<typeof connectCdp>>;
+  readonly environment: NodeJS.ProcessEnv;
 }
 
 interface SentMessage {
@@ -68,7 +91,7 @@ interface GetUpdatesRequestObservation {
   readonly sequence: number;
   readonly offset: number;
   readonly selectedUpdateIds: readonly number[];
-  readonly settled: boolean;
+  readonly state: "pending" | "settled" | "cancelled";
 }
 
 interface TelegramUpdate {
@@ -137,7 +160,7 @@ function runCommand(
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.once("error", rejectRun);
-    child.once("exit", (code, signal) => {
+    child.once("close", (code, signal) => {
       const result = {
         code,
         signal,
@@ -225,7 +248,7 @@ async function createTelegramBotApi(token: string) {
     sequence: number;
     offset: number;
     selectedUpdateIds: number[];
-    settled: boolean;
+    state: "pending" | "settled" | "cancelled";
   }[] = [];
   const pending = new Set<{
     readonly payload: Record<string, unknown>;
@@ -251,7 +274,7 @@ async function createTelegramBotApi(token: string) {
     selected: readonly TelegramUpdate[],
   ): void => {
     waiter.observation.selectedUpdateIds = selected.map((update) => update.update_id);
-    waiter.observation.settled = true;
+    waiter.observation.state = "settled";
     if (!waiter.response.writableEnded) {
       botApiResponse(waiter.response, 200, { ok: true, result: selected });
     }
@@ -327,7 +350,7 @@ async function createTelegramBotApi(token: string) {
             sequence: ++getUpdatesSequence,
             offset: requestOffset(payload),
             selectedUpdateIds: [] as number[],
-            settled: false,
+            state: "pending" as const,
           };
           getUpdatesRequests.push(observation);
           const selected = selectUpdates(payload);
@@ -338,7 +361,10 @@ async function createTelegramBotApi(token: string) {
           const waiter = { payload, response, observation };
           pending.add(waiter);
           response.once("close", () => {
-            if (pending.delete(waiter) && !response.writableEnded) cancelledPolls += 1;
+            if (pending.delete(waiter) && !response.writableEnded) {
+              observation.state = "cancelled";
+              cancelledPolls += 1;
+            }
           });
           return;
         }
@@ -425,20 +451,20 @@ function launchApplication(
   });
   let stdout = "";
   let stderr = "";
+  const lifecycle = observeTelegramAcceptanceChild(child);
   child.stdout?.on("data", (chunk) => {
     stdout += String(chunk);
   });
   child.stderr?.on("data", (chunk) => {
     stderr += String(chunk);
   });
-  const exited = new Promise<{
-    readonly code: number | null;
-    readonly signal: NodeJS.Signals | null;
-  }>((resolveExit, rejectExit) => {
-    child.once("error", rejectExit);
-    child.once("exit", (code, signal) => resolveExit({ code, signal }));
-  });
-  return { child, debugPort, exited, output: () => ({ stdout, stderr }) };
+  return {
+    child,
+    debugPort,
+    ...lifecycle,
+    browserConnection: undefined,
+    output: () => ({ stdout, stderr }),
+  };
 }
 
 interface MainRendererTarget {
@@ -447,17 +473,132 @@ interface MainRendererTarget {
   readonly webSocketDebuggerUrl?: unknown;
 }
 
-async function mainRendererTargets(port: number): Promise<readonly MainRendererTarget[]> {
-  const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+async function mainRendererTargets(
+  port: number,
+  authority: DebuggerAuthority,
+): Promise<readonly MainRendererTarget[]> {
+  await assertDebuggerListenerOwner(port, authority.pid, authority.environment);
+  const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+    signal: AbortSignal.timeout(1_000),
+  });
   if (!response.ok) throw new Error("Desktop debugging target list was unavailable");
   const targets = (await response.json()) as readonly MainRendererTarget[];
-  return targets.filter(
+  await assertDebuggerListenerOwner(port, authority.pid, authority.environment);
+  const rendererTargets = targets.filter(
     (target) =>
       target.type === "page" &&
       typeof target.url === "string" &&
       target.url.startsWith("enduragent://app/") &&
       typeof target.webSocketDebuggerUrl === "string",
   );
+  for (const target of rendererTargets) {
+    validateDebuggerUrl(target.webSocketDebuggerUrl as string, port, "/devtools/page/");
+  }
+  return rendererTargets;
+}
+
+function validateDebuggerUrl(value: string, port: number, pathPrefix: string): void {
+  const url = new URL(value);
+  if (
+    url.protocol !== "ws:" ||
+    url.hostname !== "127.0.0.1" ||
+    url.port !== String(port) ||
+    !url.pathname.startsWith(pathPrefix)
+  ) {
+    throw new TypeError("Desktop debugger target is invalid");
+  }
+}
+
+async function connectCdpWithin(
+  url: string,
+  timeoutMs = 2_500,
+): Promise<Awaited<ReturnType<typeof connectCdp>>> {
+  let timedOut = false;
+  const pending = connectCdp(url, () => undefined).then((connection) => {
+    if (timedOut) {
+      connection.socket.close();
+      throw new Error("Desktop debugger connection timed out");
+    }
+    return connection;
+  });
+  void pending.catch(() => undefined);
+  const connection = await Promise.race([
+    pending,
+    delay(timeoutMs).then(() => {
+      timedOut = true;
+      return undefined;
+    }),
+  ]);
+  if (connection === undefined) throw new Error("Desktop debugger connection timed out");
+  return connection;
+}
+
+async function debuggerListenerOwner(
+  port: number,
+  environment: NodeJS.ProcessEnv,
+): Promise<number | undefined> {
+  if (typeof environment.HOME !== "string") {
+    throw new TypeError("Desktop debugger-listener environment is invalid");
+  }
+  const result = await runCommand(
+    "/usr/sbin/lsof",
+    ["-n", "-P", "-a", `-iTCP:${port}`, "-sTCP:LISTEN", "-F0p"],
+    {
+      allowFailure: true,
+      environment: { ...process.env, HOME: environment.HOME },
+    },
+  );
+  return telegramAcceptanceDebuggerListenerOwner(result);
+}
+
+async function assertDebuggerListenerOwner(
+  port: number,
+  expectedPid: number,
+  environment: NodeJS.ProcessEnv,
+): Promise<void> {
+  if ((await debuggerListenerOwner(port, environment)) !== expectedPid) {
+    throw new TypeError("Desktop debugger listener is outside the launched application");
+  }
+}
+
+async function connectBrowserDebugger(
+  port: number,
+  expectedPid: number,
+  environment: NodeJS.ProcessEnv,
+): Promise<Awaited<ReturnType<typeof connectCdp>>> {
+  let debuggerUrl: string | undefined;
+  await waitUntil("Desktop browser debugger", async () => {
+    const owner = await debuggerListenerOwner(port, environment);
+    if (owner === undefined) return false;
+    if (owner !== expectedPid) {
+      throw new TypeError("Desktop debugger listener is outside the launched application");
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
+        signal: AbortSignal.timeout(1_000),
+      });
+      if (!response.ok) return false;
+      const target = (await response.json()) as { readonly webSocketDebuggerUrl?: unknown };
+      if (typeof target.webSocketDebuggerUrl !== "string") return false;
+      validateDebuggerUrl(target.webSocketDebuggerUrl, port, "/devtools/browser/");
+      debuggerUrl = target.webSocketDebuggerUrl;
+      return true;
+    } catch (error) {
+      if (error instanceof TypeError && error.message === "Desktop debugger target is invalid") {
+        throw error;
+      }
+      return false;
+    }
+  });
+  assert(debuggerUrl !== undefined, "Desktop browser debugger target is unavailable");
+  const connection = await connectCdpWithin(debuggerUrl);
+  try {
+    await assertDebuggerListenerOwner(port, expectedPid, environment);
+    return connection;
+  } catch (error) {
+    connection.socket.close();
+    throw error;
+  }
 }
 
 async function seedBackgroundAtLoginPreference(userData: string): Promise<void> {
@@ -474,8 +615,17 @@ async function seedBackgroundAtLoginPreference(userData: string): Promise<void> 
   );
 }
 
-async function cdpPage(port: number) {
-  const connection = await connectCdp(await waitForPage(port), () => undefined);
+async function cdpPage(port: number, authority: DebuggerAuthority) {
+  const debuggerUrl = await waitForPage(port);
+  validateDebuggerUrl(debuggerUrl, port, "/devtools/page/");
+  await assertDebuggerListenerOwner(port, authority.pid, authority.environment);
+  const connection = await connectCdpWithin(debuggerUrl);
+  try {
+    await assertDebuggerListenerOwner(port, authority.pid, authority.environment);
+  } catch (error) {
+    connection.socket.close();
+    throw error;
+  }
   const evaluate = async <T>(expression: string): Promise<T> => {
     const response = await connection.call("Runtime.evaluate", {
       expression,
@@ -593,7 +743,9 @@ async function waitForSentMessage(
   await waitUntil(
     `Bot API reply ${text}`,
     () => {
-      found = messages.slice(start).find((message) => message.text === text);
+      found = messages
+        .slice(start)
+        .find((message) => message.chatId === SENDER_ID && message.text === text);
       return found !== undefined;
     },
     40_000,
@@ -601,127 +753,94 @@ async function waitForSentMessage(
   return found as SentMessage;
 }
 
-async function processTree(rootPid: number): Promise<readonly number[]> {
-  const result = await runCommand("/bin/ps", ["-axo", "pid=,ppid="]);
-  const children = new Map<number, number[]>();
-  for (const line of result.stdout.toString("utf8").split(/\r?\n/u)) {
-    const match = /^\s*(\d+)\s+(\d+)\s*$/u.exec(line);
-    if (match === null) continue;
-    const pid = Number(match[1]);
-    const parent = Number(match[2]);
-    const values = children.get(parent) ?? [];
-    values.push(pid);
-    children.set(parent, values);
+async function launchTrackedApplication(
+  environment: NodeJS.ProcessEnv,
+  debugPort: number,
+  userData: string,
+  runningApplications: RunningApplication[],
+  debuggerAuthorities: Map<number, DebuggerAuthority>,
+): Promise<RunningApplication> {
+  const running = launchApplication(environment, debugPort, userData);
+  runningApplications.push(running);
+  const launch = await running.launch;
+  if (launch.state === "spawn-error") {
+    throw new Error("packaged Desktop root process did not spawn", { cause: launch.error });
   }
-  const descendants: number[] = [];
-  const pending = [...(children.get(rootPid) ?? [])];
-  while (pending.length > 0) {
-    const pid = pending.shift() as number;
-    descendants.push(pid);
-    pending.push(...(children.get(pid) ?? []));
+  const existing = debuggerAuthorities.get(debugPort);
+  if (existing !== undefined && existing.connection.socket.readyState === WebSocket.OPEN) {
+    await assertDebuggerListenerOwner(debugPort, existing.pid, existing.environment);
+    running.browserConnection = existing.connection;
+    return running;
   }
-  return descendants;
+  debuggerAuthorities.delete(debugPort);
+  const connection = await connectBrowserDebugger(debugPort, launch.pid, environment);
+  const authority = { pid: launch.pid, connection, environment };
+  debuggerAuthorities.set(debugPort, authority);
+  running.browserConnection = connection;
+  return running;
 }
 
-async function observeDarwinProcess(pid: number): Promise<DarwinProcessObservation> {
-  const result = await runCommand(
-    "/bin/ps",
-    ["-ww", "-p", String(pid), "-o", "pid=", "-o", "lstart=", "-o", "command="],
-    { allowFailure: true },
-  );
-  return parseDarwinProcessObservation(result, pid, application);
-}
-
-async function captureProcess(
-  pid: number,
-  trackedProcesses: Map<number, DarwinProcessBirthIdentity>,
-): Promise<boolean> {
-  const observation = await observeDarwinProcess(pid);
-  if (observation.state === "absent") return false;
-  const existing = trackedProcesses.get(pid);
-  if (
-    existing !== undefined &&
-    classifyDarwinProcessObservation(existing, observation) !== "same"
-  ) {
-    throw new TypeError(`packaged Desktop PID ${pid} was reused during capture`);
+function requireDebuggerAuthority(
+  debuggerAuthorities: ReadonlyMap<number, DebuggerAuthority>,
+  port: number,
+): DebuggerAuthority {
+  const authority = debuggerAuthorities.get(port);
+  if (authority === undefined || authority.connection.socket.readyState !== WebSocket.OPEN) {
+    throw new TypeError("Desktop debugger authority is unavailable");
   }
-  trackedProcesses.set(pid, observation.identity);
-  return true;
+  return authority;
 }
 
-async function captureApplicationProcesses(
+async function cleanApplicationExit(
   running: RunningApplication,
-  trackedProcesses: Map<number, DarwinProcessBirthIdentity>,
-): Promise<void> {
-  const rootPid = running.child.pid;
-  if (rootPid === undefined) return;
-  if (!(await captureProcess(rootPid, trackedProcesses))) return;
-  for (const pid of await processTree(rootPid)) {
-    await captureProcess(pid, trackedProcesses);
-  }
+  timeoutMs: number,
+): Promise<boolean> {
+  const lifecycle = await Promise.race([
+    Promise.all([running.launch, running.terminal]),
+    delay(timeoutMs).then(() => undefined),
+  ]);
+  return lifecycle !== undefined && telegramAcceptanceDirectExitIsClean(...lifecycle);
 }
 
-async function sameTrackedProcessRunning(identity: DarwinProcessBirthIdentity): Promise<boolean> {
-  const observation = await observeDarwinProcess(identity.pid);
-  const state = classifyDarwinProcessObservation(identity, observation);
-  if (state === "reused") {
-    throw new TypeError(`packaged Desktop PID ${identity.pid} was reused`);
-  }
-  return state === "same";
+async function packagedProcessTableIsClear(operatorHome: string): Promise<boolean> {
+  const [processTable, bundleText] = await Promise.all([
+    runCommand("/bin/ps", ["-ww", "-axo", "pid=", "-o", "ucomm="], {
+      allowFailure: true,
+    }),
+    runCommand("/usr/sbin/lsof", ["-n", "-P", "-a", "-d", "txt", "+D", application, "-F0pn"], {
+      allowFailure: true,
+      environment: { ...process.env, HOME: operatorHome },
+    }),
+  ]);
+  return (
+    telegramAcceptanceProcessTableIsClear(processTable) &&
+    telegramAcceptanceBundleTextIsClear(bundleText, application)
+  );
 }
 
-async function signalTrackedProcesses(
-  trackedProcesses: ReadonlyMap<number, DarwinProcessBirthIdentity>,
-  signal: NodeJS.Signals,
-): Promise<void> {
-  const errors: unknown[] = [];
-  for (const identity of trackedProcesses.values()) {
-    if (identity.pid === process.pid) {
-      errors.push(new Error("packaged Desktop process tracking included the acceptance driver"));
-      continue;
-    }
-    try {
-      if (!(await sameTrackedProcessRunning(identity))) continue;
-      try {
-        process.kill(identity.pid, signal);
-      } catch (error) {
-        if (await sameTrackedProcessRunning(identity)) errors.push(error);
-      }
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length > 0) throw new AggregateError(errors, `packaged Desktop ${signal} failed`);
-}
-
-async function waitForTrackedProcessExit(
-  trackedProcesses: ReadonlyMap<number, DarwinProcessBirthIdentity>,
+async function waitForStablePackagedProcessExit(
+  operatorHome: string,
   timeoutMs: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
+  let consecutiveClear = 0;
   while (Date.now() < deadline) {
-    let running = false;
-    for (const identity of trackedProcesses.values()) {
-      if (await sameTrackedProcessRunning(identity)) running = true;
+    if (await packagedProcessTableIsClear(operatorHome)) {
+      consecutiveClear += 1;
+      if (consecutiveClear === 3) return true;
+    } else {
+      consecutiveClear = 0;
     }
-    if (!running) return true;
-    await delay(50);
+    await delay(100);
   }
-  for (const identity of trackedProcesses.values()) {
-    if (await sameTrackedProcessRunning(identity)) return false;
-  }
-  return true;
+  return false;
 }
 
-async function terminateTrackedProcesses(
-  trackedProcesses: ReadonlyMap<number, DarwinProcessBirthIdentity>,
+async function requestBrowserClose(
+  connection: Awaited<ReturnType<typeof connectCdp>>,
 ): Promise<void> {
-  await signalTrackedProcesses(trackedProcesses, "SIGTERM");
-  if (await waitForTrackedProcessExit(trackedProcesses, 5_000)) return;
-  await signalTrackedProcesses(trackedProcesses, "SIGKILL");
-  if (!(await waitForTrackedProcessExit(trackedProcesses, 5_000))) {
-    throw new Error("packaged Desktop processes remained alive");
-  }
+  const command = connection.call("Browser.close").catch(() => undefined);
+  await Promise.race([command, delay(2_500)]);
 }
 
 function portOpen(port: number): Promise<boolean> {
@@ -739,18 +858,12 @@ async function gracefulQuit(
   running: RunningApplication,
   page: Awaited<ReturnType<typeof cdpPage>>,
   debugPort: number,
-  trackedProcesses: Map<number, DarwinProcessBirthIdentity>,
 ): Promise<void> {
-  await captureApplicationProcesses(running, trackedProcesses);
-  await page.connection.call("Browser.close").catch(() => undefined);
-  const exit = await Promise.race([running.exited, delay(30_000).then(() => undefined)]);
-  assert(exit !== undefined, "packaged Desktop did not quit gracefully");
-  assert(exit.code === 0 && exit.signal === null, "packaged Desktop quit was not clean");
-  assert(
-    await waitForTrackedProcessExit(trackedProcesses, 30_000),
-    "packaged Desktop process tree remained live after graceful quit",
-  );
+  await requestBrowserClose(running.browserConnection ?? page.connection);
+  assert(await cleanApplicationExit(running, 30_000), "packaged Desktop quit was not clean");
   await waitUntil("Desktop debugging listener exit", async () => !(await portOpen(debugPort)));
+  page.closeSocket();
+  running.browserConnection?.socket.close();
 }
 
 async function treeContains(root: string, value: string): Promise<boolean> {
@@ -818,7 +931,7 @@ async function main(): Promise<void> {
   const token = `123456789:${randomBytes(32).toString("base64url").slice(0, 35)}`;
   const originalClipboard = await clipboardBytes();
   const runningApplications: RunningApplication[] = [];
-  const trackedProcesses = new Map<number, DarwinProcessBirthIdentity>();
+  const debuggerAuthorities = new Map<number, DebuggerAuthority>();
   let keychain: DisposableKeychain | undefined;
   let telegram: Awaited<ReturnType<typeof createTelegramBotApi>> | undefined;
   let primary: RunningApplication | undefined;
@@ -890,10 +1003,22 @@ async function main(): Promise<void> {
       CLICOLOR_FORCE: undefined,
     });
 
-    primary = launchApplication(environment, debugPort, userData);
-    runningApplications.push(primary);
-    page = await cdpPage(debugPort);
-    await captureApplicationProcesses(primary, trackedProcesses);
+    primary = await launchTrackedApplication(
+      environment,
+      debugPort,
+      userData,
+      runningApplications,
+      debuggerAuthorities,
+    );
+    try {
+      page = await cdpPage(debugPort, requireDebuggerAuthority(debuggerAuthorities, debugPort));
+    } catch (error) {
+      const processOutput = JSON.stringify(primary.output()).replaceAll(token, "<redacted>");
+      throw new Error(
+        `${error instanceof Error ? error.message : "Desktop renderer did not start"}; exit=${String(primary.child.exitCode)}; signal=${String(primary.child.signalCode)}; process=${processOutput.slice(0, 2_000)}`,
+        { cause: error },
+      );
+    }
     await page.evaluate(
       `localStorage.setItem(${JSON.stringify(ONBOARDING_STORAGE_KEY)}, ${JSON.stringify(ONBOARDING_STORAGE_VALUE)}); true`,
     );
@@ -957,21 +1082,29 @@ async function main(): Promise<void> {
     );
 
     messageStart = telegram.sentMessages.length;
+    const freeTextMessageStart = messageStart;
     const chatActionStart = telegram.chatActions.length;
-    telegram.enqueue("How should I train today?");
+    const freeTextUpdate = telegram.enqueue("How should I train today?");
+    let freeTextInitialSelectionSequence: number | undefined;
     await waitForSentMessage(telegram.sentMessages, GENERIC_FAILURE, messageStart);
-    assert(
-      telegram.chatActions
-        .slice(chatActionStart)
-        .some((action) => action.action === "typing" && Number(action.chat_id) === SENDER_ID),
-      "free-text Telegram handling did not send a typing action",
-    );
-    assert(
-      !telegram.sentMessages
-        .slice(messageStart)
-        .some((message) => /(?:tempo|interval|recovery|ride|training plan)/iu.test(message.text)),
-      "credential-free acceptance unexpectedly produced substantive coaching",
-    );
+    await waitUntil("free-text Telegram update transport progression", () => {
+      const requests = telegram?.getUpdatesRequests() ?? [];
+      const selections = requests.filter((request) =>
+        request.selectedUpdateIds.includes(freeTextUpdate.update_id),
+      );
+      const selection = selections[0];
+      const latest = requests.at(-1);
+      const progressed =
+        selections.length === 1 &&
+        selection !== undefined &&
+        latest !== undefined &&
+        latest.sequence > selection.sequence &&
+        latest.offset > freeTextUpdate.update_id &&
+        latest.state === "pending" &&
+        telegram?.activePollCount() === 1;
+      if (progressed) freeTextInitialSelectionSequence = selection.sequence;
+      return progressed;
+    });
 
     const pairedDesired = JSON.parse(
       await readFile(join(userData, TELEGRAM_VAULT_DIRECTORY, TELEGRAM_DESIRED_STATE_FILE), "utf8"),
@@ -987,7 +1120,35 @@ async function main(): Promise<void> {
       "paired Telegram access state was not durable before restart",
     );
     await seedBackgroundAtLoginPreference(userData);
-    await gracefulQuit(primary, page, debugPort, trackedProcesses);
+    await gracefulQuit(primary, page, debugPort);
+    const freeTextActions = telegram.chatActions.slice(chatActionStart);
+    assert(
+      freeTextActions.length > 0 &&
+        freeTextActions.every(
+          (action) => action.action === "typing" && Number(action.chat_id) === SENDER_ID,
+        ),
+      "free-text Telegram handling produced an invalid typing-action sequence",
+    );
+    const freeTextReplies = telegram.sentMessages.slice(freeTextMessageStart);
+    assert(
+      freeTextReplies.every((message) => message.chatId === SENDER_ID),
+      `credential-free acceptance replied to the wrong Telegram chat: ${JSON.stringify(
+        freeTextReplies,
+      )
+        .replaceAll(token, "<redacted>")
+        .slice(0, 600)}`,
+    );
+    const freeTextReplyTexts = freeTextReplies.map((message) => message.text);
+    assert(
+      JSON.stringify(freeTextReplyTexts) === JSON.stringify([GENERIC_FAILURE]) ||
+        JSON.stringify(freeTextReplyTexts) ===
+          JSON.stringify([EXPECTED_WELCOME_MESSAGE, GENERIC_FAILURE]),
+      `credential-free acceptance produced an invalid response set after daemon drain: ${JSON.stringify(
+        freeTextReplyTexts,
+      )
+        .replaceAll(token, "<redacted>")
+        .slice(0, 600)}`,
+    );
     primary = undefined;
     page = undefined;
 
@@ -996,13 +1157,18 @@ async function main(): Promise<void> {
       ...environment,
       [ACCEPTANCE_OS_LOGIN_MARKER_ENV]: ACCEPTANCE_OS_LOGIN_MARKER_VALUE,
     };
-    primary = launchApplication(backgroundEnvironment, debugPort, userData);
-    runningApplications.push(primary);
+    primary = await launchTrackedApplication(
+      backgroundEnvironment,
+      debugPort,
+      userData,
+      runningApplications,
+      debuggerAuthorities,
+    );
+    const backgroundDebuggerAuthority = requireDebuggerAuthority(debuggerAuthorities, debugPort);
     await waitUntil("cold-start Telegram long poll", () => telegram?.activePollCount() === 1);
     await waitUntil("cold-start debugger listener", () => portOpen(debugPort));
-    await captureApplicationProcesses(primary, trackedProcesses);
     assert(
-      (await mainRendererTargets(debugPort)).length === 0,
+      (await mainRendererTargets(debugPort, backgroundDebuggerAuthority)).length === 0,
       "OS-login cold start created a main renderer",
     );
     messageStart = telegram.sentMessages.length;
@@ -1013,47 +1179,63 @@ async function main(): Promise<void> {
       messageStart,
     );
     assert(
-      (await mainRendererTargets(debugPort)).length === 0,
+      freeTextInitialSelectionSequence !== undefined,
+      "initial free-text Telegram selection was not observed",
+    );
+    const initialFreeTextSelectionSequence = freeTextInitialSelectionSequence;
+    assert(
+      telegram
+        .getUpdatesRequests()
+        .some(
+          (request) =>
+            request.sequence > initialFreeTextSelectionSequence &&
+            request.state === "settled" &&
+            request.selectedUpdateIds.includes(freeTextUpdate.update_id),
+        ),
+      "cold-start Telegram polling did not replay the persisted free-text update",
+    );
+    assert(
+      (await mainRendererTargets(debugPort, backgroundDebuggerAuthority)).length === 0,
       "background Telegram handling created a main renderer",
     );
 
-    const foregroundRequest = launchApplication(environment, debugPort, userData);
-    runningApplications.push(foregroundRequest);
-    await captureApplicationProcesses(foregroundRequest, trackedProcesses);
-    const foregroundRequestExit = await Promise.race([
-      foregroundRequest.exited,
-      delay(20_000).then(() => undefined),
-    ]);
-    assert(foregroundRequestExit !== undefined, "foreground second launch did not exit");
+    const foregroundRequest = await launchTrackedApplication(
+      environment,
+      debugPort,
+      userData,
+      runningApplications,
+      debuggerAuthorities,
+    );
     assert(
-      foregroundRequestExit.code === 0 && foregroundRequestExit.signal === null,
+      await cleanApplicationExit(foregroundRequest, 20_000),
       "foreground second launch exit was not clean",
     );
     await waitUntil(
       "one foreground main renderer",
-      async () => (await mainRendererTargets(debugPort)).length === 1,
+      async () => (await mainRendererTargets(debugPort, backgroundDebuggerAuthority)).length === 1,
     );
     await delay(250);
     assert(
-      (await mainRendererTargets(debugPort)).length === 1,
+      (await mainRendererTargets(debugPort, backgroundDebuggerAuthority)).length === 1,
       "second launch did not open exactly one main renderer",
     );
-    page = await cdpPage(debugPort);
+    page = await cdpPage(debugPort, requireDebuggerAuthority(debuggerAuthorities, debugPort));
 
     await page.evaluate("window.close(); true").catch(() => undefined);
     page.closeSocket();
     await waitUntil(
       "resident window closure",
       async () => {
-        try {
-          await waitForPage(debugPort);
+        if ((await mainRendererTargets(debugPort, backgroundDebuggerAuthority)).length !== 0) {
           return false;
-        } catch {
-          const pid = primary?.child.pid;
-          const identity = pid === undefined ? undefined : trackedProcesses.get(pid);
-          assert(identity !== undefined, "resident Desktop birth identity is missing");
-          return sameTrackedProcessRunning(identity);
         }
+        if (primary === undefined) return false;
+        const launch = await primary.launch;
+        return (
+          launch.state === "spawned" &&
+          primary.child.exitCode === null &&
+          primary.child.signalCode === null
+        );
       },
       25_000,
     );
@@ -1065,20 +1247,19 @@ async function main(): Promise<void> {
       messageStart,
     );
 
-    const secondary = launchApplication(environment, debugPort, userData);
-    runningApplications.push(secondary);
+    const secondary = await launchTrackedApplication(
+      environment,
+      debugPort,
+      userData,
+      runningApplications,
+      debuggerAuthorities,
+    );
     await delay(250);
-    await captureApplicationProcesses(secondary, trackedProcesses);
-    const secondaryExit = await Promise.race([
-      secondary.exited,
-      delay(20_000).then(() => undefined),
-    ]);
-    assert(secondaryExit !== undefined, "secondary Desktop instance did not exit");
     assert(
-      secondaryExit.code === 0 && secondaryExit.signal === null,
+      await cleanApplicationExit(secondary, 20_000),
       "secondary Desktop instance exit was not clean",
     );
-    page = await cdpPage(debugPort);
+    page = await cdpPage(debugPort, requireDebuggerAuthority(debuggerAuthorities, debugPort));
     await waitForButton(page, "Settings");
     await page.clickButton("Settings");
     await waitForButton(page, "Turn off");
@@ -1098,15 +1279,19 @@ async function main(): Promise<void> {
     assert(telegram.sentMessages.length === messageStart, "disabled Telegram replied to an update");
     assert(telegram.pollCount() === disabledPollCount, "disabled Telegram continued polling");
 
-    await gracefulQuit(primary, page, debugPort, trackedProcesses);
+    await gracefulQuit(primary, page, debugPort);
     primary = undefined;
     page = undefined;
 
     const relaunchPort = await reservePort();
-    primary = launchApplication(environment, relaunchPort, userData);
-    runningApplications.push(primary);
-    page = await cdpPage(relaunchPort);
-    await captureApplicationProcesses(primary, trackedProcesses);
+    primary = await launchTrackedApplication(
+      environment,
+      relaunchPort,
+      userData,
+      runningApplications,
+      debuggerAuthorities,
+    );
+    page = await cdpPage(relaunchPort, requireDebuggerAuthority(debuggerAuthorities, relaunchPort));
     await waitForButton(page, "Settings");
     await page.clickButton("Settings");
     await waitForButton(page, "Turn on");
@@ -1128,14 +1313,16 @@ async function main(): Promise<void> {
       const selections = requests.filter((request) =>
         request.selectedUpdateIds.includes(pendingUpdate.update_id),
       );
-      if (selections.length !== 1) return false;
+      const selection = selections[0];
+      const latest = requests.at(-1);
       return (
-        requests.some(
-          (request) =>
-            request.sequence > (selections[0]?.sequence ?? Number.MAX_SAFE_INTEGER) &&
-            request.offset > pendingUpdate.update_id &&
-            !request.settled,
-        ) && telegram?.activePollCount() === 1
+        selections.length === 1 &&
+        selection !== undefined &&
+        latest !== undefined &&
+        latest.sequence > selection.sequence &&
+        latest.offset > pendingUpdate.update_id &&
+        latest.state === "pending" &&
+        telegram?.activePollCount() === 1
       );
     });
     assert(
@@ -1146,13 +1333,14 @@ async function main(): Promise<void> {
       "pending Telegram update was not delivered exactly once",
     );
     const resumedRequests = telegram.getUpdatesRequests();
+    const latestResumedRequest = resumedRequests.at(-1);
     assert(
       resumedRequests.filter((request) =>
         request.selectedUpdateIds.includes(pendingUpdate.update_id),
       ).length === 1 &&
-        resumedRequests.some(
-          (request) => request.offset > pendingUpdate.update_id && !request.settled,
-        ),
+        latestResumedRequest !== undefined &&
+        latestResumedRequest.offset > pendingUpdate.update_id &&
+        latestResumedRequest.state === "pending",
       "pending Telegram update offset did not advance exactly once",
     );
 
@@ -1196,6 +1384,17 @@ async function main(): Promise<void> {
     assert(!(await page.domHtml()).includes(token), "Telegram credential reached renderer DOM");
     await page.screenshot(join(screenshots, "removed.png"));
     await assertOutputSecretFree(runningApplications, token);
+    const postFreeTextMessages = telegram.sentMessages.slice(freeTextMessageStart);
+    const versionReply = `Cycling Coach Desktop v${packageManifest.version}`;
+    assert(
+      postFreeTextMessages.every((message) => message.chatId === SENDER_ID),
+      "packaged Telegram acceptance sent a response to the wrong chat",
+    );
+    assert(
+      JSON.stringify(postFreeTextMessages.map((message) => message.text)) ===
+        JSON.stringify([...freeTextReplyTexts, versionReply, versionReply, versionReply]),
+      "packaged Telegram acceptance produced a late, duplicate, or replayed response",
+    );
     await writeFile(
       join(results, "summary.json"),
       `${JSON.stringify({
@@ -1210,7 +1409,7 @@ async function main(): Promise<void> {
       })}\n`,
       { mode: 0o600 },
     );
-    await gracefulQuit(primary, page, relaunchPort, trackedProcesses);
+    await gracefulQuit(primary, page, relaunchPort);
     primary = undefined;
     page = undefined;
     successResult = {
@@ -1235,31 +1434,43 @@ async function main(): Promise<void> {
       }
     };
 
-    await attempt(() => page?.closeSocket());
-    let processTeardownSafe = true;
+    const browserConnections = new Set<Awaited<ReturnType<typeof connectCdp>>>();
+    if (page !== undefined) browserConnections.add(page.connection);
     for (const running of runningApplications) {
-      try {
-        await captureApplicationProcesses(running, trackedProcesses);
-      } catch (error) {
-        processTeardownSafe = false;
-        cleanupErrors.push(error);
+      if (running.browserConnection !== undefined) {
+        browserConnections.add(running.browserConnection);
       }
     }
-    try {
-      await terminateTrackedProcesses(trackedProcesses);
-    } catch (error) {
-      processTeardownSafe = false;
-      cleanupErrors.push(error);
+    await Promise.all([...browserConnections].map(requestBrowserClose));
+    const directExits = await Promise.all(
+      runningApplications.map((running) => cleanApplicationExit(running, 10_000)),
+    );
+    const directApplicationsExitedCleanly = directExits.every(Boolean);
+    if (!directApplicationsExitedCleanly) {
+      cleanupErrors.push(
+        new Error("a directly launched packaged Desktop process did not exit cleanly"),
+      );
     }
+    await attempt(() => page?.closeSocket());
+    for (const running of runningApplications) {
+      await attempt(() => running.browserConnection?.socket.close());
+    }
+    let processTableClear = false;
     try {
-      if (!(await waitForTrackedProcessExit(trackedProcesses, 0))) {
-        processTeardownSafe = false;
-        cleanupErrors.push(new Error("tracked packaged Desktop process remained live"));
+      processTableClear = await waitForStablePackagedProcessExit(operatorHome, 5_000);
+      if (!processTableClear) {
+        cleanupErrors.push(
+          new Error("a packaged Desktop executable remained in the process table"),
+        );
       }
     } catch (error) {
-      processTeardownSafe = false;
       cleanupErrors.push(error);
     }
+    const processTeardownSafe = telegramAcceptanceShutdownIsProven({
+      executionSucceeded: executionError === undefined && successResult !== undefined,
+      directApplicationsExitedCleanly,
+      processTableClear,
+    });
     let debuggerListenersClosed = true;
     for (const debugPort of new Set(runningApplications.map((running) => running.debugPort))) {
       try {

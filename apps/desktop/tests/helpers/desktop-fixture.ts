@@ -148,11 +148,29 @@ function eventFrames(frames: readonly unknown[]): readonly unknown[] {
   return frames.length < 2 ? [] : frames.slice(0, -1).map(frameEvent);
 }
 
-export async function waitForPage(port: number): Promise<string> {
-  const deadline = Date.now() + 20_000;
+export interface WaitForPageOptions {
+  readonly timeoutMs?: number;
+  readonly probeTimeoutMs?: number;
+}
+
+export async function waitForPage(port: number, options: WaitForPageOptions = {}): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 20_000;
+  const probeTimeoutMs = options.probeTimeoutMs ?? 1_000;
+  if (
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    !Number.isInteger(probeTimeoutMs) ||
+    probeTimeoutMs < 1
+  ) {
+    throw new TypeError("desktop renderer wait timing is invalid");
+  }
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      const remaining = deadline - Date.now();
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+        signal: AbortSignal.timeout(Math.max(1, Math.min(probeTimeoutMs, remaining))),
+      });
       if (response.ok) {
         const entries = (await response.json()) as readonly {
           readonly type?: unknown;
@@ -169,7 +187,10 @@ export async function waitForPage(port: number): Promise<string> {
         if (page !== undefined) return page.webSocketDebuggerUrl as string;
       }
     } catch {}
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+    const remaining = deadline - Date.now();
+    if (remaining > 0) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, Math.min(25, remaining)));
+    }
   }
   throw new Error("timed out waiting for the desktop renderer");
 }

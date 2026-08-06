@@ -7,7 +7,10 @@ export interface AcceptanceLoginLaunchPort {
   getLoginItemSettings(...args: unknown[]): LoginItemSettings;
 }
 
-function installSingleOsLoginObservation(app: AcceptanceLoginLaunchPort): void {
+function installSingleLoginLaunchObservation(
+  app: AcceptanceLoginLaunchPort,
+  wasOpenedAtLogin: boolean,
+): void {
   const key = "getLoginItemSettings";
   const ownDescriptor = Object.getOwnPropertyDescriptor(app, key);
   const original = app.getLoginItemSettings;
@@ -28,7 +31,7 @@ function installSingleOsLoginObservation(app: AcceptanceLoginLaunchPort): void {
       if (!pending) throw new TypeError("Telegram acceptance startup marker was reused");
       pending = false;
       restore();
-      return { ...original.apply(app, args), wasOpenedAtLogin: true };
+      return { ...original.apply(app, args), wasOpenedAtLogin };
     },
   });
 }
@@ -39,10 +42,13 @@ export function consumeAcceptanceStartupMarker(
 ): "manual" | "os-login" {
   const marker = environment[ACCEPTANCE_OS_LOGIN_MARKER_ENV];
   delete environment[ACCEPTANCE_OS_LOGIN_MARKER_ENV];
-  if (marker === undefined) return "manual";
+  if (marker === undefined) {
+    installSingleLoginLaunchObservation(app, false);
+    return "manual";
+  }
   if (marker !== ACCEPTANCE_OS_LOGIN_MARKER_VALUE) {
     throw new TypeError("Telegram acceptance startup marker is invalid");
   }
-  installSingleOsLoginObservation(app);
+  installSingleLoginLaunchObservation(app, true);
   return "os-login";
 }

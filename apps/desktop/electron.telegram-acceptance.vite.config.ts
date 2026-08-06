@@ -17,6 +17,9 @@ export default defineConfig(
           input: {
             index: resolve(desktopRoot, "tests/fixtures/packaged-telegram/main-entry.ts"),
           },
+          output: {
+            chunkFileNames: "[name]-[hash].js",
+          },
         },
       },
     },

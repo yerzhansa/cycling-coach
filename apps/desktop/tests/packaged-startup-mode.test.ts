@@ -6,11 +6,11 @@ import {
   type AcceptanceLoginLaunchPort,
 } from "./fixtures/packaged-telegram/startup-mode.js";
 
-function loginPort() {
+function loginPort(wasOpenedAtLogin = false) {
   const getLoginItemSettings = vi.fn(() => ({
     openAtLogin: false,
     executableWillLaunchAtLogin: false,
-    wasOpenedAtLogin: false,
+    wasOpenedAtLogin,
     status: "not-registered" as const,
   }));
   const prototype = { getLoginItemSettings };
@@ -32,12 +32,14 @@ describe("packaged startup-mode adapter", () => {
     expect(getLoginItemSettings).toHaveBeenCalledTimes(2);
   });
 
-  it("leaves an unmarked launch on the production observation", () => {
+  it("injects one manual observation for an unmarked acceptance launch", () => {
     const environment: NodeJS.ProcessEnv = {};
-    const { app } = loginPort();
+    const { app, getLoginItemSettings } = loginPort(true);
 
     expect(consumeAcceptanceStartupMarker(environment, app)).toBe("manual");
     expect(app.getLoginItemSettings()).toMatchObject({ wasOpenedAtLogin: false });
+    expect(app.getLoginItemSettings()).toMatchObject({ wasOpenedAtLogin: true });
+    expect(getLoginItemSettings).toHaveBeenCalledTimes(2);
   });
 
   it("deletes and rejects every non-exact marker", () => {
