@@ -227,6 +227,63 @@ describe("Telegram settings surface", () => {
     expect(screen.queryByText(/encrypted bot credential could not be saved/u)).toBeNull();
   });
 
+  it.each([
+    [
+      "telegram-credential-encryption-unavailable" as const,
+      /quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again/iu,
+      /without encryption/iu,
+    ],
+    [
+      "telegram-credential-unsafe-backend" as const,
+      /refused to read or change the saved bot token without encryption.*choose Check again/iu,
+      /macOS|Keychain/iu,
+    ],
+    [
+      "telegram-credential-unavailable" as const,
+      /saved bot token could not be read from secure storage.*choose Check again/iu,
+      /macOS|Keychain/iu,
+    ],
+  ])("offers actionable recovery for %s", async (errorCode, expected, forbidden) => {
+    const user = userEvent.setup();
+    const port = setup(
+      readyState(status({ channel: { desiredState: "enabled", state: "failed", errorCode } })),
+    );
+
+    expect(screen.getByText(expected)).toBeVisible();
+    expect(screen.queryByText(forbidden)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    expect(port.reconcile).toHaveBeenCalledWith();
+  });
+
+  it.each([
+    [
+      "telegram-credential-encryption-unavailable" as const,
+      /quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again/iu,
+    ],
+    [
+      "telegram-credential-unsafe-backend" as const,
+      /refused to read or change the saved bot token without encryption.*choose Check again/iu,
+    ],
+  ])("keeps the current paired bot visible during %s recovery", (errorCode, expected) => {
+    setup(
+      readyState(
+        status({
+          channel: { desiredState: "enabled", state: "failed", errorCode },
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          pairing: { state: "paired" },
+          credentialConfigured: true,
+        }),
+      ),
+    );
+
+    expect(screen.getByText(expected)).toBeVisible();
+    expect(screen.getByText("@desktop_coach_bot")).toBeVisible();
+    expect(screen.getByText("Paired with a primary Telegram user")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeVisible();
+    expect(screen.queryByText("Create a bot with BotFather")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Paste token from clipboard" })).toBeNull();
+  });
+
   it("requires confirmation before removing the encrypted bot credential", async () => {
     const user = userEvent.setup();
     const port = setup(

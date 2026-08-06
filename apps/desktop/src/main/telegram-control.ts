@@ -19,13 +19,21 @@ import type {
   TelegramCredentialVault,
   TelegramDesiredState,
   TelegramProfileRecord,
+  TelegramProfileRePromptReason,
   TelegramProfileStatus,
 } from "./telegram-credential-vault.js";
+import {
+  emitTelegramSecureStorageFailure,
+  type TelegramSecureStorageObserver,
+  type TelegramSecureStorageReason,
+} from "./telegram-secure-storage-diagnostics.js";
 
 type EmptyRpcParams = Readonly<Record<string, never>>;
 
 export const DESKTOP_TELEGRAM_CONTROL_ERROR_CODES = [
   "telegram-credential-storage-failed",
+  "telegram-credential-encryption-unavailable",
+  "telegram-credential-unsafe-backend",
   "telegram-credential-unavailable",
   "telegram-settings-storage-uncertain",
   "telegram-daemon-unavailable",
@@ -57,6 +65,8 @@ export type DesktopTelegramMutationRefusalReason =
   | "invalid-token"
   | "validation-unavailable"
   | "webhook-removal-required"
+  | "encryption-unavailable"
+  | "unsafe-backend"
   | "storage-failed"
   | "stale-operation"
   | "transfer-required"
@@ -65,6 +75,17 @@ export type DesktopTelegramMutationRefusalReason =
   | "invalid-state";
 
 export type DesktopTelegramMutationUncertaintyReason = "storage-uncertain" | "control-uncertain";
+
+type DesktopTelegramSecureStorageRefusalReason = Extract<
+  DesktopTelegramMutationRefusalReason,
+  "encryption-unavailable" | "unsafe-backend"
+>;
+
+function isSecureStorageRefusal(
+  reason: unknown,
+): reason is DesktopTelegramSecureStorageRefusalReason {
+  return reason === "encryption-unavailable" || reason === "unsafe-backend";
+}
 
 export type DesktopTelegramMutationResult =
   | Readonly<{ outcome: "applied"; current: DesktopTelegramSnapshot }>
@@ -142,6 +163,7 @@ export interface CreateTelegramControlCoordinatorInput {
     | "setDesiredState"
   >;
   readonly daemon: TelegramDaemonAuthorityPort;
+  readonly observeSecureStorageFailure?: TelegramSecureStorageObserver;
   readonly pairingLease?: {
     readonly now: () => number;
     readonly schedule: (callback: () => void, delayMs: number) => unknown;
@@ -235,6 +257,29 @@ function profileBot(
   return { state: "ready", username: profile.bot.username };
 }
 
+function profileStatusErrorCode(
+  reason: TelegramProfileRePromptReason,
+): DesktopTelegramControlErrorCode {
+  if (reason === "encryption-unavailable") {
+    return "telegram-credential-encryption-unavailable";
+  }
+  if (reason === "unsafe-backend") return "telegram-credential-unsafe-backend";
+  return "telegram-credential-unavailable";
+}
+
+function configuredSnapshot(
+  profile: Extract<TelegramProfileStatus, { state: "configured" }>,
+  daemonSnapshot: TelegramControlSnapshot,
+  desiredState: "disabled" | "enabled",
+): DesktopTelegramSnapshot {
+  return {
+    channel: desiredState === "disabled" ? DISABLED_CHANNEL : daemonSnapshot.channel,
+    bot: profileBot(profile, daemonSnapshot.bot),
+    pairing: daemonSnapshot.pairing,
+    credentialConfigured: true,
+  };
+}
+
 function isPollingCapable(snapshot: TelegramControlSnapshot): boolean {
   return (
     snapshot.channel.desiredState === "enabled" &&
@@ -282,6 +327,20 @@ export function createTelegramControlCoordinator(
       cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     } as const);
   let pairingLease: DesktopTelegramPairingLease | undefined;
+
+  const observeDaemonApplyFailure = (reason: TelegramSecureStorageReason): void => {
+    emitTelegramSecureStorageFailure(input.observeSecureStorageFailure, {
+      stage: "daemon-apply",
+      reason,
+    });
+  };
+
+  const profileStatusRefusal = (
+    profileStatus: TelegramProfileStatus,
+  ): TelegramProfileRePromptReason | undefined => {
+    if (profileStatus.state !== "re-prompt") return undefined;
+    return profileStatus.reason;
+  };
 
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
     if (!accepting) return Promise.reject(new TypeError());
@@ -354,7 +413,16 @@ export function createTelegramControlCoordinator(
       );
     }
     if (profile.state === "wrong-home") return failure(desiredState, "telegram-home-mismatch");
-    if (profile.state === "re-prompt" || profile.state === "uncertain") {
+    if (profile.state === "re-prompt") {
+      return failure(
+        desiredState,
+        profileStatusErrorCode(profile.reason),
+        true,
+        daemonSnapshot?.bot ?? UNCONFIGURED_BOT,
+        daemonSnapshot?.pairing ?? UNPAIRED,
+      );
+    }
+    if (profile.state === "uncertain") {
       return failure(desiredState, "telegram-credential-unavailable");
     }
     if (profile.state !== "configured") {
@@ -532,7 +600,11 @@ export function createTelegramControlCoordinator(
     active: TelegramDaemonBinding,
   ): Promise<
     | { readonly state: "configured"; readonly profile: TelegramProfileRecord }
-    | { readonly state: "missing" | "refused" | "uncertain" }
+    | { readonly state: "missing" | "uncertain" }
+    | {
+        readonly state: "refused";
+        readonly reason: "encryption-unavailable" | "unsafe-backend" | "storage-failed";
+      }
   > => {
     let captured: TelegramProfileRecord | undefined;
     const result = await input.vault.applyStoredProfile(active.athleteHome, async (profile) => {
@@ -540,25 +612,33 @@ export function createTelegramControlCoordinator(
     });
     if (result.outcome === "uncertain") return { state: "uncertain" };
     if (result.outcome === "refused") {
-      return { state: result.reason === "missing" ? "missing" : "refused" };
+      if (result.reason === "missing") return { state: "missing" };
+      const reason = isSecureStorageRefusal(result.reason) ? result.reason : "storage-failed";
+      return {
+        state: "refused",
+        reason,
+      };
     }
-    return captured === undefined
-      ? { state: "refused" }
-      : { state: "configured", profile: captured };
+    if (captured !== undefined) return { state: "configured", profile: captured };
+    return { state: "refused", reason: "storage-failed" };
   };
 
   const replaceProfile = async (
     active: TelegramDaemonBinding,
     token: string,
     bot: TelegramProfileRecord["bot"],
-  ): Promise<"applied" | "refused" | "uncertain"> => {
+  ): Promise<
+    "applied" | "encryption-unavailable" | "unsafe-backend" | "storage-failed" | "uncertain"
+  > => {
     try {
       const result = await input.vault.replaceProfile({
         token,
         bot,
         authenticatedAthleteHome: active.athleteHome,
       });
-      return result.outcome;
+      if (result.outcome !== "refused") return result.outcome;
+      const reason = isSecureStorageRefusal(result.reason) ? result.reason : "storage-failed";
+      return reason;
     } catch {
       return "uncertain";
     }
@@ -673,17 +753,15 @@ export function createTelegramControlCoordinator(
       const checked = await checkedBinding();
       if ("result" in checked) return checked.result;
       const profileStatus = await input.vault.profileStatus();
-      if (
-        replacement ? profileStatus.state !== "configured" : profileStatus.state === "configured"
-      ) {
-        return refused("invalid-state");
-      }
+      const profileRefusal = profileStatusRefusal(profileStatus);
+      if (profileRefusal !== undefined) return refused(profileRefusal);
       if (profileStatus.state === "uncertain") return uncertain();
-      if (profileStatus.state === "wrong-home" || profileStatus.state === "re-prompt") {
-        return refused("storage-failed");
-      }
+      if (profileStatus.state === "wrong-home") return refused("storage-failed");
+      if (replacement && profileStatus.state !== "configured") return refused("invalid-state");
+      if (!replacement && profileStatus.state === "configured") return refused("invalid-state");
       const prior = replacement ? await captureProfile(checked.active) : undefined;
       if (replacement && prior?.state === "uncertain") return uncertain();
+      if (replacement && prior?.state === "refused") return refused(prior.reason);
       if (replacement && prior?.state !== "configured") return refused("storage-failed");
       const priorProfile = prior?.state === "configured" ? prior.profile : undefined;
       const inspection = await inspect(checked.active, token);
@@ -703,7 +781,7 @@ export function createTelegramControlCoordinator(
       if (inspection.status === "webhook-removal-required") {
         const stored = await replaceProfile(checked.active, token, inspection.bot);
         if (stored === "uncertain") return uncertain();
-        if (stored === "refused") return refused("storage-failed");
+        if (stored !== "applied") return refused(stored);
         const desiredWrite = await persistDesired(false);
         if (desiredWrite !== "applied") {
           const restored = await compensate(
@@ -725,10 +803,12 @@ export function createTelegramControlCoordinator(
         return refused("transfer-required");
       }
       if (replacement) {
+        if (profileStatus.state !== "configured") return refused("invalid-state");
         const before = await guardedSnapshotCall(checked.active, () =>
           checked.active.getTelegramStatus({}),
         );
         if (before === undefined) return refused("stale-operation");
+        const preMutationCurrent = configuredSnapshot(profileStatus, before, checked.desiredState);
         const wasSuspended =
           before.channel.state === "suspended" || transientSuspension === checked.active;
         let rawSuspended: unknown;
@@ -791,7 +871,9 @@ export function createTelegramControlCoordinator(
           const desiredRestored = desiredChanged ? await restoreDesired(priorDesired) : "restored";
           const resumed = await suspensionLease.release();
           if (stored === "uncertain" || desiredRestored === "uncertain") return uncertain();
-          return resumed === undefined ? uncertain("control-uncertain") : refused("storage-failed");
+          return resumed === undefined
+            ? uncertain("control-uncertain")
+            : refused(stored, preMutationCurrent);
         }
         if (!isCurrent(checked.active)) {
           await compensate(checked.active, priorProfile, priorDesired, desiredChanged);
@@ -803,6 +885,7 @@ export function createTelegramControlCoordinator(
         try {
           rawMutation = await checked.active.replaceTelegram({ token });
         } catch {
+          observeDaemonApplyFailure("control-uncertain");
           const daemonRestored = await restoreDaemonProfile(checked.active, priorProfile!.token);
           const restored = await compensate(
             checked.active,
@@ -819,11 +902,13 @@ export function createTelegramControlCoordinator(
             : uncertain("control-uncertain");
         }
         if (!isCurrent(checked.active)) {
+          observeDaemonApplyFailure("control-uncertain");
           await compensate(checked.active, priorProfile, priorDesired, desiredChanged);
           return uncertain("control-uncertain");
         }
         const mutation = parseMutation(rawMutation);
         if (mutation === undefined) {
+          observeDaemonApplyFailure("control-uncertain");
           const daemonRestored = await restoreDaemonProfile(checked.active, priorProfile!.token);
           const restored = await compensate(
             checked.active,
@@ -840,6 +925,7 @@ export function createTelegramControlCoordinator(
             : uncertain("control-uncertain");
         }
         if (mutation.outcome === "refused") {
+          observeDaemonApplyFailure("control-unavailable");
           const restored = await compensate(
             checked.active,
             priorProfile,
@@ -855,6 +941,7 @@ export function createTelegramControlCoordinator(
           );
         }
         if (!isReadyForProfile(mutation.current, { bot: inspection.bot })) {
+          observeDaemonApplyFailure("control-uncertain");
           const daemonRestored = await restoreDaemonProfile(checked.active, priorProfile!.token);
           const restored = await compensate(
             checked.active,
@@ -881,15 +968,19 @@ export function createTelegramControlCoordinator(
         } else {
           final = await suspensionLease.release();
         }
-        return final === undefined ||
+        if (
+          final === undefined ||
           !isReadyForProfile(final, { bot: inspection.bot }) ||
           !matchesDesired(final, differentBot ? false : priorDesired)
-          ? uncertain("control-uncertain")
-          : applied(await project(final, checked.active));
+        ) {
+          observeDaemonApplyFailure("control-uncertain");
+          return uncertain("control-uncertain");
+        }
+        return applied(await project(final, checked.active));
       }
       const stored = await replaceProfile(checked.active, token, inspection.bot);
       if (stored === "uncertain") return uncertain();
-      if (stored === "refused") return refused("storage-failed");
+      if (stored !== "applied") return refused(stored);
       const desiredWrite = await persistDesired(false);
       if (desiredWrite !== "applied") {
         const restored = await compensate(
@@ -908,6 +999,7 @@ export function createTelegramControlCoordinator(
       try {
         rawMutation = await checked.active.configureTelegram({ token });
       } catch {
+        observeDaemonApplyFailure("control-uncertain");
         const daemonCleared = await clearInitialDaemonProfile(checked.active);
         const restored = await compensate(checked.active, undefined, priorDesired, true);
         return daemonCleared !== undefined && restored === "restored"
@@ -915,11 +1007,13 @@ export function createTelegramControlCoordinator(
           : uncertain("control-uncertain");
       }
       if (!isCurrent(checked.active)) {
+        observeDaemonApplyFailure("control-uncertain");
         await compensate(checked.active, undefined, priorDesired, true);
         return uncertain("control-uncertain");
       }
       const mutation = parseMutation(rawMutation);
       if (mutation === undefined) {
+        observeDaemonApplyFailure("control-uncertain");
         const daemonCleared = await clearInitialDaemonProfile(checked.active);
         const restored = await compensate(checked.active, undefined, priorDesired, true);
         return daemonCleared !== undefined && restored === "restored"
@@ -927,6 +1021,7 @@ export function createTelegramControlCoordinator(
           : uncertain("control-uncertain");
       }
       if (mutation.outcome === "refused") {
+        observeDaemonApplyFailure("control-unavailable");
         const restored = await compensate(checked.active, undefined, priorDesired, true);
         return restored === "restored"
           ? refused(
@@ -939,6 +1034,7 @@ export function createTelegramControlCoordinator(
         !isReadyForProfile(mutation.current, { bot: inspection.bot }) ||
         !matchesDesired(mutation.current, false)
       ) {
+        observeDaemonApplyFailure("control-uncertain");
         const daemonCleared = await clearInitialDaemonProfile(checked.active);
         const restored = await compensate(checked.active, undefined, priorDesired, true);
         return daemonCleared !== undefined && restored === "restored"
@@ -957,6 +1053,8 @@ export function createTelegramControlCoordinator(
       if ("result" in checked) return checked.result;
       const profileStatus = await input.vault.profileStatus();
       if (next && profileStatus.state !== "configured") {
+        const profileRefusal = profileStatusRefusal(profileStatus);
+        if (profileRefusal !== undefined) return refused(profileRefusal);
         return profileStatus.state === "uncertain" ? uncertain() : refused("invalid-state");
       }
       if (checked.active.supervision === "attached" && next) {
@@ -972,11 +1070,13 @@ export function createTelegramControlCoordinator(
       if (stored === "refused") return refused("storage-failed");
       const response = await guardedSnapshotCall(checked.active, () => invoke(checked.active));
       if (response === undefined) {
+        observeDaemonApplyFailure("control-uncertain");
         await restoreDesired(previous);
         return uncertain("control-uncertain");
       }
       const responseDesired = response.channel.desiredState === "enabled";
       if (responseDesired !== next) {
+        observeDaemonApplyFailure("control-uncertain");
         const desiredRestored = await restoreDesired(previous);
         if (desiredRestored === "uncertain" || previous === next) {
           return uncertain("control-uncertain");
@@ -984,6 +1084,7 @@ export function createTelegramControlCoordinator(
         return refused("invalid-state");
       }
       if (next && response.channel.state === "conflict") {
+        observeDaemonApplyFailure("control-unavailable");
         if (previous) {
           return refused("polling-conflict", await project(response, checked.active));
         }
@@ -1026,18 +1127,32 @@ export function createTelegramControlCoordinator(
     }
     if (loaded.outcome === "refused") {
       if (loaded.reason === "runtime-unavailable") {
+        observeDaemonApplyFailure("control-uncertain");
         return { outcome: "uncertain", reason: "control-uncertain" };
+      }
+      if (isSecureStorageRefusal(loaded.reason)) {
+        return { outcome: "refused", reason: loaded.reason };
       }
       return {
         outcome: "refused",
-        reason: loaded.reason === "missing" ? "invalid-state" : "control-unavailable",
+        reason:
+          loaded.reason === "missing"
+            ? "invalid-state"
+            : loaded.reason === "re-prompt"
+              ? "storage-failed"
+              : "control-unavailable",
       };
     }
-    if (mutation === undefined) return { outcome: "refused", reason: "control-unavailable" };
+    if (mutation === undefined) {
+      observeDaemonApplyFailure("control-unavailable");
+      return { outcome: "refused", reason: "control-unavailable" };
+    }
     if (mutation.outcome === "refused") {
+      observeDaemonApplyFailure("control-unavailable");
       return { outcome: "refused", reason: mapDaemonRefusal(mutation.reason) };
     }
     if (expectedProfile === undefined || !isReadyForProfile(mutation.current, expectedProfile)) {
+      observeDaemonApplyFailure("control-uncertain");
       return { outcome: "uncertain", reason: "control-uncertain" };
     }
     return { outcome: "applied", current: mutation.current };
@@ -1435,6 +1550,7 @@ export function createTelegramControlCoordinator(
         if ("result" in checked) return checked.result;
         const prior = await captureProfile(checked.active);
         if (prior.state === "uncertain") return uncertain();
+        if (prior.state === "refused") return refused(prior.reason);
         if (prior.state !== "configured") return refused("invalid-state");
         const previousDesired = checked.desiredState === "enabled";
         const disabled = await guardedSnapshotCall(checked.active, () =>
@@ -1475,6 +1591,7 @@ export function createTelegramControlCoordinator(
         if ("result" in checked) return checked.result;
         const prior = await captureProfile(checked.active);
         if (prior.state === "uncertain") return uncertain();
+        if (prior.state === "refused") return refused(prior.reason);
         if (prior.state !== "configured") return refused("invalid-state");
         let ready: Extract<TelegramCredentialInspection, { status: "ready" }> | undefined;
         const appliedProfile = await input.vault.applyStoredProfile(
@@ -1490,6 +1607,12 @@ export function createTelegramControlCoordinator(
         );
         if (ready === undefined) {
           if (appliedProfile.outcome === "uncertain") return uncertain();
+          if (
+            appliedProfile.outcome === "refused" &&
+            isSecureStorageRefusal(appliedProfile.reason)
+          ) {
+            return refused(appliedProfile.reason);
+          }
           return appliedProfile.outcome === "refused" &&
             appliedProfile.reason !== "runtime-unavailable"
             ? refused("control-unavailable")
@@ -1548,11 +1671,15 @@ export function createTelegramControlCoordinator(
           ? ({ outcome: "applied", current: daemonStatus } as const)
           : await loadStoredProfile(active, daemonStatus);
         if (loaded.outcome !== "applied") {
+          const errorCode =
+            loaded.outcome === "refused" && isSecureStorageRefusal(loaded.reason)
+              ? profileStatusErrorCode(loaded.reason)
+              : loaded.outcome === "uncertain"
+                ? "telegram-control-failed"
+                : "telegram-credential-unavailable";
           return failure(
             await readDesired(),
-            loaded.outcome === "uncertain"
-              ? "telegram-control-failed"
-              : "telegram-credential-unavailable",
+            errorCode,
             true,
             profileBot(profileStatus),
             daemonStatus.pairing,
@@ -1587,6 +1714,8 @@ export function createTelegramControlCoordinator(
         }
         const profileStatus = await input.vault.profileStatus();
         if (profileStatus.state === "uncertain") return uncertain();
+        const profileRefusal = profileStatusRefusal(profileStatus);
+        if (profileRefusal !== undefined) return refused(profileRefusal);
         if (profileStatus.state !== "configured") {
           if (checked.desiredState === "enabled") return refused("invalid-state");
           const disabled = await guardedSnapshotCall(checked.active, () =>
@@ -1625,6 +1754,8 @@ export function createTelegramControlCoordinator(
         if (checked.active.supervision === "attached") return refused("transfer-required");
         const profileStatus = await input.vault.profileStatus();
         if (profileStatus.state === "uncertain") return uncertain();
+        const profileRefusal = profileStatusRefusal(profileStatus);
+        if (profileRefusal !== undefined) return refused(profileRefusal);
         if (profileStatus.state !== "configured") return refused("invalid-state");
         const daemonStatus = await guardedSnapshotCall(checked.active, () =>
           checked.active.getTelegramStatus({}),

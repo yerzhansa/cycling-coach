@@ -1,4 +1,12 @@
-import type { TelegramAllowedSendersResult } from "@enduragent/coach-contract";
+import {
+  AthleteHomeIdentitySchema,
+  TelegramBotIdSchema,
+  TelegramBotUsernameSchema,
+  type TelegramAllowedSendersResult,
+} from "@enduragent/coach-contract";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   DESKTOP_TELEGRAM_ADD_ALLOWED_SENDER_CHANNEL,
@@ -22,6 +30,10 @@ import type {
 } from "../src/main/telegram-control.js";
 import { installDesktopTelegramIpc } from "../src/main/telegram-ipc.js";
 import type { TelegramGapWarning } from "../src/main/telegram-power.js";
+import {
+  createTelegramCredentialVault,
+  type TelegramCredentialVault,
+} from "../src/main/telegram-credential-vault.js";
 
 const TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi";
 const USERNAME = "desktop_bot";
@@ -62,7 +74,13 @@ const applied = (current: DesktopTelegramSnapshot): DesktopTelegramMutationResul
   current,
 });
 
-function setup(options: { readonly trusted?: boolean; readonly configured?: boolean } = {}) {
+function setup(
+  options: {
+    readonly trusted?: boolean;
+    readonly configured?: boolean;
+    readonly vault?: Pick<TelegramCredentialVault, "profileStatus">;
+  } = {},
+) {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const removed: string[] = [];
   const trace: string[] = [];
@@ -115,15 +133,17 @@ function setup(options: { readonly trusted?: boolean; readonly configured?: bool
   };
   const vault = {
     profileStatus: vi.fn(async () =>
-      configured
-        ? {
-            state: "configured" as const,
-            profileId: "00000000-0000-4000-8000-000000000001",
-            bot: { id: 10001, username: USERNAME },
-          }
-        : { state: "missing" as const },
+      options.vault === undefined
+        ? configured
+          ? {
+              state: "configured" as const,
+              profileId: "00000000-0000-4000-8000-000000000001",
+              bot: { id: 10001, username: USERNAME },
+            }
+          : { state: "missing" as const }
+        : options.vault.profileStatus(),
     ),
-  };
+  } satisfies Pick<TelegramCredentialVault, "profileStatus">;
   const clipboard = {
     readText: vi.fn(() => {
       trace.push("read");
@@ -243,6 +263,20 @@ describe("Desktop Telegram IPC", () => {
     expect(JSON.stringify(closed)).not.toContain("private daemon detail");
   });
 
+  it.each([
+    "telegram-credential-encryption-unavailable",
+    "telegram-credential-unsafe-backend",
+  ] as const)("passes through the closed redacted %s status code", async (errorCode) => {
+    const runtime = setup();
+    const current = snapshot(false, { desiredState: "enabled", state: "failed", errorCode });
+    vi.mocked(runtime.coordinator.status).mockResolvedValueOnce(current);
+
+    await expect(runtime.invoke(DESKTOP_TELEGRAM_STATUS_CHANNEL)).resolves.toEqual({
+      ...current,
+      gapWarning: { state: "clear" },
+    });
+  });
+
   it("reads and clears the clipboard synchronously before any credential await", async () => {
     const runtime = setup();
 
@@ -265,6 +299,65 @@ describe("Desktop Telegram IPC", () => {
     expect(runtime.coordinator.configure).not.toHaveBeenCalled();
     expect(runtime.coordinator.replace).toHaveBeenCalledWith(TOKEN);
   });
+
+  it.each([
+    ["encryption-unavailable" as const, false, undefined],
+    ["unsafe-backend" as const, true, "basic_text"],
+  ])(
+    "routes a reopened real-vault %s paste through replacement",
+    async (reason, available, backend) => {
+      const base = await mkdtemp(join(await realpath(tmpdir()), "telegram-ipc-secure-storage-"));
+      try {
+        const homePath = join(base, "athlete-home");
+        await mkdir(homePath, { mode: 0o700 });
+        const value = {
+          root: join(base, "telegram-channel-v1"),
+          athleteHome: AthleteHomeIdentitySchema.parse(await realpath(homePath)),
+        };
+        const encryption = {
+          isEncryptionAvailable: () => true,
+          encryptString: (plaintext: string) => Buffer.from(plaintext, "utf8").reverse(),
+          decryptString: (ciphertext: Buffer) => Buffer.from(ciphertext).reverse().toString("utf8"),
+        };
+        const seed = createTelegramCredentialVault({ ...value, encryption });
+        await expect(
+          seed.replaceProfile({
+            token: TOKEN,
+            bot: {
+              id: TelegramBotIdSchema.parse(10001),
+              username: TelegramBotUsernameSchema.parse(USERNAME),
+            },
+            authenticatedAthleteHome: value.athleteHome,
+          }),
+        ).resolves.toMatchObject({ outcome: "applied" });
+        const reopened = createTelegramCredentialVault({
+          ...value,
+          encryption: {
+            ...encryption,
+            isEncryptionAvailable: () => available,
+            ...(backend === undefined ? {} : { getSelectedStorageBackend: () => backend }),
+          },
+        });
+        await expect(reopened.profileStatus()).resolves.toEqual({ state: "re-prompt", reason });
+        const runtime = setup({ configured: true, vault: reopened });
+        vi.mocked(runtime.coordinator.replace).mockResolvedValueOnce({
+          outcome: "refused",
+          reason,
+          current: snapshot(true),
+        });
+
+        await expect(runtime.invoke(DESKTOP_TELEGRAM_PASTE_CREDENTIAL_CHANNEL)).resolves.toEqual({
+          outcome: "refused",
+          reason,
+          current: ipcSnapshot(true),
+        });
+        expect(runtime.coordinator.replace).toHaveBeenCalledWith(TOKEN);
+        expect(runtime.coordinator.configure).not.toHaveBeenCalled();
+      } finally {
+        await rm(base, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("passes through refused and uncertain credential outcomes without inferring success from health", async () => {
     const refused = setup({ configured: true });
@@ -304,6 +397,27 @@ describe("Desktop Telegram IPC", () => {
       current: ipcSnapshot(true, { desiredState: "enabled", state: "online" }),
     });
   });
+
+  it.each(["encryption-unavailable", "unsafe-backend"] as const)(
+    "passes through the closed %s refusal without credential details",
+    async (reason) => {
+      const runtime = setup();
+      vi.mocked(runtime.coordinator.configure).mockResolvedValueOnce({
+        outcome: "refused",
+        reason,
+        current: snapshot(false),
+      });
+
+      const result = await runtime.invoke(DESKTOP_TELEGRAM_PASTE_CREDENTIAL_CHANNEL);
+
+      expect(result).toEqual({
+        outcome: "refused",
+        reason,
+        current: ipcSnapshot(false),
+      });
+      expect(JSON.stringify(result)).not.toContain(TOKEN);
+    },
+  );
 
   it("closes malformed coordinator mutation envelopes instead of copying private fields", async () => {
     const runtime = setup({ configured: true });
