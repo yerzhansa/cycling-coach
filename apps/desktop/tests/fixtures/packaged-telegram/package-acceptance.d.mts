@@ -27,4 +27,12 @@ export function verifyTelegramAcceptanceDesignatedRequirement(
   expectedCdHash: unknown,
 ): void;
 export function verifyTelegramAcceptanceManifest(value: unknown, expectedVersion: unknown): void;
+export function verifyTelegramAcceptanceWorkspaceRuntime(
+  rootManifest: unknown,
+  archiveEntries: unknown,
+  readManifest: unknown,
+): Readonly<{
+  packages: readonly string[];
+  exportTargets: readonly string[];
+}>;
 export function verifyTelegramAcceptanceMainEntry(value: unknown): string;

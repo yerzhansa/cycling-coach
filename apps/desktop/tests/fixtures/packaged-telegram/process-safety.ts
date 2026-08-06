@@ -8,6 +8,82 @@ export interface DarwinProcessCommandResult {
 }
 
 export const TELEGRAM_ACCEPTANCE_ACCOUNTING_NAME = "Enduragent Teleg";
+export const TELEGRAM_ACCEPTANCE_QUIT_FRAME =
+  '{"type":"enduragent-telegram-acceptance","command":"quit"}\n';
+
+interface TelegramAcceptanceQuitInput {
+  on(event: "data", listener: (chunk: string) => void): unknown;
+  once(event: "end" | "error", listener: () => void): unknown;
+  resume(): unknown;
+  setEncoding(encoding: BufferEncoding): unknown;
+}
+
+export function installTelegramAcceptanceQuitControl(
+  input: TelegramAcceptanceQuitInput,
+  quit: () => void,
+): void {
+  let source = "";
+  let valid = true;
+  input.setEncoding("utf8");
+  input.on("data", (chunk) => {
+    if (!valid) return;
+    source += chunk;
+    if (
+      source.length > TELEGRAM_ACCEPTANCE_QUIT_FRAME.length ||
+      !TELEGRAM_ACCEPTANCE_QUIT_FRAME.startsWith(source)
+    ) {
+      valid = false;
+    }
+  });
+  input.once("error", () => {
+    valid = false;
+  });
+  input.once("end", () => {
+    if (valid && source === TELEGRAM_ACCEPTANCE_QUIT_FRAME) quit();
+  });
+  input.resume();
+}
+
+function telegramAcceptanceStartupFailureDiagnostic(error: unknown): string {
+  let category = "unknown";
+  try {
+    if (typeof error === "object" && error !== null && "code" in error) {
+      switch (error.code) {
+        case "ERR_INVALID_PACKAGE_CONFIG":
+        case "ERR_INVALID_PACKAGE_TARGET":
+        case "ERR_MODULE_NOT_FOUND":
+        case "ERR_PACKAGE_IMPORT_NOT_DEFINED":
+        case "ERR_PACKAGE_PATH_NOT_EXPORTED":
+        case "ERR_UNKNOWN_FILE_EXTENSION":
+        case "ERR_UNSUPPORTED_DIR_IMPORT":
+          category = "module-resolution";
+      }
+    }
+  } catch {}
+  return `packaged Desktop production startup failed; category=${category}`;
+}
+
+export async function runTelegramAcceptanceBootstrap(input: {
+  readonly input: TelegramAcceptanceQuitInput;
+  readonly beforeImport: () => void;
+  readonly importProduction: () => Promise<unknown>;
+  readonly quit: () => void;
+  readonly report: (diagnostic: string) => void;
+  readonly exit: (code: number) => void;
+}): Promise<void> {
+  try {
+    installTelegramAcceptanceQuitControl(input.input, input.quit);
+    input.beforeImport();
+    await input.importProduction();
+  } catch (error) {
+    try {
+      input.report(telegramAcceptanceStartupFailureDiagnostic(error));
+    } catch {}
+    try {
+      input.exit(1);
+    } catch {}
+  }
+}
 
 export type TelegramAcceptanceApplicationLaunch =
   | { readonly state: "spawned"; readonly pid: number }
@@ -69,6 +145,63 @@ export function telegramAcceptanceDirectExitIsClean(
     terminal.code === 0 &&
     terminal.signal === null
   );
+}
+
+export function telegramAcceptanceJsonDiagnostic(
+  value: unknown,
+  sensitiveValues: readonly string[],
+  maximumLength = 4_000,
+): string {
+  const orderedSensitiveValues = [...new Set(sensitiveValues)]
+    .filter((sensitiveValue) => sensitiveValue !== "")
+    .sort((left, right) => right.length - left.length);
+  const marker = orderedSensitiveValues.some((sensitiveValue) =>
+    "<redacted>".includes(sensitiveValue),
+  )
+    ? ""
+    : "<redacted>";
+  let serialized =
+    JSON.stringify(value, (_key, candidate: unknown) => {
+      if (typeof candidate !== "string") return candidate;
+      let redacted = candidate;
+      for (const sensitiveValue of orderedSensitiveValues) {
+        redacted = redacted.replaceAll(sensitiveValue, marker);
+      }
+      return redacted;
+    }) ?? "undefined";
+  const escapedSensitiveValues = [
+    ...new Set(
+      orderedSensitiveValues.map((sensitiveValue) => JSON.stringify(sensitiveValue).slice(1, -1)),
+    ),
+  ].sort((left, right) => right.length - left.length);
+  for (const escapedSensitiveValue of escapedSensitiveValues) {
+    serialized = serialized.replaceAll(escapedSensitiveValue, marker);
+  }
+  if (serialized.length <= maximumLength) return serialized;
+  const truncationMarker = orderedSensitiveValues.some((sensitiveValue) =>
+    "<truncated>".includes(sensitiveValue),
+  )
+    ? ""
+    : "<truncated>";
+  if (maximumLength <= truncationMarker.length) return truncationMarker.slice(0, maximumLength);
+  const retainedLength = maximumLength - truncationMarker.length;
+  const headLength = Math.ceil(retainedLength / 2);
+  const tailLength = retainedLength - headLength;
+  const tail = tailLength === 0 ? "" : serialized.slice(-tailLength);
+  return `${serialized.slice(0, headLength)}${truncationMarker}${tail}`;
+}
+
+export function telegramAcceptanceLaunchDiagnostic(input: {
+  readonly pid: number | undefined;
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly output: { readonly stdout: string; readonly stderr: string };
+  readonly sensitiveValues: readonly string[];
+}): string {
+  const output = telegramAcceptanceJsonDiagnostic(input.output, input.sensitiveValues);
+  return `pid=${String(input.pid)}; exit=${String(input.code)}; signal=${String(
+    input.signal,
+  )}; output=${output}`;
 }
 
 export function telegramAcceptanceBundleTextIsClear(

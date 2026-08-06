@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { extractFile } from "@electron/asar";
+import { extractFile, listPackage } from "@electron/asar";
 import { parse } from "yaml";
 import {
   createTelegramAcceptanceBuilderConfiguration,
@@ -20,6 +20,7 @@ import {
   verifyTelegramAcceptanceNestedListing,
   verifyTelegramAcceptanceNestedSignature,
   verifyTelegramAcceptanceSignature,
+  verifyTelegramAcceptanceWorkspaceRuntime,
 } from "../tests/fixtures/packaged-telegram/package-acceptance.mjs";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -214,6 +215,9 @@ verifyTelegramAcceptanceInfoPlist(JSON.parse(infoPlist.stdout));
 const archive = join(application, "Contents/Resources/app.asar");
 const packagedManifest = JSON.parse(extractFile(archive, "package.json").toString("utf8"));
 verifyTelegramAcceptanceManifest(packagedManifest, sourceManifest.version);
+verifyTelegramAcceptanceWorkspaceRuntime(packagedManifest, listPackage(archive), (manifestPath) =>
+  JSON.parse(extractFile(archive, manifestPath).toString("utf8")),
+);
 const productionMain = verifyTelegramAcceptanceMainEntry(
   extractFile(archive, packagedManifest.main).toString("utf8"),
 );

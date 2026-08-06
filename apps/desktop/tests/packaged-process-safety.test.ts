@@ -1,13 +1,19 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
+  installTelegramAcceptanceQuitControl,
   observeTelegramAcceptanceChild,
   releaseAcceptanceStorage,
+  runTelegramAcceptanceBootstrap,
   TELEGRAM_ACCEPTANCE_ACCOUNTING_NAME,
+  TELEGRAM_ACCEPTANCE_QUIT_FRAME,
   telegramAcceptanceBundleTextIsClear,
   telegramAcceptanceDebuggerListenerOwner,
   telegramAcceptanceDirectExitIsClean,
+  telegramAcceptanceJsonDiagnostic,
+  telegramAcceptanceLaunchDiagnostic,
   telegramAcceptanceProcessTableIsClear,
   telegramAcceptanceShutdownIsProven,
 } from "./fixtures/packaged-telegram/process-safety.js";
@@ -67,6 +73,149 @@ describe("packaged direct-child lifecycle", () => {
     emitter.emit("error", error);
     expect(await lifecycle.launch).toEqual({ state: "spawned", pid: 123 });
     expect(await lifecycle.terminal).toEqual({ state: "child-error", error });
+  });
+
+  it("retains lifecycle and output diagnostics without exposing sensitive values", () => {
+    const sensitive = '123456789:line one\n"quoted"\\tail';
+    const escapedSensitive = JSON.stringify(sensitive).slice(1, -1);
+    const diagnostic = telegramAcceptanceLaunchDiagnostic({
+      pid: 123,
+      code: 1,
+      signal: null,
+      output: {
+        stdout: `before ${sensitive} after`,
+        stderr: `startup ${sensitive} failed`,
+      },
+      sensitiveValues: [sensitive],
+    });
+    expect(diagnostic).toContain("pid=123; exit=1; signal=null");
+    expect(diagnostic).toContain('stdout":"before <redacted> after');
+    expect(diagnostic).toContain('stderr":"startup <redacted> failed');
+    expect(diagnostic).not.toContain(sensitive);
+    expect(diagnostic).not.toContain(escapedSensitive);
+
+    const keyedDiagnostic = telegramAcceptanceJsonDiagnostic(
+      { [`prefix ${sensitive} suffix`]: "fixed value" },
+      [sensitive],
+    );
+    expect(keyedDiagnostic).toContain('"prefix <redacted> suffix":"fixed value"');
+    expect(keyedDiagnostic).not.toContain(sensitive);
+    expect(keyedDiagnostic).not.toContain(escapedSensitive);
+
+    expect(telegramAcceptanceJsonDiagnostic({ value: "abcdef" }, ["abc", "abcdef"])).toBe(
+      '{"value":"<redacted>"}',
+    );
+    expect(telegramAcceptanceJsonDiagnostic({ value: "redacted" }, ["redacted"])).toBe(
+      '{"value":""}',
+    );
+  });
+});
+
+describe("packaged application bootstrap control", () => {
+  it("registers an exact, fragmented stdin quit frame before production startup", async () => {
+    const input = new PassThrough();
+    const quit = vi.fn();
+    const importProduction = vi.fn(async () => {
+      expect(input.listenerCount("data")).toBeGreaterThan(0);
+      expect(input.listenerCount("end")).toBeGreaterThan(0);
+    });
+
+    const bootstrap = runTelegramAcceptanceBootstrap({
+      input,
+      beforeImport: () => undefined,
+      importProduction,
+      quit,
+      report: vi.fn(),
+      exit: vi.fn(),
+    });
+    expect(importProduction).toHaveBeenCalledOnce();
+
+    input.write(TELEGRAM_ACCEPTANCE_QUIT_FRAME.slice(0, 7));
+    expect(quit).not.toHaveBeenCalled();
+    const ended = new Promise<void>((resolve) => input.once("end", resolve));
+    input.end(TELEGRAM_ACCEPTANCE_QUIT_FRAME.slice(7));
+
+    await Promise.all([bootstrap, ended]);
+    expect(quit).toHaveBeenCalledOnce();
+  });
+
+  it("ignores malformed, oversized, and repeated stdin commands", async () => {
+    for (const command of [
+      "quit\n",
+      `${TELEGRAM_ACCEPTANCE_QUIT_FRAME}again\n`,
+      "x".repeat(TELEGRAM_ACCEPTANCE_QUIT_FRAME.length + 1),
+    ]) {
+      const input = new PassThrough();
+      const quit = vi.fn();
+      installTelegramAcceptanceQuitControl(input, quit);
+      const ended = new Promise<void>((resolve) => input.once("end", resolve));
+      input.end(command);
+      await ended;
+      expect(quit).not.toHaveBeenCalled();
+    }
+  });
+
+  it("contains production import rejection, reports only a sanitized class, and exits nonzero", async () => {
+    const input = new PassThrough();
+    const secret = "/private/tmp/athlete-secret\nsecond-line";
+    const error = Object.assign(new Error(`Cannot load ${secret}`), {
+      code: "ERR_MODULE_NOT_FOUND",
+    });
+    const report = vi.fn();
+    const exit = vi.fn();
+
+    await expect(
+      runTelegramAcceptanceBootstrap({
+        input,
+        beforeImport: () => undefined,
+        importProduction: async () => Promise.reject(error),
+        quit: vi.fn(),
+        report,
+        exit,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(report).toHaveBeenCalledOnce();
+    const diagnostic = String(report.mock.calls[0]?.[0]);
+    expect(diagnostic).toBe(
+      "packaged Desktop production startup failed; category=module-resolution",
+    );
+    expect(diagnostic).not.toContain(secret);
+    expect(diagnostic).not.toContain("athlete-secret");
+    expect(diagnostic).not.toMatch(/[\r\n]/u);
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("does not echo safe-shaped attacker-controlled failure metadata", async () => {
+    const report = vi.fn();
+    await runTelegramAcceptanceBootstrap({
+      input: new PassThrough(),
+      beforeImport: () => undefined,
+      importProduction: async () =>
+        Promise.reject({ name: "AthleteSecret", code: "ATHLETE_SECRET" }),
+      quit: vi.fn(),
+      report,
+      exit: vi.fn(),
+    });
+    expect(report).toHaveBeenCalledWith(
+      "packaged Desktop production startup failed; category=unknown",
+    );
+  });
+
+  it("does not report or exit after successful production startup", async () => {
+    const report = vi.fn();
+    const exit = vi.fn();
+    await runTelegramAcceptanceBootstrap({
+      input: new PassThrough(),
+      beforeImport: () => undefined,
+      importProduction: async () => undefined,
+      quit: vi.fn(),
+      report,
+      exit,
+    });
+    expect(report).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
   });
 });
 

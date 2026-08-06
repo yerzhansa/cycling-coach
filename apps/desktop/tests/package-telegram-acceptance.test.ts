@@ -16,6 +16,7 @@ import {
   verifyTelegramAcceptanceNestedListing,
   verifyTelegramAcceptanceNestedSignature,
   verifyTelegramAcceptanceSignature,
+  verifyTelegramAcceptanceWorkspaceRuntime,
 } from "./fixtures/packaged-telegram/package-acceptance.mjs";
 
 const version = "0.0.1";
@@ -77,6 +78,124 @@ function manifest() {
     type: "module",
     main: "out/main/index.js",
   };
+}
+
+function productionMain(target = '"./index-DV6OlGhL.js"'): string {
+  return `import { app } from "electron";
+const TELEGRAM_ACCEPTANCE_QUIT_FRAME = '{"type":"enduragent-telegram-acceptance","command":"quit"}\\n';
+function installTelegramAcceptanceQuitControl(input, quit) {
+  let source = "";
+  let valid = true;
+  input.setEncoding("utf8");
+  input.on("data", (chunk) => {
+    if (!valid) return;
+    source += chunk;
+    if (source.length > TELEGRAM_ACCEPTANCE_QUIT_FRAME.length || !TELEGRAM_ACCEPTANCE_QUIT_FRAME.startsWith(source)) {
+      valid = false;
+    }
+  });
+  input.once("error", () => {
+    valid = false;
+  });
+  input.once("end", () => {
+    if (valid && source === TELEGRAM_ACCEPTANCE_QUIT_FRAME) quit();
+  });
+  input.resume();
+}
+function telegramAcceptanceStartupFailureDiagnostic(error) {
+  let category = "unknown";
+  try {
+    if (typeof error === "object" && error !== null && "code" in error) {
+      switch (error.code) {
+        case "ERR_INVALID_PACKAGE_CONFIG":
+        case "ERR_INVALID_PACKAGE_TARGET":
+        case "ERR_MODULE_NOT_FOUND":
+        case "ERR_PACKAGE_IMPORT_NOT_DEFINED":
+        case "ERR_PACKAGE_PATH_NOT_EXPORTED":
+        case "ERR_UNKNOWN_FILE_EXTENSION":
+        case "ERR_UNSUPPORTED_DIR_IMPORT":
+          category = "module-resolution";
+      }
+    }
+  } catch {
+  }
+  return \`packaged Desktop production startup failed; category=${"${category}"}\`;
+}
+async function runTelegramAcceptanceBootstrap(input) {
+  try {
+    installTelegramAcceptanceQuitControl(input.input, input.quit);
+    input.beforeImport();
+    await input.importProduction();
+  } catch (error) {
+    try { input.report(telegramAcceptanceStartupFailureDiagnostic(error)); } catch {}
+    try { input.exit(1); } catch {}
+  }
+}
+const ACCEPTANCE_OS_LOGIN_MARKER_ENV = "ENDURAGENT_ACCEPTANCE_OS_LOGIN_LAUNCH";
+const ACCEPTANCE_OS_LOGIN_MARKER_VALUE = "os-login";
+function installSingleLoginLaunchObservation(app2, wasOpenedAtLogin) {
+  const key = "getLoginItemSettings";
+  const ownDescriptor = Object.getOwnPropertyDescriptor(app2, key);
+  const original = app2.getLoginItemSettings;
+  let pending = true;
+  const restore = () => {
+    if (ownDescriptor === void 0) {
+      if (!Reflect.deleteProperty(app2, key)) {
+        throw new TypeError("Telegram acceptance startup port could not be restored");
+      }
+      return;
+    }
+    Object.defineProperty(app2, key, ownDescriptor);
+  };
+  Object.defineProperty(app2, key, {
+    configurable: true,
+    writable: true,
+    value(...args) {
+      if (!pending) throw new TypeError("Telegram acceptance startup marker was reused");
+      pending = false;
+      restore();
+      return { ...original.apply(app2, args), wasOpenedAtLogin };
+    }
+  });
+}
+function consumeAcceptanceStartupMarker(environment, app2) {
+  const marker = environment[ACCEPTANCE_OS_LOGIN_MARKER_ENV];
+  delete environment[ACCEPTANCE_OS_LOGIN_MARKER_ENV];
+  if (marker === void 0) {
+    installSingleLoginLaunchObservation(app2, false);
+    return "manual";
+  }
+  if (marker !== ACCEPTANCE_OS_LOGIN_MARKER_VALUE) {
+    throw new TypeError("Telegram acceptance startup marker is invalid");
+  }
+  installSingleLoginLaunchObservation(app2, true);
+  return "os-login";
+}
+await runTelegramAcceptanceBootstrap({
+  input: process.stdin,
+  beforeImport: () => consumeAcceptanceStartupMarker(process.env, app),
+  importProduction: () => import(${target}),
+  quit: () => app.quit(),
+  report: (diagnostic) => process.stderr.write(\`${"${diagnostic}"}\\n\`),
+  exit: (code) => {
+    process.exitCode = code;
+    app.exit(code);
+  },
+});`;
+}
+
+function emptyPackagedHelper(source: string, name: string, nextDeclaration: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  const body = source.indexOf("{", start);
+  const end = source.indexOf(nextDeclaration, body);
+  if (start < 0 || body < 0 || end < 0) throw new TypeError("test helper boundary is invalid");
+  return `${source.slice(0, body + 1)}}\n${source.slice(end)}`;
+}
+
+function beforePackagedBootstrap(source: string, mutation: string): string {
+  const handoff = "await runTelegramAcceptanceBootstrap({";
+  if (!source.includes(handoff)) throw new TypeError("test bootstrap boundary is invalid");
+  return source.replace(handoff, `${mutation}\n${handoff}`);
 }
 
 describe("Telegram acceptance package", () => {
@@ -310,20 +429,182 @@ describe("Telegram acceptance package", () => {
     }
   });
 
-  it("keeps the wrapped production main beside its runtime-relative dependencies", () => {
-    expect(verifyTelegramAcceptanceMainEntry('await import("./index-DV6OlGhL.js");')).toBe(
-      "out/main/index-DV6OlGhL.js",
+  it("audits every exact runtime export in the packaged workspace dependency closure", () => {
+    const rootManifest = {
+      dependencies: {
+        "@enduragent/alpha": "workspace:*",
+        external: "1.0.0",
+      },
+    };
+    const manifests: Record<string, unknown> = {
+      "node_modules/@enduragent/alpha/package.json": {
+        name: "@enduragent/alpha",
+        exports: {
+          ".": {
+            types: "./dist/index.d.ts",
+            import: "./dist/index.js",
+            require: "./dist/index.cjs",
+          },
+          "./feature": "./dist/feature.js",
+          "./generated/*": "./dist/generated/*.js",
+        },
+        dependencies: { "@enduragent/beta": "workspace:*" },
+      },
+      "node_modules/@enduragent/beta/package.json": {
+        name: "@enduragent/beta",
+        exports: { ".": "./dist/index.js" },
+      },
+    };
+    const archiveEntries = [
+      ...Object.keys(manifests),
+      "node_modules/@enduragent/alpha/dist/index.js",
+      "node_modules/@enduragent/alpha/dist/index.cjs",
+      "node_modules/@enduragent/alpha/dist/feature.js",
+      "node_modules/@enduragent/beta/dist/index.js",
+    ].map((entry) => `/${entry}`);
+
+    expect(
+      verifyTelegramAcceptanceWorkspaceRuntime(
+        rootManifest,
+        archiveEntries,
+        (path: string) => manifests[path],
+      ),
+    ).toEqual({
+      packages: ["@enduragent/alpha", "@enduragent/beta"],
+      exportTargets: [
+        "node_modules/@enduragent/alpha/dist/feature.js",
+        "node_modules/@enduragent/alpha/dist/index.cjs",
+        "node_modules/@enduragent/alpha/dist/index.js",
+        "node_modules/@enduragent/beta/dist/index.js",
+      ],
+    });
+  });
+
+  it("rejects a packaged workspace dependency with any missing exact runtime export", () => {
+    const manifestPath = "node_modules/@enduragent/kernel-node/package.json";
+    const packageManifest = {
+      name: "@enduragent/kernel-node",
+      exports: {
+        "./sqlite": "./dist/sqlite.js",
+        "./archive": "./dist/archive/index.js",
+      },
+    };
+
+    expect(() =>
+      verifyTelegramAcceptanceWorkspaceRuntime(
+        { dependencies: { "@enduragent/kernel-node": "workspace:*" } },
+        [`/${manifestPath}`, "/node_modules/@enduragent/kernel-node/dist/sqlite.js"],
+        (path: string) => (path === manifestPath ? packageManifest : undefined),
+      ),
+    ).toThrow(
+      "Telegram acceptance workspace export target is missing: @enduragent/kernel-node ./dist/archive/index.js",
     );
+  });
+
+  it("rejects missing or malformed packaged workspace package metadata", () => {
+    const rootManifest = { dependencies: { "@enduragent/runtime": "workspace:*" } };
+    expect(() =>
+      verifyTelegramAcceptanceWorkspaceRuntime(rootManifest, [], () => undefined),
+    ).toThrow("Telegram acceptance workspace package manifest is missing: @enduragent/runtime");
+    expect(() =>
+      verifyTelegramAcceptanceWorkspaceRuntime(
+        rootManifest,
+        ["/node_modules/@enduragent/runtime/package.json"],
+        () => ({
+          name: "@enduragent/runtime",
+          exports: { ".": "../outside.js" },
+        }),
+      ),
+    ).toThrow("Telegram acceptance workspace export target is invalid");
+  });
+
+  it("keeps the wrapped production main beside its runtime-relative dependencies", () => {
+    expect(verifyTelegramAcceptanceMainEntry(productionMain())).toBe("out/main/index-DV6OlGhL.js");
     for (const invalid of [
-      'await import("./chunks/index-DV6OlGhL.js");',
-      'await import("../main/index-DV6OlGhL.js");',
-      'await import("./index.js");',
-      'await import("./index-first.js"); await import("./index-second.js");',
-      '// await import("./index-does-not-exist.js");',
-      '/*\nawait import("./index-does-not-exist.js");',
-      'const source = `\nawait import("./index-does-not-exist.js");',
-      'await import("./index-DV6OlGhL.js");\nprocess.stdout.write("after handoff");',
+      productionMain('"./chunks/index-DV6OlGhL.js"'),
+      productionMain('"../main/index-DV6OlGhL.js"'),
+      productionMain('"./index.js"'),
+      productionMain("`./index-${suffix}.js`"),
+      productionMain().replace("runTelegramAcceptanceBootstrap({", "arbitraryBootstrap({"),
+      productionMain().replace("input: process.stdin,", "input: process.stdout,"),
+      productionMain().replace("await input.importProduction();", "input.importProduction();"),
+      productionMain().replace("input.exit(1);", "input.exit(0);"),
+      productionMain().replace("importProduction: () =>", "productionImport: () =>"),
+      productionMain().replace("process.exitCode = code;", "process.exitCode = 0;"),
+      productionMain().replace("app.exit(code);", "app.exit(1);"),
+      emptyPackagedHelper(
+        productionMain(),
+        "installTelegramAcceptanceQuitControl",
+        "function telegramAcceptanceStartupFailureDiagnostic",
+      ),
+      emptyPackagedHelper(
+        productionMain(),
+        "telegramAcceptanceStartupFailureDiagnostic",
+        "async function runTelegramAcceptanceBootstrap",
+      ),
+      emptyPackagedHelper(
+        productionMain(),
+        "installSingleLoginLaunchObservation",
+        "function consumeAcceptanceStartupMarker",
+      ),
+      emptyPackagedHelper(
+        productionMain(),
+        "consumeAcceptanceStartupMarker",
+        "await runTelegramAcceptanceBootstrap",
+      ),
+      `${productionMain()}\nprocess.stdout.write("after handoff");`,
       undefined,
+    ]) {
+      expect(() => verifyTelegramAcceptanceMainEntry(invalid)).toThrow();
+    }
+  });
+
+  it("rejects writes to protected packaged helpers immediately before bootstrap", () => {
+    for (const mutation of [
+      "installTelegramAcceptanceQuitControl = () => {};",
+      "installTelegramAcceptanceQuitControl = installTelegramAcceptanceQuitControl;",
+      "telegramAcceptanceStartupFailureDiagnostic = telegramAcceptanceStartupFailureDiagnostic;",
+      'ACCEPTANCE_OS_LOGIN_MARKER_VALUE += "-mutated";',
+      "runTelegramAcceptanceBootstrap.prototype.apply = undefined;",
+      "({ replacement: consumeAcceptanceStartupMarker } = replacements);",
+      "[telegramAcceptanceStartupFailureDiagnostic] = replacements;",
+      "TELEGRAM_ACCEPTANCE_QUIT_FRAME++;",
+      "delete installSingleLoginLaunchObservation.prototype;",
+      'Object.defineProperty(consumeAcceptanceStartupMarker, "call", { value: undefined });',
+    ]) {
+      expect(() =>
+        verifyTelegramAcceptanceMainEntry(beforePackagedBootstrap(productionMain(), mutation)),
+      ).toThrow("Telegram acceptance production helper binding is mutated");
+    }
+  });
+
+  it("rejects extra top-level authority mutations immediately before bootstrap", () => {
+    for (const mutation of [
+      "app.quit = () => {};",
+      "process.stdin.on = () => {};",
+      'eval("installTelegramAcceptanceQuitControl = () => {}");',
+    ]) {
+      expect(() =>
+        verifyTelegramAcceptanceMainEntry(beforePackagedBootstrap(productionMain(), mutation)),
+      ).toThrow("Telegram acceptance production top-level layout is invalid");
+    }
+  });
+
+  it("rejects non-exact bootstrap parameters and Electron import syntax", () => {
+    for (const invalid of [
+      productionMain().replace(
+        "async function runTelegramAcceptanceBootstrap(input)",
+        "async function* runTelegramAcceptanceBootstrap(input)",
+      ),
+      productionMain().replace(
+        "async function runTelegramAcceptanceBootstrap(input)",
+        "async function runTelegramAcceptanceBootstrap(...input)",
+      ),
+      productionMain().replace("exit: (code) => {", "exit: (...code) => {"),
+      productionMain().replace(
+        'import { app } from "electron";',
+        'import { app } from "electron" with { type: "json" };',
+      ),
     ]) {
       expect(() => verifyTelegramAcceptanceMainEntry(invalid)).toThrow();
     }

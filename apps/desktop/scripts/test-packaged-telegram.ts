@@ -15,10 +15,13 @@ import {
 import {
   observeTelegramAcceptanceChild,
   releaseAcceptanceStorage,
+  TELEGRAM_ACCEPTANCE_QUIT_FRAME,
   telegramAcceptanceDirectExitIsClean,
   telegramAcceptanceBundleTextIsClear,
   telegramAcceptanceDebuggerListenerOwner,
+  telegramAcceptanceJsonDiagnostic,
   telegramAcceptanceProcessTableIsClear,
+  telegramAcceptanceLaunchDiagnostic,
   telegramAcceptanceShutdownIsProven,
   type TelegramAcceptanceApplicationLaunch,
   type TelegramAcceptanceApplicationTerminal,
@@ -73,6 +76,7 @@ interface RunningApplication {
   readonly launch: Promise<TelegramAcceptanceApplicationLaunch>;
   readonly terminal: Promise<TelegramAcceptanceApplicationTerminal>;
   browserConnection: Awaited<ReturnType<typeof connectCdp>> | undefined;
+  readonly requestQuit: () => Promise<void>;
   readonly output: () => { readonly stdout: string; readonly stderr: string };
 }
 
@@ -447,7 +451,7 @@ function launchApplication(
   const args = [`--user-data-dir=${userData}`, `--remote-debugging-port=${debugPort}`];
   const child = spawn(executable, args, {
     env: environment,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
   let stdout = "";
   let stderr = "";
@@ -458,13 +462,102 @@ function launchApplication(
   child.stderr?.on("data", (chunk) => {
     stderr += String(chunk);
   });
+  let quitRequest: Promise<void> | undefined;
+  const requestQuit = (): Promise<void> => {
+    if (quitRequest !== undefined) return quitRequest;
+    quitRequest = new Promise<void>((resolveRequest) => {
+      if (
+        child.exitCode !== null ||
+        child.signalCode !== null ||
+        child.stdin === null ||
+        child.stdin.destroyed ||
+        !child.stdin.writable
+      ) {
+        resolveRequest();
+        return;
+      }
+      let settled = false;
+      const settle = (): void => {
+        if (settled) return;
+        settled = true;
+        resolveRequest();
+      };
+      child.stdin.once("error", settle);
+      try {
+        child.stdin.end(TELEGRAM_ACCEPTANCE_QUIT_FRAME, settle);
+      } catch {
+        settle();
+      }
+    });
+    return quitRequest;
+  };
   return {
     child,
     debugPort,
     ...lifecycle,
     browserConnection: undefined,
+    requestQuit,
     output: () => ({ stdout, stderr }),
   };
+}
+
+function redactSensitiveText(value: string, sensitiveValues: readonly string[]): string {
+  let redacted = value;
+  for (const sensitiveValue of sensitiveValues) {
+    if (sensitiveValue !== "") redacted = redacted.replaceAll(sensitiveValue, "<redacted>");
+  }
+  return redacted;
+}
+
+function boundedDiagnostic(value: string, maximumLength = 4_000): string {
+  if (value.length <= maximumLength) return value;
+  const retainedLength = Math.max(0, maximumLength - "<truncated>".length);
+  const headLength = Math.ceil(retainedLength / 2);
+  return `${value.slice(0, headLength)}<truncated>${value.slice(-retainedLength + headLength)}`;
+}
+
+function redactedDiagnostic(value: string, sensitiveValues: readonly string[]): string {
+  return boundedDiagnostic(redactSensitiveText(value, sensitiveValues));
+}
+
+function runningApplicationDiagnostic(
+  running: RunningApplication,
+  sensitiveValues: readonly string[],
+): string {
+  return telegramAcceptanceLaunchDiagnostic({
+    pid: running.child.pid,
+    code: running.child.exitCode,
+    signal: running.child.signalCode,
+    output: running.output(),
+    sensitiveValues,
+  });
+}
+
+function runningApplicationDiagnostics(
+  runningApplications: readonly RunningApplication[],
+  sensitiveValues: readonly string[],
+): string {
+  if (runningApplications.length === 0) return "applications=[]";
+  return `applications=[${runningApplications
+    .map(
+      (running, index) =>
+        `{index=${index}; ${runningApplicationDiagnostic(running, sensitiveValues)}}`,
+    )
+    .join(", ")}]`;
+}
+
+function errorWithRunningApplicationDiagnostics(
+  error: unknown,
+  runningApplications: readonly RunningApplication[],
+  sensitiveValues: readonly string[],
+): Error {
+  const message = redactedDiagnostic(
+    error instanceof Error ? error.message : "packaged Desktop execution failed",
+    sensitiveValues,
+  );
+  return new Error(
+    `${message}; ${runningApplicationDiagnostics(runningApplications, sensitiveValues)}`,
+  );
 }
 
 interface MainRendererTarget {
@@ -687,6 +780,25 @@ async function waitForButton(
   );
 }
 
+async function completeOnboardingBeforeNavigation(
+  page: Awaited<ReturnType<typeof cdpPage>>,
+): Promise<void> {
+  await page.evaluate(
+    `localStorage.setItem(${JSON.stringify(ONBOARDING_STORAGE_KEY)}, ${JSON.stringify(
+      ONBOARDING_STORAGE_VALUE,
+    )}); true`,
+  );
+  await page.connection.call("Page.reload", { ignoreCache: true });
+  await waitUntil("completed-onboarding renderer reload", async () =>
+    page
+      .evaluate<boolean>(`document.readyState === "complete" &&
+        performance.getEntriesByType("navigation")[0]?.type === "reload" &&
+        document.documentElement.dataset.rpc === "connected" &&
+        document.querySelector('[data-onboarding="closed"]') !== null`)
+      .catch(() => false),
+  );
+}
+
 async function telegramRendererSnapshot(
   page: Awaited<ReturnType<typeof cdpPage>>,
 ): Promise<unknown> {
@@ -836,13 +948,6 @@ async function waitForStablePackagedProcessExit(
   return false;
 }
 
-async function requestBrowserClose(
-  connection: Awaited<ReturnType<typeof connectCdp>>,
-): Promise<void> {
-  const command = connection.call("Browser.close").catch(() => undefined);
-  await Promise.race([command, delay(2_500)]);
-}
-
 function portOpen(port: number): Promise<boolean> {
   return new Promise((resolveOpen) => {
     const socket = connect({ host: "127.0.0.1", port });
@@ -859,7 +964,7 @@ async function gracefulQuit(
   page: Awaited<ReturnType<typeof cdpPage>>,
   debugPort: number,
 ): Promise<void> {
-  await requestBrowserClose(running.browserConnection ?? page.connection);
+  await running.requestQuit();
   assert(await cleanApplicationExit(running, 30_000), "packaged Desktop quit was not clean");
   await waitUntil("Desktop debugging listener exit", async () => !(await portOpen(debugPort)));
   page.closeSocket();
@@ -900,7 +1005,9 @@ async function assertOutputSecretFree(
   runningApplications: readonly RunningApplication[],
   token: string,
 ): Promise<void> {
-  const output = runningApplications.map((running) => JSON.stringify(running.output())).join("\n");
+  const output = runningApplications
+    .flatMap((running) => Object.values(running.output()))
+    .join("\n");
   assert(!output.includes(token), "Telegram credential reached packaged process output");
 }
 
@@ -1013,27 +1120,32 @@ async function main(): Promise<void> {
     try {
       page = await cdpPage(debugPort, requireDebuggerAuthority(debuggerAuthorities, debugPort));
     } catch (error) {
-      const processOutput = JSON.stringify(primary.output()).replaceAll(token, "<redacted>");
+      const processOutput = boundedDiagnostic(
+        runningApplicationDiagnostic(primary, [token]),
+        2_000,
+      );
       throw new Error(
-        `${error instanceof Error ? error.message : "Desktop renderer did not start"}; exit=${String(primary.child.exitCode)}; signal=${String(primary.child.signalCode)}; process=${processOutput.slice(0, 2_000)}`,
+        `${error instanceof Error ? error.message : "Desktop renderer did not start"}; process=${processOutput}`,
         { cause: error },
       );
     }
-    await page.evaluate(
-      `localStorage.setItem(${JSON.stringify(ONBOARDING_STORAGE_KEY)}, ${JSON.stringify(ONBOARDING_STORAGE_VALUE)}); true`,
-    );
+    await completeOnboardingBeforeNavigation(page);
     await waitForButton(page, "Settings");
     await page.clickButton("Settings");
     try {
       await waitForButton(page, "Paste token from clipboard");
     } catch (error) {
-      const renderer = JSON.stringify(await telegramRendererSnapshot(page)).replaceAll(
-        token,
-        "<redacted>",
+      const renderer = telegramAcceptanceJsonDiagnostic(
+        await telegramRendererSnapshot(page),
+        [token],
+        2_000,
       );
-      const processOutput = JSON.stringify(primary.output()).replaceAll(token, "<redacted>");
+      const processOutput = boundedDiagnostic(
+        runningApplicationDiagnostic(primary, [token]),
+        1_000,
+      );
       throw new Error(
-        `${error instanceof Error ? error.message : "Telegram settings did not load"}; renderer=${renderer.slice(0, 2_000)}; profile=${existsSync(join(userData, TELEGRAM_VAULT_DIRECTORY, TELEGRAM_PROFILE_FILE))}; desired-state=${existsSync(join(userData, TELEGRAM_VAULT_DIRECTORY, TELEGRAM_DESIRED_STATE_FILE))}; Bot API methods=${telegram.methods().join(",") || "none"}; process=${processOutput.slice(0, 1_000)}`,
+        `${error instanceof Error ? error.message : "Telegram settings did not load"}; renderer=${renderer}; profile=${existsSync(join(userData, TELEGRAM_VAULT_DIRECTORY, TELEGRAM_PROFILE_FILE))}; desired-state=${existsSync(join(userData, TELEGRAM_VAULT_DIRECTORY, TELEGRAM_DESIRED_STATE_FILE))}; Bot API methods=${telegram.methods().join(",") || "none"}; process=${processOutput}`,
       );
     }
 
@@ -1042,9 +1154,12 @@ async function main(): Promise<void> {
     try {
       await waitForTelegramText(page, `@${BOT_USERNAME}`);
     } catch (error) {
-      const processOutput = JSON.stringify(primary.output()).replaceAll(token, "<redacted>");
+      const processOutput = boundedDiagnostic(
+        runningApplicationDiagnostic(primary, [token]),
+        1_000,
+      );
       throw new Error(
-        `${error instanceof Error ? error.message : "Telegram setup failed"}; Bot API methods=${telegram.methods().join(",") || "none"}; content-types=${telegram.contentTypes().join(",") || "none"}; process=${processOutput.slice(0, 1_000)}`,
+        `${error instanceof Error ? error.message : "Telegram setup failed"}; Bot API methods=${telegram.methods().join(",") || "none"}; content-types=${telegram.contentTypes().join(",") || "none"}; process=${processOutput}`,
       );
     }
     assert((await clipboardBytes()).length === 0, "Telegram credential remained on the clipboard");
@@ -1132,22 +1247,22 @@ async function main(): Promise<void> {
     const freeTextReplies = telegram.sentMessages.slice(freeTextMessageStart);
     assert(
       freeTextReplies.every((message) => message.chatId === SENDER_ID),
-      `credential-free acceptance replied to the wrong Telegram chat: ${JSON.stringify(
+      `credential-free acceptance replied to the wrong Telegram chat: ${telegramAcceptanceJsonDiagnostic(
         freeTextReplies,
-      )
-        .replaceAll(token, "<redacted>")
-        .slice(0, 600)}`,
+        [token],
+        600,
+      )}`,
     );
     const freeTextReplyTexts = freeTextReplies.map((message) => message.text);
     assert(
       JSON.stringify(freeTextReplyTexts) === JSON.stringify([GENERIC_FAILURE]) ||
         JSON.stringify(freeTextReplyTexts) ===
           JSON.stringify([EXPECTED_WELCOME_MESSAGE, GENERIC_FAILURE]),
-      `credential-free acceptance produced an invalid response set after daemon drain: ${JSON.stringify(
+      `credential-free acceptance produced an invalid response set after daemon drain: ${telegramAcceptanceJsonDiagnostic(
         freeTextReplyTexts,
-      )
-        .replaceAll(token, "<redacted>")
-        .slice(0, 600)}`,
+        [token],
+        600,
+      )}`,
     );
     primary = undefined;
     page = undefined;
@@ -1423,7 +1538,7 @@ async function main(): Promise<void> {
       removal: true,
     };
   } catch (error) {
-    executionError = error;
+    executionError = errorWithRunningApplicationDiagnostics(error, runningApplications, [token]);
   } finally {
     const cleanupErrors: unknown[] = [];
     const attempt = async (cleanup: () => void | Promise<void>): Promise<void> => {
@@ -1434,21 +1549,19 @@ async function main(): Promise<void> {
       }
     };
 
-    const browserConnections = new Set<Awaited<ReturnType<typeof connectCdp>>>();
-    if (page !== undefined) browserConnections.add(page.connection);
-    for (const running of runningApplications) {
-      if (running.browserConnection !== undefined) {
-        browserConnections.add(running.browserConnection);
-      }
-    }
-    await Promise.all([...browserConnections].map(requestBrowserClose));
+    await Promise.all(runningApplications.map((running) => running.requestQuit()));
     const directExits = await Promise.all(
       runningApplications.map((running) => cleanApplicationExit(running, 10_000)),
     );
     const directApplicationsExitedCleanly = directExits.every(Boolean);
     if (!directApplicationsExitedCleanly) {
       cleanupErrors.push(
-        new Error("a directly launched packaged Desktop process did not exit cleanly"),
+        new Error(
+          `a directly launched packaged Desktop process did not exit cleanly; ${runningApplicationDiagnostics(
+            runningApplications,
+            [token],
+          )}`,
+        ),
       );
     }
     await attempt(() => page?.closeSocket());
@@ -1460,7 +1573,12 @@ async function main(): Promise<void> {
       processTableClear = await waitForStablePackagedProcessExit(operatorHome, 5_000);
       if (!processTableClear) {
         cleanupErrors.push(
-          new Error("a packaged Desktop executable remained in the process table"),
+          new Error(
+            `a packaged Desktop executable remained in the process table; ${runningApplicationDiagnostics(
+              runningApplications,
+              [token],
+            )}`,
+          ),
         );
       }
     } catch (error) {
@@ -1514,7 +1632,10 @@ async function main(): Promise<void> {
     if (cleanupErrors.length > 0) {
       cleanupError = new AggregateError(
         executionError === undefined ? cleanupErrors : [executionError, ...cleanupErrors],
-        "packaged Telegram acceptance cleanup failed",
+        `packaged Telegram acceptance cleanup failed; ${runningApplicationDiagnostics(
+          runningApplications,
+          [token],
+        )}`,
       );
     }
   }
