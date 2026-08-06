@@ -1,6 +1,7 @@
 .conversation {
   grid-column: 1;
   overflow: auto;
+  overflow-anchor: none;
   padding: 34px 0 var(--chat-composer-clearance, 150px);
 }
 
@@ -17,7 +18,9 @@
   grid-row: 2;
   align-self: end;
   padding: 12px max(24px, calc((100% - 48px - 820px) / 2)) 18px;
-  background: linear-gradient(transparent, var(--bg) 28%);
+  background-image: var(--grain), linear-gradient(transparent, var(--bg) 28%);
+  background-repeat: repeat, no-repeat;
+  background-size: 256px 256px, auto;
 }
 
 .noticeHost:empty {
@@ -32,7 +35,7 @@
 }
 
 .announcement:not(:empty) {
-  padding: 0 14px 8px;
+  padding: 0 14px var(--inset);
 }
 
 @media (max-width: 760px) {

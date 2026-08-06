@@ -9,13 +9,17 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@base-ui/react": "^1.6.0",
     "@enduragent/coach-client": "workspace:*",
     "@enduragent/coach-contract": "workspace:*",
+    "@fontsource-variable/dm-sans": "^5.2.8",
+    "lucide-react": "^1.28.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zustand": "5.0.14"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "7.0.0",
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.1",
@@ -23,6 +27,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.2.0",
     "jsdom": "30.0.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "^6.0.2",
     "vite": "7.3.6",
     "vitest": "^4.1.4"

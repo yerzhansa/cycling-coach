@@ -18,16 +18,18 @@
 
 .title {
   margin: 0;
-  font: 560 14px/1 var(--f-ui);
+  font: 560 14px/1 var(--f-dis);
+  letter-spacing: -0.01em;
 }
 
 .subtitle {
   color: var(--ink-3);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .action {
   display: flex;
+  gap: 8px;
   align-items: center;
   margin-left: auto;
 }
@@ -36,6 +38,7 @@
   flex: 1;
   padding: 28px 0 40px;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .column {

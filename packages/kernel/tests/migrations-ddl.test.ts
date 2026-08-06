@@ -142,13 +142,7 @@ function openMigrated(): DatabaseSync {
 
 function openFull(): DatabaseSync {
   const next = openMigrated();
-  next.exec(MIGRATIONS[1]!.sql);
-  next.exec(MIGRATIONS[2]!.sql);
-  next.exec(MIGRATIONS[3]!.sql);
-  next.exec(MIGRATIONS[4]!.sql);
-  next.exec(MIGRATIONS[5]!.sql);
-  next.exec(MIGRATIONS[6]!.sql);
-  next.exec(MIGRATIONS[7]!.sql);
+  for (const migration of MIGRATIONS.slice(1)) next.exec(migration.sql);
   return next;
 }
 
@@ -823,5 +817,25 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(() => db!.prepare("INSERT INTO store_owner VALUES(2,?)").run("b".repeat(64))).toThrow();
     expect(() => db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64))).toThrow();
     expect(() => db!.prepare("DELETE FROM store_owner").run()).toThrow();
+  });
+
+  it("omits the unreleased prior bone-stress column from the baseline schema", () => {
+    db = openMigrated();
+    expect(MIGRATIONS[0].sql).not.toContain("prior_bsi");
+    const columns = (
+      db.prepare("PRAGMA table_info(intake_flags)").all() as Array<{ name: string }>
+    ).map((row) => row.name);
+    expect(columns).not.toContain("prior_bsi");
+    expect(columns).toEqual([
+      "id",
+      "swim_skill_floor",
+      "continuous_distance_capable",
+      "open_water_comfort",
+      "clinician_cleared",
+      "injury_status",
+      "device_id",
+      "hlc_physical_ms",
+      "hlc_counter",
+    ]);
   });
 });

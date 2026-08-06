@@ -104,7 +104,7 @@ export function CredentialsSection(): ReactElement {
                       <button
                         type="button"
                         ref={confirmationDelete}
-                        className={`${styles.button} ${styles.danger}`}
+                        className={styles.danger}
                         disabled={deleting ? false : mutating}
                         aria-disabled={deleting ? "true" : undefined}
                         aria-label={`Confirm deletion of the ${entry.provider} credential`}

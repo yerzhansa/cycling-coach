@@ -16,6 +16,7 @@ AGENTS.override.md
 .tests/
 .agents/
 .ralph/
+.worktrees/
 .specify/
 specs/
 skills-lock.json

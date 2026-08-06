@@ -12,6 +12,8 @@ export const CLOSED_ONBOARDING: OnboardingSurfaceState = Object.freeze({
   draft: null,
   rideImport: IDLE_RIDE_IMPORT,
   focusSeq: 0,
+  readiness: Object.freeze({ provider: false, trainingData: false, intake: false }),
+  lastCommit: null,
 });
 
 export interface OnboardingSlice {

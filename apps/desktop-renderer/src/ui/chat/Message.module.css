@@ -76,9 +76,9 @@
   max-width: 100%;
   padding: 12px;
   overflow-x: auto;
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  background: color-mix(in srgb, currentcolor 5%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--sunk);
 }
 
 .text pre code {
@@ -110,9 +110,14 @@
 .text th,
 .text td {
   padding: 0.45em 0.6em;
-  border: 1px solid var(--line-2);
+  border: 1px solid var(--line);
   color: inherit;
   text-align: start;
   vertical-align: top;
   white-space: nowrap;
+}
+
+.text th {
+  color: var(--ink-2);
+  font-weight: 500;
 }

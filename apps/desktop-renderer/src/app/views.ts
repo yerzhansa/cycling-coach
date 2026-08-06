@@ -1,3 +1,11 @@
+import {
+  Activity,
+  History,
+  ListChecks,
+  MessageSquare,
+  Settings,
+  type LucideIcon,
+} from "lucide-react";
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
 export type ViewId = "chat" | "archive" | "training" | "setup" | "settings";
@@ -8,7 +16,7 @@ export const REACT_CHAT_REGION = "react-chat-region";
 export interface ViewDefinition {
   readonly id: ViewId;
   readonly label: string;
-  readonly glyph: string;
+  readonly icon: LucideIcon;
   readonly title: string;
   readonly page: LazyExoticComponent<ComponentType> | typeof REACT_CHAT_REGION;
 }
@@ -17,14 +25,14 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
   {
     id: "chat",
     label: "Chat",
-    glyph: "◆",
+    icon: MessageSquare,
     title: "Chat",
     page: REACT_CHAT_REGION,
   },
   {
     id: "archive",
     label: "Past chats",
-    glyph: "▤",
+    icon: History,
     title: "Past chats",
     page: lazy(async () => ({
       default: (await import("../ui/archive/ArchiveView.js")).ArchiveView,
@@ -33,7 +41,7 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
   {
     id: "training",
     label: "Training",
-    glyph: "▲",
+    icon: Activity,
     title: "Training",
     page: lazy(async () => ({
       default: (await import("../ui/training/TrainingView.js")).TrainingView,
@@ -42,7 +50,7 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
   {
     id: "setup",
     label: "Setup",
-    glyph: "●",
+    icon: ListChecks,
     title: "Setup",
     page: lazy(async () => ({
       default: (await import("../ui/onboarding/OnboardingWizard.js")).OnboardingWizard,
@@ -51,7 +59,7 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
   {
     id: "settings",
     label: "Settings",
-    glyph: "⚙",
+    icon: Settings,
     title: "Settings",
     page: lazy(async () => ({
       default: (await import("../ui/settings/SettingsView.js")).SettingsView,

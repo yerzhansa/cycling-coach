@@ -46,7 +46,8 @@ function collect(source: string, media: string | undefined, into: ParsedRule[]):
     if (open === -1) return;
     const prelude = source.slice(index, open).trim();
     const { body, end } = readBlock(source, open);
-    if (prelude.startsWith("@")) collect(body, prelude, into);
+    if (prelude.startsWith("@layer")) collect(body, media, into);
+    else if (prelude.startsWith("@")) collect(body, prelude, into);
     else into.push({ selector: prelude, media, raw: body, declarations: customProperties(body) });
     index = end;
   }
@@ -160,7 +161,7 @@ describe("control reset", () => {
     for (const element of FONT_INHERIT_ELEMENTS) expect([...inherited]).toContain(element);
   });
 
-  it("rings every keyboard-focused control with the brand outline", async () => {
+  it("rings every keyboard-focused control with the neutral outline", async () => {
     const tokens = parse(await readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"));
     const focus = tokens.filter(
       (rule) => rule.media === undefined && selectors(rule).some((part) => part.includes(FOCUS)),
@@ -169,8 +170,8 @@ describe("control reset", () => {
     expect([...selectors(focus[0])].sort()).toEqual(
       [...CONTROL_ELEMENTS].map((element) => `${element}${FOCUS}`).sort(),
     );
-    expect(focus[0].raw.replaceAll(/\s+/gu, " ")).toContain("outline: 3px solid var(--brand)");
-    expect(focus[0].raw.replaceAll(/\s+/gu, " ")).toContain("outline-offset: 2px");
+    expect(focus[0].raw.replaceAll(/\s+/gu, " ")).toContain("outline: 2px solid var(--ink)");
+    expect(focus[0].raw.replaceAll(/\s+/gu, " ")).toContain("outline-offset: 1px");
   });
 
   it("suppresses the focus ring only through focus-qualified selectors", async () => {

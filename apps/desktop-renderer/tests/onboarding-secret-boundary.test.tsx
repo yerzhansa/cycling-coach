@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -9,10 +9,28 @@ import { handoffCredential } from "../src/onboarding/credentials.js";
 import {
   control,
   mountWizard,
+  openApiKeyPanel,
+  openTrainingPanel,
+  panel,
   passwordInput,
   resetOnboardingStore,
+  rowState,
+  seedSecret,
   testBridge,
+  type UserEvent,
 } from "./onboarding-harness.js";
+
+function panelButton(name: string, label: string): HTMLButtonElement {
+  const host = panel(name);
+  if (host === null) throw new Error(`panel not open: ${name}`);
+  return within(host).getByRole("button", { name: label });
+}
+
+async function saveIn(user: UserEvent, name: string): Promise<void> {
+  await user.click(
+    panelButton(name, name === "training" ? "Save Intervals.icu API key" : "Save API key"),
+  );
+}
 
 function deferred() {
   let resolve!: () => void;
@@ -145,10 +163,11 @@ describe("mounted onboarding secret boundary", () => {
     });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
 
     await user.type(passwordInput("anthropic"), sentinel);
     expect(passwordInput("anthropic").value).toBe(sentinel);
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await saveIn(user, "api-key");
 
     await waitFor(() => {
       expect(transient).toEqual({ slot: "anthropic", value: sentinel });
@@ -158,7 +177,7 @@ describe("mounted onboarding secret boundary", () => {
 
     gate.resolve();
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
+      expect(rowState("ai")).toBe("ready");
     });
     expect(transient).toBeUndefined();
     expect(JSON.stringify(domSurfaces({ console: consoleCalls, rpc, bridgeResult }))).not.toContain(
@@ -178,7 +197,6 @@ describe("mounted onboarding secret boundary", () => {
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
     bridge.credentialStatuses
       .mockResolvedValueOnce([{ slot: "anthropic", state: "configured", runtimeState: "active" }])
-      .mockResolvedValueOnce([{ slot: "anthropic", state: "configured", runtimeState: "active" }])
       .mockResolvedValue([
         { slot: "anthropic", state: "configured", runtimeState: "active" },
         { slot: "intervals-icu", state: "configured", runtimeState: "active" },
@@ -197,12 +215,9 @@ describe("mounted onboarding secret boundary", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("training-data");
-    });
+    await openTrainingPanel(user);
     await user.type(passwordInput("intervals-icu"), sentinel);
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await saveIn(user, "training");
 
     await waitFor(() => {
       expect(transient).toEqual({ slot: "intervals-icu", value: sentinel });
@@ -212,7 +227,7 @@ describe("mounted onboarding secret boundary", () => {
 
     gate.resolve();
     await waitFor(() => {
-      expect(wizard.controller.state().step).toBe("safety-intake");
+      expect(rowState("training")).toBe("ready");
     });
     expect(transient).toBeUndefined();
     expect(JSON.stringify(domSurfaces({ console: consoleCalls, rpc, bridgeResult }))).not.toContain(
@@ -229,9 +244,11 @@ describe("mounted onboarding secret boundary", () => {
     bridge.writeCredential.mockRejectedValue(new TypeError());
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "openrouter");
 
     await user.type(passwordInput("openrouter"), sentinel);
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await saveIn(user, "api-key");
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("credential-save-failed");
@@ -248,13 +265,61 @@ describe("mounted onboarding secret boundary", () => {
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    await openApiKeyPanel(user);
 
     await user.type(passwordInput("anthropic"), sentinel);
     await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "openrouter");
 
-    expect(passwordInput("anthropic").getAttribute("value")).toBeNull();
+    expect(document.querySelector('input[data-slot="anthropic"]')).toBeNull();
+    expect(passwordInput("openrouter").getAttribute("value")).toBeNull();
     expect(JSON.stringify(domSurfaces({}))).not.toContain(sentinel);
     expect(JSON.stringify(wizard.controller.state())).not.toContain(sentinel);
+    wizard.controller.dispose();
+  });
+
+  it("writes only the selected provider's slot when the model key is saved", async () => {
+    const user = userEvent.setup();
+    const modelSecret = "synthetic-scoped-model-secret";
+    const trainingSecret = "synthetic-scoped-training-secret";
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await openApiKeyPanel(user);
+    await openTrainingPanel(user);
+    seedSecret("anthropic", modelSecret);
+    seedSecret("intervals-icu", trainingSecret);
+
+    await saveIn(user, "api-key");
+
+    await waitFor(() => {
+      expect(bridge.writeCredential).toHaveBeenCalledOnce();
+    });
+    expect(bridge.writeCredential.mock.calls[0]?.[0]?.slot).toBe("anthropic");
+    expect(passwordInput("intervals-icu").value).toBe(trainingSecret);
+    wizard.controller.dispose();
+  });
+
+  it("writes only intervals-icu when the training key is saved", async () => {
+    const user = userEvent.setup();
+    const modelSecret = "synthetic-scoped-model-secret-2";
+    const trainingSecret = "synthetic-scoped-training-secret-2";
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    await openApiKeyPanel(user);
+    await openTrainingPanel(user);
+    seedSecret("anthropic", modelSecret);
+    seedSecret("intervals-icu", trainingSecret);
+
+    await saveIn(user, "training");
+
+    await waitFor(() => {
+      expect(bridge.writeCredential).toHaveBeenCalledOnce();
+    });
+    expect(bridge.writeCredential.mock.calls[0]?.[0]?.slot).toBe("intervals-icu");
+    expect(passwordInput("anthropic").value).toBe(modelSecret);
     wizard.controller.dispose();
   });
 });

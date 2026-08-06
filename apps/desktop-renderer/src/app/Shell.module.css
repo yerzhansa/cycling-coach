@@ -1,9 +1,11 @@
 .win {
+  composes: grain from "../theme/surface.module.css";
+
   position: fixed;
   inset: 0;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
-  background: var(--bg);
+  background-color: var(--bg);
   color: var(--ink);
   font: 14px/1.5 var(--f-ui);
 }

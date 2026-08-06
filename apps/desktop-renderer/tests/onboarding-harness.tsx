@@ -1,4 +1,5 @@
-import { act, render, type RenderResult } from "@testing-library/react";
+import { act, render, screen, waitFor, type RenderResult } from "@testing-library/react";
+import type userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import type { OnboardingBridge, OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
 import {
@@ -12,6 +13,8 @@ import { credentialDrafts } from "../src/state/credential-drafts.js";
 import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { OnboardingWizard } from "../src/ui/onboarding/OnboardingWizard.js";
+
+export type UserEvent = ReturnType<typeof userEvent.setup>;
 
 export interface MountedWizard {
   readonly controller: OnboardingController;
@@ -75,16 +78,6 @@ export function control<T extends HTMLElement>(id: string): T {
   return element;
 }
 
-export function credentialBadge(slot: string): HTMLElement {
-  const badge = passwordInput(slot).parentElement?.querySelector<HTMLElement>(".credential-state");
-  if (badge === null || badge === undefined) throw new Error(`Badge not found: ${slot}`);
-  return badge;
-}
-
-export function credentialBadges(): readonly HTMLElement[] {
-  return Array.from(document.querySelectorAll<HTMLElement>(".credential-state"));
-}
-
 export function errorText(): string {
   return document.querySelector("#onboarding-error")?.textContent ?? "";
 }
@@ -93,6 +86,87 @@ export function retryButtons(): readonly HTMLButtonElement[] {
   return Array.from(document.querySelectorAll("button")).filter(
     (button) => button.textContent === "Retry saved keys",
   );
+}
+
+export function setupCard(): HTMLElement {
+  const card = document.querySelector<HTMLElement>("[data-setup-card]");
+  if (card === null) throw new Error("Setup card not found");
+  return card;
+}
+
+export function setupRow(id: string): HTMLElement {
+  const row = document.querySelector<HTMLElement>(`[data-setup-row="${id}"]`);
+  if (row === null) throw new Error(`Setup row not found: ${id}`);
+  return row;
+}
+
+export function rowState(id: string): string {
+  return setupRow(id).dataset.state ?? "";
+}
+
+export function rowSubtitle(id: string): string {
+  return (
+    setupRow(id).querySelector("[data-setup-row-title]")?.nextElementSibling?.textContent ?? ""
+  );
+}
+
+export function panel(name: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-setup-panel="${name}"]`);
+}
+
+export function laneMenu(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-setup-menu="ai"]');
+}
+
+export function laneItems(): readonly HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[data-lane]"));
+}
+
+export async function openLaneMenu(user: UserEvent): Promise<void> {
+  const trigger = document.querySelector<HTMLElement>('[data-setup-trigger="ai"]');
+  if (trigger === null) throw new Error("AI row trigger not found");
+  await user.click(trigger);
+  await waitFor(() => {
+    if (laneMenu() === null) throw new Error("Lane menu did not open");
+  });
+}
+
+export async function chooseLane(user: UserEvent, lane: string): Promise<void> {
+  await openLaneMenu(user);
+  const item = document.querySelector<HTMLElement>(`[data-lane="${lane}"]`);
+  if (item === null) throw new Error(`Lane not offered: ${lane}`);
+  await user.click(item);
+  await waitFor(() => {
+    if (laneMenu() !== null) throw new Error("Lane menu did not close");
+  });
+}
+
+export async function openApiKeyPanel(user: UserEvent): Promise<void> {
+  await chooseLane(user, "api-key");
+  await waitFor(() => {
+    if (panel("api-key") === null) throw new Error("API key panel did not open");
+  });
+}
+
+export async function openTrainingPanel(user: UserEvent): Promise<void> {
+  const trigger = document.querySelector<HTMLElement>('[data-setup-trigger="training"]');
+  if (trigger === null) throw new Error("Training row trigger not found");
+  await user.click(trigger);
+  await waitFor(() => {
+    if (panel("training") === null) throw new Error("Training panel did not open");
+  });
+}
+
+export function claudeCliNoteText(): string | null {
+  return document.querySelector<HTMLElement>('[data-setup-note="claude-cli"]')?.textContent ?? null;
+}
+
+export function primaryButton(): HTMLButtonElement {
+  return screen.getByRole("button", { name: "Start coaching" });
+}
+
+export async function finishSetup(user: UserEvent): Promise<void> {
+  await user.click(primaryButton());
 }
 
 export function seedSecret(slot: string, secret: string): HTMLInputElement {
@@ -161,7 +235,7 @@ export const TEST_LLM_CONFIGURATION: OnboardingLlmConfiguration = {
       defaultBaseUrl: "https://api.z.ai/api/openai/v1",
     },
   ],
-  active: null,
+  active: { provider: "openai-codex", model: "gpt-5.5" },
 };
 
 export type TestBridge = OnboardingBridge & {

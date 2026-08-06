@@ -638,15 +638,23 @@ describe("coach request and event projection", () => {
     } as const;
     const clearedIntake = {
       ...safeIntake,
-      prior_bsi: true,
       clinician_cleared: true,
       injury_status: "returning",
     } as const;
     expect(SaveIntakeRpcParamsSchema.parse(safeIntake)).toEqual(safeIntake);
     expect(SaveIntakeRpcParamsSchema.parse(clearedIntake)).toEqual(clearedIntake);
+    const historicalIntake = {
+      ...safeIntake,
+      prior_bsi: true,
+      clinician_cleared: true,
+    } as const;
+    expect(SaveIntakeRpcParamsSchema.parse(historicalIntake)).toEqual(historicalIntake);
+    const { prior_bsi: _priorBsi, ...withoutPriorBsi } = safeIntake;
     for (const invalid of [
+      withoutPriorBsi,
       { ...safeIntake, swim_skill_floor: "novice" },
       { ...safeIntake, extra: true },
+      { ...safeIntake, prior_bsi: true },
       { ...safeIntake, clinician_cleared: true },
       { ...clearedIntake, clinician_cleared: null },
     ]) {
@@ -1558,8 +1566,9 @@ describe("handshake", () => {
     }
   });
 
-  it("round trips client, accepted, and both mismatch directions", () => {
+  it("accepts aligned protocol 12 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
+    expect(client.clientProtocolVersion).toBe(12);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -1569,18 +1578,18 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual(
       accepted,
     );
-    const older = createVersionMismatchServerHandshakeFrame(
-      "ephemeral-client-started",
-      PROTOCOL_VERSION - 1,
-      PROTOCOL_VERSION,
-    );
-    const newer = createVersionMismatchServerHandshakeFrame(
-      "unmanaged-foreground",
-      PROTOCOL_VERSION + 1,
-      PROTOCOL_VERSION,
-    );
-    expect(ServerHandshakeFrameSchema.parse(older)).toEqual(older);
-    expect(ServerHandshakeFrameSchema.parse(newer)).toEqual(newer);
+    const oldClient = createVersionMismatchServerHandshakeFrame("ephemeral-client-started", 11, 12);
+    const oldServer = createVersionMismatchServerHandshakeFrame("unmanaged-foreground", 13, 12);
+    expect(ServerHandshakeFrameSchema.parse(oldClient)).toEqual(oldClient);
+    expect(oldClient.direction).toBe("client-older");
+    expect(ServerHandshakeFrameSchema.parse(oldServer)).toEqual(oldServer);
+    expect(oldServer.direction).toBe("client-newer");
+    expect(() =>
+      createAcceptedServerHandshakeFrame("service-managed", 11, acceptedHandshakeBinding, 12),
+    ).toThrow();
+    expect(() =>
+      createAcceptedServerHandshakeFrame("service-managed", 13, acceptedHandshakeBinding, 12),
+    ).toThrow();
   });
 
   it("rejects invalid token and fail-open handshake shapes", () => {

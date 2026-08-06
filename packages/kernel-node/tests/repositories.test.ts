@@ -402,7 +402,6 @@ describe("repository ports over real node:sqlite", () => {
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
-      prior_bsi: false,
       clinician_cleared: null,
       injury_status: "none" as const,
       device_id: "device-a",
@@ -412,7 +411,6 @@ describe("repository ports over real node:sqlite", () => {
     const second = {
       ...first,
       id: "1".repeat(26),
-      prior_bsi: true,
       clinician_cleared: true,
       injury_status: "returning" as const,
       hlc_counter: 1,

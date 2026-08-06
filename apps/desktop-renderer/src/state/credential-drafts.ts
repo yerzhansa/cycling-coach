@@ -13,12 +13,15 @@ export function releaseCredentialDraft(slot: string, input: HTMLInputElement | n
 }
 
 export const credentialDrafts: CredentialDraftPort = {
-  harvest(): readonly TransientPasswordInput[] {
-    return Array.from(inputs, ([slot, input]) => {
-      const carrier: TransientPasswordInput = { value: input.value, dataset: { slot } };
+  harvest(slots?: readonly string[]): readonly TransientPasswordInput[] {
+    const wanted = slots === undefined ? null : new Set(slots);
+    const carriers: TransientPasswordInput[] = [];
+    for (const [slot, input] of inputs) {
+      if (wanted !== null && !wanted.has(slot)) continue;
+      carriers.push({ value: input.value, dataset: { slot } });
       input.value = "";
-      return carrier;
-    });
+    }
+    return carriers;
   },
   clear(): void {
     for (const input of inputs.values()) input.value = "";

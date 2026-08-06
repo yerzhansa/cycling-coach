@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   claudeCliReady,
   createOnboardingState,
+  hasConfiguredModel,
+  hasTrainingData,
   nextStep,
   previousStep,
+  selectedProviderReady,
   toOnboardingCompletion,
   toDesktopIntakeFlags,
   withCredentialStatuses,
@@ -25,6 +28,7 @@ describe("desktop onboarding machine", () => {
       "chatGptState",
       "claudeCliIdentity",
       "claudeCliState",
+      "credentialRuntimeStatus",
       "credentialStatus",
       "fixedError",
       "importedRideFileCount",
@@ -51,13 +55,16 @@ describe("desktop onboarding machine", () => {
       step: "safety-intake",
       fixedError: "intake-incomplete",
     });
-    state = withIntake(state, { priorBsi: false, injuryStatus: "none" });
+    state = withIntake(state, { injuryStatus: "none" });
     state = nextStep(state);
     expect(state.step).toBe("ready");
   });
 
-  it("accepts a restored or newly configured ChatGPT lane and preserves refusals for retry", () => {
+  it("requires a runtime-ready restored or newly configured ChatGPT lane", () => {
     let state = createOnboardingState([], { state: "configured", runtimeReady: false });
+    expect(hasConfiguredModel(state)).toBe(false);
+    expect(nextStep(state).fixedError).toBe("credential-required");
+    state = withChatGptStatus(state, { state: "configured", runtimeReady: true });
     expect(nextStep(state).step).toBe("training-data");
     state = createOnboardingState();
     state = withChatGptPending(state);
@@ -75,6 +82,51 @@ describe("desktop onboarding machine", () => {
     expect(nextStep(state).step).toBe("training-data");
     state = withChatGptStatus(state, { state: "absent", runtimeReady: false });
     expect(state.chatGptState).toBe("absent");
+  });
+
+  it("requires the selected provider to match an active, healthy runtime", () => {
+    const selection = { provider: "anthropic", model: "claude-sonnet-4-6" };
+    const failed = createOnboardingState([
+      { slot: "anthropic", state: "configured", runtimeState: "failed" },
+    ]);
+
+    expect(hasConfiguredModel(failed)).toBe(false);
+    expect(selectedProviderReady(failed, selection, selection)).toBe(false);
+    expect(
+      selectedProviderReady(failed, selection, {
+        provider: "openrouter",
+        model: "deepseek/deepseek-v4-flash",
+      }),
+    ).toBe(false);
+
+    const active = createOnboardingState([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+    ]);
+    expect(selectedProviderReady(active, selection, selection)).toBe(true);
+    expect(
+      selectedProviderReady(
+        active,
+        { provider: "anthropic", model: "athlete-selected-model" },
+        selection,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects a failed training runtime but accepts imported ride data as the fallback", () => {
+    let state = createOnboardingState([
+      { slot: "intervals-icu", state: "configured", runtimeState: "failed" },
+    ]);
+    expect(hasTrainingData(state)).toBe(false);
+    state = nextStep(state, true);
+    expect(nextStep(state)).toMatchObject({
+      step: "training-data",
+      fixedError: "training-data-required",
+    });
+
+    state = withImportedRideFileCount(state, 1);
+    expect(hasTrainingData(state)).toBe(true);
+    expect(nextStep(state).step).toBe("safety-intake");
+    expect(toOnboardingCompletion(state).requiresProviderSync).toBe(false);
   });
 
   it("treats only a probe-ready Claude subscription lane as a configured model", () => {
@@ -151,9 +203,7 @@ describe("desktop onboarding machine", () => {
   });
 
   it("maps every cycling intake branch to the landed strict DTO", () => {
-    expect(
-      toDesktopIntakeFlags({ priorBsi: false, injuryStatus: "none", clinicianCleared: null }),
-    ).toEqual({
+    expect(toDesktopIntakeFlags({ injuryStatus: "none", clinicianCleared: null })).toEqual({
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
@@ -161,19 +211,19 @@ describe("desktop onboarding machine", () => {
       clinician_cleared: null,
       injury_status: "none",
     });
-    for (const priorBsi of [false, true]) {
-      for (const injuryStatus of ["managing", "returning"] as const) {
-        for (const clinicianCleared of [false, true]) {
-          expect(toDesktopIntakeFlags({ priorBsi, injuryStatus, clinicianCleared })).toMatchObject({
-            prior_bsi: priorBsi,
-            injury_status: injuryStatus,
-            clinician_cleared: clinicianCleared,
-          });
-        }
+    for (const injuryStatus of ["managing", "returning"] as const) {
+      for (const clinicianCleared of [false, true]) {
+        expect(toDesktopIntakeFlags({ injuryStatus, clinicianCleared })).toMatchObject({
+          injury_status: injuryStatus,
+          clinician_cleared: clinicianCleared,
+        });
       }
     }
+    expect(() => toDesktopIntakeFlags({ injuryStatus: null, clinicianCleared: null })).toThrow(
+      TypeError,
+    );
     expect(() =>
-      toDesktopIntakeFlags({ priorBsi: true, injuryStatus: "none", clinicianCleared: null }),
+      toDesktopIntakeFlags({ injuryStatus: "managing", clinicianCleared: null }),
     ).toThrow(TypeError);
   });
 });

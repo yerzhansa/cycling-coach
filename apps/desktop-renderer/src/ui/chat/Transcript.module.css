@@ -29,10 +29,10 @@
 }
 
 .athlete {
+  composes: raised from "../../theme/surface.module.css";
   justify-self: end;
-  padding: 13px 17px;
-  border-radius: 16px 16px 6px 16px;
-  background: var(--brand-soft);
+  padding: 12px 16px;
+  border-bottom-right-radius: var(--r-ctl);
 }
 
 .coach {
@@ -57,7 +57,11 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
+  gap: var(--inset);
+}
+
+.controls[hidden] {
+  display: none;
 }
 
 .failure {
@@ -67,16 +71,10 @@
 }
 
 .pill {
+  composes: control sm outline from "../../theme/surface.module.css";
   justify-self: start;
-  padding: 8px 13px;
-  border: 1px solid var(--line-2);
-  border-radius: 999px;
-  color: var(--brand);
-  background: var(--surface);
-  cursor: pointer;
 }
 
-.pill:disabled {
-  cursor: default;
-  opacity: 0.5;
+.pill[hidden] {
+  display: none;
 }

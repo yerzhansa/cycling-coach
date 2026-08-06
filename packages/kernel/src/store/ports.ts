@@ -233,7 +233,6 @@ export interface IntakeFlagsRow {
   readonly swim_skill_floor: null;
   readonly continuous_distance_capable: null;
   readonly open_water_comfort: null;
-  readonly prior_bsi: boolean;
   readonly clinician_cleared: boolean | null;
   readonly injury_status: "none" | "managing" | "returning";
   readonly device_id: string;
