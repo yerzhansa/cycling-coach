@@ -995,6 +995,7 @@ export function createTelegramControlCoordinator(
         if (disabled?.channel.state !== "disabled") return uncertain("control-uncertain");
         return refused("polling-conflict", await project(disabled, checked.active));
       }
+      if (!next && response.channel.state === "disabled") clearPairingLease();
       return applied(await project(response, checked.active));
     });
 
@@ -1158,8 +1159,18 @@ export function createTelegramControlCoordinator(
       return undefined;
     }
     const coherent = loaded.current;
-    const desired = await persistPairingDesired(active, true);
-    if (desired !== "applied" || !isCurrent(active)) return undefined;
+    const desired = await resolveDesired(coherent);
+    if (desired.state === "repair-required" || !isCurrent(active)) return undefined;
+    if (desired.desiredState === "disabled") {
+      clearPairingLease();
+      if (coherent.channel.desiredState === "disabled" && coherent.channel.state === "disabled") {
+        return coherent;
+      }
+      const disabled = await restoreDaemonDesired(active, false);
+      return disabled?.pairing.state === "paired" && disabled.channel.state === "disabled"
+        ? disabled
+        : undefined;
+    }
     if (isEnabledRuntimeCoherent(coherent)) {
       if (!isCurrent(active)) return undefined;
       clearPairingLease();
@@ -1181,6 +1192,9 @@ export function createTelegramControlCoordinator(
     const cleanup = await cleanupUnpaired(active);
     if (!isCurrent(active)) return { state: "uncertain" };
     if (cleanup === "paired" || cleanup === "primary") {
+      if ((await persistPairingDesired(active, true)) !== "applied") {
+        return { state: "uncertain" };
+      }
       const terminal = await guardedSnapshotCall(active, () =>
         cleanup === "paired" ? active.getTelegramStatus({}) : active.reconcileTelegram({}),
       );
@@ -1365,7 +1379,21 @@ export function createTelegramControlCoordinator(
   const repairPairingTruth = async (
     active: TelegramDaemonBinding,
     daemonSnapshot: TelegramControlSnapshot,
+    desiredState: "disabled" | "enabled",
   ): Promise<TelegramControlSnapshot | undefined> => {
+    if (desiredState === "disabled") {
+      clearPairingLease();
+      if (
+        daemonSnapshot.channel.desiredState === "disabled" &&
+        daemonSnapshot.channel.state === "disabled"
+      ) {
+        return daemonSnapshot;
+      }
+      const disabled = await guardedSnapshotCall(active, () => active.disableTelegram({}));
+      return disabled?.channel.desiredState === "disabled" && disabled.channel.state === "disabled"
+        ? disabled
+        : undefined;
+    }
     if (
       daemonSnapshot.pairing.state === "failed" &&
       daemonSnapshot.pairing.errorCode === "telegram-pairing-storage-uncertain"
@@ -1558,7 +1586,7 @@ export function createTelegramControlCoordinator(
             daemonStatus.pairing,
           );
         }
-        const repaired = await repairPairingTruth(active, loaded.current);
+        const repaired = await repairPairingTruth(active, loaded.current, desired.desiredState);
         if (!isCurrent(active)) throw new TypeError("stale Telegram daemon status");
         return repaired === undefined
           ? failure(
@@ -1599,7 +1627,11 @@ export function createTelegramControlCoordinator(
         const loaded = await loadStoredProfile(checked.active, daemonStatus);
         if (loaded.outcome === "uncertain") return uncertain(loaded.reason);
         if (loaded.outcome === "refused") return refused(loaded.reason);
-        const repaired = await repairPairingTruth(checked.active, loaded.current);
+        const repaired = await repairPairingTruth(
+          checked.active,
+          loaded.current,
+          checked.desiredState,
+        );
         if (repaired === undefined) return uncertain("control-uncertain");
         const desiredAfterRepair = await readDesired();
         const final =
@@ -1631,7 +1663,15 @@ export function createTelegramControlCoordinator(
         );
         if (daemonStatus === undefined) return refused("stale-operation");
         if (daemonStatus.pairing.state === "paired") {
-          const preserved = await preservePaired(checked.active, daemonStatus);
+          const coherent = await preservePaired(checked.active, daemonStatus);
+          if (coherent === undefined) return uncertain("control-uncertain");
+          const desiredWrite = await persistPairingDesired(checked.active, true);
+          if (desiredWrite !== "applied") {
+            return uncertain(
+              desiredWrite === "uncertain" ? "storage-uncertain" : "control-uncertain",
+            );
+          }
+          const preserved = await preservePaired(checked.active, coherent);
           return preserved === undefined
             ? uncertain("control-uncertain")
             : applied(await project(preserved, checked.active));
@@ -1728,8 +1768,14 @@ export function createTelegramControlCoordinator(
             : applied(await project(preserved, checked.active));
         }
         if (cancelled.pairing.state === "awaiting-code") {
-          if (!priorDesired && (await persistPairingDesired(checked.active, true)) !== "applied") {
-            return uncertain();
+          if (!priorDesired) {
+            clearPairingLease();
+            const disabled = await restoreDaemonDesired(checked.active, false);
+            if (disabled === undefined) return uncertain("control-uncertain");
+            if (disabled.pairing.state === "paired") {
+              return applied(await project(disabled, checked.active));
+            }
+            return refused("invalid-state", await project(disabled, checked.active));
           }
           if (!isCurrent(checked.active)) return uncertain("control-uncertain");
           armPairingLease(checked.active, cancelled.pairing);
@@ -1739,9 +1785,6 @@ export function createTelegramControlCoordinator(
         const primary = await hasPrimarySender(checked.active);
         if (primary === undefined) return uncertain("control-uncertain");
         if (primary) {
-          if ((await persistPairingDesired(checked.active, true)) !== "applied") {
-            return uncertain();
-          }
           if (!isCurrent(checked.active)) return uncertain("control-uncertain");
           const reconciled = await guardedSnapshotCall(checked.active, () =>
             checked.active.reconcileTelegram({}),
