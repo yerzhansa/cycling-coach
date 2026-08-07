@@ -72,9 +72,10 @@ export function analysisUnavailableCopy(reason: AnalysisUnavailableReason): stri
     case "activity-not-found":
       return "This ride is no longer available in local training history.";
     case "source-not-found":
-    case "ambiguous-source":
     case "not-provider-backed":
-      return "No trusted stream source is available for this ride.";
+      return "This analysis requires a ride synced from intervals.icu.";
+    case "ambiguous-source":
+      return "More than one intervals.icu source matches this ride, so analysis is paused.";
     case "missing-sensor-data":
       return "This ride does not have both power and heart-rate data.";
     case "duplicate-stream":

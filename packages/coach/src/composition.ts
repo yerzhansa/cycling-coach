@@ -102,8 +102,23 @@ import type { CoachOperationsDependencies } from "./operations.js";
 import { createSpendMeterService, type SpendMeterService } from "./spend-meter.js";
 import { createStoredActivityAnalysisService } from "./activity-analysis-service.js";
 import { createAerobicDriftAnalyzer } from "./aerobic-drift.js";
-import { createProviderActivityStreamReader } from "./activity-analysis-provider.js";
-import { createProviderActivityStreamArchive } from "./activity-analysis-archive.js";
+import {
+  createProviderActivityAnalysisClientAccess,
+  createProviderActivityStreamReader,
+} from "./activity-analysis-provider.js";
+import {
+  createProviderActivityBestEffortsArchive,
+  createProviderActivityIntervalsArchive,
+  createProviderActivityStreamArchive,
+} from "./activity-analysis-archive.js";
+import {
+  createIntervalReviewAnalyzer,
+  createProviderActivityIntervalReader,
+} from "./activity-interval-review.js";
+import {
+  createBestEffortAnalyzer,
+  createProviderActivityBestEffortReader,
+} from "./activity-best-efforts.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -1016,15 +1031,29 @@ export async function createLocalCoachComposition(
       if (fields.length === 0) throw new TypeError("empty key tuple");
       return H(analysisCrypto, ...(fields as [string | number, ...(string | number)[]]));
     });
-    const providerStreams = createProviderActivityStreamReader({
+    const providerAccess = createProviderActivityAnalysisClientAccess({
       credentials: options.liveIntervals,
+    });
+    const archiveDependencies = {
+      archive: analysisImport.archive,
+      store: input.context.store,
+      sources: analysisSources,
+      runExclusive: <T>(work: () => Promise<T>) => runtime!.runExclusive(work),
+      now,
+    };
+    const providerStreams = createProviderActivityStreamReader({
+      access: providerAccess,
       archive: createProviderActivityStreamArchive({
-        archive: analysisImport.archive,
-        store: input.context.store,
-        sources: analysisSources,
-        runExclusive: (work) => runtime!.runExclusive(work),
-        now,
+        ...archiveDependencies,
       }),
+    });
+    const providerIntervals = createProviderActivityIntervalReader({
+      access: providerAccess,
+      archive: createProviderActivityIntervalsArchive({ ...archiveDependencies }),
+    });
+    const providerBestEfforts = createProviderActivityBestEffortReader({
+      access: providerAccess,
+      archive: createProviderActivityBestEffortsArchive({ ...archiveDependencies }),
     });
     const activityAnalysis = createStoredActivityAnalysisService({
       store: input.context.store,
@@ -1035,6 +1064,8 @@ export async function createLocalCoachComposition(
           activities: canonicalActivities,
           provider: providerStreams,
         }),
+        intervals: createIntervalReviewAnalyzer({ provider: providerIntervals }),
+        bestEfforts: createBestEffortAnalyzer({ provider: providerBestEfforts }),
       },
       runCacheWrite: (work) => runtime!.runExclusive(work),
       now,

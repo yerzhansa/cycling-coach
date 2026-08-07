@@ -24,7 +24,14 @@ export interface RideAnalysisViewState {
   readonly revision: string | null;
   readonly sections: ActivityAnalysisResult["sections"];
   readonly loadingSections: readonly ActivityAnalysisSection[];
+  readonly failedSections: readonly ActivityAnalysisSection[];
 }
+
+export const DEFAULT_RIDE_ANALYSIS_SECTIONS = [
+  "aerobic-drift",
+  "intervals",
+  "best-efforts",
+] as const satisfies readonly ActivityAnalysisSection[];
 
 export const EMPTY_RIDE_ANALYSIS: RideAnalysisViewState = Object.freeze({
   activityId: null,
@@ -32,6 +39,7 @@ export const EMPTY_RIDE_ANALYSIS: RideAnalysisViewState = Object.freeze({
   revision: null,
   sections: Object.freeze({}),
   loadingSections: Object.freeze([]),
+  failedSections: Object.freeze([]),
 });
 
 export interface RideAnalysisView {
@@ -87,6 +95,7 @@ export function createRideAnalysisController(input: {
       ...state,
       status: "loading",
       loadingSections: requested,
+      failedSections: state.failedSections.filter((section) => !requested.includes(section)),
     });
     let client: CoachClient | undefined;
     try {
@@ -117,6 +126,7 @@ export function createRideAnalysisController(input: {
         revision: result.revision,
         sections: retain ? { ...state.sections, ...result.sections } : result.sections,
         loadingSections: [],
+        failedSections: state.failedSections.filter((section) => !requested.includes(section)),
       });
     } catch (error) {
       if (
@@ -137,6 +147,7 @@ export function createRideAnalysisController(input: {
         ...state,
         status: Object.keys(state.sections).length === 0 ? "unavailable" : "refresh-unavailable",
         loadingSections: [],
+        failedSections: [...new Set([...state.failedSections, ...requested])],
       });
     } finally {
       if (operation === controller) operation = undefined;
@@ -160,9 +171,10 @@ export function createRideAnalysisController(input: {
         status: "loading",
         revision: null,
         sections: {},
-        loadingSections: ["aerobic-drift"],
+        loadingSections: DEFAULT_RIDE_ANALYSIS_SECTIONS,
+        failedSections: [],
       });
-      await load(["aerobic-drift"]);
+      await load(DEFAULT_RIDE_ANALYSIS_SECTIONS);
     },
     load,
     dispose() {

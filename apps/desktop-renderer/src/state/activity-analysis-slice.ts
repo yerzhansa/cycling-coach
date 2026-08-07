@@ -1,4 +1,5 @@
 import type { StateCreator } from "zustand";
+import type { ActivityAnalysisSection } from "@enduragent/coach-contract";
 import {
   EMPTY_RIDE_ANALYSIS,
   type RideAnalysisViewState,
@@ -6,7 +7,7 @@ import {
 import type { EnduragentState } from "./store.js";
 
 export interface RideAnalysisActions {
-  refresh(): void;
+  refresh(sections: readonly ActivityAnalysisSection[]): void;
 }
 
 export interface ActivityAnalysisSlice {

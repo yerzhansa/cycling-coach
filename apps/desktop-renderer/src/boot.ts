@@ -85,8 +85,8 @@ export function bootRenderer(): Disposer {
     },
   });
   store.getState().bindRideAnalysisActions({
-    refresh: () => {
-      void rideAnalysisController.load(["aerobic-drift"], true);
+    refresh: (sections) => {
+      void rideAnalysisController.load(sections, true);
     },
   });
   let selectedAnalysisRide = store.getState().selectedRide?.id ?? null;

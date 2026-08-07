@@ -87,7 +87,7 @@ function setup(call: CoachClient["call"]) {
 }
 
 describe("ride analysis controller", () => {
-  it("loads the drift section for a selected canonical ride", async () => {
+  it("loads the visible ride-analysis sections for a selected canonical ride", async () => {
     const call = vi.fn(async () => result()) as unknown as CoachClient["call"];
     const { controller, states } = setup(call);
 
@@ -95,7 +95,10 @@ describe("ride analysis controller", () => {
 
     expect(call).toHaveBeenCalledWith(
       "getActivityAnalysis",
-      { canonicalActivityId: FIRST, sections: ["aerobic-drift"] },
+      {
+        canonicalActivityId: FIRST,
+        sections: ["aerobic-drift", "intervals", "best-efforts"],
+      },
       { signal: expect.any(AbortSignal) },
     );
     expect(states.at(-1)).toMatchObject({
@@ -150,8 +153,28 @@ describe("ride analysis controller", () => {
       activityId: FIRST,
       status: "refresh-unavailable",
       sections: { aerobicDrift: { kind: "computed" } },
+      failedSections: ["aerobic-drift"],
     });
     expect(JSON.stringify(states.at(-1))).not.toContain("private transport detail");
+  });
+
+  it("tracks a failed section without marking completed sibling evidence as failed", async () => {
+    let fail = false;
+    const call = vi.fn(async () => {
+      if (fail) throw new Error("private interval failure");
+      return result();
+    }) as unknown as CoachClient["call"];
+    const { controller, states } = setup(call);
+    await controller.select(FIRST);
+
+    fail = true;
+    await controller.load(["intervals"], true);
+
+    expect(states.at(-1)).toMatchObject({
+      status: "refresh-unavailable",
+      failedSections: ["intervals"],
+      sections: { aerobicDrift: { kind: "computed" } },
+    });
   });
 
   it("clears analysis state and cancels work when the ride closes", async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { normalizeActivityStreams, type ActivityStream } from "intervals-icu-api";
 import {
   createBoundedActivityStreamFetch,
+  createProviderActivityAnalysisClientAccess,
   createProviderActivityStreamReader,
 } from "../src/activity-analysis-provider.js";
 
@@ -16,10 +17,13 @@ describe("provider activity stream reader", () => {
   it("does not create a client without credentials", async () => {
     const createClient = vi.fn();
     const archive = { write: vi.fn() };
-    const reader = createProviderActivityStreamReader({
+    const access = createProviderActivityAnalysisClientAccess({
       credentials: { read: async () => ({ apiKey: "", athleteId: "0" }) },
-      archive,
       createClient,
+    });
+    const reader = createProviderActivityStreamReader({
+      access,
+      archive,
     });
 
     await expect(
@@ -36,21 +40,25 @@ describe("provider activity stream reader", () => {
   it("archives bounded duplicate-safe evidence before returning it", async () => {
     const order: string[] = [];
     const normalized = normalizeActivityStreams(streams);
-    const reader = createProviderActivityStreamReader({
+    const access = createProviderActivityAnalysisClientAccess({
       credentials: { read: async () => ({ apiKey: "secret", athleteId: "0" }) },
+      createClient: () =>
+        ({
+          activities: {
+            getStreamMap: async () => {
+              order.push("fetch");
+              return { ok: true as const, value: normalized };
+            },
+          },
+        }) as never,
+    });
+    const reader = createProviderActivityStreamReader({
+      access,
       archive: {
         write: async () => {
           order.push("archive");
         },
       },
-      createClient: () => ({
-        activities: {
-          getStreamMap: async () => {
-            order.push("fetch");
-            return { ok: true as const, value: normalized };
-          },
-        },
-      }),
     });
 
     await expect(
@@ -64,22 +72,26 @@ describe("provider activity stream reader", () => {
   });
 
   it("maps provider rate limits to a refresh failure without exposing response details", async () => {
-    const reader = createProviderActivityStreamReader({
+    const access = createProviderActivityAnalysisClientAccess({
       credentials: { read: async () => ({ apiKey: "secret", athleteId: "0" }) },
+      createClient: () =>
+        ({
+          activities: {
+            getStreamMap: async () => ({
+              ok: false as const,
+              error: {
+                kind: "RateLimit" as const,
+                status: 429 as const,
+                retryAfterMs: 1,
+                body: "private",
+              },
+            }),
+          },
+        }) as never,
+    });
+    const reader = createProviderActivityStreamReader({
+      access,
       archive: { write: vi.fn() },
-      createClient: () => ({
-        activities: {
-          getStreamMap: async () => ({
-            ok: false as const,
-            error: {
-              kind: "RateLimit" as const,
-              status: 429 as const,
-              retryAfterMs: 1,
-              body: "private",
-            },
-          }),
-        },
-      }),
     });
 
     await expect(
@@ -89,6 +101,27 @@ describe("provider activity stream reader", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toMatchObject({ code: "rate-limited" });
+  });
+
+  it("shares a bounded physical request budget across readers for one source revision", async () => {
+    const createClient = vi.fn(() => ({ activities: {} }) as never);
+    const access = createProviderActivityAnalysisClientAccess({
+      credentials: { read: async () => ({ apiKey: "secret", athleteId: "0" }) },
+      createClient,
+      maximumRequestsPerRevision: 2,
+    });
+    const request = {
+      sourceRevision: REVISION,
+      signal: new AbortController().signal,
+      maximumBytes: 10,
+    };
+
+    await access.open(request);
+    await access.open(request);
+    await expect(access.open(request)).rejects.toMatchObject({
+      code: "request-budget-exhausted",
+    });
+    expect(createClient).toHaveBeenCalledTimes(2);
   });
 });
 

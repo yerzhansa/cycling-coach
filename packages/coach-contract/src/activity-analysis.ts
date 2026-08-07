@@ -245,7 +245,7 @@ export const AerobicDriftDataSchema = z
     }
   });
 
-const IntervalKindSchema = z.enum(["work", "recovery", "unknown"]);
+const IntervalKindSchema = z.enum(["work", "recovery", "lap", "unknown"]);
 const NullableDisplayTextSchema = boundedDisplayText(128).nullable();
 
 export const ActivityIntervalSchema = z
