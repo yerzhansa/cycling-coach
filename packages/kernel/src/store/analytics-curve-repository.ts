@@ -1,4 +1,4 @@
-import type { Row, SqlStore } from "./ports.js";
+import type { Row, SqlReadStore, SqlStore } from "./ports.js";
 
 export const ANALYTICS_CURVE_PARTS = Object.freeze([
   Object.freeze({ curveFamily: "power" as const, activityType: "Ride" as const }),
@@ -86,12 +86,17 @@ export interface AnalyticsCurveRepository {
   readState(): Promise<AnalyticsCurveState>;
 }
 
+export interface AnalyticsCurveStateReader {
+  readState(): Promise<AnalyticsCurveState>;
+}
+
 type HashKey = (fields: readonly (string | number)[]) => Promise<string>;
 
 const HEX = /^[0-9a-f]{64}$/;
 const CIVIL_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_EPOCH_SECONDS = 8_640_000_000_000;
 const MAX_DECODED_BYTES = 2_097_152;
+const DAY_MS = 86_400_000;
 
 function invalidInput(): never {
   throw new TypeError("invalid analytics curve input");
@@ -140,6 +145,11 @@ function shiftCivilDate(value: string, days: number): string {
   const parsed = new Date(`${value}T00:00:00.000Z`);
   parsed.setUTCDate(parsed.getUTCDate() + days);
   return parsed.toISOString().slice(0, 10);
+}
+
+function civilDateMatchesInstant(value: string, epochSeconds: number): boolean {
+  const utcDate = new Date(epochSeconds * 1_000).toISOString().slice(0, 10);
+  return Math.abs(Date.parse(`${value}T00:00:00.000Z`) - Date.parse(`${utcDate}T00:00:00.000Z`)) <= DAY_MS;
 }
 
 export function analyticsCurveWindows(frozenOn: string): AnalyticsCurveWindows {
@@ -221,7 +231,7 @@ function generationFromRow(row: Row | undefined): AnalyticsCurveGeneration {
     || row.previous_start !== windows.previous.start || row.previous_end !== windows.previous.end
     || row.sustainability_start !== windows.sustainability.start
     || row.sustainability_end !== windows.sustainability.end
-    || new Date(row.frozen_epoch_s * 1_000).toISOString().slice(0, 10) !== row.frozen_on) {
+    || !civilDateMatchesInstant(row.frozen_on, row.frozen_epoch_s)) {
     invariantMismatch();
   }
   return Object.freeze({
@@ -287,12 +297,16 @@ const GENERATION_COLUMNS = `generation_id,source,lane,frozen_epoch_s,frozen_on,
 const EVIDENCE_COLUMNS = `evidence_id,generation_id,curve_family,activity_type,request_identity,
   archive_address,archive_rel_path,archive_epoch_s,decoded_bytes`;
 
-export function createAnalyticsCurveRepository(
-  store: SqlStore,
+function createAnalyticsCurveReadAccess(
+  store: SqlReadStore,
   hashKey: HashKey,
-): AnalyticsCurveRepository {
-  if (store === null || typeof store !== "object" || typeof hashKey !== "function") invalidInput();
-
+): {
+  readonly readGeneration: (generationId: string) => Promise<AnalyticsCurveGeneration>;
+  readonly readEvidence: (
+    generation: AnalyticsCurveGeneration,
+  ) => Promise<readonly AnalyticsCurveEvidence[]>;
+  readonly readState: () => Promise<AnalyticsCurveState>;
+} {
   const readGeneration = async (generationId: string): Promise<AnalyticsCurveGeneration> => {
     const generation = generationFromRow(await store.get(
       `SELECT ${GENERATION_COLUMNS} FROM analytics_curve_generation WHERE generation_id=?`,
@@ -326,12 +340,69 @@ ORDER BY curve_family COLLATE BINARY ASC, activity_type COLLATE BINARY ASC`, [ge
     return evidence;
   };
 
+  const readState = async (): Promise<AnalyticsCurveState> => {
+    const failureRow = await store.get(
+      "SELECT generation_id,code,failed_epoch_s FROM analytics_curve_refresh_failure WHERE singleton=1",
+    );
+    let refreshFailure: AnalyticsCurveRefreshFailure | null = null;
+    if (failureRow !== undefined) {
+      if (!isAddress(failureRow.generation_id) || !isRefreshFailureCode(failureRow.code)
+        || !isEpoch(failureRow.failed_epoch_s)) invariantMismatch();
+      const failureGeneration = await readGeneration(failureRow.generation_id);
+      if (failureRow.failed_epoch_s < failureGeneration.frozenEpochSeconds) invariantMismatch();
+      refreshFailure = Object.freeze({
+        generationId: failureRow.generation_id,
+        code: failureRow.code,
+        failedEpochSeconds: failureRow.failed_epoch_s,
+      });
+    }
+    const currentRow = await store.get(`SELECT c.generation_id,p.promoted_epoch_s
+FROM analytics_curve_current AS c
+JOIN analytics_curve_generation_promotion AS p ON p.generation_id=c.generation_id
+WHERE c.singleton=1`);
+    if (currentRow === undefined) return Object.freeze({ current: null, refreshFailure });
+    if (!isAddress(currentRow.generation_id) || !isEpoch(currentRow.promoted_epoch_s)) {
+      invariantMismatch();
+    }
+    const generation = await readGeneration(currentRow.generation_id);
+    if (currentRow.promoted_epoch_s < generation.frozenEpochSeconds) invariantMismatch();
+    const evidence = await readEvidence(generation);
+    if (!isCompleteEvidence(evidence)) invariantMismatch();
+    return Object.freeze({
+      current: Object.freeze({
+        generation,
+        evidence: Object.freeze(evidence),
+        promotedEpochSeconds: currentRow.promoted_epoch_s,
+      }),
+      refreshFailure,
+    });
+  };
+
+  return Object.freeze({ readGeneration, readEvidence, readState });
+}
+
+export function createAnalyticsCurveStateReader(
+  store: SqlReadStore,
+  hashKey: HashKey,
+): AnalyticsCurveStateReader {
+  if (store === null || typeof store !== "object" || typeof hashKey !== "function") invalidInput();
+  const access = createAnalyticsCurveReadAccess(store, hashKey);
+  return Object.freeze({ readState: access.readState });
+}
+
+export function createAnalyticsCurveRepository(
+  store: SqlStore,
+  hashKey: HashKey,
+): AnalyticsCurveRepository {
+  if (store === null || typeof store !== "object" || typeof hashKey !== "function") invalidInput();
+  const { readGeneration, readEvidence, readState } = createAnalyticsCurveReadAccess(store, hashKey);
+
   const repository: AnalyticsCurveRepository = {
     async beginGeneration(input) {
       if (!isPlainExact(input, ["frozenEpochSeconds", "frozenOn"])
         || !isEpoch(input.frozenEpochSeconds)) invalidInput();
       const frozenOn = civilDate(input.frozenOn);
-      if (new Date(input.frozenEpochSeconds * 1_000).toISOString().slice(0, 10) !== frozenOn) {
+      if (!civilDateMatchesInstant(frozenOn, input.frozenEpochSeconds)) {
         invalidInput();
       }
       const seed: AnalyticsCurveGeneration = {
@@ -464,43 +535,7 @@ ON CONFLICT(singleton) DO UPDATE SET generation_id=excluded.generation_id,
       ]);
     },
 
-    async readState() {
-      const failureRow = await store.get(
-        "SELECT generation_id,code,failed_epoch_s FROM analytics_curve_refresh_failure WHERE singleton=1",
-      );
-      let refreshFailure: AnalyticsCurveRefreshFailure | null = null;
-      if (failureRow !== undefined) {
-        if (!isAddress(failureRow.generation_id) || !isRefreshFailureCode(failureRow.code)
-          || !isEpoch(failureRow.failed_epoch_s)) invariantMismatch();
-        const failureGeneration = await readGeneration(failureRow.generation_id);
-        if (failureRow.failed_epoch_s < failureGeneration.frozenEpochSeconds) invariantMismatch();
-        refreshFailure = Object.freeze({
-          generationId: failureRow.generation_id,
-          code: failureRow.code,
-          failedEpochSeconds: failureRow.failed_epoch_s,
-        });
-      }
-      const currentRow = await store.get(`SELECT c.generation_id,p.promoted_epoch_s
-FROM analytics_curve_current AS c
-JOIN analytics_curve_generation_promotion AS p ON p.generation_id=c.generation_id
-WHERE c.singleton=1`);
-      if (currentRow === undefined) return Object.freeze({ current: null, refreshFailure });
-      if (!isAddress(currentRow.generation_id) || !isEpoch(currentRow.promoted_epoch_s)) {
-        invariantMismatch();
-      }
-      const generation = await readGeneration(currentRow.generation_id);
-      if (currentRow.promoted_epoch_s < generation.frozenEpochSeconds) invariantMismatch();
-      const evidence = await readEvidence(generation);
-      if (!isCompleteEvidence(evidence)) invariantMismatch();
-      return Object.freeze({
-        current: Object.freeze({
-          generation,
-          evidence: Object.freeze(evidence),
-          promotedEpochSeconds: currentRow.promoted_epoch_s,
-        }),
-        refreshFailure,
-      });
-    },
+    readState,
   };
   return Object.freeze(repository);
 }

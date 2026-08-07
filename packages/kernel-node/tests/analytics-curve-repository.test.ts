@@ -4,6 +4,7 @@ import {
   ANALYTICS_CURVE_PARTS,
   analyticsCurveWindows,
   createAnalyticsCurveRepository,
+  createAnalyticsCurveStateReader,
   runMigrations,
   type AnalyticsCurveRepository,
   type MigratorStore,
@@ -73,6 +74,19 @@ describe("analytics curve repository", () => {
     expect(Object.isFrozen(first.generation.windows.current)).toBe(true);
   });
 
+  it("allows the capture civil date to be one day either side of the UTC instant", async () => {
+    const lateUtc = Date.parse("2026-08-07T23:30:00.000Z") / 1_000;
+    const adjacent = await repository.beginGeneration({
+      frozenEpochSeconds: lateUtc,
+      frozenOn: "2026-08-08",
+    });
+    expect(adjacent.generation.windows.current.end).toBe("2026-08-08");
+    await expect(repository.beginGeneration({
+      frozenEpochSeconds: lateUtc,
+      frozenOn: "2026-08-09",
+    })).rejects.toThrow(new TypeError("invalid analytics curve input"));
+  });
+
   it("records exactly four immutable parts and promotes only the complete generation", async () => {
     const { generation } = await begin();
     const firstPart = ANALYTICS_CURVE_PARTS[0]!;
@@ -124,6 +138,7 @@ describe("analytics curve repository", () => {
     expect(new Set(state.current?.evidence.map((row) => row.requestIdentity)).size).toBe(4);
     expect(state.refreshFailure).toBeNull();
     expect(Object.isFrozen(state.current?.evidence)).toBe(true);
+    await expect(createAnalyticsCurveStateReader(store, hashKey).readState()).resolves.toEqual(state);
   });
 
   it("preserves last-good state across a failed partial refresh and clears failure on promotion", async () => {

@@ -2,6 +2,7 @@ import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import { makeIntervalsHttpFactory } from "@enduragent/core";
 import {
   H,
+  analyticsCurveWindows,
   createAnalyticsCurveRepository,
   type PhysicalRequestLedger,
   type SyncBudget,
@@ -22,6 +23,7 @@ export interface RunAnalyticsCurveRefreshOptions {
   readonly apiKey: string;
   readonly athleteId: string;
   readonly frozenAt: Date;
+  readonly frozenOn: string;
   readonly budget: SyncBudget;
   readonly attemptLedger: PhysicalRequestLedger;
   readonly baseFetch?: typeof globalThis.fetch;
@@ -43,6 +45,7 @@ export async function runAnalyticsCurveRefresh(
   ) {
     throw new TypeError("analytics curve frozen instant is invalid");
   }
+  analyticsCurveWindows(options.frozenOn);
   const sleep =
     dependencies.sleep ??
     ((ms: number, signal: AbortSignal) =>
@@ -61,6 +64,7 @@ export async function runAnalyticsCurveRefresh(
     });
     return refreshAnalyticsCurves({
       athleteId: options.athleteId,
+      frozenOn: options.frozenOn,
       minRequestIntervalMs: DEFAULT_REQUEST_INTERVAL_MS,
       httpFactory: makeIntervalsHttpFactory({
         apiKey: options.apiKey,

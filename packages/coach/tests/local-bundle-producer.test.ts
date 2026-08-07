@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CryptoPort, FileSystemPort } from "@enduragent/kernel/ports";
 import { validateReferenceCaptureManifest } from "@enduragent/kernel/reference/capture";
-import type { ReferenceBundle, VerifiedSnapshotReader } from "@enduragent/kernel/reference/local-bundle";
+import type { ReferenceBundle } from "@enduragent/kernel/reference/local-bundle";
 import type { Row, SqlReadStore } from "@enduragent/kernel/store";
 import {
   createLocalBundleProducer,
@@ -95,6 +95,40 @@ describe("local bundle producer composition", () => {
     ]);
     expect(readerKeys).toEqual(["readVerifiedSnapshot"]);
     expect(selectedKeys.sort()).toEqual(["activities", "settings", "streams", "wellness"]);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("merges current curve evidence before the configured bundle projection", async () => {
+    const store = readStore();
+    const curveProjection = { powerCurves: { list: [] }, hrCurves: { list: [] },
+      sustainabilityCurves: { cycling: { power: {}, hr: {} } } };
+    const bundleProjection = vi.fn((bundle: ReferenceBundle) => bundle);
+    const projectCurves = vi.fn(async () => curveProjection);
+    const producer = createLocalBundleProducer({ storePath: "synthetic.sqlite",
+      archiveRoot: "synthetic-archive", bundleProjection },
+    dependencies(store, { projectCurves }));
+
+    const value = await producer.produce(manifest());
+
+    expect(projectCurves).toHaveBeenCalledWith(expect.objectContaining({
+      store, frozenOn: "1998-06-10",
+    }));
+    expect(bundleProjection).toHaveBeenCalledWith({ ...emptyBundle, ...curveProjection });
+    expect(value.bundle).toEqual({ ...emptyBundle, ...curveProjection });
+  });
+
+  it("keeps the base bundle publishable when optional curve projection fails", async () => {
+    const close = vi.fn(async () => {});
+    const store = readStore(close);
+    const producer = createLocalBundleProducer({ storePath: "synthetic.sqlite",
+      archiveRoot: "synthetic-archive" }, dependencies(store, {
+      projectCurves: async () => { throw new Error("curve-private-sentinel"); },
+    }));
+
+    await expect(producer.produce(manifest())).resolves.toEqual({
+      captureId: "123e4567-e89b-42d3-a456-426614174000",
+      frozenNow: "1998-06-10T12:00:00", bundle: emptyBundle,
+    });
     expect(close).toHaveBeenCalledTimes(1);
   });
 

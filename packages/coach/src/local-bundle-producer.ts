@@ -14,12 +14,16 @@ import {
   type ReferenceBundleProjection,
   type VerifiedSnapshotReader,
 } from "@enduragent/kernel/reference/local-bundle";
-import type { SqlReadStore } from "@enduragent/kernel/store";
+import { H, createAnalyticsCurveStateReader, type SqlReadStore } from "@enduragent/kernel/store";
 import { createVerifiedSnapshotReader } from "@enduragent/kernel-node/archive";
 import { nodeFileSystem } from "@enduragent/kernel-node/filesystem";
 import { createNodeCrypto } from "@enduragent/kernel-node/ingest";
 import { openReadonlySqliteStorage } from "@enduragent/kernel-node/sqlite";
-import { decodeLocalBundleProjection, type LocalBundleSelectedEvidence } from "@enduragent/sync-intervals-icu";
+import {
+  decodeLocalBundleProjection,
+  projectAnalyticsCurveEvidence,
+  type LocalBundleSelectedEvidence,
+} from "@enduragent/sync-intervals-icu";
 
 const SOURCE = "intervals-icu" as const;
 
@@ -60,6 +64,30 @@ export interface LocalBundleProducerDependencies {
     snapshots: VerifiedSnapshotReader,
     activityFilter: ActivityProjectionFilter,
   ) => Promise<ProducedLocalBundle["bundle"]>;
+  readonly projectCurves?: (input: {
+    readonly store: SqlReadStore;
+    readonly snapshots: VerifiedSnapshotReader;
+    readonly crypto: CryptoPort;
+    readonly frozenOn: string;
+  }) => Promise<Partial<
+    Pick<ProducedLocalBundle["bundle"], "powerCurves" | "hrCurves" | "sustainabilityCurves">
+  >>;
+}
+
+async function projectCurrentCurves(input: {
+  readonly store: SqlReadStore;
+  readonly snapshots: VerifiedSnapshotReader;
+  readonly crypto: CryptoPort;
+  readonly frozenOn: string;
+}): Promise<Partial<
+  Pick<ProducedLocalBundle["bundle"], "powerCurves" | "hrCurves" | "sustainabilityCurves">
+>> {
+  const state = await createAnalyticsCurveStateReader(input.store, (fields: readonly (string | number)[]) => {
+    if (fields.length === 0) throw new TypeError("empty key tuple");
+    return H(input.crypto, ...(fields as [string | number, ...(string | number)[]]));
+  }).readState();
+  if (state.current === null || state.current.generation.frozenOn !== input.frozenOn) return {};
+  return projectAnalyticsCurveEvidence(state.current, input.snapshots);
 }
 
 export function createLocalBundleProducer(
@@ -71,6 +99,7 @@ export function createLocalBundleProducer(
   const makeFileSystem = dependencies.fileSystem ?? nodeFileSystem;
   const makeCrypto = dependencies.crypto ?? createNodeCrypto;
   const decode = dependencies.decode ?? decodeLocalBundleProjection;
+  const projectCurves = dependencies.projectCurves ?? projectCurrentCurves;
   const activityFilter = options.activityFilter ?? KEEP_ALL_ACTIVITIES;
   const bundleProjection = options.bundleProjection ?? IDENTITY_REFERENCE_BUNDLE_PROJECTION;
 
@@ -81,7 +110,8 @@ export function createLocalBundleProducer(
       let projectionFailed = false;
       try {
         store = openStore(options.storePath);
-        const snapshots = makeSnapshots({ archiveRoot: options.archiveRoot, fs: makeFileSystem(), crypto: makeCrypto() });
+        const crypto = makeCrypto();
+        const snapshots = makeSnapshots({ archiveRoot: options.archiveRoot, fs: makeFileSystem(), crypto });
         const selected: LocalBundleSelectedEvidence = {
           activities: await readSelectedSourceRows(store, { source: SOURCE, lane: "activities" }),
           settings: await readSelectedGenericRows(store, { source: SOURCE, lane: "settings" }),
@@ -89,8 +119,21 @@ export function createLocalBundleProducer(
           streams: await readSelectedGenericRows(store, { source: SOURCE, lane: "streams" }),
         };
         const bundle = await decode(manifest, selected, snapshots, activityFilter);
+        let curveProjection: Partial<
+          Pick<typeof bundle, "powerCurves" | "hrCurves" | "sustainabilityCurves">
+        > = {};
+        try {
+          curveProjection = await projectCurves({
+            store,
+            snapshots,
+            crypto,
+            frozenOn: manifest.plan.frozenNow.slice(0, 10),
+          });
+        } catch {
+          curveProjection = {};
+        }
         produced = { captureId: manifest.capture_id, frozenNow: manifest.plan.frozenNow,
-          bundle: bundleProjection(bundle) };
+          bundle: bundleProjection({ ...bundle, ...curveProjection }) };
       } catch {
         projectionFailed = true;
       }

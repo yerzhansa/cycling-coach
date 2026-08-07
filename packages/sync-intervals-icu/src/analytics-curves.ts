@@ -42,6 +42,7 @@ export type AnalyticsCurveRefreshOutcome =
 
 export interface RefreshAnalyticsCurvesOptions {
   readonly athleteId: string;
+  readonly frozenOn: string;
   readonly minRequestIntervalMs: number;
   readonly httpFactory: IntervalsHttpFactory;
   readonly archive: ArchiveManager;
@@ -181,7 +182,8 @@ export async function refreshAnalyticsCurves(
 
   const frozenEpochSeconds = wallEpochSeconds(options.wallClock);
   const frozenAt = new Date(frozenEpochSeconds * 1_000).toISOString();
-  const frozenOn = frozenAt.slice(0, 10);
+  const frozenOn = options.frozenOn;
+  const windows = analyticsCurveWindows(frozenOn);
   const { generation } = await options.repository.beginGeneration({ frozenEpochSeconds, frozenOn });
   let physicalRequests = 0;
   let decodedBytes = 0;
@@ -224,7 +226,6 @@ export async function refreshAnalyticsCurves(
       options.budget.perRequestTimeoutMs,
     ),
   });
-  const windows = analyticsCurveWindows(frozenOn);
   const selectors = Object.freeze([
     `r.${windows.current.start}.${windows.current.end}`,
     `r.${windows.previous.start}.${windows.previous.end}`,
