@@ -133,7 +133,7 @@ async function composeFetched(): Promise<FetchedReference> {
     sportTypes: SPORT_TYPES,
     throttleMs: 0,
   });
-  const runs = runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.bundle.activities);
+  const runs = runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.adapterActivities);
   const { omitPowerFamily, meta: baseMeta } = composeProvenance(runs);
   const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow), {
     omitPowerFamily,
@@ -240,7 +240,7 @@ describe("live-data bridge integration", () => {
       sportTypes: SPORT_TYPES,
       throttleMs: 0,
     });
-    runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.bundle.activities);
+    runAdaptersForActivities([CYCLING_ADAPTER], SPORT_TYPES, live.adapterActivities);
     const derived_metrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow));
     const fetched: FetchedReference = {
       latest: {

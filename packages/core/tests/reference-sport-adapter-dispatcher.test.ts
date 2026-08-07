@@ -26,7 +26,7 @@ const runningAdapter: ReferenceSportAdapter = {
 };
 
 function activity(type: string): Activity {
-  return { id: "12345", start_date_local: "1998-06-04T12:00:00", type } as Activity;
+  return { id: "12345", startDateLocal: "1998-06-04T12:00:00", type } as Activity;
 }
 
 afterEach(() => {
@@ -82,7 +82,7 @@ describe("findAdapterForActivity", () => {
 
   it("returns null without warning for a malformed row whose type is missing", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const malformed = { id: "12345", start_date_local: "1998-06-04T12:00:00" } as unknown as Activity;
+    const malformed = { id: "12345", startDateLocal: "1998-06-04T12:00:00" } as unknown as Activity;
     expect(findAdapterForActivity([cyclingAdapter], malformed)).toBeNull();
     expect(warn).not.toHaveBeenCalled();
   });
@@ -149,7 +149,7 @@ describe("runAdaptersForActivities", () => {
 
   it("silently skips a malformed row whose type is missing", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const malformed = { id: "12345", start_date_local: "1998-06-04T12:00:00" } as unknown as Activity;
+    const malformed = { id: "12345", startDateLocal: "1998-06-04T12:00:00" } as unknown as Activity;
     const runs = runAdaptersForActivities([cyclingAdapter], cyclingTypes, [malformed]);
     expect(runs).toHaveLength(0);
     expect(warn).not.toHaveBeenCalled();
