@@ -43,6 +43,7 @@
     "@enduragent/kernel-node": "workspace:*",
     "@enduragent/sync-intervals-icu": "workspace:*",
     "@enduragent/sport-cycling": "workspace:*",
+    "intervals-icu-api": "0.3.1",
     "ws": "^8.20.0",
     "yaml": "^2.8.3"
   },

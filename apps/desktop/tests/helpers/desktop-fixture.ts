@@ -383,6 +383,11 @@ export async function launchDesktopFixture(input: {
         ReturnType<CoachOperations["getArchivedTranscriptPage"]>
       >;
     },
+    async getActivityAnalysis(request) {
+      return finalFrame(await invoke("getActivityAnalysis", request)) as Awaited<
+        ReturnType<NonNullable<CoachOperations["getActivityAnalysis"]>>
+      >;
+    },
     async configureRuntime(request) {
       return finalFrame(await invoke("configureRuntime", request)) as Awaited<
         ReturnType<CoachOperations["configureRuntime"]>

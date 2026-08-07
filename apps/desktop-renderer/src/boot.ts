@@ -6,6 +6,7 @@ import {
 import { SaveIntakeRpcParamsSchema } from "@enduragent/coach-contract";
 import { flushSync } from "react-dom";
 import { createArchiveController } from "./archive/controller.js";
+import { createRideAnalysisController } from "./activity-analysis/controller.js";
 import { createChatController } from "./chat/controller.js";
 import { createDesktopCoachClientProvider } from "./coach-client.js";
 import { createFirstSyncController } from "./first-sync.js";
@@ -77,6 +78,24 @@ export function bootRenderer(): Disposer {
   void desktopUpdateController.start();
 
   const clients = createDesktopCoachClientProvider();
+  const rideAnalysisController = createRideAnalysisController({
+    clients,
+    view: {
+      render: (next) => store.getState().setRideAnalysis(next),
+    },
+  });
+  store.getState().bindRideAnalysisActions({
+    refresh: () => {
+      void rideAnalysisController.load(["aerobic-drift"], true);
+    },
+  });
+  let selectedAnalysisRide = store.getState().selectedRide?.id ?? null;
+  const disposeRideAnalysisSelection = store.subscribe((next) => {
+    const selected = next.selectedRide?.id ?? null;
+    if (selected === selectedAnalysisRide) return;
+    selectedAnalysisRide = selected;
+    void rideAnalysisController.select(selected);
+  });
   const clientAfterFailure = async (failedClient: CoachClient | undefined) => {
     if (failedClient === undefined) return clients.reconnect();
     const current = await clients.getClient();
@@ -381,8 +400,10 @@ export function bootRenderer(): Disposer {
     store.getState().bindSettingsPorts(null);
     store.getState().bindSyncActions(null);
     store.getState().bindRideImportActions(null);
+    store.getState().bindRideAnalysisActions(null);
     store.getState().bindOnboardingActions(null);
     disposeLifecycle();
+    disposeRideAnalysisSelection();
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();
     desktopUpdateController.dispose();
@@ -402,6 +423,7 @@ export function bootRenderer(): Disposer {
     archiveController.dispose();
     spendController.dispose();
     trainingContextController.dispose();
+    rideAnalysisController.dispose();
     void clients.close();
   };
   window.addEventListener("pagehide", dispose, { once: true });

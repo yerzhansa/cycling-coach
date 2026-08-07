@@ -518,6 +518,183 @@
   padding: 20px;
 }
 
+.analysisPanel {
+  composes: raised from "../../theme/surface.module.css";
+  margin-top: 14px;
+  padding: 20px;
+}
+
+.analysisHeading {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.analysisHeading h2 {
+  margin: 0;
+  font: 600 21px/1.2 var(--f-dis);
+  letter-spacing: -0.015em;
+}
+
+.analysisIntro {
+  max-width: 650px;
+  margin: 9px 0 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.analysisLoading,
+.analysisUnavailable p {
+  margin: 20px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.analysisUnavailable .action {
+  margin-top: 12px;
+}
+
+.analysisNotice {
+  margin: 18px 0 0;
+  padding: 9px 11px;
+  border-left: 3px solid var(--warn);
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--warn) var(--tint), transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.analysisRefresh {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.driftReading {
+  display: flex;
+  gap: 22px;
+  align-items: flex-end;
+  justify-content: space-between;
+  min-width: 0;
+  margin-top: 22px;
+  padding-left: 13px;
+  border-left: 2px solid var(--ink);
+}
+
+.driftValue {
+  margin: 0;
+  font: 600 33px/1 var(--f-dis);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.025em;
+}
+
+.driftContext {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+  min-width: 0;
+  text-align: right;
+}
+
+.driftEvidenceBadge {
+  composes: chip from "../../theme/surface.module.css";
+  font-size: 10.5px;
+}
+
+.driftEvidenceBadge[data-evidence="limited"] {
+  color: var(--warn);
+  background-color: color-mix(in srgb, var(--warn) var(--tint), transparent);
+}
+
+.driftContext p {
+  margin: 0;
+  color: var(--ink-3);
+  font: 10px/1.4 var(--f-mono);
+  text-transform: uppercase;
+}
+
+.driftTrace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+  margin-top: 18px;
+}
+
+.driftHalf {
+  composes: sunken from "../../theme/surface.module.css";
+  min-width: 0;
+  padding: 13px 14px;
+}
+
+.driftHalf h3 {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 560;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.driftEf {
+  margin: 10px 0 0;
+  font: 600 18px/1.1 var(--f-dis);
+  font-variant-numeric: tabular-nums;
+}
+
+.driftHalfStats {
+  margin: 7px 0 0;
+  color: var(--ink-2);
+  font: 11px/1.4 var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.driftHalfMeta {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-3);
+  font: 9.5px/1.4 var(--f-mono);
+}
+
+.driftConnector {
+  position: relative;
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  font: 13px/1 var(--f-mono);
+}
+
+.driftConnector::before {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: -1;
+  height: 1px;
+  background: var(--line);
+  content: "";
+}
+
+.driftCoverage {
+  margin: 13px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-3);
+  font: 10px/1.5 var(--f-mono);
+}
+
+.driftLimitations {
+  display: grid;
+  gap: 5px;
+  margin: 13px 0 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
 .rideEyebrow {
   margin: 0 0 8px;
   color: var(--ink-3);
@@ -594,6 +771,25 @@
 @media (max-width: 520px) {
   .rideSummary {
     grid-template-columns: 1fr;
+  }
+
+  .driftReading {
+    display: grid;
+    align-items: start;
+  }
+
+  .driftContext {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .driftTrace {
+    grid-template-columns: 1fr;
+  }
+
+  .driftConnector {
+    height: 18px;
+    transform: rotate(90deg);
   }
 }
 

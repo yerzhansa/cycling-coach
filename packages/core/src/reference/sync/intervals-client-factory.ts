@@ -170,12 +170,13 @@ export function makeAbortableClient(opts: {
   signal: AbortSignal;
   perRequestMs: number;
   attemptLedger?: PhysicalRequestLedger;
+  baseFetch?: typeof globalThis.fetch;
 }): IntervalsClient {
   return new IntervalsClient({
     apiKey: opts.apiKey,
     athleteId: opts.athleteId,
     fetch: wrapFetchWithSignal({
-      baseFetch: wrapFetchWithSharedBucket(globalThis.fetch),
+      baseFetch: wrapFetchWithSharedBucket(opts.baseFetch ?? globalThis.fetch),
       outer: opts.signal,
       perRequestMs: opts.perRequestMs,
       attemptLedger: opts.attemptLedger,

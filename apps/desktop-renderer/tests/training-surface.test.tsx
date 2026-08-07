@@ -8,6 +8,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RideImportState } from "../src/ride-import.js";
+import { EMPTY_RIDE_ANALYSIS } from "../src/activity-analysis/controller.js";
 import { restoreManualSyncFocus } from "../src/state/manual-sync-focus.js";
 import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
@@ -256,6 +257,8 @@ beforeEach(() => {
     activeView: "training",
     training: ready(),
     selectedRide: null,
+    rideAnalysis: EMPTY_RIDE_ANALYSIS,
+    rideAnalysisActions: null,
     sync: IDLE_MANUAL_SYNC,
     syncActions: null,
     rideImport: IDLE_RIDE_IMPORT,
@@ -269,6 +272,8 @@ afterEach(() => {
     activeView: "chat",
     training: EMPTY_TRAINING_SURFACE,
     selectedRide: null,
+    rideAnalysis: EMPTY_RIDE_ANALYSIS,
+    rideAnalysisActions: null,
     sync: IDLE_MANUAL_SYNC,
     syncActions: null,
     rideImport: IDLE_RIDE_IMPORT,
@@ -343,6 +348,114 @@ describe("training page", () => {
     expect(within(recent).getByText("26.2 mi")).toBeInTheDocument();
     expect(within(recent).getByText("Distance unavailable")).toBeInTheDocument();
     expect(within(recent).getByText("1h 0m")).toBeInTheDocument();
+  });
+
+  it("shows a neutral, time-weighted local aerobic drift estimate with its limitations", async () => {
+    const user = userEvent.setup();
+    if (context.recentRides.kind !== "computed") throw new Error("expected fixture rides");
+    const ride = context.recentRides.items[0]!;
+    useEnduragentStore.setState({
+      rideAnalysis: {
+        activityId: ride.id,
+        status: "refresh-unavailable",
+        revision: "c".repeat(64),
+        loadingSections: [],
+        sections: {
+          aerobicDrift: {
+            kind: "computed",
+            data: {
+              method: "local-time-weighted-efficiency-factor",
+              firstHalf: {
+                durationSeconds: 1_650,
+                sampleCount: 1_650,
+                averagePowerWatts: 205,
+                averageHeartRateBpm: 140,
+                efficiencyFactor: 1.46,
+              },
+              secondHalf: {
+                durationSeconds: 1_650,
+                sampleCount: 1_650,
+                averagePowerWatts: 202,
+                averageHeartRateBpm: 145,
+                efficiencyFactor: 1.39,
+              },
+              decouplingPercent: 4.8,
+              coverage: {
+                totalSamples: 3_600,
+                validSamples: 3_300,
+                includedDurationSeconds: 3_300,
+                windowDurationSeconds: 3_600,
+                fraction: 3_300 / 3_600,
+              },
+              evidence: "limited",
+              limitations: ["duration-under-60-minutes", "moving-status-unavailable"],
+            },
+            provenance: {
+              source: "local-canonical",
+              delivery: "live",
+              observedAt: "1998-07-19T08:00:00.000Z",
+            },
+          },
+        },
+      },
+    });
+    render(<TrainingView />);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Review road ride from 1998-07-09 · 22:00, 1h 31m, 42.1 km",
+      }),
+    );
+
+    const panel = screen.getByRole("region", { name: "Local aerobic drift estimate" });
+    expect(within(panel).getByText("+4.8%")).toHaveAccessibleName(
+      "Observed efficiency-factor change +4.8%",
+    );
+    expect(within(panel).getByText("1.46 EF")).toBeInTheDocument();
+    expect(within(panel).getByText("1.39 EF")).toBeInTheDocument();
+    expect(within(panel).getByText(/92% usable time/)).toBeInTheDocument();
+    expect(within(panel).getByText("Limited context")).toBeInTheDocument();
+    expect(
+      within(panel).getByText(
+        "No moving-status stream was available, so stopped time may be included.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByText("Showing the previous result. The latest refresh did not finish."),
+    ).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("good");
+    expect(panel).not.toHaveTextContent("bad");
+    expect(document.body).not.toHaveTextContent(ride.id);
+  });
+
+  it("explains deterministic unavailable states without offering a pointless retry", async () => {
+    const user = userEvent.setup();
+    if (context.recentRides.kind !== "computed") throw new Error("expected fixture rides");
+    const ride = context.recentRides.items[0]!;
+    useEnduragentStore.setState({
+      rideAnalysis: {
+        activityId: ride.id,
+        status: "ready",
+        revision: "c".repeat(64),
+        loadingSections: [],
+        sections: { aerobicDrift: { kind: "unavailable", reason: "activity-too-short" } },
+      },
+      rideAnalysisActions: { refresh: vi.fn() },
+    });
+    render(<TrainingView />);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Review road ride from 1998-07-09 · 22:00, 1h 31m, 42.1 km",
+      }),
+    );
+
+    const panel = screen.getByRole("region", { name: "Local aerobic drift estimate" });
+    expect(
+      within(panel).getByText(
+        "At least 30 usable minutes, with 15 minutes in each half, are required.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 
   it("preserves a selected ride across temporary refresh failure and reconciles authoritative lists", () => {

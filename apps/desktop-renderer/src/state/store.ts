@@ -14,6 +14,10 @@ import {
   writeStoredPaletteId,
 } from "../theme/preferences.js";
 import { createArchiveSlice, type ArchiveSlice } from "./archive-slice.js";
+import {
+  createActivityAnalysisSlice,
+  type ActivityAnalysisSlice,
+} from "./activity-analysis-slice.js";
 import { createChatSlice, type ChatSlice } from "./chat-slice.js";
 import { createConnectionSlice, type ConnectionSlice } from "./connection-slice.js";
 import { createOnboardingSlice, type OnboardingSlice } from "./onboarding-slice.js";
@@ -27,10 +31,12 @@ import { createSyncSlice, type SyncSlice } from "./sync-slice.js";
 import { createTrainingSlice, type TrainingSlice } from "./training-slice.js";
 
 export interface EnduragentState
-  extends ChatSlice,
+  extends
+    ChatSlice,
     ArchiveSlice,
     SettingsSlice,
     TrainingSlice,
+    ActivityAnalysisSlice,
     SyncSlice,
     ConnectionSlice,
     RideImportSlice,
@@ -61,6 +67,7 @@ export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
   ...createArchiveSlice(set, get, api),
   ...createSettingsSlice(set, get, api),
   ...createTrainingSlice(set, get, api),
+  ...createActivityAnalysisSlice(set, get, api),
   ...createSyncSlice(set, get, api),
   ...createConnectionSlice(set, get, api),
   ...createRideImportSlice(set, get, api),
