@@ -69,6 +69,8 @@ describe("intervals_create_workout payload (calendar-payload group)", () => {
     expect(payload.category).toBe("WORKOUT");
     expect(payload.name).toBe("Z2 Endurance 90min");
     expect(typeof payload.description).toBe("string");
+    expect("movingTime" in payload).toBe(false);
+    expect("icuTrainingLoad" in payload).toBe(false);
     expect("moving_time" in payload).toBe(false);
     expect("icu_training_load" in payload).toBe(false);
   });

@@ -167,7 +167,7 @@ describe("shared request bucket", () => {
     });
 
     const event = {
-      start_date_local: "1998-01-05T00:00:00",
+      startDateLocal: "1998-01-05T00:00:00",
       category: "WORKOUT" as const,
       name: "Test workout",
     };
@@ -255,7 +255,7 @@ describe("makeChatClient", () => {
     });
 
     await client.events.create({
-      start_date_local: "1998-01-05T00:00:00",
+      startDateLocal: "1998-01-05T00:00:00",
       category: "WORKOUT",
       name: "Test workout",
     });
@@ -277,7 +277,7 @@ describe("makeChatClient", () => {
     let result: Awaited<ReturnType<typeof client.events.create>> | undefined;
     const p = client.events
       .create({
-        start_date_local: "1998-01-05T00:00:00",
+        startDateLocal: "1998-01-05T00:00:00",
         category: "WORKOUT",
         name: "Test workout",
       })
@@ -308,7 +308,7 @@ describe("makeChatClient", () => {
     });
 
     const result = await client.events.create({
-      start_date_local: "1998-01-05T00:00:00",
+      startDateLocal: "1998-01-05T00:00:00",
       category: "WORKOUT",
       name: "Test workout",
     });
@@ -332,7 +332,7 @@ describe("makeChatClient", () => {
     });
 
     const result = await client.events.create({
-      start_date_local: "1998-01-05T00:00:00",
+      startDateLocal: "1998-01-05T00:00:00",
       category: "WORKOUT",
       name: "Test workout",
     });

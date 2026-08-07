@@ -235,7 +235,7 @@ export function createPureCoreIntervalsTools(
               if (dateError) return dateError;
               try {
                 const event = await selectedMutations.createEvent({
-                  start_date_local: `${input.date}T00:00:00`,
+                  startDateLocal: `${input.date}T00:00:00`,
                   category: "WORKOUT",
                   name: input.name,
                   type: "WeightTraining",

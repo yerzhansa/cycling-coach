@@ -1,6 +1,6 @@
 import type { AthleteState } from "@enduragent/coach-contract";
 import type { ModelMessage } from "ai";
-import type { IntervalsClient } from "intervals-icu-api";
+import type { EventInput, IntervalsClient } from "intervals-icu-api";
 import type { GenerateOptions, GenerateResult } from "./sport.js";
 import type { LedgerEventInput } from "./sport/ledger-event.js";
 import type { SourceProvenance } from "./provenance.js";
@@ -204,7 +204,7 @@ export interface CalendarEventForDelete {
 }
 
 export interface PlatformCalendarMutationsPort {
-  createEvent(input: unknown): Promise<unknown>;
+  createEvent(input: EventInput): Promise<unknown>;
   readEventForDelete(input: { eventId: number }): Promise<CalendarEventForDelete>;
   deleteEvent(input: { eventId: number }): Promise<unknown>;
 }

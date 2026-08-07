@@ -186,11 +186,11 @@ describe("intervals_create_strength_workout", () => {
     });
     expect(createCalls).toEqual([
       {
-        start_date_local: `${date}T00:00:00`,
+        startDateLocal: `${date}T00:00:00`,
         category: "WORKOUT",
         name: "Lower body 45min",
         type: "WeightTraining",
-        external_id: `cycling-coach:${date}:strength-lower-body-45min`,
+        externalId: `cycling-coach:${date}:strength-lower-body-45min`,
         tags: ["cycling-coach"],
         description: "Back squat 3x5 @ RPE 7",
       },
