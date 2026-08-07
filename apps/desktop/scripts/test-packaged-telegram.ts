@@ -616,14 +616,12 @@ async function connectCdpWithin(
     return connection;
   });
   void pending.catch(() => undefined);
-  const connection = await Promise.race([
-    pending,
-    delay(timeoutMs).then(() => {
+  const connection = await withAcceptanceDeadline("Desktop debugger connection", pending, {
+    timeoutMs,
+    onTimeout: () => {
       timedOut = true;
-      return undefined;
-    }),
-  ]);
-  if (connection === undefined) throw new Error("Desktop debugger connection timed out");
+    },
+  });
   return connection;
 }
 
@@ -783,23 +781,25 @@ async function waitForButton(
   );
 }
 
-async function completeOnboardingBeforeNavigation(
+async function seedCompletedOnboardingAfterStartup(
   page: Awaited<ReturnType<typeof cdpPage>>,
 ): Promise<void> {
-  await page.evaluate(
-    `localStorage.setItem(${JSON.stringify(ONBOARDING_STORAGE_KEY)}, ${JSON.stringify(
-      ONBOARDING_STORAGE_VALUE,
-    )}); true`,
-  );
-  await callCdpWithin(page.connection, "Page.reload", { ignoreCache: true });
-  await waitUntil("completed-onboarding renderer reload", async () =>
+  await waitUntil("initial renderer startup", async () =>
     page
       .evaluate<boolean>(`document.readyState === "complete" &&
-        performance.getEntriesByType("navigation")[0]?.type === "reload" &&
         document.documentElement.dataset.rpc === "connected" &&
-        document.querySelector('[data-onboarding="closed"]') !== null`)
+        document.querySelector('[data-onboarding="open"]') !== null`)
       .catch(() => false),
   );
+  const persisted = await page.evaluate<boolean>(
+    `(() => {
+      const key = ${JSON.stringify(ONBOARDING_STORAGE_KEY)};
+      const value = ${JSON.stringify(ONBOARDING_STORAGE_VALUE)};
+      localStorage.setItem(key, value);
+      return localStorage.getItem(key) === value;
+    })()`,
+  );
+  assert(persisted, "completed onboarding state was not persisted");
 }
 
 async function telegramRendererSnapshot(
@@ -910,10 +910,11 @@ async function cleanApplicationExit(
   running: RunningApplication,
   timeoutMs: number,
 ): Promise<boolean> {
-  const lifecycle = await Promise.race([
+  const lifecycle = await withAcceptanceDeadline(
+    "packaged Desktop clean exit",
     Promise.all([running.launch, running.terminal]),
-    delay(timeoutMs).then(() => undefined),
-  ]);
+    { timeoutMs },
+  ).catch(() => undefined);
   return lifecycle !== undefined && telegramAcceptanceDirectExitIsClean(...lifecycle);
 }
 
@@ -1149,9 +1150,16 @@ async function main(): Promise<void> {
         { cause: error },
       );
     }
-    await completeOnboardingBeforeNavigation(page);
+    await seedCompletedOnboardingAfterStartup(page);
     await waitForButton(page, "Settings");
     await page.clickButton("Settings");
+    await waitUntil("Settings after onboarding dismissal", async () =>
+      page
+        .evaluate<boolean>(
+          `document.querySelector('[data-view="settings"][data-onboarding="closed"]') !== null`,
+        )
+        .catch(() => false),
+    );
     try {
       await waitForButton(page, "Paste token from clipboard");
     } catch (error) {

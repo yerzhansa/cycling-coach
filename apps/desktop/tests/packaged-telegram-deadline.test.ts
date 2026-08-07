@@ -20,6 +20,19 @@ describe("packaged Telegram acceptance deadlines", () => {
     expect(abort).toHaveBeenCalledOnce();
   });
 
+  it("clears its timeout after an operation settles", async () => {
+    const abort = vi.fn();
+
+    await expect(
+      withAcceptanceDeadline("fast operation", Promise.resolve("done"), {
+        timeoutMs: 20,
+        onTimeout: abort,
+      }),
+    ).resolves.toBe("done");
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
+    expect(abort).not.toHaveBeenCalled();
+  });
+
   it("terminates a stalled child without exposing its arguments", async () => {
     const sensitiveArgument = "telegram-token-must-not-appear";
 
