@@ -46,6 +46,7 @@ export interface SyncBudget {
 
 export type RefreshRequestTag =
   | "store:activities"
+  | "store:analytics-curves"
   | "store:wellness"
   | "store:settings"
   | "store:streams"
@@ -60,7 +61,21 @@ export interface PhysicalRequestCounts {
 
 export interface PhysicalRequestLedger {
   charge(path: "store" | "legacy", tag: RefreshRequestTag): void;
+  tryReserve(
+    path: "store" | "legacy",
+    tag: RefreshRequestTag,
+    count: number,
+  ): PhysicalRequestReservation | null;
   snapshot(): PhysicalRequestCounts;
+}
+
+export interface PhysicalRequestReservation {
+  /** Convert one held slot into one physical request charge. */
+  charge(): void;
+  /** Idempotently return every unused slot; callers should use this in finally. */
+  release(): void;
+  /** Number of held slots not yet charged or released. */
+  remaining(): number;
 }
 
 export class PhysicalRequestLimitError extends Error {
@@ -70,8 +85,16 @@ export class PhysicalRequestLimitError extends Error {
   }
 }
 
+export class PhysicalRequestReservationSettledError extends Error {
+  constructor() {
+    super("physical request reservation is settled");
+    this.name = "PhysicalRequestReservationSettledError";
+  }
+}
+
 const REFRESH_REQUEST_TAGS = Object.freeze([
   "store:activities",
+  "store:analytics-curves",
   "store:wellness",
   "store:settings",
   "store:streams",
@@ -99,6 +122,7 @@ export function createPhysicalRequestLedger(input: {
   });
   const byTag: Record<RefreshRequestTag, number> = {
     "store:activities": 0,
+    "store:analytics-curves": 0,
     "store:wellness": 0,
     "store:settings": 0,
     "store:streams": 0,
@@ -107,25 +131,75 @@ export function createPhysicalRequestLedger(input: {
   let storeRequests = 0;
   let legacyRequests = 0;
   let totalRequests = 0;
+  let reservedStoreRequests = 0;
+  let reservedLegacyRequests = 0;
+  let reservedTotalRequests = 0;
+
+  const validateCharge = (path: "store" | "legacy", tag: RefreshRequestTag): void => {
+    if (
+      (path !== "store" && path !== "legacy")
+      || !REFRESH_REQUEST_TAGS.includes(tag)
+      || (path === "store" && !tag.startsWith("store:"))
+      || (path === "legacy" && tag !== "legacy:reference")
+    ) {
+      throw new TypeError("invalid physical request charge");
+    }
+  };
+  const hasCapacity = (path: "store" | "legacy", count: number): boolean => {
+    const used = path === "store" ? storeRequests : legacyRequests;
+    const reserved = path === "store" ? reservedStoreRequests : reservedLegacyRequests;
+    return used + reserved + count <= limits[path]
+      && totalRequests + reservedTotalRequests + count <= limits.total;
+  };
+  const recordCharge = (path: "store" | "legacy", tag: RefreshRequestTag): void => {
+    if (path === "store") storeRequests += 1;
+    else legacyRequests += 1;
+    totalRequests += 1;
+    byTag[tag] += 1;
+  };
+  const changeReserved = (path: "store" | "legacy", count: number): void => {
+    if (path === "store") reservedStoreRequests += count;
+    else reservedLegacyRequests += count;
+    reservedTotalRequests += count;
+  };
 
   return Object.freeze({
     charge(path: "store" | "legacy", tag: RefreshRequestTag): void {
-      if (
-        (path !== "store" && path !== "legacy")
-        || !REFRESH_REQUEST_TAGS.includes(tag)
-        || (path === "store" && !tag.startsWith("store:"))
-        || (path === "legacy" && tag !== "legacy:reference")
-      ) {
-        throw new TypeError("invalid physical request charge");
+      validateCharge(path, tag);
+      if (!hasCapacity(path, 1)) throw new PhysicalRequestLimitError();
+      recordCharge(path, tag);
+    },
+    tryReserve(
+      path: "store" | "legacy",
+      tag: RefreshRequestTag,
+      count: number,
+    ): PhysicalRequestReservation | null {
+      validateCharge(path, tag);
+      if (!Number.isSafeInteger(count) || count <= 0) {
+        throw new TypeError("invalid physical request reservation");
       }
-      const pathCount = path === "store" ? storeRequests : legacyRequests;
-      if (pathCount >= limits[path] || totalRequests >= limits.total) {
-        throw new PhysicalRequestLimitError();
-      }
-      if (path === "store") storeRequests += 1;
-      else legacyRequests += 1;
-      totalRequests += 1;
-      byTag[tag] += 1;
+      if (!hasCapacity(path, count)) return null;
+      changeReserved(path, count);
+      let remaining = count;
+      let settled = false;
+      return Object.freeze({
+        charge(): void {
+          if (settled || remaining === 0) throw new PhysicalRequestReservationSettledError();
+          changeReserved(path, -1);
+          recordCharge(path, tag);
+          remaining -= 1;
+          if (remaining === 0) settled = true;
+        },
+        release(): void {
+          if (settled) return;
+          changeReserved(path, -remaining);
+          remaining = 0;
+          settled = true;
+        },
+        remaining(): number {
+          return remaining;
+        },
+      });
     },
     snapshot(): PhysicalRequestCounts {
       return Object.freeze({

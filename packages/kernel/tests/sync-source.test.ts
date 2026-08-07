@@ -3,10 +3,12 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   createPhysicalRequestLedger,
   PhysicalRequestLimitError,
+  PhysicalRequestReservationSettledError,
   SOURCE_IDS,
   SOURCE_LANES,
   type BackfillDepth,
   type PlannedWorkoutDoc,
+  type PhysicalRequestReservation,
   type PushResult,
   type RawFileSourceArtifact,
   type SnapshotSourceArtifact,
@@ -60,6 +62,9 @@ describe("sync source contract", () => {
       readonly maxRequests: number;
       readonly maxArtifacts: number;
     }>();
+    expectTypeOf<PhysicalRequestReservation["charge"]>().toBeFunction();
+    expectTypeOf<PhysicalRequestReservation["release"]>().toBeFunction();
+    expectTypeOf<PhysicalRequestReservation["remaining"]>().toBeFunction();
     expectTypeOf<SourceArtifact>().toEqualTypeOf<
       SnapshotSourceArtifact | RawFileSourceArtifact | SourceCheckpoint
     >();
@@ -116,6 +121,60 @@ describe("physical request ledger", () => {
       .toThrowError(new TypeError("invalid physical request limits"));
     const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
     expect(() => ledger.charge("store", "legacy:reference")).toThrow(TypeError);
+    expect(ledger.snapshot().totalRequests).toBe(0);
+  });
+
+  it("holds four analytics slots atomically without counting calls before they happen", () => {
+    const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
+    for (let index = 0; index < 60; index += 1) ledger.charge("store", "store:activities");
+    for (let index = 0; index < 15; index += 1) ledger.charge("legacy", "legacy:reference");
+    const before = ledger.snapshot();
+
+    const reservation = ledger.tryReserve("store", "store:analytics-curves", 4);
+    expect(reservation).not.toBeNull();
+    expect(reservation!.remaining()).toBe(4);
+    expect(ledger.snapshot()).toEqual(before);
+    expect(ledger.tryReserve("store", "store:analytics-curves", 1)).toBeNull();
+    expect(() => ledger.charge("store", "store:activities")).toThrow(PhysicalRequestLimitError);
+
+    for (let index = 0; index < 4; index += 1) reservation!.charge();
+    expect(reservation!.remaining()).toBe(0);
+    expect(ledger.snapshot()).toMatchObject({
+      storeRequests: 64,
+      legacyRequests: 15,
+      totalRequests: 79,
+      byTag: { "store:analytics-curves": 4 },
+    });
+    expect(() => reservation!.charge()).toThrow(PhysicalRequestReservationSettledError);
+  });
+
+  it("fails reservation admission without mutation and releases unused capacity", () => {
+    const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
+    for (let index = 0; index < 61; index += 1) ledger.charge("store", "store:activities");
+    const before = ledger.snapshot();
+    expect(ledger.tryReserve("store", "store:analytics-curves", 4)).toBeNull();
+    expect(ledger.snapshot()).toEqual(before);
+
+    const reservation = ledger.tryReserve("store", "store:analytics-curves", 3)!;
+    reservation.charge();
+    reservation.release();
+    reservation.release();
+    expect(reservation.remaining()).toBe(0);
+    expect(() => reservation.charge()).toThrow(PhysicalRequestReservationSettledError);
+    const replacement = ledger.tryReserve("store", "store:analytics-curves", 2);
+    expect(replacement).not.toBeNull();
+    expect(ledger.snapshot()).toMatchObject({
+      storeRequests: 62,
+      totalRequests: 62,
+      byTag: { "store:analytics-curves": 1 },
+    });
+    replacement!.release();
+  });
+
+  it("rejects invalid reservation counts and path/tag pairs without mutation", () => {
+    const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
+    expect(() => ledger.tryReserve("store", "store:analytics-curves", 0)).toThrow(TypeError);
+    expect(() => ledger.tryReserve("legacy", "store:analytics-curves", 4)).toThrow(TypeError);
     expect(ledger.snapshot().totalRequests).toBe(0);
   });
 });
