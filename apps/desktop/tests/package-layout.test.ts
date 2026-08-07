@@ -743,6 +743,34 @@ describe("desktop package layout", () => {
     ).rejects.toThrow("known plaintext secret marker");
   });
 
+  it.each([
+    "ENDURAGENT_ACCEPTANCE_TELEGRAM_BOT_API_ORIGIN",
+    "ENDURAGENT_ACCEPTANCE_OS_LOGIN_LAUNCH",
+  ])("rejects acceptance-only runtime marker %s from a canonical package", async (marker) => {
+    const fixture = await syntheticPackage();
+    await fixture.writeArchive("out/main/daemon-utility.js", marker);
+    await fixture.rebuild();
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("acceptance-only package marker");
+  });
+
+  it("rejects the acceptance ASAR metadata identity from a canonical package", async () => {
+    const fixture = await syntheticPackage();
+    await fixture.writeArchive(
+      "package.json",
+      `${JSON.stringify({
+        ...sourceManifest,
+        name: "enduragent-desktop-telegram-acceptance",
+        enduragentDesktopTelegramAcceptance: true,
+      })}\n`,
+    );
+    await fixture.rebuild();
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("acceptance-only package marker");
+  });
+
   it("scans external and unpacked files for synthetic secret markers", async () => {
     const externalFixture = await syntheticPackage();
     await writeFile(

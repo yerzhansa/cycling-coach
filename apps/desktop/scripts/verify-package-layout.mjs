@@ -87,6 +87,12 @@ const knownSecretMarkers = [
   "sentinel-my-llm-key",
   "synthetic-secret",
 ];
+const acceptanceOnlyMarkers = [
+  "enduragent_acceptance_telegram_bot_api_origin",
+  "enduragent_acceptance_os_login_launch",
+  "enduragent-desktop-telegram-acceptance",
+  "enduragentdesktoptelegramacceptance",
+];
 const removedMainManifestKeys = new Set([
   "dist",
   "gitHead",
@@ -212,6 +218,9 @@ function inspectPath(path, label) {
 
 function inspectContents(bytes, label) {
   const text = bytes.toString("latin1").toLowerCase();
+  if (acceptanceOnlyMarkers.some((marker) => text.includes(marker))) {
+    fail("acceptance-only package marker", label);
+  }
   if (
     knownSecretMarkers.some((marker) => text.includes(marker)) ||
     /obviously-fake-[a-z0-9-]{1,96}key\b/u.test(text) ||
