@@ -42,6 +42,19 @@ const produced: ProducedLocalBundle = {
   bundle: { activities: [], wellness: [], ftpHistory: [], athlete: { sportSettings: [] } },
 };
 
+async function skipCurveRefresh(
+  options: Parameters<typeof import("../src/analytics-curves.js").runAnalyticsCurveRefresh>[0],
+) {
+  return {
+    kind: "skipped" as const,
+    generationId: "a".repeat(64),
+    frozenAt: options.frozenAt.toISOString(),
+    physicalRequests: 0,
+    decodedBytes: 0,
+    failure: "request-budget-exhausted" as const,
+  };
+}
+
 function emptyReadonlyStore(): SqlReadStore {
   return {
     get: vi.fn(async () => undefined),
@@ -72,6 +85,23 @@ async function makeRuntime(
       return manifest;
     },
   );
+  const refreshCurves = vi.fn(
+    async (
+      options: Parameters<typeof import("../src/analytics-curves.js").runAnalyticsCurveRefresh>[0],
+    ) => {
+      const reservation = options.attemptLedger.tryReserve("store", "store:analytics-curves", 4);
+      if (reservation === null) throw new Error("synthetic curve reservation failed");
+      for (let index = 0; index < 4; index += 1) reservation.charge();
+      reservation.release();
+      return {
+        kind: "promoted" as const,
+        generationId: "a".repeat(64),
+        frozenAt: options.frozenAt.toISOString(),
+        physicalRequests: 4 as const,
+        decodedBytes: 0,
+      };
+    },
+  );
   const produce = vi.fn(async () => produced);
   runtime = createStoreRuntime({
     env: {},
@@ -86,27 +116,72 @@ async function makeRuntime(
     reference,
     dependencies: {
       capture,
+      refreshCurves,
       produce,
       now: () => new Date("1998-07-18T12:00:00.000Z"),
       monotonicNow: () => 1,
       openReadonlyStore: () => readonlyStore,
     },
   });
-  return { runtime, capture, produce, reference, readonlyStore };
+  return { root, runtime, capture, refreshCurves, produce, reference, readonlyStore };
 }
 
 describe("StoreRuntime", () => {
-  it("starts both request stacks in one ledger window and publishes only after production", async () => {
-    const { runtime, reference } = await makeRuntime();
+  it("runs base capture, curve acquisition, and legacy refresh in one ledger window", async () => {
+    const { runtime, capture, refreshCurves, produce, reference } = await makeRuntime();
     const result = await runtime.runWindow();
-    expect(result.counts).toMatchObject({ storeRequests: 1, legacyRequests: 1, totalRequests: 2 });
+    expect(result.counts).toMatchObject({
+      storeRequests: 5,
+      legacyRequests: 1,
+      totalRequests: 6,
+      byTag: { "store:settings": 1, "store:analytics-curves": 4 },
+    });
+    expect(refreshCurves).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "synthetic",
+        athleteId: "synthetic-athlete",
+        frozenAt: new Date("1998-07-18T12:00:00.000Z"),
+      }),
+    );
+    expect(capture.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshCurves.mock.invocationCallOrder[0]!,
+    );
+    expect(refreshCurves.mock.invocationCallOrder[0]).toBeLessThan(
+      produce.mock.invocationCallOrder[0]!,
+    );
     expect(reference.runScheduledOnce).toHaveBeenCalledTimes(1);
     expect(runtime.currentSnapshot()).toBe(produced);
     await runtime.close();
   });
 
+  it("waits for both base lanes before reserving optional curve capacity", async () => {
+    const { runtime, refreshCurves, reference } = await makeRuntime();
+    let releaseLegacy!: () => void;
+    let markLegacyStarted!: () => void;
+    const legacyStarted = new Promise<void>((resolve) => {
+      markLegacyStarted = resolve;
+    });
+    vi.mocked(reference.runScheduledOnce).mockImplementationOnce(async () => {
+      runtime.attemptLedgerForRun().charge("legacy", "legacy:reference");
+      markLegacyStarted();
+      await new Promise<void>((resolve) => {
+        releaseLegacy = resolve;
+      });
+      return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [] };
+    });
+
+    const window = runtime.runWindow();
+    await legacyStarted;
+    await Promise.resolve();
+    expect(refreshCurves).not.toHaveBeenCalled();
+    releaseLegacy();
+    await expect(window).resolves.toMatchObject({ published: true, legacySucceeded: true });
+    expect(refreshCurves).toHaveBeenCalledTimes(1);
+    await runtime.close();
+  });
+
   it("runs the legacy lane without capture when the intervals.icu API key is empty", async () => {
-    const { runtime, capture, produce, reference } = await makeRuntime({
+    const { runtime, capture, refreshCurves, produce, reference } = await makeRuntime({
       ...config,
       intervals: { ...config.intervals, apiKey: "" },
     });
@@ -117,6 +192,7 @@ describe("StoreRuntime", () => {
       legacySucceeded: true,
     });
     expect(capture).not.toHaveBeenCalled();
+    expect(refreshCurves).not.toHaveBeenCalled();
     expect(produce).not.toHaveBeenCalled();
     expect(reference.runScheduledOnce).toHaveBeenCalledTimes(1);
     expect(runtime.currentSnapshot()).toBeUndefined();
@@ -144,11 +220,42 @@ describe("StoreRuntime", () => {
   });
 
   it("retains the prior complete snapshot after a later capture failure", async () => {
-    const { runtime, capture } = await makeRuntime();
+    const { runtime, capture, refreshCurves } = await makeRuntime();
     await runtime.runWindow();
+    refreshCurves.mockClear();
     capture.mockRejectedValueOnce(new Error("capture failed"));
     await expect(runtime.runWindow()).rejects.toThrow("capture failed");
+    expect(refreshCurves).not.toHaveBeenCalled();
     expect(runtime.currentSnapshot()).toBe(produced);
+    await runtime.close();
+  });
+
+  it("isolates an unexpected curve refresh failure and publishes the base snapshot", async () => {
+    const { root, runtime, refreshCurves, produce } = await makeRuntime();
+    refreshCurves.mockRejectedValueOnce(
+      Object.assign(new Error("curve adapter failed"), {
+        apiKey: "SECRET-CURVE-KEY",
+        authorization: "Basic SECRET",
+      }),
+    );
+
+    await expect(runtime.runWindow()).resolves.toMatchObject({
+      published: true,
+      legacySucceeded: true,
+      counts: { storeRequests: 1, legacyRequests: 1, totalRequests: 2 },
+    });
+    expect(produce).toHaveBeenCalledTimes(1);
+    expect(runtime.currentSnapshot()).toBe(produced);
+
+    const raw = await readFile(join(root, "logs", "log.jsonl"), "utf8");
+    expect(JSON.parse(raw.trim())).toMatchObject({
+      level: "warn",
+      component: "sync",
+      event: "analytics_curve_refresh_failed",
+      err: { name: "Error", message: "curve adapter failed", authorization: "[redacted]" },
+    });
+    expect(raw).not.toContain("SECRET-CURVE-KEY");
+    expect(raw).not.toContain("Basic SECRET");
     await runtime.close();
   });
 
@@ -187,6 +294,7 @@ describe("StoreRuntime", () => {
       reference,
       dependencies: {
         capture,
+        refreshCurves: skipCurveRefresh,
         produce: vi.fn(async () => produced),
         now: () => new Date("1998-07-18T12:00:00.000Z"),
         monotonicNow: () => 1,
@@ -257,6 +365,7 @@ describe("StoreRuntime", () => {
               release = () => resolve(manifest);
             }),
         ),
+        refreshCurves: skipCurveRefresh,
         produce: vi.fn(async () => produced),
         now: () => new Date("1998-07-18T12:00:00.000Z"),
         monotonicNow: () => 1,
@@ -493,6 +602,7 @@ describe("StoreRuntime", () => {
             });
           },
         ),
+        refreshCurves: skipCurveRefresh,
         produce: vi.fn(async () => produced),
         now: () => new Date("1998-07-18T12:00:00.000Z"),
         monotonicNow: () => 1,
