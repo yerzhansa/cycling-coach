@@ -9,6 +9,7 @@ export * from "./dedup-confirmation-repository.js";
 export * from "./intake-repository.js";
 export * from "./activity-repository.js";
 export * from "./canonical-activity-reader.js";
+export * from "./trusted-activity-source-resolver.js";
 export * from "./derived-key.js";
 export * from "./sync-source.js";
 export * from "./sync-state-repository.js";
