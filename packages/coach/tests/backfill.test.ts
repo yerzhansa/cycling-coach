@@ -878,7 +878,8 @@ describe("incremental backfill pages", () => {
         sourceChanges: 0,
       });
     });
-    const before = await dumpStore(legacy);
+    const beforeWorkouts = await legacy.all("SELECT * FROM workout ORDER BY workout_key");
+    const beforeSessions = await legacy.all("SELECT * FROM session ORDER BY session_key");
     await legacy.close();
     const baseFetch = profileFetch("synthetic-athlete-upgrade");
 
@@ -895,9 +896,12 @@ describe("incremental backfill pages", () => {
     expect(baseFetch).toHaveBeenCalledOnce();
     const upgraded = openSqliteStorage(storePath);
     try {
-      expect(await upgraded.get("PRAGMA user_version")).toEqual({ user_version: 9 });
+      expect(await upgraded.get("PRAGMA user_version")).toEqual({ user_version: 10 });
       expect(await upgraded.get("SELECT count(*) AS count FROM store_owner")).toEqual({ count: 1 });
-      expect(await dumpStore(upgraded)).toBe(before);
+      expect(await upgraded.all("SELECT * FROM workout ORDER BY workout_key")).toEqual(beforeWorkouts);
+      expect(await upgraded.all("SELECT * FROM session ORDER BY session_key")).toEqual(beforeSessions);
+      expect(await upgraded.get("SELECT count(*) AS count FROM analytics_curve_generation"))
+        .toEqual({ count: 0 });
     } finally {
       await upgraded.close();
     }

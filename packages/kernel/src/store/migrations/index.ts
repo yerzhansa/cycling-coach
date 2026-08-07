@@ -7,6 +7,7 @@ import incremental006 from "./006_incremental_ingest.sql";
 import syncFailure007 from "./007_sync_failure.sql";
 import storeOwner008 from "./008_store_owner.sql";
 import activitySourceResolver009 from "./009_activity_source_resolver.sql";
+import analyticsCurves010 from "./010_analytics_curves.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -31,4 +32,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 7, name: "007_sync_failure", sql: syncFailure007 },
   { version: 8, name: "008_store_owner", sql: storeOwner008 },
   { version: 9, name: "009_activity_source_resolver", sql: activitySourceResolver009 },
+  { version: 10, name: "010_analytics_curves", sql: analyticsCurves010 },
 ];
