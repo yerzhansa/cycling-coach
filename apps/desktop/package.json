@@ -18,6 +18,7 @@
     "test:packaged-self-test": "node scripts/verify-packaged-self-test.mjs",
     "verify:package-layout": "node scripts/verify-package-layout.mjs",
     "verify:mac-release": "node scripts/verify-macos-release.mjs",
+    "verify:mac-genesis-release": "node scripts/verify-macos-genesis-release.mjs",
     "smoke:runtime": "node scripts/electron-smoke.mjs runtime",
     "smoke:security": "node scripts/electron-smoke.mjs security",
     "accept:residency": "node ./scripts/accept-residency.mjs",

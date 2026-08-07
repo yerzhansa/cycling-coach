@@ -32,6 +32,14 @@ function runs(job: Mapping): string[] {
   return steps(job).flatMap((step) => (typeof step.run === "string" ? [step.run] : []));
 }
 
+function namedStep(job: Mapping, name: string): Mapping | undefined {
+  return steps(job).find((step) => step.name === name);
+}
+
+function countShellLine(script: string, expected: string): number {
+  return script.split(/\r?\n/u).filter((line) => line.trim() === expected).length;
+}
+
 function exactPermissions(
   value: unknown,
   expected: Mapping,
@@ -394,20 +402,34 @@ export function inspectDesktopReleaseWorkflows(
     "latest promotion",
     issues,
   );
-  const writeAuthorityText = [stage, publish, promote].map(scalar).join("\n");
-  for (const secret of [
+  const signingSecrets = [
     "CSC_LINK",
     "CSC_KEY_PASSWORD",
     "APPLE_API_KEY",
     "APPLE_API_KEY_ID",
     "APPLE_API_ISSUER",
+    "APPLE_API_KEY_P8_BASE64",
     "ENDURAGENT_DEVELOPER_ID_IDENTITY",
-  ]) {
-    if (writeAuthorityText.includes(secret))
+  ];
+  const nonSigningDesktopText = Object.entries(desktopJobs)
+    .filter(([jobName]) => jobName !== "sign-macos")
+    .map(([jobName, rawJob]) => scalar(mapping(rawJob, `desktop.jobs.${jobName}`, issues)))
+    .join("\n");
+  for (const secret of signingSecrets) {
+    if (new RegExp(`\\b${secret}\\b`, "u").test(nonSigningDesktopText))
       issues.push(`signing secret ${secret} escaped the signing job`);
   }
   if (sign.environment !== "desktop-macos-signing")
     issues.push("signing secrets must come from desktop-macos-signing environment");
+  if (
+    Object.entries(desktopJobs).some(
+      ([jobName, rawJob]) =>
+        jobName !== "sign-macos" &&
+        mapping(rawJob, `desktop.jobs.${jobName}`, issues).environment === "desktop-macos-signing",
+    )
+  ) {
+    issues.push("desktop-macos-signing environment must remain exclusive to the signing job");
+  }
   if (
     stage.environment !== "desktop-macos-publication" ||
     promote.environment !== "desktop-macos-latest"
@@ -432,20 +454,91 @@ export function inspectDesktopReleaseWorkflows(
   ) {
     issues.push("public desktop publication must remain unreachable until activation lands");
   }
-  const independentRun = runs(verify).find((run) => run.includes("verify:mac-release --")) ?? "";
+  const signingSteps = steps(sign);
+  const signingStep = namedStep(sign, "Build signed and notarized macOS envelope");
+  const signingEnvironment = mapping(signingStep?.env, "macOS signing step environment", issues);
+  const signingRun = typeof signingStep?.run === "string" ? signingStep.run : "";
+  const keyCleanupStep = namedStep(sign, "Remove temporary notarization key");
+  const keyCleanupRun = typeof keyCleanupStep?.run === "string" ? keyCleanupStep.run : "";
+  const keyCreation = signingRun.indexOf(
+    'printf \'%s\' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"',
+  );
+  const privateUmask = signingRun.indexOf("umask 077");
+  if (
+    (signingRun.match(/pnpm --filter @enduragent\/desktop package:mac:genesis(?:\s|$)/gu) ?? [])
+      .length !== 1 ||
+    (signingRun.match(/pnpm --filter @enduragent\/desktop package:mac(?:\s|$)/gu) ?? []).length !==
+      1 ||
+    countShellLine(signingRun, 'case "$RELEASE_MODE" in') !== 1 ||
+    !signingRun.includes("genesis)") ||
+    !signingRun.includes("steady)") ||
+    signingEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
+    signingEnvironment.ENDURAGENT_MACOS_GENESIS_VERSION !== "${{ inputs.version }}" ||
+    nonSigningDesktopText.includes("package:mac")
+  ) {
+    issues.push("signing must dispatch explicit genesis and steady packaging modes");
+  }
+  if (
+    keyCreation === -1 ||
+    privateUmask === -1 ||
+    privateUmask > keyCreation ||
+    signingEnvironment.APPLE_API_KEY !== "${{ runner.temp }}/AuthKey.p8" ||
+    keyCleanupStep?.if !== "${{ always() }}" ||
+    signingSteps.indexOf(keyCleanupStep ?? {}) <= signingSteps.indexOf(signingStep ?? {}) ||
+    countShellLine(keyCleanupRun, 'rm -f "$RUNNER_TEMP/AuthKey.p8"') !== 1
+  ) {
+    issues.push("temporary notarization key must be created privately and always removed");
+  }
+  const independentStep = namedStep(verify, "Independently verify signed updater envelope");
+  const independentEnvironment = mapping(
+    independentStep?.env,
+    "independent macOS verification step environment",
+    issues,
+  );
+  const independentRun = typeof independentStep?.run === "string" ? independentStep.run : "";
   const transactionVerification = independentRun.indexOf("desktop-release:transaction -- verify");
   const publicEnvelope = independentRun.indexOf("desktop-release:transaction -- public-envelope");
-  const nativeVerification = independentRun.indexOf("verify:mac-release --");
+  const genesisVerification = independentRun.indexOf(
+    "verify:mac-genesis-release --",
+    publicEnvelope,
+  );
+  const steadyVerification = independentRun.indexOf("verify:mac-release --", publicEnvelope);
+  const genesisCase = independentRun.slice(
+    independentRun.indexOf("genesis)", publicEnvelope),
+    independentRun.indexOf(";;", independentRun.indexOf("genesis)", publicEnvelope)),
+  );
+  const steadyCase = independentRun.slice(
+    independentRun.indexOf("steady)", publicEnvelope),
+    independentRun.indexOf(";;", independentRun.indexOf("steady)", publicEnvelope)),
+  );
   if (
-    !desktopSource.includes("genesis staging fails closed") ||
     transactionVerification === -1 ||
     publicEnvelope <= transactionVerification ||
-    nativeVerification <= publicEnvelope ||
-    !independentRun.slice(nativeVerification).includes('"$PUBLIC_ENVELOPE"') ||
+    genesisVerification <= publicEnvelope ||
+    steadyVerification <= publicEnvelope ||
+    independentEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
+    countShellLine(independentRun, 'case "$RELEASE_MODE" in') !== 1 ||
+    (independentRun.match(/verify:mac-genesis-release --/gu) ?? []).length !== 1 ||
+    (independentRun.match(/verify:mac-release --/gu) ?? []).length !== 1 ||
+    (independentRun.slice(publicEnvelope).match(/"\$PUBLIC_ENVELOPE"/gu) ?? []).length !== 3 ||
+    !genesisCase.includes('"$PUBLIC_ENVELOPE"') ||
+    !genesisCase.includes('"$CANDIDATE_APP"') ||
+    genesisCase.includes("$INDEPENDENT_BASELINE_APP") ||
+    !steadyCase.includes('"$PUBLIC_ENVELOPE"') ||
+    !steadyCase.includes('"$INDEPENDENT_BASELINE_APP"') ||
+    !steadyCase.includes('"$CANDIDATE_APP"') ||
     desktopSource.split("\\(FA494ACVTF\\)$").length - 1 !== 3 ||
-    !desktopSource.includes('test "$INDEPENDENT_SIGNING_IDENTITY" = "$SIGNING_IDENTITY"')
+    countShellLine(independentRun, 'test "$INDEPENDENT_CDHASH" = "$CANDIDATE_CDHASH"') !== 1 ||
+    countShellLine(
+      independentRun,
+      'test "$INDEPENDENT_CODE_DIRECTORY_SHA256" = "$CANDIDATE_CODE_DIRECTORY_SHA256"',
+    ) !== 1 ||
+    countShellLine(independentRun, 'test "$INDEPENDENT_SIGNING_IDENTITY" = "$SIGNING_IDENTITY"') !==
+      1
   ) {
-    issues.push("native verification must consume a signed exact-four public envelope");
+    issues.push(
+      "mode-specific native verification must consume a signed exact-four public envelope",
+    );
   }
   if (
     (

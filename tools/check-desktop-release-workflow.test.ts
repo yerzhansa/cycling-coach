@@ -121,15 +121,133 @@ describe("desktop release workflow policy", () => {
 
   it("keeps the audit manifest outside the native exact-four verifier boundary", () => {
     const source = sources();
-    const desktop = source.desktop.replace(
-      'verify:mac-release -- \\\n              "$PUBLIC_ENVELOPE"',
-      'verify:mac-release -- \\\n              "$RUNNER_TEMP/desktop-release"',
+    const desktop = source.desktop.replaceAll(
+      '"$PUBLIC_ENVELOPE"',
+      '"$RUNNER_TEMP/desktop-release"',
     );
     expect(
       inspect(source.release, desktop).some((issue) =>
         issue.includes("exact-four public envelope"),
       ),
     ).toBe(true);
+  });
+
+  it("requires explicit genesis packaging, acknowledgement, and native verification", () => {
+    const source = sources();
+    const wrongPackage = source.desktop.replace("package:mac:genesis", "package:mac");
+    const wrongAcknowledgement = source.desktop.replace(
+      "ENDURAGENT_MACOS_GENESIS_VERSION: ${{ inputs.version }}",
+      "ENDURAGENT_MACOS_GENESIS_VERSION: 2026.1.1",
+    );
+    const missingGenesisVerifier = source.desktop.replace(
+      "verify:mac-genesis-release --",
+      "verify:mac-release --",
+    );
+    const sealedGenesisVerifier = source.desktop.replace(
+      '                "$PUBLIC_ENVELOPE" \\\n',
+      '                "$RUNNER_TEMP/desktop-release" \\\n',
+    );
+    const escapedPackaging = source.desktop.replace(
+      "pnpm desktop-release:transaction -- verify \\\n",
+      "pnpm --filter @enduragent/desktop package:mac:genesis\n          pnpm desktop-release:transaction -- verify \\\n",
+    );
+    const constantSigningMode = source.desktop.replace(
+      "RELEASE_MODE: ${{ inputs.mode }}\n          ENDURAGENT_DEVELOPER_ID_IDENTITY:",
+      "RELEASE_MODE: steady\n          ENDURAGENT_DEVELOPER_ID_IDENTITY:",
+    );
+    const constantVerificationMode = source.desktop.replace(
+      '--output "$PUBLIC_ENVELOPE"\n          case "$RELEASE_MODE" in',
+      '--output "$PUBLIC_ENVELOPE"\n          case "genesis" in',
+    );
+    const commentedSigningSelector = source.desktop.replace(
+      '          case "$RELEASE_MODE" in',
+      '          case "genesis" in # case "$RELEASE_MODE" in',
+    );
+    const commentedVerificationSelector = source.desktop.replace(
+      '--output "$PUBLIC_ENVELOPE"\n          case "$RELEASE_MODE" in',
+      '--output "$PUBLIC_ENVELOPE"\n          case "genesis" in # case "$RELEASE_MODE" in',
+    );
+
+    for (const mutated of [
+      wrongPackage,
+      wrongAcknowledgement,
+      missingGenesisVerifier,
+      sealedGenesisVerifier,
+      escapedPackaging,
+      constantSigningMode,
+      constantVerificationMode,
+      commentedSigningSelector,
+      commentedVerificationSelector,
+    ]) {
+      expect(
+        inspect(source.release, mutated).some(
+          (issue) =>
+            issue.includes("packaging modes") || issue.includes("exact-four public envelope"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("requires independent candidate identity binding", () => {
+    const source = sources();
+    const mutations = [
+      source.desktop.replace('test "$INDEPENDENT_CDHASH" = "$CANDIDATE_CDHASH"', "true"),
+      source.desktop.replace(
+        'test "$INDEPENDENT_CODE_DIRECTORY_SHA256" = "$CANDIDATE_CODE_DIRECTORY_SHA256"',
+        "true",
+      ),
+      source.desktop.replace(
+        'test "$INDEPENDENT_SIGNING_IDENTITY" = "$SIGNING_IDENTITY"',
+        '# test "$INDEPENDENT_SIGNING_IDENTITY" = "$SIGNING_IDENTITY"',
+      ),
+    ];
+
+    for (const mutated of mutations) {
+      expect(
+        inspect(source.release, mutated).some((issue) =>
+          issue.includes("mode-specific native verification"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("keeps signing credentials exclusive and always removes the notarization key", () => {
+    const source = sources();
+    const cleanupStep =
+      '      - name: Remove temporary notarization key\n        if: ${{ always() }}\n        run: rm -f "$RUNNER_TEMP/AuthKey.p8"\n';
+    const missingCleanup = source.desktop.replace(cleanupStep, "");
+    const permissiveCreation = source.desktop.replace("          umask 077\n", "");
+    const divergentKeyPath = source.desktop.replace(
+      "APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8",
+      "APPLE_API_KEY: ${{ runner.temp }}/OtherKey.p8",
+    );
+    const earlyCleanup = source.desktop
+      .replace(cleanupStep, "")
+      .replace(
+        "      - name: Build signed and notarized macOS envelope\n",
+        `${cleanupStep}      - name: Build signed and notarized macOS envelope\n`,
+      );
+    const leakedVerifierSecret = source.desktop.replace(
+      "  verify-macos-envelope:\n    runs-on: macos-15",
+      "  verify-macos-envelope:\n    environment: desktop-macos-signing\n    env:\n      CSC_LINK: ${{ secrets.CSC_LINK }}\n    runs-on: macos-15",
+    );
+
+    expect(
+      inspect(source.release, missingCleanup).some((issue) => issue.includes("always removed")),
+    ).toBe(true);
+    expect(
+      inspect(source.release, permissiveCreation).some((issue) =>
+        issue.includes("created privately"),
+      ),
+    ).toBe(true);
+    for (const mutated of [divergentKeyPath, earlyCleanup]) {
+      expect(
+        inspect(source.release, mutated).some((issue) => issue.includes("always removed")),
+      ).toBe(true);
+    }
+    const leakedIssues = inspect(source.release, leakedVerifierSecret);
+    expect(leakedIssues.some((issue) => issue.includes("escaped the signing job"))).toBe(true);
+    expect(leakedIssues.some((issue) => issue.includes("exclusive to the signing job"))).toBe(true);
   });
 
   it("keeps desktop opt-in and defaults cycling releases to package-only", () => {
