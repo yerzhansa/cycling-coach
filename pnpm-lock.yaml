@@ -709,6 +709,9 @@ importers:
       fflate:
         specifier: 0.8.3
         version: 0.8.3
+      intervals-icu-api:
+        specifier: ^0.3.1
+        version: 0.3.1(typescript@6.0.3)
     devDependencies:
       tsup:
         specifier: ^8.4.0

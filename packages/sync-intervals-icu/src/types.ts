@@ -33,6 +33,11 @@ export const INTERVALS_ICU_CAPABILITIES = Object.freeze({
 
 export const MAX_JSON_BYTES = 67_108_864;
 
+export type IntervalsHttpFactory = (args: {
+  readonly outer: AbortSignal;
+  readonly perRequestTimeoutMs: number;
+}) => HttpPort;
+
 export interface IntervalsLandingAcl {
   activity(row: Record<string, unknown>): Readonly<Record<string, unknown>>;
   wellness(row: Record<string, unknown>): Readonly<Record<string, unknown>>;
@@ -45,10 +50,7 @@ export interface IntervalsIcuSourceOptions {
   readonly historyNewestDate: string;
   readonly historyOldestDate?: string;
   readonly minRequestIntervalMs: number;
-  readonly httpFactory: (args: {
-    readonly outer: AbortSignal;
-    readonly perRequestTimeoutMs: number;
-  }) => HttpPort;
+  readonly httpFactory: IntervalsHttpFactory;
   readonly archive: ArchiveManager;
   readonly acl: IntervalsLandingAcl;
   readonly wallClock: Pick<ClockPort, "now">;
