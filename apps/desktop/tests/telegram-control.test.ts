@@ -1260,10 +1260,13 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.binding.beginTelegramPairing).not.toHaveBeenCalled();
   });
 
-  it("preserves prior intent when pairing becomes paired after preflight", async () => {
+  it("enables a successful explicit pairing settlement from disabled intent", async () => {
     const runtime = harness({
-      enabled: true,
-      daemonSnapshot: snapshot(undefined, { pairing: { state: "unpaired" } }),
+      enabled: false,
+      daemonSnapshot: snapshot(
+        { desiredState: "disabled", state: "disabled" },
+        { pairing: { state: "unpaired" } },
+      ),
     });
     const paired = snapshot(undefined, { pairing: { state: "paired" } });
     vi.mocked(runtime.binding.beginTelegramPairing).mockImplementationOnce(async () => {
@@ -1416,7 +1419,7 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.vault.setDesiredState).not.toHaveBeenCalledWith(false);
   });
 
-  it("repairs durable enabled intent when cancellation leaves pairing active", async () => {
+  it("keeps durable disabled intent when cancellation leaves pairing active", async () => {
     const awaiting = {
       state: "awaiting-code" as const,
       code: "ABCDEF",
@@ -1433,10 +1436,15 @@ describe("Telegram main-process control coordinator", () => {
     await expect(runtime.coordinator.cancelPairing()).resolves.toMatchObject({
       outcome: "refused",
       reason: "invalid-state",
-      current: { channel: { desiredState: "enabled" }, pairing: awaiting },
+      current: {
+        channel: { desiredState: "disabled", state: "disabled" },
+        pairing: awaiting,
+      },
     });
-    expect(runtime.desired()).toBe(true);
-    expect(runtime.vault.setDesiredState).toHaveBeenCalledWith(true);
+    expect(runtime.desired()).toBe(false);
+    expect(runtime.vault.setDesiredState).not.toHaveBeenCalled();
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).toHaveBeenCalledOnce();
   });
 
   it("fences new work, clears pairing timers, and drains an accepted removal on close", async () => {
@@ -1565,6 +1573,51 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.desired()).toBe(true);
     expect(runtime.binding.cancelTelegramPairing).not.toHaveBeenCalled();
     expect(runtime.binding.disableTelegram).not.toHaveBeenCalled();
+  });
+
+  it("prevents a cancelled pairing lease from re-enabling an explicitly disabled bot", async () => {
+    const clock = leaseScheduler();
+    const awaiting = snapshot(undefined, {
+      pairing: {
+        state: "awaiting-code",
+        code: "ABCDEF",
+        expiresAt: "2026-08-05T12:01:00.000Z",
+      },
+    });
+    const runtime = harness({
+      enabled: false,
+      pairingLease: clock.port,
+      daemonSnapshot: snapshot(
+        { desiredState: "disabled", state: "disabled" },
+        { pairing: { state: "unpaired" } },
+      ),
+    });
+    vi.mocked(runtime.binding.beginTelegramPairing).mockImplementationOnce(async () => {
+      runtime.setSnapshot(awaiting);
+      return awaiting;
+    });
+
+    await runtime.coordinator.beginPairing();
+    expect(clock.entries).toHaveLength(1);
+    vi.mocked(runtime.vault.setDesiredState).mockClear();
+    vi.mocked(runtime.binding.enableTelegram).mockClear();
+    vi.mocked(runtime.binding.disableTelegram).mockClear();
+
+    await runtime.coordinator.disable();
+    expect(clock.entries[0]?.cancelled).toBe(true);
+    runtime.setSnapshot(
+      snapshot({ desiredState: "disabled", state: "disabled" }, { pairing: { state: "paired" } }),
+    );
+    clock.fire(0, true);
+
+    await expect(runtime.coordinator.status()).resolves.toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      pairing: { state: "paired" },
+    });
+    expect(runtime.desired()).toBe(false);
+    expect(vi.mocked(runtime.vault.setDesiredState).mock.calls).toEqual([[false]]);
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).toHaveBeenCalledOnce();
   });
 
   it("consumes a failed paired-lease expiry and retries until the lease is cleared", async () => {
@@ -1699,91 +1752,47 @@ describe("Telegram main-process control coordinator", () => {
     expect(setDesired.mock.calls).toEqual([[false], [true]]);
   });
 
-  it("reasserts paired intent after a stale coordinator compensates across a shared vault", async () => {
+  it("keeps shared durable disabled intent during a paired coordinator takeover", async () => {
     const runtime = harness({ enabled: false });
-    const staleWriteStarted = deferred<void>();
-    const releaseStaleWrite = deferred<void>();
-    const successorProfileReady = deferred<void>();
-    const releaseSuccessorProfile = deferred<void>();
-    const successorDesiredQueued = deferred<void>();
-    let vaultTail: Promise<void> = Promise.resolve();
-    let profileReads = 0;
-    let desiredReads = 0;
-    let holdFirstEnabledWrite = true;
-    const exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
-      const result = vaultTail.then(operation, operation);
-      vaultTail = result.then(
-        () => undefined,
-        () => undefined,
-      );
-      return result;
-    };
-    const sharedVault: TelegramCredentialVault = {
-      profileStatus() {
-        profileReads += 1;
-        const result = exclusive(() => runtime.vault.profileStatus());
-        if (profileReads !== 2) return result;
-        return result.then(async (status) => {
-          successorProfileReady.resolve();
-          await releaseSuccessorProfile.promise;
-          return status;
-        });
-      },
-      replaceProfile(input) {
-        return exclusive(() => runtime.vault.replaceProfile(input));
-      },
-      applyStoredProfile(home, apply) {
-        return exclusive(() => runtime.vault.applyStoredProfile(home, apply));
-      },
-      deleteProfile() {
-        return exclusive(() => runtime.vault.deleteProfile());
-      },
-      desiredState() {
-        desiredReads += 1;
-        if (desiredReads === 2) successorDesiredQueued.resolve();
-        return exclusive(() => runtime.vault.desiredState());
-      },
-      setDesiredState(enabled) {
-        return exclusive(async () => {
-          const result = await runtime.vault.setDesiredState(enabled);
-          if (enabled && holdFirstEnabledWrite) {
-            holdFirstEnabledWrite = false;
-            staleWriteStarted.resolve();
-            await releaseStaleWrite.promise;
-          }
-          return result;
-        });
-      },
-    };
+    const profileReadStarted = deferred<void>();
+    const releaseProfileRead = deferred<void>();
+    const profileStatus = vi.mocked(runtime.vault.profileStatus);
+    const readProfile = profileStatus.getMockImplementation()!;
+    profileStatus.mockImplementationOnce(async () => {
+      profileReadStarted.resolve();
+      await releaseProfileRead.promise;
+      return readProfile();
+    });
     const successor = { ...runtime.binding, generation: 2 };
     let staleCurrent: TelegramDaemonBinding | undefined = runtime.binding;
     const stale = createTelegramControlCoordinator({
       selectedAthleteHome: () => HOME,
-      vault: sharedVault,
+      vault: runtime.vault,
       daemon: { current: () => staleCurrent },
     });
     const current = createTelegramControlCoordinator({
       selectedAthleteHome: () => HOME,
-      vault: sharedVault,
+      vault: runtime.vault,
       daemon: { current: () => successor },
     });
 
-    const successorStatus = current.status();
-    await successorProfileReady.promise;
     const staleStatus = stale.status();
-    await staleWriteStarted.promise;
+    await profileReadStarted.promise;
     staleCurrent = successor;
-    releaseSuccessorProfile.resolve();
-    await successorDesiredQueued.promise;
-    releaseStaleWrite.resolve();
+    releaseProfileRead.resolve();
 
-    await staleStatus;
-    await expect(successorStatus).resolves.toMatchObject({
-      channel: { desiredState: "enabled", state: "online" },
+    await expect(staleStatus).resolves.toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
       pairing: { state: "paired" },
     });
-    expect(runtime.desired()).toBe(true);
-    expect(vi.mocked(runtime.vault.setDesiredState).mock.calls).toEqual([[true], [false], [true]]);
+    await expect(current.status()).resolves.toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      pairing: { state: "paired" },
+    });
+    expect(runtime.desired()).toBe(false);
+    expect(runtime.vault.setDesiredState).not.toHaveBeenCalled();
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).toHaveBeenCalledOnce();
   });
 
   it("repairs a restart crash window with no primary or live pairing", async () => {
@@ -1889,7 +1898,7 @@ describe("Telegram main-process control coordinator", () => {
     },
   );
 
-  it("reconciles paired daemon truth into durable enabled intent", async () => {
+  it("reconciles a paired online daemon to durable disabled intent", async () => {
     const runtime = harness({
       enabled: false,
       daemonSnapshot: snapshot(undefined, { pairing: { state: "paired" } }),
@@ -1898,12 +1907,14 @@ describe("Telegram main-process control coordinator", () => {
     await expect(runtime.coordinator.reconcile()).resolves.toMatchObject({
       outcome: "applied",
       current: {
-        channel: { desiredState: "enabled", state: "online" },
+        channel: { desiredState: "disabled", state: "disabled" },
         pairing: { state: "paired" },
       },
     });
-    expect(runtime.desired()).toBe(true);
-    expect(runtime.vault.setDesiredState).toHaveBeenCalledWith(true);
+    expect(runtime.desired()).toBe(false);
+    expect(runtime.vault.setDesiredState).not.toHaveBeenCalled();
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).toHaveBeenCalledOnce();
   });
 
   it("reconciles stale enabled intent to disabled when no pairing or primary exists", async () => {
@@ -1951,6 +1962,25 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.desired()).toBe(true);
     expect(runtime.vault.setDesiredState).not.toHaveBeenCalledWith(false);
     expect(runtime.binding.disableTelegram).not.toHaveBeenCalled();
+  });
+
+  it("keeps durable disabled intent when cancellation observes a paired bot", async () => {
+    const runtime = harness({
+      enabled: false,
+      daemonSnapshot: snapshot(undefined, { pairing: { state: "paired" } }),
+    });
+
+    await expect(runtime.coordinator.cancelPairing()).resolves.toMatchObject({
+      outcome: "applied",
+      current: {
+        channel: { desiredState: "disabled", state: "disabled" },
+        pairing: { state: "paired" },
+      },
+    });
+    expect(runtime.desired()).toBe(false);
+    expect(runtime.vault.setDesiredState).not.toHaveBeenCalled();
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).toHaveBeenCalledOnce();
   });
 
   it("restores prior durable intent after an uncertain pairing profile load", async () => {
@@ -2426,6 +2456,69 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.binding.disableTelegram).toHaveBeenCalledWith({});
     expect(runtime.binding.suspendTelegramPolling).not.toHaveBeenCalled();
     expect(runtime.trace).toEqual(["vault:desired:false", "daemon:disable"]);
+  });
+
+  it("keeps a paired bot durably disabled across repeated status polls", async () => {
+    const runtime = harness();
+
+    await runtime.coordinator.disable();
+
+    await expect(runtime.coordinator.status()).resolves.toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      pairing: { state: "paired" },
+    });
+    await expect(runtime.coordinator.status()).resolves.toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      pairing: { state: "paired" },
+    });
+
+    expect(runtime.desired()).toBe(false);
+    expect(runtime.vault.setDesiredState).toHaveBeenCalledOnce();
+    expect(runtime.vault.setDesiredState).toHaveBeenCalledWith(false);
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a paired bot durably disabled when the coordinator reconciles", async () => {
+    const runtime = harness();
+
+    await runtime.coordinator.disable();
+
+    await expect(runtime.coordinator.reconcile()).resolves.toMatchObject({
+      outcome: "applied",
+      current: {
+        channel: { desiredState: "disabled", state: "disabled" },
+        bot: { state: "ready", username: USERNAME },
+        pairing: { state: "paired" },
+      },
+    });
+
+    expect(runtime.desired()).toBe(false);
+    expect(runtime.vault.setDesiredState).toHaveBeenCalledOnce();
+    expect(runtime.vault.setDesiredState).toHaveBeenCalledWith(false);
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).toHaveBeenCalledOnce();
+  });
+
+  it("preserves durable disabled intent after coordinator reconstruction", async () => {
+    const runtime = harness({
+      enabled: false,
+      daemonSnapshot: snapshot(
+        { desiredState: "disabled", state: "disabled" },
+        { pairing: { state: "paired" } },
+      ),
+    });
+
+    await expect(runtime.coordinator.status()).resolves.toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      bot: { state: "ready", username: USERNAME },
+      pairing: { state: "paired" },
+    });
+
+    expect(runtime.desired()).toBe(false);
+    expect(runtime.vault.setDesiredState).not.toHaveBeenCalled();
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).not.toHaveBeenCalled();
   });
 
   it.each([true, false])(

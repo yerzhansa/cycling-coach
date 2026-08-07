@@ -733,6 +733,120 @@ afterEach(async () => {
 });
 
 describe.skipIf(!hasLoopback)("Desktop Telegram release chain", () => {
+  it("keeps paired identity durably off across polling and coordinator reconstruction", async () => {
+    const fixture = await createFixture();
+    const started = await startPairingA(fixture);
+    const active = await pairAOnline(fixture, started);
+    const profileBefore = await fixture.vault.profileStatus();
+    const accessBefore = await fixture.coordinator.listAllowedSenders();
+    const inspectionsBefore = [...fixture.inspections];
+
+    await expect(fixture.coordinator.disable()).resolves.toMatchObject({
+      outcome: "applied",
+      current: {
+        channel: { desiredState: "disabled", state: "disabled" },
+        bot: { state: "ready", username: BOT.username },
+        pairing: { state: "paired" },
+      },
+    });
+    expect(active.stopCalls).toBe(1);
+    expect(active.rawApiCalls).toContainEqual({
+      method: "getUpdates",
+      payload: { phase: "final-offset" },
+    });
+    await expect(fixture.telegram.drainPending()).resolves.toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      pairing: { state: "paired" },
+    });
+    await expect(fixture.vault.desiredState()).resolves.toEqual({
+      state: "configured",
+      enabled: false,
+    });
+
+    const callsAfterDisable = [...active.rawApiCalls];
+    await active.dispatch(
+      messageContext({
+        bot: active,
+        updateId: 2,
+        senderId: PRIMARY_SENDER,
+        text: "/version",
+      }),
+    );
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      await expect(fixture.coordinator.status()).resolves.toMatchObject({
+        channel: { desiredState: "disabled", state: "disabled" },
+        pairing: { state: "paired" },
+      });
+      await expect(fixture.coordinator.reconcile()).resolves.toMatchObject({
+        outcome: "applied",
+        current: {
+          channel: { desiredState: "disabled", state: "disabled" },
+          pairing: { state: "paired" },
+        },
+      });
+    }
+
+    const reconstructed = fixture.coordinatorFor("app-supervised");
+    await expect(reconstructed.status()).resolves.toMatchObject({
+      channel: { desiredState: "disabled", state: "disabled" },
+      pairing: { state: "paired" },
+    });
+    await expect(reconstructed.reconcile()).resolves.toMatchObject({
+      outcome: "applied",
+      current: {
+        channel: { desiredState: "disabled", state: "disabled" },
+        pairing: { state: "paired" },
+      },
+    });
+
+    expect(active.rawApiCalls).toEqual(callsAfterDisable);
+    expect(fixture.network.bots.map(({ token }) => token)).toEqual([TELEGRAM_TOKEN_A]);
+    expect(fixture.network.bots[0]).toBe(active);
+    expect(await storedToken(fixture)).toBe(TELEGRAM_TOKEN_A);
+    await expect(fixture.vault.profileStatus()).resolves.toEqual(profileBefore);
+    await expect(reconstructed.listAllowedSenders()).resolves.toEqual(accessBefore);
+    await expect(fixture.vault.desiredState()).resolves.toEqual({
+      state: "configured",
+      enabled: false,
+    });
+    expect(fixture.inspections).toEqual(inspectionsBefore);
+
+    await expect(reconstructed.enable()).resolves.toMatchObject({ outcome: "applied" });
+    await waitUntil(
+      () =>
+        fixture.network.bots.length === 2 &&
+        fixture.telegram.getStatus().channel.state === "online",
+      "re-enabled paired generation",
+    );
+    const resumed = fixture.network.bot(TELEGRAM_TOKEN_A, 1);
+    await expect(reconstructed.status()).resolves.toMatchObject({
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: BOT.username },
+      pairing: { state: "paired" },
+    });
+    expect(await storedToken(fixture)).toBe(TELEGRAM_TOKEN_A);
+    await expect(fixture.vault.profileStatus()).resolves.toEqual(profileBefore);
+    await expect(reconstructed.listAllowedSenders()).resolves.toEqual(accessBefore);
+    expect(fixture.inspections).toEqual(inspectionsBefore);
+
+    await resumed.dispatch(
+      messageContext({
+        bot: resumed,
+        updateId: 3,
+        senderId: PRIMARY_SENDER,
+        text: "/version",
+      }),
+    );
+    expect(resumed.rawApiCalls).toContainEqual({
+      method: "sendMessage",
+      payload: expect.objectContaining({
+        chat_id: PRIMARY_SENDER,
+        text: "Cycling Coach Desktop v2098.1.1",
+      }),
+    });
+  }, 30_000);
+
   it("refuses invalid token B while coherent token A stays stored and online", async () => {
     const fixture = await createFixture();
     const started = await startPairingA(fixture);
