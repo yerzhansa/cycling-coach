@@ -75,7 +75,10 @@ import {
   resolveDesktopRendererSource,
 } from "./security.js";
 import { DesktopDaemonSupervisor, isUtilityTerminalFrame } from "./supervisor.js";
-import { createDesktopQuitCoordinator } from "./quit-coordinator.js";
+import {
+  createDesktopQuitCoordinator,
+  installDesktopTerminationSignalHandler,
+} from "./quit-coordinator.js";
 import { createDesktopUpdateController } from "./update-controller.js";
 import { isDesktopUpdateReleaseEligible } from "./update-eligibility.js";
 import { installDesktopUpdateIpc } from "./update-ipc.js";
@@ -255,6 +258,12 @@ async function runDesktop(): Promise<void> {
     void residency?.close();
     if (quitCoordinator.beforeQuit(event) === "draining") quitRequested = true;
   });
+  if (process.platform === "darwin") {
+    installDesktopTerminationSignalHandler({
+      signalSource: process,
+      requestQuit: () => app.quit(),
+    });
+  }
   try {
     const resolution = await supervisor.resolve();
     if (resolution.status === "refused") {

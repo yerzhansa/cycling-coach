@@ -4,6 +4,23 @@ export interface DesktopBeforeQuitEvent {
   preventDefault(): void;
 }
 
+export interface DesktopTerminationSignalSource {
+  on(event: "SIGTERM", listener: () => void): unknown;
+}
+
+export function installDesktopTerminationSignalHandler(input: {
+  readonly signalSource: DesktopTerminationSignalSource;
+  readonly requestQuit: () => void;
+}): void {
+  let quitRequested = false;
+  const requestQuit = (): void => {
+    if (quitRequested) return;
+    quitRequested = true;
+    input.requestQuit();
+  };
+  input.signalSource.on("SIGTERM", requestQuit);
+}
+
 export async function completeDesktopShutdown(input: {
   readonly drain: () => Promise<void>;
   readonly updateController: Pick<DesktopUpdateController, "completeInstallAfterDrain">;
