@@ -27,6 +27,7 @@ function planItem(index: number) {
 }
 
 const context: CyclingTrainingContext = {
+  performanceProgress: { kind: "unavailable", reason: "not-synced" },
   anchorZones: {
     kind: "computed",
     asOf: "1998-07-19T08:00:00.000Z",
@@ -86,6 +87,7 @@ const context: CyclingTrainingContext = {
 };
 
 const unknownContext: CyclingTrainingContext = {
+  performanceProgress: { kind: "unavailable", reason: "not-synced" },
   anchorZones: { kind: "unknown", reason: "missing-anchor" },
   cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
   plan: { kind: "unknown", reason: "no-plan" },

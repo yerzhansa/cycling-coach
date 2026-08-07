@@ -75,6 +75,7 @@ import {
 } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
+import { createPowerProgressStateSource } from "./power-progress.js";
 import {
   assertRuntimeAthleteOwner,
   RuntimeAthleteOwnerRefusal,
@@ -769,9 +770,15 @@ export async function createLocalCoachComposition(
     const cyclingFtpAnchorResolver = (
       dependencies.createResolver ?? createCyclingFtpAnchorResolver
     )(repository);
+    const powerProgress = createPowerProgressStateSource({
+      store: input.context.store,
+      archiveRoot: input.home.archiveDir,
+      now,
+    });
     const stateReader = createPersistedAthleteStateSource({
       dataDir: input.home.root,
       cyclingFtpAnchorResolver,
+      powerProgressSource: powerProgress,
     });
     const buildBundle = (config: Config): RuntimeBundle => {
       const timezone = resolveUserTimezone(config.session.timezone);

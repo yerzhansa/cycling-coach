@@ -1,6 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { AthleteStateSchema, type AthleteState } from "@enduragent/coach-contract";
+import {
+  AthleteStateSchema,
+  PowerProgressPanelSchema,
+  type AthleteState,
+  type PowerProgressPanel,
+} from "@enduragent/coach-contract";
 import type { AthleteStateReaderPort } from "@enduragent/engine";
 import type { CyclingFtpAnchorResolver } from "@enduragent/kernel/anchors";
 import {
@@ -47,6 +52,9 @@ function isFiniteInstant(value: string): boolean {
 export interface CreatePersistedAthleteStateSourceOptions {
   readonly dataDir: string;
   readonly cyclingFtpAnchorResolver: CyclingFtpAnchorResolver;
+  readonly powerProgressSource?: {
+    readPowerProgress(): Promise<PowerProgressPanel>;
+  };
 }
 
 export function createPersistedAthleteStateSource(
@@ -98,12 +106,29 @@ export function createPersistedAthleteStateSource(
       const parsedAsOf = Date.parse(latest.metadata.last_updated);
       const asOfEpochS =
         Number.isFinite(parsedAsOf) && parsedAsOf >= 0 ? Math.floor(parsedAsOf / 1_000) : null;
-      const anchor =
+      const [anchor, performanceProgress] = await Promise.all([
         asOfEpochS === null
-          ? null
-          : await input.cyclingFtpAnchorResolver
+          ? Promise.resolve(null)
+          : input.cyclingFtpAnchorResolver
               .resolve({ effectiveAtEpochS: asOfEpochS, evaluatedAtEpochS: asOfEpochS })
-              .catch(() => null);
+              .catch(() => null),
+        input.powerProgressSource === undefined
+          ? Promise.resolve({ kind: "unavailable", reason: "not-synced" } as const)
+          : input.powerProgressSource
+              .readPowerProgress()
+              .then((value): PowerProgressPanel => {
+                const parsed = PowerProgressPanelSchema.safeParse(value);
+                return parsed.success
+                  ? parsed.data
+                  : { kind: "unavailable", reason: "invalid-data" };
+              })
+              .catch(
+                (): PowerProgressPanel => ({
+                  kind: "unavailable",
+                  reason: "temporary-failure",
+                }),
+              ),
+      ]);
       const trainingContext = projectCyclingTrainingContext({
         asOf: latest.metadata.last_updated,
         anchor,
@@ -111,6 +136,7 @@ export function createPersistedAthleteStateSource(
         recentActivities: latest.recent_activities,
         plannedWorkouts: latest.planned_workouts,
         wellness: latest.wellness_data,
+        performanceProgress,
       });
       const mapped = {
         schemaVersion: latest.metadata.schema_version,

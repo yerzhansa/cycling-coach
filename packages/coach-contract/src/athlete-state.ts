@@ -3,6 +3,252 @@ import { z } from "zod";
 export const FreshnessSchema = z.enum(["fresh", "flag", "stale", "critical"]);
 export type Freshness = z.infer<typeof FreshnessSchema>;
 
+const POWER_PROGRESS_DURATIONS = [5, 60, 300, 1_200, 3_600] as const;
+const POWER_PROGRESS_HR_DURATIONS = [60, 300, 1_200, 3_600] as const;
+
+function isCivilDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
+}
+
+function civilEpochDay(value: string): number {
+  return Date.parse(`${value}T00:00:00.000Z`) / 86_400_000;
+}
+
+const PowerProgressDateSchema = z.string().length(10).refine(isCivilDate, "invalid civil date");
+
+const CivilDateWindowSchema = z
+  .object({
+    start: PowerProgressDateSchema,
+    end: PowerProgressDateSchema,
+  })
+  .strict()
+  .refine((value) => value.start <= value.end, "date window start must not follow its end");
+
+export const PowerProgressDateWindowSchema = CivilDateWindowSchema.refine(
+  (value) => civilEpochDay(value.end) - civilEpochDay(value.start) === 27,
+  {
+    message: "power progress window must contain 28 days",
+  },
+);
+
+const PowerProgressSustainabilityWindowSchema = CivilDateWindowSchema.refine(
+  (value) => civilEpochDay(value.end) - civilEpochDay(value.start) === 41,
+  { message: "sustainability window must contain 42 days" },
+);
+
+const ProgressUnavailableValueSchema = z.object({ kind: z.literal("unavailable") }).strict();
+
+export const PowerProgressWattsSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      watts: z.number().finite().positive().max(20_000),
+    })
+    .strict(),
+  ProgressUnavailableValueSchema,
+]);
+
+export const PowerProgressBpmSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      bpm: z.number().finite().positive().max(500),
+    })
+    .strict(),
+  ProgressUnavailableValueSchema,
+]);
+
+export const PowerProgressChangeSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      percent: z.number().finite().min(-1_000_000).max(1_000_000),
+    })
+    .strict(),
+  ProgressUnavailableValueSchema,
+]);
+
+function changeMatchesValues(value: {
+  readonly current: { readonly kind: "computed" | "unavailable" };
+  readonly previous: { readonly kind: "computed" | "unavailable" };
+  readonly change: { readonly kind: "computed" | "unavailable" };
+}): boolean {
+  const comparable = value.current.kind === "computed" && value.previous.kind === "computed";
+  return comparable === (value.change.kind === "computed");
+}
+
+export const PowerProgressAnchorSchema = z
+  .object({
+    durationSeconds: z.union(POWER_PROGRESS_DURATIONS.map((value) => z.literal(value))),
+    current: PowerProgressWattsSchema,
+    previous: PowerProgressWattsSchema,
+    change: PowerProgressChangeSchema,
+  })
+  .strict()
+  .refine(changeMatchesValues, "power progress change requires both window values");
+
+export const PowerProgressHeartRateAnchorSchema = z
+  .object({
+    durationSeconds: z.union(POWER_PROGRESS_HR_DURATIONS.map((value) => z.literal(value))),
+    current: PowerProgressBpmSchema,
+    previous: PowerProgressBpmSchema,
+    change: PowerProgressChangeSchema,
+  })
+  .strict()
+  .refine(changeMatchesValues, "heart-rate change requires both window values");
+
+function exactDurations(
+  values: readonly { readonly durationSeconds: number }[],
+  expected: readonly number[],
+): boolean {
+  return (
+    values.length === expected.length &&
+    values.every((value, index) => value.durationSeconds === expected[index])
+  );
+}
+
+const PowerProgressAnchorsSchema = z
+  .array(PowerProgressAnchorSchema)
+  .length(POWER_PROGRESS_DURATIONS.length)
+  .refine((value) => exactDurations(value, POWER_PROGRESS_DURATIONS), "unexpected power anchors");
+
+const PowerProgressHeartRateContextSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      anchors: z
+        .array(PowerProgressHeartRateAnchorSchema)
+        .length(POWER_PROGRESS_HR_DURATIONS.length)
+        .refine(
+          (value) => exactDurations(value, POWER_PROGRESS_HR_DURATIONS),
+          "unexpected heart-rate anchors",
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("unavailable"),
+      reason: z.literal("insufficient-data"),
+    })
+    .strict(),
+]);
+
+const PowerProgressSustainabilityContextSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      window: PowerProgressSustainabilityWindowSchema,
+      coverageRatio: z.number().finite().min(0).max(1),
+      sourceContext: z.enum(["indoor", "outdoor", "mixed", "unknown"]),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("unavailable"),
+      reason: z.literal("insufficient-data"),
+    })
+    .strict(),
+]);
+
+export const PowerProgressRefreshFailureCodeSchema = z.enum([
+  "request-budget-exhausted",
+  "rate-limited",
+  "timeout",
+  "network",
+  "provider-unavailable",
+  "malformed-response",
+  "response-too-large",
+  "cancelled",
+  "temporary-failure",
+]);
+
+export const PowerProgressRefreshFailureSchema = z
+  .object({
+    code: PowerProgressRefreshFailureCodeSchema,
+    failedAt: z.string().max(64).datetime({ offset: true }),
+  })
+  .strict();
+
+export const PowerProgressUnavailableReasonSchema = z.enum([
+  "not-synced",
+  "insufficient-data",
+  "invalid-data",
+  "refresh-failed",
+  "temporary-failure",
+]);
+
+export const PowerProgressComputedSchema = z
+  .object({
+    kind: z.literal("computed"),
+    currentWindow: PowerProgressDateWindowSchema,
+    previousWindow: PowerProgressDateWindowSchema,
+    anchors: PowerProgressAnchorsSchema,
+    rotation: z.enum(["sprint", "endurance", "balanced", "unknown"]),
+    heartRateContext: PowerProgressHeartRateContextSchema,
+    sustainabilityContext: PowerProgressSustainabilityContextSchema,
+    freshness: FreshnessSchema,
+    asOf: z.string().max(64).datetime({ offset: true }),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (civilEpochDay(value.currentWindow.start) - civilEpochDay(value.previousWindow.end) !== 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["previousWindow"],
+        message: "power progress windows must be adjacent",
+      });
+    }
+    if (
+      value.sustainabilityContext.kind === "computed" &&
+      (value.sustainabilityContext.window.end !== value.currentWindow.end ||
+        civilEpochDay(value.sustainabilityContext.window.end) -
+          civilEpochDay(value.sustainabilityContext.window.start) !==
+          41)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["sustainabilityContext", "window"],
+        message: "sustainability window must be the matching 42-day window",
+      });
+    }
+  });
+
+export const PowerProgressPanelSchema = z.discriminatedUnion("kind", [
+  PowerProgressComputedSchema,
+  z
+    .object({
+      kind: z.literal("unavailable"),
+      reason: PowerProgressUnavailableReasonSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("stale"),
+      lastGood: PowerProgressComputedSchema,
+      refreshFailure: PowerProgressRefreshFailureSchema,
+    })
+    .strict(),
+]);
+
+export type PowerProgressDateWindow = z.infer<typeof PowerProgressDateWindowSchema>;
+export type PowerProgressWatts = z.infer<typeof PowerProgressWattsSchema>;
+export type PowerProgressBpm = z.infer<typeof PowerProgressBpmSchema>;
+export type PowerProgressChange = z.infer<typeof PowerProgressChangeSchema>;
+export type PowerProgressAnchor = z.infer<typeof PowerProgressAnchorSchema>;
+export type PowerProgressHeartRateAnchor = z.infer<typeof PowerProgressHeartRateAnchorSchema>;
+export type PowerProgressRefreshFailureCode = z.infer<typeof PowerProgressRefreshFailureCodeSchema>;
+export type PowerProgressRefreshFailure = z.infer<typeof PowerProgressRefreshFailureSchema>;
+export type PowerProgressUnavailableReason = z.infer<typeof PowerProgressUnavailableReasonSchema>;
+export type PowerProgressComputed = z.infer<typeof PowerProgressComputedSchema>;
+export type PowerProgressPanel = z.infer<typeof PowerProgressPanelSchema>;
+
 export const TrainingContextUnknownReasonSchema = z.enum([
   "not-synced",
   "missing-anchor",
@@ -140,6 +386,7 @@ export const WellnessTrendPanelSchema = z.discriminatedUnion("kind", [
 
 export const CyclingTrainingContextSchema = z
   .object({
+    performanceProgress: PowerProgressPanelSchema,
     anchorZones: AnchorZonesPanelSchema,
     cyclingLoad: CyclingLoadPanelSchema,
     plan: PlanPanelSchema,
@@ -162,6 +409,7 @@ export type WellnessTrendPanel = z.infer<typeof WellnessTrendPanelSchema>;
 export type CyclingTrainingContext = z.infer<typeof CyclingTrainingContextSchema>;
 
 export const UNKNOWN_CYCLING_TRAINING_CONTEXT: CyclingTrainingContext = {
+  performanceProgress: { kind: "unavailable", reason: "not-synced" },
   anchorZones: { kind: "unknown", reason: "not-synced" },
   cyclingLoad: { kind: "unknown", reason: "not-synced" },
   plan: { kind: "unknown", reason: "not-synced" },

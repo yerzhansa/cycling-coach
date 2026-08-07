@@ -15,6 +15,7 @@ import {
 } from "../src/training-context/format.js";
 
 const context: CyclingTrainingContext = {
+  performanceProgress: { kind: "unavailable", reason: "not-synced" },
   anchorZones: { kind: "unknown", reason: "missing-anchor" },
   cyclingLoad: {
     kind: "computed",

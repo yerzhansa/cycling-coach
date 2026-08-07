@@ -12,6 +12,7 @@ import {
   TurnEventSchema,
   AthleteStateSchema,
   CyclingTrainingContextSchema,
+  PowerProgressPanelSchema,
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
   ChatRequestSchema,
   ChatResponseSchema,
@@ -70,6 +71,28 @@ const validState = {
   wellness: { restingHr: 45 },
 } as const;
 
+const computedPowerProgress = {
+  kind: "computed",
+  currentWindow: { start: "1998-06-09", end: "1998-07-06" },
+  previousWindow: { start: "1998-05-12", end: "1998-06-08" },
+  anchors: [5, 60, 300, 1_200, 3_600].map((durationSeconds) => ({
+    durationSeconds,
+    current: { kind: "computed", watts: 300 },
+    previous: { kind: "computed", watts: 280 },
+    change: { kind: "computed", percent: 7.1 },
+  })),
+  rotation: "balanced",
+  heartRateContext: { kind: "unavailable", reason: "insufficient-data" },
+  sustainabilityContext: {
+    kind: "computed",
+    window: { start: "1998-05-26", end: "1998-07-06" },
+    coverageRatio: 0.8,
+    sourceContext: "mixed",
+  },
+  freshness: "fresh",
+  asOf: "1998-07-06T09:00:00.000Z",
+} as const;
+
 function cloneState(): Record<string, unknown> {
   return structuredClone(validState) as unknown as Record<string, unknown>;
 }
@@ -87,8 +110,8 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 12", () => {
-    expect(PROTOCOL_VERSION).toBe(12);
+  it("is 13", () => {
+    expect(PROTOCOL_VERSION).toBe(13);
   });
 });
 
@@ -267,6 +290,7 @@ describe("AthleteState", () => {
 
   it("parses computed and unknown training-context envelopes strictly", () => {
     const computed = {
+      performanceProgress: { kind: "unavailable", reason: "not-synced" },
       anchorZones: {
         kind: "computed",
         asOf: "1998-07-06T09:00:00.000Z",
@@ -331,6 +355,45 @@ describe("AthleteState", () => {
       CyclingTrainingContextSchema.safeParse({
         ...computed,
         adherence: { ...computed.adherence, ratio: 1.1 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("bounds Power Progress and preserves explicit unavailable and stale states", () => {
+    expect(PowerProgressPanelSchema.parse(computedPowerProgress)).toEqual(computedPowerProgress);
+    expect(
+      PowerProgressPanelSchema.parse({
+        kind: "stale",
+        lastGood: computedPowerProgress,
+        refreshFailure: { code: "timeout", failedAt: "1998-07-07T09:00:00.000Z" },
+      }),
+    ).toMatchObject({ kind: "stale", lastGood: computedPowerProgress });
+    expect(PowerProgressPanelSchema.parse({ kind: "unavailable", reason: "not-synced" })).toEqual({
+      kind: "unavailable",
+      reason: "not-synced",
+    });
+    expect(
+      PowerProgressPanelSchema.safeParse({
+        ...computedPowerProgress,
+        anchors: [...computedPowerProgress.anchors].reverse(),
+      }).success,
+    ).toBe(false);
+    expect(
+      PowerProgressPanelSchema.safeParse({
+        ...computedPowerProgress,
+        anchors: computedPowerProgress.anchors.map((anchor, index) =>
+          index === 0
+            ? { ...anchor, current: { kind: "computed", watts: Number.POSITIVE_INFINITY } }
+            : anchor,
+        ),
+      }).success,
+    ).toBe(false);
+    expect(
+      PowerProgressPanelSchema.safeParse({
+        ...computedPowerProgress,
+        anchors: computedPowerProgress.anchors.map((anchor, index) =>
+          index === 0 ? { ...anchor, current: { kind: "unavailable" } } : anchor,
+        ),
       }).success,
     ).toBe(false);
   });
