@@ -57,7 +57,7 @@ function heartRateCurve(id: string, secs: readonly number[], values: readonly (n
   return { id, secs: [...secs], values: [...values], provider_private_field: "not-projected" };
 }
 
-function payloads() {
+function payloads(): readonly unknown[] {
   return [
     {
       activities: { private_activity: { id: "private_activity", start_date_local: FROZEN_ON } },
@@ -90,7 +90,7 @@ function payloads() {
         heartRateCurve(SUSTAINABILITY, [300, 600, 1_200, 3_600], [176, 169, 164, 149]),
       ],
     },
-  ] as const;
+  ];
 }
 
 function reader(
