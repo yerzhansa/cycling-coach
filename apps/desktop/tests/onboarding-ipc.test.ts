@@ -32,6 +32,39 @@ type OwnershipCheck = (
   value: string,
 ) => Promise<"unowned" | "matched" | "mismatch" | "unresolved" | "store-unavailable">;
 
+function runtimeConfigSnapshot(
+  provider: RuntimeConfigSnapshot["llm"]["provider"] = "anthropic",
+  credentialConfigured = true,
+): RuntimeConfigSnapshot {
+  return {
+    schemaVersion: 3,
+    llm: {
+      provider,
+      model: "athlete-selected-model",
+      credential_configured: credentialConfigured,
+    },
+    intervals: {
+      athlete_id: "synthetic-athlete",
+      credential_configured: true,
+      managedByEnvironment: { athleteId: false },
+    },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "UTC",
+      managedByEnvironment: {
+        historyTokenBudgetRatio: false,
+        idleMinutes: false,
+        dailyResetHour: false,
+        resetArchiveRetentionDays: false,
+        timezone: false,
+      },
+    },
+  };
+}
+
 function harness(
   checkIntervalsCredentialOwner: OwnershipCheck = vi.fn(async () => "unresolved" as const),
   chatGptActivationTimeoutMs?: number,
@@ -111,35 +144,7 @@ function harness(
     invalidateProbeCache: vi.fn(),
     activate: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
   };
-  const getRuntimeConfig = vi.fn(
-    async (): Promise<RuntimeConfigSnapshot> => ({
-      schemaVersion: 3 as const,
-      llm: {
-        provider: "anthropic" as const,
-        model: "athlete-selected-model",
-        credential_configured: true,
-      },
-      intervals: {
-        athlete_id: "synthetic-athlete",
-        credential_configured: true,
-        managedByEnvironment: { athleteId: false },
-      },
-      session: {
-        historyTokenBudgetRatio: 0.3,
-        idleMinutes: 0,
-        dailyResetHour: 4,
-        resetArchiveRetentionDays: 0,
-        timezone: "UTC",
-        managedByEnvironment: {
-          historyTokenBudgetRatio: false,
-          idleMinutes: false,
-          dailyResetHour: false,
-          resetArchiveRetentionDays: false,
-          timezone: false,
-        },
-      },
-    }),
-  );
+  const getRuntimeConfig = vi.fn(async () => runtimeConfigSnapshot());
   const applyExistingLlmSelection = vi.fn(
     async (_selection: OnboardingLlmSelection, _signal?: AbortSignal) => false,
   );
@@ -617,6 +622,7 @@ describe("desktop onboarding IPC", () => {
       endpoint: { mode: "automatic" as const },
     };
     let activationSignal: AbortSignal | undefined;
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex"));
     subject.chatGptAuth.hasStoredProfile.mockResolvedValueOnce(false);
     subject.applyExistingLlmSelection.mockImplementationOnce(async (_selection, signal) => {
       activationSignal = signal;
@@ -638,6 +644,7 @@ describe("desktop onboarding IPC", () => {
       model: "gpt-5.4-mini",
       endpoint: { mode: "automatic" as const },
     };
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex"));
     subject.chatGptAuth.hasStoredProfile.mockResolvedValueOnce(false);
     subject.applyExistingLlmSelection.mockResolvedValueOnce(true);
 
@@ -660,6 +667,7 @@ describe("desktop onboarding IPC", () => {
       model: "gpt-5.4-mini",
       endpoint: { mode: "automatic" as const },
     };
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex"));
     subject.chatGptAuth.hasStoredProfile.mockResolvedValueOnce(true);
     subject.applyExistingLlmSelection.mockResolvedValueOnce(true);
 
@@ -675,6 +683,44 @@ describe("desktop onboarding IPC", () => {
     expect(subject.chatGptAuth.activate).not.toHaveBeenCalled();
   });
 
+  it("activates the stored default when the selected custom ChatGPT profile is unusable", async () => {
+    const subject = harness();
+    const selection = {
+      provider: "openai-codex" as const,
+      model: "gpt-5.4-mini",
+      endpoint: { mode: "automatic" as const },
+    };
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex", false));
+    subject.chatGptAuth.hasStoredProfile.mockResolvedValueOnce(true);
+    subject.applyExistingLlmSelection.mockResolvedValueOnce(true);
+
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "configured", runtimeReady: true });
+
+    expect(subject.applyExistingLlmSelection).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.hasStoredProfile).toHaveBeenCalledOnce();
+    expect(subject.chatGptAuth.activate).toHaveBeenCalledWith(selection, expect.any(AbortSignal));
+  });
+
+  it("does not replace a custom ChatGPT profile when its runtime preflight fails", async () => {
+    const subject = harness();
+    const selection = {
+      provider: "openai-codex" as const,
+      model: "gpt-5.4-mini",
+      endpoint: { mode: "automatic" as const },
+    };
+    subject.getRuntimeConfig.mockRejectedValueOnce(new Error("private runtime failure"));
+
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "refused", reason: "runtime-unavailable" });
+
+    expect(subject.applyExistingLlmSelection).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.hasStoredProfile).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.activate).not.toHaveBeenCalled();
+  });
+
   it("routes an inactive stored ChatGPT profile through bounded activation", async () => {
     const subject = harness();
     const selection = {
@@ -682,6 +728,7 @@ describe("desktop onboarding IPC", () => {
       model: "gpt-5.4-mini",
       endpoint: { mode: "automatic" as const },
     };
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex"));
     subject.applyExistingLlmSelection.mockResolvedValueOnce(false);
     subject.chatGptAuth.activate.mockResolvedValueOnce({
       status: "refused",

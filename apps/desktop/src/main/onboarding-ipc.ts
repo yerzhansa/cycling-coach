@@ -430,13 +430,19 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
         ? AbortSignal.timeout(options.chatGptActivationTimeoutMs ?? CHATGPT_ACTIVATION_TIMEOUT_MS)
         : undefined;
     try {
-      const existingSelection =
-        chatGptActivationSignal === undefined
-          ? options.applyExistingLlmSelection(selection)
-          : withAbort(
-              options.applyExistingLlmSelection(selection, chatGptActivationSignal),
-              chatGptActivationSignal,
-            );
+      let existingSelection: boolean | Promise<boolean>;
+      if (chatGptActivationSignal === undefined) {
+        existingSelection = options.applyExistingLlmSelection(selection);
+      } else {
+        const runtime = await withAbort(options.getRuntimeConfig(), chatGptActivationSignal);
+        existingSelection =
+          runtime.llm.provider === selection.provider && runtime.llm.credential_configured
+            ? withAbort(
+                options.applyExistingLlmSelection(selection, chatGptActivationSignal),
+                chatGptActivationSignal,
+              )
+            : false;
+      }
       if (await existingSelection) {
         return { status: "configured", runtimeReady: true };
       }
