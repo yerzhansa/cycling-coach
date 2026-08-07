@@ -65,6 +65,14 @@ function sameReleaseFileIdentity(left, right) {
   );
 }
 
+function releaseDirectoryIdentity(stat) {
+  return Object.freeze({ dev: stat.dev, ino: stat.ino, mode: stat.mode });
+}
+
+function sameReleaseDirectoryIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode;
+}
+
 async function readRegularReleaseFile(path, label) {
   let before;
   try {
@@ -265,6 +273,26 @@ export function requireDeveloperIdIdentity(value) {
   return value;
 }
 
+export function requireMacosBaselineApplication(value) {
+  const hasControlCharacter =
+    typeof value === "string" &&
+    Array.from(value).some((character) => {
+      const code = character.codePointAt(0);
+      return code !== undefined && (code < 32 || code === 127);
+    });
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 4_096 ||
+    value !== value.trim() ||
+    !isAbsolute(value) ||
+    hasControlCharacter
+  ) {
+    throw new TypeError("signed baseline application path is invalid");
+  }
+  return value;
+}
+
 export async function readCyclingCoachVersion(options = {}) {
   const repositoryRoot = options.repositoryRoot ?? canonicalRepositoryRoot;
   if (!isAbsolute(repositoryRoot)) {
@@ -307,6 +335,11 @@ export async function createMacosReleasePlan(input, dependencies = {}) {
   });
   const feedUrl = requireGenericFeedUrl(input.feedUrl);
   const identity = requireDeveloperIdIdentity(input.identity);
+  const baselineApplication = requireMacosBaselineApplication(input.baselineApplication);
+  const candidateApplication = join(desktopRoot, "dist/mac-arm64/Enduragent.app");
+  if (resolve(baselineApplication) === resolve(candidateApplication)) {
+    throw new TypeError("signed baseline application must differ from candidate");
+  }
   const builderOptions = {
     projectDir: desktopRoot,
     publish: "never",
@@ -346,6 +379,7 @@ export async function createMacosReleasePlan(input, dependencies = {}) {
   return Object.freeze({
     version,
     feedUrl,
+    baselineApplication,
     artifactNames: releaseArtifactNames(version),
     builderOptions,
   });
@@ -414,6 +448,29 @@ async function requireReleaseDirectory(path, label) {
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new TypeError(`invalid ${label}`);
   }
+  return releaseDirectoryIdentity(stat);
+}
+
+async function removeBoundReleaseDirectory(path, expectedIdentity) {
+  let stat;
+  try {
+    stat = await lstat(path);
+  } catch (error) {
+    if (missingPathError(error)) return;
+    throw new TypeError("release envelope cleanup failed");
+  }
+  if (
+    stat.isSymbolicLink() ||
+    !stat.isDirectory() ||
+    !sameReleaseDirectoryIdentity(releaseDirectoryIdentity(stat), expectedIdentity)
+  ) {
+    throw new TypeError("release envelope cleanup target changed");
+  }
+  try {
+    await rm(path, { recursive: true, force: true });
+  } catch {
+    throw new TypeError("release envelope cleanup failed");
+  }
 }
 
 async function requireMissingReleasePath(path) {
@@ -430,12 +487,13 @@ export function macosReleaseEnvelopePath(plan) {
   return join(plan.builderOptions.projectDir, "dist", `release-envelope-${plan.version}-mac-arm64`);
 }
 
-export async function promoteMacosReleaseEnvelope(plan, verifyEnvelope) {
+export async function promoteMacosReleaseEnvelope(plan, verifyEnvelope, overrides = {}) {
   if (typeof verifyEnvelope !== "function") {
     throw new TypeError("release envelope verifier is required");
   }
   const artifactDirectory = join(plan.builderOptions.projectDir, "dist");
   await requireReleaseDirectory(artifactDirectory, "release build directory");
+  const dependencies = { rename: overrides.rename ?? rename };
   const envelopePath = macosReleaseEnvelopePath(plan);
   await requireMissingReleasePath(envelopePath);
   const sourceEntries = [
@@ -466,11 +524,17 @@ export async function promoteMacosReleaseEnvelope(plan, verifyEnvelope) {
       snapshot: await readRegularReleaseFile(entry.path, entry.label),
     })),
   );
-  let temporaryDirectory;
+  let cleanupPath;
+  let cleanupIdentity;
   try {
-    temporaryDirectory = await mkdtemp(
+    const temporaryDirectory = await mkdtemp(
       join(artifactDirectory, `.release-envelope-${plan.version}-mac-arm64-`),
     );
+    cleanupIdentity = await requireReleaseDirectory(
+      temporaryDirectory,
+      "temporary release envelope",
+    );
+    cleanupPath = temporaryDirectory;
     await Promise.all(
       snapshots.map(({ name, snapshot }) =>
         writeFile(join(temporaryDirectory, name), snapshot.bytes, {
@@ -499,7 +563,10 @@ export async function promoteMacosReleaseEnvelope(plan, verifyEnvelope) {
     ) {
       throw new TypeError("promoted release artifact envelope differs");
     }
-    await verifyEnvelope(temporaryDirectory);
+    await requireMissingReleasePath(envelopePath);
+    await dependencies.rename(temporaryDirectory, envelopePath);
+    cleanupPath = envelopePath;
+    await verifyEnvelope(envelopePath);
     const currentSources = await Promise.all(
       snapshots.map(({ path, label }) => readRegularReleaseFile(path, label)),
     );
@@ -514,7 +581,7 @@ export async function promoteMacosReleaseEnvelope(plan, verifyEnvelope) {
     }
     const verifiedSnapshots = await Promise.all(
       snapshots.map(({ name, label }) =>
-        readRegularReleaseFile(join(temporaryDirectory, name), `verified ${label}`),
+        readRegularReleaseFile(join(envelopePath, name), `verified ${label}`),
       ),
     );
     if (
@@ -526,20 +593,25 @@ export async function promoteMacosReleaseEnvelope(plan, verifyEnvelope) {
     ) {
       throw new TypeError("release envelope changed during verification");
     }
-    const verifiedNames = (await readdir(temporaryDirectory)).sort();
+    const verifiedNames = (await readdir(envelopePath)).sort();
     if (
       verifiedNames.length !== expectedNames.length ||
       verifiedNames.some((name, index) => name !== expectedNames[index])
     ) {
       throw new TypeError("release envelope changed during verification");
     }
-    await requireMissingReleasePath(envelopePath);
-    await rename(temporaryDirectory, envelopePath);
-    temporaryDirectory = undefined;
+    const verifiedDirectoryIdentity = await requireReleaseDirectory(
+      envelopePath,
+      "verified release envelope",
+    );
+    if (!sameReleaseDirectoryIdentity(verifiedDirectoryIdentity, cleanupIdentity)) {
+      throw new TypeError("release envelope changed during verification");
+    }
+    cleanupPath = undefined;
     return envelopePath;
   } finally {
-    if (temporaryDirectory !== undefined) {
-      await rm(temporaryDirectory, { recursive: true, force: true });
+    if (cleanupPath !== undefined && cleanupIdentity !== undefined) {
+      await removeBoundReleaseDirectory(cleanupPath, cleanupIdentity);
     }
   }
 }
@@ -575,6 +647,16 @@ export async function runMacosRelease(input, dependencies = {}) {
   const notarizationCredentials = requireNotarizationCredentials(
     dependencies.environment ?? process.env,
   );
+  const verification = await import("./verify-macos-release.mjs");
+  const verifyBaselineApplication =
+    dependencies.verifyBaselineApplication ??
+    ((baseline, options) =>
+      verification.verifyMacosBaselineApplication(baseline, options, {
+        executeFile: dependencies.executeFile,
+      }));
+  await verifyBaselineApplication(plan.baselineApplication, {
+    candidateVersion: plan.version,
+  });
   const build = dependencies.build ?? (await import("electron-builder")).build;
   const artifacts = await build(plan.builderOptions);
   const application = join(plan.builderOptions.projectDir, "dist/mac-arm64/Enduragent.app");
@@ -588,11 +670,10 @@ export async function runMacosRelease(input, dependencies = {}) {
       feedUrl: plan.feedUrl,
     },
   });
-  const verification = await import("./verify-macos-release.mjs");
-  const verifyApplication =
-    dependencies.verifyApplication ??
-    ((path) =>
-      verification.verifyMacosApplication(path, {
+  const verifyIdentityContinuity =
+    dependencies.verifyIdentityContinuity ??
+    ((baseline, candidate, options) =>
+      verification.verifyMacosIdentityContinuity(baseline, candidate, options, {
         executeFile: dependencies.executeFile,
       }));
   const verifyDmg =
@@ -601,7 +682,9 @@ export async function runMacosRelease(input, dependencies = {}) {
       verification.verifyMacosDmg(path, {
         executeFile: dependencies.executeFile,
       }));
-  await verifyApplication(application);
+  await verifyIdentityContinuity(plan.baselineApplication, application, {
+    candidateVersion: plan.version,
+  });
   const dmgPath = join(plan.builderOptions.projectDir, "dist", plan.artifactNames.dmg);
   await notarizeMacosDmg(dmgPath, notarizationCredentials, {
     notarize: dependencies.notarize,
@@ -609,17 +692,20 @@ export async function runMacosRelease(input, dependencies = {}) {
   await verifyDmg(dmgPath);
   const sealReleaseMetadata = dependencies.sealReleaseMetadata ?? sealMacosReleaseMetadata;
   await sealReleaseMetadata(plan);
-  const verifyReleaseArtifacts =
-    dependencies.verifyReleaseArtifacts ?? verification.verifyMacosReleaseArtifacts;
   const verifyEnvelope = (artifactDirectory) =>
-    verifyReleaseArtifacts(
+    verification.verifyMacosReleaseEnvelope(
       artifactDirectory,
+      plan.baselineApplication,
+      application,
       {
         repositoryRoot: input.repositoryRoot ?? canonicalRepositoryRoot,
         readVersionFile: dependencies.readFile,
       },
       {
         executeFile: dependencies.executeFile,
+        verifyIdentityContinuity,
+        verifyReleaseApplicationContents: dependencies.verifyReleaseApplicationContents,
+        verifyReleaseArtifacts: dependencies.verifyReleaseArtifacts,
       },
     );
   const promoteReleaseEnvelope = dependencies.promoteReleaseEnvelope ?? promoteMacosReleaseEnvelope;
@@ -632,6 +718,7 @@ async function main() {
   const result = await runMacosRelease({
     feedUrl: process.env.ENDURAGENT_DESKTOP_UPDATE_URL,
     identity: process.env.ENDURAGENT_DEVELOPER_ID_IDENTITY,
+    baselineApplication: process.env.ENDURAGENT_MACOS_BASELINE_APP,
   });
   process.stdout.write(`macOS release envelope: ${result.envelopePath}\n`);
 }

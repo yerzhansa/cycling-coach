@@ -89,6 +89,7 @@ describe("Desktop development package plan", () => {
         desktopRoot,
         feedUrl: "https://updates.example.test/stable/",
         identity: "Enduragent Test (ABCDE12345)",
+        baselineApplication: join(desktopRoot, "dist/baseline/Enduragent.app"),
       },
       { readFile: async () => JSON.stringify({ version: "2026.8.6" }) },
     );

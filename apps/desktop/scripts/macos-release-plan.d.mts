@@ -1,4 +1,10 @@
 import type { NotarizeOptions } from "@electron/notarize";
+import type {
+  VerifiedMacosBaselineApplication,
+  VerifiedMacosIdentityContinuity,
+  VerifiedMacosReleaseArtifacts,
+  VerifyMacosReleaseApplicationContentsOptions,
+} from "./verify-macos-release.mjs";
 
 export interface ReleaseArtifactNames {
   readonly dmg: string;
@@ -10,6 +16,7 @@ export interface ReleaseArtifactNames {
 export interface MacosReleaseInput {
   readonly feedUrl: string | undefined;
   readonly identity: string | undefined;
+  readonly baselineApplication: string | undefined;
   readonly repositoryRoot?: string;
   readonly desktopRoot?: string;
 }
@@ -54,6 +61,7 @@ export interface MacosReleaseBuilderOptions {
 export interface MacosReleasePlan {
   readonly version: string;
   readonly feedUrl: string;
+  readonly baselineApplication: string;
   readonly artifactNames: ReleaseArtifactNames;
   readonly builderOptions: MacosReleaseBuilderOptions;
 }
@@ -100,7 +108,15 @@ export interface MacosReleaseDependencies {
       };
     },
   ) => Promise<void>;
-  readonly verifyApplication?: (application: string) => Promise<void>;
+  readonly verifyBaselineApplication?: (
+    baselineApplication: string,
+    options: { readonly candidateVersion: string },
+  ) => Promise<VerifiedMacosBaselineApplication>;
+  readonly verifyIdentityContinuity?: (
+    baselineApplication: string,
+    candidateApplication: string,
+    options: { readonly candidateVersion: string },
+  ) => Promise<VerifiedMacosIdentityContinuity>;
   readonly verifyDmg?: (dmgPath: string) => Promise<void>;
   readonly promoteReleaseEnvelope?: (
     plan: MacosReleasePlan,
@@ -118,7 +134,22 @@ export interface MacosReleaseDependencies {
         arguments_: readonly string[],
       ) => Promise<unknown>;
     },
-  ) => Promise<unknown>;
+  ) => Promise<VerifiedMacosReleaseArtifacts>;
+  readonly verifyReleaseApplicationContents?: (
+    artifactDirectory: string,
+    baselineApplication: string,
+    options: VerifyMacosReleaseApplicationContentsOptions,
+    dependencies: {
+      readonly executeFile?: (
+        executable: string,
+        arguments_: readonly string[],
+      ) => Promise<unknown>;
+    },
+  ) => Promise<void>;
+}
+
+export interface PromoteMacosReleaseEnvelopeDependencies {
+  readonly rename?: (oldPath: string, newPath: string) => Promise<void>;
 }
 
 export const DESKTOP_UPDATER_CACHE_DIRECTORY: "@enduragentdesktop-updater";
@@ -128,6 +159,7 @@ export function requireNotarizationCredentials(
 export function requireStableCalVer(value: unknown): string;
 export function requireGenericFeedUrl(value: unknown): string;
 export function requireDeveloperIdIdentity(value: unknown): string;
+export function requireMacosBaselineApplication(value: unknown): string;
 export function releaseArtifactNames(version: string): ReleaseArtifactNames;
 export function readCyclingCoachVersion(options?: {
   readonly repositoryRoot?: string;
@@ -142,6 +174,7 @@ export function macosReleaseEnvelopePath(plan: MacosReleasePlan): string;
 export function promoteMacosReleaseEnvelope(
   plan: MacosReleasePlan,
   verifyEnvelope: (artifactDirectory: string) => Promise<unknown>,
+  dependencies?: PromoteMacosReleaseEnvelopeDependencies,
 ): Promise<string>;
 export function notarizeMacosDmg(
   dmgPath: string,
