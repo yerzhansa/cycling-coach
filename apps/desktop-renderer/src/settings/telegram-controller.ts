@@ -176,6 +176,11 @@ interface TelegramSettingsHandlers {
   readonly onRemoveSender: (senderId: number) => void;
 }
 
+interface TelegramFeedbackProvenance {
+  readonly kind: "pairing-instruction" | "success";
+  readonly telegram: TelegramControlStatus | null;
+}
+
 export interface TelegramSettingsView {
   bind(handlers: TelegramSettingsHandlers): void;
   close(): void;
@@ -268,27 +273,35 @@ function mutationFailureCopy(
   return failureCopy(action);
 }
 
-function resultCopy(action: TelegramSettingsAction, status: TelegramControlStatus): string {
-  if (status.gapWarning.state === "possible-message-loss") {
-    return "Telegram reconnected after a long gap. Some messages may not have arrived.";
-  }
-  if (status.bot.state === "webhook-removal-required") {
-    return "Bot verified. Remove its webhook before pairing it with this Mac.";
-  }
-  if (status.pairing.state === "awaiting-code") {
-    return "Pairing code ready. Send it to the bot in Telegram.";
-  }
-  if (status.pairing.state === "paired" && action === "begin-pairing") {
-    return "Telegram is paired with its primary user.";
-  }
+type ActiveTelegramPairingStatus = TelegramControlStatus & {
+  readonly bot: { readonly state: "ready"; readonly username: string };
+  readonly pairing: {
+    readonly state: "awaiting-code";
+    readonly code: string;
+    readonly expiresAt: string;
+  };
+};
+
+export function hasActiveTelegramPairingCode(
+  status: TelegramControlStatus,
+): status is ActiveTelegramPairingStatus {
+  if (status.bot.state !== "ready" || status.pairing.state !== "awaiting-code") return false;
+  if (!status.credentialConfigured || status.channel.desiredState !== "enabled") return false;
+  return (
+    status.channel.state === "starting" ||
+    status.channel.state === "online" ||
+    status.channel.state === "offline-retrying" ||
+    status.channel.state === "suspended"
+  );
+}
+
+function channelHealthCopy(status: TelegramControlStatus): string {
   if (status.channel.state === "online") return "Telegram is online.";
   if (status.channel.state === "starting") return "Telegram is connecting.";
   if (status.channel.state === "suspended") {
     return "Telegram polling is paused while this Mac sleeps.";
   }
-  if (status.channel.state === "disabled") {
-    return action === "remove" ? "Telegram was removed from this Mac." : "Telegram is off.";
-  }
+  if (status.channel.state === "disabled") return "Telegram is off.";
   if (status.channel.state === "waiting-for-credential") {
     return "Copy a bot token from BotFather, then paste it from the clipboard.";
   }
@@ -305,6 +318,136 @@ function resultCopy(action: TelegramSettingsAction, status: TelegramControlStatu
     return "Telegram is offline. Enduragent will keep trying while this Mac is awake and online.";
   }
   return "Telegram needs attention. Keep the app open, check the connection, and try again.";
+}
+
+function resultCopy(action: TelegramSettingsAction, status: TelegramControlStatus): string {
+  if (status.gapWarning.state === "possible-message-loss") {
+    return "Telegram reconnected after a long gap. Some messages may not have arrived.";
+  }
+  if (status.bot.state === "webhook-removal-required") {
+    return "Bot verified. Remove its webhook before pairing it with this Mac.";
+  }
+  if (hasActiveTelegramPairingCode(status)) {
+    return "Pairing code ready. Send it to the bot in Telegram.";
+  }
+  if (status.pairing.state === "paired" && action === "begin-pairing") {
+    return "Telegram is paired with its primary user.";
+  }
+  if (status.channel.state === "disabled" && action === "remove") {
+    return "Telegram was removed from this Mac.";
+  }
+  return channelHealthCopy(status);
+}
+
+function sameBotTruth(left: TelegramBotStatus, right: TelegramBotStatus): boolean {
+  if (left.state === "unconfigured" || right.state === "unconfigured") {
+    return left.state === right.state;
+  }
+  return left.state === right.state && left.username === right.username;
+}
+
+function samePairingTruth(left: TelegramPairingStatus, right: TelegramPairingStatus): boolean {
+  if (left.state !== right.state) return false;
+  if (left.state === "awaiting-code" && right.state === "awaiting-code") {
+    return left.code === right.code && left.expiresAt === right.expiresAt;
+  }
+  if (left.state === "failed" && right.state === "failed") {
+    return left.errorCode === right.errorCode;
+  }
+  return true;
+}
+
+function sameFeedbackTruth(left: TelegramControlStatus, right: TelegramControlStatus): boolean {
+  return (
+    left.channel.desiredState === right.channel.desiredState &&
+    left.channel.state === right.channel.state &&
+    sameBotTruth(left.bot, right.bot) &&
+    samePairingTruth(left.pairing, right.pairing)
+  );
+}
+
+function pairingInstructionRemainsValid(
+  origin: TelegramControlStatus,
+  current: TelegramControlStatus,
+): boolean {
+  if (origin.pairing.state !== "awaiting-code" || !hasActiveTelegramPairingCode(current))
+    return false;
+  if (!sameBotTruth(origin.bot, current.bot)) return false;
+  if (origin.pairing.code !== current.pairing.code) return false;
+  if (origin.pairing.expiresAt !== current.pairing.expiresAt) return false;
+  return true;
+}
+
+function botUsername(status: TelegramBotStatus): string | null {
+  return status.state === "unconfigured" ? null : status.username;
+}
+
+function pairingFailureCopy(
+  pairing: Extract<TelegramPairingStatus, { readonly state: "failed" }>,
+): string {
+  if (pairing.errorCode === "telegram-pairing-storage-uncertain") {
+    return "The primary Telegram user may have been saved, but Enduragent could not verify storage. Restart Enduragent and check Telegram before pairing again.";
+  }
+  if (pairing.errorCode === "telegram-pairing-storage-failed") {
+    return "The primary Telegram user could not be saved. Check local disk access and try pairing again.";
+  }
+  if (pairing.errorCode === "telegram-pairing-refused") {
+    return "Pairing was refused because this bot already has a primary user.";
+  }
+  return "Pairing is unavailable until the Telegram bot can connect.";
+}
+
+function pairingTransitionCopy(
+  previous: TelegramControlStatus,
+  current: TelegramControlStatus,
+): string | null {
+  const previousBot = botUsername(previous.bot);
+  const currentBot = botUsername(current.bot);
+  if (previousBot !== currentBot) {
+    if (currentBot === null) return "Telegram bot was removed from this Mac.";
+    if (previousBot !== null) return `Telegram bot changed to @${currentBot}. Pairing was reset.`;
+  }
+  if (previous.pairing.state !== "awaiting-code") return null;
+  if (current.pairing.state === "awaiting-code") {
+    if (samePairingTruth(previous.pairing, current.pairing)) return null;
+    return hasActiveTelegramPairingCode(current)
+      ? "A new Telegram pairing code is ready. Send it to the bot in Telegram."
+      : null;
+  }
+  if (current.pairing.state === "paired") {
+    return "Telegram is paired with its primary user.";
+  }
+  if (current.pairing.state === "expired") {
+    return "The pairing code expired before it was used. Create a new code when you are ready.";
+  }
+  if (current.pairing.state === "failed") return pairingFailureCopy(current.pairing);
+  if (current.pairing.state === "unpaired") return "Telegram pairing was cancelled.";
+  return null;
+}
+
+function pollingAnnouncement(
+  previous: TelegramControlStatus,
+  current: TelegramControlStatus,
+): string {
+  return (
+    pairingTransitionCopy(previous, current) ??
+    (previous.channel.state === current.channel.state ? "" : channelHealthCopy(current))
+  );
+}
+
+function feedbackIsSuperseded(
+  feedback: TelegramSettingsFeedback | null,
+  provenance: TelegramFeedbackProvenance | null,
+  current: TelegramControlStatus,
+): boolean {
+  if (feedback === null || provenance?.telegram === null || provenance?.telegram === undefined) {
+    return false;
+  }
+  if (provenance.kind === "pairing-instruction") {
+    return !pairingInstructionRemainsValid(provenance.telegram, current);
+  }
+  if (feedback.tone !== "success") return false;
+  return !sameFeedbackTruth(provenance.telegram, current);
 }
 
 async function loadSenders(
@@ -335,6 +478,7 @@ export function createTelegramSettingsController(input: {
   let operation: Promise<void> | undefined;
   let pollTask: Promise<void> | undefined;
   let pollTimer: ReturnType<typeof globalThis.setInterval> | undefined;
+  let feedbackProvenance: TelegramFeedbackProvenance | null = null;
   const schedule = input.setInterval ?? globalThis.setInterval;
   const cancelSchedule = input.clearInterval ?? globalThis.clearInterval;
   const pollIntervalMs = input.pollIntervalMs ?? 5_000;
@@ -393,16 +537,21 @@ export function createTelegramSettingsController(input: {
           ) {
             const previous = readCurrentContent();
             const healthAnnouncement =
-              previous.telegram !== null &&
-              previous.telegram.channel.state !== content.telegram.channel.state
-                ? resultCopy("reconcile", content.telegram)
-                : "";
+              previous.telegram === null
+                ? ""
+                : pollingAnnouncement(previous.telegram, content.telegram);
+            const feedbackSuperseded = feedbackIsSuperseded(
+              previous.feedback,
+              feedbackProvenance,
+              content.telegram,
+            );
+            if (feedbackSuperseded) feedbackProvenance = null;
             render({
               status: "ready",
               ...content,
-              announcement: previous.announcement,
+              announcement: feedbackSuperseded ? "" : previous.announcement,
               healthAnnouncement,
-              feedback: previous.feedback,
+              feedback: feedbackSuperseded ? null : previous.feedback,
             });
           }
         },
@@ -425,6 +574,7 @@ export function createTelegramSettingsController(input: {
       .then(
         (content) => {
           if (!disposed && generation === operationGeneration) {
+            feedbackProvenance = null;
             render({
               status: "ready",
               ...content,
@@ -483,10 +633,23 @@ export function createTelegramSettingsController(input: {
       .then(
         ({ content, result }) => {
           if (!disposed && generation === operationGeneration) {
+            const transitionMessage =
+              result.outcome === "applied" && previous.telegram !== null
+                ? pairingTransitionCopy(previous.telegram, content.telegram)
+                : null;
             const message =
               result.outcome === "applied"
-                ? resultCopy(action, content.telegram)
+                ? (transitionMessage ?? resultCopy(action, content.telegram))
                 : mutationFailureCopy(action, result);
+            feedbackProvenance =
+              result.outcome === "applied"
+                ? {
+                    kind: hasActiveTelegramPairingCode(content.telegram)
+                      ? "pairing-instruction"
+                      : "success",
+                    telegram: content.telegram,
+                  }
+                : null;
             render({
               status: "ready",
               ...content,
@@ -506,6 +669,7 @@ export function createTelegramSettingsController(input: {
         },
         () => {
           if (!disposed && generation === operationGeneration) {
+            feedbackProvenance = null;
             render({
               status: "error",
               kind: "action",
@@ -545,6 +709,7 @@ export function createTelegramSettingsController(input: {
         (result) => {
           if (!disposed && generation === operationGeneration) {
             if (result.outcome === "uncertain") {
+              feedbackProvenance = null;
               const message =
                 result.reason === "storage-uncertain"
                   ? "The allowed-user list may have changed, but Enduragent could not verify storage. Restart Enduragent and check the list before trying again."
@@ -558,6 +723,7 @@ export function createTelegramSettingsController(input: {
               return;
             }
             if (result.outcome === "refused") {
+              feedbackProvenance = null;
               const message = failureCopy(action);
               render({
                 status: "ready",
@@ -567,6 +733,7 @@ export function createTelegramSettingsController(input: {
               });
               return;
             }
+            feedbackProvenance = { kind: "success", telegram: previous.telegram };
             render({
               status: "ready",
               ...previous,
@@ -584,6 +751,7 @@ export function createTelegramSettingsController(input: {
         },
         () => {
           if (!disposed && generation === operationGeneration) {
+            feedbackProvenance = null;
             render({
               status: "error",
               kind: "action",
@@ -631,6 +799,7 @@ export function createTelegramSettingsController(input: {
         pollTimer = undefined;
       }
       currentState = { status: "closed" };
+      feedbackProvenance = null;
       input.view.close();
     },
     state: () => currentState,
@@ -641,6 +810,7 @@ export function createTelegramSettingsController(input: {
       if (pollTimer !== undefined) cancelSchedule(pollTimer);
       pollTimer = undefined;
       currentState = { status: "closed" };
+      feedbackProvenance = null;
       input.view.dispose();
     },
   };

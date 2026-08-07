@@ -31,6 +31,16 @@ const OFFLINE = Object.freeze({
   channel: { desiredState: "enabled", state: "offline-retrying" },
 } as const satisfies TelegramControlStatus);
 
+const AWAITING = Object.freeze({
+  ...PAIRED,
+  channel: { desiredState: "enabled", state: "starting" },
+  pairing: {
+    state: "awaiting-code",
+    code: "A1B2C3",
+    expiresAt: "1998-07-06T12:01:00.000Z",
+  },
+} as const satisfies TelegramControlStatus);
+
 const SENDERS = Object.freeze({
   senders: Object.freeze([{ senderId: 101, role: "primary" as const }]),
 }) satisfies TelegramAllowedSenders;
@@ -83,15 +93,7 @@ function setup() {
     beginPairing: vi.fn(
       async (): Promise<TelegramMutationResult> => ({
         outcome: "applied" as const,
-        current: {
-          ...PAIRED,
-          channel: { desiredState: "enabled" as const, state: "starting" as const },
-          pairing: {
-            state: "awaiting-code" as const,
-            code: "A1B2C3",
-            expiresAt: "1998-07-06T12:01:00.000Z",
-          },
-        },
+        current: AWAITING,
       }),
     ),
     cancelPairing: vi.fn(
@@ -157,6 +159,15 @@ function setup() {
     states,
     view,
   };
+}
+
+async function beginPairing(runtime: ReturnType<typeof setup>): Promise<void> {
+  runtime.handlers.onBeginPairing();
+  await vi.waitFor(() =>
+    expect(runtime.controller.state()).toMatchObject({
+      telegram: { pairing: { state: "awaiting-code" } },
+    }),
+  );
 }
 
 describe("Telegram settings controller", () => {
@@ -281,6 +292,31 @@ describe("Telegram settings controller", () => {
     expect(runtime.controller.state()).toMatchObject({ feedback: { tone: "error" } });
   });
 
+  it("clears successful action feedback when channel truth changes", async () => {
+    const runtime = setup();
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
+    await runtime.controller.activate();
+    runtime.handlers.onEnable();
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        feedback: { tone: "success", message: "Telegram is online." },
+      }),
+    );
+
+    runtime.bridge.status.mockResolvedValueOnce(OFFLINE);
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: { channel: { state: "offline-retrying" } },
+        announcement: "",
+        healthAnnouncement:
+          "Telegram is offline. Enduragent will keep trying while this Mac is awake and online.",
+        feedback: null,
+      }),
+    );
+  });
+
   it("reports an uncertain replacement as repair-required without claiming refusal", async () => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);
@@ -331,6 +367,37 @@ describe("Telegram settings controller", () => {
     expect(JSON.stringify(runtime.controller.state())).not.toContain("was not applied");
   });
 
+  it("preserves uncertain replacement warnings across health transitions", async () => {
+    const runtime = setup();
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
+    await runtime.controller.activate();
+    runtime.bridge.pasteTokenFromClipboard.mockResolvedValueOnce({
+      outcome: "uncertain",
+      reason: "storage-uncertain",
+      current: PAIRED,
+    });
+    runtime.handlers.onPasteToken();
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({ feedback: { tone: "warning" } }),
+    );
+
+    runtime.bridge.status.mockResolvedValueOnce(OFFLINE);
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: { channel: { state: "offline-retrying" } },
+        healthAnnouncement:
+          "Telegram is offline. Enduragent will keep trying while this Mac is awake and online.",
+        feedback: {
+          tone: "warning",
+          message:
+            "The copied token was not applied to the running bot because storage could not be verified. Restart Enduragent and check Telegram before trying again.",
+        },
+      }),
+    );
+  });
+
   it.each([
     ["clipboard-unavailable", "The clipboard could not be read. No Telegram token was used."],
     [
@@ -369,18 +436,43 @@ describe("Telegram settings controller", () => {
     );
   });
 
+  it.each([
+    [
+      {
+        ...DISABLED,
+        bot: { state: "ready" as const, username: "replacement_bot" },
+        credentialConfigured: true,
+      },
+      "Telegram bot changed to @replacement_bot. Pairing was reset.",
+    ],
+    [DISABLED, "Telegram bot was removed from this Mac."],
+  ])("invalidates pairing instructions when the configured bot changes", async (next, message) => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    await beginPairing(runtime);
+
+    runtime.bridge.status.mockResolvedValueOnce(next);
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: next,
+        healthAnnouncement: message,
+        feedback: null,
+      }),
+    );
+  });
+
   it("publishes the short-lived pairing code and manages additional senders", async () => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);
     await runtime.controller.activate();
 
-    runtime.handlers.onBeginPairing();
-    await vi.waitFor(() =>
-      expect(runtime.controller.state()).toMatchObject({
-        status: "ready",
-        telegram: { pairing: { state: "awaiting-code", code: "A1B2C3" } },
-      }),
-    );
+    await beginPairing(runtime);
+    expect(runtime.controller.state()).toMatchObject({
+      status: "ready",
+      telegram: { pairing: { state: "awaiting-code", code: "A1B2C3" } },
+    });
 
     runtime.handlers.onAddSender(202);
     await vi.waitFor(() => expect(runtime.bridge.addAllowedSender).toHaveBeenCalledWith(202));
@@ -388,6 +480,316 @@ describe("Telegram settings controller", () => {
       status: "ready",
       allowedSenders: { senders: [{ senderId: 101 }, { senderId: 202 }] },
     });
+  });
+
+  it("replaces pairing instructions when the primary user claims the bot", async () => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    await beginPairing(runtime);
+    expect(runtime.controller.state()).toMatchObject({
+      feedback: {
+        tone: "success",
+        message: "Pairing code ready. Send it to the bot in Telegram.",
+      },
+    });
+
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: { pairing: { state: "paired" } },
+        announcement: "",
+        healthAnnouncement: "Telegram is paired with its primary user.",
+        feedback: null,
+      }),
+    );
+
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: { pairing: { state: "paired" } },
+        healthAnnouncement: "",
+        feedback: null,
+      }),
+    );
+  });
+
+  it("keeps the current pairing instruction through recoverable channel transitions", async () => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    await beginPairing(runtime);
+
+    for (const [state, healthAnnouncement] of [
+      ["online", "Telegram is online."],
+      [
+        "offline-retrying",
+        "Telegram is offline. Enduragent will keep trying while this Mac is awake and online.",
+      ],
+      ["suspended", "Telegram polling is paused while this Mac sleeps."],
+    ] as const) {
+      runtime.bridge.status.mockResolvedValueOnce({
+        ...AWAITING,
+        channel: { desiredState: "enabled", state },
+      });
+      runtime.poll?.();
+      await vi.waitFor(() =>
+        expect(runtime.controller.state()).toMatchObject({
+          telegram: { channel: { state }, pairing: { state: "awaiting-code" } },
+          healthAnnouncement,
+          feedback: {
+            tone: "success",
+            message: "Pairing code ready. Send it to the bot in Telegram.",
+          },
+        }),
+      );
+    }
+  });
+
+  it("announces a replacement pairing code once", async () => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    await beginPairing(runtime);
+    const replacement = {
+      ...AWAITING,
+      pairing: {
+        state: "awaiting-code" as const,
+        code: "D4E5F6",
+        expiresAt: "1998-07-06T12:02:00.000Z",
+      },
+    };
+
+    runtime.bridge.status.mockResolvedValueOnce(replacement);
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: { pairing: { state: "awaiting-code", code: "D4E5F6" } },
+        announcement: "",
+        healthAnnouncement: "A new Telegram pairing code is ready. Send it to the bot in Telegram.",
+        feedback: null,
+      }),
+    );
+
+    runtime.bridge.status.mockResolvedValueOnce(replacement);
+    runtime.poll?.();
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({ healthAnnouncement: "" }),
+    );
+  });
+
+  it("reports channel truth instead of an unusable replacement code from polling", async () => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    await beginPairing(runtime);
+    const conflictedReplacement = {
+      ...AWAITING,
+      channel: { desiredState: "enabled" as const, state: "conflict" as const },
+      pairing: {
+        state: "awaiting-code" as const,
+        code: "D4E5F6",
+        expiresAt: "1998-07-06T12:02:00.000Z",
+      },
+    };
+
+    runtime.bridge.status.mockResolvedValueOnce(conflictedReplacement);
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: conflictedReplacement,
+        announcement: "",
+        healthAnnouncement:
+          "Another service is polling this bot. Stop that deployment, then check again.",
+        feedback: null,
+      }),
+    );
+    expect(JSON.stringify(runtime.controller.state())).not.toContain(
+      "A new Telegram pairing code is ready",
+    );
+  });
+
+  it("reports channel truth instead of an action-returned unusable replacement code", async () => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    await beginPairing(runtime);
+    const conflictedReplacement = {
+      ...AWAITING,
+      channel: { desiredState: "enabled" as const, state: "conflict" as const },
+      pairing: {
+        state: "awaiting-code" as const,
+        code: "D4E5F6",
+        expiresAt: "1998-07-06T12:02:00.000Z",
+      },
+    };
+    runtime.bridge.reconcile.mockResolvedValueOnce({
+      outcome: "applied",
+      current: conflictedReplacement,
+    });
+
+    runtime.handlers.onReconcile();
+
+    const message = "Another service is polling this bot. Stop that deployment, then check again.";
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: conflictedReplacement,
+        announcement: message,
+        healthAnnouncement: "",
+        feedback: { tone: "success", message },
+      }),
+    );
+    expect(JSON.stringify(runtime.controller.state())).not.toContain(
+      "A new Telegram pairing code is ready",
+    );
+  });
+
+  it.each([
+    [
+      "disabled intent",
+      { ...AWAITING, channel: { desiredState: "disabled" as const, state: "disabled" as const } },
+      "Telegram is off.",
+    ],
+    [
+      "failed channel",
+      { ...AWAITING, channel: { desiredState: "enabled" as const, state: "failed" as const } },
+      "Telegram needs attention. Keep the app open, check the connection, and try again.",
+    ],
+    [
+      "polling conflict",
+      { ...AWAITING, channel: { desiredState: "enabled" as const, state: "conflict" as const } },
+      "Another service is polling this bot. Stop that deployment, then check again.",
+    ],
+    [
+      "transfer requirement",
+      {
+        ...AWAITING,
+        channel: { desiredState: "enabled" as const, state: "transfer-required" as const },
+      },
+      "This bot is still owned by another Desktop installation. Remove it there before retrying here.",
+    ],
+    ["missing credential", { ...AWAITING, credentialConfigured: false }, ""],
+  ])("removes pairing instructions after %s", async (_reason, next, healthAnnouncement) => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    await beginPairing(runtime);
+
+    runtime.bridge.status.mockResolvedValueOnce(next);
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: next,
+        announcement: "",
+        healthAnnouncement,
+        feedback: null,
+      }),
+    );
+  });
+
+  it.each([
+    [
+      "expired",
+      { state: "expired" as const },
+      "The pairing code expired before it was used. Create a new code when you are ready.",
+    ],
+    [
+      "unavailable",
+      { state: "failed" as const, errorCode: "telegram-pairing-unavailable" as const },
+      "Pairing is unavailable until the Telegram bot can connect.",
+    ],
+    [
+      "refused",
+      { state: "failed" as const, errorCode: "telegram-pairing-refused" as const },
+      "Pairing was refused because this bot already has a primary user.",
+    ],
+    [
+      "storage failed",
+      { state: "failed" as const, errorCode: "telegram-pairing-storage-failed" as const },
+      "The primary Telegram user could not be saved. Check local disk access and try pairing again.",
+    ],
+    [
+      "storage uncertain",
+      { state: "failed" as const, errorCode: "telegram-pairing-storage-uncertain" as const },
+      "The primary Telegram user may have been saved, but Enduragent could not verify storage. Restart Enduragent and check Telegram before pairing again.",
+    ],
+    ["unpaired", { state: "unpaired" as const }, "Telegram pairing was cancelled."],
+  ])("replaces pairing instructions when pairing becomes %s", async (_state, pairing, message) => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    await beginPairing(runtime);
+
+    runtime.bridge.status.mockResolvedValueOnce({
+      ...PAIRED,
+      channel: { desiredState: "enabled", state: "starting" },
+      pairing,
+    });
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: { pairing },
+        healthAnnouncement: message,
+        feedback: null,
+      }),
+    );
+  });
+
+  it.each([
+    ["paired", PAIRED, "Telegram is paired with its primary user."],
+    [
+      "expired",
+      { ...AWAITING, pairing: { state: "expired" as const } },
+      "The pairing code expired before it was used. Create a new code when you are ready.",
+    ],
+    [
+      "failed",
+      {
+        ...AWAITING,
+        pairing: { state: "failed" as const, errorCode: "telegram-pairing-refused" as const },
+      },
+      "Pairing was refused because this bot already has a primary user.",
+    ],
+    [
+      "unpaired",
+      { ...AWAITING, pairing: { state: "unpaired" as const } },
+      "Telegram pairing was cancelled.",
+    ],
+    [
+      "replacement bot",
+      {
+        ...DISABLED,
+        bot: { state: "ready" as const, username: "replacement_bot" },
+        credentialConfigured: true,
+      },
+      "Telegram bot changed to @replacement_bot. Pairing was reset.",
+    ],
+  ])("announces an action-returned %s transition once", async (_transition, next, message) => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    await beginPairing(runtime);
+    runtime.bridge.reconcile.mockResolvedValueOnce({ outcome: "applied", current: next });
+
+    runtime.handlers.onReconcile();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: next,
+        announcement: message,
+        healthAnnouncement: "",
+        feedback: { tone: "success", message },
+      }),
+    );
+
+    runtime.bridge.status.mockResolvedValueOnce(next);
+    runtime.poll?.();
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        healthAnnouncement: "",
+        feedback: { message },
+      }),
+    );
   });
 
   it("warns that a primary claim may have committed when pairing storage is uncertain", async () => {
