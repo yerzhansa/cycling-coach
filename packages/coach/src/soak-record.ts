@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 
 export type Attempt = {seq:number;path:"store"|"legacy";tag:
-  | "store:activities" | "store:wellness" | "store:settings" | "store:streams" | "legacy:reference";
+  | "store:activities" | "store:analytics-curves" | "store:wellness" | "store:settings"
+  | "store:streams" | "legacy:reference";
   started_ms:number;finished_ms:number;outcome:"ok"|"http-error"|"aborted"|"limit-rejected"};
 export type WindowEvidence = {attempts:Attempt[];elapsed_ms:number;completed:boolean;
   rate_limited:boolean;cancel_propagated:boolean};
@@ -115,7 +116,9 @@ function parseWindow(value: unknown, label: string): WindowEvidence {
     const outcome = attempt.outcome;
     if (seq !== index + 1 || (path !== "store" && path !== "legacy")
       || typeof tag !== "string"
-      || (path === "store" && !["store:activities", "store:wellness", "store:settings", "store:streams"].includes(tag))
+      || (path === "store" && ![
+        "store:activities", "store:analytics-curves", "store:wellness", "store:settings", "store:streams",
+      ].includes(tag))
       || (path === "legacy" && tag !== "legacy:reference")
       || !["ok", "http-error", "aborted", "limit-rejected"].includes(String(outcome))) fail("attempt is invalid");
     const started = safe(attempt.started_ms, "attempt start");

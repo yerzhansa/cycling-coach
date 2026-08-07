@@ -87,18 +87,40 @@ async function scratchEvidence(headSha: string): Promise<OverlapEvidence> {
   const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
   const attempts: Attempt[] = [];
   let tick = 0;
+  const observeCharge = (
+    path: "store" | "legacy",
+    tag: RefreshRequestTag,
+    charge: () => void,
+  ): void => {
+    const seq = attempts.length + 1;
+    const started = ++tick;
+    try {
+      charge();
+      attempts.push({ seq, path, tag, started_ms: started, finished_ms: 0, outcome: "ok" });
+    } catch (error) {
+      if (!(error instanceof PhysicalRequestLimitError)) throw error;
+      attempts.push({ seq, path, tag, started_ms: started, finished_ms: ++tick, outcome: "limit-rejected" });
+      throw error;
+    }
+  };
   const observingLedger: PhysicalRequestLedger = Object.freeze({
     charge(path: "store" | "legacy", tag: RefreshRequestTag): void {
-      const seq = attempts.length + 1;
-      const started = ++tick;
-      try {
-        ledger.charge(path, tag);
-        attempts.push({ seq, path, tag, started_ms: started, finished_ms: 0, outcome: "ok" });
-      } catch (error) {
-        if (!(error instanceof PhysicalRequestLimitError)) throw error;
-        attempts.push({ seq, path, tag, started_ms: started, finished_ms: ++tick, outcome: "limit-rejected" });
-        throw error;
-      }
+      observeCharge(path, tag, () => ledger.charge(path, tag));
+    },
+    tryReserve(path: "store" | "legacy", tag: RefreshRequestTag, count: number) {
+      const reservation = ledger.tryReserve(path, tag, count);
+      if (reservation === null) return null;
+      return Object.freeze({
+        charge(): void {
+          observeCharge(path, tag, () => reservation.charge());
+        },
+        release(): void {
+          reservation.release();
+        },
+        remaining(): number {
+          return reservation.remaining();
+        },
+      });
     },
     snapshot: () => ledger.snapshot(),
   });
@@ -181,6 +203,7 @@ function attemptsFromCounts(counts: PhysicalRequestCounts): Attempt[] {
   };
   push("store", "store:settings", counts.byTag["store:settings"]);
   push("store", "store:activities", counts.byTag["store:activities"]);
+  push("store", "store:analytics-curves", counts.byTag["store:analytics-curves"]);
   push("store", "store:wellness", counts.byTag["store:wellness"]);
   push("store", "store:streams", counts.byTag["store:streams"]);
   push("legacy", "legacy:reference", counts.byTag["legacy:reference"]);

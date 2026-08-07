@@ -390,6 +390,7 @@ describe("incremental backfill pages", () => {
                 totalRequests: 0,
                 byTag: {
                   "store:activities": 0,
+                  "store:analytics-curves": 0,
                   "store:wellness": 0,
                   "store:settings": 0,
                   "store:streams": 0,
