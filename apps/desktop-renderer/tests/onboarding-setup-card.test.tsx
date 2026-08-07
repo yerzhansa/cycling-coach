@@ -134,7 +134,9 @@ describe("setup card", () => {
   it("labels the AI trigger Choose when nothing is set and Change when a lane is ready", async () => {
     const cold = mountWizard({ bridge: coldBridge() });
     await cold.open();
-    expect(screen.getByRole("button", { name: "Choose what powers your coach" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Choose what powers your coach" }),
+    ).toBeInTheDocument();
     expect(rowState("ai")).toBe("pending");
     expect(setupRow("ai").textContent).toContain("AI that powers your coach");
     expect(rowSubtitle("ai")).toBe("Required — Enduragent doesn't include one");
@@ -147,7 +149,9 @@ describe("setup card", () => {
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
     });
-    expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Change what powers your coach" }),
+    ).toBeInTheDocument();
     warm.controller.dispose();
   });
 
@@ -279,12 +283,14 @@ describe("setup card", () => {
     await chooseLane(user, "openai-codex");
 
     await waitFor(() => {
-      expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
+      expect(wizard.controller.state().chatGptRuntimeState).toBe("failed");
     });
+    expect(wizard.controller.state().fixedError).toBeNull();
     expect(panel("chatgpt")).not.toBeNull();
     expect(panel("chatgpt")?.textContent).toContain(
-      "Your provider choice is saved, but it is not active yet.",
+      "Signed in, but the coach could not be activated. Retry without signing in again.",
     );
+    expect(screen.getByRole("button", { name: "Retry activation" })).toBeEnabled();
     wizard.controller.dispose();
   });
 
@@ -304,10 +310,10 @@ describe("setup card", () => {
     await chooseLane(user, "openai-codex");
 
     await waitFor(() => {
-      expect(wizard.controller.state().fixedError).toBe("model-runtime-unavailable");
+      expect(wizard.controller.state().chatGptRuntimeState).toBe("failed");
     });
-    expect(panel("chatgpt")).toBeNull();
-    expect(panel("ai-error")?.textContent).toContain("it is not active yet");
+    expect(wizard.controller.state().fixedError).toBeNull();
+    expect(panel("chatgpt")).not.toBeNull();
 
     await chooseLane(user, "openai-codex");
 
@@ -721,7 +727,10 @@ describe("setup card", () => {
     bridge.chatGptStatus
       .mockResolvedValueOnce({ state: "absent", runtimeReady: false })
       .mockResolvedValue({ state: "configured", runtimeReady: true });
-    bridge.chatGptLogin.mockResolvedValue({ status: "configured", runtimeReady: true });
+    bridge.chatGptLogin.mockImplementation(async ({ operationId }) => ({
+      status: "stored",
+      operationId,
+    }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await waitFor(() => {
@@ -755,7 +764,9 @@ describe("setup card", () => {
     seedSecret("intervals-icu", randomUUID());
 
     await user.click(
-      within(panel("training") as HTMLElement).getByRole("button", { name: "Cancel Intervals.icu setup" }),
+      within(panel("training") as HTMLElement).getByRole("button", {
+        name: "Cancel Intervals.icu setup",
+      }),
     );
 
     await waitFor(() => {

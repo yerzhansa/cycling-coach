@@ -12,7 +12,10 @@ const SCOPE = "openid profile email offline_access";
 const CALLBACK_PORT = 1455;
 const CALLBACK_HOST = "127.0.0.1";
 const CALLBACK_PATH = "/auth/callback";
+const AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1000;
+const TOKEN_EXCHANGE_TIMEOUT_MS = 10_000;
 const TOKEN_REFRESH_TIMEOUT_MS = 30_000;
+const CALLBACK_FORCE_CLOSE_MS = 500;
 
 export interface CodexCredentials {
   access: string;
@@ -23,13 +26,35 @@ export interface CodexCredentials {
   email?: string;
 }
 
+export type CodexLoginProgressPhase = "waiting-for-browser" | "completing-sign-in";
+
+export type CodexLoginErrorReason =
+  | "authorization-timed-out"
+  | "token-exchange-timed-out"
+  | "token-exchange-failed";
+
+const CODEX_LOGIN_ERROR_MESSAGES: Readonly<Record<CodexLoginErrorReason, string>> = {
+  "authorization-timed-out": "ChatGPT authorization timed out",
+  "token-exchange-timed-out": "ChatGPT token exchange timed out",
+  "token-exchange-failed": "ChatGPT token exchange failed",
+};
+
+export class CodexLoginError extends Error {
+  constructor(readonly reason: CodexLoginErrorReason) {
+    super(CODEX_LOGIN_ERROR_MESSAGES[reason]);
+    this.name = "CodexLoginError";
+  }
+}
+
 export interface CodexLoginOptions {
   onAuth: (info: { url: string; instructions?: string; callbackAvailable?: boolean }) => void;
-  onPrompt: (prompt: { message: string }) => Promise<string>;
-  onProgress?: (message: string) => void;
-  onManualCodeInput?: () => Promise<string>;
+  onPrompt: (prompt: { message: string; signal: AbortSignal }) => Promise<string>;
+  onProgress?: (phase: CodexLoginProgressPhase) => void;
+  onManualCodeInput?: (signal: AbortSignal) => Promise<string>;
   originator?: string;
   signal?: AbortSignal;
+  authorizationTimeoutMs?: number;
+  tokenExchangeTimeoutMs?: number;
 }
 
 // ============================================================================
@@ -136,6 +161,44 @@ interface OAuthServerHandle {
   waitForCode: () => Promise<{ code: string } | null>;
 }
 
+function boundedServerClose(server: Server): () => Promise<void> {
+  let pending: Promise<void> | undefined;
+  return () => {
+    if (pending !== undefined) return pending;
+    pending = new Promise<void>((resolve) => {
+      let settled = false;
+      let forceTimer: ReturnType<typeof setTimeout> | undefined;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        if (forceTimer !== undefined) clearTimeout(forceTimer);
+        resolve();
+      };
+      const forceClose = () => {
+        try {
+          server.closeAllConnections();
+        } catch {
+          // The listener may already have closed between the deadline and cleanup.
+        }
+        settle();
+      };
+      try {
+        // Stops accepting callbacks immediately. Existing browser connections get
+        // a short grace period before the hard cleanup below.
+        server.close(() => settle());
+        server.closeIdleConnections();
+      } catch {
+        forceClose();
+        return;
+      }
+      if (!settled) {
+        forceTimer = setTimeout(forceClose, CALLBACK_FORCE_CLOSE_MS);
+      }
+    });
+    return pending;
+  };
+}
+
 function startLocalOAuthServer(state: string): Promise<OAuthServerHandle> {
   let settleWait: ((value: { code: string } | null) => void) | undefined;
   const waitForCodePromise = new Promise<{ code: string } | null>((resolve) => {
@@ -147,10 +210,13 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerHandle> {
     };
   });
 
+  let closeServer: () => Promise<void>;
   const server: Server = createServer((req, res) => {
     const respond = (status: number, html: string) => {
       res.statusCode = status;
       res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Connection", "close");
+      res.shouldKeepAlive = false;
       res.end(html);
     };
     try {
@@ -168,19 +234,26 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerHandle> {
         respond(400, errorHtml("Missing authorization code."));
         return;
       }
-      respond(200, successHtml("OpenAI authentication completed. You can close this window."));
+      respond(
+        200,
+        successHtml(
+          "Authorization received. Return to Enduragent while ChatGPT sign-in completes.",
+        ),
+      );
+      void closeServer();
       settleWait?.({ code });
     } catch {
       respond(500, errorHtml("Internal error while processing OAuth callback."));
     }
   });
+  closeServer = boundedServerClose(server);
 
   return new Promise<OAuthServerHandle>((resolve) => {
     server
       .listen(CALLBACK_PORT, CALLBACK_HOST, () => {
         resolve({
           callbackAvailable: true,
-          close: () => new Promise((resolveClose) => server.close(() => resolveClose())),
+          close: closeServer,
           cancelWait: () => settleWait?.(null),
           waitForCode: () => waitForCodePromise,
         });
@@ -194,18 +267,19 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerHandle> {
         settleWait?.(null);
         resolve({
           callbackAvailable: false,
-          close: async () => {
-            try {
-              server.close();
-            } catch {
-              // ignore
-            }
-          },
+          close: closeServer,
           cancelWait: () => {},
           waitForCode: async () => null,
         });
       });
   });
+}
+
+function positiveSafeTimeout(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${name} must be a positive safe integer`);
+  }
+  return value;
 }
 
 // ============================================================================
@@ -372,12 +446,83 @@ async function refreshAccessToken(
 // ============================================================================
 
 export async function loginCodex(options: CodexLoginOptions): Promise<CodexCredentials> {
+  const authorizationTimeoutMs = positiveSafeTimeout(
+    options.authorizationTimeoutMs ?? AUTHORIZATION_TIMEOUT_MS,
+    "authorizationTimeoutMs",
+  );
+  const tokenExchangeTimeoutMs = positiveSafeTimeout(
+    options.tokenExchangeTimeoutMs ?? TOKEN_EXCHANGE_TIMEOUT_MS,
+    "tokenExchangeTimeoutMs",
+  );
   options.signal?.throwIfAborted();
   const { verifier, state, url } = await createAuthorizationFlow(options.originator);
   options.signal?.throwIfAborted();
   const server = await startLocalOAuthServer(state);
+  const authorizationTimeout = AbortSignal.timeout(authorizationTimeoutMs);
+  const authorizationSignal = options.signal
+    ? AbortSignal.any([options.signal, authorizationTimeout])
+    : authorizationTimeout;
+  const manualInputController = new AbortController();
+  const manualInputSignal = AbortSignal.any([authorizationSignal, manualInputController.signal]);
   const abortWait = (): void => server.cancelWait();
-  options.signal?.addEventListener("abort", abortWait, { once: true });
+  authorizationSignal.addEventListener("abort", abortWait, { once: true });
+  let authorizationWaitActive = true;
+
+  const cancelManualInput = (): void => {
+    if (!manualInputController.signal.aborted) {
+      manualInputController.abort(
+        new DOMException("Authorization input no longer needed", "AbortError"),
+      );
+    }
+  };
+  const finishAuthorizationWait = (): void => {
+    if (!authorizationWaitActive) return;
+    authorizationWaitActive = false;
+    authorizationSignal.removeEventListener("abort", abortWait);
+    cancelManualInput();
+  };
+  const throwIfAuthorizationAborted = (): void => {
+    options.signal?.throwIfAborted();
+    if (authorizationTimeout.aborted) {
+      throw new CodexLoginError("authorization-timed-out");
+    }
+    authorizationSignal.throwIfAborted();
+  };
+  const awaitAuthorizationInput = async <T>(pending: Promise<T>): Promise<T> => {
+    throwIfAuthorizationAborted();
+    return await new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const settle = (callback: () => void): void => {
+        if (settled) return;
+        settled = true;
+        authorizationSignal.removeEventListener("abort", rejectForAbort);
+        callback();
+      };
+      const rejectForAbort = (): void => {
+        let failure: unknown = authorizationSignal.reason;
+        try {
+          throwIfAuthorizationAborted();
+        } catch (error) {
+          failure = error;
+        }
+        settle(() => reject(failure));
+      };
+
+      authorizationSignal.addEventListener("abort", rejectForAbort, { once: true });
+      pending.then(
+        (value) => settle(() => resolve(value)),
+        (error: unknown) => settle(() => reject(error)),
+      );
+      if (authorizationSignal.aborted) rejectForAbort();
+    });
+  };
+  const reportProgress = (phase: CodexLoginProgressPhase): void => {
+    try {
+      options.onProgress?.(phase);
+    } catch {
+      // Progress is advisory and must not break credential acquisition.
+    }
+  };
 
   let code: string | undefined;
   const applyParsedInput = (input: string) => {
@@ -386,7 +531,8 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
     code = parsed.code;
   };
   try {
-    options.signal?.throwIfAborted();
+    throwIfAuthorizationAborted();
+    reportProgress("waiting-for-browser");
     options.onAuth({
       url,
       instructions: "A browser window should open. Complete login to finish.",
@@ -397,57 +543,93 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
       let manualCode: string | undefined;
       let manualError: Error | undefined;
       const manualPromise = options
-        .onManualCodeInput()
+        .onManualCodeInput(manualInputSignal)
         .then((input) => {
           manualCode = input;
           server.cancelWait();
         })
         .catch((err) => {
+          if (manualInputSignal.aborted) return;
           manualError = err instanceof Error ? err : new Error(String(err));
           server.cancelWait();
         });
 
-      const result = await server.waitForCode();
-      options.signal?.throwIfAborted();
+      const result = await awaitAuthorizationInput(server.waitForCode());
+      throwIfAuthorizationAborted();
       if (manualError) throw manualError;
       if (result?.code) {
         code = result.code;
+        cancelManualInput();
       } else if (manualCode) {
         applyParsedInput(manualCode);
       }
       if (!code) {
-        await manualPromise;
-        options.signal?.throwIfAborted();
+        await awaitAuthorizationInput(manualPromise);
+        throwIfAuthorizationAborted();
         if (manualError) throw manualError;
         if (manualCode) {
           applyParsedInput(manualCode);
         }
       }
     } else {
-      const result = await server.waitForCode();
-      options.signal?.throwIfAborted();
+      const result = await awaitAuthorizationInput(server.waitForCode());
+      throwIfAuthorizationAborted();
       if (result?.code) code = result.code;
     }
 
     if (!code) {
-      const input = await options.onPrompt({
-        message: "Paste the authorization code (or full redirect URL):",
-      });
+      const input = await awaitAuthorizationInput(
+        options.onPrompt({
+          message: "Paste the authorization code (or full redirect URL):",
+          signal: authorizationSignal,
+        }),
+      );
+      throwIfAuthorizationAborted();
       applyParsedInput(input);
     }
 
     if (!code) throw new Error("Missing authorization code");
+    finishAuthorizationWait();
+    void server.close();
+    reportProgress("completing-sign-in");
 
-    const tokenResult = await exchangeAuthorizationCode(
-      code,
-      verifier,
-      REDIRECT_URI,
-      options.signal,
-    );
-    options.signal?.throwIfAborted();
-    if (tokenResult.type !== "success") throw new Error("Token exchange failed");
+    const tokenExchangeTimeout = AbortSignal.timeout(tokenExchangeTimeoutMs);
+    const tokenExchangeSignal = options.signal
+      ? AbortSignal.any([options.signal, tokenExchangeTimeout])
+      : tokenExchangeTimeout;
+    let tokenResult: TokenResult;
+    try {
+      tokenResult = await exchangeAuthorizationCode(
+        code,
+        verifier,
+        REDIRECT_URI,
+        tokenExchangeSignal,
+      );
+      options.signal?.throwIfAborted();
+      if (tokenExchangeTimeout.aborted) {
+        throw new CodexLoginError("token-exchange-timed-out");
+      }
+    } catch (error) {
+      if (error instanceof CodexLoginError) throw error;
+      options.signal?.throwIfAborted();
+      if (tokenExchangeTimeout.aborted) {
+        throw new CodexLoginError("token-exchange-timed-out");
+      }
+      console.error("[codex-oauth] code->token error:", {
+        name: error instanceof Error ? error.name : typeof error,
+      });
+      throw new CodexLoginError("token-exchange-failed");
+    }
+    if (tokenResult.type !== "success") {
+      throw new CodexLoginError("token-exchange-failed");
+    }
 
-    const accountId = extractAccountId(tokenResult.access);
+    let accountId: string;
+    try {
+      accountId = extractAccountId(tokenResult.access);
+    } catch {
+      throw new CodexLoginError("token-exchange-failed");
+    }
 
     return {
       access: tokenResult.access,
@@ -456,7 +638,7 @@ export async function loginCodex(options: CodexLoginOptions): Promise<CodexCrede
       accountId,
     };
   } finally {
-    options.signal?.removeEventListener("abort", abortWait);
+    finishAuthorizationWait();
     await server.close();
   }
 }

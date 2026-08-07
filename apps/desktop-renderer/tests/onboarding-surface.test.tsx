@@ -764,9 +764,12 @@ describe("mounted onboarding", () => {
       expect(bridge.chatGptLogin).toHaveBeenCalledOnce();
     });
     expect(bridge.chatGptLogin).toHaveBeenCalledWith({
-      provider: "openai-codex",
-      model: "gpt-5.5",
-      endpoint: { mode: "automatic" },
+      operationId: expect.any(String),
+      selection: {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        endpoint: { mode: "automatic" },
+      },
     });
     wizard.controller.dispose();
   });
@@ -1014,7 +1017,7 @@ describe("mounted onboarding", () => {
       expect(rowState("ai")).toBe("ready");
     });
     expect(wizard.controller.state().fixedError).toBeNull();
-    expect(wizard.controller.state().chatGptRuntimeReady).toBe(false);
+    expect(wizard.controller.state().chatGptRuntimeState).toBe("ready");
     expect(document.body.textContent).not.toContain(exceptionDetail);
     wizard.controller.dispose();
   });
@@ -1088,7 +1091,7 @@ describe("mounted onboarding", () => {
     await user.click(signIn);
 
     expect(bridge.chatGptLogin).toHaveBeenCalledTimes(1);
-    expect(button("Finish signing in in your browser…")).toBeDisabled();
+    expect(button("Waiting for browser…")).toBeDisabled();
     act(() => {
       wizard.controller.startChatGptLogin();
     });

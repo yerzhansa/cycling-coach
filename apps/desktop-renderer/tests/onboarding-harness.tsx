@@ -6,7 +6,11 @@ import {
   createOnboardingController,
   type OnboardingController,
 } from "../src/onboarding/controller.js";
-import type { ChatGptLoginResult, OnboardingCompletion } from "../src/onboarding/machine.js";
+import type {
+  ChatGptLoginProgress,
+  ChatGptLoginResult,
+  OnboardingCompletion,
+} from "../src/onboarding/machine.js";
 import type { RideImportController } from "../src/ride-import.js";
 import { createOnboardingViewAdapter } from "../src/state/adapters/onboarding.js";
 import { credentialDrafts } from "../src/state/credential-drafts.js";
@@ -35,6 +39,8 @@ export function mountWizard(input: {
   readonly rideImports?: RideImportController;
   readonly onRideImportPresentationChange?: (presenting: boolean) => void;
   readonly onComplete?: (completion: OnboardingCompletion) => void;
+  readonly createOperationId?: () => string;
+  readonly afterPaint?: (callback: () => void) => () => void;
 }): MountedWizard {
   const focusOpener = vi.fn<() => void>();
   const adapter = createOnboardingViewAdapter({
@@ -50,6 +56,10 @@ export function mountWizard(input: {
       : { onRideImportPresentationChange: input.onRideImportPresentationChange }),
     focusOpener,
     onComplete: input.onComplete ?? vi.fn(),
+    ...(input.createOperationId === undefined
+      ? {}
+      : { createOperationId: input.createOperationId }),
+    ...(input.afterPaint === undefined ? {} : { afterPaint: input.afterPaint }),
   });
   useEnduragentStore.getState().bindOnboardingActions(controller);
   const rendered = render(<OnboardingWizard />);
@@ -247,6 +257,10 @@ export type TestBridge = OnboardingBridge & {
   readonly applyLlmSelection: ReturnType<typeof vi.fn<OnboardingBridge["applyLlmSelection"]>>;
   readonly chatGptStatus: ReturnType<typeof vi.fn<OnboardingBridge["chatGptStatus"]>>;
   readonly chatGptLogin: ReturnType<typeof vi.fn<OnboardingBridge["chatGptLogin"]>>;
+  readonly cancelChatGptLogin: ReturnType<typeof vi.fn<OnboardingBridge["cancelChatGptLogin"]>>;
+  readonly onChatGptLoginProgress: ReturnType<
+    typeof vi.fn<OnboardingBridge["onChatGptLoginProgress"]>
+  >;
   readonly claudeCliStatus: ReturnType<typeof vi.fn<OnboardingBridge["claudeCliStatus"]>>;
   readonly claudeCliRecheck: ReturnType<typeof vi.fn<OnboardingBridge["claudeCliRecheck"]>>;
   readonly writeCredential: ReturnType<typeof vi.fn<OnboardingBridge["writeCredential"]>>;
@@ -254,9 +268,19 @@ export type TestBridge = OnboardingBridge & {
   readonly chooseImportFiles: ReturnType<typeof vi.fn<OnboardingBridge["chooseImportFiles"]>>;
   readonly onDroppedImportFiles: ReturnType<typeof vi.fn<OnboardingBridge["onDroppedImportFiles"]>>;
   readonly saveIntake: ReturnType<typeof vi.fn<OnboardingBridge["saveIntake"]>>;
+  emitChatGptProgress(progress: ChatGptLoginProgress): void;
 };
 
-export function testBridge(login: () => Promise<ChatGptLoginResult>): TestBridge {
+type LegacyChatGptLoginResult =
+  | ChatGptLoginResult
+  | { readonly status: "configured"; readonly runtimeReady: true }
+  | {
+      readonly status: "refused";
+      readonly reason: Extract<ChatGptLoginResult, { status: "refused" }>["reason"];
+    };
+
+export function testBridge(login: () => Promise<LegacyChatGptLoginResult>): TestBridge {
+  const progressListeners = new Set<(progress: ChatGptLoginProgress) => void>();
   return {
     credentialStatuses: vi.fn<OnboardingBridge["credentialStatuses"]>(async () => []),
     retryFailedCredentials: vi.fn<OnboardingBridge["retryFailedCredentials"]>(async () => []),
@@ -276,7 +300,26 @@ export function testBridge(login: () => Promise<ChatGptLoginResult>): TestBridge
       state: "configured",
       runtimeReady: true,
     })),
-    chatGptLogin: vi.fn<OnboardingBridge["chatGptLogin"]>(login),
+    chatGptLogin: vi.fn<OnboardingBridge["chatGptLogin"]>(async (input) => {
+      const result = await login();
+      if (result.status === "configured") {
+        return { status: "stored", operationId: input.operationId };
+      }
+      if ("operationId" in result) return result;
+      return {
+        status: "refused",
+        operationId: input.operationId,
+        reason: result.reason as Extract<ChatGptLoginResult, { status: "refused" }>["reason"],
+      };
+    }),
+    cancelChatGptLogin: vi.fn<OnboardingBridge["cancelChatGptLogin"]>(async (operationId) => ({
+      status: "cancelling",
+      operationId,
+    })),
+    onChatGptLoginProgress: vi.fn<OnboardingBridge["onChatGptLoginProgress"]>((listener) => {
+      progressListeners.add(listener);
+      return () => progressListeners.delete(listener);
+    }),
     claudeCliStatus: vi.fn<OnboardingBridge["claudeCliStatus"]>(async () => ({
       state: "not-logged-in",
     })),
@@ -297,6 +340,9 @@ export function testBridge(login: () => Promise<ChatGptLoginResult>): TestBridge
       publication: { scope: "activities-and-streams", status: "available" },
     })),
     saveIntake: vi.fn<OnboardingBridge["saveIntake"]>(async () => {}),
+    emitChatGptProgress(progress) {
+      for (const listener of progressListeners) listener(progress);
+    },
   };
 }
 

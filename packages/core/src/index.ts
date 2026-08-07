@@ -181,8 +181,13 @@ export type {
 export { TokenRefreshError } from "./auth/refresh-failure.js";
 export type { RefreshFailure, RefreshFailureReason } from "./auth/refresh-failure.js";
 export { runCodexLogin } from "./auth/openai-codex-login.js";
-export { loginCodex, refreshCodexToken } from "./agent/codex/oauth.js";
-export type { CodexCredentials, CodexLoginOptions } from "./agent/codex/oauth.js";
+export { CodexLoginError, loginCodex, refreshCodexToken } from "./agent/codex/oauth.js";
+export type {
+  CodexCredentials,
+  CodexLoginErrorReason,
+  CodexLoginOptions,
+  CodexLoginProgressPhase,
+} from "./agent/codex/oauth.js";
 
 // ─── Channels ─────────────────────────────────────────────────────────
 export { createTelegramBot } from "./channels/telegram.js";

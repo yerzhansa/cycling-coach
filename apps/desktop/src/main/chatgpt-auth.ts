@@ -1,10 +1,12 @@
 import { join } from "node:path";
 import {
+  CodexLoginError,
   deleteStoredProfile,
   loadStoredProfileSnapshot,
   loginCodex,
   recoverAndSaveStoredProfile,
   type CodexCredentials,
+  type CodexLoginProgressPhase,
   type CodexLoginOptions,
 } from "@enduragent/core";
 import type { ConfigureRuntimeRpcParams, RuntimeConfigSnapshot } from "@enduragent/coach-contract";
@@ -16,7 +18,9 @@ import {
 } from "./llm-selection.js";
 
 export const CHATGPT_PROFILE_NAME = "openai-codex" as const;
-export const CHATGPT_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+export const CHATGPT_ACTIVATION_TIMEOUT_MS = 10_000;
+
+export type ChatGptLoginProgressPhase = CodexLoginProgressPhase;
 
 export type ChatGptLoginRefusalReason =
   | "already-in-progress"
@@ -33,8 +37,17 @@ export interface ChatGptStatus {
 }
 
 export type ChatGptLoginResult =
-  | { readonly status: "configured"; readonly runtimeReady: true }
-  | { readonly status: "refused"; readonly reason: ChatGptLoginRefusalReason };
+  | { readonly status: "stored"; readonly operationId: string }
+  | {
+      readonly status: "refused";
+      readonly operationId: string;
+      readonly reason: ChatGptLoginRefusalReason;
+    };
+
+export type ChatGptCancelLoginResult = {
+  readonly status: "cancelling" | "not-active";
+  readonly operationId: string;
+};
 
 export type ChatGptDeleteResult =
   | { readonly status: "deleted"; readonly cleanupPending: false }
@@ -48,9 +61,18 @@ export type ChatGptDeleteResult =
     };
 
 export interface ChatGptAuthController {
+  hasStoredProfile(): Promise<boolean>;
   status(): Promise<ChatGptStatus>;
-  login(selection: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
-  activate(selection: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
+  login(
+    operationId: string,
+    selection: OnboardingLlmSelection,
+    onProgress?: (phase: ChatGptLoginProgressPhase) => void,
+  ): Promise<ChatGptLoginResult>;
+  cancelLogin(operationId: string): ChatGptCancelLoginResult;
+  activate(
+    selection: OnboardingLlmSelection,
+    signal?: AbortSignal,
+  ): Promise<OnboardingLlmSelectionResult>;
   deleteCredential(): Promise<ChatGptDeleteResult>;
 }
 
@@ -62,14 +84,19 @@ interface ChatGptAuthDependencies {
 
 interface CreateChatGptAuthOptions {
   readonly configDir: string;
-  readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
+  readonly applyRuntimeConfig: (
+    request: ConfigureRuntimeRpcParams,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   readonly getRuntimeConfig: () => Promise<RuntimeConfigSnapshot>;
   readonly clearRuntimeCredential?: () => Promise<
     "cleared" | "not-active" | "managed-by-environment"
   >;
   readonly openExternal: (url: string) => Promise<void>;
   readonly signal?: AbortSignal;
-  readonly timeoutMs?: number;
+  readonly authorizationTimeoutMs?: number;
+  readonly tokenExchangeTimeoutMs?: number;
+  readonly activationTimeoutMs?: number;
   readonly dependencies?: ChatGptAuthDependencies;
 }
 
@@ -142,24 +169,65 @@ async function configuredRuntime(
 
 function classifyLoginFailure(
   error: unknown,
-  timeoutSignal: AbortSignal,
+  attemptSignal: AbortSignal,
   sessionSignal: AbortSignal | undefined,
 ): ChatGptLoginRefusalReason {
   if (error instanceof ChatGptAuthFlowError) return error.reason;
-  if (timeoutSignal.aborted) return "timed-out";
-  if (sessionSignal?.aborted) return "cancelled";
+  if (attemptSignal.aborted || sessionSignal?.aborted) return "cancelled";
+  if (
+    (typeof CodexLoginError === "function" && error instanceof CodexLoginError) ||
+    (isRecord(error) &&
+      error.name === "CodexLoginError" &&
+      (error.reason === "authorization-timed-out" ||
+        error.reason === "token-exchange-timed-out" ||
+        error.reason === "token-exchange-failed"))
+  ) {
+    return error.reason === "authorization-timed-out" ? "timed-out" : "exchange-failed";
+  }
   if (isRecord(error) && error.name === "AbortError") return "cancelled";
   return "exchange-failed";
+}
+
+function validOperationId(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+async function withAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAuthController {
   const runLogin = options.dependencies?.loginCodex ?? loginCodex;
   const storeProfile = options.dependencies?.writeProfile ?? writeChatGptProfile;
   const removeProfile = options.dependencies?.deleteProfile ?? deleteChatGptProfile;
-  let activeLogin: Promise<ChatGptLoginResult> | undefined;
+  let activeLogin:
+    | {
+        readonly operationId: string;
+        readonly controller: AbortController;
+        readonly promise: Promise<ChatGptLoginResult>;
+      }
+    | undefined;
 
   const applySelection = async (
     selection: OnboardingLlmSelection,
+    activationSignal?: AbortSignal,
   ): Promise<OnboardingLlmSelectionResult> => {
     let parsed: ReturnType<typeof parseChatGptLlmSelection>;
     try {
@@ -170,8 +238,19 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
     if (!(await hasChatGptProfile(options.configDir))) {
       return { status: "refused", reason: "credential-required" };
     }
+    const timeoutSignal = AbortSignal.timeout(
+      options.activationTimeoutMs ?? CHATGPT_ACTIVATION_TIMEOUT_MS,
+    );
+    const signals = [timeoutSignal];
+    if (options.signal !== undefined) signals.push(options.signal);
+    if (activationSignal !== undefined) signals.push(activationSignal);
+    const signal = signals.length === 1 ? timeoutSignal : AbortSignal.any(signals);
     try {
-      await options.applyRuntimeConfig(runtimeConfigurationForSelection(parsed));
+      signal.throwIfAborted();
+      await withAbort(
+        options.applyRuntimeConfig(runtimeConfigurationForSelection(parsed), signal),
+        signal,
+      );
     } catch {
       return { status: "refused", reason: "runtime-unavailable" };
     }
@@ -179,22 +258,32 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
   };
 
   const performLogin = async (
-    selection: ReturnType<typeof parseChatGptLlmSelection>,
+    operationId: string,
+    attemptController: AbortController,
+    onProgress?: (phase: ChatGptLoginProgressPhase) => void,
   ): Promise<ChatGptLoginResult> => {
-    const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? CHATGPT_LOGIN_TIMEOUT_MS);
-    const browserController = new AbortController();
-    const signals = [timeoutSignal, browserController.signal];
-    if (options.signal !== undefined) signals.push(options.signal);
-    const signal = AbortSignal.any(signals);
+    const signal =
+      options.signal === undefined
+        ? attemptController.signal
+        : AbortSignal.any([options.signal, attemptController.signal]);
     let credentials: CodexCredentials;
     try {
       credentials = await runLogin({
         originator: "enduragent-desktop",
         signal,
+        ...(options.authorizationTimeoutMs === undefined
+          ? {}
+          : { authorizationTimeoutMs: options.authorizationTimeoutMs }),
+        ...(options.tokenExchangeTimeoutMs === undefined
+          ? {}
+          : { tokenExchangeTimeoutMs: options.tokenExchangeTimeoutMs }),
+        onProgress: (phase) => {
+          if (!signal.aborted) onProgress?.(phase);
+        },
         onAuth: ({ url, callbackAvailable }) => {
           if (callbackAvailable === false) return;
           void options.openExternal(url).catch(() => {
-            browserController.abort(new ChatGptAuthFlowError("cancelled"));
+            attemptController.abort(new ChatGptAuthFlowError("cancelled"));
           });
         },
         onPrompt: async () => {
@@ -204,23 +293,24 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
     } catch (error) {
       return {
         status: "refused",
-        reason: classifyLoginFailure(error, timeoutSignal, options.signal),
+        operationId,
+        reason: classifyLoginFailure(error, attemptController.signal, options.signal),
       };
     }
     try {
+      signal.throwIfAborted();
       await storeProfile(options.configDir, credentials);
     } catch {
-      return { status: "refused", reason: "storage-failed" };
+      if (signal.aborted) {
+        return { status: "refused", operationId, reason: "cancelled" };
+      }
+      return { status: "refused", operationId, reason: "storage-failed" };
     }
-    try {
-      await options.applyRuntimeConfig(runtimeConfigurationForSelection(selection));
-    } catch {
-      return { status: "refused", reason: "runtime-unavailable" };
-    }
-    return { status: "configured", runtimeReady: true };
+    return { status: "stored", operationId };
   };
 
   return {
+    hasStoredProfile: () => hasChatGptProfile(options.configDir),
     async status() {
       const configured = await hasChatGptProfile(options.configDir);
       const runtimeReady = await configuredRuntime(options.getRuntimeConfig);
@@ -229,18 +319,31 @@ export function createChatGptAuth(options: CreateChatGptAuthOptions): ChatGptAut
         runtimeReady: runtimeReady ?? false,
       };
     },
-    async login(input) {
-      const selection = parseChatGptLlmSelection(input);
+    async login(operationId, input, onProgress) {
+      if (!validOperationId(operationId)) throw new TypeError();
+      parseChatGptLlmSelection(input);
       if (activeLogin !== undefined) {
-        return { status: "refused", reason: "already-in-progress" };
+        return { status: "refused", operationId, reason: "already-in-progress" };
       }
-      const pending = performLogin(selection);
-      activeLogin = pending;
+      const controller = new AbortController();
+      const pending = Promise.resolve().then(() =>
+        performLogin(operationId, controller, onProgress),
+      );
+      activeLogin = { operationId, controller, promise: pending };
       try {
         return await pending;
       } finally {
-        if (activeLogin === pending) activeLogin = undefined;
+        if (activeLogin?.promise === pending) activeLogin = undefined;
       }
+    },
+    cancelLogin(operationId) {
+      if (!validOperationId(operationId)) throw new TypeError();
+      const active = activeLogin;
+      if (active === undefined || active.operationId !== operationId) {
+        return { status: "not-active", operationId };
+      }
+      active.controller.abort(new DOMException("Cancelled", "AbortError"));
+      return { status: "cancelling", operationId };
     },
     activate: applySelection,
     async deleteCredential() {

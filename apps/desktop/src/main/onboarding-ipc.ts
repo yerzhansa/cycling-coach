@@ -7,11 +7,15 @@ import type {
 } from "@enduragent/coach-contract";
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent, OpenDialogOptions } from "electron";
 import {
+  CHATGPT_ACTIVATION_TIMEOUT_MS,
   CHATGPT_PROFILE_NAME,
   type ChatGptAuthController,
+  type ChatGptCancelLoginResult,
+  type ChatGptLoginProgressPhase,
   type ChatGptLoginResult,
   type ChatGptStatus,
 } from "./chatgpt-auth.js";
+import { DESKTOP_RENDERER_URL } from "./constants.js";
 import {
   DESKTOP_CREDENTIAL_SLOTS,
   type CredentialSlotStatus,
@@ -41,6 +45,10 @@ export const DESKTOP_LLM_SELECTION_APPLY_CHANNEL =
   "enduragent:onboarding:llm-selection-apply" as const;
 export const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status" as const;
 export const DESKTOP_CHATGPT_LOGIN_CHANNEL = "enduragent:onboarding:chatgpt-login" as const;
+export const DESKTOP_CHATGPT_LOGIN_CANCEL_CHANNEL =
+  "enduragent:onboarding:chatgpt-login-cancel" as const;
+export const DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL =
+  "enduragent:onboarding:chatgpt-login-progress" as const;
 export const DESKTOP_CLAUDE_CLI_STATUS_CHANNEL = "enduragent:onboarding:claude-cli-status" as const;
 export const DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL =
   "enduragent:onboarding:claude-cli-recheck" as const;
@@ -62,7 +70,11 @@ interface RegisterOnboardingIpcOptions {
   readonly chatGptAuth: ChatGptAuthController;
   readonly claudeCli: ClaudeCliStatusController;
   readonly getRuntimeConfig: () => Promise<RuntimeConfigSnapshot>;
-  readonly applyExistingLlmSelection: (selection: OnboardingLlmSelection) => Promise<boolean>;
+  readonly applyExistingLlmSelection: (
+    selection: OnboardingLlmSelection,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
+  readonly chatGptActivationTimeoutMs?: number;
   readonly isTrusted: (event: IpcMainInvokeEvent) => boolean;
   readonly checkIntervalsCredentialOwner: (
     value: string,
@@ -70,6 +82,31 @@ interface RegisterOnboardingIpcOptions {
 }
 
 const SUPPORTED_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function withAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
 
 export function runtimeConfigurationForCredential(
   slot: DesktopCredentialSlot,
@@ -212,8 +249,49 @@ function minimizeClaudeCliStatus(value: ClaudeCliStatus): ClaudeCliStatus {
 }
 
 function minimizeChatGptLogin(value: ChatGptLoginResult): ChatGptLoginResult {
-  if (value.status === "configured") return { status: "configured", runtimeReady: true };
-  return { status: "refused", reason: value.reason };
+  if (value.status === "stored") {
+    return { status: "stored", operationId: value.operationId };
+  }
+  return { status: "refused", operationId: value.operationId, reason: value.reason };
+}
+
+function minimizeChatGptCancel(value: ChatGptCancelLoginResult): ChatGptCancelLoginResult {
+  return { status: value.status, operationId: value.operationId };
+}
+
+function validChatGptOperationId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+function parseChatGptLoginInput(value: unknown): {
+  readonly operationId: string;
+  readonly selection: OnboardingLlmSelection;
+} {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 2 ||
+    !Object.hasOwn(value, "operationId") ||
+    !Object.hasOwn(value, "selection") ||
+    !validChatGptOperationId(value.operationId)
+  ) {
+    throw new TypeError();
+  }
+  return {
+    operationId: value.operationId,
+    selection: parseChatGptLlmSelection(value.selection),
+  };
+}
+
+function parseChatGptCancelInput(value: unknown): { readonly operationId: string } {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 1 ||
+    !Object.hasOwn(value, "operationId") ||
+    !validChatGptOperationId(value.operationId)
+  ) {
+    throw new TypeError();
+  }
+  return { operationId: value.operationId };
 }
 
 async function llmConfiguration(
@@ -234,8 +312,26 @@ async function llmConfiguration(
 }
 
 export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): () => void {
+  let disposed = false;
   const requireTrusted = (event: IpcMainInvokeEvent): void => {
     if (!options.isTrusted(event)) throw new TypeError();
+  };
+  const publishChatGptProgress = (
+    sender: IpcMainInvokeEvent["sender"],
+    operationId: string,
+    phase: ChatGptLoginProgressPhase,
+  ): void => {
+    try {
+      if (disposed || sender.isDestroyed() || sender.mainFrame.url !== DESKTOP_RENDERER_URL) {
+        return;
+      }
+      sender.send(DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL, {
+        operationId,
+        phase,
+      });
+    } catch {
+      return;
+    }
   };
   options.ipcMain.handle(DESKTOP_CREDENTIAL_STATUS_CHANNEL, async (event, ...args) => {
     requireTrusted(event);
@@ -329,13 +425,40 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
     } catch {
       return { status: "refused", reason: "invalid-input" };
     }
+    const chatGptActivationSignal =
+      selection.provider === "openai-codex"
+        ? AbortSignal.timeout(options.chatGptActivationTimeoutMs ?? CHATGPT_ACTIVATION_TIMEOUT_MS)
+        : undefined;
     try {
-      if (await options.applyExistingLlmSelection(selection)) {
+      let existingSelection: boolean | Promise<boolean>;
+      if (chatGptActivationSignal === undefined) {
+        existingSelection = options.applyExistingLlmSelection(selection);
+      } else {
+        const runtime = await withAbort(options.getRuntimeConfig(), chatGptActivationSignal);
+        existingSelection =
+          runtime.llm.provider === selection.provider && runtime.llm.credential_configured
+            ? withAbort(
+                options.applyExistingLlmSelection(selection, chatGptActivationSignal),
+                chatGptActivationSignal,
+              )
+            : false;
+      }
+      if (await existingSelection) {
         return { status: "configured", runtimeReady: true };
       }
-      if (selection.provider === "openai-codex") {
+      if (chatGptActivationSignal !== undefined) {
+        const hasStoredProfile = await withAbort(
+          options.chatGptAuth.hasStoredProfile(),
+          chatGptActivationSignal,
+        );
+        if (!hasStoredProfile) {
+          return { status: "refused", reason: "credential-required" };
+        }
         return minimizeSelection(
-          await options.chatGptAuth.activate(parseChatGptLlmSelection(selection)),
+          await options.chatGptAuth.activate(
+            parseChatGptLlmSelection(selection),
+            chatGptActivationSignal,
+          ),
         );
       }
       if (selection.provider === "claude-cli") {
@@ -356,8 +479,18 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
   options.ipcMain.handle(DESKTOP_CHATGPT_LOGIN_CHANNEL, async (event, ...args) => {
     requireTrusted(event);
     if (args.length !== 1) throw new TypeError();
-    const selection = parseChatGptLlmSelection(args[0]);
-    return minimizeChatGptLogin(await options.chatGptAuth.login(selection));
+    const input = parseChatGptLoginInput(args[0]);
+    return minimizeChatGptLogin(
+      await options.chatGptAuth.login(input.operationId, input.selection, (phase) => {
+        publishChatGptProgress(event.sender, input.operationId, phase);
+      }),
+    );
+  });
+  options.ipcMain.handle(DESKTOP_CHATGPT_LOGIN_CANCEL_CHANNEL, (event, ...args) => {
+    requireTrusted(event);
+    if (args.length !== 1) throw new TypeError();
+    const input = parseChatGptCancelInput(args[0]);
+    return minimizeChatGptCancel(options.chatGptAuth.cancelLogin(input.operationId));
   });
   options.ipcMain.handle(DESKTOP_CLAUDE_CLI_STATUS_CHANNEL, async (event, ...args) => {
     requireTrusted(event);
@@ -392,6 +525,7 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
     );
   });
   return () => {
+    disposed = true;
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_STATUS_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_RETRY_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CREDENTIAL_WRITE_CHANNEL);
@@ -400,6 +534,7 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
     options.ipcMain.removeHandler(DESKTOP_LLM_SELECTION_APPLY_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHATGPT_STATUS_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHATGPT_LOGIN_CHANNEL);
+    options.ipcMain.removeHandler(DESKTOP_CHATGPT_LOGIN_CANCEL_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CLAUDE_CLI_STATUS_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL);
     options.ipcMain.removeHandler(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL);

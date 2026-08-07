@@ -19,6 +19,8 @@ import { credentialPresentation } from "./credential-presentation.js";
 import { handoffCredential, type CredentialDraftPort } from "./credentials.js";
 import type { SetupCommit } from "./lanes.js";
 import {
+  chatGptSignedIn,
+  chatGptUiPhase,
   createOnboardingState,
   hasTrainingData,
   intakeComplete,
@@ -26,8 +28,11 @@ import {
   toDesktopIntakeFlags,
   toOnboardingCompletion,
   withBusy,
+  withChatGptActivationPending,
+  withChatGptActivationResult,
   withChatGptLoginResult,
   withChatGptPending,
+  withChatGptProgress,
   withChatGptStatus,
   withClaudeCliStatus,
   withCredentialStatuses,
@@ -35,6 +40,7 @@ import {
   withImportedRideFileCount,
   withIntake,
   type ChatGptStatus,
+  type ChatGptUiPhase,
   type CredentialSlotStatus,
   type DesktopIntakeDraft,
   type OnboardingCompletion,
@@ -64,7 +70,16 @@ export interface OnboardingSurfaceState {
   readonly focusSeq: number;
   readonly readiness: OnboardingReadiness;
   readonly lastCommit: SetupCommit;
+  readonly actionStatus: OnboardingActionStatus;
 }
+
+export type OnboardingActionStatus =
+  | "working"
+  | Extract<
+      ChatGptUiPhase,
+      "waiting-for-browser" | "completing-sign-in" | "signed-in" | "activating-coach" | "ready"
+    >
+  | null;
 
 export interface OnboardingView {
   render(surface: OnboardingSurfaceState): void;
@@ -77,6 +92,8 @@ export interface OnboardingActions {
   dismiss(): void;
   retrySavedKeys(): void;
   startChatGptLogin(): void;
+  cancelChatGptLogin(): void;
+  retryChatGptActivation(): void;
   recheckClaudeCli(): void;
   chooseImportFiles(): void;
   selectProvider(provider: string): void;
@@ -108,6 +125,56 @@ export interface OnboardingControllerOptions {
   readonly onRideImportPresentationChange?: (presenting: boolean) => void;
   readonly focusOpener: () => void;
   readonly onComplete: (completion: OnboardingCompletion) => void;
+  readonly createOperationId?: () => string;
+  readonly afterPaint?: (callback: () => void) => () => void;
+}
+
+export const CHATGPT_PROGRESS_DETAIL_DELAY_MS = 3_000;
+// The Desktop main process owns the 10-second runtime activation deadline. This
+// wider renderer deadline only catches a broken IPC response path after main has
+// had time to report its authoritative result.
+export const CHATGPT_ACTIVATION_TRANSPORT_TIMEOUT_MS = 12_000;
+export const ONBOARDING_STATUS_REFRESH_TIMEOUT_MS = 3_000;
+
+type BoundedResult<T> =
+  | { readonly status: "fulfilled"; readonly value: T }
+  | { readonly status: "rejected" };
+
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<BoundedResult<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then<BoundedResult<T>, BoundedResult<T>>(
+        (value) => ({ status: "fulfilled", value }),
+        () => ({ status: "rejected" }),
+      ),
+      new Promise<BoundedResult<T>>((resolve) => {
+        timer = setTimeout(() => resolve({ status: "rejected" }), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function afterNextPaint(callback: () => void): () => void {
+  if (typeof requestAnimationFrame !== "function") {
+    const timer = setTimeout(callback, 0);
+    return () => clearTimeout(timer);
+  }
+  let secondFrame: number | undefined;
+  let cancelled = false;
+  const firstFrame = requestAnimationFrame(() => {
+    if (cancelled) return;
+    secondFrame = requestAnimationFrame(() => {
+      if (!cancelled) callback();
+    });
+  });
+  return () => {
+    cancelled = true;
+    cancelAnimationFrame(firstFrame);
+    if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
+  };
 }
 
 type CredentialWriteFailureReason = Extract<
@@ -169,6 +236,15 @@ export function createOnboardingController(
   let llmDraft: LlmSelectionDraft | undefined;
   let llmDrafts: Record<string, LlmSelectionDraft> = {};
   let lastCommit: SetupCommit = null;
+  let actionStatus: OnboardingActionStatus = null;
+  let authGeneration = 0;
+  let statusRefreshGeneration = 0;
+  let progressDetailTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelScheduledActivation: (() => void) | undefined;
+  let cancellingOperationId: string | undefined;
+
+  const createOperationId = options.createOperationId ?? (() => crypto.randomUUID());
+  const scheduleAfterPaint = options.afterPaint ?? afterNextPaint;
 
   const selectedProviderIsReady = (): boolean => {
     const parsed = llmSelectionFromDraft(llmDraft);
@@ -194,7 +270,29 @@ export function createOnboardingController(
       focusSeq,
       readiness: currentReadiness(),
       lastCommit,
+      actionStatus,
     });
+  };
+
+  const clearProgressDetailTimer = (): void => {
+    if (progressDetailTimer === undefined) return;
+    clearTimeout(progressDetailTimer);
+    progressDetailTimer = undefined;
+  };
+
+  const clearScheduledActivation = (): void => {
+    cancelScheduledActivation?.();
+    cancelScheduledActivation = undefined;
+  };
+
+  const cancelActiveChatGptLogin = (): void => {
+    const operationId = state.chatGptOperationId;
+    if (operationId === null || cancellingOperationId === operationId) return;
+    cancellingOperationId = operationId;
+    const clearCancellation = (): void => {
+      if (cancellingOperationId === operationId) cancellingOperationId = undefined;
+    };
+    void options.bridge.cancelChatGptLogin(operationId).then(clearCancellation, clearCancellation);
   };
 
   const focusTitle = (): void => {
@@ -226,6 +324,12 @@ export function createOnboardingController(
   };
 
   const close = (): void => {
+    cancelActiveChatGptLogin();
+    clearProgressDetailTimer();
+    clearScheduledActivation();
+    authGeneration += 1;
+    statusRefreshGeneration += 1;
+    actionStatus = null;
     visit += 1;
     options.credentials.clear();
     presenting = false;
@@ -246,31 +350,26 @@ export function createOnboardingController(
   };
 
   const refreshStatuses = async (expectedVisit: number): Promise<boolean> => {
-    const [statuses, chatGpt] = await Promise.allSettled([
-      options.bridge.credentialStatuses(),
-      options.bridge.chatGptStatus(),
+    const expectedAuthGeneration = authGeneration;
+    const refreshGeneration = ++statusRefreshGeneration;
+    const [statuses, chatGpt] = await Promise.all([
+      settleWithin(options.bridge.credentialStatuses(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
+      settleWithin(options.bridge.chatGptStatus(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
     ]);
-    if (visit !== expectedVisit || !presenting) return false;
+    if (visit !== expectedVisit || !presenting || refreshGeneration !== statusRefreshGeneration) {
+      return false;
+    }
     if (statuses.status === "fulfilled") {
       credentialStatuses = statuses.value;
       state = withCredentialStatuses(state, statuses.value);
     }
-    if (chatGpt.status === "fulfilled") {
+    if (chatGpt.status === "fulfilled" && expectedAuthGeneration === authGeneration) {
       state = withChatGptStatus(state, chatGpt.value);
-    } else if (
-      statuses.status === "fulfilled" &&
-      statuses.value.some(
-        (entry) => entry.slot !== "intervals-icu" && entry.runtimeState === "active",
-      )
-    ) {
-      state = { ...state, chatGptRuntimeReady: false };
     }
     return statuses.status === "fulfilled";
   };
 
-  const invalidateCredentialRuntimeStatuses = (
-    slots: ReadonlySet<DesktopCredentialSlot>,
-  ): void => {
+  const invalidateCredentialRuntimeStatuses = (slots: ReadonlySet<DesktopCredentialSlot>): void => {
     if (slots.size === 0) return;
     const credentialRuntimeStatus = { ...state.credentialRuntimeStatus };
     for (const slot of slots) credentialRuntimeStatus[slot] = null;
@@ -393,6 +492,7 @@ export function createOnboardingController(
     if (disposed || !presenting || state.busy) return;
     const submitVisit = visit;
     lastCommit = "provider";
+    actionStatus = null;
     state = withBusy(state, true);
     publish();
     const parsedSelection = llmSelectionFromDraft(llmDraft);
@@ -448,6 +548,7 @@ export function createOnboardingController(
     if (disposed || !presenting || state.busy || rideImports.isBusy()) return;
     const submitVisit = visit;
     lastCommit = "training";
+    actionStatus = null;
     state = withBusy(state, true);
     publish();
     const saved = await savePasswordControls(submitVisit, ["intervals-icu"]);
@@ -481,6 +582,7 @@ export function createOnboardingController(
       return;
     }
     const finishVisit = visit;
+    actionStatus = null;
     state = withBusy(state, true);
     publish();
     let intake: ReturnType<typeof toDesktopIntakeFlags>;
@@ -515,6 +617,85 @@ export function createOnboardingController(
     options.onComplete(toOnboardingCompletion(state));
   };
 
+  const beginChatGptActivation = (
+    selection: OnboardingLlmSelection,
+    expectedVisit: number,
+  ): void => {
+    if (
+      disposed ||
+      visit !== expectedVisit ||
+      !presenting ||
+      !chatGptSignedIn(state) ||
+      state.chatGptRuntimeState === "activating"
+    ) {
+      return;
+    }
+    clearScheduledActivation();
+    const activationGeneration = ++authGeneration;
+    state = withChatGptActivationPending(state);
+    actionStatus = "activating-coach";
+    publish();
+    void settleWithin(
+      options.bridge.applyLlmSelection(selection),
+      CHATGPT_ACTIVATION_TRANSPORT_TIMEOUT_MS,
+    ).then((result) => {
+      if (
+        disposed ||
+        visit !== expectedVisit ||
+        !presenting ||
+        activationGeneration !== authGeneration ||
+        state.chatGptRuntimeState !== "activating"
+      ) {
+        return;
+      }
+      // An activation result is terminal for this auth generation. Status
+      // refreshes that started while activation was pending must not overwrite it.
+      authGeneration += 1;
+      const ready = result.status === "fulfilled" && result.value.status === "configured";
+      state = withChatGptActivationResult(state, ready);
+      if (ready) {
+        recordActiveSelection(selection);
+        actionStatus = "ready";
+      } else {
+        actionStatus = null;
+      }
+      focusTitle();
+      publish();
+    });
+  };
+
+  const scheduleChatGptActivation = (
+    selection: OnboardingLlmSelection,
+    expectedVisit: number,
+  ): void => {
+    clearScheduledActivation();
+    cancelScheduledActivation = scheduleAfterPaint(() => {
+      cancelScheduledActivation = undefined;
+      beginChatGptActivation(selection, expectedVisit);
+    });
+  };
+
+  const disposeChatGptProgress = options.bridge.onChatGptLoginProgress((progress) => {
+    if (
+      disposed ||
+      !presenting ||
+      state.chatGptOperationId !== progress.operationId ||
+      state.chatGptLoginPhase === "idle"
+    ) {
+      return;
+    }
+    const previous = state;
+    state = withChatGptProgress(state, progress);
+    if (state === previous) return;
+    if (progress.phase === "completing-sign-in") {
+      clearProgressDetailTimer();
+      actionStatus = "completing-sign-in";
+    } else if (actionStatus !== "working") {
+      actionStatus = "waiting-for-browser";
+    }
+    publish();
+  });
+
   const disposeImportState = rideImports.subscribe((next) => {
     rideImportState = next;
     if (next.status === "succeeded") {
@@ -530,14 +711,19 @@ export function createOnboardingController(
       if (disposed || presenting || opening) return;
       opening = true;
       const openVisit = ++visit;
+      authGeneration += 1;
+      statusRefreshGeneration += 1;
+      clearProgressDetailTimer();
+      clearScheduledActivation();
       completed = false;
       lastCommit = null;
+      actionStatus = null;
       let statuses: readonly CredentialSlotStatus[] = [];
       let restoredChatGptStatus: ChatGptStatus = { state: "absent", runtimeReady: false };
-      const restored = await Promise.allSettled([
-        options.bridge.credentialStatuses(),
-        options.bridge.chatGptStatus(),
-        options.bridge.llmConfiguration(),
+      const restored = await Promise.all([
+        settleWithin(options.bridge.credentialStatuses(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
+        settleWithin(options.bridge.chatGptStatus(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
+        settleWithin(options.bridge.llmConfiguration(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
       ]);
       if (restored[0].status === "fulfilled") statuses = restored[0].value;
       if (restored[1].status === "fulfilled") restoredChatGptStatus = restored[1].value;
@@ -554,6 +740,10 @@ export function createOnboardingController(
       }
       credentialStatuses = statuses;
       state = createOnboardingState(statuses, restoredChatGptStatus);
+      const restoredPhase = chatGptUiPhase(state);
+      if (restoredPhase === "signed-in" || restoredPhase === "ready") {
+        actionStatus = restoredPhase;
+      }
       if (llmDraft === undefined) state = withError(state, "configuration-unavailable");
       state = withImportedRideFileCount(state, rideImports.importedFileCount());
       presenting = true;
@@ -565,12 +755,19 @@ export function createOnboardingController(
     },
     close,
     dispose(): void {
+      cancelActiveChatGptLogin();
+      clearProgressDetailTimer();
+      clearScheduledActivation();
       disposed = true;
+      authGeneration += 1;
+      statusRefreshGeneration += 1;
       visit += 1;
+      actionStatus = null;
       options.credentials.clear();
       presenting = false;
       setRideImportPresentation(false);
       publish();
+      disposeChatGptProgress();
       disposeImportState();
     },
     state: () => state,
@@ -593,7 +790,9 @@ export function createOnboardingController(
     retrySavedKeys(): void {
       if (disposed || !presenting || state.busy) return;
       const retryVisit = visit;
+      const retryAuthGeneration = authGeneration;
       lastCommit = "training";
+      actionStatus = null;
       state = withBusy(state, true);
       focusTitle();
       publish();
@@ -602,10 +801,12 @@ export function createOnboardingController(
           const statuses = await options.bridge.retryFailedCredentials();
           if (visit !== retryVisit || !presenting) return;
           let nextState = withCredentialStatuses(state, statuses);
-          try {
-            nextState = withChatGptStatus(nextState, await options.bridge.chatGptStatus());
-          } catch {
-            nextState = { ...nextState, chatGptRuntimeReady: false };
+          const chatGpt = await settleWithin(
+            options.bridge.chatGptStatus(),
+            ONBOARDING_STATUS_REFRESH_TIMEOUT_MS,
+          );
+          if (chatGpt.status === "fulfilled" && retryAuthGeneration === authGeneration) {
+            nextState = withChatGptStatus(nextState, chatGpt.value);
           }
           if (visit !== retryVisit || !presenting) return;
           credentialStatuses = statuses;
@@ -621,7 +822,22 @@ export function createOnboardingController(
       })();
     },
     startChatGptLogin(): void {
-      if (disposed || !presenting || state.busy || state.chatGptState === "pending") return;
+      if (
+        disposed ||
+        !presenting ||
+        state.busy ||
+        state.chatGptLoginPhase !== "idle" ||
+        state.chatGptRuntimeState === "activating"
+      ) {
+        return;
+      }
+      if (chatGptSignedIn(state)) {
+        const parsed = llmSelectionFromDraft(llmDraft);
+        if (parsed.error === null && parsed.selection.provider === "openai-codex") {
+          beginChatGptActivation(parsed.selection, visit);
+        }
+        return;
+      }
       if (llmDraft?.provider.provider !== "openai-codex") {
         const chatGpt = llmConfiguration?.providers.find(
           (provider) => provider.provider === "openai-codex",
@@ -638,38 +854,99 @@ export function createOnboardingController(
         return;
       }
       const loginVisit = visit;
-      state = withChatGptPending(state);
+      const operationId = createOperationId();
+      authGeneration += 1;
+      state = withChatGptPending(state, operationId);
+      actionStatus = "working";
+      clearProgressDetailTimer();
+      progressDetailTimer = setTimeout(() => {
+        progressDetailTimer = undefined;
+        if (
+          disposed ||
+          visit !== loginVisit ||
+          !presenting ||
+          state.chatGptOperationId !== operationId ||
+          state.chatGptLoginPhase === "idle"
+        ) {
+          return;
+        }
+        actionStatus = state.chatGptLoginPhase;
+        publish();
+      }, CHATGPT_PROGRESS_DETAIL_DELAY_MS);
       publish();
-      void options.bridge.chatGptLogin(parsedSelection.selection).then(
-        async (result) => {
-          if (disposed || visit !== loginVisit || !presenting || state.chatGptState !== "pending") {
+      void options.bridge.chatGptLogin({ operationId, selection: parsedSelection.selection }).then(
+        (result) => {
+          if (
+            disposed ||
+            visit !== loginVisit ||
+            !presenting ||
+            state.chatGptOperationId !== operationId ||
+            result.operationId !== operationId
+          ) {
             return;
           }
+          clearProgressDetailTimer();
+          authGeneration += 1;
           state = withChatGptLoginResult(state, result);
-          if (result.status === "configured") {
-            recordActiveSelection(parsedSelection.selection);
-            await refreshStatuses(loginVisit).catch(() => undefined);
+          if (result.status === "stored") {
+            actionStatus = "signed-in";
+          } else {
+            actionStatus = null;
           }
-          if (disposed || visit !== loginVisit || !presenting) return;
           focusTitle();
           publish();
+          if (result.status === "stored") {
+            scheduleChatGptActivation(parsedSelection.selection, loginVisit);
+          }
         },
         () => {
-          if (disposed || visit !== loginVisit || !presenting || state.chatGptState !== "pending") {
+          if (
+            disposed ||
+            visit !== loginVisit ||
+            !presenting ||
+            state.chatGptOperationId !== operationId
+          ) {
             return;
           }
+          clearProgressDetailTimer();
+          authGeneration += 1;
           state = withChatGptLoginResult(state, {
             status: "refused",
+            operationId,
             reason: "exchange-failed",
           });
+          actionStatus = null;
           focusTitle();
           publish();
         },
       );
     },
+    cancelChatGptLogin(): void {
+      if (disposed || !presenting || state.chatGptLoginPhase === "idle") return;
+      cancelActiveChatGptLogin();
+    },
+    retryChatGptActivation(): void {
+      if (
+        disposed ||
+        !presenting ||
+        state.busy ||
+        !chatGptSignedIn(state) ||
+        selectedProviderIsReady() ||
+        state.chatGptRuntimeState === "activating"
+      ) {
+        return;
+      }
+      const parsedSelection = llmSelectionFromDraft(llmDraft);
+      if (parsedSelection.error !== null || parsedSelection.selection.provider !== "openai-codex") {
+        setFixedError(parsedSelection.error ?? "configuration-unavailable");
+        return;
+      }
+      beginChatGptActivation(parsedSelection.selection, visit);
+    },
     recheckClaudeCli(): void {
       if (disposed || !presenting || state.busy) return;
       const recheckVisit = visit;
+      actionStatus = null;
       state = withBusy(state, true);
       publish();
       void options.bridge.claudeCliRecheck().then(
@@ -690,14 +967,24 @@ export function createOnboardingController(
       void rideImports.chooseAndImport("onboarding");
     },
     selectProvider(provider): void {
+      if (state.chatGptRuntimeState === "activating") return;
       const next = llmConfiguration?.providers.find((entry) => entry.provider === provider);
       if (next === undefined) return;
       setLlmDraft(llmDrafts[next.provider] ?? draftForProvider(next));
       setFixedError(null);
+      if (provider === "openai-codex" && chatGptSignedIn(state) && !selectedProviderIsReady()) {
+        const parsedSelection = llmSelectionFromDraft(llmDraft);
+        if (
+          parsedSelection.error === null &&
+          parsedSelection.selection.provider === "openai-codex"
+        ) {
+          beginChatGptActivation(parsedSelection.selection, visit);
+        }
+        return;
+      }
       const canActivateWithoutInput =
-        (provider === "claude-cli" &&
-          (state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key")) ||
-        (provider === "openai-codex" && state.chatGptState === "configured");
+        provider === "claude-cli" &&
+        (state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key");
       if (canActivateWithoutInput && !selectedProviderIsReady()) void saveModelKey();
     },
     selectModel(model): void {

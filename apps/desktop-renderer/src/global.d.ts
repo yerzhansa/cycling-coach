@@ -27,7 +27,9 @@ interface EnduragentAuth {
   llmConfiguration(): Promise<OnboardingLlmConfiguration>;
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatgptStatus(): Promise<ChatGptStatus>;
-  chatgptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
+  chatgptLogin(input: ChatGptLoginInput): Promise<ChatGptLoginResult>;
+  cancelChatgptLogin(operationId: string): Promise<ChatGptCancelLoginResult>;
+  onChatgptLoginProgress(listener: (progress: ChatGptLoginProgress) => void): () => void;
   claudeCliStatus(): Promise<ClaudeCliStatus>;
   claudeCliRecheck(): Promise<ClaudeCliStatus>;
   telegramStatus(): Promise<DesktopTelegramStatus>;
@@ -300,6 +302,11 @@ interface OnboardingLlmSelection {
   readonly endpoint: OnboardingLlmEndpointSelection;
 }
 
+interface ChatGptLoginInput {
+  readonly operationId: string;
+  readonly selection: OnboardingLlmSelection;
+}
+
 type OnboardingLlmSelectionResult =
   | { readonly status: "configured"; readonly runtimeReady: true }
   | {
@@ -337,9 +344,10 @@ interface ClaudeCliStatus {
 }
 
 type ChatGptLoginResult =
-  | { readonly status: "configured"; readonly runtimeReady: true }
+  | { readonly status: "stored"; readonly operationId: string }
   | {
       readonly status: "refused";
+      readonly operationId: string;
       readonly reason:
         | "already-in-progress"
         | "callback-unavailable"
@@ -349,6 +357,16 @@ type ChatGptLoginResult =
         | "storage-failed"
         | "runtime-unavailable";
     };
+
+interface ChatGptLoginProgress {
+  readonly operationId: string;
+  readonly phase: "waiting-for-browser" | "completing-sign-in";
+}
+
+interface ChatGptCancelLoginResult {
+  readonly status: "cancelling" | "not-active";
+  readonly operationId: string;
+}
 
 type CredentialWriteResult =
   | {

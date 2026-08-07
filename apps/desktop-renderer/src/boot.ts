@@ -184,6 +184,8 @@ export function bootRenderer(): Disposer {
     applyLlmSelection: (value) => window.enduragentAuth.applyLlmSelection(value),
     chatGptStatus: () => window.enduragentAuth.chatgptStatus(),
     chatGptLogin: (value) => window.enduragentAuth.chatgptLogin(value),
+    cancelChatGptLogin: (operationId) => window.enduragentAuth.cancelChatgptLogin(operationId),
+    onChatGptLoginProgress: (listener) => window.enduragentAuth.onChatgptLoginProgress(listener),
     claudeCliStatus: () => window.enduragentAuth.claudeCliStatus(),
     claudeCliRecheck: () => window.enduragentAuth.claudeCliRecheck(),
     chooseImportFiles: () => window.enduragentAuth.chooseImportFiles(),

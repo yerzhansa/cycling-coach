@@ -6,6 +6,7 @@ import { AiRow } from "./AiRow.js";
 import {
   ERROR_COPY,
   FOOTER_NOTE,
+  CHATGPT_PHASE_COPY,
   OUTSTANDING_NOTE,
   PRIMARY_LABEL,
   SETUP_HEADING,
@@ -47,6 +48,13 @@ export function OnboardingWizard(): ReactElement | null {
   const wizard = surface.wizard;
   const readiness = surface.readiness;
   const importCopy = rideImportStatusCopy(surface.rideImport);
+  const actionStatus = surface.actionStatus ?? (wizard.busy ? "working" : null);
+  const actionStatusCopy =
+    actionStatus === null
+      ? ""
+      : actionStatus === "working"
+        ? "Working…"
+        : CHATGPT_PHASE_COPY[actionStatus];
   const blocked =
     wizard.busy ||
     surface.rideImport.status === "running" ||
@@ -125,9 +133,11 @@ export function OnboardingWizard(): ReactElement | null {
         className="onboarding-action-status mt-1.5 text-xs text-ink-2"
         role="status"
         aria-live="polite"
-        hidden={!wizard.busy}
+        aria-atomic="true"
+        hidden={actionStatus === null}
+        data-state={actionStatus ?? "idle"}
       >
-        {wizard.busy ? "Working…" : ""}
+        {actionStatusCopy}
       </p>
       <p className="onboarding-error-announcer sr-only" role="status" aria-live="polite">
         {wizard.fixedError === null ? "" : ERROR_COPY[wizard.fixedError]}

@@ -868,7 +868,10 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               const request = COACH_RPC_METHOD_REGISTRY.configureRuntime.requestSchema.parse(
                 generic.data.params,
               );
-              result = await input.operations.configureRuntime(request);
+              result = await input.operations.configureRuntime(
+                request,
+                state.detachController.signal,
+              );
             } catch (error) {
               invocationFailure = { error };
             }

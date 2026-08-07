@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import {
   DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL,
+  DESKTOP_CHATGPT_LOGIN_CANCEL_CHANNEL,
   DESKTOP_CHATGPT_LOGIN_CHANNEL,
+  DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL,
   DESKTOP_CHATGPT_STATUS_CHANNEL,
   DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL,
   DESKTOP_CLAUDE_CLI_STATUS_CHANNEL,
@@ -17,7 +19,12 @@ import {
   registerOnboardingIpc,
   runtimeConfigurationForCredential,
 } from "../src/main/onboarding-ipc.js";
-import { runtimeConfigurationForExistingSelection } from "../src/main/llm-selection.js";
+import { DESKTOP_RENDERER_URL } from "../src/main/constants.js";
+import {
+  runtimeConfigurationForExistingSelection,
+  type OnboardingLlmSelection,
+  type OnboardingLlmSelectionResult,
+} from "../src/main/llm-selection.js";
 import type { CredentialVault } from "../src/main/credential-vault.js";
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
@@ -25,8 +32,42 @@ type OwnershipCheck = (
   value: string,
 ) => Promise<"unowned" | "matched" | "mismatch" | "unresolved" | "store-unavailable">;
 
+function runtimeConfigSnapshot(
+  provider: RuntimeConfigSnapshot["llm"]["provider"] = "anthropic",
+  credentialConfigured = true,
+): RuntimeConfigSnapshot {
+  return {
+    schemaVersion: 3,
+    llm: {
+      provider,
+      model: "athlete-selected-model",
+      credential_configured: credentialConfigured,
+    },
+    intervals: {
+      athlete_id: "synthetic-athlete",
+      credential_configured: true,
+      managedByEnvironment: { athleteId: false },
+    },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "UTC",
+      managedByEnvironment: {
+        historyTokenBudgetRatio: false,
+        idleMinutes: false,
+        dailyResetHour: false,
+        resetArchiveRetentionDays: false,
+        timezone: false,
+      },
+    },
+  };
+}
+
 function harness(
   checkIntervalsCredentialOwner: OwnershipCheck = vi.fn(async () => "unresolved" as const),
+  chatGptActivationTimeoutMs?: number,
 ) {
   const handlers = new Map<string, Handler>();
   const ipcMain = {
@@ -65,9 +106,28 @@ function harness(
     })),
   };
   const chatGptAuth = {
+    hasStoredProfile: vi.fn(async () => true),
     status: vi.fn(async () => ({ state: "configured" as const, runtimeReady: true })),
-    login: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
-    activate: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
+    login: vi.fn(
+      async (
+        operationId: string,
+        _selection: unknown,
+        _onProgress?: (phase: "waiting-for-browser" | "completing-sign-in") => void,
+      ) => ({ status: "stored" as const, operationId }),
+    ),
+    cancelLogin: vi.fn((operationId: string) => ({
+      status: "cancelling" as const,
+      operationId,
+    })),
+    activate: vi.fn(
+      async (
+        _selection: OnboardingLlmSelection,
+        _signal?: AbortSignal,
+      ): Promise<OnboardingLlmSelectionResult> => ({
+        status: "configured",
+        runtimeReady: true,
+      }),
+    ),
     deleteCredential: vi.fn(async () => ({
       status: "deleted" as const,
       cleanupPending: false as const,
@@ -84,35 +144,18 @@ function harness(
     invalidateProbeCache: vi.fn(),
     activate: vi.fn(async () => ({ status: "configured" as const, runtimeReady: true as const })),
   };
-  const getRuntimeConfig = vi.fn(async (): Promise<RuntimeConfigSnapshot> => ({
-    schemaVersion: 3 as const,
-    llm: {
-      provider: "anthropic" as const,
-      model: "athlete-selected-model",
-      credential_configured: true,
+  const getRuntimeConfig = vi.fn(async () => runtimeConfigSnapshot());
+  const applyExistingLlmSelection = vi.fn(
+    async (_selection: OnboardingLlmSelection, _signal?: AbortSignal) => false,
+  );
+  const progressSend = vi.fn();
+  const trustedEvent = {
+    sender: {
+      isDestroyed: () => false,
+      mainFrame: { url: DESKTOP_RENDERER_URL },
+      send: progressSend,
     },
-    intervals: {
-      athlete_id: "synthetic-athlete",
-      credential_configured: true,
-      managedByEnvironment: { athleteId: false },
-    },
-    session: {
-      historyTokenBudgetRatio: 0.3,
-      idleMinutes: 0,
-      dailyResetHour: 4,
-      resetArchiveRetentionDays: 0,
-      timezone: "UTC",
-      managedByEnvironment: {
-        historyTokenBudgetRatio: false,
-        idleMinutes: false,
-        dailyResetHour: false,
-        resetArchiveRetentionDays: false,
-        timezone: false,
-      },
-    },
-  }));
-  const applyExistingLlmSelection = vi.fn(async () => false);
-  const trustedEvent = {} as IpcMainInvokeEvent;
+  } as unknown as IpcMainInvokeEvent;
   const dispose = registerOnboardingIpc({
     ipcMain: ipcMain as never,
     dialog,
@@ -122,6 +165,7 @@ function harness(
     claudeCli,
     getRuntimeConfig,
     applyExistingLlmSelection,
+    ...(chatGptActivationTimeoutMs === undefined ? {} : { chatGptActivationTimeoutMs }),
     isTrusted: (event) => event === trustedEvent,
     checkIntervalsCredentialOwner,
   });
@@ -137,6 +181,7 @@ function harness(
     applyExistingLlmSelection,
     dialog,
     checkIntervalsCredentialOwner,
+    progressSend,
     trustedEvent,
     dispose,
     invoke,
@@ -291,6 +336,7 @@ describe("desktop onboarding IPC", () => {
         DESKTOP_LLM_SELECTION_APPLY_CHANNEL,
         DESKTOP_CHATGPT_STATUS_CHANNEL,
         DESKTOP_CHATGPT_LOGIN_CHANNEL,
+        DESKTOP_CHATGPT_LOGIN_CANCEL_CHANNEL,
         DESKTOP_CLAUDE_CLI_STATUS_CHANNEL,
         DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL,
         DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL,
@@ -544,41 +590,162 @@ describe("desktop onboarding IPC", () => {
     await expect(
       subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, chatGpt),
     ).resolves.toEqual({ status: "configured", runtimeReady: true });
-    expect(subject.chatGptAuth.activate).toHaveBeenCalledWith(chatGpt);
+    expect(subject.chatGptAuth.activate).toHaveBeenCalledWith(chatGpt, expect.any(AbortSignal));
   });
 
-  it.each([
-    {
-      description: "API credential",
-      selection: {
-        provider: "anthropic" as const,
-        model: "athlete-selected-model",
-        endpoint: { mode: "automatic" as const },
-      },
-    },
-    {
-      description: "custom ChatGPT profile",
-      selection: {
-        provider: "openai-codex" as const,
-        model: "gpt-5.4-mini",
-        endpoint: { mode: "automatic" as const },
-      },
-    },
-  ])(
-    "preserves an active $description without requiring Desktop-owned credentials",
-    async ({ selection }) => {
-      const subject = harness();
-      subject.applyExistingLlmSelection.mockResolvedValueOnce(true);
+  it("preserves an active API credential without requiring a Desktop-owned credential", async () => {
+    const subject = harness();
+    const selection = {
+      provider: "anthropic" as const,
+      model: "athlete-selected-model",
+      endpoint: { mode: "automatic" as const },
+    };
+    subject.applyExistingLlmSelection.mockResolvedValueOnce(true);
 
-      await expect(
-        subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
-      ).resolves.toEqual({ status: "configured", runtimeReady: true });
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "configured", runtimeReady: true });
 
-      expect(subject.applyExistingLlmSelection).toHaveBeenCalledWith(selection);
-      expect(subject.vault.applyLlmSelection).not.toHaveBeenCalled();
-      expect(subject.chatGptAuth.activate).not.toHaveBeenCalled();
-    },
-  );
+    expect(subject.applyExistingLlmSelection).toHaveBeenCalledWith(selection);
+    expect(subject.vault.applyLlmSelection).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.activate).not.toHaveBeenCalled();
+  });
+
+  it("bounds a stalled custom ChatGPT profile activation with the shared deadline", async () => {
+    const subject = harness(
+      vi.fn(async () => "unresolved" as const),
+      5,
+    );
+    const selection = {
+      provider: "openai-codex" as const,
+      model: "gpt-5.4-mini",
+      endpoint: { mode: "automatic" as const },
+    };
+    let activationSignal: AbortSignal | undefined;
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex"));
+    subject.chatGptAuth.hasStoredProfile.mockResolvedValueOnce(false);
+    subject.applyExistingLlmSelection.mockImplementationOnce(async (_selection, signal) => {
+      activationSignal = signal;
+      return await new Promise<boolean>(() => {});
+    });
+
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "refused", reason: "runtime-unavailable" });
+
+    expect(activationSignal?.aborted).toBe(true);
+    expect(subject.chatGptAuth.activate).not.toHaveBeenCalled();
+  });
+
+  it("preserves an active custom ChatGPT profile without requiring a Desktop profile", async () => {
+    const subject = harness();
+    const selection = {
+      provider: "openai-codex" as const,
+      model: "gpt-5.4-mini",
+      endpoint: { mode: "automatic" as const },
+    };
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex"));
+    subject.chatGptAuth.hasStoredProfile.mockResolvedValueOnce(false);
+    subject.applyExistingLlmSelection.mockResolvedValueOnce(true);
+
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "configured", runtimeReady: true });
+
+    expect(subject.applyExistingLlmSelection).toHaveBeenCalledWith(
+      selection,
+      expect.any(AbortSignal),
+    );
+    expect(subject.vault.applyLlmSelection).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.activate).not.toHaveBeenCalled();
+  });
+
+  it("preserves an active custom ChatGPT profile when the Desktop default also exists", async () => {
+    const subject = harness();
+    const selection = {
+      provider: "openai-codex" as const,
+      model: "gpt-5.4-mini",
+      endpoint: { mode: "automatic" as const },
+    };
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex"));
+    subject.chatGptAuth.hasStoredProfile.mockResolvedValueOnce(true);
+    subject.applyExistingLlmSelection.mockResolvedValueOnce(true);
+
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "configured", runtimeReady: true });
+
+    expect(subject.applyExistingLlmSelection).toHaveBeenCalledWith(
+      selection,
+      expect.any(AbortSignal),
+    );
+    expect(subject.chatGptAuth.hasStoredProfile).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.activate).not.toHaveBeenCalled();
+  });
+
+  it("activates the stored default when the selected custom ChatGPT profile is unusable", async () => {
+    const subject = harness();
+    const selection = {
+      provider: "openai-codex" as const,
+      model: "gpt-5.4-mini",
+      endpoint: { mode: "automatic" as const },
+    };
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex", false));
+    subject.chatGptAuth.hasStoredProfile.mockResolvedValueOnce(true);
+    subject.applyExistingLlmSelection.mockResolvedValueOnce(true);
+
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "configured", runtimeReady: true });
+
+    expect(subject.applyExistingLlmSelection).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.hasStoredProfile).toHaveBeenCalledOnce();
+    expect(subject.chatGptAuth.activate).toHaveBeenCalledWith(selection, expect.any(AbortSignal));
+  });
+
+  it("does not replace a custom ChatGPT profile when its runtime preflight fails", async () => {
+    const subject = harness();
+    const selection = {
+      provider: "openai-codex" as const,
+      model: "gpt-5.4-mini",
+      endpoint: { mode: "automatic" as const },
+    };
+    subject.getRuntimeConfig.mockRejectedValueOnce(new Error("private runtime failure"));
+
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "refused", reason: "runtime-unavailable" });
+
+    expect(subject.applyExistingLlmSelection).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.hasStoredProfile).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.activate).not.toHaveBeenCalled();
+  });
+
+  it("routes an inactive stored ChatGPT profile through bounded activation", async () => {
+    const subject = harness();
+    const selection = {
+      provider: "openai-codex" as const,
+      model: "gpt-5.4-mini",
+      endpoint: { mode: "automatic" as const },
+    };
+    subject.getRuntimeConfig.mockResolvedValueOnce(runtimeConfigSnapshot("openai-codex"));
+    subject.applyExistingLlmSelection.mockResolvedValueOnce(false);
+    subject.chatGptAuth.activate.mockResolvedValueOnce({
+      status: "refused",
+      reason: "runtime-unavailable",
+    });
+
+    await expect(
+      subject.invoke(DESKTOP_LLM_SELECTION_APPLY_CHANNEL, subject.trustedEvent, selection),
+    ).resolves.toEqual({ status: "refused", reason: "runtime-unavailable" });
+
+    expect(subject.chatGptAuth.hasStoredProfile).toHaveBeenCalledOnce();
+    expect(subject.chatGptAuth.activate).toHaveBeenCalledWith(selection, expect.any(AbortSignal));
+    expect(subject.applyExistingLlmSelection).toHaveBeenCalledWith(
+      selection,
+      expect.any(AbortSignal),
+    );
+  });
 
   it("fails an active-provider apply closed without falling back to another credential", async () => {
     const subject = harness();
@@ -770,18 +937,47 @@ describe("desktop onboarding IPC", () => {
     expect(subject.vault.applyLlmSelection).not.toHaveBeenCalled();
   });
 
-  it("gates strict ChatGPT status and login invokes", async () => {
+  it("gates correlated ChatGPT login, progress, and cancellation invokes", async () => {
     const subject = harness();
+    subject.chatGptAuth.login.mockImplementationOnce(
+      async (
+        operationId: string,
+        _selection: unknown,
+        onProgress?: (phase: "waiting-for-browser" | "completing-sign-in") => void,
+      ) => {
+        onProgress?.("waiting-for-browser");
+        onProgress?.("completing-sign-in");
+        return { status: "stored" as const, operationId };
+      },
+    );
     await expect(
       subject.invoke(DESKTOP_CHATGPT_STATUS_CHANNEL, subject.trustedEvent),
     ).resolves.toEqual({ state: "configured", runtimeReady: true });
     await expect(
       subject.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, subject.trustedEvent, {
-        provider: "openai-codex",
-        model: "gpt-5.5",
-        endpoint: { mode: "automatic" },
+        operationId: "login-1",
+        selection: {
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          endpoint: { mode: "automatic" },
+        },
       }),
-    ).resolves.toEqual({ status: "configured", runtimeReady: true });
+    ).resolves.toEqual({ status: "stored", operationId: "login-1" });
+    expect(subject.progressSend).toHaveBeenNthCalledWith(
+      1,
+      DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL,
+      { operationId: "login-1", phase: "waiting-for-browser" },
+    );
+    expect(subject.progressSend).toHaveBeenNthCalledWith(
+      2,
+      DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL,
+      { operationId: "login-1", phase: "completing-sign-in" },
+    );
+    expect(
+      subject.invoke(DESKTOP_CHATGPT_LOGIN_CANCEL_CHANNEL, subject.trustedEvent, {
+        operationId: "login-1",
+      }),
+    ).toEqual({ status: "cancelling", operationId: "login-1" });
     await expect(
       subject.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, {} as IpcMainInvokeEvent),
     ).rejects.toBeInstanceOf(TypeError);
@@ -793,6 +989,64 @@ describe("desktop onboarding IPC", () => {
     ).rejects.toBeInstanceOf(TypeError);
     expect(subject.chatGptAuth.status).toHaveBeenCalledOnce();
     expect(subject.chatGptAuth.login).toHaveBeenCalledOnce();
+    expect(subject.chatGptAuth.cancelLogin).toHaveBeenCalledWith("login-1");
+  });
+
+  it("does not publish delayed ChatGPT progress after requester navigation or disposal", async () => {
+    const subject = harness();
+    let publish!: (phase: "waiting-for-browser" | "completing-sign-in") => void;
+    subject.chatGptAuth.login.mockImplementationOnce(
+      async (operationId, _selection, onProgress) => {
+        publish = onProgress!;
+        return { status: "stored" as const, operationId };
+      },
+    );
+    await subject.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, subject.trustedEvent, {
+      operationId: "login-navigation",
+      selection: {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        endpoint: { mode: "automatic" },
+      },
+    });
+
+    (subject.trustedEvent.sender.mainFrame as { url: string }).url = "https://attacker.invalid";
+    publish("waiting-for-browser");
+    expect(subject.progressSend).not.toHaveBeenCalled();
+
+    (subject.trustedEvent.sender.mainFrame as { url: string }).url = DESKTOP_RENDERER_URL;
+    subject.dispose();
+    publish("completing-sign-in");
+    expect(subject.progressSend).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed ChatGPT operation envelopes before dispatch", async () => {
+    const subject = harness();
+    for (const value of [
+      { operationId: "bad id", selection: {} },
+      { operationId: "login-1", selection: { provider: "anthropic" } },
+      {
+        operationId: "login-1",
+        selection: {
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          endpoint: { mode: "automatic" },
+        },
+        extra: true,
+      },
+    ]) {
+      await expect(
+        subject.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, subject.trustedEvent, value),
+      ).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(() =>
+      subject.invoke(DESKTOP_CHATGPT_LOGIN_CANCEL_CHANNEL, subject.trustedEvent, {
+        operationId: "login-1",
+        extra: true,
+      }),
+    ).toThrow(TypeError);
+    expect(subject.chatGptAuth.login).not.toHaveBeenCalled();
+    expect(subject.chatGptAuth.cancelLogin).not.toHaveBeenCalled();
   });
 
   it("validates trusted senders and exact credential inputs before dispatch", async () => {
@@ -887,10 +1141,10 @@ describe("desktop onboarding IPC", () => {
     ).resolves.toEqual([]);
   });
 
-  it("disposes only its eleven handlers", () => {
+  it("disposes only its twelve handlers", () => {
     const subject = harness();
     subject.dispose();
     expect(subject.handlers.size).toBe(0);
-    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(11);
+    expect(subject.ipcMain.removeHandler).toHaveBeenCalledTimes(12);
   });
 });

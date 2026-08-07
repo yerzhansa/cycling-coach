@@ -671,7 +671,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         applied: { llm: true, intervals: true, session: false },
       },
     });
-    expect(configureRuntime).toHaveBeenCalledWith(runtime);
+    expect(configureRuntime).toHaveBeenCalledWith(runtime, expect.any(AbortSignal));
     expect(JSON.stringify(response)).not.toContain("placeholder");
     expect(JSON.stringify(response)).not.toContain("athlete-a");
     expect(JSON.stringify(response)).not.toContain("model-a");
@@ -693,6 +693,44 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(JSON.stringify(snapshotResponse)).not.toContain("api_key");
     expect(JSON.stringify(snapshotResponse)).not.toContain("token");
     expect(JSON.stringify(snapshotResponse)).not.toContain("path");
+    await client.close();
+  });
+
+  it("aborts runtime configuration when its requesting connection detaches", async () => {
+    const token = "x".repeat(43);
+    const started = deferred<void>();
+    let operationSignal: AbortSignal | undefined;
+    const configureRuntime = vi.fn(async (_request, signal?: AbortSignal): Promise<never> => {
+      operationSignal = signal;
+      started.resolve(undefined);
+      return await new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, configureRuntime },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "runtime-detach",
+        method: "configureRuntime",
+        params: { llm: { provider: "openai-codex", model: "gpt-5.5" } },
+      }),
+    );
+    await started.promise;
+
+    const closed = new Promise<void>((resolve) => client.ws.once("close", () => resolve()));
+    client.ws.close();
+    await closed;
+    await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+
     await client.close();
   });
 

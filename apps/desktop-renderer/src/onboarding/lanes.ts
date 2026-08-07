@@ -6,7 +6,12 @@ import {
 } from "../ui/onboarding/copy.js";
 import type { OnboardingLlmConfiguration, OnboardingLlmProviderConfiguration } from "./bridge.js";
 import { claudeCliPresentation } from "./credential-presentation.js";
-import { claudeCliReady, type OnboardingErrorCode, type OnboardingState } from "./machine.js";
+import {
+  chatGptSignedIn,
+  claudeCliReady,
+  type OnboardingErrorCode,
+  type OnboardingState,
+} from "./machine.js";
 
 export const KEYLESS_SETUP_LANES = ["claude-cli", "openai-codex"] as const;
 
@@ -65,7 +70,13 @@ export function aiRowCopy(
 ): AiRowCopy {
   if (lane === null) return { title: AI_ROW_UNSET.title, subtitle: AI_ROW_UNSET.subtitle };
   const title = SETUP_LANE_LABELS[lane];
-  if (!ready) return { title, subtitle: `${AI_ROW_PREFIX} · ${AI_ROW_PENDING[lane]}` };
+  if (!ready) {
+    const pending =
+      lane === "openai-codex" && chatGptSignedIn(wizard)
+        ? "signed in · activation needed"
+        : AI_ROW_PENDING[lane];
+    return { title, subtitle: `${AI_ROW_PREFIX} · ${pending}` };
+  }
   if (lane === "claude-cli" && wizard.claudeCliIdentity !== null) {
     return { title, subtitle: `${AI_ROW_PREFIX} · ${wizard.claudeCliIdentity}` };
   }

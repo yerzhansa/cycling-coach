@@ -1,7 +1,7 @@
 import type { ChatGptLoginRefusalReason } from "../../onboarding/constants.js";
 import { INTERVALS_GUIDANCE } from "../../onboarding/constants.js";
 import type { SetupLane } from "../../onboarding/lanes.js";
-import type { OnboardingErrorCode } from "../../onboarding/machine.js";
+import type { ChatGptUiPhase, OnboardingErrorCode } from "../../onboarding/machine.js";
 
 export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "credential-required": "Sign in with ChatGPT or add at least one model key to continue.",
@@ -101,7 +101,22 @@ export const AI_ROW_TOOLTIP = {
 
 export const CHATGPT_SIGN_IN_LABEL = "Sign in with ChatGPT";
 
-export const CHATGPT_PENDING_LABEL = "Finish signing in in your browser…";
+export const CHATGPT_CANCEL_SIGN_IN_LABEL = "Cancel sign-in";
+
+export const CHATGPT_RETRY_ACTIVATION_LABEL = "Retry activation";
+
+export const CHATGPT_ACTIVATION_FAILURE_COPY =
+  "Signed in, but the coach could not be activated. Retry without signing in again.";
+
+export const CHATGPT_PHASE_COPY: Readonly<
+  Record<Exclude<ChatGptUiPhase, "idle" | "login-failed" | "activation-failed">, string>
+> = {
+  "waiting-for-browser": "Waiting for browser…",
+  "completing-sign-in": "Completing sign-in…",
+  "signed-in": "Signed in",
+  "activating-coach": "Activating coach…",
+  ready: "Ready",
+};
 
 export const CHATGPT_PANEL_HINT =
   "Opens OpenAI's sign-in page in your browser — you type your password there, not here. Needs a paid plan.";

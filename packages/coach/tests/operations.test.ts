@@ -765,6 +765,36 @@ describe("coach operations", () => {
     expect(trace).toEqual(["sync-start", "configure", "sync-end"]);
   });
 
+  it("propagates caller cancellation into runtime configuration", async () => {
+    const started = promiseGate();
+    let observedSignal: AbortSignal | undefined;
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: operationRuntime(),
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async (_request, signal) => {
+        observedSignal = signal;
+        started.release();
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    });
+    const controller = new AbortController();
+    const pending = operations.configureRuntime(
+      { llm: { provider: "openai-codex", model: "gpt-5.5" } },
+      controller.signal,
+    );
+    await started.promise;
+
+    controller.abort(new DOMException("Detached", "AbortError"));
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
   it.each([
     "credential-required",
     "ownership-unavailable",

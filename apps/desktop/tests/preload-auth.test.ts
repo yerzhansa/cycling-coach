@@ -54,6 +54,8 @@ interface AuthBridge {
   releaseNotes(): Promise<unknown>;
   chatgptStatus(): Promise<unknown>;
   chatgptLogin(input: unknown): Promise<unknown>;
+  cancelChatgptLogin(input: unknown): Promise<unknown>;
+  onChatgptLoginProgress(listener: (progress: unknown) => void): () => void;
   claudeCliStatus(): Promise<unknown>;
   claudeCliRecheck(): Promise<unknown>;
   telegramStatus(): Promise<unknown>;
@@ -95,6 +97,11 @@ const chatGptSelection = {
   provider: "openai-codex",
   model: "gpt-5.5",
   endpoint: { mode: "automatic" },
+} as const;
+
+const chatGptLoginInput = {
+  operationId: "login-1",
+  selection: chatGptSelection,
 } as const;
 
 const providerOrder = [
@@ -224,6 +231,7 @@ describe("desktop preload ChatGPT auth", () => {
         "addTelegramAllowedSender",
         "beginTelegramPairing",
         "cancelTelegramPairing",
+        "cancelChatgptLogin",
         "chatgptLogin",
         "chatgptStatus",
         "chooseImportFiles",
@@ -242,6 +250,7 @@ describe("desktop preload ChatGPT auth", () => {
         "llmConfiguration",
         "checkForUpdates",
         "onDroppedImportFiles",
+        "onChatgptLoginProgress",
         "onUpdateState",
         "pasteTelegramTokenFromClipboard",
         "reconcileTelegram",
@@ -1367,19 +1376,60 @@ describe("desktop preload ChatGPT auth", () => {
   it("exposes strict status and configured results", async () => {
     mocks.invoke
       .mockResolvedValueOnce({ state: "configured", runtimeReady: false })
-      .mockResolvedValueOnce({ status: "configured", runtimeReady: true });
+      .mockResolvedValueOnce({ status: "stored", operationId: "login-1" });
     await expect(bridge.chatgptStatus()).resolves.toEqual({
       state: "configured",
       runtimeReady: false,
     });
-    await expect(bridge.chatgptLogin(chatGptSelection)).resolves.toEqual({
-      status: "configured",
-      runtimeReady: true,
+    await expect(bridge.chatgptLogin(chatGptLoginInput)).resolves.toEqual({
+      status: "stored",
+      operationId: "login-1",
     });
     expect(mocks.invoke.mock.calls.map(([channel]) => channel)).toEqual([
       "enduragent:onboarding:chatgpt-status",
       "enduragent:onboarding:chatgpt-login",
     ]);
+  });
+
+  it("correlates cancellation and forwards only closed progress events", async () => {
+    mocks.invoke.mockResolvedValueOnce({ status: "cancelling", operationId: "login-1" });
+    await expect(bridge.cancelChatgptLogin("login-1")).resolves.toEqual({
+      status: "cancelling",
+      operationId: "login-1",
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith("enduragent:onboarding:chatgpt-login-cancel", {
+      operationId: "login-1",
+    });
+
+    const received: unknown[] = [];
+    const dispose = bridge.onChatgptLoginProgress((progress) => received.push(progress));
+    const listener = mocks.on.mock.calls.find(
+      ([channel]) => channel === "enduragent:onboarding:chatgpt-login-progress",
+    )?.[1] as (_event: unknown, value: unknown) => void;
+    listener(undefined, { operationId: "login-1", phase: "waiting-for-browser" });
+    listener(undefined, { operationId: "login-1", phase: "unknown" });
+    listener(undefined, {
+      operationId: "login-1",
+      phase: "completing-sign-in",
+      credential: "private",
+    });
+    expect(received).toEqual([{ operationId: "login-1", phase: "waiting-for-browser" }]);
+
+    dispose();
+    dispose();
+    listener(undefined, { operationId: "login-1", phase: "completing-sign-in" });
+    expect(received).toHaveLength(1);
+  });
+
+  it("rejects invalid and mismatched ChatGPT operation IDs", async () => {
+    await expect(bridge.cancelChatgptLogin("bad id")).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      bridge.chatgptLogin({ ...chatGptLoginInput, operationId: "bad id" }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    mocks.invoke.mockResolvedValueOnce({ status: "not-active", operationId: "stale" });
+    await expect(bridge.cancelChatgptLogin("login-1")).rejects.toBeInstanceOf(TypeError);
   });
 
   it("copies claude-cli status payloads with their exact optional keys", async () => {
@@ -1419,21 +1469,26 @@ describe("desktop preload ChatGPT auth", () => {
   });
 
   it("accepts only closed refusal reasons and exact keys", async () => {
-    mocks.invoke.mockResolvedValueOnce({ status: "refused", reason: "timed-out" });
-    await expect(bridge.chatgptLogin(chatGptSelection)).resolves.toEqual({
+    mocks.invoke.mockResolvedValueOnce({
       status: "refused",
+      operationId: "login-1",
+      reason: "timed-out",
+    });
+    await expect(bridge.chatgptLogin(chatGptLoginInput)).resolves.toEqual({
+      status: "refused",
+      operationId: "login-1",
       reason: "timed-out",
     });
     for (const value of [
       { state: "configured", runtimeReady: true, extra: true },
       { state: "unknown", runtimeReady: false },
-      { status: "refused", reason: "unknown" },
-      { status: "configured", runtimeReady: false },
+      { status: "refused", operationId: "login-1", reason: "unknown" },
+      { status: "stored", operationId: "stale-login" },
     ]) {
       mocks.invoke.mockResolvedValueOnce(value);
       const operation = Object.hasOwn(value, "state")
         ? bridge.chatgptStatus()
-        : bridge.chatgptLogin(chatGptSelection);
+        : bridge.chatgptLogin(chatGptLoginInput);
       await expect(operation).rejects.toBeInstanceOf(TypeError);
     }
   });
