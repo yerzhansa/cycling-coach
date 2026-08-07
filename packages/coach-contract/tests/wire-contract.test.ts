@@ -944,6 +944,9 @@ describe("coach request and event projection", () => {
           plannedWorkouts: [],
           wellness: {},
         }),
+      getActivityAnalysis: async () => {
+        throw new Error("not exercised by registry exhaustiveness");
+      },
       importFiles: async ({ paths }) => ({
         schemaVersion: 2,
         files: { total: paths.length, imported: paths.length, quarantined: 0 },
@@ -1502,7 +1505,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-13 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-14 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1510,8 +1513,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 13,
-      serverProtocolVersion: 13,
+      clientProtocolVersion: 14,
+      serverProtocolVersion: 14,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1566,9 +1569,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 13 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 14 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(13);
+    expect(client.clientProtocolVersion).toBe(14);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -1578,8 +1581,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual(
       accepted,
     );
-    const oldClient = createVersionMismatchServerHandshakeFrame("ephemeral-client-started", 12, 13);
-    const oldServer = createVersionMismatchServerHandshakeFrame("unmanaged-foreground", 14, 13);
+    const oldClient = createVersionMismatchServerHandshakeFrame("ephemeral-client-started", 13, 14);
+    const oldServer = createVersionMismatchServerHandshakeFrame("unmanaged-foreground", 15, 14);
     expect(ServerHandshakeFrameSchema.parse(oldClient)).toEqual(oldClient);
     expect(oldClient.direction).toBe("client-older");
     expect(ServerHandshakeFrameSchema.parse(oldServer)).toEqual(oldServer);
@@ -1695,6 +1698,6 @@ describe("additive protocol signals", () => {
   });
 
   it("uses protocol version thirteen", () => {
-    expect(PROTOCOL_VERSION).toBe(13);
+    expect(PROTOCOL_VERSION).toBe(14);
   });
 });

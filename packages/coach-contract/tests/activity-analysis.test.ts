@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import {
   ACTIVITY_ANALYSIS_SECTIONS,
+  ActivityAnalysisResultSchema,
   ActivityAnalysisRequestSchema,
   CanonicalActivitySummarySchema,
   createActivityAnalysisResultSchema,
@@ -135,5 +136,117 @@ describe("activity analysis contract", () => {
     ]) {
       expect(ResultSchema.safeParse(invalid).success).toBe(false);
     }
+  });
+
+  it("freezes concrete units and bounds for every renderer section", () => {
+    const concrete = {
+      schemaVersion: 1,
+      activity,
+      revision: REVISION,
+      sections: {
+        aerobicDrift: {
+          kind: "computed",
+          data: {
+            method: "local-time-weighted-efficiency-factor",
+            firstHalf: {
+              durationSeconds: 1_800,
+              sampleCount: 1_800,
+              averagePowerWatts: 200,
+              averageHeartRateBpm: 140,
+              efficiencyFactor: 1.43,
+            },
+            secondHalf: {
+              durationSeconds: 1_800,
+              sampleCount: 1_800,
+              averagePowerWatts: 198,
+              averageHeartRateBpm: 145,
+              efficiencyFactor: 1.37,
+            },
+            decouplingPercent: 4.2,
+            coverage: {
+              totalSamples: 3_600,
+              validSamples: 3_600,
+              includedDurationSeconds: 3_600,
+              windowDurationSeconds: 3_600,
+              fraction: 1,
+            },
+            evidence: "standard",
+            limitations: [],
+          },
+          provenance,
+        },
+        powerDistribution: {
+          kind: "computed",
+          data: {
+            unit: "watts",
+            buckets: [{ lower: 100, upper: 125, seconds: 600 }],
+            totalSeconds: 600,
+          },
+          provenance: { ...provenance, source: "provider" },
+        },
+        heartRateDistribution: {
+          kind: "computed",
+          data: {
+            unit: "bpm",
+            buckets: [{ lower: 130, upper: 135, seconds: 600 }],
+            totalSeconds: 600,
+          },
+          provenance: { ...provenance, source: "provider" },
+        },
+      },
+    } as const;
+    expect(ActivityAnalysisResultSchema.parse(concrete)).toEqual(concrete);
+    expect(ActivityAnalysisResultSchema.safeParse({
+      ...concrete,
+      sections: {
+        ...concrete.sections,
+        powerDistribution: {
+          ...concrete.sections.powerDistribution,
+          data: { ...concrete.sections.powerDistribution.data, unit: "bpm" },
+        },
+      },
+    }).success).toBe(false);
+    expect(ActivityAnalysisResultSchema.safeParse({
+      ...concrete,
+      sections: {
+        ...concrete.sections,
+        aerobicDrift: {
+          ...concrete.sections.aerobicDrift,
+          data: {
+            ...concrete.sections.aerobicDrift.data,
+            evidence: "limited",
+            limitations: [],
+          },
+        },
+      },
+    }).success).toBe(false);
+    expect(ActivityAnalysisResultSchema.safeParse({
+      ...concrete,
+      sections: {
+        intervals: {
+          kind: "computed",
+          data: { source: "provider", intervals: [], groups: [] },
+          provenance,
+        },
+      },
+    }).success).toBe(false);
+    expect(ActivityAnalysisResultSchema.safeParse({
+      ...concrete,
+      sections: {
+        powerHeartRate: {
+          kind: "computed",
+          data: {
+            source: "provider",
+            rows: [],
+            curves: [],
+            coverageFraction: 0,
+            heartRateLagSeconds: null,
+            warmupSeconds: null,
+            cooldownSeconds: null,
+          },
+          provenance,
+        },
+      },
+    }).success).toBe(false);
   });
 });

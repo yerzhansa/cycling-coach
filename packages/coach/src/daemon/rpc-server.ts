@@ -354,6 +354,7 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "listArchivedConversations",
   "getArchivedTranscriptPage",
   "getAthleteState",
+  "getActivityAnalysis",
   "importFiles",
   "sync",
   "saveIntake",
@@ -794,6 +795,23 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             try {
               COACH_RPC_METHOD_REGISTRY.getAthleteState.requestSchema.parse(generic.data.params);
               result = await input.engine.getAthleteState();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getActivityAnalysis":
+            try {
+              const request =
+                COACH_RPC_METHOD_REGISTRY.getActivityAnalysis.requestSchema.parse(
+                  generic.data.params,
+                );
+              if (input.operations.getActivityAnalysis === undefined) {
+                throw new TypeError("Activity analysis operation is unavailable.");
+              }
+              result = await input.operations.getActivityAnalysis(
+                request,
+                state.detachController.signal,
+              );
             } catch (error) {
               invocationFailure = { error };
             }

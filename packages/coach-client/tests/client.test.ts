@@ -50,6 +50,11 @@ const rpcDeadlineCases = [
   ["listArchivedConversations", {}, 30_000],
   ["getArchivedTranscriptPage", { boundaryRef: "a".repeat(64), cursor: null, limit: 25 }, 30_000],
   ["getAthleteState", {}, 30_000],
+  [
+    "getActivityAnalysis",
+    { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
+    90_000,
+  ],
   ["importFiles", { paths: ["/synthetic/ride.fit"] }, 3_600_000],
   ["sync", {}, 86_400_000],
   [
@@ -683,6 +688,51 @@ describe("RPC receive and observers", () => {
     );
   });
 
+  it("parses a bounded activity-analysis result before typed delivery", async () => {
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.sendHook = (text) => {
+      const request = JSON.parse(text) as { readonly id: number };
+      socket.emitMessage(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            schemaVersion: 1,
+            activity: {
+              id: "a".repeat(64),
+              workoutId: "b".repeat(64),
+              sessionSequence: 0,
+              isMultisport: false,
+              sport: "cycling",
+              subSport: null,
+              isTransition: false,
+              startEpochSeconds: 899_985_600,
+              timezoneOffsetSeconds: 0,
+              localDate: "1998-07-06",
+              elapsedSeconds: 3_600,
+              timerSeconds: 3_500,
+              movingSeconds: 3_400,
+              distanceMeters: 40_000,
+            },
+            revision: "c".repeat(64),
+            sections: {
+              intervals: { kind: "unavailable", reason: "not-provider-backed" },
+            },
+          },
+        }),
+      );
+    };
+
+    await expect(client.call("getActivityAnalysis", {
+      canonicalActivityId: "a".repeat(64),
+      sections: ["intervals"],
+    })).resolves.toMatchObject({
+      schemaVersion: 1,
+      sections: { intervals: { kind: "unavailable", reason: "not-provider-backed" } },
+    });
+  });
+
   it("exercises all methods with monotonic strict requests and parsed results", async () => {
     const received: unknown[] = [];
     const { socket, connecting } = acceptedSocket();
@@ -724,6 +774,27 @@ describe("RPC receive and observers", () => {
           recentActivities: [],
           plannedWorkouts: [],
           wellness: {},
+        },
+        getActivityAnalysis: {
+          schemaVersion: 1,
+          activity: {
+            id: "a".repeat(64),
+            workoutId: "b".repeat(64),
+            sessionSequence: 0,
+            isMultisport: false,
+            sport: "cycling",
+            subSport: null,
+            isTransition: false,
+            startEpochSeconds: 899_985_600,
+            timezoneOffsetSeconds: 0,
+            localDate: "1998-07-06",
+            elapsedSeconds: 3_600,
+            timerSeconds: 3_500,
+            movingSeconds: 3_400,
+            distanceMeters: 40_000,
+          },
+          revision: "c".repeat(64),
+          sections: { intervals: { kind: "unavailable", reason: "unsupported" } },
         },
         importFiles: {
           schemaVersion: 2,

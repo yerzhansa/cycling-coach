@@ -117,6 +117,7 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   listArchivedConversations: 30_000,
   getArchivedTranscriptPage: 30_000,
   getAthleteState: 30_000,
+  getActivityAnalysis: 90_000,
   importFiles: 60 * 60_000,
   sync: 24 * 60 * 60_000,
   saveIntake: 30_000,

@@ -1247,6 +1247,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       current: "page",
       order: [
         "Sync",
+        "Power progress",
         "Current cycling anchor",
         "Cycling Load",
         "Plan",
