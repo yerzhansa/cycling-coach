@@ -1,9 +1,16 @@
 import { spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { note, text, isCancel, log } from "@clack/prompts";
 import { loginCodex } from "../agent/codex/oauth.js";
+import type { CodexLoginProgressPhase } from "../agent/codex/oauth.js";
 import type { OAuthCredential } from "./profiles.js";
 
 const LOCAL_CALLBACK_FALLBACK_MS = 120_000;
+
+const OAUTH_PROGRESS_COPY: Readonly<Record<CodexLoginProgressPhase, string>> = {
+  "waiting-for-browser": "Waiting for browser sign-in…",
+  "completing-sign-in": "Completing ChatGPT sign-in…",
+};
 
 function isHeadless(): boolean {
   if (!process.stdout.isTTY) return true;
@@ -14,11 +21,7 @@ function isHeadless(): boolean {
 
 function openUrl(url: string): void {
   const opener =
-    process.platform === "darwin"
-      ? "open"
-      : process.platform === "win32"
-        ? "start"
-        : "xdg-open";
+    process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   try {
     const child = spawn(opener, [url], {
       detached: true,
@@ -31,11 +34,13 @@ function openUrl(url: string): void {
   }
 }
 
-async function promptForCode(message: string): Promise<string> {
+async function promptForCode(message: string, signal: AbortSignal): Promise<string> {
   const value = await text({
     message,
+    signal,
     validate: (v) => (!v ? "Value is required" : undefined),
   });
+  signal.throwIfAborted();
   if (isCancel(value)) throw new Error("OAuth cancelled by user");
   return typeof value === "string" ? value : "";
 }
@@ -66,13 +71,13 @@ export async function runCodexLogin(): Promise<OAuthCredential> {
       console.log(url);
       if (!headless) openUrl(url);
     },
-    onPrompt: async (prompt) => await promptForCode(prompt.message),
-    onProgress: (msg) => log.info(msg),
-    onManualCodeInput: async () => {
+    onPrompt: async (prompt) => await promptForCode(prompt.message, prompt.signal),
+    onProgress: (phase) => log.info(OAUTH_PROGRESS_COPY[phase]),
+    onManualCodeInput: async (signal) => {
       if (!headless) {
-        await new Promise((resolve) => setTimeout(resolve, LOCAL_CALLBACK_FALLBACK_MS));
+        await delay(LOCAL_CALLBACK_FALLBACK_MS, undefined, { signal });
       }
-      return await promptForCode("Paste the authorization code (or full redirect URL)");
+      return await promptForCode("Paste the authorization code (or full redirect URL)", signal);
     },
   });
 

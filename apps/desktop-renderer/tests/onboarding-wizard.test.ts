@@ -171,10 +171,15 @@ describe("desktop onboarding wizard", () => {
       ]),
       writeCredential: vi.fn(),
       chatgptStatus: vi.fn(async () => ({ state: "configured" as const, runtimeReady: false })),
-      chatgptLogin: vi.fn(async () => ({
-        status: "configured" as const,
-        runtimeReady: true as const,
+      chatgptLogin: vi.fn(async ({ operationId }: { operationId: string }) => ({
+        status: "stored" as const,
+        operationId,
       })),
+      cancelChatgptLogin: vi.fn(async (operationId: string) => ({
+        status: "not-active" as const,
+        operationId,
+      })),
+      onChatgptLoginProgress: vi.fn(() => vi.fn()),
       chooseImportFiles: vi.fn(async () => []),
       onDroppedImportFiles: vi.fn(() => vi.fn()),
     } as unknown as DesktopOnboardingAuth;
@@ -189,11 +194,12 @@ describe("desktop onboarding wizard", () => {
       state: "configured",
       runtimeReady: false,
     });
-    await expect(bridge.chatGptLogin(selection)).resolves.toEqual({
-      status: "configured",
-      runtimeReady: true,
+    const login = { operationId: "synthetic-operation", selection };
+    await expect(bridge.chatGptLogin(login)).resolves.toEqual({
+      status: "stored",
+      operationId: "synthetic-operation",
     });
-    expect(auth.chatgptLogin).toHaveBeenCalledWith(selection);
+    expect(auth.chatgptLogin).toHaveBeenCalledWith(login);
     await expect(bridge.retryFailedCredentials()).resolves.toEqual([
       { slot: "anthropic", state: "configured", runtimeState: "active" },
     ]);
@@ -260,7 +266,7 @@ describe("desktop onboarding wizard", () => {
     expect(wizard).not.toContain('event.key !== "Tab"');
     expect(wizard).toContain('aria-live="polite"');
     expect(aiRow).toContain("CHATGPT_SIGN_IN_LABEL");
-    expect(aiRow).toContain("CHATGPT_PENDING_LABEL");
+    expect(aiRow).toContain("CHATGPT_PHASE_COPY");
     expect(aiRow).toContain("CHATGPT_PANEL_HINT");
     expect(card).toContain("[&>*+*]:border-t");
     expect(card).toContain("[&>*:first-child]:rounded-t-xl");
@@ -312,7 +318,9 @@ describe("desktop onboarding wizard", () => {
   it("names the ChatGPT lane copy exactly once, in the copy module", async () => {
     const copy = await readFile(new URL("../src/ui/onboarding/copy.ts", import.meta.url), "utf8");
     expect(copy).toContain("Sign in with ChatGPT");
-    expect(copy).toContain("Finish signing in in your browser…");
+    expect(copy).toContain("Waiting for browser…");
+    expect(copy).toContain("Completing sign-in…");
+    expect(copy).toContain("Activating coach…");
     expect(copy).toContain("Needs a paid plan.");
   });
 

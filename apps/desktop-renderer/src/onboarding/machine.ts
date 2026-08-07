@@ -1,4 +1,9 @@
-import { SaveIntakeRpcParamsSchema, type SaveIntakeRpcParams } from "@enduragent/coach-contract";
+import {
+  KEYLESS_LLM_PROVIDERS,
+  SaveIntakeRpcParamsSchema,
+  isKeylessProvider,
+  type SaveIntakeRpcParams,
+} from "@enduragent/coach-contract";
 import {
   DESKTOP_CREDENTIAL_SLOTS,
   ONBOARDING_STEP_IDS,
@@ -8,6 +13,9 @@ import {
   type OnboardingStepId,
 } from "./constants.js";
 import { claudeCliIdentityLine } from "./credential-presentation.js";
+
+const CHATGPT_SUBSCRIPTION_PROVIDER = KEYLESS_LLM_PROVIDERS[0];
+const CLAUDE_CLI_PROVIDER = KEYLESS_LLM_PROVIDERS[1];
 
 export type CredentialState = "missing" | "configured" | "re-prompt";
 export type CredentialRuntimeState = "active" | "stored-inactive" | "failed";
@@ -23,6 +31,25 @@ export interface ChatGptStatus {
   readonly runtimeReady: boolean;
 }
 
+export type ChatGptLoginPhase = "idle" | "waiting-for-browser" | "completing-sign-in";
+
+export type ChatGptRuntimeState = "inactive" | "activating" | "ready" | "failed";
+
+export type ChatGptUiPhase =
+  | "idle"
+  | "waiting-for-browser"
+  | "completing-sign-in"
+  | "signed-in"
+  | "activating-coach"
+  | "ready"
+  | "login-failed"
+  | "activation-failed";
+
+export interface ChatGptLoginProgress {
+  readonly operationId: string;
+  readonly phase: Exclude<ChatGptLoginPhase, "idle">;
+}
+
 export interface ClaudeCliStatus {
   readonly state: ClaudeCliState;
   readonly email?: string;
@@ -31,8 +58,17 @@ export interface ClaudeCliStatus {
 }
 
 export type ChatGptLoginResult =
-  | { readonly status: "configured"; readonly runtimeReady: true }
-  | { readonly status: "refused"; readonly reason: ChatGptLoginRefusalReason };
+  | { readonly status: "stored"; readonly operationId: string }
+  | {
+      readonly status: "refused";
+      readonly operationId: string;
+      readonly reason: ChatGptLoginRefusalReason;
+    };
+
+export type ChatGptCancelLoginResult = {
+  readonly status: "cancelling" | "not-active";
+  readonly operationId: string;
+};
 
 export interface DesktopIntakeDraft {
   readonly injuryStatus: "none" | "managing" | "returning" | null;
@@ -65,8 +101,10 @@ export interface OnboardingState {
   readonly credentialRuntimeStatus: Readonly<
     Record<DesktopCredentialSlot, CredentialRuntimeState | null>
   >;
-  readonly chatGptState: "absent" | "pending" | "configured" | "refused";
-  readonly chatGptRuntimeReady: boolean;
+  readonly chatGptCredentialState: "absent" | "stored";
+  readonly chatGptRuntimeState: ChatGptRuntimeState;
+  readonly chatGptLoginPhase: ChatGptLoginPhase;
+  readonly chatGptOperationId: string | null;
   readonly chatGptRefusal: ChatGptLoginRefusalReason | null;
   readonly claudeCliState: ClaudeCliState | null;
   readonly claudeCliIdentity: string | null;
@@ -105,8 +143,11 @@ export function createOnboardingState(
     step: "coach-keys",
     credentialStatus,
     credentialRuntimeStatus,
-    chatGptState: chatGptStatus.state,
-    chatGptRuntimeReady: chatGptStatus.runtimeReady,
+    chatGptCredentialState: chatGptStatus.state === "configured" ? "stored" : "absent",
+    chatGptRuntimeState:
+      chatGptStatus.state === "configured" && chatGptStatus.runtimeReady ? "ready" : "inactive",
+    chatGptLoginPhase: "idle",
+    chatGptOperationId: null,
     chatGptRefusal: null,
     claudeCliState: claudeCliStatus === null ? null : claudeCliStatus.state,
     claudeCliIdentity: claudeCliStatus === null ? null : claudeCliIdentityLine(claudeCliStatus),
@@ -120,8 +161,11 @@ export function createOnboardingState(
 export function withChatGptStatus(state: OnboardingState, status: ChatGptStatus): OnboardingState {
   return {
     ...state,
-    chatGptState: status.state,
-    chatGptRuntimeReady: status.runtimeReady,
+    chatGptCredentialState: status.state === "configured" ? "stored" : "absent",
+    chatGptRuntimeState:
+      status.state === "configured" && status.runtimeReady ? "ready" : "inactive",
+    chatGptLoginPhase: "idle",
+    chatGptOperationId: null,
     chatGptRefusal: null,
   };
 }
@@ -141,37 +185,98 @@ export function claudeCliReady(state: OnboardingState): boolean {
   return state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key";
 }
 
-export function withChatGptPending(state: OnboardingState): OnboardingState {
+export function withChatGptPending(state: OnboardingState, operationId: string): OnboardingState {
   return {
     ...state,
-    chatGptState: "pending",
-    chatGptRuntimeReady: false,
+    chatGptLoginPhase: "waiting-for-browser",
+    chatGptOperationId: operationId,
     chatGptRefusal: null,
     busy: true,
     fixedError: null,
   };
 }
 
+export function withChatGptProgress(
+  state: OnboardingState,
+  progress: ChatGptLoginProgress,
+): OnboardingState {
+  if (
+    state.chatGptOperationId !== progress.operationId ||
+    state.chatGptLoginPhase === "idle" ||
+    (state.chatGptLoginPhase === "completing-sign-in" && progress.phase === "waiting-for-browser")
+  ) {
+    return state;
+  }
+  return { ...state, chatGptLoginPhase: progress.phase };
+}
+
 export function withChatGptLoginResult(
   state: OnboardingState,
   result: ChatGptLoginResult,
 ): OnboardingState {
-  return result.status === "configured"
+  if (state.chatGptOperationId !== result.operationId || state.chatGptLoginPhase === "idle") {
+    return state;
+  }
+  return result.status === "stored"
     ? {
         ...state,
-        chatGptState: "configured",
-        chatGptRuntimeReady: true,
+        chatGptCredentialState: "stored",
+        chatGptRuntimeState: "inactive",
+        chatGptLoginPhase: "idle",
+        chatGptOperationId: null,
         chatGptRefusal: null,
         busy: false,
         fixedError: null,
       }
     : {
         ...state,
-        chatGptState: "refused",
-        chatGptRuntimeReady: false,
+        chatGptLoginPhase: "idle",
+        chatGptOperationId: null,
         chatGptRefusal: result.reason,
         busy: false,
       };
+}
+
+export function withChatGptActivationPending(state: OnboardingState): OnboardingState {
+  if (state.chatGptCredentialState !== "stored") return state;
+  return {
+    ...state,
+    chatGptRuntimeState: "activating",
+    chatGptRefusal: null,
+    busy: false,
+    fixedError: null,
+  };
+}
+
+export function withChatGptActivationResult(
+  state: OnboardingState,
+  ready: boolean,
+): OnboardingState {
+  if (state.chatGptCredentialState !== "stored") return state;
+  return {
+    ...state,
+    chatGptRuntimeState: ready ? "ready" : "failed",
+    busy: false,
+  };
+}
+
+export function chatGptUiPhase(state: OnboardingState): ChatGptUiPhase {
+  if (state.chatGptLoginPhase !== "idle") return state.chatGptLoginPhase;
+  if (state.chatGptCredentialState === "stored") {
+    if (state.chatGptRuntimeState === "activating") return "activating-coach";
+    if (state.chatGptRuntimeState === "ready") return "ready";
+    if (state.chatGptRuntimeState === "failed") return "activation-failed";
+    return "signed-in";
+  }
+  return state.chatGptRefusal === null ? "idle" : "login-failed";
+}
+
+export function chatGptSignedIn(state: OnboardingState): boolean {
+  return state.chatGptCredentialState === "stored";
+}
+
+export function chatGptReady(state: OnboardingState): boolean {
+  return state.chatGptCredentialState === "stored" && state.chatGptRuntimeState === "ready";
 }
 
 export function withCredentialStatuses(
@@ -189,7 +294,7 @@ export function withCredentialStatuses(
 
 export function hasConfiguredModel(state: OnboardingState): boolean {
   return (
-    (state.chatGptState === "configured" && state.chatGptRuntimeReady) ||
+    chatGptReady(state) ||
     claudeCliReady(state) ||
     DESKTOP_CREDENTIAL_SLOTS.some(
       (slot) =>
@@ -213,11 +318,11 @@ export function selectedProviderReady(
   ) {
     return false;
   }
-  if (selected.provider === "openai-codex") {
-    return state.chatGptState === "configured" && state.chatGptRuntimeReady;
+  if (selected.provider === CHATGPT_SUBSCRIPTION_PROVIDER) {
+    return chatGptReady(state);
   }
-  if (selected.provider === "claude-cli") return claudeCliReady(state);
-  if (selected.provider === "codex-agent" || selected.provider === "intervals-icu") return false;
+  if (selected.provider === CLAUDE_CLI_PROVIDER) return claudeCliReady(state);
+  if (selected.provider === "intervals-icu" || isKeylessProvider(selected.provider)) return false;
   const slot = DESKTOP_CREDENTIAL_SLOTS.find((candidate) => candidate === selected.provider);
   if (slot === undefined) return false;
   return (

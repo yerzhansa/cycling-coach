@@ -94,10 +94,16 @@ function activationBridge(
     ),
     applyLlmSelection: vi.fn<OnboardingBridge["applyLlmSelection"]>(apply),
     chatGptStatus: vi.fn<OnboardingBridge["chatGptStatus"]>(chatGptStatus),
-    chatGptLogin: vi.fn<OnboardingBridge["chatGptLogin"]>(async () => ({
+    chatGptLogin: vi.fn<OnboardingBridge["chatGptLogin"]>(async ({ operationId }) => ({
       status: "refused",
+      operationId,
       reason: "cancelled",
     })),
+    cancelChatGptLogin: vi.fn<OnboardingBridge["cancelChatGptLogin"]>(async (operationId) => ({
+      status: "not-active",
+      operationId,
+    })),
+    onChatGptLoginProgress: vi.fn<OnboardingBridge["onChatGptLoginProgress"]>(() => () => {}),
     claudeCliStatus: vi.fn<OnboardingBridge["claudeCliStatus"]>(async () => ({
       state: "ready",
       email: "athlete@example.test",

@@ -34,6 +34,8 @@ const DESKTOP_LLM_CONFIGURATION_CHANNEL = "enduragent:onboarding:llm-configurati
 const DESKTOP_LLM_SELECTION_APPLY_CHANNEL = "enduragent:onboarding:llm-selection-apply";
 const DESKTOP_CHATGPT_STATUS_CHANNEL = "enduragent:onboarding:chatgpt-status";
 const DESKTOP_CHATGPT_LOGIN_CHANNEL = "enduragent:onboarding:chatgpt-login";
+const DESKTOP_CHATGPT_LOGIN_CANCEL_CHANNEL = "enduragent:onboarding:chatgpt-login-cancel";
+const DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL = "enduragent:onboarding:chatgpt-login-progress";
 const DESKTOP_CLAUDE_CLI_STATUS_CHANNEL = "enduragent:onboarding:claude-cli-status";
 const DESKTOP_CLAUDE_CLI_RECHECK_CHANNEL = "enduragent:onboarding:claude-cli-recheck";
 const DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL = "enduragent:onboarding:choose-import-files";
@@ -480,6 +482,26 @@ function parseChatGptSelection(value: unknown): PreloadLlmSelection {
   return selection;
 }
 
+function parseChatGptOperationId(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
+    throw new TypeError();
+  }
+  return value;
+}
+
+function parseChatGptLoginInput(value: unknown): {
+  readonly operationId: string;
+  readonly selection: PreloadLlmSelection;
+} {
+  if (!record(value) || !exactKeys(value, ["operationId", "selection"])) {
+    throw new TypeError();
+  }
+  return {
+    operationId: parseChatGptOperationId(value.operationId),
+    selection: parseChatGptSelection(value.selection),
+  };
+}
+
 function parseCredentialWriteInput(value: unknown): {
   readonly slot: string;
   readonly value: string;
@@ -806,23 +828,52 @@ function parseChatGptStatus(value: unknown): unknown {
   return { state: value.state, runtimeReady: value.runtimeReady };
 }
 
-function parseChatGptLogin(value: unknown): unknown {
+function parseChatGptLogin(value: unknown, operationId: string): unknown {
   if (!record(value)) throw new TypeError();
   if (
-    value.status === "configured" &&
-    exactKeys(value, ["status", "runtimeReady"]) &&
-    value.runtimeReady === true
+    value.status === "stored" &&
+    exactKeys(value, ["status", "operationId"]) &&
+    value.operationId === operationId
   ) {
-    return { status: "configured", runtimeReady: true };
+    return { status: "stored", operationId };
   }
   if (
     value.status === "refused" &&
-    exactKeys(value, ["status", "reason"]) &&
+    exactKeys(value, ["status", "operationId", "reason"]) &&
+    value.operationId === operationId &&
     CHATGPT_REASONS.has(value.reason as string)
   ) {
-    return { status: "refused", reason: value.reason };
+    return { status: "refused", operationId, reason: value.reason };
   }
   throw new TypeError();
+}
+
+function parseChatGptCancel(value: unknown, operationId: string): unknown {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["status", "operationId"]) ||
+    (value.status !== "cancelling" && value.status !== "not-active") ||
+    value.operationId !== operationId
+  ) {
+    throw new TypeError();
+  }
+  return { status: value.status, operationId };
+}
+
+interface PreloadChatGptLoginProgress {
+  readonly operationId: string;
+  readonly phase: "waiting-for-browser" | "completing-sign-in";
+}
+
+function parseChatGptLoginProgress(value: unknown): PreloadChatGptLoginProgress {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["operationId", "phase"]) ||
+    (value.phase !== "waiting-for-browser" && value.phase !== "completing-sign-in")
+  ) {
+    throw new TypeError();
+  }
+  return { operationId: parseChatGptOperationId(value.operationId), phase: value.phase };
 }
 
 function parseClaudeCliStatus(value: unknown): unknown {
@@ -1137,6 +1188,7 @@ async function invokeTelegramSenders(): Promise<unknown> {
 
 let dropDisposer: (() => void) | undefined;
 const updateListeners = new Set<(state: PreloadUpdateState) => void>();
+const chatGptLoginProgressListeners = new Set<(progress: PreloadChatGptLoginProgress) => void>();
 
 window.addEventListener(
   "click",
@@ -1179,6 +1231,20 @@ ipcRenderer.on(DESKTOP_UPDATE_STATE_CHANNEL, (_event, value: unknown) => {
   for (const listener of updateListeners) {
     try {
       listener(parseUpdateState(state));
+    } catch {}
+  }
+});
+
+ipcRenderer.on(DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL, (_event, value: unknown) => {
+  let progress: PreloadChatGptLoginProgress;
+  try {
+    progress = parseChatGptLoginProgress(value);
+  } catch {
+    return;
+  }
+  for (const listener of chatGptLoginProgressListeners) {
+    try {
+      listener(parseChatGptLoginProgress(progress));
     } catch {}
   }
 });
@@ -1236,8 +1302,29 @@ contextBridge.exposeInMainWorld(
     chatgptStatus: async () =>
       parseChatGptStatus(await ipcRenderer.invoke(DESKTOP_CHATGPT_STATUS_CHANNEL)),
     chatgptLogin: async (input: unknown) => {
-      const selection = parseChatGptSelection(input);
-      return parseChatGptLogin(await ipcRenderer.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, selection));
+      const request = parseChatGptLoginInput(input);
+      return parseChatGptLogin(
+        await ipcRenderer.invoke(DESKTOP_CHATGPT_LOGIN_CHANNEL, request),
+        request.operationId,
+      );
+    },
+    cancelChatgptLogin: async (input: unknown) => {
+      const operationId = parseChatGptOperationId(input);
+      return parseChatGptCancel(
+        await ipcRenderer.invoke(DESKTOP_CHATGPT_LOGIN_CANCEL_CHANNEL, { operationId }),
+        operationId,
+      );
+    },
+    onChatgptLoginProgress: (listener: unknown) => {
+      if (typeof listener !== "function") throw new TypeError();
+      const typedListener = listener as (progress: PreloadChatGptLoginProgress) => void;
+      chatGptLoginProgressListeners.add(typedListener);
+      let active = true;
+      return (): void => {
+        if (!active) return;
+        active = false;
+        chatGptLoginProgressListeners.delete(typedListener);
+      };
     },
     claudeCliStatus: async () =>
       parseClaudeCliStatus(await ipcRenderer.invoke(DESKTOP_CLAUDE_CLI_STATUS_CHANNEL)),

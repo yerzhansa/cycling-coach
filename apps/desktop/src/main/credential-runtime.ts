@@ -17,10 +17,11 @@ export interface LlmProviderSelectionEvidence {
 }
 
 export interface CredentialRuntimeApplication {
-  applyExplicit(request: ConfigureRuntimeRpcParams): Promise<void>;
+  applyExplicit(request: ConfigureRuntimeRpcParams, signal?: AbortSignal): Promise<void>;
   applyExistingLlmSelection(
     provider: LlmProvider,
     request: ConfigureRuntimeRpcParams,
+    signal?: AbortSignal,
   ): Promise<boolean>;
   reapplyStoredCredential(
     slot: DesktopCredentialSlot,
@@ -36,14 +37,17 @@ interface CredentialRuntimeApplicationOptions {
   readonly selectedLlmProvider: (
     storedCredentialSlots: readonly DesktopCredentialSlot[],
   ) => Promise<LlmProvider | undefined>;
-  readonly configureRuntime: (request: ConfigureRuntimeRpcParams) => Promise<void>;
+  readonly configureRuntime: (
+    request: ConfigureRuntimeRpcParams,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   readonly clearRuntimeCredential?: (
     credential: DesktopManagedCredential,
   ) => Promise<"cleared" | "not-active" | "managed-by-environment">;
 }
 
 export interface RuntimeConfigurationAuthority {
-  configureRuntime(request: ConfigureRuntimeRpcParams): Promise<void>;
+  configureRuntime(request: ConfigureRuntimeRpcParams, signal?: AbortSignal): Promise<void>;
   clearCredential(
     credential: DesktopManagedCredential,
   ): Promise<"cleared" | "not-active" | "managed-by-environment">;
@@ -83,11 +87,16 @@ export function createConnectionRuntimeAuthority(
   }>,
   connect: typeof connectCoachClient = connectCoachClient,
 ): RuntimeConfigurationAuthority {
-  const call = async <T>(operation: (client: CoachClient) => Promise<T>): Promise<T> => {
+  const call = async <T>(
+    operation: (client: CoachClient) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> => {
+    signal?.throwIfAborted();
     const client = await connect({
       url: connection.url,
       token: connection.token,
       expectedAthleteHome: connection.athleteHome,
+      ...(signal === undefined ? {} : { signal }),
     });
     try {
       return (await operation(client)) as T;
@@ -96,8 +105,14 @@ export function createConnectionRuntimeAuthority(
     }
   };
   return {
-    async configureRuntime(request) {
-      const result = await call((client) => client.call("configureRuntime", request));
+    async configureRuntime(request, signal) {
+      const result = await call(
+        (client) =>
+          signal === undefined
+            ? client.call("configureRuntime", request)
+            : client.call("configureRuntime", request, { signal }),
+        signal,
+      );
       if (
         !("status" in result) ||
         result.status !== "applied" ||
@@ -147,16 +162,48 @@ export function createCredentialRuntimeApplication(
     return result;
   };
 
+  const settleWithSignal = async <T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> => {
+    if (signal === undefined) return await operation;
+    signal.throwIfAborted();
+    return await new Promise<T>((resolve, reject) => {
+      const onAbort = (): void => {
+        signal.removeEventListener("abort", onAbort);
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      void operation.then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(error);
+        },
+      );
+    });
+  };
+
   return {
-    applyExplicit(request) {
-      return serialize(() => options.configureRuntime(request));
+    applyExplicit(request, signal) {
+      return serialize(() => {
+        signal?.throwIfAborted();
+        return options.configureRuntime(request, signal);
+      });
     },
-    applyExistingLlmSelection(provider, request) {
+    applyExistingLlmSelection(provider, request, signal) {
       return serialize(async () => {
+        signal?.throwIfAborted();
         if (request.llm === undefined || request.llm.provider !== undefined) throw new TypeError();
-        const selectedProvider = await options.selectedLlmProvider([]);
+        const selectedProvider = await settleWithSignal(options.selectedLlmProvider([]), signal);
         if (selectedProvider !== provider) return false;
-        await options.configureRuntime(request);
+        signal?.throwIfAborted();
+        await settleWithSignal(
+          signal === undefined
+            ? options.configureRuntime(request)
+            : options.configureRuntime(request, signal),
+          signal,
+        );
         return true;
       });
     },

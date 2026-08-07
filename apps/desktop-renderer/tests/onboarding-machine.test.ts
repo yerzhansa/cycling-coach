@@ -10,8 +10,11 @@ import {
   toOnboardingCompletion,
   toDesktopIntakeFlags,
   withCredentialStatuses,
+  withChatGptActivationPending,
+  withChatGptActivationResult,
   withChatGptLoginResult,
   withChatGptPending,
+  withChatGptProgress,
   withChatGptStatus,
   withClaudeCliStatus,
   withIntake,
@@ -23,9 +26,11 @@ describe("desktop onboarding machine", () => {
     let state = createOnboardingState();
     expect(Object.keys(state).sort()).toEqual([
       "busy",
+      "chatGptCredentialState",
+      "chatGptLoginPhase",
+      "chatGptOperationId",
       "chatGptRefusal",
-      "chatGptRuntimeReady",
-      "chatGptState",
+      "chatGptRuntimeState",
       "claudeCliIdentity",
       "claudeCliState",
       "credentialRuntimeStatus",
@@ -67,21 +72,41 @@ describe("desktop onboarding machine", () => {
     state = withChatGptStatus(state, { state: "configured", runtimeReady: true });
     expect(nextStep(state).step).toBe("training-data");
     state = createOnboardingState();
-    state = withChatGptPending(state);
-    expect(state).toMatchObject({ chatGptState: "pending", busy: true });
+    state = withChatGptPending(state, "operation-1");
+    expect(state).toMatchObject({
+      chatGptLoginPhase: "waiting-for-browser",
+      chatGptOperationId: "operation-1",
+      busy: true,
+    });
+    state = withChatGptProgress(state, {
+      operationId: "operation-1",
+      phase: "completing-sign-in",
+    });
+    expect(state.chatGptLoginPhase).toBe("completing-sign-in");
     state = withChatGptLoginResult(state, {
       status: "refused",
+      operationId: "operation-1",
       reason: "callback-unavailable",
     });
     expect(state).toMatchObject({
-      chatGptState: "refused",
+      chatGptCredentialState: "absent",
+      chatGptLoginPhase: "idle",
       chatGptRefusal: "callback-unavailable",
       busy: false,
     });
-    state = withChatGptLoginResult(state, { status: "configured", runtimeReady: true });
+    state = withChatGptPending(state, "operation-2");
+    state = withChatGptLoginResult(state, { status: "stored", operationId: "operation-2" });
+    expect(state).toMatchObject({
+      chatGptCredentialState: "stored",
+      chatGptRuntimeState: "inactive",
+      busy: false,
+    });
+    state = withChatGptActivationPending(state);
+    expect(state.chatGptRuntimeState).toBe("activating");
+    state = withChatGptActivationResult(state, true);
     expect(nextStep(state).step).toBe("training-data");
     state = withChatGptStatus(state, { state: "absent", runtimeReady: false });
-    expect(state.chatGptState).toBe("absent");
+    expect(state.chatGptCredentialState).toBe("absent");
   });
 
   it("requires the selected provider to match an active, healthy runtime", () => {

@@ -69,9 +69,9 @@ describe("onboarding provider status", () => {
       state: selectedProvider === "chatgpt" ? ("configured" as const) : ("absent" as const),
       runtimeReady: selectedProvider === "chatgpt",
     }));
-    const chatGptLogin = vi.fn(async () => {
+    const chatGptLogin = vi.fn(async ({ operationId }: { operationId: string }) => {
       selectedProvider = "chatgpt";
-      return { status: "configured" as const, runtimeReady: true as const };
+      return { status: "stored" as const, operationId };
     });
     const bridge = twoProviderBridge({ credentialStatuses, chatGptStatus, chatGptLogin });
     const wizard = mountWizard({ bridge });
@@ -82,16 +82,14 @@ describe("onboarding provider status", () => {
     expect(rowState("ai")).toBe("pending");
     await user.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
 
-    await waitFor(() => {
-      expect(credentialStatuses).toHaveBeenCalledTimes(2);
-    });
+    expect(credentialStatuses).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
     });
     expectOnePoweringRow("Powers your coach");
     expect(panel("chatgpt")).toBeNull();
     expect(document.body.textContent).not.toContain("Retry saved keys");
-    expect(chatGptStatus).toHaveBeenCalledTimes(2);
+    expect(chatGptStatus).toHaveBeenCalledTimes(1);
     wizard.controller.dispose();
   });
 
@@ -180,7 +178,7 @@ describe("onboarding provider status", () => {
     wizard.controller.dispose();
   });
 
-  it("fails ChatGPT activity closed when its post-selection status is unavailable", async () => {
+  it("preserves ChatGPT activity when an unrelated post-selection status is unavailable", async () => {
     const user = userEvent.setup();
     let selectedProvider: "anthropic" | "chatgpt" = "chatgpt";
     const chatGptStatus = vi
@@ -214,20 +212,20 @@ describe("onboarding provider status", () => {
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
     });
-    expect(wizard.controller.state().chatGptRuntimeReady).toBe(false);
+    expect(wizard.controller.state().chatGptRuntimeState).toBe("ready");
     expect(document.body.textContent).not.toContain("private status failure");
     wizard.controller.dispose();
   });
 
-  it("does not report a completed sign-in as refused when status refresh fails", async () => {
+  it("does not run a post-sign-in refresh that could overwrite the completed sign-in", async () => {
     const user = userEvent.setup();
     const credentialStatuses = vi
       .fn<OnboardingBridge["credentialStatuses"]>()
       .mockResolvedValueOnce([])
       .mockRejectedValueOnce(new TypeError());
-    const chatGptLogin = vi.fn(async () => ({
-      status: "configured" as const,
-      runtimeReady: true as const,
+    const chatGptLogin = vi.fn(async ({ operationId }: { operationId: string }) => ({
+      status: "stored" as const,
+      operationId,
     }));
     const chatGptStatus = vi
       .fn<OnboardingBridge["chatGptStatus"]>()
@@ -240,15 +238,14 @@ describe("onboarding provider status", () => {
 
     await user.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
 
-    await waitFor(() => {
-      expect(credentialStatuses).toHaveBeenCalledTimes(2);
-    });
+    expect(credentialStatuses).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
     });
     expect(document.body.textContent).not.toContain(
       "ChatGPT sign-in could not be completed. Please retry.",
     );
+    expect(chatGptStatus).toHaveBeenCalledTimes(1);
     wizard.controller.dispose();
   });
 });

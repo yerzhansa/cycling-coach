@@ -167,8 +167,10 @@ async function pollCredentialStatuses(vault: CredentialVault): Promise<void> {
     window: {} as never,
     vault,
     chatGptAuth: {
+      hasStoredProfile: async () => false,
       status: async () => ({ state: "absent", runtimeReady: false }),
-      login: async () => ({ status: "refused", reason: "cancelled" }),
+      login: async (operationId) => ({ status: "refused", operationId, reason: "cancelled" }),
+      cancelLogin: (operationId) => ({ status: "not-active", operationId }),
       activate: async () => ({ status: "refused", reason: "credential-required" }),
       deleteCredential: async () => ({ status: "refused", reason: "not-found" }),
     },
@@ -245,6 +247,89 @@ describe("desktop credential runtime precedence", () => {
       token: "x".repeat(43),
       expectedAthleteHome: "/synthetic/athlete",
     });
+  });
+
+  it("forwards the activation deadline through connection, RPC, and serialization", async () => {
+    const request = {
+      llm: { model: "gpt-5.5" },
+    };
+    const controller = new AbortController();
+    const call = vi.fn(async () => ({
+      schemaVersion: 3 as const,
+      status: "applied" as const,
+      applied: { llm: true, intervals: false, session: false },
+    }));
+    const connect = vi.fn(async () => ({
+      handshake: {} as never,
+      call,
+      close: vi.fn(async () => {}),
+    }));
+    const authority = createConnectionRuntimeAuthority(
+      {
+        url: "ws://127.0.0.1:45005/rpc",
+        token: "x".repeat(43),
+        athleteHome: "/synthetic/athlete",
+      },
+      connect as never,
+    );
+    const configureRuntime = vi.fn(authority.configureRuntime);
+    const runtime = createCredentialRuntimeApplication({
+      selectedLlmProvider: async () => "openai-codex",
+      configureRuntime,
+    });
+
+    await expect(
+      runtime.applyExistingLlmSelection("openai-codex", request, controller.signal),
+    ).resolves.toBe(true);
+
+    expect(configureRuntime).toHaveBeenCalledWith(request, controller.signal);
+    expect(connect).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:45005/rpc",
+      token: "x".repeat(43),
+      expectedAthleteHome: "/synthetic/athlete",
+      signal: controller.signal,
+    });
+    expect(call).toHaveBeenCalledWith("configureRuntime", request, {
+      signal: controller.signal,
+    });
+  });
+
+  it("does not start a queued runtime mutation after its activation deadline", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const configured = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const selectedLlmProvider = vi.fn(async () => "openai-codex" as const);
+    const configureRuntime = vi.fn(async () => {
+      started();
+      await gate;
+    });
+    const runtime = createCredentialRuntimeApplication({
+      selectedLlmProvider,
+      configureRuntime,
+    });
+    const blocker = runtime.applyExplicit({
+      llm: { provider: "anthropic", model: "athlete-selected-model" },
+    });
+    await configured;
+    const controller = new AbortController();
+    const queued = runtime.applyExistingLlmSelection(
+      "openai-codex",
+      { llm: { model: "gpt-5.5" } },
+      controller.signal,
+    );
+    const queuedExpectation = expect(queued).rejects.toMatchObject({ name: "TimeoutError" });
+    controller.abort(new DOMException("Activation timed out", "TimeoutError"));
+
+    release();
+    await blocker;
+    await queuedExpectation;
+    expect(selectedLlmProvider).not.toHaveBeenCalled();
+    expect(configureRuntime).toHaveBeenCalledOnce();
   });
 
   it("uses the current-account sentinel only for a blank ownership preflight", () => {

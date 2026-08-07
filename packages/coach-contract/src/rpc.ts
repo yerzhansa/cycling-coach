@@ -826,7 +826,10 @@ export interface CoachOperations {
   getArchivedTranscriptPage(
     request: GetArchivedTranscriptPageRpcParams,
   ): Promise<GetArchivedTranscriptPageRpcResult>;
-  configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult>;
+  configureRuntime(
+    request: ConfigureRuntimeRpcParams,
+    signal?: AbortSignal,
+  ): Promise<ConfigureRuntimeRpcResult>;
   getRuntimeConfig(request: GetRuntimeConfigRpcParams): Promise<GetRuntimeConfigRpcResult>;
   getUnitsPreference?(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult>;
   setUnitsPreference?(request: SetUnitsPreferenceRpcParams): Promise<SetUnitsPreferenceRpcResult>;

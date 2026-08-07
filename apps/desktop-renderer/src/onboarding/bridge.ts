@@ -11,6 +11,8 @@ import {
 import { validateRendererDaemonConnection } from "../daemon-connection.js";
 import { SUPPORTED_IMPORT_EXTENSIONS, type DesktopCredentialSlot } from "./constants.js";
 import type {
+  ChatGptCancelLoginResult,
+  ChatGptLoginProgress,
   ChatGptLoginResult,
   ChatGptStatus,
   ClaudeCliStatus,
@@ -110,6 +112,11 @@ export interface OnboardingCredentialWriteInput {
   readonly selection?: OnboardingLlmSelection;
 }
 
+export interface ChatGptLoginInput {
+  readonly operationId: string;
+  readonly selection: OnboardingLlmSelection;
+}
+
 export interface OnboardingBridge {
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
@@ -117,7 +124,9 @@ export interface OnboardingBridge {
   llmConfiguration(): Promise<OnboardingLlmConfiguration>;
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatGptStatus(): Promise<ChatGptStatus>;
-  chatGptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
+  chatGptLogin(input: ChatGptLoginInput): Promise<ChatGptLoginResult>;
+  cancelChatGptLogin(operationId: string): Promise<ChatGptCancelLoginResult>;
+  onChatGptLoginProgress(listener: (progress: ChatGptLoginProgress) => void): () => void;
   claudeCliStatus(): Promise<ClaudeCliStatus>;
   claudeCliRecheck(): Promise<ClaudeCliStatus>;
   chooseImportFiles(): Promise<readonly string[]>;
@@ -141,7 +150,9 @@ export interface DesktopOnboardingAuth {
   llmConfiguration(): Promise<OnboardingLlmConfiguration>;
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatgptStatus(): Promise<ChatGptStatus>;
-  chatgptLogin(input: OnboardingLlmSelection): Promise<ChatGptLoginResult>;
+  chatgptLogin(input: ChatGptLoginInput): Promise<ChatGptLoginResult>;
+  cancelChatgptLogin(operationId: string): Promise<ChatGptCancelLoginResult>;
+  onChatgptLoginProgress(listener: (progress: ChatGptLoginProgress) => void): () => void;
   claudeCliStatus(): Promise<ClaudeCliStatus>;
   claudeCliRecheck(): Promise<ClaudeCliStatus>;
   chooseImportFiles(): Promise<readonly string[]>;
@@ -201,6 +212,8 @@ export function createOnboardingBridge(
     applyLlmSelection: (input) => auth.applyLlmSelection(input),
     chatGptStatus: () => auth.chatgptStatus(),
     chatGptLogin: (input) => auth.chatgptLogin(input),
+    cancelChatGptLogin: (operationId) => auth.cancelChatgptLogin(operationId),
+    onChatGptLoginProgress: (listener) => auth.onChatgptLoginProgress(listener),
     claudeCliStatus: () => auth.claudeCliStatus(),
     claudeCliRecheck: () => auth.claudeCliRecheck(),
     chooseImportFiles: () => auth.chooseImportFiles(),

@@ -595,11 +595,11 @@ async function runDesktop(): Promise<void> {
     };
     const chatGptAuth = createChatGptAuth({
       configDir,
-      async applyRuntimeConfig(request) {
+      async applyRuntimeConfig(request, signal) {
         const binding = activeRuntimeBinding!;
         const lifecycleState = daemonLifecycle?.snapshot();
         if (lifecycleState?.status !== "ready") throw new TypeError();
-        await binding.credentials.applyExplicit(request);
+        await binding.credentials.applyExplicit(request, signal);
         const currentLifecycleState = daemonLifecycle?.snapshot();
         if (
           activeRuntimeBinding !== binding ||
@@ -721,7 +721,11 @@ async function runDesktop(): Promise<void> {
             chatGptAuth,
             claudeCli,
             getRuntimeConfig: readActiveRuntimeConfig,
-            applyExistingLlmSelection: async (selection: OnboardingLlmSelection) => {
+            applyExistingLlmSelection: async (
+              selection: OnboardingLlmSelection,
+              signal?: AbortSignal,
+            ) => {
+              signal?.throwIfAborted();
               const binding = activeRuntimeBinding;
               const lifecycleState = daemonLifecycle?.snapshot();
               if (binding === undefined || lifecycleState?.status !== "ready") {
@@ -730,7 +734,9 @@ async function runDesktop(): Promise<void> {
               const applied = await binding.credentials.applyExistingLlmSelection(
                 selection.provider,
                 runtimeConfigurationForExistingSelection(selection),
+                signal,
               );
+              signal?.throwIfAborted();
               const currentLifecycleState = daemonLifecycle?.snapshot();
               if (
                 activeRuntimeBinding !== binding ||

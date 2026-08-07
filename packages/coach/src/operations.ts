@@ -284,17 +284,25 @@ export function createCoachOperations(
         .readArchivedTranscriptPage(parsedRequest)
         .then((result) => GetArchivedTranscriptPageRpcResultSchema.parse(result));
     },
-    configureRuntime(request: ConfigureRuntimeRpcParams): Promise<ConfigureRuntimeRpcResult> {
+    configureRuntime(
+      request: ConfigureRuntimeRpcParams,
+      callerSignal?: AbortSignal,
+    ): Promise<ConfigureRuntimeRpcResult> {
       const parsedRequest = ConfigureRuntimeRpcParamsSchema.parse(request);
       const deadlineSignal = AbortSignal.timeout(runtimeConfigurationDeadlineMs);
+      const requestSignal =
+        callerSignal === undefined
+          ? deadlineSignal
+          : AbortSignal.any([deadlineSignal, callerSignal]);
       return enqueueRuntimeConfiguration(async () => {
         const apply = async (admissionSignal?: AbortSignal): Promise<ConfigureRuntimeRpcResult> => {
           const signal =
             admissionSignal === undefined
-              ? deadlineSignal
-              : AbortSignal.any([deadlineSignal, admissionSignal]);
+              ? requestSignal
+              : AbortSignal.any([requestSignal, admissionSignal]);
           signal.throwIfAborted();
           const refusal = await input.applyRuntimeConfig(parsedRequest, signal);
+          signal.throwIfAborted();
           if (refusal !== undefined) {
             return ConfigureRuntimeRpcResultSchema.parse({
               schemaVersion: 3,
