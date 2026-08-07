@@ -1,5 +1,10 @@
 import { performance } from "node:perf_hooks";
-import type { Config, AthleteDataReader, ReferenceRuntime } from "@enduragent/core";
+import type {
+  Config,
+  AthleteDataReader,
+  ReferenceRuntime,
+  SubsystemLogger,
+} from "@enduragent/core";
 import { createStoreAthleteDataReader, createSubsystemLogger } from "@enduragent/core";
 import {
   createCanonicalActivityReader,
@@ -15,6 +20,7 @@ import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bun
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { openReadonlySqliteStorage } from "@enduragent/kernel-node/sqlite";
 import { join } from "node:path";
+import { runAnalyticsCurveRefresh } from "./analytics-curves.js";
 import { runReferenceCapture } from "./capture.js";
 import { createLocalBundleProducer } from "./local-bundle-producer.js";
 import type { CoachStoreWriterContext } from "./runtime.js";
@@ -48,6 +54,7 @@ export interface StoreWriteResult<T> {
 
 export interface StoreRuntimeDependencies {
   readonly capture?: typeof runReferenceCapture;
+  readonly refreshCurves?: typeof runAnalyticsCurveRefresh;
   readonly produce?: (manifest: ReferenceCaptureManifest) => Promise<ProducedLocalBundle>;
   readonly now?: () => Date;
   readonly monotonicNow?: () => number;
@@ -81,8 +88,9 @@ export class StoreRuntime {
   private readonlyStore: SqlReadStore | undefined;
   private readonly canonicalActivities: CanonicalActivityReader;
   private readonly dependencies: Required<
-    Pick<StoreRuntimeDependencies, "capture" | "produce" | "now" | "monotonicNow">
+    Pick<StoreRuntimeDependencies, "capture" | "refreshCurves" | "produce" | "now" | "monotonicNow">
   >;
+  private readonly logger: SubsystemLogger;
   private readonly scheduler: WallClockScheduler;
   private snapshotValue: ProducedLocalBundle | undefined;
   private activeLedger: PhysicalRequestLedger | undefined;
@@ -106,9 +114,10 @@ export class StoreRuntime {
     const dependencies = options.dependencies ?? {};
     const now = dependencies.now ?? (() => new Date());
     const schedulerDependencies = dependencies.schedulerDependencies ?? {};
-    const logger = createSubsystemLogger("sync", options.home.root);
+    this.logger = createSubsystemLogger("sync", options.home.root);
     this.dependencies = {
       capture: dependencies.capture ?? runReferenceCapture,
+      refreshCurves: dependencies.refreshCurves ?? runAnalyticsCurveRefresh,
       produce:
         dependencies.produce ??
         ((manifest) =>
@@ -135,7 +144,7 @@ export class StoreRuntime {
         await this.runWindow();
       },
       onError: (error) => {
-        logger.error("scheduled_store_refresh_failed", error);
+        this.logger.error("scheduled_store_refresh_failed", error);
       },
       dependencies: {
         nowEpochMs: schedulerDependencies.nowEpochMs ?? (() => now().getTime()),
@@ -401,6 +410,22 @@ LIMIT 1`,
       ]);
       let published = false;
       if (captureResult.status === "fulfilled" && captureResult.value !== undefined) {
+        try {
+          await this.dependencies.refreshCurves({
+            env: this.options.env,
+            ...(this.options.writerContext === undefined
+              ? {}
+              : { writerContext: this.options.writerContext }),
+            apiKey: config.intervals.apiKey,
+            athleteId: config.intervals.athleteId,
+            frozenAt: now,
+            budget,
+            attemptLedger: ledger,
+          });
+        } catch (error) {
+          this.logger.warn("analytics_curve_refresh_failed", error);
+        }
+        controller.signal.throwIfAborted();
         const produced = await this.dependencies.produce(captureResult.value);
         this.snapshotValue = produced;
         published = true;
