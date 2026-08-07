@@ -34,6 +34,7 @@ import {
   parseRenamedWellnessRow,
   renameTpFieldsOnActivity,
   renameTpFieldsOnWellnessRow,
+  StreamNormalizationError,
   type ReferenceBundle,
   type RenameSummary,
 } from "@enduragent/kernel/reference/local-bundle";
@@ -375,7 +376,17 @@ async function fetchStreams(
       log(`Reference: streams fetch failed for an activity: ${renderEndpointError(result.error)}`);
       continue;
     }
-    const parsed = ActivityStreamsSchema.safeParse(normalizeStreams(result.value));
+    let normalized: unknown;
+    try {
+      normalized = normalizeStreams(result.value);
+    } catch (error) {
+      const reason = error instanceof StreamNormalizationError
+        ? "duplicate descriptor types"
+        : "normalization rejected input";
+      log(`Reference: streams shape rejected for an activity: ${reason}`);
+      continue;
+    }
+    const parsed = ActivityStreamsSchema.safeParse(normalized);
     if (!parsed.success) {
       log(`Reference: streams shape rejected for an activity: ${parsed.error.message}`);
       continue;

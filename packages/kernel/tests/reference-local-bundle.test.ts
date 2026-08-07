@@ -13,6 +13,7 @@ import {
   parseCanonicalProjectionValue,
   parseGenericLandingEnvelope,
   renameTpFieldsOnActivity,
+  StreamNormalizationError,
 } from "../src/reference/entry/local-bundle.js";
 import type { ActivityProjectionFilter, ReferenceBundle } from "../src/reference/local-bundle.js";
 import { METRIC_REGISTRY } from "../src/reference/metrics/registry.js";
@@ -99,6 +100,26 @@ describe("kernel local bundle contracts", () => {
     );
     const shared = [1];
     expect(normalizeStreams({ dfaA1: shared, dfa_a1: shared })).toEqual({ dfa_a1: shared });
+  });
+
+  it("fails closed with structured diagnostics instead of overwriting duplicate descriptors", () => {
+    let thrown: unknown;
+    try {
+      normalizeStreams([
+        { type: "watts", data: [180, 190] },
+        { type: "watts", data: [250, 260] },
+        { type: "dfaA1", data: [0.9, 0.8] },
+        { type: "dfa_a1", data: [0.7, 0.6] },
+      ]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(StreamNormalizationError);
+    expect((thrown as StreamNormalizationError).issues).toEqual([
+      { kind: "DuplicateType", type: "watts", count: 2 },
+      { kind: "DuplicateType", type: "dfa_a1", count: 2 },
+    ]);
+    expect(Object.keys(thrown as StreamNormalizationError)).not.toContain("issues");
   });
 
   it("uses canonical UTF-8 byte ordering including non-ASCII and prefixes", () => {

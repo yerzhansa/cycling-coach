@@ -95,14 +95,50 @@ function normalizeStreamKey(key: string): string {
   return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 }
 
+export interface DuplicateStreamTypeIssue {
+  readonly kind: "DuplicateType";
+  readonly type: string;
+  readonly count: number;
+}
+
+/**
+ * The canonical channel map cannot represent duplicate descriptors without
+ * choosing one and discarding the others. Raw snapshots retain every
+ * descriptor; this error makes the projection fail closed with diagnostics.
+ */
+export class StreamNormalizationError extends TypeError {
+  declare readonly issues: readonly DuplicateStreamTypeIssue[];
+
+  constructor(issues: readonly DuplicateStreamTypeIssue[]) {
+    super("duplicate stream descriptor types");
+    this.name = "StreamNormalizationError";
+    Object.defineProperty(this, "issues", {
+      configurable: false,
+      enumerable: false,
+      value: Object.freeze(issues.map((issue) => Object.freeze({ ...issue }))),
+      writable: false,
+    });
+  }
+}
+
 export function normalizeStreams(value: unknown): unknown {
   if (Array.isArray(value)) {
     const output: Record<string, unknown> = {};
+    const counts = new Map<string, number>();
     for (const entry of value) if (entry !== null && typeof entry === "object"
       && typeof (entry as Record<string, unknown>).type === "string"
       && Array.isArray((entry as Record<string, unknown>).data)) {
-      output[(entry as Record<string, unknown>).type as string] = (entry as Record<string, unknown>).data;
+      const type = normalizeStreamKey((entry as Record<string, unknown>).type as string);
+      counts.set(type, (counts.get(type) ?? 0) + 1);
+      if (!Object.hasOwn(output, type)) {
+        output[type] = (entry as Record<string, unknown>).data;
+      }
     }
+    const issues: DuplicateStreamTypeIssue[] = [];
+    for (const [type, count] of counts) {
+      if (count > 1) issues.push({ kind: "DuplicateType", type, count });
+    }
+    if (issues.length > 0) throw new StreamNormalizationError(issues);
     return output;
   }
   if (value !== null && typeof value === "object") {

@@ -359,6 +359,38 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     expect(res.bundle.streams?.["1"]?.watts).toEqual([200, 210]);
   });
 
+  it("skips only the ride with duplicate stream descriptors and logs a safe diagnostic", async () => {
+    const logs: string[] = [];
+    const { client } = fakeClient({
+      activities: [
+        camelActivity({ id: 1, startDateLocal: daysAgo(1) }),
+        camelActivity({ id: 2, startDateLocal: daysAgo(2) }),
+      ],
+      streamFor: (id) => id === "1"
+        ? {
+            ok: true,
+            value: [
+              { type: "athlete_custom_stream", data: [1] },
+              { type: "athlete_custom_stream", data: [2] },
+            ],
+          }
+        : STREAM_OK,
+    });
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: (message) => logs.push(message),
+    });
+    expect(res.bundle.streams?.["1"]).toBeUndefined();
+    expect(res.bundle.streams?.["2"]).toBeDefined();
+    expect(logs).toContain(
+      "Reference: streams shape rejected for an activity: duplicate descriptor types",
+    );
+    expect(logs.join("\n")).not.toContain("athlete_custom_stream");
+  });
+
   it("normalizes the lib's camelCased OBJECT stream shape (dfaA1 -> dfa_a1)", async () => {
     const { client } = fakeClient({
       activities: [camelActivity({ id: 1, startDateLocal: daysAgo(1) })],
