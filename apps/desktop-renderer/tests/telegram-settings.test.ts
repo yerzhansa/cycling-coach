@@ -220,6 +220,53 @@ describe("Telegram settings controller", () => {
     });
   });
 
+  it("gives actionable Keychain recovery when secure storage is unavailable during setup", async () => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    runtime.bridge.pasteTokenFromClipboard.mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+      current: DISABLED,
+    });
+
+    runtime.handlers.onPasteToken();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: DISABLED,
+        feedback: {
+          tone: "error",
+          message:
+            "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, copy the bot token again, then retry.",
+        },
+      }),
+    );
+  });
+
+  it("refuses plaintext token storage without mislabeling it as a Keychain approval problem", async () => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    runtime.bridge.pasteTokenFromClipboard.mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "unsafe-backend",
+      current: DISABLED,
+    });
+
+    runtime.handlers.onPasteToken();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: DISABLED,
+        feedback: {
+          tone: "error",
+          message:
+            "No secure credential backend is available, so Enduragent refused to save the bot token without encryption. Quit and reopen Enduragent, copy the bot token again, then retry.",
+        },
+      }),
+    );
+    expect(JSON.stringify(runtime.controller.state())).not.toContain("Keychain");
+  });
+
   it("keeps the old bot online while reporting a refused replacement across status polls", async () => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);
@@ -416,6 +463,14 @@ describe("Telegram settings controller", () => {
       "webhook-removal-required",
       "The copied bot still uses a webhook. Remove that webhook before replacing the current Telegram bot.",
     ],
+    [
+      "encryption-unavailable",
+      "The current Telegram bot is unchanged because secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, copy the bot token again, then retry.",
+    ],
+    [
+      "unsafe-backend",
+      "The current Telegram bot is unchanged because no secure credential backend is available. Enduragent refused to save the copied token without encryption. Quit and reopen Enduragent, copy the bot token again, then retry.",
+    ],
   ] as const)("reports the closed %s replacement refusal", async (reason, message) => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);
@@ -459,6 +514,38 @@ describe("Telegram settings controller", () => {
         telegram: next,
         healthAnnouncement: message,
         feedback: null,
+      }),
+    );
+  });
+
+  it.each([
+    [
+      "reconcile" as const,
+      "encryption-unavailable" as const,
+      "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again.",
+    ],
+    [
+      "remove-webhook" as const,
+      "unsafe-backend" as const,
+      "No secure credential backend is available, so Enduragent refused to read or change the saved bot token without encryption. Quit and reopen Enduragent, then choose Check again.",
+    ],
+  ])("gives %s an actionable %s recovery", async (action, reason, message) => {
+    const runtime = setup();
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
+    await runtime.controller.activate();
+    const result = { outcome: "refused", reason, current: PAIRED } as const;
+    if (action === "reconcile") {
+      runtime.bridge.reconcile.mockResolvedValueOnce(result);
+      runtime.handlers.onReconcile();
+    } else {
+      runtime.bridge.removeWebhook.mockResolvedValueOnce(result);
+      runtime.handlers.onRemoveWebhook();
+    }
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: PAIRED,
+        feedback: { tone: "error", message },
       }),
     );
   });

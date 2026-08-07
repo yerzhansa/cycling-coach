@@ -89,6 +89,7 @@ import {
 } from "./telegram-credential-vault.js";
 import { createTelegramDaemonBinding } from "./telegram-daemon-binding.js";
 import { installDesktopTelegramIpc } from "./telegram-ipc.js";
+import { createTelegramSecureStorageDiagnostics } from "./telegram-secure-storage-diagnostics.js";
 import {
   createDesktopTelegramPowerLifecycle,
   type DesktopTelegramPowerLifecycle,
@@ -265,10 +266,12 @@ async function runDesktop(): Promise<void> {
       await realpath(resolveDesktopAthleteHome(environment)),
     );
     requireDesktopDaemonHome(selectedAthleteHome, resolution.athleteHome);
+    const telegramSecureStorageDiagnostics = createTelegramSecureStorageDiagnostics();
     const telegramVault = createTelegramCredentialVault({
       root: join(app.getPath("userData"), TELEGRAM_CREDENTIAL_DIRECTORY_NAME),
       athleteHome: selectedAthleteHome,
       encryption: safeStorage,
+      observeSecureStorageFailure: telegramSecureStorageDiagnostics,
     });
     let activeTelegramBinding: TelegramDaemonBinding | undefined;
     const preparedTelegramBindings = new Map<number, TelegramDaemonBinding>();
@@ -284,6 +287,7 @@ async function runDesktop(): Promise<void> {
             : undefined;
         },
       },
+      observeSecureStorageFailure: telegramSecureStorageDiagnostics,
     });
     closeTelegramCoordinator = () => telegramCoordinator.close();
     telegramPower = createDesktopTelegramPowerLifecycle({
@@ -558,6 +562,7 @@ async function runDesktop(): Promise<void> {
           selectedAthleteHome: () => selectedAthleteHome,
           vault: telegramVault,
           daemon: { current: () => successorTelegram },
+          observeSecureStorageFailure: telegramSecureStorageDiagnostics,
         });
         const reconciliation = await successorTelegramCoordinator.reconcile();
         const desiredState = await telegramVault.desiredState();

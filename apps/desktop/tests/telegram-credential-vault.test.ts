@@ -244,6 +244,103 @@ describe("Telegram credential vault", () => {
     });
   });
 
+  it.each([
+    [
+      "unavailable encryption",
+      {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString: vi.fn(),
+      } satisfies CredentialEncryptionPort,
+      "encryption-unavailable" as const,
+    ],
+    [
+      "an unsafe backend",
+      {
+        ...encryption(),
+        getSelectedStorageBackend: () => "basic_text",
+      } satisfies CredentialEncryptionPort,
+      "unsafe-backend" as const,
+    ],
+  ])("preserves %s as a closed status reason after reopen", async (_label, backend, reason) => {
+    const value = await fixture();
+    await seedProfile(value);
+    const reopened = createTelegramCredentialVault({ ...value, encryption: backend });
+
+    await expect(reopened.profileStatus()).resolves.toEqual({ state: "re-prompt", reason });
+  });
+
+  it("emits only the exact closed stages at their vault boundaries", async () => {
+    const events: unknown[] = [];
+    const observeSecureStorageFailure = vi.fn((event: unknown) => {
+      events.push(event);
+    });
+
+    const encryptionValue = await fixture();
+    await seedProfile(encryptionValue);
+    const unavailable = createTelegramCredentialVault({
+      ...encryptionValue,
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString: vi.fn(),
+      },
+      observeSecureStorageFailure,
+    });
+    await unavailable.profileStatus();
+
+    const namespaceValue = await fixture();
+    await mkdir(namespaceValue.root, { mode: 0o755 });
+    const unsafeNamespace = createTelegramCredentialVault({
+      ...namespaceValue,
+      encryption: encryption(),
+      observeSecureStorageFailure,
+    });
+    await unsafeNamespace.profileStatus();
+
+    const profileValue = await fixture();
+    await seedProfile(profileValue);
+    const failedProfileWrite = createTelegramCredentialVault({
+      ...profileValue,
+      encryption: encryption(),
+      renameFile: vi.fn(async () => {
+        throw new TypeError("private synthetic rename failure");
+      }) as never,
+      observeSecureStorageFailure,
+    });
+    await failedProfileWrite.replaceProfile({
+      token: "synthetic-token-b",
+      bot: BOT_B,
+      authenticatedAthleteHome: profileValue.athleteHome,
+    });
+
+    const desiredValue = await fixture();
+    const desiredSeed = createTelegramCredentialVault({
+      ...desiredValue,
+      encryption: encryption(),
+    });
+    await desiredSeed.setDesiredState(false);
+    const failedDesiredWrite = createTelegramCredentialVault({
+      ...desiredValue,
+      encryption: encryption(),
+      renameFile: vi.fn(async () => {
+        throw new TypeError("private synthetic desired-state failure");
+      }) as never,
+      observeSecureStorageFailure,
+    });
+    await failedDesiredWrite.setDesiredState(true);
+
+    expect(events).toEqual([
+      { stage: "encryption-availability", reason: "encryption-unavailable" },
+      { stage: "namespace", reason: "storage-failed" },
+      { stage: "profile-atomic-write", reason: "storage-failed" },
+      { stage: "desired-state-write", reason: "storage-failed" },
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(
+      /synthetic-token|private synthetic|telegram-channel-v1/u,
+    );
+  });
+
   it("anchors the profile namespace in its parent before publishing ciphertext", async () => {
     const value = await fixture();
     const syncParentDirectory = vi.fn(async (path: string) => {
@@ -352,7 +449,10 @@ describe("Telegram credential vault", () => {
         { mode: TELEGRAM_CREDENTIAL_FILE_MODE },
       );
       const vault = createTelegramCredentialVault({ ...value, encryption: encryption() });
-      await expect(vault.profileStatus()).resolves.toEqual({ state: "re-prompt" });
+      await expect(vault.profileStatus()).resolves.toEqual({
+        state: "re-prompt",
+        reason: "storage-failed",
+      });
       await expect(vault.applyStoredProfile(value.athleteHome, apply)).resolves.toEqual({
         outcome: "refused",
         reason: "re-prompt",
@@ -923,7 +1023,10 @@ describe("Telegram credential vault", () => {
     await writeFile(outside, "ciphertext", { mode: TELEGRAM_CREDENTIAL_FILE_MODE });
     await symlink(outside, join(value.root, TELEGRAM_PROFILE_FILE_NAME));
     const symlinkedFile = createTelegramCredentialVault({ ...value, encryption: encryption() });
-    await expect(symlinkedFile.profileStatus()).resolves.toEqual({ state: "re-prompt" });
+    await expect(symlinkedFile.profileStatus()).resolves.toEqual({
+      state: "re-prompt",
+      reason: "storage-failed",
+    });
     await expect(
       symlinkedFile.replaceProfile({
         token: "synthetic-token-a",
@@ -934,7 +1037,10 @@ describe("Telegram credential vault", () => {
 
     await rm(join(value.root, TELEGRAM_PROFILE_FILE_NAME));
     await chmod(value.root, 0o755);
-    await expect(symlinkedFile.profileStatus()).resolves.toEqual({ state: "re-prompt" });
+    await expect(symlinkedFile.profileStatus()).resolves.toEqual({
+      state: "re-prompt",
+      reason: "storage-failed",
+    });
   });
 
   it("deletes through a durable tombstone and cleans deferred ciphertext later", async () => {

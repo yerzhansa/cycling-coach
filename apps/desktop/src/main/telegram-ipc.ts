@@ -41,6 +41,8 @@ const COORDINATOR_REFUSAL_REASONS = new Set([
   "invalid-token",
   "validation-unavailable",
   "webhook-removal-required",
+  "encryption-unavailable",
+  "unsafe-backend",
   "storage-failed",
   "stale-operation",
   "transfer-required",
@@ -60,6 +62,8 @@ export type DesktopTelegramMutationRefusalReason =
   | "invalid-token"
   | "validation-unavailable"
   | "webhook-removal-required"
+  | "encryption-unavailable"
+  | "unsafe-backend"
   | "storage-failed"
   | "stale-operation"
   | "transfer-required"
@@ -371,7 +375,7 @@ export function installDesktopTelegramIpc(input: {
               current: closedSnapshot(),
             } as const;
           }
-          return profile.state === "configured"
+          return profile.state === "configured" || profile.state === "re-prompt"
             ? input.coordinator.replace(captured.token)
             : input.coordinator.configure(captured.token);
         });
