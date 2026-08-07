@@ -3,8 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionStatus } from "../src/state/connection-slice.js";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
-import { restoreManualSyncFocus, setManualSyncFocusTarget } from "../src/state/manual-sync-focus.js";
+import {
+  restoreManualSyncFocus,
+  setManualSyncFocusTarget,
+} from "../src/state/manual-sync-focus.js";
 import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
@@ -48,6 +52,8 @@ beforeEach(() => {
     onboarding: CLOSED_ONBOARDING,
     onboardingActions: null,
     connection: "connecting",
+    settings: EMPTY_SETTINGS_SURFACE,
+    settingsPorts: null,
   });
 });
 
@@ -62,6 +68,141 @@ afterEach(() => {
     onboarding: CLOSED_ONBOARDING,
     onboardingActions: null,
     connection: "connecting",
+    settings: EMPTY_SETTINGS_SURFACE,
+    settingsPorts: null,
+  });
+});
+
+describe("sidebar update action", () => {
+  it("appears only when an update is ready and names its version", () => {
+    render(<Sidebar />);
+
+    const hiddenStates = [
+      { status: "disabled" },
+      { status: "idle" },
+      { status: "checking" },
+      { status: "current" },
+      { status: "downloading", version: "1998.7.7" },
+      { status: "failed", stage: "check" },
+      { status: "failed", stage: "download" },
+    ] as const;
+    for (const state of hiddenStates) {
+      update({
+        settings: {
+          ...EMPTY_SETTINGS_SURFACE,
+          update: { state, actionDisabled: false },
+        },
+      });
+      expect(screen.queryByText("Update available")).not.toBeInTheDocument();
+    }
+
+    update({
+      settings: {
+        ...EMPTY_SETTINGS_SURFACE,
+        update: {
+          state: { status: "downloaded", version: "1998.7.7" },
+          actionDisabled: false,
+        },
+      },
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Install update version 1998.7.7" }),
+    ).toHaveTextContent("Update available");
+  });
+
+  it("activates the existing updater port once", async () => {
+    const user = userEvent.setup();
+    const activate = vi.fn();
+    useEnduragentStore.setState({
+      settings: {
+        ...EMPTY_SETTINGS_SURFACE,
+        update: {
+          state: { status: "downloaded", version: "1998.7.7" },
+          actionDisabled: false,
+        },
+      },
+      settingsPorts: { update: { activate } } as never,
+    });
+    render(<Sidebar />);
+
+    await user.click(screen.getByRole("button", { name: "Install update version 1998.7.7" }));
+
+    expect(activate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the restarting state visible, busy and inert", () => {
+    useEnduragentStore.setState({
+      settings: {
+        ...EMPTY_SETTINGS_SURFACE,
+        update: {
+          state: { status: "downloaded", version: "1998.7.7" },
+          actionDisabled: true,
+        },
+      },
+      settingsPorts: { update: { activate: vi.fn() } } as never,
+    });
+    render(<Sidebar />);
+
+    const restarting = screen.getByRole("button", {
+      name: "Restarting to install update version 1998.7.7",
+    });
+    expect(restarting).toHaveTextContent("Restarting…");
+    expect(restarting).toBeDisabled();
+    expect(restarting).toHaveAttribute("aria-busy", "true");
+
+    update({
+      settings: {
+        ...EMPTY_SETTINGS_SURFACE,
+        update: {
+          state: { status: "installing", version: "1998.7.8" },
+          actionDisabled: false,
+        },
+      },
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "Restarting to install update version 1998.7.8",
+      }),
+    ).toBeDisabled();
+  });
+
+  it("announces availability politely and respects sidebar locks", () => {
+    useEnduragentStore.setState({ settingsPorts: { update: { activate: vi.fn() } } as never });
+    render(<Sidebar />);
+
+    const announcement = document.querySelector(".update-announcement");
+    expect(announcement).toHaveAttribute("role", "status");
+    expect(announcement).toHaveAttribute("aria-live", "polite");
+    expect(announcement).toHaveAttribute("aria-atomic", "true");
+    expect(announcement).toBeEmptyDOMElement();
+
+    update({
+      settings: {
+        ...EMPTY_SETTINGS_SURFACE,
+        update: {
+          state: { status: "downloaded", version: "1998.7.7" },
+          actionDisabled: false,
+        },
+      },
+      onboarding: { ...CLOSED_ONBOARDING, open: true },
+    });
+    expect(announcement).toHaveTextContent("Update version 1998.7.7 is available");
+    expect(screen.getByRole("button", { name: "Install update version 1998.7.7" })).toBeDisabled();
+
+    update({
+      onboarding: CLOSED_ONBOARDING,
+      activeView: "settings",
+      settings: {
+        ...EMPTY_SETTINGS_SURFACE,
+        savingOwners: ["synthetic-lock"],
+        update: {
+          state: { status: "downloaded", version: "1998.7.7" },
+          actionDisabled: false,
+        },
+      },
+    });
+    expect(screen.getByRole("button", { name: "Install update version 1998.7.7" })).toBeDisabled();
   });
 });
 
@@ -205,10 +346,7 @@ describe("sidebar setup navigation", () => {
     });
     render(<Sidebar />);
 
-    expect(screen.getByRole("button", { name: "Setup" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    expect(screen.getByRole("button", { name: "Setup" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Chat" })).not.toHaveAttribute("aria-current");
 
     await user.click(screen.getByRole("button", { name: "Training" }));

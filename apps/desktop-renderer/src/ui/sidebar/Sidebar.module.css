@@ -110,6 +110,31 @@
   border-top: 1px solid var(--line);
 }
 
+.updateButton {
+  composes: row from "../../theme/surface.module.css";
+  justify-content: center;
+  min-height: var(--ctl-h);
+  color: var(--ink);
+  background-color: var(--surface);
+  box-shadow: var(--edge), var(--elev-1);
+  font-size: 12.5px;
+  font-weight: 560;
+}
+
+.updateButton:disabled {
+  cursor: default;
+  opacity: 0.64;
+}
+
+.srOnly {
+  position: absolute;
+  overflow: hidden;
+  clip-path: inset(50%);
+  width: 1px;
+  height: 1px;
+  white-space: nowrap;
+}
+
 .sync {
   composes: row from "../../theme/surface.module.css";
   min-height: var(--ctl-h);
