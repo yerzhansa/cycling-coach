@@ -1,6 +1,7 @@
 import type {
   CyclingTrainingContext,
   CyclingZoneRow,
+  PowerProgressPanel,
   WellnessSeries,
 } from "@enduragent/coach-contract";
 import type { CyclingFtpAnchorResult } from "@enduragent/kernel/anchors";
@@ -18,6 +19,7 @@ export interface ProjectCyclingTrainingContextInput {
   readonly recentActivities: readonly unknown[];
   readonly plannedWorkouts: readonly unknown[];
   readonly wellness: unknown;
+  readonly performanceProgress?: PowerProgressPanel;
 }
 
 const cyclingTypes = new Set<string>(cyclingSport.intervalsActivityTypes);
@@ -187,6 +189,10 @@ export function projectCyclingTrainingContext(
   input: ProjectCyclingTrainingContextInput,
 ): CyclingTrainingContext {
   return {
+    performanceProgress: input.performanceProgress ?? {
+      kind: "unavailable",
+      reason: "not-synced",
+    },
     anchorZones: projectAnchorZones(input),
     cyclingLoad: projectCyclingLoad(input),
     plan: projectPlan(input),

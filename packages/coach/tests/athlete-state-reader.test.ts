@@ -420,9 +420,14 @@ describe("persisted athlete state source", () => {
       stalenessBand: "aging" as const,
       stale: true,
     }));
+    const readPowerProgress = vi.fn(async () => ({
+      kind: "unavailable" as const,
+      reason: "insufficient-data" as const,
+    }));
     const state = await createPersistedAthleteStateSource({
       dataDir: root,
       cyclingFtpAnchorResolver: { resolve },
+      powerProgressSource: { readPowerProgress },
     }).getAthleteState();
     const expectedEpoch = Date.parse(snapshot.metadata.last_updated) / 1_000;
     expect(resolve).toHaveBeenCalledOnce();
@@ -430,12 +435,42 @@ describe("persisted athlete state source", () => {
       effectiveAtEpochS: expectedEpoch,
       evaluatedAtEpochS: expectedEpoch,
     });
+    expect(readPowerProgress).toHaveBeenCalledOnce();
     expect(state.trainingContext).toMatchObject({
+      performanceProgress: { kind: "unavailable", reason: "insufficient-data" },
       anchorZones: { kind: "computed" },
       cyclingLoad: { kind: "computed", value: 80 },
       plan: { kind: "computed" },
       adherence: { kind: "computed", ratio: 1 },
       wellnessTrend: { kind: "computed" },
+    });
+  });
+
+  it("isolates a Power Progress read failure from the rest of athlete state", async () => {
+    const root = await home();
+    await writeJson(root, "latest.json", latest());
+    const state = await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      powerProgressSource: {
+        readPowerProgress: async () => Promise.reject(new Error("private archive path")),
+      },
+    }).getAthleteState();
+    expect(state.trainingContext?.performanceProgress).toEqual({
+      kind: "unavailable",
+      reason: "temporary-failure",
+    });
+    expect(JSON.stringify(state)).not.toContain("private archive path");
+    const malformed = await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      powerProgressSource: {
+        readPowerProgress: async () => ({ kind: "computed" }) as never,
+      },
+    }).getAthleteState();
+    expect(malformed.trainingContext?.performanceProgress).toEqual({
+      kind: "unavailable",
+      reason: "invalid-data",
     });
   });
 

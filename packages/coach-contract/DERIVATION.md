@@ -52,8 +52,10 @@ error object.
 
 ## Table B — AthleteState fields
 
-Derivation rule: `AthleteState` is derived from the persisted latest-data
-model, never from the `/status` chat turn —
+Derivation rule: `AthleteState` is derived from validated persisted application
+state, never from the `/status` chat turn. Most fields come from the latest-data
+model; `trainingContext.performanceProgress` additionally reads the verified
+store-native analytics-curve generation —
 `packages/core/src/channels/telegram.ts:385-398` shows `/status` is a model
 turn, not a deterministic render.
 
@@ -71,7 +73,7 @@ turn, not a deterministic render.
 | `recentActivities`   | `packages/core/src/reference/schemas/latest.ts:76` (`recent_activities`)                                                                                                                                                                                                                                                                                                                                    |
 | `plannedWorkouts`    | `packages/core/src/reference/schemas/latest.ts:77` (`planned_workouts`)                                                                                                                                                                                                                                                                                                                                     |
 | `wellness`           | `packages/core/src/reference/schemas/latest.ts:78` (`wellness_data` — explicitly NOT an array; typed `z.unknown()`)                                                                                                                                                                                                                                                                                         |
-| `trainingContext`    | Deterministic projection in `packages/coach/src/training-context.ts`, assembled by `packages/coach/src/athlete-state-reader.ts` from the same parsed latest snapshot, the persisted-anchor resolver in `packages/kernel/src/anchors/resolve-anchor.ts`, the zone calculator in `packages/sport-cycling/src/zones.ts`, and the Reference input schemas in `packages/kernel/src/reference/schemas/inputs.ts`. |
+| `trainingContext`    | Deterministic projection in `packages/coach/src/training-context.ts`, assembled by `packages/coach/src/athlete-state-reader.ts` from the parsed latest snapshot, the persisted-anchor resolver, and the sanitized Power Progress source.                                                                                                                                                |
 
 Renames (source snake_case → contract camelCase): `metadata.schema_version` →
 `schemaVersion`, `metadata.last_updated` → `lastUpdated`,
@@ -90,6 +92,7 @@ not infer it from raw state fields.
 
 | Envelope or field group    | Persisted source and recipe                                                                                                                                                                                                                                                         |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `performanceProgress`      | `packages/coach/src/power-progress.ts` reads the current analytics-curve generation and its separate refresh-failure marker, verifies all four archived payloads, runs the unchanged power/HR/sustainability metrics, and emits only bounded display DTOs. Raw curves, provider IDs, generation IDs, archive paths, and metric maps never cross this contract. |
 | `anchorZones.kind`, `asOf` | Resolver result evaluated at whole epoch seconds parsed from `metadata.last_updated`; invalid time or resolver failure yields `unknown/not-synced`, and a missing resolver result yields `unknown/missing-anchor`.                                                                  |
 | `anchorZones.anchor`       | `watts`, `validFrom`, `source`, `confidence`, `ageDays`, `stalenessBand`, and `stale` are copied from `CyclingFtpAnchorResult` without reinterpretation.                                                                                                                            |
 | `anchorZones.zones`        | Six ordered rows from one `calculateCyclingZones(anchor.watts)` call; `label` becomes `name`, formatted `value` becomes `range`, and an absent overlap marker becomes `false`.                                                                                                      |

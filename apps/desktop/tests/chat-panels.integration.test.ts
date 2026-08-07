@@ -25,6 +25,7 @@ const fixtures: RunningDesktopFixture[] = [];
 const scratchPaths: string[] = [];
 
 const trainingContext = {
+  performanceProgress: { kind: "unavailable", reason: "not-synced" },
   anchorZones: {
     kind: "computed",
     asOf: "2026-07-19T08:00:00.000Z",
