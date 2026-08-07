@@ -64,6 +64,27 @@ const state: AthleteState = {
 };
 
 const operations: CoachOperations = {
+  getActivityAnalysis: async ({ canonicalActivityId }) => ({
+    schemaVersion: 1,
+    activity: {
+      id: canonicalActivityId,
+      workoutId: "b".repeat(64),
+      sessionSequence: 0,
+      isMultisport: false,
+      sport: "cycling",
+      subSport: null,
+      isTransition: false,
+      startEpochSeconds: 899_985_600,
+      timezoneOffsetSeconds: 0,
+      localDate: "1998-07-06",
+      elapsedSeconds: 3_600,
+      timerSeconds: 3_500,
+      movingSeconds: 3_400,
+      distanceMeters: 40_000,
+    },
+    revision: "c".repeat(64),
+    sections: { aerobicDrift: { kind: "unavailable", reason: "unsupported" } },
+  }),
   importFiles: async ({ paths }) => ({
     schemaVersion: 2,
     files: { total: paths.length, imported: paths.length, quarantined: 0 },
@@ -462,7 +483,7 @@ async function openSocket(
 }
 
 describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
-  it("accepts the first-frame token and projects all four registry methods", async () => {
+  it("accepts the first-frame token and projects engine plus activity-analysis methods", async () => {
     const token = "x".repeat(43);
     const calls: string[] = [];
     const rpc = createCoachRpcServer({
@@ -488,6 +509,13 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
           return state;
         },
       }),
+      operations: {
+        ...operations,
+        getActivityAnalysis: async (request) => {
+          calls.push("getActivityAnalysis");
+          return operations.getActivityAnalysis!(request);
+        },
+      },
     });
     const client = await openSocket(rpc);
     client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
@@ -526,13 +554,24 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       { id: 2, method: "resetSession", params: { chatId: "chat" } },
       { id: 3, method: "hasSession", params: { chatId: "chat" } },
       { id: 4, method: "getAthleteState", params: {} },
+      {
+        id: 5,
+        method: "getActivityAnalysis",
+        params: { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
+      },
     ];
     for (const value of requests) {
       client.ws.send(JSON.stringify({ jsonrpc: "2.0", ...value }));
       const response = parseCoachRpcEnvelope(await client.frames.next());
       expect(response).toMatchObject({ jsonrpc: "2.0", id: value.id });
     }
-    expect(calls).toEqual(["chat:chat", "resetSession:chat", "hasSession:chat", "getAthleteState"]);
+    expect(calls).toEqual([
+      "chat:chat",
+      "resetSession:chat",
+      "hasSession:chat",
+      "getAthleteState",
+      "getActivityAnalysis",
+    ]);
     await client.close();
   });
 
@@ -722,6 +761,44 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         id: "runtime-detach",
         method: "configureRuntime",
         params: { llm: { provider: "openai-codex", model: "gpt-5.5" } },
+      }),
+    );
+    await started.promise;
+
+    const closed = new Promise<void>((resolve) => client.ws.once("close", () => resolve()));
+    client.ws.close();
+    await closed;
+    await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+
+    await client.close();
+  });
+
+  it("aborts activity analysis when its requesting connection detaches", async () => {
+    const token = "x".repeat(43);
+    const started = deferred<void>();
+    let operationSignal: AbortSignal | undefined;
+    const getActivityAnalysis = vi.fn(async (_request, signal?: AbortSignal): Promise<never> => {
+      operationSignal = signal;
+      started.resolve(undefined);
+      return await new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    });
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, getActivityAnalysis },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "activity-analysis-detach",
+        method: "getActivityAnalysis",
+        params: { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
       }),
     );
     await started.promise;
@@ -1274,8 +1351,10 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     const chat = vi.fn(async () => ({ text: "ok" }));
     const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
     const hasSession = vi.fn(async () => ({ hasSession: true }));
+    const getActivityAnalysis = vi.fn(operations.getActivityAnalysis!);
     const rpc = createCoachRpcServer({
       engine: engine({ chat, resetSession, hasSession }),
+      operations: { ...operations, getActivityAnalysis },
       token,
       owner: "app-supervised",
     });
@@ -1335,6 +1414,21 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     expect(chat).toHaveBeenCalledOnce();
     expect(resetSession).toHaveBeenCalledOnce();
     expect(hasSession).toHaveBeenCalledOnce();
+
+    id += 1;
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "getActivityAnalysis",
+        params: { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id,
+      result: { schemaVersion: 1, sections: { aerobicDrift: { kind: "unavailable" } } },
+    });
+    expect(getActivityAnalysis).toHaveBeenCalledOnce();
     await client.close();
   });
 

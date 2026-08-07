@@ -111,7 +111,7 @@ describe("exit codes", () => {
 
 describe("protocol version", () => {
   it("is 13", () => {
-    expect(PROTOCOL_VERSION).toBe(13);
+    expect(PROTOCOL_VERSION).toBe(14);
   });
 });
 

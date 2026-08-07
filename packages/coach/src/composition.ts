@@ -56,7 +56,12 @@ import {
   createCyclingFtpAnchorResolver,
   type CyclingFtpAnchorResolver,
 } from "@enduragent/kernel/anchors";
-import { createAnchorRepository, type AnchorRepository } from "@enduragent/kernel/store";
+import {
+  createAnchorRepository,
+  createCanonicalActivityReader,
+  createTrustedActivitySourceResolver,
+  type AnchorRepository,
+} from "@enduragent/kernel/store";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type { CoachStoreWriterContext } from "./runtime.js";
@@ -91,6 +96,7 @@ import {
 import { createCoachOperations } from "./operations.js";
 import type { CoachOperationsDependencies } from "./operations.js";
 import { createSpendMeterService, type SpendMeterService } from "./spend-meter.js";
+import { createStoredActivityAnalysisService } from "./activity-analysis-service.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -992,23 +998,34 @@ export async function createLocalCoachComposition(
       },
     });
     const options = Object.freeze({ liveIntervals });
-    const operations = createCoachOperations(
-      {
-        home: input.home,
-        context: input.context,
-        runtime,
-        intervalsCredentials: options.liveIntervals,
-        historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
-        readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
-        readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
-        readArchivedTranscriptPage: (request) =>
-          reconfigurable.getArchivedTranscriptPage(request),
-        applyRuntimeConfig,
-        readRuntimeConfig: () =>
-          runtimeConfigSnapshot(input.home.configDir, activeConfig, input.env, activeTimezone),
-      },
-      dependencies.operationsDependencies,
-    );
+    const activityAnalysis = createStoredActivityAnalysisService({
+      store: input.context.store,
+      activities: createCanonicalActivityReader(input.context.store),
+      sources: createTrustedActivitySourceResolver(input.context.store),
+      runCacheWrite: (work) => runtime!.runExclusive(work),
+      now,
+    });
+    const operations = {
+      ...createCoachOperations(
+        {
+          home: input.home,
+          context: input.context,
+          runtime,
+          intervalsCredentials: options.liveIntervals,
+          historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
+          readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
+          readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
+          readArchivedTranscriptPage: (request) =>
+            reconfigurable.getArchivedTranscriptPage(request),
+          applyRuntimeConfig,
+          readRuntimeConfig: () =>
+            runtimeConfigSnapshot(input.home.configDir, activeConfig, input.env, activeTimezone),
+        },
+        dependencies.operationsDependencies,
+      ),
+      getActivityAnalysis: (request, signal) =>
+        activityAnalysis.getActivityAnalysis(request, signal),
+    } satisfies CoachOperations;
     return {
       engine: reconfigurable.engine,
       operations,

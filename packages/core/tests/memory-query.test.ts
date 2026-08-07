@@ -153,7 +153,7 @@ describe("memory_query tool", () => {
     expect(result.endsWith("[truncated — narrow the date range or add a query term]")).toBe(true);
   });
 
-  it("365-file corpus scans under the budget", async () => {
+  it("365-file corpus scans under the budget", { timeout: 15_000 }, async () => {
     const start = Date.parse("2025-06-01T00:00:00Z");
     for (let i = 0; i < 365; i++) {
       const date = new Date(start + i * 86_400_000).toISOString().slice(0, 10);

@@ -236,8 +236,8 @@ describe("sync failure repository", () => {
     await runMigrations(store, MIGRATIONS.slice(0, 6));
     await runMigrations(store, MIGRATIONS);
     expect(await dumpStore(store)).not.toContain("# sync_failure");
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 10 });
-    expect(DUMP_TABLES).toHaveLength(36);
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 11 });
+    expect(DUMP_TABLES).toHaveLength(37);
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(DUMP_TABLES.map(({ table }) => table)).not.toContain("sync_failure");
     expect(DERIVED_TABLES).not.toContain("sync_failure");

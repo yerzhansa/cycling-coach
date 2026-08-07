@@ -71,6 +71,7 @@ describe("INV-2 canonical dump (armed with real ingest at W2)", () => {
   it("includes every incremental cache while excluding checkpoint operations", () => {
     const dumped = DUMP_TABLES.map(({ table }) => table);
     expect(dumped).toEqual(expect.arrayContaining([
+      "activity_analysis_projection",
       "analytics_curve_current", "analytics_curve_evidence", "analytics_curve_generation",
       "analytics_curve_generation_promotion",
       "ingest_candidate_index", "ingest_cluster_state", "ingest_dedup_pair_state",
@@ -83,5 +84,6 @@ describe("INV-2 canonical dump (armed with real ingest at W2)", () => {
       "ingest_candidate_index", "ingest_cluster_state", "ingest_dedup_pair_state", "ingest_dedup_session_state",
     ]));
     expect(DERIVED_TABLES).not.toContain("ingest_incremental_state");
+    expect(DERIVED_TABLES).not.toContain("activity_analysis_projection");
   });
 });
