@@ -237,7 +237,7 @@ describe("sync failure repository", () => {
     const before = await dumpStore(store);
     await runMigrations(store, MIGRATIONS);
     expect(await dumpStore(store)).toBe(before);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 8 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 9 });
     expect(DUMP_TABLES).toHaveLength(32);
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(DUMP_TABLES.map(({ table }) => table)).not.toContain("sync_failure");

@@ -162,6 +162,7 @@ describe("001_init migration", () => {
       { version: 6, name: "006_incremental_ingest" },
       { version: 7, name: "007_sync_failure" },
       { version: 8, name: "008_store_owner" },
+      { version: 9, name: "009_activity_source_resolver" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -817,6 +818,20 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(() => db!.prepare("INSERT INTO store_owner VALUES(2,?)").run("b".repeat(64))).toThrow();
     expect(() => db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64))).toThrow();
     expect(() => db!.prepare("DELETE FROM store_owner").run()).toThrow();
+  });
+
+  it("adds the canonical-session provider lookup index", () => {
+    db = openFull();
+    expect(createHash("sha256").update(MIGRATIONS[8]!.sql).digest("hex")).toBe(
+      "4fe2e7648bbb09ad62c60a86e26ac4a9e09f4c0e24882428e12ad8722f3d420c",
+    );
+    expect(
+      db.prepare("PRAGMA index_info(idx_source_record_session_source)").all(),
+    ).toEqual([
+      expect.objectContaining({ seqno: 0, name: "session_key" }),
+      expect.objectContaining({ seqno: 1, name: "source" }),
+      expect.objectContaining({ seqno: 2, name: "id" }),
+    ]);
   });
 
   it("omits the unreleased prior bone-stress column from the baseline schema", () => {
