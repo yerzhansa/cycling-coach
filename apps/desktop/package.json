@@ -23,6 +23,7 @@
     "accept:residency": "node ./scripts/accept-residency.mjs",
     "test:safe-storage-packaged": "node scripts/test-safe-storage-packaged.mjs",
     "test:telegram-packaged": "tsx scripts/test-packaged-telegram.ts",
+    "test:macos-update-roundtrip": "tsx scripts/verify-updater-round-trip.mjs",
     "test": "vitest run"
   },
   "dependencies": {
