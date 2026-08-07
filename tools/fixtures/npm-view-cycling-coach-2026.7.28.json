@@ -1,0 +1,19 @@
+{
+  "name": "cycling-coach",
+  "version": "2026.7.28",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yerzhansa/cycling-coach.git",
+    "directory": "packages/cycling-coach"
+  },
+  "_integrity": "sha512-rnD3sGbdWlza5bV+MCK0v5P4VSc6slhaYZhkYCWjWCGIFUz9DgXbuMqpe1VnPp3u8GNZ8j8HTdbE/DAmjfR16w==",
+  "dist": {
+    "integrity": "sha512-rnD3sGbdWlza5bV+MCK0v5P4VSc6slhaYZhkYCWjWCGIFUz9DgXbuMqpe1VnPp3u8GNZ8j8HTdbE/DAmjfR16w==",
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@2026.7.28",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    }
+  }
+}

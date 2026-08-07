@@ -1,0 +1,450 @@
+import { createHash } from "node:crypto";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parse, stringify } from "yaml";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  DESKTOP_FEED_URL,
+  DESKTOP_MANIFEST,
+  DESKTOP_RELEASE_SCHEMA_VERSION,
+  assertLatestCas,
+  assertPublishableAssets,
+  assertReleaseMode,
+  assertRemoteAsset,
+  inspectNpmAttestationClaims,
+  materializeDesktopPublicEnvelope,
+  releaseFileNames,
+  sealDesktopRelease,
+  verifyNpmProvenanceBundle,
+  verifyDesktopRelease,
+} from "./desktop-release-transaction.js";
+
+const version = "2026.8.7";
+const binding = {
+  tag: `cycling-coach@${version}`,
+  version,
+  commit: "a".repeat(40),
+  draftId: "123",
+  mode: "steady" as const,
+  workflowRunId: "456",
+  workflowRunAttempt: "1",
+  draftBodySha256: "b".repeat(64),
+  npmIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
+  npmAttestationUrl: `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${version}`,
+  signingIdentity: "Developer ID Application: Example (FA494ACVTF)",
+  candidateCdHash: "c".repeat(40),
+  candidateCodeDirectorySha256: "d".repeat(64),
+  baselineTag: "cycling-coach@2026.8.6",
+  baselineReleaseId: "122",
+  baselineCommit: "e".repeat(40),
+  baselineZipSha256: "f".repeat(64),
+  baselineSigningIdentity: "Developer ID Application: Example (FA494ACVTF)",
+  baselineCdHash: "1".repeat(40),
+};
+
+let directory: string;
+
+function sha512(bytes: Uint8Array): string {
+  return createHash("sha512").update(bytes).digest("base64");
+}
+
+function writeEnvelope(extra?: string): void {
+  const [dmgName, zipName, blockmapName] = releaseFileNames(version);
+  const dmg = Buffer.from("signed-dmg");
+  const zip = Buffer.from("signed-zip");
+  writeFileSync(join(directory, dmgName), dmg);
+  writeFileSync(join(directory, zipName), zip);
+  writeFileSync(join(directory, blockmapName), "blockmap");
+  writeFileSync(
+    join(directory, "latest-mac.yml"),
+    stringify({
+      version,
+      files: [
+        { url: zipName, sha512: sha512(zip), size: zip.length },
+        { url: dmgName, sha512: sha512(dmg), size: dmg.length },
+      ],
+      path: zipName,
+      sha512: sha512(zip),
+      releaseDate: "1998-08-07T00:00:00.000Z",
+    }),
+  );
+  if (extra) writeFileSync(join(directory, extra), "stale");
+}
+
+beforeEach(() => {
+  directory = mkdtempSync(join(tmpdir(), "desktop-release-transaction-"));
+  mkdirSync(directory, { recursive: true });
+});
+
+describe("advertised npm attestation claims", () => {
+  const integrityBytes = Buffer.alloc(64, 7);
+  const integrity = `sha512-${integrityBytes.toString("base64")}`;
+  const expectation = {
+    name: "cycling-coach",
+    version,
+    integrity,
+    repository: "https://github.com/yerzhansa/enduragent",
+    workflow: ".github/workflows/release.yml",
+    ref: `refs/tags/cycling-coach@${version}`,
+    releaseTag: `cycling-coach@${version}`,
+    commit: "a".repeat(40),
+    invocationId: "https://github.com/yerzhansa/enduragent/actions/runs/456/attempts/1",
+    eventName: "push",
+    repositoryId: "1209631813",
+    repositoryOwnerId: "23091036",
+  };
+
+  function attestation(predicateType: string, predicate: unknown) {
+    const statement = {
+      _type:
+        predicateType === "https://slsa.dev/provenance/v1"
+          ? "https://in-toto.io/Statement/v1"
+          : "https://in-toto.io/Statement/v0.1",
+      subject: [
+        {
+          name: `pkg:npm/cycling-coach@${version}`,
+          digest: { sha512: integrityBytes.toString("hex") },
+        },
+      ],
+      predicateType,
+      predicate,
+    };
+    return {
+      predicateType,
+      bundle: {
+        dsseEnvelope: { payload: Buffer.from(JSON.stringify(statement)).toString("base64") },
+      },
+    };
+  }
+
+  function document(commit = expectation.commit) {
+    return {
+      attestations: [
+        attestation("https://slsa.dev/provenance/v1", {
+          buildDefinition: {
+            buildType: "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+            internalParameters: {
+              github: {
+                event_name: expectation.eventName,
+                repository_id: expectation.repositoryId,
+                repository_owner_id: expectation.repositoryOwnerId,
+              },
+            },
+            externalParameters: {
+              workflow: {
+                ref: expectation.ref,
+                repository: expectation.repository,
+                path: expectation.workflow,
+              },
+            },
+            resolvedDependencies: [
+              {
+                uri: `git+${expectation.repository}@${expectation.ref}`,
+                digest: { gitCommit: commit },
+              },
+            ],
+          },
+          runDetails: {
+            builder: { id: "https://github.com/actions/runner/github-hosted" },
+            metadata: { invocationId: expectation.invocationId },
+          },
+        }),
+        attestation("https://github.com/npm/attestation/tree/main/specs/publish/v0.1", {
+          name: expectation.name,
+          version: expectation.version,
+          registry: "https://registry.npmjs.org",
+        }),
+      ],
+    };
+  }
+
+  it("accepts statements bound to the exact tarball, workflow, ref, and commit", () => {
+    expect(() => inspectNpmAttestationClaims(document(), expectation)).not.toThrow();
+  });
+
+  it("accepts workflow_dispatch provenance on the exact release tag ref", () => {
+    const dispatched = { ...expectation, eventName: "workflow_dispatch" };
+    const metadata = document();
+    const provenance = metadata.attestations.find(
+      (entry) => entry.predicateType === "https://slsa.dev/provenance/v1",
+    )!;
+    const statement = JSON.parse(
+      Buffer.from(provenance.bundle.dsseEnvelope.payload, "base64").toString("utf8"),
+    ) as {
+      predicate: { buildDefinition: { internalParameters: { github: { event_name: string } } } };
+    };
+    statement.predicate.buildDefinition.internalParameters.github.event_name = "workflow_dispatch";
+    provenance.bundle.dsseEnvelope.payload = Buffer.from(JSON.stringify(statement)).toString(
+      "base64",
+    );
+    expect(() => inspectNpmAttestationClaims(metadata, dispatched)).not.toThrow();
+  });
+
+  it("cryptographically verifies the exact SLSA bundle with the pinned workflow identity", async () => {
+    const metadata = document();
+    const provenanceBundle = metadata.attestations.find(
+      (entry) => entry.predicateType === "https://slsa.dev/provenance/v1",
+    )!.bundle;
+    let calls = 0;
+    await verifyNpmProvenanceBundle(metadata, expectation, async (bundle, identity) => {
+      calls += 1;
+      expect(bundle).toBe(provenanceBundle);
+      expect(identity).toEqual({
+        issuer: "https://token.actions.githubusercontent.com",
+        uri: `https://github.com/yerzhansa/enduragent/.github/workflows/release.yml@${expectation.ref}`,
+      });
+    });
+    expect(calls).toBe(1);
+    await expect(
+      verifyNpmProvenanceBundle(metadata, expectation, async () => {
+        throw new TypeError("certificate identity mismatch");
+      }),
+    ).rejects.toThrow("certificate identity mismatch");
+  });
+
+  it("rejects commit drift and duplicate provenance statements", () => {
+    expect(() => inspectNpmAttestationClaims(document("f".repeat(40)), expectation)).toThrow(
+      "workflow binding",
+    );
+    const duplicate = document();
+    duplicate.attestations.push(duplicate.attestations[0]);
+    expect(() => inspectNpmAttestationClaims(duplicate, expectation)).toThrow("duplicate");
+    const extra = document();
+    extra.attestations.push(attestation("https://example.invalid/extra", {}));
+    expect(() => inspectNpmAttestationClaims(extra, expectation)).toThrow("unexpected");
+  });
+
+  it("permits a prior same-repository invocation only for exact resume", () => {
+    const prior = document();
+    const payload = JSON.parse(
+      Buffer.from(prior.attestations[0].bundle.dsseEnvelope.payload, "base64").toString("utf8"),
+    ) as { predicate: { runDetails: { metadata: { invocationId: string } } } };
+    payload.predicate.runDetails.metadata.invocationId =
+      "https://github.com/yerzhansa/enduragent/actions/runs/123/attempts/2";
+    prior.attestations[0].bundle.dsseEnvelope.payload = Buffer.from(
+      JSON.stringify(payload),
+    ).toString("base64");
+    expect(() =>
+      inspectNpmAttestationClaims(prior, { ...expectation, allowPriorInvocation: true }),
+    ).not.toThrow();
+    expect(() => inspectNpmAttestationClaims(prior, expectation)).toThrow("workflow binding");
+  });
+
+  it("permits a prior tag invocation across push and workflow_dispatch reruns", () => {
+    const prior = document();
+    const payload = JSON.parse(
+      Buffer.from(prior.attestations[0].bundle.dsseEnvelope.payload, "base64").toString("utf8"),
+    ) as {
+      predicate: {
+        buildDefinition: { internalParameters: { github: { event_name: string } } };
+        runDetails: { metadata: { invocationId: string } };
+      };
+    };
+    payload.predicate.buildDefinition.internalParameters.github.event_name = "workflow_dispatch";
+    payload.predicate.runDetails.metadata.invocationId =
+      "https://github.com/yerzhansa/enduragent/actions/runs/123/attempts/1";
+    prior.attestations[0].bundle.dsseEnvelope.payload = Buffer.from(
+      JSON.stringify(payload),
+    ).toString("base64");
+    expect(() =>
+      inspectNpmAttestationClaims(prior, { ...expectation, allowPriorInvocation: true }),
+    ).not.toThrow();
+    expect(() => inspectNpmAttestationClaims(prior, expectation)).toThrow("workflow binding");
+  });
+
+  it("fails closed at the repository rename migration boundary", () => {
+    const renamed = document();
+    const payload = JSON.parse(
+      Buffer.from(renamed.attestations[0].bundle.dsseEnvelope.payload, "base64").toString("utf8"),
+    ) as {
+      predicate: {
+        buildDefinition: { externalParameters: { workflow: { repository: string } } };
+      };
+    };
+    payload.predicate.buildDefinition.externalParameters.workflow.repository =
+      "https://github.com/yerzhansa/cycling-coach";
+    renamed.attestations[0].bundle.dsseEnvelope.payload = Buffer.from(
+      JSON.stringify(payload),
+    ).toString("base64");
+    expect(() =>
+      inspectNpmAttestationClaims(renamed, { ...expectation, allowPriorInvocation: true }),
+    ).toThrow("repository rename boundary requires a new release version");
+  });
+});
+
+afterEach(() => rmSync(directory, { recursive: true, force: true }));
+
+describe("desktop release envelope", () => {
+  it("seals exactly four updater files with metadata last and digest bindings", async () => {
+    writeEnvelope();
+    const manifest = await sealDesktopRelease(directory, binding);
+    expect(manifest.schemaVersion).toBe(DESKTOP_RELEASE_SCHEMA_VERSION);
+    expect(
+      (
+        JSON.parse(readFileSync(join(directory, DESKTOP_MANIFEST), "utf8")) as {
+          schemaVersion: unknown;
+        }
+      ).schemaVersion,
+    ).toBe(DESKTOP_RELEASE_SCHEMA_VERSION);
+    expect(manifest.feedUrl).toBe(DESKTOP_FEED_URL);
+    expect(manifest.files.map((file) => file.name)).toEqual(releaseFileNames(version));
+    expect(manifest.files.at(-1)?.name).toBe("latest-mac.yml");
+    await expect(verifyDesktopRelease(directory, binding)).resolves.toEqual(manifest);
+  });
+
+  it("materializes a digest-verified exact-four hardlink view for the native verifier", async () => {
+    writeEnvelope();
+    const manifest = await sealDesktopRelease(directory, binding);
+    const parent = mkdtempSync(join(tmpdir(), "desktop-public-envelope-"));
+    const output = join(parent, "public");
+    try {
+      await expect(materializeDesktopPublicEnvelope(directory, output)).resolves.toEqual(manifest);
+      expect(readdirSync(output).sort()).toEqual([...releaseFileNames(version)].sort());
+      expect(readdirSync(output)).not.toContain(DESKTOP_MANIFEST);
+      for (const file of manifest.files) {
+        expect(lstatSync(join(output, file.name)).ino).toBe(
+          lstatSync(join(directory, file.name)).ino,
+        );
+      }
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("requires the canonical two-entry updater metadata contract", async () => {
+    writeEnvelope();
+    const metadataPath = join(directory, "latest-mac.yml");
+    const metadata = parse(readFileSync(metadataPath, "utf8")) as {
+      files: Array<Record<string, unknown>>;
+    };
+    metadata.files.push({ ...metadata.files[0] });
+    writeFileSync(metadataPath, stringify(metadata));
+    await expect(sealDesktopRelease(directory, binding)).rejects.toThrow("latest-mac.yml");
+
+    metadata.files.pop();
+    metadata.files[0].unexpected = true;
+    writeFileSync(metadataPath, stringify(metadata));
+    await expect(sealDesktopRelease(directory, binding)).rejects.toThrow("latest-mac.yml");
+  });
+
+  it("pins the npm attestation endpoint and Developer ID team", async () => {
+    writeEnvelope();
+    await expect(
+      sealDesktopRelease(directory, {
+        ...binding,
+        npmAttestationUrl: "https://example.invalid/attestations/cycling-coach",
+      }),
+    ).rejects.toThrow("npm attestation URL");
+    await expect(
+      sealDesktopRelease(directory, {
+        ...binding,
+        signingIdentity: "Developer ID Application: Example (ABCDE12345)",
+      }),
+    ).rejects.toThrow("signing identity");
+  });
+
+  it("rejects an extra pre-seal file and post-seal byte changes", async () => {
+    writeEnvelope("old-latest.yml");
+    await expect(sealDesktopRelease(directory, binding)).rejects.toThrow("exactly four");
+
+    rmSync(join(directory, "old-latest.yml"));
+    await sealDesktopRelease(directory, binding);
+    writeFileSync(join(directory, releaseFileNames(version)[1]), "conflict");
+    await expect(verifyDesktopRelease(directory, binding)).rejects.toThrow("digest mismatch");
+  });
+
+  it("rejects a manifest whose release binding is changed", async () => {
+    writeEnvelope();
+    await sealDesktopRelease(directory, binding);
+    const path = join(directory, DESKTOP_MANIFEST);
+    const manifest = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    manifest.commit = "b".repeat(40);
+    writeFileSync(path, `${JSON.stringify(manifest)}\n`);
+    await expect(verifyDesktopRelease(directory, binding)).rejects.toThrow("transaction hash");
+  });
+
+  it("rejects unknown top-level manifest keys", async () => {
+    writeEnvelope();
+    await sealDesktopRelease(directory, binding);
+    const path = join(directory, DESKTOP_MANIFEST);
+    const manifest = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    manifest.unexpected = true;
+    writeFileSync(path, `${JSON.stringify(manifest)}\n`);
+    await expect(verifyDesktopRelease(directory, binding)).rejects.toThrow("manifest is invalid");
+  });
+
+  it("rejects unknown nested-file manifest keys", async () => {
+    writeEnvelope();
+    await sealDesktopRelease(directory, binding);
+    const path = join(directory, DESKTOP_MANIFEST);
+    const manifest = JSON.parse(readFileSync(path, "utf8")) as {
+      files: Array<Record<string, unknown>>;
+    };
+    manifest.files[0]!.unexpected = true;
+    writeFileSync(path, `${JSON.stringify(manifest)}\n`);
+    await expect(verifyDesktopRelease(directory, binding)).rejects.toThrow("manifest is invalid");
+  });
+
+  it("rejects unsupported desktop release schema versions", async () => {
+    writeEnvelope();
+    await sealDesktopRelease(directory, binding);
+    const path = join(directory, DESKTOP_MANIFEST);
+    const manifest = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    manifest.schemaVersion = DESKTOP_RELEASE_SCHEMA_VERSION + 1;
+    writeFileSync(path, `${JSON.stringify(manifest)}\n`);
+    await expect(verifyDesktopRelease(directory, binding)).rejects.toThrow("manifest is invalid");
+  });
+});
+
+describe("desktop release publication guards", () => {
+  it("rejects stale assets and conflicting bytes while permitting exact resume", async () => {
+    writeEnvelope();
+    const manifest = await sealDesktopRelease(directory, binding);
+    expect(() => assertPublishableAssets([{ name: "old.zip" }], manifest)).toThrow("stale");
+    expect(() =>
+      assertPublishableAssets([{ name: manifest.files[0].name }], manifest),
+    ).not.toThrow();
+    const local = readFileSync(join(directory, manifest.files[0].name));
+    expect(() => assertRemoteAsset(manifest.files[0], local)).not.toThrow();
+    expect(() => assertRemoteAsset(manifest.files[0], Buffer.from("other"))).toThrow("conflicting");
+  });
+
+  it("refuses genesis after a baseline and steady mode without one", () => {
+    expect(() => assertReleaseMode("genesis", "2026.8.6")).toThrow("genesis");
+    expect(() => assertReleaseMode("steady", null)).toThrow("baseline");
+    expect(() => assertReleaseMode("genesis", null)).not.toThrow();
+    expect(() => assertReleaseMode("steady", "2026.8.6")).not.toThrow();
+  });
+
+  it("requires an unchanged latest observation and monotonic desktop version", () => {
+    const observed = { id: 12, tag: "cycling-coach@2026.8.6", metadataSha256: "e".repeat(64) };
+    expect(() => assertLatestCas(version, observed, observed, "2026.8.6")).not.toThrow();
+    expect(() =>
+      assertLatestCas(
+        version,
+        observed,
+        { id: 13, tag: "running-coach@2026.8.7", metadataSha256: null },
+        "2026.8.6",
+      ),
+    ).toThrow("changed");
+    expect(() =>
+      assertLatestCas(
+        version,
+        observed,
+        { ...observed, metadataSha256: "f".repeat(64) },
+        "2026.8.6",
+      ),
+    ).toThrow("changed");
+    expect(() => assertLatestCas(version, observed, observed, "2026.8.8")).toThrow("monotonic");
+  });
+});

@@ -1,0 +1,220 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+import { inspectDesktopReleaseWorkflows } from "./check-desktop-release-workflow.js";
+
+const releasePath = resolve(".github/workflows/release.yml");
+const desktopPath = resolve(".github/workflows/desktop-release.yml");
+const versionPath = resolve(".github/workflows/version-pr.yml");
+const npmViewFixturePath = resolve("tools/fixtures/npm-view-cycling-coach-2026.7.28.json");
+
+function sources(): { release: string; desktop: string; version: string } {
+  return {
+    release: readFileSync(releasePath, "utf8"),
+    desktop: readFileSync(desktopPath, "utf8"),
+    version: readFileSync(versionPath, "utf8"),
+  };
+}
+
+function inspect(release: string, desktop: string, version = sources().version): string[] {
+  return inspectDesktopReleaseWorkflows(release, desktop, version);
+}
+
+describe("desktop release workflow policy", () => {
+  it("accepts the canonical coordinator and reusable workflow", () => {
+    const source = sources();
+    expect(inspect(source.release, source.desktop, source.version)).toEqual([]);
+  });
+
+  it("rejects signing write permission and publication signing secrets", () => {
+    const source = sources();
+    const mutated = source.desktop
+      .replace("contents: read\n    outputs:", "contents: write\n    outputs:")
+      .replaceAll("GITHUB_TOKEN: ${{ github.token }}", "CSC_LINK: ${{ secrets.CSC_LINK }}");
+    const issues = inspect(source.release, mutated);
+    expect(issues.some((issue) => issue.includes("macOS signing permissions"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("escaped the signing job"))).toBe(true);
+  });
+
+  it("rejects reordered jobs and draft semantics on the default package-only path", () => {
+    const source = sources();
+    const desktop = source.desktop.replace("needs: sign-macos", "needs: promote-latest");
+    const release = source.release.replace(
+      'gh release create "$TAG" --title "$TAG" --notes "$BODY"',
+      'gh release create "$TAG" --draft --latest=false --title "$TAG" --notes "$BODY"',
+    );
+    const issues = inspect(release, desktop);
+    expect(issues.some((issue) => issue.includes("verification must follow signing"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("create-normal-or-leave-existing"))).toBe(true);
+  });
+
+  it("rejects direct triggers and a non-failing activation stop", () => {
+    const source = sources();
+    const desktop = source.desktop
+      .replace("workflow_call:", "workflow_call:\n  workflow_dispatch:")
+      .replace(
+        "echo '::error::Public activation, compensation, production-feed roundtrip, and GA body activation have not landed; stable publication fails closed.'\n          exit 1",
+        "echo 'unsafe continuation'\n          exit 0",
+      );
+    const issues = inspect(source.release, desktop);
+    expect(issues.some((issue) => issue.includes("workflow_call-only"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("stop explicitly and nonzero"))).toBe(true);
+  });
+
+  it("rejects a reusable call without a write permission ceiling", () => {
+    const source = sources();
+    const release = source.release.replace(
+      "    permissions:\n      actions: read\n      contents: write\n    uses: ./.github/workflows/desktop-release.yml",
+      "    uses: ./.github/workflows/desktop-release.yml",
+    );
+    expect(
+      inspect(release, source.desktop).some((issue) =>
+        issue.includes("desktop reusable call permissions"),
+      ),
+    ).toBe(true);
+  });
+
+  it("uses a byte-deterministic npm alias packer", () => {
+    const source = sources();
+    expect(source.release).toContain('npm pack "$ALIAS_DIR/extract/package"');
+    expect(source.release).not.toContain('tar -czf "$ALIAS_TARBALL"');
+    const root = mkdtempSync(join(tmpdir(), "deterministic-npm-pack-"));
+    try {
+      const packageDirectory = join(root, "package");
+      mkdirSync(packageDirectory);
+      writeFileSync(
+        join(packageDirectory, "package.json"),
+        JSON.stringify({ name: "synthetic-alias", version: "1.0.0", files: ["index.js"] }),
+      );
+      writeFileSync(join(packageDirectory, "index.js"), "export {};\n");
+      const archives = ["first", "second"].map((name) => {
+        const output = join(root, name);
+        mkdirSync(output);
+        execFileSync(
+          "npm",
+          ["pack", packageDirectory, "--pack-destination", output, "--ignore-scripts", "--json"],
+          { env: { ...process.env, npm_config_cache: join(root, "npm-cache") } },
+        );
+        return readFileSync(join(output, "synthetic-alias-1.0.0.tgz"));
+      });
+      expect(archives[0].equals(archives[1])).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("binds downstream verification to the successful signing attempt", () => {
+    const source = sources();
+    const desktop = source.desktop.replace(
+      "SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.workflow_run_attempt }}",
+      "SIGNING_RUN_ATTEMPT: ${{ github.run_attempt }}",
+    );
+    expect(
+      inspect(source.release, desktop).some((issue) =>
+        issue.includes("successful signing attempt"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the audit manifest outside the native exact-four verifier boundary", () => {
+    const source = sources();
+    const desktop = source.desktop.replace(
+      'verify:mac-release -- \\\n              "$PUBLIC_ENVELOPE"',
+      'verify:mac-release -- \\\n              "$RUNNER_TEMP/desktop-release"',
+    );
+    expect(
+      inspect(source.release, desktop).some((issue) =>
+        issue.includes("exact-four public envelope"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps desktop opt-in and defaults cycling releases to package-only", () => {
+    const source = sources();
+    expect(source.release.match(/vars\.ENABLE_DESKTOP_MACOS_RELEASE/gu)).toHaveLength(1);
+    expect(source.release).toContain("needs.parse-tag.outputs.desktop_enabled == 'true'");
+    expect(source.release).toContain("needs.parse-tag.outputs.desktop_enabled != 'true'");
+    const alwaysEnabled = source.release.replaceAll(
+      "needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true'",
+      "needs.parse-tag.outputs.package == 'cycling-coach'",
+    );
+    expect(
+      inspect(alwaysEnabled, source.desktop).some((issue) =>
+        issue.includes("frozen coordinator opt-in"),
+      ),
+    ).toBe(true);
+    const strandsCycling = source.release.replace(
+      "needs.parse-tag.outputs.package != 'cycling-coach' || needs.parse-tag.outputs.desktop_enabled != 'true'",
+      "needs.parse-tag.outputs.package != 'cycling-coach'",
+    );
+    expect(
+      inspect(strandsCycling, source.desktop).some((issue) => issue.includes("package-only")),
+    ).toBe(true);
+    const splitBrain = source.release.replace(
+      "DESKTOP_ENABLED: ${{ needs.parse-tag.outputs.desktop_enabled }}",
+      "DESKTOP_ENABLED: ${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}",
+    );
+    expect(
+      inspect(splitBrain, source.desktop).some((issue) => issue.includes("read once and frozen")),
+    ).toBe(true);
+  });
+
+  it("rejects GitHub expressions interpolated directly into shell scripts", () => {
+    const source = sources();
+    const desktop = source.desktop.replace(
+      'test "$ARTIFACT_NAME" = "desktop-release-$GITHUB_RUN_ID-$SIGNING_RUN_ATTEMPT"',
+      'test "$ARTIFACT_NAME" = "desktop-release-${{ github.run_id }}-$SIGNING_RUN_ATTEMPT"',
+    );
+    expect(
+      inspect(source.release, desktop).some((issue) =>
+        issue.includes("run scripts must receive contexts through env"),
+      ),
+    ).toBe(true);
+  });
+
+  it("requires queued exact-tag dispatch recovery", () => {
+    const source = sources();
+    const version = source.version
+      .replace("  queue: max\n", "")
+      .replace('--ref "$TAG" -f tag="$TAG"', '--ref main -f tag="$TAG"');
+    const issues = inspect(source.release, source.desktop, version);
+    expect(issues.some((issue) => issue.includes("queue:max"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("exact-tag release dispatch"))).toBe(true);
+  });
+
+  it("requires verified npm outputs and the successful publication tuple", () => {
+    const source = sources();
+    const release = source.release
+      .replace(
+        "npm_integrity: ${{ needs.verify-npm-publication.outputs.npm_integrity }}",
+        "npm_integrity: ${{ needs.publish-npm.outputs.npm_integrity }}",
+      )
+      .replace("--workflow .github/workflows/release.yml", "--workflow release.yml")
+      .replace(
+        "/actions/runs/$PUBLICATION_RUN_ID/attempts/$PUBLICATION_RUN_ATTEMPT",
+        "/actions/runs/$PUBLICATION_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT",
+      );
+    const issues = inspect(release, source.desktop);
+    expect(issues.some((issue) => issue.includes("verified npm job outputs"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("exact signed provenance"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("publication attempt tuple"))).toBe(true);
+  });
+
+  it("uses the public npm view dist evidence shape", () => {
+    const source = sources();
+    const fixture = JSON.parse(readFileSync(npmViewFixturePath, "utf8")) as {
+      _integrity: string;
+      dist: { integrity: string; attestations: { url: string } };
+    };
+    expect(fixture.dist.integrity).toBe(fixture._integrity);
+    expect(fixture.dist.attestations.url).toBe(
+      "https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@2026.7.28",
+    );
+    expect(source.release).toContain(".dist.integrity");
+    expect(source.release).toContain(".dist.attestations.url");
+    expect(source.release).not.toContain("._attestations.url");
+  });
+});

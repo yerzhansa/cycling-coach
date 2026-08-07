@@ -29,13 +29,29 @@ on:
           - running-coach
           - duathlon-coach
       tag:
-        description: 'Tag (leave empty to use packages/<package>/package.json version on main)'
+        description: 'Exact release tag; a main-ref dispatch can only resume versions already present on npm'
+        required: false
+        default: ''
+      desktop_mode:
+        description: 'macOS release continuity mode (genesis is manual-dispatch only)'
+        type: choice
+        default: steady
+        options:
+          - steady
+          - genesis
+      desktop_baseline_tag:
+        description: 'Explicit retained genesis baseline tag; leave empty to require repository latest'
         required: false
         default: ''
 
 # PG-16: per-job least-privilege; id-token only on publish.
 permissions:
   contents: read
+
+concurrency:
+  group: stable-desktop-coordinator
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   parse-tag:
@@ -44,12 +60,28 @@ jobs:
       package: ${{ steps.parse.outputs.package }}
       version: ${{ steps.parse.outputs.version }}
       ref: ${{ steps.parse.outputs.ref }}
+      commit: ${{ steps.parse.outputs.commit }}
+      desktop_mode: ${{ steps.parse.outputs.desktop_mode }}
+      desktop_baseline_tag: ${{ steps.parse.outputs.desktop_baseline_tag }}
+      desktop_enabled: ${{ steps.parse.outputs.desktop_enabled }}
     steps:
       # Needed only when workflow_dispatch is invoked with an empty tag input —
       # we resolve the version from packages/<package>/package.json on the
       # dispatched ref. Cheap enough to always run; keeps the resolver simple.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - id: parse
+        env:
+          DESKTOP_ENABLED_INPUT: ${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}
+          DISPATCH_TAG_INPUT: ${{ github.event.inputs.tag }}
+          DISPATCH_PACKAGE_INPUT: ${{ github.event.inputs.package }}
+          DISPATCH_MODE_INPUT: ${{ github.event.inputs.desktop_mode }}
+          DISPATCH_BASELINE_TAG_INPUT: ${{ github.event.inputs.desktop_baseline_tag }}
+          WORKFLOW_EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.sha }}
         # Three trigger paths produce a tag string:
         #   push:tags          -> github.ref_name is the tag (cycling-coach@2026.5.2)
         #   workflow_dispatch  -> if inputs.tag is non-empty, use it verbatim;
@@ -58,11 +90,11 @@ jobs:
         #                         after a Version-PR merge without typing the tag.
         run: |
           set -euo pipefail
-          INPUT_TAG="${{ github.event.inputs.tag }}"
+          INPUT_TAG="$DISPATCH_TAG_INPUT"
           if [ -n "$INPUT_TAG" ]; then
             TAG="$INPUT_TAG"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            PKG="${{ github.event.inputs.package }}"
+          elif [ "$WORKFLOW_EVENT_NAME" = "workflow_dispatch" ]; then
+            PKG="$DISPATCH_PACKAGE_INPUT"
             if [ ! -f "packages/$PKG/package.json" ]; then
               echo "::error::packages/$PKG/package.json not found on this ref"
               exit 1
@@ -71,17 +103,73 @@ jobs:
             TAG="$PKG@$VERSION"
             echo "::notice::Empty tag input — resolved to $TAG via packages/$PKG/package.json"
           else
-            TAG="${{ github.ref_name }}"
+            TAG="$WORKFLOW_REF_NAME"
           fi
           PACKAGE="${TAG%@*}"
           VERSION="${TAG#*@}"
-          if [ "$PACKAGE" = "$TAG" ] || [ "$VERSION" = "$TAG" ]; then
+          if ! printf '%s' "$PACKAGE" | grep -Eq '^(cycling-coach|running-coach|duathlon-coach)$' || \
+             ! printf '%s' "$VERSION" | grep -Eq '^[1-9][0-9]{3}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)$'; then
             echo "::error::Tag '$TAG' is not in <package>@<version> format"
+            exit 1
+          fi
+          git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          if ! git show-ref --verify --quiet "refs/tags/$TAG"; then
+            echo "::error::Tag '$TAG' does not exist"
+            exit 1
+          fi
+          COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
+          MODE="steady"
+          BASELINE_TAG="none"
+          DESKTOP_ENABLED=false
+          if [ "$DESKTOP_ENABLED_INPUT" = "true" ]; then
+            DESKTOP_ENABLED=true
+          fi
+          if [ "$WORKFLOW_EVENT_NAME" = "workflow_dispatch" ]; then
+            MODE="$DISPATCH_MODE_INPUT"
+            if [ -n "$DISPATCH_BASELINE_TAG_INPUT" ]; then
+              BASELINE_TAG="$DISPATCH_BASELINE_TAG_INPUT"
+            fi
+          fi
+          if [ "$MODE" = "genesis" ] && [ "$WORKFLOW_EVENT_NAME" != "workflow_dispatch" ]; then
+            echo "::error::Genesis mode is allowed only by an explicit manual dispatch"
+            exit 1
+          fi
+          if [ "$MODE" = "genesis" ] && { [ -z "$INPUT_TAG" ] || [ "$PACKAGE" != "cycling-coach" ]; }; then
+            echo "::error::Genesis requires an explicitly supplied cycling-coach tag"
+            exit 1
+          fi
+          if [ "$MODE" = "genesis" ] && [ "$DESKTOP_ENABLED" != "true" ]; then
+            echo "::error::Genesis requires ENABLE_DESKTOP_MACOS_RELEASE=true"
+            exit 1
+          fi
+          if [ "$MODE" = "genesis" ] && [ "$BASELINE_TAG" != "none" ]; then
+            echo "::error::Genesis cannot consume a prior desktop baseline"
+            exit 1
+          fi
+          if [ "$BASELINE_TAG" != "none" ] && ! printf '%s' "$BASELINE_TAG" | grep -Eq '^cycling-coach@[1-9][0-9]{3}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)$'; then
+            echo "::error::Explicit desktop baseline tag is invalid"
+            exit 1
+          fi
+          if [ "$MODE" != "steady" ] && [ "$MODE" != "genesis" ]; then
+            echo "::error::Unsupported desktop release mode '$MODE'"
+            exit 1
+          fi
+          if [ "$WORKFLOW_EVENT_NAME" = "workflow_dispatch" ] && \
+             [ "$WORKFLOW_REF" != "refs/heads/main" ] && [ "$WORKFLOW_REF" != "refs/tags/$TAG" ]; then
+            echo "::error::Manual release dispatch must run from main or the exact release tag"
+            exit 1
+          fi
+          if [ "$WORKFLOW_EVENT_NAME" = "push" ] && [ "$COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "::error::Tag commit does not match the triggering commit"
             exit 1
           fi
           echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "desktop_mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "desktop_baseline_tag=$BASELINE_TAG" >> "$GITHUB_OUTPUT"
+          echo "desktop_enabled=$DESKTOP_ENABLED" >> "$GITHUB_OUTPUT"
           echo "::notice::Releasing $PACKAGE @ $VERSION (ref: $TAG)"
 
   build:
@@ -92,7 +180,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ needs.parse-tag.outputs.ref }}
+          ref: ${{ needs.parse-tag.outputs.commit }}
+          persist-credentials: false
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -109,7 +198,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ needs.parse-tag.outputs.ref }}
+          ref: ${{ needs.parse-tag.outputs.commit }}
+          persist-credentials: false
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -121,13 +211,23 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
-    needs: [parse-tag, build]
+    needs: [parse-tag, build, test]
+    outputs:
+      artifact_id: ${{ steps.npm-artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.npm-artifact.outputs.artifact-digest }}
+      artifact_name: npm-release-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.parse-tag.outputs.package }}
+      workflow_run_attempt: ${{ github.run_attempt }}
+      primary_filename: ${{ steps.pack.outputs.primary_filename }}
+      primary_sha512: ${{ steps.pack.outputs.primary_sha512 }}
+      alias_filename: ${{ steps.pack.outputs.alias_filename }}
+      alias_sha512: ${{ steps.pack.outputs.alias_sha512 }}
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ needs.parse-tag.outputs.ref }}
+          ref: ${{ needs.parse-tag.outputs.commit }}
+          persist-credentials: false
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -136,6 +236,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       - name: Pack and smoke ${{ needs.parse-tag.outputs.package }}
+        id: pack
+        env:
+          RELEASE_PACKAGE: ${{ needs.parse-tag.outputs.package }}
+          RELEASE_VERSION: ${{ needs.parse-tag.outputs.version }}
         # Install the packed tarball as a dependency of a fresh consumer
         # project — what end users actually do. Installing in-place via
         # `npm install --omit=dev` doesn't work: npm resolves the full
@@ -143,36 +247,92 @@ jobs:
         # private workspace devDeps.
         run: |
           set -euo pipefail
-          PACKAGE="${{ needs.parse-tag.outputs.package }}"
+          PACKAGE="$RELEASE_PACKAGE"
           PACK_DIR="/tmp/smoke-pack-$PACKAGE"
+          SOURCE_PACKAGE_JSON="packages/$PACKAGE/package.json"
+          CANONICAL_REPOSITORY="git+https://github.com/yerzhansa/enduragent.git"
+          CANONICAL_DIRECTORY="packages/$PACKAGE"
+          jq -e --arg name "$PACKAGE" --arg version "$RELEASE_VERSION" \
+            --arg repository "$CANONICAL_REPOSITORY" --arg directory "$CANONICAL_DIRECTORY" \
+            '.name == $name and .version == $version and .repository == {"type":"git","url":$repository,"directory":$directory} and .publishConfig == null' \
+            "$SOURCE_PACKAGE_JSON" >/dev/null
           mkdir -p "$PACK_DIR"
           pnpm --dir "packages/$PACKAGE" pack --pack-destination "$PACK_DIR"
           TARBALL=$(find "$PACK_DIR" -maxdepth 1 -name '*.tgz' -print -quit)
+          test -f "$TARBALL"
+          PACKED_PACKAGE_JSON="$PACK_DIR/primary-package.json"
+          tar -xOf "$TARBALL" package/package.json > "$PACKED_PACKAGE_JSON"
+          jq -e --arg name "$PACKAGE" --arg version "$RELEASE_VERSION" \
+            --arg repository "$CANONICAL_REPOSITORY" --arg directory "$CANONICAL_DIRECTORY" \
+            '.name == $name and .version == $version and .repository == {"type":"git","url":$repository,"directory":$directory} and .publishConfig == null' \
+            "$PACKED_PACKAGE_JSON" >/dev/null
           pnpm check:published-package -- "$TARBALL"
           mkdir -p "/tmp/smoke-consumer-$PACKAGE"
-          cd "/tmp/smoke-consumer-$PACKAGE"
-          npm init -y > /dev/null
-          npm install "$TARBALL"
-          timeout 30 node "node_modules/$PACKAGE/dist/index.js" --help
+          (
+            cd "/tmp/smoke-consumer-$PACKAGE"
+            npm init -y > /dev/null
+            npm install "$TARBALL"
+            timeout 30 node "node_modules/$PACKAGE/dist/index.js" --help
+          )
+          PRIMARY_FILENAME=$(basename "$TARBALL")
+          PRIMARY_SHA512=$(shasum -a 512 "$TARBALL" | awk '{print $1}')
+          ALIAS_FILENAME=none
+          ALIAS_SHA512=none
+          if [ "$PACKAGE" = "cycling-coach" ]; then
+            ALIAS_DIR="$PACK_DIR/alias"
+            mkdir -p "$ALIAS_DIR/extract"
+            tar -xzf "$TARBALL" -C "$ALIAS_DIR/extract"
+            node -e 'const fs=require("fs");const p=process.argv[1];const pkg=JSON.parse(fs.readFileSync(p,"utf8"));pkg.name="enduragent";pkg.bin={enduragent:"dist/index.js"};fs.writeFileSync(p,JSON.stringify(pkg,null,2)+"\n");' "$ALIAS_DIR/extract/package/package.json"
+            ALIAS_PACK_JSON=$(npm pack "$ALIAS_DIR/extract/package" \
+              --pack-destination "$PACK_DIR" --ignore-scripts --json)
+            ALIAS_FILENAME=$(printf '%s' "$ALIAS_PACK_JSON" | jq -er \
+              'if length == 1 and .[0].filename then .[0].filename else error("unexpected npm pack output") end')
+            test "$ALIAS_FILENAME" = "enduragent-$RELEASE_VERSION.tgz"
+            tar -xOf "$PACK_DIR/$ALIAS_FILENAME" package/package.json > "$PACK_DIR/alias-package.json"
+            jq -e --arg version "$RELEASE_VERSION" --arg repository "$CANONICAL_REPOSITORY" \
+              --arg directory "$CANONICAL_DIRECTORY" \
+              '.name == "enduragent" and .version == $version and .bin == {"enduragent":"dist/index.js"} and .repository == {"type":"git","url":$repository,"directory":$directory} and .publishConfig == null' \
+              "$PACK_DIR/alias-package.json" >/dev/null
+            pnpm check:published-package -- "$PACK_DIR/$ALIAS_FILENAME"
+            ALIAS_SHA512=$(shasum -a 512 "$PACK_DIR/$ALIAS_FILENAME" | awk '{print $1}')
+          fi
+          echo "primary_filename=$PRIMARY_FILENAME" >> "$GITHUB_OUTPUT"
+          echo "primary_sha512=$PRIMARY_SHA512" >> "$GITHUB_OUTPUT"
+          echo "alias_filename=$ALIAS_FILENAME" >> "$GITHUB_OUTPUT"
+          echo "alias_sha512=$ALIAS_SHA512" >> "$GITHUB_OUTPUT"
+      - name: Upload immutable npm release artifacts
+        id: npm-artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-release-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.parse-tag.outputs.package }}
+          path: /tmp/smoke-pack-${{ needs.parse-tag.outputs.package }}/*.tgz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
 
-  publish:
+  publish-npm:
     runs-on: ubuntu-latest
-    needs: [parse-tag, build, test, smoke]
+    needs: [parse-tag, smoke]
+    environment: ${{ needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true' && 'npm-production' || '' }}
     # Per-package serialization. Two cycling-coach releases on the same day
     # never run in parallel (avoids any same-tag publish race), but cycling
     # and running can publish at the same time once both are real binaries.
     concurrency:
       group: release-publish-${{ needs.parse-tag.outputs.package }}
       cancel-in-progress: false
+      queue: max
     permissions:
-      contents: write   # for `gh release create` if no UI-created release exists
+      actions: read
+      contents: read
       id-token: write   # PG-16: OIDC, scoped to publish job only
+    outputs:
+      published_new: ${{ steps.npm-publish.outputs.published_new }}
+      publication_run_id: ${{ steps.npm-publish.outputs.publication_run_id }}
+      publication_run_attempt: ${{ steps.npm-publish.outputs.publication_run_attempt }}
+      publication_ref: ${{ steps.npm-publish.outputs.publication_ref }}
+      publication_event_name: ${{ steps.npm-publish.outputs.publication_event_name }}
+      publication_commit: ${{ steps.npm-publish.outputs.publication_commit }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ needs.parse-tag.outputs.ref }}
-          fetch-depth: 0
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           # Node 24 ships npm 11.x natively. npm 11.5.1+ is required for the
@@ -181,88 +341,380 @@ jobs:
           # flaky (`Cannot find module 'promise-retry'` mid-swap).
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r build
-
-      - name: Verify tag version matches package.json
-        # Belt-and-suspenders against "tagged before bumping" mistakes. If the
-        # tag says cycling-coach@2026.5.2 but package.json still says 2026.5.1,
-        # fail loudly rather than silently shipping the wrong version.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.smoke.outputs.artifact_id }}
+          path: ${{ runner.temp }}/npm-release
+          digest-mismatch: error
+      - name: Bind immutable npm artifact evidence
+        env:
+          ARTIFACT_ID: ${{ needs.smoke.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.smoke.outputs.artifact_digest }}
+          ARTIFACT_NAME: ${{ needs.smoke.outputs.artifact_name }}
+          PREPARE_RUN_ATTEMPT: ${{ needs.smoke.outputs.workflow_run_attempt }}
+          RELEASE_PACKAGE: ${{ needs.parse-tag.outputs.package }}
         run: |
           set -euo pipefail
-          PACKAGE="${{ needs.parse-tag.outputs.package }}"
-          EXPECTED="${{ needs.parse-tag.outputs.version }}"
-          ACTUAL=$(node -p "require('./packages/$PACKAGE/package.json').version")
-          if [ "$EXPECTED" != "$ACTUAL" ]; then
-            echo "::error::Tag $PACKAGE@$EXPECTED does not match packages/$PACKAGE/package.json (version: $ACTUAL)"
-            exit 1
-          fi
+          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          test "$ARTIFACT_NAME" = "npm-release-$GITHUB_RUN_ID-$PREPARE_RUN_ATTEMPT-$RELEASE_PACKAGE"
 
-      - name: Pack, verify, and publish to npm via OIDC
+      - name: Publish immutable primary tarball to npm via OIDC
+        id: npm-publish
+        env:
+          RELEASE_PACKAGE: ${{ needs.parse-tag.outputs.package }}
+          RELEASE_VERSION: ${{ needs.parse-tag.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.parse-tag.outputs.commit }}
+          RELEASE_TAG: ${{ needs.parse-tag.outputs.ref }}
+          PRIMARY_FILENAME: ${{ needs.smoke.outputs.primary_filename }}
+          PRIMARY_SHA512: ${{ needs.smoke.outputs.primary_sha512 }}
         # Publish the exact tarball accepted by the legal-artifact gate.
         # OIDC is negotiated automatically by npm 11+ when id-token: write
         # is granted (no NPM_TOKEN secret needed). The trusted publisher
         # must be configured per-package on npmjs.com (one-time operator
         # action; matches repo `yerzhansa/enduragent` + workflow
-        # `release.yml`).
+        # `release.yml`). Keep the npm publisher environment-unbound while
+        # package-only releases remain environment-free; the conditional
+        # `npm-production` environment above is a GitHub approval boundary.
         run: |
           set -euo pipefail
-          PACKAGE="${{ needs.parse-tag.outputs.package }}"
-          PACK_DIR="/tmp/publish-pack-$PACKAGE"
-          mkdir -p "$PACK_DIR"
-          pnpm --dir "packages/$PACKAGE" pack --pack-destination "$PACK_DIR"
-          TARBALL=$(find "$PACK_DIR" -maxdepth 1 -name '*.tgz' -print -quit)
-          pnpm check:published-package -- "$TARBALL"
-          npm publish "$TARBALL" --access public
-
-      - name: Create GitHub Release if missing
-        # Tag may have been created via the GitHub UI's "Draft a new release"
-        # flow, in which case the Release already exists with operator-written
-        # notes. Don't overwrite it. Only create one if it's missing (e.g., the
-        # tag came from `git push --tags` with no Release attached).
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          PACKAGE="${{ needs.parse-tag.outputs.package }}"
-          TAG="${{ needs.parse-tag.outputs.ref }}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::notice::Release $TAG already exists (likely created via UI). Leaving it untouched."
+          PACKAGE="$RELEASE_PACKAGE"
+          TARBALL="$RUNNER_TEMP/npm-release/$PRIMARY_FILENAME"
+          printf '%s' "$PRIMARY_FILENAME" | grep -Eq '^[a-z0-9-]+-[1-9][0-9]{3}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)\.tgz$'
+          printf '%s' "$PRIMARY_SHA512" | grep -Eq '^[0-9a-f]{128}$'
+          test -f "$TARBALL"
+          test "$(shasum -a 512 "$TARBALL" | awk '{print $1}')" = "$PRIMARY_SHA512"
+          PACKAGE_JSON="$RUNNER_TEMP/$PACKAGE-package.json"
+          tar -xOf "$TARBALL" package/package.json > "$PACKAGE_JSON"
+          CANONICAL_REPOSITORY="git+https://github.com/yerzhansa/enduragent.git"
+          CANONICAL_DIRECTORY="packages/$PACKAGE"
+          jq -e --arg name "$PACKAGE" --arg version "$RELEASE_VERSION" \
+            --arg repository "$CANONICAL_REPOSITORY" --arg directory "$CANONICAL_DIRECTORY" \
+            '.name == $name and .version == $version and .repository == {"type":"git","url":$repository,"directory":$directory} and .publishConfig == null' \
+            "$PACKAGE_JSON" >/dev/null
+          EXPECTED_INTEGRITY="sha512-$(printf '%s' "$PRIMARY_SHA512" | xxd -r -p | base64 | tr -d '\n')"
+          EXPECTED_COMMIT="$RELEASE_COMMIT"
+          SPEC="$PACKAGE@$RELEASE_VERSION"
+          VIEW_JSON="$RUNNER_TEMP/$PACKAGE-view.json"
+          VIEW_ERROR="$RUNNER_TEMP/$PACKAGE-view.error"
+          if npm view "$SPEC" --registry=https://registry.npmjs.org/ --json > "$VIEW_JSON" 2> "$VIEW_ERROR"; then
+            jq -e --arg version "$RELEASE_VERSION" --arg integrity "$EXPECTED_INTEGRITY" \
+              --arg repository "$CANONICAL_REPOSITORY" \
+              '.version == $version and .dist.integrity == $integrity and .repository.url == $repository' \
+              "$VIEW_JSON" >/dev/null || {
+                echo "::error::$SPEC exists but does not match the prepared primary bytes and repository"
+                exit 1
+              }
+            echo "::notice::$SPEC already exists; the no-OIDC verification job will require exact bytes and provenance"
+            echo "published_new=false" >> "$GITHUB_OUTPUT"
+          elif grep -Eq '(^|[[:space:]])E404([[:space:]]|$)|404 Not Found' "$VIEW_ERROR"; then
+            if [ "$GITHUB_REF" != "refs/tags/$RELEASE_TAG" ] || [ "$GITHUB_SHA" != "$EXPECTED_COMMIT" ]; then
+              echo "::error::First npm publication requires the exact release tag ref and commit"
+              exit 1
+            fi
+            npm publish "$TARBALL" --access public --ignore-scripts \
+              --registry=https://registry.npmjs.org/ --provenance
+            echo "published_new=true" >> "$GITHUB_OUTPUT"
           else
-            # Extract the topmost CHANGELOG entry — content between the first
-            # '## ' header and the second '## ' header (the previous release).
-            BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' "packages/$PACKAGE/CHANGELOG.md" | tail -n +2)
-            gh release create "$TAG" --title "$TAG" --notes "$BODY"
-            echo "::notice::Created GitHub Release $TAG"
+            cat "$VIEW_ERROR" >&2
+            echo "::error::npm registry lookup failed without a confirmed 404; refusing publish"
+            exit 1
           fi
+          echo "publication_run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "publication_run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "publication_ref=$GITHUB_REF" >> "$GITHUB_OUTPUT"
+          echo "publication_event_name=$GITHUB_EVENT_NAME" >> "$GITHUB_OUTPUT"
+          echo "publication_commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Publish enduragent alias to npm via OIDC
+        env:
+          RELEASE_PACKAGE: ${{ needs.parse-tag.outputs.package }}
+          RELEASE_VERSION: ${{ needs.parse-tag.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.parse-tag.outputs.commit }}
+          RELEASE_TAG: ${{ needs.parse-tag.outputs.ref }}
+          ALIAS_FILENAME: ${{ needs.smoke.outputs.alias_filename }}
+          ALIAS_SHA512: ${{ needs.smoke.outputs.alias_sha512 }}
         run: |
           set -euo pipefail
-          PACKAGE="${{ needs.parse-tag.outputs.package }}"
+          PACKAGE="$RELEASE_PACKAGE"
           if [ "$PACKAGE" != "cycling-coach" ]; then
             echo "::notice::No enduragent alias for $PACKAGE — skipping"
             exit 0
           fi
-          VERSION="${{ needs.parse-tag.outputs.version }}"
-          PACK_DIR="/tmp/publish-pack-$PACKAGE"
-          TARBALL=$(find "$PACK_DIR" -maxdepth 1 -name '*.tgz' -print -quit)
-          ALIAS_DIR="/tmp/publish-pack-enduragent"
-          rm -rf "$ALIAS_DIR"
-          mkdir -p "$ALIAS_DIR/extract"
-          tar -xzf "$TARBALL" -C "$ALIAS_DIR/extract"
-          node -e 'const fs=require("fs");const p=process.argv[1];const pkg=JSON.parse(fs.readFileSync(p,"utf8"));pkg.name="enduragent";pkg.bin={enduragent:"dist/index.js"};fs.writeFileSync(p,JSON.stringify(pkg,null,2)+"\n");' "$ALIAS_DIR/extract/package/package.json"
-          ALIAS_TARBALL="$ALIAS_DIR/enduragent-$VERSION.tgz"
-          COPYFILE_DISABLE=1 tar -czf "$ALIAS_TARBALL" -C "$ALIAS_DIR/extract" package
-          pnpm check:published-package -- "$ALIAS_TARBALL"
-          EXPECTED_REPO=$(node -p "require('./packages/$PACKAGE/package.json').repository.url")
-          PUBLISHED_REPO=$(npm view "enduragent@$VERSION" repository.url 2>/dev/null || true)
-          if [ -z "$PUBLISHED_REPO" ]; then
-            npm publish "$ALIAS_TARBALL" --access public
-          elif [ "$PUBLISHED_REPO" = "$EXPECTED_REPO" ]; then
-            echo "::notice::enduragent@$VERSION already published from $EXPECTED_REPO — skipping publish"
+          VERSION="$RELEASE_VERSION"
+          test "$ALIAS_FILENAME" = "enduragent-$VERSION.tgz"
+          printf '%s' "$ALIAS_SHA512" | grep -Eq '^[0-9a-f]{128}$'
+          ALIAS_TARBALL="$RUNNER_TEMP/npm-release/$ALIAS_FILENAME"
+          test -f "$ALIAS_TARBALL"
+          test "$(shasum -a 512 "$ALIAS_TARBALL" | awk '{print $1}')" = "$ALIAS_SHA512"
+          ALIAS_PACKAGE_JSON="$RUNNER_TEMP/enduragent-package.json"
+          tar -xOf "$ALIAS_TARBALL" package/package.json > "$ALIAS_PACKAGE_JSON"
+          CANONICAL_REPOSITORY="git+https://github.com/yerzhansa/enduragent.git"
+          CANONICAL_DIRECTORY="packages/$PACKAGE"
+          jq -e --arg version "$VERSION" \
+            --arg repository "$CANONICAL_REPOSITORY" --arg directory "$CANONICAL_DIRECTORY" \
+            '.name == "enduragent" and .version == $version and .bin == {"enduragent":"dist/index.js"} and .repository == {"type":"git","url":$repository,"directory":$directory} and .publishConfig == null' \
+            "$ALIAS_PACKAGE_JSON" >/dev/null
+          EXPECTED_REPO="$CANONICAL_REPOSITORY"
+          EXPECTED_INTEGRITY="sha512-$(printf '%s' "$ALIAS_SHA512" | xxd -r -p | base64 | tr -d '\n')"
+          SPEC="enduragent@$VERSION"
+          VIEW_JSON="$RUNNER_TEMP/enduragent-view.json"
+          VIEW_ERROR="$RUNNER_TEMP/enduragent-view.error"
+          if npm view "$SPEC" --registry=https://registry.npmjs.org/ --json > "$VIEW_JSON" 2> "$VIEW_ERROR"; then
+            PUBLISHED_REPO=$(jq -r '.repository.url // empty' "$VIEW_JSON")
+            PUBLISHED_INTEGRITY=$(jq -r '.dist.integrity // empty' "$VIEW_JSON")
+            if [ "$PUBLISHED_REPO" = "$EXPECTED_REPO" ] && [ "$PUBLISHED_INTEGRITY" = "$EXPECTED_INTEGRITY" ]; then
+              echo "::notice::$SPEC already published from $EXPECTED_REPO — skipping publish"
+            else
+              echo "::error::$SPEC exists on npm but does not match the prepared alias bytes and repository"
+              exit 1
+            fi
+          elif grep -Eq '(^|[[:space:]])E404([[:space:]]|$)|404 Not Found' "$VIEW_ERROR"; then
+            if [ "$GITHUB_REF" != "refs/tags/$RELEASE_TAG" ] || [ "$GITHUB_SHA" != "$RELEASE_COMMIT" ]; then
+              echo "::error::First alias publication requires the exact release tag ref and commit"
+              exit 1
+            fi
+            npm publish "$ALIAS_TARBALL" --access public --ignore-scripts \
+              --registry=https://registry.npmjs.org/ --provenance
           else
-            echo "::error::enduragent@$VERSION exists on npm but was published from $PUBLISHED_REPO (expected $EXPECTED_REPO)"
+            cat "$VIEW_ERROR" >&2
+            echo "::error::npm registry lookup failed without a confirmed 404; refusing alias publish"
             exit 1
+          fi
+
+  verify-npm-publication:
+    runs-on: ubuntu-latest
+    needs: [parse-tag, smoke, publish-npm]
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      npm_integrity: ${{ steps.verify.outputs.npm_integrity }}
+      npm_attestation_url: ${{ steps.verify.outputs.npm_attestation_url }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.parse-tag.outputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.smoke.outputs.artifact_id }}
+          path: ${{ runner.temp }}/npm-release
+          digest-mismatch: error
+      - name: Verify public npm bytes and signed provenance
+        id: verify
+        env:
+          ARTIFACT_ID: ${{ needs.smoke.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.smoke.outputs.artifact_digest }}
+          ARTIFACT_NAME: ${{ needs.smoke.outputs.artifact_name }}
+          PREPARE_RUN_ATTEMPT: ${{ needs.smoke.outputs.workflow_run_attempt }}
+          PRIMARY_FILENAME: ${{ needs.smoke.outputs.primary_filename }}
+          PRIMARY_SHA512: ${{ needs.smoke.outputs.primary_sha512 }}
+          PUBLISHED_NEW: ${{ needs.publish-npm.outputs.published_new }}
+          PUBLICATION_RUN_ID: ${{ needs.publish-npm.outputs.publication_run_id }}
+          PUBLICATION_RUN_ATTEMPT: ${{ needs.publish-npm.outputs.publication_run_attempt }}
+          PUBLICATION_REF: ${{ needs.publish-npm.outputs.publication_ref }}
+          PUBLICATION_EVENT_NAME: ${{ needs.publish-npm.outputs.publication_event_name }}
+          PUBLICATION_COMMIT: ${{ needs.publish-npm.outputs.publication_commit }}
+          RELEASE_PACKAGE: ${{ needs.parse-tag.outputs.package }}
+          RELEASE_VERSION: ${{ needs.parse-tag.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.parse-tag.outputs.commit }}
+          RELEASE_TAG: ${{ needs.parse-tag.outputs.ref }}
+          WORKFLOW_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REPOSITORY_ID: ${{ github.repository_id }}
+          WORKFLOW_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          test "$ARTIFACT_NAME" = "npm-release-$GITHUB_RUN_ID-$PREPARE_RUN_ATTEMPT-$RELEASE_PACKAGE"
+          test "$PUBLISHED_NEW" = "true" || test "$PUBLISHED_NEW" = "false"
+          printf '%s' "$PUBLICATION_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$PUBLICATION_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
+          if [ "$PUBLISHED_NEW" = "true" ]; then
+            test "$PUBLICATION_REF" = "refs/tags/$RELEASE_TAG"
+            test "$PUBLICATION_COMMIT" = "$RELEASE_COMMIT"
+          fi
+          printf '%s' "$PRIMARY_SHA512" | grep -Eq '^[0-9a-f]{128}$'
+          TARBALL="$RUNNER_TEMP/npm-release/$PRIMARY_FILENAME"
+          test -f "$TARBALL"
+          test "$(shasum -a 512 "$TARBALL" | awk '{print $1}')" = "$PRIMARY_SHA512"
+          CANONICAL_REPOSITORY="git+https://github.com/yerzhansa/enduragent.git"
+          CANONICAL_DIRECTORY="packages/$RELEASE_PACKAGE"
+          PACKAGE_JSON="$RUNNER_TEMP/verified-package.json"
+          tar -xOf "$TARBALL" package/package.json > "$PACKAGE_JSON"
+          jq -e --arg name "$RELEASE_PACKAGE" --arg version "$RELEASE_VERSION" \
+            --arg repository "$CANONICAL_REPOSITORY" --arg directory "$CANONICAL_DIRECTORY" \
+            '.name == $name and .version == $version and .repository == {"type":"git","url":$repository,"directory":$directory} and .publishConfig == null' \
+            "$PACKAGE_JSON" >/dev/null
+          EXPECTED_INTEGRITY="sha512-$(printf '%s' "$PRIMARY_SHA512" | xxd -r -p | base64 | tr -d '\n')"
+          EXPECTED_ATTESTATION_URL="https://registry.npmjs.org/-/npm/v1/attestations/$RELEASE_PACKAGE@$RELEASE_VERSION"
+          SPEC="$RELEASE_PACKAGE@$RELEASE_VERSION"
+          VIEW_JSON="$RUNNER_TEMP/npm-publication.json"
+          OBSERVED_INTEGRITY=none
+          OBSERVED_ATTESTATION_URL=none
+          for attempt in $(seq 1 12); do
+            if npm view "$SPEC" --registry=https://registry.npmjs.org/ --json > "$VIEW_JSON" 2>/dev/null; then
+              OBSERVED_INTEGRITY=$(jq -r '.dist.integrity // empty' "$VIEW_JSON")
+              OBSERVED_ATTESTATION_URL=$(jq -r '.dist.attestations.url // empty' "$VIEW_JSON")
+              if [ "$OBSERVED_INTEGRITY" = "$EXPECTED_INTEGRITY" ] && [ "$OBSERVED_ATTESTATION_URL" = "$EXPECTED_ATTESTATION_URL" ]; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "::error::npm publication did not converge to the prepared bytes and canonical attestation URL"
+              exit 1
+            fi
+            sleep 5
+          done
+          test "$OBSERVED_INTEGRITY" = "$EXPECTED_INTEGRITY"
+          test "$OBSERVED_ATTESTATION_URL" = "$EXPECTED_ATTESTATION_URL"
+          ATTESTATION_FILE="$RUNNER_TEMP/npm-attestations.json"
+          curl --fail-with-body --silent --show-error --location \
+            --retry 5 --retry-delay 3 --retry-all-errors --max-time 30 \
+            --output "$ATTESTATION_FILE" "$EXPECTED_ATTESTATION_URL"
+          CONSUMER_DIR="$RUNNER_TEMP/npm-signature-consumer"
+          mkdir -p "$CONSUMER_DIR"
+          (
+            cd "$CONSUMER_DIR"
+            npm init -y >/dev/null
+            npm install "$SPEC" --ignore-scripts --registry=https://registry.npmjs.org/
+            npm audit signatures --registry=https://registry.npmjs.org/
+          )
+          ALLOW_PRIOR_INVOCATION=false
+          if [ "$PUBLISHED_NEW" = "false" ]; then
+            ALLOW_PRIOR_INVOCATION=true
+          fi
+          pnpm desktop-release:transaction -- verify-npm-provenance \
+            --metadata "$ATTESTATION_FILE" \
+            --name "$RELEASE_PACKAGE" \
+            --version "$RELEASE_VERSION" \
+            --integrity "$EXPECTED_INTEGRITY" \
+            --repository "https://github.com/$WORKFLOW_REPOSITORY" \
+            --workflow .github/workflows/release.yml \
+            --ref "$PUBLICATION_REF" \
+            --commit "$RELEASE_COMMIT" \
+            --invocation-id "https://github.com/$WORKFLOW_REPOSITORY/actions/runs/$PUBLICATION_RUN_ID/attempts/$PUBLICATION_RUN_ATTEMPT" \
+            --allow-prior-invocation "$ALLOW_PRIOR_INVOCATION" \
+            --release-tag "$RELEASE_TAG" \
+            --event-name "$PUBLICATION_EVENT_NAME" \
+            --repository-id "$WORKFLOW_REPOSITORY_ID" \
+            --repository-owner-id "$WORKFLOW_REPOSITORY_OWNER_ID"
+          echo "npm_integrity=$EXPECTED_INTEGRITY" >> "$GITHUB_OUTPUT"
+          echo "npm_attestation_url=$EXPECTED_ATTESTATION_URL" >> "$GITHUB_OUTPUT"
+
+  prepare-release-draft:
+    runs-on: ubuntu-latest
+    needs: [parse-tag, verify-npm-publication]
+    if: ${{ needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true' }}
+    permissions:
+      contents: write
+    outputs:
+      draft_id: ${{ steps.release-draft.outputs.draft_id }}
+      draft_body_sha256: ${{ steps.release-draft.outputs.body_sha256 }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.parse-tag.outputs.commit }}
+          persist-credentials: false
+      - name: Create or validate GitHub Release draft
+        id: release-draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DESKTOP_ENABLED: ${{ needs.parse-tag.outputs.desktop_enabled }}
+          RELEASE_PACKAGE: ${{ needs.parse-tag.outputs.package }}
+          RELEASE_TAG: ${{ needs.parse-tag.outputs.ref }}
+          RELEASE_COMMIT: ${{ needs.parse-tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          PACKAGE="$RELEASE_PACKAGE"
+          TAG="$RELEASE_TAG"
+          COMMIT="$RELEASE_COMMIT"
+          BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' "packages/$PACKAGE/CHANGELOG.md" | tail -n +2)
+          BODY_SHA256=$(printf '%s' "$BODY" | shasum -a 256 | awk '{print $1}')
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            RELEASE_JSON=$(gh release view "$TAG" --json body,databaseId,isDraft,isPrerelease,tagName)
+            RELEASE_TAG=$(printf '%s' "$RELEASE_JSON" | jq -r '.tagName')
+            IS_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.isDraft')
+            IS_PRERELEASE=$(printf '%s' "$RELEASE_JSON" | jq -r '.isPrerelease')
+            EXISTING_BODY_SHA256=$(printf '%s' "$RELEASE_JSON" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
+            if [ "$RELEASE_TAG" != "$TAG" ]; then
+              echo "::error::Existing GitHub Release is bound to a different tag"
+              exit 1
+            fi
+            if [ "$IS_PRERELEASE" != "false" ]; then
+              echo "::error::Stable desktop updater assets cannot use a prerelease"
+              exit 1
+            fi
+            if [ "$PACKAGE" = "cycling-coach" ] && [ "$DESKTOP_ENABLED" = "true" ] && [ "$IS_DRAFT" != "true" ]; then
+              echo "::error::Desktop assets require an unpublished GitHub Release draft"
+              exit 1
+            fi
+            if [ "$PACKAGE" = "cycling-coach" ] && [ "$DESKTOP_ENABLED" = "true" ] && [ "$EXISTING_BODY_SHA256" != "$BODY_SHA256" ]; then
+              echo "::error::Existing desktop draft body differs from the bound pre-GA release notes"
+              exit 1
+            fi
+          else
+            gh release create "$TAG" --draft --latest=false --target "$COMMIT" --title "$TAG" --notes "$BODY"
+            RELEASE_JSON=$(gh release view "$TAG" --json databaseId,isDraft,isPrerelease,tagName)
+            echo "::notice::Created non-latest GitHub Release draft $TAG"
+          fi
+          DRAFT_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.databaseId')
+          if ! printf '%s' "$DRAFT_ID" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "::error::GitHub Release draft id is invalid"
+            exit 1
+          fi
+          echo "draft_id=$DRAFT_ID" >> "$GITHUB_OUTPUT"
+          echo "body_sha256=$BODY_SHA256" >> "$GITHUB_OUTPUT"
+
+  desktop-release:
+    needs: [parse-tag, verify-npm-publication, prepare-release-draft]
+    if: ${{ needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true' }}
+    permissions:
+      actions: read
+      contents: write
+    uses: ./.github/workflows/desktop-release.yml
+    with:
+      tag: ${{ needs.parse-tag.outputs.ref }}
+      version: ${{ needs.parse-tag.outputs.version }}
+      commit: ${{ needs.parse-tag.outputs.commit }}
+      draft_id: ${{ needs.prepare-release-draft.outputs.draft_id }}
+      mode: ${{ needs.parse-tag.outputs.desktop_mode }}
+      draft_body_sha256: ${{ needs.prepare-release-draft.outputs.draft_body_sha256 }}
+      npm_integrity: ${{ needs.verify-npm-publication.outputs.npm_integrity }}
+      npm_attestation_url: ${{ needs.verify-npm-publication.outputs.npm_attestation_url }}
+      baseline_tag: ${{ needs.parse-tag.outputs.desktop_baseline_tag }}
+  publish-package-only-release:
+    runs-on: ubuntu-latest
+    needs: [parse-tag, verify-npm-publication]
+    if: ${{ needs.parse-tag.outputs.package != 'cycling-coach' || needs.parse-tag.outputs.desktop_enabled != 'true' }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.parse-tag.outputs.commit }}
+          persist-credentials: false
+      - name: Preserve package-only GitHub Release behavior
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PACKAGE: ${{ needs.parse-tag.outputs.package }}
+          RELEASE_TAG: ${{ needs.parse-tag.outputs.ref }}
+        run: |
+          set -euo pipefail
+          PACKAGE="$RELEASE_PACKAGE"
+          TAG="$RELEASE_TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists (likely created via UI). Leaving it untouched."
+          else
+            BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' "packages/$PACKAGE/CHANGELOG.md" | tail -n +2)
+            gh release create "$TAG" --title "$TAG" --notes "$BODY"
+            echo "::notice::Created GitHub Release $TAG"
           fi

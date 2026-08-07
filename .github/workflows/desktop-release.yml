@@ -1,0 +1,517 @@
+name: Desktop release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      commit:
+        required: true
+        type: string
+      draft_id:
+        required: true
+        type: string
+      mode:
+        required: true
+        type: string
+      draft_body_sha256:
+        required: true
+        type: string
+      npm_integrity:
+        required: true
+        type: string
+      npm_attestation_url:
+        required: true
+        type: string
+      baseline_tag:
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: stable-desktop
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  sign-macos:
+    runs-on: macos-15
+    environment: desktop-macos-signing
+    permissions:
+      contents: read
+    outputs:
+      baseline_tag: ${{ steps.baseline.outputs.baseline_tag }}
+      baseline_release_id: ${{ steps.baseline.outputs.baseline_release_id }}
+      baseline_commit: ${{ steps.baseline.outputs.baseline_commit }}
+      baseline_zip_sha256: ${{ steps.baseline.outputs.baseline_zip_sha256 }}
+      baseline_signing_identity: ${{ steps.baseline.outputs.baseline_signing_identity }}
+      baseline_cdhash: ${{ steps.baseline.outputs.baseline_cdhash }}
+      cdhash: ${{ steps.signing-evidence.outputs.cdhash }}
+      code_directory_sha256: ${{ steps.signing-evidence.outputs.code_directory_sha256 }}
+      signing_identity: ${{ steps.signing-evidence.outputs.signing_identity }}
+      workflow_run_attempt: ${{ github.run_attempt }}
+      artifact_name: desktop-release-${{ github.run_id }}-${{ github.run_attempt }}
+      artifact_id: ${{ steps.sealed-artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.sealed-artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Refuse invalid release mode
+        if: ${{ inputs.mode != 'steady' && inputs.mode != 'genesis' }}
+        run: exit 1
+      - name: Resolve signed baseline
+        id: baseline
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/desktop-baseline"
+          pnpm desktop-release:transaction -- baseline \
+            --directory "$RUNNER_TEMP/desktop-baseline" \
+            --mode "$RELEASE_MODE" \
+            --candidate-version "$RELEASE_VERSION" \
+            --baseline-tag "$RELEASE_BASELINE_TAG" \
+            --github-output "$GITHUB_OUTPUT"
+          if [ "$RELEASE_MODE" = 'steady' ]; then
+            BASELINE_ZIP=$(find "$RUNNER_TEMP/desktop-baseline" -maxdepth 1 -type f -name '*-arm64.zip' -print -quit)
+            test -n "$BASELINE_ZIP"
+            ditto -x -k "$BASELINE_ZIP" "$RUNNER_TEMP/desktop-baseline/unpacked"
+            BASELINE_APP=$(find "$RUNNER_TEMP/desktop-baseline/unpacked" -maxdepth 2 -type d -name Enduragent.app -print -quit)
+            if [ -z "$BASELINE_APP" ]; then
+              echo '::error::Signed baseline application is missing from the prior release ZIP'
+              exit 1
+            fi
+            echo "baseline_app=$BASELINE_APP" >> "$GITHUB_OUTPUT"
+            BASELINE_EVIDENCE=$(codesign --display --verbose=4 "$BASELINE_APP" 2>&1)
+            BASELINE_IDENTITY=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^Authority=//p' | head -1)
+            BASELINE_CDHASH=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^CDHash=//p' | head -1)
+            printf '%s' "$BASELINE_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
+            printf '%s' "$BASELINE_CDHASH" | grep -Eq '^[0-9a-f]{40}$'
+            echo "baseline_signing_identity=$BASELINE_IDENTITY" >> "$GITHUB_OUTPUT"
+            echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Refuse genesis before unavailable packaging and canonical verification
+        if: ${{ inputs.mode == 'genesis' }}
+        run: |
+          echo '::error::Genesis packaging and baseline-free canonical verification have not landed; genesis staging fails closed.'
+          exit 1
+      - name: Build signed and notarized macOS envelope
+        if: ${{ inputs.mode == 'steady' }}
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          ENDURAGENT_DEVELOPER_ID_IDENTITY: ${{ vars.ENDURAGENT_DEVELOPER_ID_IDENTITY }}
+          ENDURAGENT_DESKTOP_UPDATE_URL: https://github.com/yerzhansa/enduragent/releases/latest/download/
+          ENDURAGENT_MACOS_BASELINE_APP: ${{ steps.baseline.outputs.baseline_app }}
+          ENDURAGENT_MACOS_GENESIS_VERSION: ${{ inputs.version }}
+          APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"
+          chmod 600 "$APPLE_API_KEY"
+          pnpm --filter @enduragent/desktop package:mac
+      - name: Bind candidate signing evidence
+        id: signing-evidence
+        run: |
+          set -euo pipefail
+          EVIDENCE=$(codesign --display --verbose=4 apps/desktop/dist/mac-arm64/Enduragent.app 2>&1)
+          CDHASH=$(printf '%s\n' "$EVIDENCE" | sed -n 's/^CDHash=//p' | head -1)
+          CODE_DIRECTORY_SHA256=$(printf '%s\n' "$EVIDENCE" | sed -n 's/^CandidateCDHashFull sha256=//p' | head -1)
+          SIGNING_IDENTITY=$(printf '%s\n' "$EVIDENCE" | sed -n 's/^Authority=//p' | head -1)
+          if ! printf '%s' "$CDHASH" | grep -Eq '^[0-9a-f]{40}$' || \
+             ! printf '%s' "$CODE_DIRECTORY_SHA256" | grep -Eq '^[0-9a-f]{64}$' || \
+             ! printf '%s' "$SIGNING_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'; then
+            echo '::error::Candidate code-signing evidence is incomplete'
+            exit 1
+          fi
+          echo "cdhash=$CDHASH" >> "$GITHUB_OUTPUT"
+          echo "code_directory_sha256=$CODE_DIRECTORY_SHA256" >> "$GITHUB_OUTPUT"
+          echo "signing_identity=$SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
+      - name: Remove temporary notarization key
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
+      - name: Seal digest-bound release manifest
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
+          NPM_INTEGRITY: ${{ inputs.npm_integrity }}
+          NPM_ATTESTATION_URL: ${{ inputs.npm_attestation_url }}
+          SIGNING_IDENTITY: ${{ steps.signing-evidence.outputs.signing_identity }}
+          CANDIDATE_CDHASH: ${{ steps.signing-evidence.outputs.cdhash }}
+          CANDIDATE_CODE_DIRECTORY_SHA256: ${{ steps.signing-evidence.outputs.code_directory_sha256 }}
+          BASELINE_TAG: ${{ steps.baseline.outputs.baseline_tag }}
+          BASELINE_RELEASE_ID: ${{ steps.baseline.outputs.baseline_release_id }}
+          BASELINE_COMMIT: ${{ steps.baseline.outputs.baseline_commit }}
+          BASELINE_ZIP_SHA256: ${{ steps.baseline.outputs.baseline_zip_sha256 }}
+          BASELINE_SIGNING_IDENTITY: ${{ steps.baseline.outputs.baseline_signing_identity }}
+          BASELINE_CDHASH: ${{ steps.baseline.outputs.baseline_cdhash }}
+        run: |
+          pnpm desktop-release:transaction -- seal \
+            --directory "apps/desktop/dist/release-envelope-$RELEASE_VERSION-mac-arm64" \
+            --tag "$RELEASE_TAG" \
+            --version "$RELEASE_VERSION" \
+            --commit "$RELEASE_COMMIT" \
+            --draft-id "$RELEASE_DRAFT_ID" \
+            --mode "$RELEASE_MODE" \
+            --workflow-run-id "$WORKFLOW_RUN_ID" \
+            --workflow-run-attempt "$WORKFLOW_RUN_ATTEMPT" \
+            --draft-body-sha256 "$RELEASE_BODY_SHA256" \
+            --npm-integrity "$NPM_INTEGRITY" \
+            --npm-attestation-url "$NPM_ATTESTATION_URL" \
+            --signing-identity "$SIGNING_IDENTITY" \
+            --candidate-cdhash "$CANDIDATE_CDHASH" \
+            --candidate-code-directory-sha256 "$CANDIDATE_CODE_DIRECTORY_SHA256" \
+            --baseline-tag "$BASELINE_TAG" \
+            --baseline-release-id "$BASELINE_RELEASE_ID" \
+            --baseline-commit "$BASELINE_COMMIT" \
+            --baseline-zip-sha256 "$BASELINE_ZIP_SHA256" \
+            --baseline-signing-identity "$BASELINE_SIGNING_IDENTITY" \
+            --baseline-cdhash "$BASELINE_CDHASH"
+      - name: Upload sealed macOS transaction artifact
+        id: sealed-artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/desktop/dist/release-envelope-${{ inputs.version }}-mac-arm64/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+  verify-macos-envelope:
+    runs-on: macos-15
+    needs: sign-macos
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
+          path: ${{ runner.temp }}/desktop-release
+          digest-mismatch: error
+      - name: Bind immutable Actions artifact evidence
+        env:
+          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
+          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
+          SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.workflow_run_attempt }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          test "$ARTIFACT_NAME" = "desktop-release-$GITHUB_RUN_ID-$SIGNING_RUN_ATTEMPT"
+      - name: Resolve independent baseline
+        id: independent-baseline
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
+        run: |
+          pnpm desktop-release:transaction -- baseline \
+            --directory "$RUNNER_TEMP/independent-baseline" \
+            --mode "$RELEASE_MODE" \
+            --candidate-version "$RELEASE_VERSION" \
+            --baseline-tag "$RELEASE_BASELINE_TAG" \
+            --github-output "$GITHUB_OUTPUT"
+          if [ "$RELEASE_MODE" = 'steady' ]; then
+            BASELINE_ZIP=$(find "$RUNNER_TEMP/independent-baseline" -maxdepth 1 -type f -name '*-arm64.zip' -print -quit)
+            test -n "$BASELINE_ZIP"
+            ditto -x -k "$BASELINE_ZIP" "$RUNNER_TEMP/independent-baseline/unpacked"
+            BASELINE_APP=$(find "$RUNNER_TEMP/independent-baseline/unpacked" -maxdepth 2 -type d -name Enduragent.app -print -quit)
+            test -n "$BASELINE_APP"
+            echo "baseline_app=$BASELINE_APP" >> "$GITHUB_OUTPUT"
+            BASELINE_EVIDENCE=$(codesign --display --verbose=4 "$BASELINE_APP" 2>&1)
+            BASELINE_IDENTITY=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^Authority=//p' | head -1)
+            BASELINE_CDHASH=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^CDHash=//p' | head -1)
+            printf '%s' "$BASELINE_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
+            printf '%s' "$BASELINE_CDHASH" | grep -Eq '^[0-9a-f]{40}$'
+            echo "baseline_signing_identity=$BASELINE_IDENTITY" >> "$GITHUB_OUTPUT"
+            echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Confirm independently resolved baseline evidence
+        env:
+          INDEPENDENT_TAG: ${{ steps.independent-baseline.outputs.baseline_tag }}
+          INDEPENDENT_RELEASE_ID: ${{ steps.independent-baseline.outputs.baseline_release_id }}
+          INDEPENDENT_COMMIT: ${{ steps.independent-baseline.outputs.baseline_commit }}
+          INDEPENDENT_ZIP_SHA256: ${{ steps.independent-baseline.outputs.baseline_zip_sha256 }}
+          INDEPENDENT_SIGNING_IDENTITY: ${{ steps.independent-baseline.outputs.baseline_signing_identity }}
+          INDEPENDENT_CDHASH: ${{ steps.independent-baseline.outputs.baseline_cdhash }}
+          SIGNED_TAG: ${{ needs.sign-macos.outputs.baseline_tag }}
+          SIGNED_RELEASE_ID: ${{ needs.sign-macos.outputs.baseline_release_id }}
+          SIGNED_COMMIT: ${{ needs.sign-macos.outputs.baseline_commit }}
+          SIGNED_ZIP_SHA256: ${{ needs.sign-macos.outputs.baseline_zip_sha256 }}
+          SIGNED_SIGNING_IDENTITY: ${{ needs.sign-macos.outputs.baseline_signing_identity }}
+          SIGNED_CDHASH: ${{ needs.sign-macos.outputs.baseline_cdhash }}
+        run: |
+          test "$INDEPENDENT_TAG" = "$SIGNED_TAG"
+          test "$INDEPENDENT_RELEASE_ID" = "$SIGNED_RELEASE_ID"
+          test "$INDEPENDENT_COMMIT" = "$SIGNED_COMMIT"
+          test "$INDEPENDENT_ZIP_SHA256" = "$SIGNED_ZIP_SHA256"
+          test "$INDEPENDENT_SIGNING_IDENTITY" = "$SIGNED_SIGNING_IDENTITY"
+          test "$INDEPENDENT_CDHASH" = "$SIGNED_CDHASH"
+      - name: Independently verify signed updater envelope
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.workflow_run_attempt }}
+          RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
+          NPM_INTEGRITY: ${{ inputs.npm_integrity }}
+          NPM_ATTESTATION_URL: ${{ inputs.npm_attestation_url }}
+          SIGNING_IDENTITY: ${{ needs.sign-macos.outputs.signing_identity }}
+          CANDIDATE_CDHASH: ${{ needs.sign-macos.outputs.cdhash }}
+          CANDIDATE_CODE_DIRECTORY_SHA256: ${{ needs.sign-macos.outputs.code_directory_sha256 }}
+          BASELINE_TAG: ${{ needs.sign-macos.outputs.baseline_tag }}
+          BASELINE_RELEASE_ID: ${{ needs.sign-macos.outputs.baseline_release_id }}
+          BASELINE_COMMIT: ${{ needs.sign-macos.outputs.baseline_commit }}
+          BASELINE_ZIP_SHA256: ${{ needs.sign-macos.outputs.baseline_zip_sha256 }}
+          BASELINE_SIGNING_IDENTITY: ${{ needs.sign-macos.outputs.baseline_signing_identity }}
+          BASELINE_CDHASH: ${{ needs.sign-macos.outputs.baseline_cdhash }}
+          INDEPENDENT_BASELINE_APP: ${{ steps.independent-baseline.outputs.baseline_app }}
+        run: |
+          pnpm desktop-release:transaction -- verify \
+            --directory "$RUNNER_TEMP/desktop-release" \
+            --tag "$RELEASE_TAG" \
+            --version "$RELEASE_VERSION" \
+            --commit "$RELEASE_COMMIT" \
+            --draft-id "$RELEASE_DRAFT_ID" \
+            --mode "$RELEASE_MODE" \
+            --workflow-run-id "$WORKFLOW_RUN_ID" \
+            --workflow-run-attempt "$SIGNING_RUN_ATTEMPT" \
+            --draft-body-sha256 "$RELEASE_BODY_SHA256" \
+            --npm-integrity "$NPM_INTEGRITY" \
+            --npm-attestation-url "$NPM_ATTESTATION_URL" \
+            --signing-identity "$SIGNING_IDENTITY" \
+            --candidate-cdhash "$CANDIDATE_CDHASH" \
+            --candidate-code-directory-sha256 "$CANDIDATE_CODE_DIRECTORY_SHA256" \
+            --baseline-tag "$BASELINE_TAG" \
+            --baseline-release-id "$BASELINE_RELEASE_ID" \
+            --baseline-commit "$BASELINE_COMMIT" \
+            --baseline-zip-sha256 "$BASELINE_ZIP_SHA256" \
+            --baseline-signing-identity "$BASELINE_SIGNING_IDENTITY" \
+            --baseline-cdhash "$BASELINE_CDHASH"
+          hdiutil verify "$RUNNER_TEMP/desktop-release/Enduragent-$RELEASE_VERSION-arm64.dmg"
+          spctl --assess --type open --context context:primary-signature --verbose \
+            "$RUNNER_TEMP/desktop-release/Enduragent-$RELEASE_VERSION-arm64.dmg"
+          mkdir "$RUNNER_TEMP/desktop-release-unpacked"
+          ditto -x -k "$RUNNER_TEMP/desktop-release/Enduragent-$RELEASE_VERSION-arm64.zip" \
+            "$RUNNER_TEMP/desktop-release-unpacked"
+          INDEPENDENT_EVIDENCE=$(codesign --display --verbose=4 \
+            "$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app" 2>&1)
+          INDEPENDENT_CDHASH=$(printf '%s\n' "$INDEPENDENT_EVIDENCE" | sed -n 's/^CDHash=//p' | head -1)
+          INDEPENDENT_CODE_DIRECTORY_SHA256=$(printf '%s\n' "$INDEPENDENT_EVIDENCE" | sed -n 's/^CandidateCDHashFull sha256=//p' | head -1)
+          INDEPENDENT_SIGNING_IDENTITY=$(printf '%s\n' "$INDEPENDENT_EVIDENCE" | sed -n 's/^Authority=//p' | head -1)
+          test "$INDEPENDENT_CDHASH" = "$CANDIDATE_CDHASH"
+          test "$INDEPENDENT_CODE_DIRECTORY_SHA256" = "$CANDIDATE_CODE_DIRECTORY_SHA256"
+          test "$INDEPENDENT_SIGNING_IDENTITY" = "$SIGNING_IDENTITY"
+          codesign --verify --deep --strict --verbose=2 \
+            "$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app"
+          spctl --assess --type execute --verbose \
+            "$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app"
+          if [ "$RELEASE_MODE" = 'steady' ]; then
+            PUBLIC_ENVELOPE="$RUNNER_TEMP/desktop-public-envelope"
+            pnpm desktop-release:transaction -- public-envelope \
+              --directory "$RUNNER_TEMP/desktop-release" \
+              --output "$PUBLIC_ENVELOPE"
+            pnpm --filter @enduragent/desktop verify:mac-release -- \
+              "$PUBLIC_ENVELOPE" \
+              "$INDEPENDENT_BASELINE_APP" \
+              "$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app"
+          fi
+          mkdir "$RUNNER_TEMP/desktop-release-dmg"
+          hdiutil attach -readonly -nobrowse \
+            -mountpoint "$RUNNER_TEMP/desktop-release-dmg" \
+            "$RUNNER_TEMP/desktop-release/Enduragent-$RELEASE_VERSION-arm64.dmg"
+          trap 'hdiutil detach "$RUNNER_TEMP/desktop-release-dmg"' EXIT
+          codesign --verify --deep --strict --verbose=2 \
+            "$RUNNER_TEMP/desktop-release-dmg/Enduragent.app"
+          spctl --assess --type execute --verbose \
+            "$RUNNER_TEMP/desktop-release-dmg/Enduragent.app"
+
+  stage-private-draft:
+    runs-on: ubuntu-latest
+    needs: [sign-macos, verify-macos-envelope]
+    environment: desktop-macos-publication
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
+          path: ${{ runner.temp }}/desktop-release
+          digest-mismatch: error
+      - name: Bind immutable Actions artifact evidence
+        env:
+          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
+          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
+          SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.workflow_run_attempt }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          test "$ARTIFACT_NAME" = "desktop-release-$GITHUB_RUN_ID-$SIGNING_RUN_ATTEMPT"
+      - name: Upload updater envelope to the private draft
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm desktop-release:transaction -- stage --directory "$RUNNER_TEMP/desktop-release"
+
+  desktop-activation-not-implemented:
+    runs-on: ubuntu-latest
+    needs: stage-private-draft
+    if: ${{ inputs.mode == 'steady' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Refuse incomplete public activation transaction
+        run: |
+          echo '::error::Public activation, compensation, production-feed roundtrip, and GA body activation have not landed; stable publication fails closed.'
+          exit 1
+
+  publish-assets:
+    runs-on: ubuntu-latest
+    needs: [sign-macos, stage-private-draft]
+    if: ${{ false && inputs.mode == 'steady' }}
+    environment: desktop-macos-publication
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      latest_id: ${{ steps.publish.outputs.latest_id }}
+      latest_tag: ${{ steps.publish.outputs.latest_tag }}
+      latest_metadata_sha256: ${{ steps.publish.outputs.latest_metadata_sha256 }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
+          path: ${{ runner.temp }}/desktop-release
+          digest-mismatch: error
+      - name: Bind immutable Actions artifact evidence
+        env:
+          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
+          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
+          SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.workflow_run_attempt }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          test "$ARTIFACT_NAME" = "desktop-release-$GITHUB_RUN_ID-$SIGNING_RUN_ATTEMPT"
+      - name: Publish verified release without changing latest
+        id: publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pnpm desktop-release:transaction -- publish \
+            --directory "$RUNNER_TEMP/desktop-release" \
+            --github-output "$GITHUB_OUTPUT"
+
+  promote-latest:
+    runs-on: ubuntu-latest
+    needs: [sign-macos, publish-assets]
+    if: ${{ inputs.mode == 'steady' }}
+    environment: desktop-macos-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
+          path: ${{ runner.temp }}/desktop-release
+          digest-mismatch: error
+      - name: Bind immutable Actions artifact evidence
+        env:
+          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
+          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
+          SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.workflow_run_attempt }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          test "$ARTIFACT_NAME" = "desktop-release-$GITHUB_RUN_ID-$SIGNING_RUN_ATTEMPT"
+      - name: Compare-and-swap repository latest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_LATEST_ID: ${{ needs.publish-assets.outputs.latest_id }}
+          EXPECTED_LATEST_TAG: ${{ needs.publish-assets.outputs.latest_tag }}
+          EXPECTED_LATEST_METADATA_SHA256: ${{ needs.publish-assets.outputs.latest_metadata_sha256 }}
+        run: |
+          pnpm desktop-release:transaction -- promote \
+            --directory "$RUNNER_TEMP/desktop-release" \
+            --expected-latest-id "$EXPECTED_LATEST_ID" \
+            --expected-latest-tag "$EXPECTED_LATEST_TAG" \
+            --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"
