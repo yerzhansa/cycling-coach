@@ -323,7 +323,7 @@ export function releaseArtifactNames(version) {
   });
 }
 
-export async function createMacosReleasePlan(input, dependencies = {}) {
+async function createMacosReleasePlanCore(input, dependencies = {}) {
   const repositoryRoot = input.repositoryRoot ?? canonicalRepositoryRoot;
   const desktopRoot = input.desktopRoot ?? join(repositoryRoot, "apps/desktop");
   if (!isAbsolute(desktopRoot)) {
@@ -335,11 +335,6 @@ export async function createMacosReleasePlan(input, dependencies = {}) {
   });
   const feedUrl = requireGenericFeedUrl(input.feedUrl);
   const identity = requireDeveloperIdIdentity(input.identity);
-  const baselineApplication = requireMacosBaselineApplication(input.baselineApplication);
-  const candidateApplication = join(desktopRoot, "dist/mac-arm64/Enduragent.app");
-  if (resolve(baselineApplication) === resolve(candidateApplication)) {
-    throw new TypeError("signed baseline application must differ from candidate");
-  }
   const builderOptions = {
     projectDir: desktopRoot,
     publish: "never",
@@ -379,10 +374,26 @@ export async function createMacosReleasePlan(input, dependencies = {}) {
   return Object.freeze({
     version,
     feedUrl,
-    baselineApplication,
     artifactNames: releaseArtifactNames(version),
     builderOptions,
   });
+}
+
+export async function createMacosReleasePlan(input, dependencies = {}) {
+  const plan = await createMacosReleasePlanCore(input, dependencies);
+  const baselineApplication = requireMacosBaselineApplication(input.baselineApplication);
+  const candidateApplication = join(
+    plan.builderOptions.projectDir,
+    "dist/mac-arm64/Enduragent.app",
+  );
+  if (resolve(baselineApplication) === resolve(candidateApplication)) {
+    throw new TypeError("signed baseline application must differ from candidate");
+  }
+  return Object.freeze({ ...plan, baselineApplication });
+}
+
+export async function createMacosGenesisReleasePlan(input, dependencies = {}) {
+  return createMacosReleasePlanCore(input, dependencies);
 }
 
 export async function sealMacosReleaseMetadata(plan) {

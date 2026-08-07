@@ -217,7 +217,14 @@ function parseSignatureMetadata(result) {
   ) {
     fail("macOS signed identity is invalid");
   }
-  return { identifier, teamIdentifier, codeDirectory, cdHash };
+  return {
+    identifier,
+    teamIdentifier,
+    codeDirectory,
+    cdHash,
+    hardenedRuntime: true,
+    authorities: Object.freeze([...authorities]),
+  };
 }
 
 function parseDesignatedRequirement(result) {
@@ -303,9 +310,13 @@ async function inspectMacosApplicationIdentity(application, bundle, dependencies
   return Object.freeze({
     version,
     identifier: signature.identifier,
+    productName: canonicalProductName,
+    packageName: canonicalPackageName,
     teamIdentifier: signature.teamIdentifier,
     designatedRequirement,
     entitlements,
+    hardenedRuntime: signature.hardenedRuntime,
+    authorities: signature.authorities,
     codeDirectory: signature.codeDirectory,
     cdHash: signature.cdHash,
   });
@@ -351,6 +362,67 @@ export async function verifyMacosBaselineApplication(baselineApplication, option
   });
 }
 
+async function verifyMacosReleaseCandidateBundle(
+  candidateApplication,
+  candidateVersion,
+  bundle,
+  dependencies,
+) {
+  const candidate = await inspectMacosApplicationIdentity(
+    candidateApplication,
+    bundle,
+    dependencies,
+  );
+  if (candidate.version !== candidateVersion) fail("candidate release identity is invalid");
+  return Object.freeze({
+    version: candidate.version,
+    identifier: candidate.identifier,
+    productName: candidate.productName,
+    packageName: candidate.packageName,
+    teamIdentifier: candidate.teamIdentifier,
+    designatedRequirement: candidate.designatedRequirement,
+    hardenedRuntime: candidate.hardenedRuntime,
+    authorities: candidate.authorities,
+    entitlements: candidate.entitlements,
+    candidateCodeIdentity: Object.freeze({
+      codeDirectory: candidate.codeDirectory,
+      cdHash: candidate.cdHash,
+    }),
+  });
+}
+
+export async function verifyMacosReleaseCandidateApplication(
+  candidateApplication,
+  options,
+  overrides = {},
+) {
+  let candidateVersion;
+  try {
+    candidateVersion = requireStableCalVer(options?.candidateVersion);
+  } catch {
+    fail("candidate release version is invalid");
+  }
+  if (typeof candidateApplication !== "string" || !isAbsolute(candidateApplication)) {
+    fail("candidate application path must be absolute");
+  }
+  const dependencies = {
+    executeFile: overrides.executeFile ?? executeSystemFile,
+    extractAsarFile: overrides.extractAsarFile ?? extractFile,
+    lstat: overrides.lstat ?? lstat,
+    mkdtemp: overrides.mkdtemp ?? mkdtemp,
+    realpath: overrides.realpath ?? realpath,
+    rm: overrides.rm ?? rm,
+    tmpdir: overrides.tmpdir ?? tmpdir,
+  };
+  const bundle = await requireApplicationBundle(candidateApplication, "candidate", dependencies);
+  return verifyMacosReleaseCandidateBundle(
+    candidateApplication,
+    candidateVersion,
+    bundle,
+    dependencies,
+  );
+}
+
 export async function verifyMacosIdentityContinuity(
   baselineApplication,
   candidateApplication,
@@ -388,11 +460,20 @@ export async function verifyMacosIdentityContinuity(
   if (baselineBundle.canonicalPath === candidateBundle.canonicalPath) {
     fail("baseline application must differ from candidate");
   }
-  const [baseline, candidate] = await Promise.all([
+  const [baseline, candidateIdentity] = await Promise.all([
     inspectMacosApplicationIdentity(baselineApplication, baselineBundle, dependencies),
-    inspectMacosApplicationIdentity(candidateApplication, candidateBundle, dependencies),
+    verifyMacosReleaseCandidateBundle(
+      candidateApplication,
+      candidateVersion,
+      candidateBundle,
+      dependencies,
+    ),
   ]);
-  if (candidate.version !== candidateVersion) fail("candidate release identity is invalid");
+  const candidate = {
+    ...candidateIdentity,
+    codeDirectory: candidateIdentity.candidateCodeIdentity.codeDirectory,
+    cdHash: candidateIdentity.candidateCodeIdentity.cdHash,
+  };
   if (!olderStableCalVer(baseline.version, candidate.version)) {
     fail("baseline application is not older than candidate");
   }
@@ -810,26 +891,15 @@ async function requireSameSecureDirectory(path, expectedIdentity, dependencies, 
   }
 }
 
-async function inspectPackagedApplication(
-  baselineApplication,
-  application,
-  candidateVersion,
-  expectedCodeIdentity,
-  dependencies,
-) {
-  let continuity;
+async function inspectPackagedApplication(application, expectedCodeIdentity, verifyCandidate) {
+  let verifiedCandidate;
   try {
-    continuity = await dependencies.verifyIdentityContinuity(
-      baselineApplication,
-      application,
-      { candidateVersion },
-      dependencies,
-    );
+    verifiedCandidate = await verifyCandidate(application);
   } catch (error) {
     if (error instanceof MacosReleaseVerificationError) throw error;
     fail("packaged macOS application identity verification failed");
   }
-  const actualCodeIdentity = requireCandidateCodeIdentity(continuity?.candidateCodeIdentity);
+  const actualCodeIdentity = requireCandidateCodeIdentity(verifiedCandidate?.candidateCodeIdentity);
   if (
     actualCodeIdentity.codeDirectory !== expectedCodeIdentity.codeDirectory ||
     actualCodeIdentity.cdHash !== expectedCodeIdentity.cdHash
@@ -838,16 +908,13 @@ async function inspectPackagedApplication(
   }
 }
 
-export async function verifyMacosReleaseApplicationContents(
+async function verifyMacosReleaseApplicationContentsWithCandidate(
   artifactDirectory,
-  baselineApplication,
   options,
-  overrides = {},
+  overrides,
+  verifyCandidate,
 ) {
   if (!isAbsolute(artifactDirectory)) fail("artifact directory must be absolute");
-  if (typeof baselineApplication !== "string" || !isAbsolute(baselineApplication)) {
-    fail("baseline application path must be absolute");
-  }
   let candidateVersion;
   try {
     candidateVersion = requireStableCalVer(options?.candidateVersion);
@@ -869,7 +936,6 @@ export async function verifyMacosReleaseApplicationContents(
     rmdir: overrides.rmdir ?? rmdir,
     tmpdir: overrides.tmpdir ?? tmpdir,
     writeFile: overrides.writeFile ?? writeFile,
-    verifyIdentityContinuity: overrides.verifyIdentityContinuity ?? verifyMacosIdentityContinuity,
   };
   const names = releaseArtifactNames(candidateVersion);
   const zipPath = join(artifactDirectory, names.zip);
@@ -942,13 +1008,7 @@ export async function verifyMacosReleaseApplicationContents(
       "macOS release ZIP extraction failed",
     );
     const zipApplication = await requireSingleRootApplication(zipDirectory, "ZIP", dependencies);
-    await inspectPackagedApplication(
-      baselineApplication,
-      zipApplication,
-      candidateVersion,
-      expectedCodeIdentity,
-      dependencies,
-    );
+    await inspectPackagedApplication(zipApplication, expectedCodeIdentity, verifyCandidate);
 
     hdiutilBeforeAttach = await inspectCurrentHdiutilState(
       temporaryDirectory,
@@ -1008,13 +1068,7 @@ export async function verifyMacosReleaseApplicationContents(
     requireNewImageInstance(candidateAttachmentIdentity, hdiutilBeforeAttach);
     attachmentIdentity = candidateAttachmentIdentity;
     const dmgApplication = await requireSingleRootApplication(mountPoint, "DMG", dependencies);
-    await inspectPackagedApplication(
-      baselineApplication,
-      dmgApplication,
-      candidateVersion,
-      expectedCodeIdentity,
-      dependencies,
-    );
+    await inspectPackagedApplication(dmgApplication, expectedCodeIdentity, verifyCandidate);
   } catch (error) {
     failure =
       error instanceof MacosReleaseVerificationError
@@ -1145,6 +1199,51 @@ export async function verifyMacosReleaseApplicationContents(
   }
   if (cleanupFailure !== undefined) throw cleanupFailure;
   if (failure !== null) throw failure;
+}
+
+export async function verifyMacosReleaseApplicationContents(
+  artifactDirectory,
+  baselineApplication,
+  options,
+  overrides = {},
+) {
+  if (typeof baselineApplication !== "string" || !isAbsolute(baselineApplication)) {
+    fail("baseline application path must be absolute");
+  }
+  const verifyIdentityContinuity =
+    overrides.verifyIdentityContinuity ?? verifyMacosIdentityContinuity;
+  return verifyMacosReleaseApplicationContentsWithCandidate(
+    artifactDirectory,
+    options,
+    overrides,
+    (application) =>
+      verifyIdentityContinuity(
+        baselineApplication,
+        application,
+        { candidateVersion: options?.candidateVersion },
+        overrides,
+      ),
+  );
+}
+
+export async function verifyMacosGenesisReleaseApplicationContents(
+  artifactDirectory,
+  options,
+  overrides = {},
+) {
+  const verifyCandidateApplication =
+    overrides.verifyCandidateApplication ?? verifyMacosReleaseCandidateApplication;
+  return verifyMacosReleaseApplicationContentsWithCandidate(
+    artifactDirectory,
+    options,
+    overrides,
+    (application) =>
+      verifyCandidateApplication(
+        application,
+        { candidateVersion: options?.candidateVersion },
+        overrides,
+      ),
+  );
 }
 
 async function runSystemVerification(executeFile, executable, arguments_, failureMessage) {
@@ -1478,6 +1577,43 @@ export async function verifyMacosReleaseEnvelope(
     overrides,
   );
   return Object.freeze({ artifacts, identityContinuity });
+}
+
+export async function verifyMacosGenesisReleaseEnvelope(
+  artifactDirectory,
+  looseCandidateApplication,
+  options = {},
+  overrides = {},
+) {
+  const verifyReleaseArtifacts = overrides.verifyReleaseArtifacts ?? verifyMacosReleaseArtifacts;
+  const artifacts = await verifyReleaseArtifacts(artifactDirectory, options, overrides);
+  let candidateVersion;
+  try {
+    candidateVersion = requireStableCalVer(artifacts?.version);
+  } catch {
+    fail("verified release version is invalid");
+  }
+  const verifyCandidateApplication =
+    overrides.verifyCandidateApplication ?? verifyMacosReleaseCandidateApplication;
+  const candidateIdentity = await verifyCandidateApplication(
+    looseCandidateApplication,
+    { candidateVersion },
+    overrides,
+  );
+  if (candidateIdentity?.version !== candidateVersion) {
+    fail("loose candidate release identity is invalid");
+  }
+  const looseCandidateCodeIdentity = requireCandidateCodeIdentity(
+    candidateIdentity.candidateCodeIdentity,
+  );
+  const verifyReleaseApplicationContents =
+    overrides.verifyReleaseApplicationContents ?? verifyMacosGenesisReleaseApplicationContents;
+  await verifyReleaseApplicationContents(
+    artifactDirectory,
+    { candidateVersion, looseCandidateCodeIdentity },
+    overrides,
+  );
+  return Object.freeze({ artifacts, candidateIdentity });
 }
 
 async function main() {

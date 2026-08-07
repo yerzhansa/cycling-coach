@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   DESKTOP_UPDATER_CACHE_DIRECTORY,
+  createMacosGenesisReleasePlan,
   createMacosReleasePlan,
   macosReleaseEnvelopePath,
   notarizeMacosDmg,
@@ -28,7 +29,9 @@ import {
   runMacosRelease,
   sealMacosReleaseMetadata,
 } from "../scripts/macos-release-plan.mjs";
+import { runMacosGenesisRelease } from "../scripts/macos-genesis-release.mjs";
 import type {
+  MacosGenesisReleasePlan,
   MacosReleaseBuilderOptions,
   MacosReleasePlan,
 } from "../scripts/macos-release-plan.mjs";
@@ -55,6 +58,22 @@ const verifiedLooseIdentity = Object.freeze({
 const verifiedBaselineApplication = Object.freeze({
   baselineVersion: "2026.7.1",
   teamIdentifier: "FA494ACVTF",
+});
+const verifiedCandidateApplication = Object.freeze({
+  version: "2026.7.2",
+  identifier: "icu.enduragent.desktop" as const,
+  productName: "Enduragent" as const,
+  packageName: "@enduragent/desktop" as const,
+  teamIdentifier: "FA494ACVTF" as const,
+  designatedRequirement: "synthetic canonical designated requirement",
+  hardenedRuntime: true as const,
+  authorities: Object.freeze([
+    "Developer ID Application: Enduragent Test (FA494ACVTF)",
+    "Developer ID Certification Authority",
+    "Apple Root CA",
+  ] as const),
+  entitlements: JSON.stringify({ "com.apple.security.cs.allow-jit": true }),
+  candidateCodeIdentity: verifiedLooseIdentity.candidateCodeIdentity,
 });
 const temporaryRoots: string[] = [];
 
@@ -256,6 +275,34 @@ describe("macOS release plan", () => {
     ).rejects.toThrow("signed baseline application must differ from candidate");
   });
 
+  it("creates a genesis plan without weakening the routine baseline contract", async () => {
+    const genesisPlan = await createMacosGenesisReleasePlan(
+      {
+        repositoryRoot: "/synthetic/repository",
+        desktopRoot: "/synthetic/repository/apps/desktop",
+        feedUrl,
+        identity,
+        genesisVersion: "2026.7.2",
+      },
+      { readFile: versionReader() },
+    );
+
+    expect(genesisPlan).not.toHaveProperty("baselineApplication");
+    expect(genesisPlan.version).toBe("2026.7.2");
+    await expect(
+      createMacosReleasePlan(
+        {
+          repositoryRoot: "/synthetic/repository",
+          desktopRoot: "/synthetic/repository/apps/desktop",
+          feedUrl,
+          identity,
+          baselineApplication: undefined,
+        },
+        { readFile: versionReader() },
+      ),
+    ).rejects.toThrow("signed baseline application path is invalid");
+  });
+
   it("fails baseline preflight before loading or invoking electron-builder", async () => {
     const build = vi.fn(async (_options: MacosReleaseBuilderOptions) => []);
     await expect(
@@ -275,6 +322,112 @@ describe("macOS release plan", () => {
       ),
     ).rejects.toThrow("signed baseline application path is invalid");
     expect(build).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "2026.7.1", "2026.7.3"])(
+    "fails genesis acknowledgement before loading or invoking electron-builder: %s",
+    async (genesisVersion) => {
+      const build = vi.fn(async (_options: MacosReleaseBuilderOptions) => []);
+
+      await expect(
+        runMacosGenesisRelease(
+          {
+            repositoryRoot: "/synthetic/repository",
+            desktopRoot: "/synthetic/repository/apps/desktop",
+            feedUrl,
+            identity,
+            genesisVersion,
+          },
+          {
+            readFile: versionReader(),
+            environment: notarizationEnvironment,
+            build,
+          },
+        ),
+      ).rejects.toThrow("macOS genesis release version acknowledgement is invalid");
+      expect(build).not.toHaveBeenCalled();
+    },
+  );
+
+  it("builds genesis only through canonical candidate and embedded-app verification", async () => {
+    const build = vi.fn(async (_options: MacosReleaseBuilderOptions) => [
+      "/synthetic/Enduragent-2026.7.2-arm64.dmg",
+    ]);
+    const verifyPackageLayout = vi.fn(async () => {});
+    const verifyCandidateApplication = vi.fn(async () => verifiedCandidateApplication);
+    const notarize = vi.fn(async () => {});
+    const verifyDmg = vi.fn(async () => {});
+    const sealReleaseMetadata = vi.fn(async () => {});
+    const verifyReleaseArtifacts = vi.fn(async (artifactDirectory: string) =>
+      verifiedReleaseArtifactsAt(artifactDirectory),
+    );
+    const verifyReleaseApplicationContents = vi.fn(async () => {});
+    const envelopePath =
+      "/synthetic/repository/apps/desktop/dist/release-envelope-2026.7.2-mac-arm64";
+    const temporaryEnvelopePath =
+      "/synthetic/repository/apps/desktop/dist/.release-envelope-2026.7.2-mac-arm64-test";
+    const promoteReleaseEnvelope = vi.fn(
+      async (
+        _plan: MacosGenesisReleasePlan,
+        verifyEnvelope: (artifactDirectory: string) => Promise<unknown>,
+      ) => {
+        await verifyEnvelope(temporaryEnvelopePath);
+        return envelopePath;
+      },
+    );
+
+    const result = await runMacosGenesisRelease(
+      {
+        repositoryRoot: "/synthetic/repository",
+        desktopRoot: "/synthetic/repository/apps/desktop",
+        feedUrl,
+        identity,
+        genesisVersion: "2026.7.2",
+      },
+      {
+        readFile: versionReader(),
+        environment: notarizationEnvironment,
+        build,
+        verifyPackageLayout,
+        verifyCandidateApplication,
+        notarize,
+        verifyDmg,
+        sealReleaseMetadata,
+        verifyReleaseArtifacts,
+        verifyReleaseApplicationContents,
+        promoteReleaseEnvelope,
+      },
+    );
+
+    const application = "/synthetic/repository/apps/desktop/dist/mac-arm64/Enduragent.app";
+    expect(result.envelopePath).toBe(envelopePath);
+    expect(verifyCandidateApplication).toHaveBeenCalledTimes(2);
+    expect(verifyCandidateApplication).toHaveBeenNthCalledWith(1, application, {
+      candidateVersion: "2026.7.2",
+    });
+    expect(verifyCandidateApplication).toHaveBeenNthCalledWith(
+      2,
+      application,
+      { candidateVersion: "2026.7.2" },
+      expect.any(Object),
+    );
+    expect(verifyReleaseApplicationContents).toHaveBeenCalledWith(
+      temporaryEnvelopePath,
+      {
+        candidateVersion: "2026.7.2",
+        looseCandidateCodeIdentity: verifiedCandidateApplication.candidateCodeIdentity,
+      },
+      expect.any(Object),
+    );
+    expect(build.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyCandidateApplication.mock.invocationCallOrder[0]!,
+    );
+    expect(verifyCandidateApplication.mock.invocationCallOrder[0]).toBeLessThan(
+      notarize.mock.invocationCallOrder[0]!,
+    );
+    expect(sealReleaseMetadata.mock.invocationCallOrder[0]).toBeLessThan(
+      promoteReleaseEnvelope.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("rejects a missing absolute baseline before invoking electron-builder", async () => {

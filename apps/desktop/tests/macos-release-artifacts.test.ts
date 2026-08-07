@@ -21,7 +21,10 @@ import { parse, stringify } from "yaml";
 import {
   verifyMacosApplication,
   verifyMacosBaselineApplication,
+  verifyMacosGenesisReleaseApplicationContents,
+  verifyMacosGenesisReleaseEnvelope,
   verifyMacosIdentityContinuity,
+  verifyMacosReleaseCandidateApplication,
   verifyMacosReleaseApplicationContents,
   verifyMacosReleaseArtifacts,
   verifyMacosReleaseEnvelope,
@@ -263,6 +266,74 @@ async function signedIdentityFixture() {
 }
 
 describe("macOS signed identity continuity", () => {
+  it("proves a canonical candidate without requiring an older baseline", async () => {
+    const fixture = await signedIdentityFixture();
+
+    await expect(
+      verifyMacosReleaseCandidateApplication(
+        fixture.candidate,
+        { candidateVersion: version },
+        {
+          executeFile: fixture.executeFile,
+          extractAsarFile: fixture.extractAsarFile,
+        },
+      ),
+    ).resolves.toEqual({
+      version,
+      identifier: "icu.enduragent.desktop",
+      productName: "Enduragent",
+      packageName: "@enduragent/desktop",
+      teamIdentifier: "FA494ACVTF",
+      designatedRequirement: canonicalDesignatedRequirement,
+      hardenedRuntime: true,
+      authorities: [
+        "Developer ID Application: Enduragent Test (FA494ACVTF)",
+        "Developer ID Certification Authority",
+        "Apple Root CA",
+      ],
+      entitlements: JSON.stringify({ "com.apple.security.cs.allow-jit": true }),
+      candidateCodeIdentity: {
+        codeDirectory: "v=20500 size=100 flags=0x10000(runtime) hashes=1+7 location=embedded",
+        cdHash: "b".repeat(40),
+      },
+    });
+  });
+
+  it.each([
+    {
+      label: "bundle name",
+      mutate(metadata: SignedApplicationMetadata) {
+        metadata.info.CFBundleName = "Alternate";
+      },
+      error: "macOS product identity is invalid",
+    },
+    {
+      label: "package version",
+      mutate(metadata: SignedApplicationMetadata) {
+        metadata.manifest.version = "2026.7.1";
+      },
+      error: "macOS package identity is invalid",
+    },
+    {
+      label: "certificate authority",
+      mutate(metadata: SignedApplicationMetadata) {
+        metadata.extraAuthorities.push("Alternate Root");
+      },
+      error: "macOS signed identity is invalid",
+    },
+  ])("rejects a genesis candidate with alternate $label", async ({ mutate, error }) => {
+    const fixture = await signedIdentityFixture();
+    mutate(fixture.metadata.get(fixture.candidate)!);
+
+    await expect(
+      verifyMacosReleaseCandidateApplication(
+        fixture.candidate,
+        { candidateVersion: version },
+        { executeFile: fixture.executeFile, extractAsarFile: fixture.extractAsarFile },
+      ),
+    ).rejects.toThrow(error);
+  });
+
   it("preflights the complete signed baseline before a candidate exists", async () => {
     const fixture = await signedIdentityFixture();
 
@@ -895,6 +966,33 @@ async function packagedApplicationFixture(
       };
     },
   );
+  const verifyCandidateApplication = vi.fn(
+    async (application: string, verificationOptions: { candidateVersion: string }) => {
+      const source = application.includes("/zip/") ? "zip" : "dmg";
+      if (options.identityFailure === source) {
+        throw new Error(`${application}: private signing output`);
+      }
+      return {
+        version: verificationOptions.candidateVersion,
+        identifier: "icu.enduragent.desktop" as const,
+        productName: "Enduragent" as const,
+        packageName: "@enduragent/desktop" as const,
+        teamIdentifier: "FA494ACVTF" as const,
+        designatedRequirement: canonicalDesignatedRequirement,
+        hardenedRuntime: true as const,
+        authorities: [
+          "Developer ID Application: Enduragent Test (FA494ACVTF)",
+          "Developer ID Certification Authority",
+          "Apple Root CA",
+        ] as const,
+        entitlements: JSON.stringify({ "com.apple.security.cs.allow-jit": true }),
+        candidateCodeIdentity:
+          source === "zip"
+            ? (options.zipCodeIdentity ?? looseCandidateCodeIdentity)
+            : (options.dmgCodeIdentity ?? looseCandidateCodeIdentity),
+      };
+    },
+  );
   const remove = vi.fn(async (path: string, removeOptions: { recursive: true; force: true }) => {
     if (options.cleanupFailure && temporaryDirectories.includes(path)) {
       throw new Error("private cleanup output");
@@ -934,6 +1032,20 @@ async function packagedApplicationFixture(
         verifyIdentityContinuity,
       },
     );
+  const verifyGenesis = () =>
+    verifyMacosGenesisReleaseApplicationContents(
+      artifactDirectory,
+      { candidateVersion: version, looseCandidateCodeIdentity },
+      {
+        executeFile,
+        mkdtemp: mkdtempTracked,
+        realpath: resolveRealpath,
+        rm: remove,
+        rmdir: removeMountPoint,
+        tmpdir: () => root,
+        verifyCandidateApplication,
+      },
+    );
   return {
     artifactDirectory,
     baseline,
@@ -941,15 +1053,79 @@ async function packagedApplicationFixture(
     convertedPlists,
     executeFile,
     intendedMountPoint: () => mountPoint,
+    verifyCandidateApplication,
     verifyIdentityContinuity,
     remove,
     removeMountPoint,
     temporaryDirectories,
     verify,
+    verifyGenesis,
   };
 }
 
 describe("macOS packaged application identity binding", () => {
+  it("runs the secure genesis ZIP and DMG path and verifies both embedded candidates", async () => {
+    const fixture = await packagedApplicationFixture();
+
+    await expect(fixture.verifyGenesis()).resolves.toBeUndefined();
+
+    expect(fixture.verifyCandidateApplication).toHaveBeenCalledTimes(2);
+    expect(
+      fixture.verifyCandidateApplication.mock.calls.map(([application]) => application),
+    ).toEqual([
+      expect.stringMatching(/\/zip\/Enduragent\.app$/u),
+      expect.stringMatching(/\/dmg\/Enduragent\.app$/u),
+    ]);
+    for (const [, verificationOptions] of fixture.verifyCandidateApplication.mock.calls) {
+      expect(verificationOptions).toEqual({ candidateVersion: version });
+    }
+    expect(fixture.executeFile).toHaveBeenCalledWith("/usr/bin/ditto", [
+      "-x",
+      "-k",
+      join(fixture.artifactDirectory, names.zip),
+      expect.stringMatching(/\/zip$/u),
+    ]);
+    expect(fixture.executeFile).toHaveBeenCalledWith("/usr/bin/hdiutil", [
+      "attach",
+      "-readonly",
+      "-nobrowse",
+      "-noautoopen",
+      "-plist",
+      "-mountpoint",
+      fixture.intendedMountPoint(),
+      join(fixture.artifactDirectory, names.dmg),
+    ]);
+    expect(fixture.executeFile).toHaveBeenCalledWith("/usr/bin/hdiutil", [
+      "detach",
+      "/dev/disk42s1",
+    ]);
+    await expect(lstat(fixture.temporaryDirectories[0]!)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["zip", "dmg"] as const)(
+    "rejects a genesis %s application whose CDHash differs from the loose candidate",
+    async (source) => {
+      const mismatchedCodeIdentity = {
+        ...looseCandidateCodeIdentity,
+        cdHash: "c".repeat(40),
+      };
+      const fixture = await packagedApplicationFixture(
+        source === "zip"
+          ? { zipCodeIdentity: mismatchedCodeIdentity }
+          : { dmgCodeIdentity: mismatchedCodeIdentity },
+      );
+
+      await expect(fixture.verifyGenesis()).rejects.toThrow(
+        "packaged macOS application differs from the loose candidate",
+      );
+      expect(
+        fixture.verifyCandidateApplication.mock.calls.some(([application]) =>
+          application.includes(`/${source}/Enduragent.app`),
+        ),
+      ).toBe(true);
+    },
+  );
+
   it("binds both mandatory packaged applications to the loose candidate before cleanup", async () => {
     const fixture = await packagedApplicationFixture();
 
@@ -1396,6 +1572,64 @@ describe("macOS packaged application identity binding", () => {
 });
 
 describe("macOS release artifact envelope", () => {
+  it("verifies a genesis envelope against the proved loose candidate without a baseline", async () => {
+    const fixture = await releaseFixture();
+    const looseCandidateApplication = "/synthetic/candidate/Enduragent.app";
+    const artifacts = Object.freeze({
+      version,
+      names: Object.freeze({ ...names, metadata: "latest-mac.yml" as const }),
+      paths: Object.freeze({
+        dmg: join(fixture.artifactDirectory, names.dmg),
+        zip: join(fixture.artifactDirectory, names.zip),
+        blockmap: join(fixture.artifactDirectory, names.blockmap),
+        metadata: join(fixture.artifactDirectory, names.metadata),
+      }),
+      sizes: Object.freeze({
+        dmg: fixture.dmg.length,
+        zip: fixture.zip.length,
+        blockmap: fixture.blockmap.length,
+      }),
+      dmgSha512: fixture.dmgSha512,
+      zipSha512: fixture.zipSha512,
+    });
+    const candidateIdentity = Object.freeze({
+      version,
+      candidateCodeIdentity: Object.freeze({
+        codeDirectory: looseCandidateCodeIdentity.codeDirectory,
+        cdHash: looseCandidateCodeIdentity.cdHash,
+      }),
+    });
+    const verifyReleaseArtifacts = vi.fn(async () => artifacts);
+    const verifyCandidateApplication = vi.fn(async () => candidateIdentity);
+    const verifyReleaseApplicationContents = vi.fn(async () => {});
+
+    await expect(
+      verifyMacosGenesisReleaseEnvelope(
+        fixture.artifactDirectory,
+        looseCandidateApplication,
+        { repositoryRoot: fixture.repositoryRoot },
+        {
+          verifyReleaseArtifacts,
+          verifyCandidateApplication,
+          verifyReleaseApplicationContents,
+        },
+      ),
+    ).resolves.toEqual({ artifacts, candidateIdentity });
+    expect(verifyCandidateApplication).toHaveBeenCalledWith(
+      looseCandidateApplication,
+      { candidateVersion: version },
+      expect.any(Object),
+    );
+    expect(verifyReleaseApplicationContents).toHaveBeenCalledWith(
+      fixture.artifactDirectory,
+      {
+        candidateVersion: version,
+        looseCandidateCodeIdentity,
+      },
+      expect.any(Object),
+    );
+  });
+
   it("verifies artifacts, the loose candidate, and packaged applications as one envelope", async () => {
     const fixture = await releaseFixture();
     const baselineApplication = "/synthetic/baseline/Enduragent.app";
