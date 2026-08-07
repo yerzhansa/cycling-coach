@@ -46,8 +46,8 @@ export function createDesktopUpdateController(input: {
     ) {
       return;
     }
-    const action =
-      state.status === "downloaded" ? input.bridge.restartToUpdate : input.bridge.checkForUpdates;
+    const restarting = state.status === "downloaded";
+    const action = restarting ? input.bridge.restartToUpdate : input.bridge.checkForUpdates;
     const before = revision;
     const pending = Promise.resolve()
       .then(() => action.call(input.bridge))
@@ -56,7 +56,7 @@ export function createDesktopUpdateController(input: {
           if (!disposed && revision === before) render(next);
         },
         () => {
-          if (!disposed && revision === before) {
+          if (!disposed && revision === before && !restarting) {
             render({
               status: "failed",
               stage: state.status === "downloading" ? "download" : "check",

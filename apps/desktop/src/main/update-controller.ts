@@ -16,6 +16,7 @@ export type DesktopAutoUpdater = Pick<
   | "logger"
   | "autoDownload"
   | "autoInstallOnAppQuit"
+  | "autoRunAppAfterInstall"
   | "allowPrerelease"
   | "allowDowngrade"
   | "on"
@@ -190,6 +191,7 @@ export function createDesktopUpdateController(input: {
       updater.logger = null;
       updater.autoDownload = false;
       updater.autoInstallOnAppQuit = false;
+      updater.autoRunAppAfterInstall = true;
       updater.allowPrerelease = false;
       updater.allowDowngrade = false;
       updater.on("error", onError);
