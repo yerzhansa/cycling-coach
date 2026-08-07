@@ -3,6 +3,7 @@ import type {
   AnchorZonesPanel,
   CyclingLoadPanel,
   PlanPanel,
+  PowerProgressPanel,
   WellnessTrendPanel,
 } from "@enduragent/coach-contract";
 import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
@@ -29,6 +30,7 @@ import {
   trainingStatusCopy,
 } from "./copy.js";
 import styles from "./TrainingView.module.css";
+import { PowerProgressContent } from "./PowerProgressPanel.js";
 import { WellnessSparkline } from "./WellnessSparkline.js";
 
 function Panel(props: {
@@ -46,6 +48,14 @@ function Panel(props: {
 
 function Unknown(props: { readonly reason: keyof typeof TRAINING_UNKNOWN_COPY }): ReactElement {
   return <p className={styles.empty}>{TRAINING_UNKNOWN_COPY[props.reason]}</p>;
+}
+
+function PowerProgressStatePanel(props: { readonly panel: PowerProgressPanel }): ReactElement {
+  return (
+    <Panel name="power-progress" title="Power progress">
+      <PowerProgressContent panel={props.panel} />
+    </Panel>
+  );
 }
 
 function SyncPanel(): ReactElement {
@@ -305,6 +315,7 @@ export function TrainingView(): ReactElement {
         {status}
       </p>
       <SyncPanel />
+      <PowerProgressStatePanel panel={training.trainingContext.performanceProgress} />
       <AnchorPanel panel={training.trainingContext.anchorZones} />
       <LoadPanel panel={training.trainingContext.cyclingLoad} />
       <UpcomingPlanPanel panel={training.trainingContext.plan} />

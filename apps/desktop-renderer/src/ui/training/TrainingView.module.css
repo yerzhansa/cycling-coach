@@ -64,6 +64,182 @@
   line-height: 1.45;
 }
 
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.progressNotice {
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  border-left: 3px solid var(--warn);
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--warn) var(--tint), transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.progressHeader {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.progressHeader > div {
+  min-width: 0;
+}
+
+.progressHeader .badge {
+  flex: none;
+  margin: 0;
+}
+
+.progressHeader .badge[data-freshness="flag"],
+.progressHeader .badge[data-freshness="stale"],
+.progressHeader .badge[data-freshness="critical"] {
+  color: var(--warn);
+  background-color: color-mix(in srgb, var(--warn) var(--tint), transparent);
+}
+
+.progressLead {
+  margin: 0 0 5px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.progressTableWrap {
+  min-width: 0;
+  margin-top: 14px;
+  overflow-x: auto;
+}
+
+.progressTable {
+  width: 100%;
+  min-width: 390px;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.progressTable th,
+.progressTable td {
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+}
+
+.progressTable thead th {
+  padding-top: 0;
+  color: var(--ink-3);
+  font: 10px/1.3 var(--f-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.progressTable th:first-child,
+.progressTable td:first-child {
+  padding-left: 0;
+  text-align: left;
+}
+
+.progressTable th:last-child,
+.progressTable td:last-child {
+  padding-right: 0;
+}
+
+.progressTable tbody th {
+  position: relative;
+  color: var(--ink);
+  font: 560 12px/1.35 var(--f-ui);
+}
+
+.progressTable tbody th::before {
+  display: inline-block;
+  width: 3px;
+  height: 18px;
+  margin-right: 9px;
+  vertical-align: middle;
+  background: var(--ink);
+  border-radius: 2px;
+  content: "";
+  opacity: 0.26;
+}
+
+.progressTable tbody tr:nth-child(1) th::before {
+  opacity: 1;
+}
+
+.progressTable tbody tr:nth-child(2) th::before {
+  opacity: 0.8;
+}
+
+.progressTable tbody tr:nth-child(3) th::before {
+  opacity: 0.62;
+}
+
+.progressTable tbody tr:nth-child(4) th::before {
+  opacity: 0.44;
+}
+
+.progressTable tbody td {
+  color: var(--ink-2);
+  font: 11px/1.35 var(--f-mono);
+}
+
+.progressTable tbody td:nth-child(2) {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.progressChange[data-tone="positive"] {
+  color: var(--ok);
+}
+
+.progressChange[data-tone="negative"] {
+  color: var(--warn);
+}
+
+.progressDetails {
+  margin-top: 14px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.progressDetails summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 560;
+}
+
+.progressDetails summary:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+.progressDetails .progressTableWrap {
+  margin-top: 10px;
+}
+
+.heartRateTable tbody th::before {
+  opacity: 0.45;
+}
+
+.progressFoot {
+  margin: 14px 0 0;
+  color: var(--ink-3);
+  font: 10.5px/1.5 var(--f-mono);
+}
+
 .badge {
   composes: chip from "../../theme/surface.module.css";
   margin: 4px 0 8px;
@@ -227,6 +403,14 @@
 }
 
 @media (max-width: 760px) {
+  .progressHeader {
+    display: grid;
+  }
+
+  .progressHeader .badge {
+    justify-self: start;
+  }
+
   .wellnessRow {
     grid-template-columns: 62px 70px minmax(50px, 1fr);
   }
