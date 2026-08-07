@@ -3,8 +3,10 @@ import { join } from "node:path";
 import {
   AthleteStateSchema,
   PowerProgressPanelSchema,
+  RecentRidesPanelSchema,
   type AthleteState,
   type PowerProgressPanel,
+  type RecentRidesPanel,
 } from "@enduragent/coach-contract";
 import type { AthleteStateReaderPort } from "@enduragent/engine";
 import type { CyclingFtpAnchorResolver } from "@enduragent/kernel/anchors";
@@ -54,6 +56,12 @@ export interface CreatePersistedAthleteStateSourceOptions {
   readonly cyclingFtpAnchorResolver: CyclingFtpAnchorResolver;
   readonly powerProgressSource?: {
     readPowerProgress(): Promise<PowerProgressPanel>;
+  };
+  readonly recentRidesSource?: {
+    readRecentRides(input: {
+      readonly asOf: string;
+      readonly asOfEpochSeconds: number;
+    }): Promise<RecentRidesPanel>;
   };
 }
 
@@ -106,7 +114,7 @@ export function createPersistedAthleteStateSource(
       const parsedAsOf = Date.parse(latest.metadata.last_updated);
       const asOfEpochS =
         Number.isFinite(parsedAsOf) && parsedAsOf >= 0 ? Math.floor(parsedAsOf / 1_000) : null;
-      const [anchor, performanceProgress] = await Promise.all([
+      const [anchor, performanceProgress, recentRides] = await Promise.all([
         asOfEpochS === null
           ? Promise.resolve(null)
           : input.cyclingFtpAnchorResolver
@@ -128,6 +136,25 @@ export function createPersistedAthleteStateSource(
                   reason: "temporary-failure",
                 }),
               ),
+        asOfEpochS === null || input.recentRidesSource === undefined
+          ? Promise.resolve({ kind: "unknown", reason: "not-synced" } as const)
+          : input.recentRidesSource
+              .readRecentRides({
+                asOf: latest.metadata.last_updated,
+                asOfEpochSeconds: asOfEpochS,
+              })
+              .then((value): RecentRidesPanel => {
+                const parsed = RecentRidesPanelSchema.safeParse(value);
+                return parsed.success
+                  ? parsed.data
+                  : { kind: "unknown", reason: "temporary-failure" };
+              })
+              .catch(
+                (): RecentRidesPanel => ({
+                  kind: "unknown",
+                  reason: "temporary-failure",
+                }),
+              ),
       ]);
       const trainingContext = projectCyclingTrainingContext({
         asOf: latest.metadata.last_updated,
@@ -137,6 +164,7 @@ export function createPersistedAthleteStateSource(
         plannedWorkouts: latest.planned_workouts,
         wellness: latest.wellness_data,
         performanceProgress,
+        recentRides,
       });
       const mapped = {
         schemaVersion: latest.metadata.schema_version,

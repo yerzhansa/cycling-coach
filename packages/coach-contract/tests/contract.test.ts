@@ -13,6 +13,7 @@ import {
   AthleteStateSchema,
   CyclingTrainingContextSchema,
   PowerProgressPanelSchema,
+  RecentRidesPanelSchema,
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
   ChatRequestSchema,
   ChatResponseSchema,
@@ -111,7 +112,7 @@ describe("exit codes", () => {
 
 describe("protocol version", () => {
   it("is 13", () => {
-    expect(PROTOCOL_VERSION).toBe(14);
+    expect(PROTOCOL_VERSION).toBe(15);
   });
 });
 
@@ -291,6 +292,23 @@ describe("AthleteState", () => {
   it("parses computed and unknown training-context envelopes strictly", () => {
     const computed = {
       performanceProgress: { kind: "unavailable", reason: "not-synced" },
+      recentRides: {
+        kind: "computed",
+        asOf: "1998-07-06T09:00:00.000Z",
+        windowDays: 28,
+        items: [
+          {
+            id: "a".repeat(64),
+            subSport: "road",
+            startEpochSeconds: 899_712_000,
+            timezoneOffsetSeconds: 21_600,
+            localDate: "1998-07-06",
+            elapsedSeconds: 3_700,
+            movingSeconds: 3_600,
+            distanceMeters: 40_000,
+          },
+        ],
+      },
       anchorZones: {
         kind: "computed",
         asOf: "1998-07-06T09:00:00.000Z",
@@ -345,6 +363,11 @@ describe("AthleteState", () => {
       },
     } as const;
     expect(CyclingTrainingContextSchema.parse(computed)).toEqual(computed);
+    const { recentRides: _recentRides, ...olderContext } = computed;
+    expect(CyclingTrainingContextSchema.parse(olderContext).recentRides).toEqual({
+      kind: "unknown",
+      reason: "not-synced",
+    });
     expect(CyclingTrainingContextSchema.parse(UNKNOWN_CYCLING_TRAINING_CONTEXT)).toEqual(
       UNKNOWN_CYCLING_TRAINING_CONTEXT,
     );
@@ -394,6 +417,44 @@ describe("AthleteState", () => {
         anchors: computedPowerProgress.anchors.map((anchor, index) =>
           index === 0 ? { ...anchor, current: { kind: "unavailable" } } : anchor,
         ),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("bounds recent rides and rejects provider-only or malformed fields", () => {
+    const ride = {
+      id: "a".repeat(64),
+      subSport: "road",
+      startEpochSeconds: 899_712_000,
+      timezoneOffsetSeconds: 21_600,
+      localDate: "1998-07-06",
+      elapsedSeconds: 3_700,
+      movingSeconds: 3_600,
+      distanceMeters: 40_000,
+    } as const;
+    const panel = {
+      kind: "computed",
+      asOf: "1998-07-06T09:00:00.000Z",
+      windowDays: 28,
+      items: Array.from({ length: 8 }, (_, index) => ({
+        ...ride,
+        id: index.toString(16).padStart(64, "0"),
+      })),
+    } as const;
+    expect(RecentRidesPanelSchema.parse(panel)).toEqual(panel);
+    expect(
+      RecentRidesPanelSchema.safeParse({ ...panel, items: [...panel.items, ride] }).success,
+    ).toBe(false);
+    expect(
+      RecentRidesPanelSchema.safeParse({
+        ...panel,
+        items: [{ ...ride, providerActivityId: "private" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      RecentRidesPanelSchema.safeParse({
+        ...panel,
+        items: [{ ...ride, localDate: "1998-02-30" }],
       }).success,
     ).toBe(false);
   });

@@ -105,6 +105,33 @@ const computedPowerProgress = {
 
 const context: CyclingTrainingContext = {
   performanceProgress: computedPowerProgress,
+  recentRides: {
+    kind: "computed",
+    asOf: "1998-07-19T08:00:00.000Z",
+    windowDays: 28,
+    items: [
+      {
+        id: "a".repeat(64),
+        subSport: "road",
+        startEpochSeconds: 900_000_000,
+        timezoneOffsetSeconds: 21_600,
+        localDate: "1998-07-09",
+        elapsedSeconds: 5_460,
+        movingSeconds: 5_100,
+        distanceMeters: 42_120,
+      },
+      {
+        id: "b".repeat(64),
+        subSport: "indoor_cycling",
+        startEpochSeconds: 899_900_000,
+        timezoneOffsetSeconds: null,
+        localDate: "1998-07-08",
+        elapsedSeconds: null,
+        movingSeconds: 3_600,
+        distanceMeters: null,
+      },
+    ],
+  },
   anchorZones: {
     kind: "computed",
     asOf: "1998-07-19T08:00:00.000Z",
@@ -165,6 +192,7 @@ const context: CyclingTrainingContext = {
 
 const unknownContext: CyclingTrainingContext = {
   performanceProgress: { kind: "unavailable", reason: "not-synced" },
+  recentRides: { kind: "unknown", reason: "not-synced" },
   anchorZones: { kind: "unknown", reason: "missing-anchor" },
   cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
   plan: { kind: "unknown", reason: "no-plan" },
@@ -227,6 +255,7 @@ beforeEach(() => {
   useEnduragentStore.setState({
     activeView: "training",
     training: ready(),
+    selectedRide: null,
     sync: IDLE_MANUAL_SYNC,
     syncActions: null,
     rideImport: IDLE_RIDE_IMPORT,
@@ -239,6 +268,7 @@ afterEach(() => {
   useEnduragentStore.setState({
     activeView: "chat",
     training: EMPTY_TRAINING_SURFACE,
+    selectedRide: null,
     sync: IDLE_MANUAL_SYNC,
     syncActions: null,
     rideImport: IDLE_RIDE_IMPORT,
@@ -256,6 +286,7 @@ describe("training page", () => {
     expect(headings.map((node) => node.textContent)).toEqual([
       "Sync",
       "Power progress",
+      "Recent rides",
       "Current cycling anchor",
       "Cycling Load",
       "Plan",
@@ -272,6 +303,96 @@ describe("training page", () => {
     expect(screen.getByText("80%")).toBeInTheDocument();
     expect(screen.getByText("4/5 planned days matched")).toBeInTheDocument();
     expect(document.querySelector(".training-status")).toHaveProperty("hidden", true);
+  });
+
+  it("opens a local ride review and restores focus without exposing its canonical identifier", async () => {
+    const user = userEvent.setup();
+    render(<TrainingView />);
+
+    const recent = screen.getByRole("region", { name: "Recent rides" });
+    const opener = within(recent).getByRole("button", {
+      name: "Review road ride from 1998-07-09 · 22:00, 1h 31m, 42.1 km",
+    });
+    await user.click(opener);
+
+    expect(screen.getByRole("region", { name: "Ride review" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Ride review" })).toHaveFocus();
+    expect(screen.getByRole("heading", { level: 2, name: "Road ride" })).toBeInTheDocument();
+    expect(screen.getByText("1h 31m")).toBeInTheDocument();
+    expect(screen.getByText("42.1 km")).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("a".repeat(64));
+
+    await user.click(screen.getByRole("button", { name: "Back to training" }));
+    expect(screen.getByRole("region", { name: "Training" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Review road ride from 1998-07-09 · 22:00, 1h 31m, 42.1 km",
+      }),
+    ).toHaveFocus();
+  });
+
+  it("uses the cycling unit preference and explicit unavailable ride metadata", () => {
+    useEnduragentStore.setState({
+      training: ready({
+        unitsPreference: { status: "ready", value: "imperial", source: "cycling" },
+      }),
+    });
+    render(<TrainingView />);
+
+    const recent = screen.getByRole("region", { name: "Recent rides" });
+    expect(within(recent).getByText("26.2 mi")).toBeInTheDocument();
+    expect(within(recent).getByText("Distance unavailable")).toBeInTheDocument();
+    expect(within(recent).getByText("1h 0m")).toBeInTheDocument();
+  });
+
+  it("preserves a selected ride across temporary refresh failure and reconciles authoritative lists", () => {
+    const store = useEnduragentStore.getState();
+    if (context.recentRides.kind !== "computed") throw new Error("expected fixture rides");
+    store.openRide(context.recentRides.items[0]!);
+    store.setTraining(
+      ready({
+        trainingContext: {
+          ...context,
+          recentRides: { kind: "unknown", reason: "temporary-failure" },
+        },
+      }),
+    );
+    expect(useEnduragentStore.getState().selectedRide?.id).toBe(context.recentRides.items[0]?.id);
+
+    store.setTraining(
+      ready({
+        trainingContext: {
+          ...context,
+          recentRides: { kind: "unknown", reason: "not-synced" },
+        },
+      }),
+    );
+    expect(useEnduragentStore.getState().selectedRide).toBeNull();
+
+    store.openRide(context.recentRides.items[0]!);
+
+    store.setTraining(
+      ready({
+        trainingContext: {
+          ...context,
+          recentRides: {
+            ...context.recentRides,
+            items: [{ ...context.recentRides.items[0]!, distanceMeters: 43_000 }],
+          },
+        },
+      }),
+    );
+    expect(useEnduragentStore.getState().selectedRide?.distanceMeters).toBe(43_000);
+
+    store.setTraining(
+      ready({
+        trainingContext: {
+          ...context,
+          recentRides: { ...context.recentRides, items: [context.recentRides.items[1]!] },
+        },
+      }),
+    );
+    expect(useEnduragentStore.getState().selectedRide).toBeNull();
   });
 
   it("renders an accessible five-effort Power Progress comparison with secondary context", async () => {
@@ -379,6 +500,7 @@ describe("training page", () => {
     expect(screen.getByRole("region", { name: "Training" })).toHaveAttribute("aria-busy", "true");
     for (const copy of [
       "Sync training data to compare your recent power.",
+      "Sync or import a cycling ride to review it here.",
       "No cycling FTP anchor is available",
       "No platform Load is available for the last 7 days",
       "No planned cycling workouts are available",

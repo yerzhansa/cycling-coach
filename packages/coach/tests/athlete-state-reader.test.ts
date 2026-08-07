@@ -424,10 +424,27 @@ describe("persisted athlete state source", () => {
       kind: "unavailable" as const,
       reason: "insufficient-data" as const,
     }));
+    const recentRide = {
+      id: "a".repeat(64),
+      subSport: "road",
+      startEpochSeconds: 1_658_102_400,
+      timezoneOffsetSeconds: 21_600,
+      localDate: "2022-07-18",
+      elapsedSeconds: 3_700,
+      movingSeconds: 3_600,
+      distanceMeters: 40_000,
+    } as const;
+    const readRecentRides = vi.fn(async () => ({
+      kind: "computed" as const,
+      asOf: snapshot.metadata.last_updated,
+      windowDays: 28 as const,
+      items: [recentRide],
+    }));
     const state = await createPersistedAthleteStateSource({
       dataDir: root,
       cyclingFtpAnchorResolver: { resolve },
       powerProgressSource: { readPowerProgress },
+      recentRidesSource: { readRecentRides },
     }).getAthleteState();
     const expectedEpoch = Date.parse(snapshot.metadata.last_updated) / 1_000;
     expect(resolve).toHaveBeenCalledOnce();
@@ -436,8 +453,13 @@ describe("persisted athlete state source", () => {
       evaluatedAtEpochS: expectedEpoch,
     });
     expect(readPowerProgress).toHaveBeenCalledOnce();
+    expect(readRecentRides).toHaveBeenCalledWith({
+      asOf: snapshot.metadata.last_updated,
+      asOfEpochSeconds: expectedEpoch,
+    });
     expect(state.trainingContext).toMatchObject({
       performanceProgress: { kind: "unavailable", reason: "insufficient-data" },
+      recentRides: { kind: "computed", items: [recentRide] },
       anchorZones: { kind: "computed" },
       cyclingLoad: { kind: "computed", value: 80 },
       plan: { kind: "computed" },
@@ -471,6 +493,35 @@ describe("persisted athlete state source", () => {
     expect(malformed.trainingContext?.performanceProgress).toEqual({
       kind: "unavailable",
       reason: "invalid-data",
+    });
+  });
+
+  it("isolates invalid or failed recent-ride reads without leaking private errors", async () => {
+    const root = await home();
+    await writeJson(root, "latest.json", latest());
+    const failed = await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      recentRidesSource: {
+        readRecentRides: async () => Promise.reject(new Error("private provider activity id")),
+      },
+    }).getAthleteState();
+    expect(failed.trainingContext?.recentRides).toEqual({
+      kind: "unknown",
+      reason: "temporary-failure",
+    });
+    expect(JSON.stringify(failed)).not.toContain("private provider activity id");
+
+    const malformed = await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      recentRidesSource: {
+        readRecentRides: async () => ({ kind: "computed" }) as never,
+      },
+    }).getAthleteState();
+    expect(malformed.trainingContext?.recentRides).toEqual({
+      kind: "unknown",
+      reason: "temporary-failure",
     });
   });
 

@@ -81,6 +81,7 @@ import {
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import { createPowerProgressStateSource } from "./power-progress.js";
+import { createRecentRidesSource } from "./recent-rides.js";
 import {
   assertRuntimeAthleteOwner,
   RuntimeAthleteOwnerRefusal,
@@ -781,10 +782,12 @@ export async function createLocalCoachComposition(
       archiveRoot: input.home.archiveDir,
       now,
     });
+    const canonicalActivities = createCanonicalActivityReader(input.context.store);
     const stateReader = createPersistedAthleteStateSource({
       dataDir: input.home.root,
       cyclingFtpAnchorResolver,
       powerProgressSource: powerProgress,
+      recentRidesSource: createRecentRidesSource(canonicalActivities),
     });
     const buildBundle = (config: Config): RuntimeBundle => {
       const timezone = resolveUserTimezone(config.session.timezone);
@@ -1000,7 +1003,7 @@ export async function createLocalCoachComposition(
     const options = Object.freeze({ liveIntervals });
     const activityAnalysis = createStoredActivityAnalysisService({
       store: input.context.store,
-      activities: createCanonicalActivityReader(input.context.store),
+      activities: canonicalActivities,
       sources: createTrustedActivitySourceResolver(input.context.store),
       runCacheWrite: (work) => runtime!.runExclusive(work),
       now,

@@ -14,6 +14,7 @@ export function Page(props: {
   readonly className?: string;
   readonly onKeyDown?: KeyboardEventHandler<HTMLElement>;
   readonly ref?: Ref<HTMLElement>;
+  readonly titleRef?: Ref<HTMLHeadingElement>;
   readonly children: ReactNode;
 }): ReactElement {
   return (
@@ -27,7 +28,13 @@ export function Page(props: {
       onKeyDown={props.onKeyDown}
     >
       <div className={styles.bar}>
-        <h1 className={styles.title}>{props.title}</h1>
+        <h1
+          ref={props.titleRef}
+          className={styles.title}
+          tabIndex={props.titleRef === undefined ? undefined : -1}
+        >
+          {props.title}
+        </h1>
         {props.subtitle === undefined ? null : (
           <span className={styles.subtitle}>{props.subtitle}</span>
         )}

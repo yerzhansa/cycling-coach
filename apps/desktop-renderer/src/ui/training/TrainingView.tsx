@@ -4,9 +4,10 @@ import type {
   CyclingLoadPanel,
   PlanPanel,
   PowerProgressPanel,
+  RecentRide,
   WellnessTrendPanel,
 } from "@enduragent/coach-contract";
-import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { rideImportStatusCopy } from "../../ride-import.js";
 import {
   setManualSyncFocusFallback,
@@ -31,6 +32,7 @@ import {
 } from "./copy.js";
 import styles from "./TrainingView.module.css";
 import { PowerProgressContent } from "./PowerProgressPanel.js";
+import { RecentRidesStatePanel, RideDetailView } from "./RideReview.js";
 import { WellnessSparkline } from "./WellnessSparkline.js";
 
 function Panel(props: {
@@ -307,15 +309,53 @@ function RideImportPanel(): ReactElement {
 
 export function TrainingView(): ReactElement {
   const training = useEnduragentStore((store) => store.training);
+  const selectedRide = useEnduragentStore((store) => store.selectedRide);
+  const openRide = useEnduragentStore((store) => store.openRide);
+  const closeRide = useEnduragentStore((store) => store.closeRide);
+  const rideButtons = useRef(new Map<string, HTMLButtonElement>());
+  const previousRideId = useRef<string | null>(null);
+  const title = useRef<HTMLHeadingElement>(null);
   const status = trainingStatusCopy(training.status);
 
+  useLayoutEffect(() => {
+    const currentRideId = selectedRide?.id ?? null;
+    if (currentRideId !== null && previousRideId.current !== currentRideId) {
+      title.current?.focus();
+    } else if (currentRideId === null && previousRideId.current !== null) {
+      (rideButtons.current.get(previousRideId.current) ?? title.current)?.focus();
+    }
+    previousRideId.current = currentRideId;
+  }, [selectedRide?.id]);
+
+  if (selectedRide !== null) {
+    return (
+      <RideDetailView
+        ride={selectedRide}
+        units={training.unitsPreference.value}
+        titleRef={title}
+        onBack={closeRide}
+      />
+    );
+  }
+
   return (
-    <Page title="Training" busy={training.status === "loading"}>
+    <Page title="Training" titleRef={title} busy={training.status === "loading"}>
       <p className={`${styles.status} training-status`} hidden={training.status === "ready"}>
         {status}
       </p>
       <SyncPanel />
       <PowerProgressStatePanel panel={training.trainingContext.performanceProgress} />
+      <RecentRidesStatePanel
+        panel={training.trainingContext.recentRides}
+        units={training.unitsPreference.value}
+        onOpen={(ride: RecentRide) => {
+          openRide(ride);
+        }}
+        registerButton={(id, node) => {
+          if (node === null) rideButtons.current.delete(id);
+          else rideButtons.current.set(id, node);
+        }}
+      />
       <AnchorPanel panel={training.trainingContext.anchorZones} />
       <LoadPanel panel={training.trainingContext.cyclingLoad} />
       <UpcomingPlanPanel panel={training.trainingContext.plan} />

@@ -384,9 +384,40 @@ export const WellnessTrendPanelSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+export const RecentRideSchema = z
+  .object({
+    id: z.string().regex(/^[0-9a-f]{64}$/u),
+    subSport: z.string().min(1).max(128).nullable(),
+    startEpochSeconds: z.number().int().safe().nonnegative(),
+    timezoneOffsetSeconds: z.number().int().min(-86_400).max(86_400).nullable(),
+    localDate: PowerProgressDateSchema,
+    elapsedSeconds: z.number().int().safe().nonnegative().nullable(),
+    movingSeconds: z.number().int().safe().nonnegative().nullable(),
+    distanceMeters: z.number().finite().nonnegative().max(100_000_000).nullable(),
+  })
+  .strict();
+
+export const RecentRidesPanelSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("computed"),
+      asOf: z.string().min(1).max(64),
+      windowDays: z.literal(28),
+      items: z.array(RecentRideSchema).min(1).max(8),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("unknown"),
+      reason: z.enum(["not-synced", "no-recent-rides", "temporary-failure"]),
+    })
+    .strict(),
+]);
+
 export const CyclingTrainingContextSchema = z
   .object({
     performanceProgress: PowerProgressPanelSchema,
+    recentRides: RecentRidesPanelSchema.default({ kind: "unknown", reason: "not-synced" }),
     anchorZones: AnchorZonesPanelSchema,
     cyclingLoad: CyclingLoadPanelSchema,
     plan: PlanPanelSchema,
@@ -406,10 +437,13 @@ export type AdherencePanel = z.infer<typeof AdherencePanelSchema>;
 export type WellnessPoint = z.infer<typeof WellnessPointSchema>;
 export type WellnessSeries = z.infer<typeof WellnessSeriesSchema>;
 export type WellnessTrendPanel = z.infer<typeof WellnessTrendPanelSchema>;
+export type RecentRide = z.infer<typeof RecentRideSchema>;
+export type RecentRidesPanel = z.infer<typeof RecentRidesPanelSchema>;
 export type CyclingTrainingContext = z.infer<typeof CyclingTrainingContextSchema>;
 
 export const UNKNOWN_CYCLING_TRAINING_CONTEXT: CyclingTrainingContext = {
   performanceProgress: { kind: "unavailable", reason: "not-synced" },
+  recentRides: { kind: "unknown", reason: "not-synced" },
   anchorZones: { kind: "unknown", reason: "not-synced" },
   cyclingLoad: { kind: "unknown", reason: "not-synced" },
   plan: { kind: "unknown", reason: "not-synced" },
