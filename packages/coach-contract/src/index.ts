@@ -8,3 +8,4 @@ export * from "./spend.js";
 export * from "./self-test.js";
 export * from "./handshake.js";
 export * from "./telegram-control.js";
+export * from "./activity-analysis.js";
