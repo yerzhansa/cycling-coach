@@ -26,6 +26,33 @@ const scratchPaths: string[] = [];
 
 const trainingContext = {
   performanceProgress: { kind: "unavailable", reason: "not-synced" },
+  recentRides: {
+    kind: "computed",
+    asOf: "2026-07-19T08:00:00.000Z",
+    windowDays: 28,
+    items: [
+      {
+        id: "c".repeat(64),
+        subSport: "road",
+        startEpochSeconds: 1_784_358_000,
+        timezoneOffsetSeconds: 18_000,
+        localDate: "2026-07-18",
+        elapsedSeconds: 5_460,
+        movingSeconds: 5_100,
+        distanceMeters: 42_120,
+      },
+      {
+        id: "d".repeat(64),
+        subSport: "indoor_cycling",
+        startEpochSeconds: 1_784_268_000,
+        timezoneOffsetSeconds: null,
+        localDate: "2026-07-17",
+        elapsedSeconds: 3_600,
+        movingSeconds: 3_600,
+        distanceMeters: null,
+      },
+    ],
+  },
   anchorZones: {
     kind: "computed",
     asOf: "2026-07-19T08:00:00.000Z",
@@ -1248,6 +1275,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       order: [
         "Sync",
         "Power progress",
+        "Recent rides",
         "Current cycling anchor",
         "Cycling Load",
         "Plan",
@@ -1285,6 +1313,57 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         buttonReachable: true,
       },
     });
+    const rideReview = await fixture.evaluate<{
+      readonly page: string | null;
+      readonly titleFocused: boolean;
+      readonly overview: string;
+      readonly canonicalIdVisible: boolean;
+      readonly pageOverflow: boolean;
+      readonly documentOverflow: boolean;
+    }>(`
+      const recent = document.querySelector('[data-panel="recent-rides"]');
+      const opener = recent.querySelector("button");
+      opener.scrollIntoView({ block: "nearest" });
+      opener.click();
+      const mountDeadline = Date.now() + 5000;
+      while (!document.querySelector('section[aria-label="Ride review"]') && Date.now() < mountDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const page = document.querySelector('section[aria-label="Ride review"]');
+      const title = page.querySelector("h1");
+      return {
+        page: page.getAttribute("aria-label"),
+        titleFocused: document.activeElement === title,
+        overview: page.querySelector('[aria-labelledby="ride-overview-title"]').textContent,
+        canonicalIdVisible: page.textContent.includes("${"c".repeat(64)}"),
+        pageOverflow: Array.from(page.querySelectorAll("section, div, dl")).some(
+          (node) => node.scrollWidth > node.clientWidth,
+        ),
+        documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      };
+    `);
+    expect(rideReview).toEqual({
+      page: "Ride review",
+      titleFocused: true,
+      overview: "Recent rideRoad rideDate2026-07-18 · 12:00Duration1h 31mDistance42.1 km",
+      canonicalIdVisible: false,
+      pageOverflow: false,
+      documentOverflow: false,
+    });
+    const rideReturn = await fixture.evaluate<{
+      readonly page: string | null;
+      readonly openerFocused: boolean;
+    }>(`
+      document.querySelector('section[aria-label="Ride review"] button').click();
+      const mountDeadline = Date.now() + 5000;
+      while (!document.querySelector('section[aria-label="Training"]') && Date.now() < mountDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const page = document.querySelector('section[aria-label="Training"]');
+      const opener = page.querySelector('[data-panel="recent-rides"] button');
+      return { page: page.getAttribute("aria-label"), openerFocused: document.activeElement === opener };
+    `);
+    expect(rideReturn).toEqual({ page: "Training", openerFocused: true });
     const units = await fixture.evaluate<{
       readonly pressed: string | null;
       readonly enabled: boolean;

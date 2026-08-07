@@ -62,6 +62,7 @@ const state: AthleteState = {
   wellness: { restingHr: 45 },
   trainingContext: {
     performanceProgress: { kind: "unavailable", reason: "not-synced" },
+    recentRides: { kind: "unknown", reason: "no-recent-rides" },
     anchorZones: { kind: "unknown", reason: "missing-anchor" },
     cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
     plan: { kind: "unknown", reason: "no-plan" },
