@@ -312,6 +312,8 @@ export function TrainingView(): ReactElement {
   const selectedRide = useEnduragentStore((store) => store.selectedRide);
   const openRide = useEnduragentStore((store) => store.openRide);
   const closeRide = useEnduragentStore((store) => store.closeRide);
+  const rideAnalysis = useEnduragentStore((store) => store.rideAnalysis);
+  const rideAnalysisActions = useEnduragentStore((store) => store.rideAnalysisActions);
   const rideButtons = useRef(new Map<string, HTMLButtonElement>());
   const previousRideId = useRef<string | null>(null);
   const title = useRef<HTMLHeadingElement>(null);
@@ -332,6 +334,8 @@ export function TrainingView(): ReactElement {
       <RideDetailView
         ride={selectedRide}
         units={training.unitsPreference.value}
+        analysis={rideAnalysis}
+        onRefreshAnalysis={rideAnalysisActions?.refresh ?? null}
         titleRef={title}
         onBack={closeRide}
       />

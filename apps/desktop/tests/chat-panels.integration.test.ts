@@ -155,6 +155,67 @@ function makeScript(
       if (request.method === "getAthleteState") {
         return response({ ...athleteState, lastSynced });
       }
+      if (request.method === "getActivityAnalysis") {
+        const canonicalActivityId = (request.params as { readonly canonicalActivityId: string })
+          .canonicalActivityId;
+        return response({
+          schemaVersion: 1,
+          activity: {
+            id: canonicalActivityId,
+            workoutId: "e".repeat(64),
+            sessionSequence: 0,
+            isMultisport: false,
+            sport: "cycling",
+            subSport: "road",
+            isTransition: false,
+            startEpochSeconds: 1_784_358_000,
+            timezoneOffsetSeconds: 18_000,
+            localDate: "2026-07-18",
+            elapsedSeconds: 5_460,
+            timerSeconds: 5_200,
+            movingSeconds: 5_100,
+            distanceMeters: 42_120,
+          },
+          revision: "f".repeat(64),
+          sections: {
+            aerobicDrift: {
+              kind: "computed",
+              data: {
+                method: "local-time-weighted-efficiency-factor",
+                firstHalf: {
+                  durationSeconds: 2_550,
+                  sampleCount: 2_550,
+                  averagePowerWatts: 205,
+                  averageHeartRateBpm: 140,
+                  efficiencyFactor: 1.46,
+                },
+                secondHalf: {
+                  durationSeconds: 2_550,
+                  sampleCount: 2_550,
+                  averagePowerWatts: 202,
+                  averageHeartRateBpm: 145,
+                  efficiencyFactor: 1.39,
+                },
+                decouplingPercent: 4.8,
+                coverage: {
+                  totalSamples: 5_460,
+                  validSamples: 5_100,
+                  includedDurationSeconds: 5_100,
+                  windowDurationSeconds: 5_460,
+                  fraction: 5_100 / 5_460,
+                },
+                evidence: "limited",
+                limitations: ["moving-status-unavailable"],
+              },
+              provenance: {
+                source: "local-canonical",
+                delivery: "live",
+                observedAt: "2026-07-19T08:00:00.000Z",
+              },
+            },
+          },
+        });
+      }
       if (request.method === "getUnitsPreference") {
         return response({ value: units, source: units === "metric" ? "default" : "cycling" });
       }
@@ -1320,6 +1381,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly canonicalIdVisible: boolean;
       readonly pageOverflow: boolean;
       readonly documentOverflow: boolean;
+      readonly drift: string;
+      readonly limitation: string;
     }>(`
       const recent = document.querySelector('[data-panel="recent-rides"]');
       const opener = recent.querySelector("button");
@@ -1330,6 +1393,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       const page = document.querySelector('section[aria-label="Ride review"]');
+      const analysisDeadline = Date.now() + 5000;
+      while (!page.textContent.includes("+4.8%") && Date.now() < analysisDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       const title = page.querySelector("h1");
       return {
         page: page.getAttribute("aria-label"),
@@ -1340,6 +1407,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
           (node) => node.scrollWidth > node.clientWidth,
         ),
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        drift: page.querySelector('[aria-label^="Observed efficiency-factor change"]')?.textContent ?? "",
+        limitation: page.querySelector('[aria-label="Analysis limitations"]')?.textContent ?? "",
       };
     `);
     expect(rideReview).toEqual({
@@ -1349,6 +1418,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       canonicalIdVisible: false,
       pageOverflow: false,
       documentOverflow: false,
+      drift: "+4.8%",
+      limitation: "No moving-status stream was available, so stopped time may be included.",
     });
     const rideReturn = await fixture.evaluate<{
       readonly page: string | null;
@@ -1434,6 +1505,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     ]);
     expect(calls.filter((call) => call.method === "setUnitsPreference")).toEqual([
       { jsonrpc: "2.0", method: "setUnitsPreference", params: { value: "imperial" } },
+    ]);
+    expect(calls.filter((call) => call.method === "getActivityAnalysis")).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "getActivityAnalysis",
+        params: { canonicalActivityId: "c".repeat(64), sections: ["aerobic-drift"] },
+      },
     ]);
     await fixture.setViewport(720, 800);
     const compactTrainingGeometry = await fixture.evaluate<{

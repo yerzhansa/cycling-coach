@@ -238,6 +238,9 @@ importers:
       '@enduragent/sync-intervals-icu':
         specifier: workspace:*
         version: link:../sync-intervals-icu
+      intervals-icu-api:
+        specifier: 0.3.1
+        version: 0.3.1(typescript@6.0.3)
       ws:
         specifier: ^8.20.0
         version: 8.20.0

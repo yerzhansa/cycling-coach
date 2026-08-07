@@ -1,0 +1,176 @@
+import {
+  CoachClientDisconnectedError,
+  CoachClientProtocolError,
+  type CoachClient,
+} from "@enduragent/coach-client";
+import {
+  ActivityAnalysisResultSchema,
+  CanonicalActivityIdSchema,
+  type ActivityAnalysisResult,
+  type ActivityAnalysisSection,
+} from "@enduragent/coach-contract";
+import type { DesktopCoachClientProvider } from "../coach-client.js";
+
+export type RideAnalysisStatus =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "unavailable"
+  | "refresh-unavailable";
+
+export interface RideAnalysisViewState {
+  readonly activityId: string | null;
+  readonly status: RideAnalysisStatus;
+  readonly revision: string | null;
+  readonly sections: ActivityAnalysisResult["sections"];
+  readonly loadingSections: readonly ActivityAnalysisSection[];
+}
+
+export const EMPTY_RIDE_ANALYSIS: RideAnalysisViewState = Object.freeze({
+  activityId: null,
+  status: "idle" as const,
+  revision: null,
+  sections: Object.freeze({}),
+  loadingSections: Object.freeze([]),
+});
+
+export interface RideAnalysisView {
+  render(state: RideAnalysisViewState): void;
+}
+
+export interface RideAnalysisController {
+  select(activityId: string | null): Promise<void>;
+  load(sections: readonly ActivityAnalysisSection[], refresh?: boolean): Promise<void>;
+  dispose(): void;
+}
+
+export function createRideAnalysisController(input: {
+  readonly clients: DesktopCoachClientProvider;
+  readonly view: RideAnalysisView;
+}): RideAnalysisController {
+  let disposed = false;
+  let generation = 0;
+  let operation: AbortController | undefined;
+  let failedClient: CoachClient | undefined;
+  let reconnectRequired = false;
+  let state: RideAnalysisViewState = EMPTY_RIDE_ANALYSIS;
+
+  const render = (next: RideAnalysisViewState): void => {
+    state = next;
+    if (!disposed) input.view.render(state);
+  };
+  const clientAfterFailure = async (): Promise<CoachClient> => {
+    if (!reconnectRequired) return input.clients.getClient();
+    const current = await input.clients.getClient();
+    const client =
+      failedClient === undefined || current === failedClient
+        ? await input.clients.reconnect()
+        : current;
+    reconnectRequired = false;
+    failedClient = undefined;
+    return client;
+  };
+
+  const load = async (
+    sections: readonly ActivityAnalysisSection[],
+    refresh = false,
+  ): Promise<void> => {
+    if (disposed || state.activityId === null) return;
+    const selectedActivityId = state.activityId;
+    const requested = [...new Set(sections)];
+    if (requested.length === 0) return;
+    const selectedGeneration = ++generation;
+    operation?.abort();
+    const controller = new AbortController();
+    operation = controller;
+    render({
+      ...state,
+      status: "loading",
+      loadingSections: requested,
+    });
+    let client: CoachClient | undefined;
+    try {
+      client = await clientAfterFailure();
+      controller.signal.throwIfAborted();
+      const result = ActivityAnalysisResultSchema.parse(
+        await client.call(
+          "getActivityAnalysis",
+          {
+            canonicalActivityId: selectedActivityId,
+            sections: requested,
+            ...(refresh ? { refresh: true } : {}),
+          },
+          { signal: controller.signal },
+        ),
+      ) as ActivityAnalysisResult;
+      if (
+        disposed ||
+        selectedGeneration !== generation ||
+        state.activityId !== selectedActivityId
+      ) {
+        return;
+      }
+      const retain = state.revision === null || state.revision === result.revision;
+      render({
+        activityId: selectedActivityId,
+        status: "ready",
+        revision: result.revision,
+        sections: retain ? { ...state.sections, ...result.sections } : result.sections,
+        loadingSections: [],
+      });
+    } catch (error) {
+      if (
+        disposed ||
+        selectedGeneration !== generation ||
+        state.activityId !== selectedActivityId
+      ) {
+        return;
+      }
+      if (
+        error instanceof CoachClientDisconnectedError ||
+        error instanceof CoachClientProtocolError
+      ) {
+        reconnectRequired = true;
+        failedClient = client;
+      }
+      render({
+        ...state,
+        status: Object.keys(state.sections).length === 0 ? "unavailable" : "refresh-unavailable",
+        loadingSections: [],
+      });
+    } finally {
+      if (operation === controller) operation = undefined;
+    }
+  };
+
+  input.view.render(state);
+  return {
+    async select(activityId) {
+      const selected = activityId === null ? null : CanonicalActivityIdSchema.parse(activityId);
+      if (disposed || selected === state.activityId) return;
+      generation += 1;
+      operation?.abort();
+      operation = undefined;
+      if (selected === null) {
+        render(EMPTY_RIDE_ANALYSIS);
+        return;
+      }
+      render({
+        activityId: selected,
+        status: "loading",
+        revision: null,
+        sections: {},
+        loadingSections: ["aerobic-drift"],
+      });
+      await load(["aerobic-drift"]);
+    },
+    load,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      generation += 1;
+      operation?.abort();
+      operation = undefined;
+    },
+  };
+}

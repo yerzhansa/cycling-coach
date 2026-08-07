@@ -44,7 +44,7 @@ export * from "./reference/index.js";
 export { bootstrapReference } from "./reference/runtime.js";
 export type { BootstrapReferenceDeps, ReferenceRuntime } from "./reference/runtime.js";
 export { wrapFetchWithSignal } from "./reference/sync/intervals-client-factory.js";
-export { makeChatClient } from "./reference/sync/intervals-client-factory.js";
+export { makeAbortableClient, makeChatClient } from "./reference/sync/intervals-client-factory.js";
 
 export {
   appendUsageLine,

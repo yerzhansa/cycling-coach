@@ -59,11 +59,14 @@ import {
 import {
   createAnchorRepository,
   createCanonicalActivityReader,
+  createIntervalsSourceRepository,
   createTrustedActivitySourceResolver,
+  H,
   type AnchorRepository,
 } from "@enduragent/kernel/store";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import type { CoachStoreWriterContext } from "./runtime.js";
 import {
   type CoachEngine,
@@ -98,6 +101,9 @@ import { createCoachOperations } from "./operations.js";
 import type { CoachOperationsDependencies } from "./operations.js";
 import { createSpendMeterService, type SpendMeterService } from "./spend-meter.js";
 import { createStoredActivityAnalysisService } from "./activity-analysis-service.js";
+import { createAerobicDriftAnalyzer } from "./aerobic-drift.js";
+import { createProviderActivityStreamReader } from "./activity-analysis-provider.js";
+import { createProviderActivityStreamArchive } from "./activity-analysis-archive.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -1001,10 +1007,35 @@ export async function createLocalCoachComposition(
       },
     });
     const options = Object.freeze({ liveIntervals });
+    const analysisImport = createNodeImportRuntime({
+      archiveDir: input.home.archiveDir,
+      store: input.context.store,
+    });
+    const analysisCrypto = createNodeCrypto();
+    const analysisSources = createIntervalsSourceRepository(input.context.store, (fields) => {
+      if (fields.length === 0) throw new TypeError("empty key tuple");
+      return H(analysisCrypto, ...(fields as [string | number, ...(string | number)[]]));
+    });
+    const providerStreams = createProviderActivityStreamReader({
+      credentials: options.liveIntervals,
+      archive: createProviderActivityStreamArchive({
+        archive: analysisImport.archive,
+        store: input.context.store,
+        sources: analysisSources,
+        runExclusive: (work) => runtime!.runExclusive(work),
+        now,
+      }),
+    });
     const activityAnalysis = createStoredActivityAnalysisService({
       store: input.context.store,
       activities: canonicalActivities,
       sources: createTrustedActivitySourceResolver(input.context.store),
+      analyzers: {
+        aerobicDrift: createAerobicDriftAnalyzer({
+          activities: canonicalActivities,
+          provider: providerStreams,
+        }),
+      },
       runCacheWrite: (work) => runtime!.runExclusive(work),
       now,
     });
