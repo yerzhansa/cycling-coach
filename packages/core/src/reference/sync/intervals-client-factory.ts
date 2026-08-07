@@ -156,14 +156,13 @@ export function makeIntervalsHttpFactory(options: {
  * Per-`runSync` IntervalsClient. Wraps `globalThis.fetch` with the abortable
  * shim above (composed over the shared bucket so the per-request timeout
  * covers queue wait plus HTTP call), and disables lib-side retry
- * (`maxAttempts: 1`) so an outer-timeout abort propagates into `AbortError`
- * without the lib silently recovering. Reference's own retry-after /
+ * (`maxAttempts: 1`) so an outer-timeout resolves as a normalized managed
+ * `Network` failure without the lib silently recovering. Reference's own retry-after /
  * rate-limit handling lives at the orchestrator layer (per ADR-0011), not at
  * the client layer.
  *
- * `intervals-icu-api@0.1.2` does not expose `signal?: AbortSignal` on its
- * resource methods; the constructor's `fetch` option is the only injection
- * point.
+ * Resource methods do not expose `signal?: AbortSignal`; the constructor's
+ * `fetch` option remains the injection point for the operation-scoped signal.
  */
 export function makeAbortableClient(opts: {
   apiKey: string;

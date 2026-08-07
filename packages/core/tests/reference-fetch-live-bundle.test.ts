@@ -123,6 +123,11 @@ describe("fetchLiveBundle", () => {
     expect(act.icu_ctl).toBeUndefined();
     expect(act.icu_atl).toBeUndefined();
 
+    const adapterActivity = res.adapterActivities[0]! as unknown as Record<string, unknown>;
+    expect(adapterActivity.startDateLocal).toBeTypeOf("string");
+    expect(adapterActivity.start_date_local).toBeUndefined();
+    expect(adapterActivity.icuCtl).toBe(50);
+
     const well = res.bundle.wellness[0]! as Record<string, unknown>;
     expect(well.fitness).toBe(40);
     expect(well.fatigue).toBe(45);

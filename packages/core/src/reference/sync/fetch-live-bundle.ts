@@ -15,7 +15,7 @@
 // only, capped) and abort-aware so a slow account cannot consume the whole
 // `SYNC_OPERATION_TIMEOUT_MS` budget.
 
-import { snakeCaseKeys } from "intervals-icu-api";
+import { snakeCaseKeys, type Activity as ManagedActivity } from "intervals-icu-api";
 import { serializeError } from "../../logging/serialize-error.js";
 import {
   REFERENCE_CAPTURE_STREAM_LIMIT,
@@ -115,6 +115,10 @@ export interface LiveFetchResult {
   readonly plannedWorkouts: readonly PlannedEvent[];
   /** Full-window inputs for metric computation. */
   readonly bundle: ReferenceBundle;
+  /** Canonical managed activities for sport-adapter dispatch. Provider-facing
+   * camelCase values stay separate from the snake_case persistence/metric
+   * boundary in `bundle.activities`. */
+  readonly adapterActivities: readonly ManagedActivity[];
   /** Sync wall-clock as an ISO string — the metric date-window anchor. */
   readonly frozenNow: string;
   /** Endpoints that returned an error (athlete-profile, wellness) and were
@@ -217,8 +221,10 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   // snake_case (start_date_local, icu_training_load, …). Reverse it here only —
   // wellness already ships in the camelCase mixed shape the schema agrees on. A
   // non-array body (ok:true but malformed) is treated as empty, not a crash.
+  let adapterActivities: ManagedActivity[] = [];
   let rawActivities: Array<Record<string, unknown>> = [];
   if (Array.isArray(actResult.value)) {
+    adapterActivities = actResult.value as ManagedActivity[];
     rawActivities = snakeCaseKeys(actResult.value) as Array<Record<string, unknown>>;
   } else {
     log("Reference: activities.list returned a non-array body; treating as empty");
@@ -336,6 +342,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     wellnessData: wellness,
     plannedWorkouts,
     bundle,
+    adapterActivities,
     frozenNow,
     ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
   };

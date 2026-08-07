@@ -48,8 +48,8 @@ importers:
         specifier: ^6.0.158
         version: 6.0.170(zod@4.4.1)
       intervals-icu-api:
-        specifier: 0.1.2
-        version: 0.1.2(typescript@6.0.3)
+        specifier: 0.3.1
+        version: 0.3.1(typescript@6.0.3)
       msw:
         specifier: ^2.13.3
         version: 2.14.2(@types/node@25.6.0)(typescript@6.0.3)
@@ -357,8 +357,8 @@ importers:
         specifier: ^1.42.0
         version: 1.42.0
       intervals-icu-api:
-        specifier: ^0.1.2
-        version: 0.1.2(typescript@6.0.3)
+        specifier: ^0.3.1
+        version: 0.3.1(typescript@6.0.3)
       yaml:
         specifier: ^2.8.3
         version: 2.8.3
@@ -415,8 +415,8 @@ importers:
         specifier: ^1.42.0
         version: 1.42.0
       intervals-icu-api:
-        specifier: ^0.1.2
-        version: 0.1.2(typescript@6.0.3)
+        specifier: ^0.3.1
+        version: 0.3.1(typescript@6.0.3)
       yaml:
         specifier: ^2.8.3
         version: 2.8.3
@@ -501,8 +501,8 @@ importers:
         specifier: ^6.0.158
         version: 6.0.170(zod@4.4.1)
       intervals-icu-api:
-        specifier: ^0.1.2
-        version: 0.1.2(typescript@6.0.3)
+        specifier: ^0.3.1
+        version: 0.3.1(typescript@6.0.3)
       zod:
         specifier: ^4.3.6
         version: 4.4.1
@@ -610,8 +610,8 @@ importers:
         specifier: ^6.0.158
         version: 6.0.170(zod@4.4.1)
       intervals-icu-api:
-        specifier: ^0.1.2
-        version: 0.1.2(typescript@6.0.3)
+        specifier: ^0.3.1
+        version: 0.3.1(typescript@6.0.3)
       zod:
         specifier: ^4.3.6
         version: 4.4.1
@@ -660,8 +660,8 @@ importers:
         specifier: ^6.0.158
         version: 6.0.170(zod@4.4.1)
       intervals-icu-api:
-        specifier: ^0.1.2
-        version: 0.1.2(typescript@6.0.3)
+        specifier: ^0.3.1
+        version: 0.3.1(typescript@6.0.3)
       zod:
         specifier: ^4.3.6
         version: 4.4.1
@@ -3171,8 +3171,8 @@ packages:
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
 
-  intervals-icu-api@0.1.2:
-    resolution: {integrity: sha512-HqK9WarMm6SGIpzFag4FpMo/2NgTq00B3xD6CYkqJ0+kD+BTmCTwjc3yDM7rat+1UNokEEIJneBrM4zkoJunCA==}
+  intervals-icu-api@0.3.1:
+    resolution: {integrity: sha512-W1zKgPpPTbT3TtqF/PGSaarcMxpKBC6SQnFOvRsJ5Te9Hp7LPav5pLi5lWY8lqXtXrSt2Ab74ZFHICiBOZuEqA==}
     engines: {node: '>=18'}
 
   ip-address@10.4.0:
@@ -7126,7 +7126,7 @@ snapshots:
 
   inherits@2.0.4: {}
 
-  intervals-icu-api@0.1.2(typescript@6.0.3):
+  intervals-icu-api@0.3.1(typescript@6.0.3):
     dependencies:
       openapi-fetch: 0.17.0
       valibot: 1.3.1(typescript@6.0.3)

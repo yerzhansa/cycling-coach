@@ -122,7 +122,7 @@ async function fetchOnce(
   const runs: readonly AdapterRun[] = runAdaptersForActivities(
     adapters,
     sportTypes,
-    live.bundle.activities,
+    live.adapterActivities,
   );
   const { omitPowerFamily, meta: baseMeta } = composeProvenance(runs);
   const derivedMetrics = computeDerivedMetrics(buildMetricInput(live.bundle, live.frozenNow), {

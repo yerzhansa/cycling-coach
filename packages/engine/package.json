@@ -36,7 +36,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@openrouter/ai-sdk-provider": "^2.9.1",
     "ai": "^6.0.158",
-    "intervals-icu-api": "^0.1.2",
+    "intervals-icu-api": "^0.3.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
