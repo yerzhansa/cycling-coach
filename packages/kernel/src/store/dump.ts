@@ -18,6 +18,10 @@ export const DERIVED_TABLES = [
 
 /** Every current store table, alphabetical, with its content-derived order key. */
 export const DUMP_TABLES = [
+  { table: "analytics_curve_current", orderBy: "singleton" },
+  { table: "analytics_curve_evidence", orderBy: "evidence_id" },
+  { table: "analytics_curve_generation", orderBy: "generation_id" },
+  { table: "analytics_curve_generation_promotion", orderBy: "generation_id" },
   { table: "anchor_history", orderBy: "id" },
   { table: "athlete", orderBy: "id" },
   { table: "dedup_confirmation", orderBy: "id" },

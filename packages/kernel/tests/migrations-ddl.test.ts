@@ -45,6 +45,11 @@ const EXPECTED_FULL_TABLES = [
   "ingest_cluster_state",
   "sync_failure",
   "store_owner",
+  "analytics_curve_generation",
+  "analytics_curve_evidence",
+  "analytics_curve_generation_promotion",
+  "analytics_curve_current",
+  "analytics_curve_refresh_failure",
 ];
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
@@ -163,6 +168,7 @@ describe("001_init migration", () => {
       { version: 7, name: "007_sync_failure" },
       { version: 8, name: "008_store_owner" },
       { version: 9, name: "009_activity_source_resolver" },
+      { version: 10, name: "010_analytics_curves" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -254,7 +260,7 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies 001 through 008 with exactly thirty-six tables and no foreign-key violations", () => {
+  it("applies 001 through 010 with exactly forty-one tables and no foreign-key violations", () => {
     db = openFull();
     const names = (
       db
@@ -264,7 +270,7 @@ describe("001_init migration", () => {
       .map((row) => row.name)
       .sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
-    expect(names).toHaveLength(36);
+    expect(names).toHaveLength(41);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
@@ -497,6 +503,20 @@ describe("001_init migration", () => {
         "sync_operation_no_delete",
         "store_owner_no_update",
         "store_owner_no_delete",
+        "analytics_curve_generation_promotion_requires_complete_evidence",
+        "analytics_curve_evidence_uses_generation_instant",
+        "analytics_curve_generation_promotion_uses_later_instant",
+        "analytics_curve_refresh_failure_insert_uses_later_instant",
+        "analytics_curve_refresh_failure_update_uses_later_instant",
+        "analytics_curve_generation_no_update",
+        "analytics_curve_generation_no_delete",
+        "analytics_curve_evidence_no_update",
+        "analytics_curve_evidence_no_delete",
+        "analytics_curve_generation_promotion_no_update",
+        "analytics_curve_generation_promotion_no_delete",
+        "analytics_curve_current_no_delete",
+        "analytics_curve_current_insert_clears_failure",
+        "analytics_curve_current_update_clears_failure",
       ]),
     );
 
@@ -714,6 +734,10 @@ describe("001_init migration", () => {
 
   it("enumerates sync state ownership", () => {
     expect(DUMP_TABLES).toEqual([
+      { table: "analytics_curve_current", orderBy: "singleton" },
+      { table: "analytics_curve_evidence", orderBy: "evidence_id" },
+      { table: "analytics_curve_generation", orderBy: "generation_id" },
+      { table: "analytics_curve_generation_promotion", orderBy: "generation_id" },
       { table: "anchor_history", orderBy: "id" },
       { table: "athlete", orderBy: "id" },
       { table: "dedup_confirmation", orderBy: "id" },
@@ -747,12 +771,19 @@ describe("001_init migration", () => {
       { table: "workout", orderBy: "workout_key" },
       { table: "zone_set_history", orderBy: "id" },
     ]);
-    expect(DUMP_TABLES).toHaveLength(32);
+    expect(DUMP_TABLES).toHaveLength(36);
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("source_watermark");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_operation");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_failure");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("store_owner");
+    expect(DUMP_TABLES.map(({ table }) => String(table)))
+      .not.toContain("analytics_curve_refresh_failure");
     for (const table of [
+      "analytics_curve_current",
+      "analytics_curve_evidence",
+      "analytics_curve_generation",
+      "analytics_curve_generation_promotion",
+      "analytics_curve_refresh_failure",
       "source_artifact",
       "source_record_revision",
       "source_record_current",
@@ -796,7 +827,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     }>;
     expect(tables.find((row) => row.name === "sync_failure")?.strict).toBe(1);
     expect(db.prepare("PRAGMA foreign_key_list(sync_failure)").all()).toEqual([]);
-    expect(DUMP_TABLES).toHaveLength(32);
+    expect(DUMP_TABLES).toHaveLength(36);
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(PURE_AUTHORED_TABLES).not.toContain("sync_failure");
     expect(MIXED_AUTHORED_TABLES).not.toContain("sync_failure");
@@ -832,6 +863,30 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
       expect.objectContaining({ seqno: 1, name: "source" }),
       expect.objectContaining({ seqno: 2, name: "id" }),
     ]);
+  });
+
+  it("adds strict immutable four-part analytics curve generations", () => {
+    db = openFull();
+    expect(createHash("sha256").update(MIGRATIONS[9]!.sql).digest("hex")).toBe(
+      "adff3df143002dae23e39a4633d6cc0e39b80fb3689dca843262549b883fbe77",
+    );
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{
+      name: string;
+      strict: number;
+    }>;
+    for (const name of [
+      "analytics_curve_generation",
+      "analytics_curve_evidence",
+      "analytics_curve_generation_promotion",
+      "analytics_curve_current",
+      "analytics_curve_refresh_failure",
+    ]) {
+      expect(tables.find((row) => row.name === name)?.strict).toBe(1);
+    }
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(DUMP_TABLES).toHaveLength(36);
+    expect(DUMP_TABLES.map(({ table }) => table)).not.toContain("analytics_curve_refresh_failure");
+    expect(DERIVED_TABLES).not.toContain("analytics_curve_generation");
   });
 
   it("omits the unreleased prior bone-stress column from the baseline schema", () => {

@@ -231,14 +231,13 @@ describe("sync failure repository", () => {
     }
   });
 
-  it("upgrades a migration-six store without changing canonical dump ownership", async () => {
+  it("upgrades a migration-six store while keeping operational failures outside the dump", async () => {
     store = openSqliteStorage(":memory:");
     await runMigrations(store, MIGRATIONS.slice(0, 6));
-    const before = await dumpStore(store);
     await runMigrations(store, MIGRATIONS);
-    expect(await dumpStore(store)).toBe(before);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 9 });
-    expect(DUMP_TABLES).toHaveLength(32);
+    expect(await dumpStore(store)).not.toContain("# sync_failure");
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 10 });
+    expect(DUMP_TABLES).toHaveLength(36);
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(DUMP_TABLES.map(({ table }) => table)).not.toContain("sync_failure");
     expect(DERIVED_TABLES).not.toContain("sync_failure");
