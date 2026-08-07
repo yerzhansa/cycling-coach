@@ -103,6 +103,7 @@ function harness(responses: readonly (HttpResponse | Error)[] = [
   };
   const options: RefreshAnalyticsCurvesOptions = {
     athleteId: "i0",
+    frozenOn: "2012-06-15",
     minRequestIntervalMs: 250,
     archive,
     repository,
@@ -183,6 +184,18 @@ describe("analytics curve acquisition", () => {
       promotedEpochSeconds: FROZEN_EPOCH_SECONDS,
     }]);
     expect(test.failures).toEqual([]);
+  });
+
+  it("uses the capture civil date for selectors when it is adjacent to the UTC date", async () => {
+    const test = harness();
+    const result = await refreshAnalyticsCurves({ ...test.options, frozenOn: "2012-06-16" });
+
+    expect(result).toMatchObject({ kind: "promoted", frozenAt: "2012-06-15T12:00:00.000Z" });
+    expect(test.requests.map((value) => new URL(value).searchParams.get("curves"))).toEqual(
+      Array(4).fill(
+        "r.2012-05-20.2012-06-16,r.2012-04-22.2012-05-19,r.2012-05-06.2012-06-16",
+      ),
+    );
   });
 
   it("makes zero calls when all four physical slots cannot be reserved", async () => {

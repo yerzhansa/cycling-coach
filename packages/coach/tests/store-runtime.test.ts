@@ -141,6 +141,7 @@ describe("StoreRuntime", () => {
         apiKey: "synthetic",
         athleteId: "synthetic-athlete",
         frozenAt: new Date("1998-07-18T12:00:00.000Z"),
+        frozenOn: "1998-07-18",
       }),
     );
     expect(capture.mock.invocationCallOrder[0]).toBeLessThan(

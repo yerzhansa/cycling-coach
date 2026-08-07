@@ -6,4 +6,5 @@ export * from "./source.js";
 export * from "./zip.js";
 export * from "./projection.js";
 export * from "./analytics-curves.js";
+export * from "./analytics-curve-projection.js";
 export type { PhysicalRequestLedger } from "@enduragent/kernel/store";

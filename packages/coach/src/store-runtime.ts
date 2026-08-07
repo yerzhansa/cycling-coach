@@ -419,6 +419,7 @@ LIMIT 1`,
             apiKey: config.intervals.apiKey,
             athleteId: config.intervals.athleteId,
             frozenAt: now,
+            frozenOn: captureResult.value.plan.frozenNow.slice(0, 10),
             budget,
             attemptLedger: ledger,
           });

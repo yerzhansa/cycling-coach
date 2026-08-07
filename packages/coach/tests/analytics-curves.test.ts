@@ -71,6 +71,7 @@ describe("desktop analytics curve composition", () => {
           apiKey: "synthetic-secret",
           athleteId: "i0",
           frozenAt: new Date("2012-06-15T12:00:00.000Z"),
+          frozenOn: "2012-06-15",
           budget,
           attemptLedger: ledger,
           baseFetch,
@@ -112,9 +113,20 @@ describe("desktop analytics curve composition", () => {
         apiKey: "synthetic-secret",
         athleteId: "i0",
         frozenAt: new Date(Number.NaN),
+        frozenOn: "2012-06-15",
         budget: {} as SyncBudget,
         attemptLedger: {} as never,
       }),
     ).rejects.toThrow("analytics curve frozen instant is invalid");
+  });
+
+  it("rejects an invalid capture civil date before opening a writer", async () => {
+    await expect(
+      runAnalyticsCurveRefresh({
+        env: {}, apiKey: "synthetic-secret", athleteId: "i0",
+        frozenAt: new Date("2012-06-15T12:00:00.000Z"), frozenOn: "2012-02-30",
+        budget: {} as SyncBudget, attemptLedger: {} as never,
+      }),
+    ).rejects.toThrow("invalid analytics curve input");
   });
 });
