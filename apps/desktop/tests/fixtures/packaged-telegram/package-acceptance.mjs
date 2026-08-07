@@ -13,6 +13,14 @@ function exactObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+export function configureTelegramAcceptanceSigningEnvironment(environment) {
+  if (!exactObject(environment)) {
+    throw new TypeError("Telegram acceptance signing environment is invalid");
+  }
+  environment.CSC_FOR_PULL_REQUEST = "true";
+  environment.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+}
+
 const WORKSPACE_PACKAGE_NAME = /^@enduragent\/[a-z0-9][a-z0-9._-]*$/u;
 
 function workspaceDependencies(manifest) {

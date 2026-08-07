@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  configureTelegramAcceptanceSigningEnvironment,
   createTelegramAcceptanceBuilderConfiguration,
   selectTelegramAcceptanceNestedTarget,
   TELEGRAM_ACCEPTANCE_APP_ID,
@@ -199,6 +200,20 @@ function beforePackagedBootstrap(source: string, mutation: string): string {
 }
 
 describe("Telegram acceptance package", () => {
+  it("forces ad-hoc signing in pull-request builds without certificate discovery", () => {
+    const environment = {
+      CSC_FOR_PULL_REQUEST: "false",
+      CSC_IDENTITY_AUTO_DISCOVERY: "true",
+    };
+
+    configureTelegramAcceptanceSigningEnvironment(environment);
+
+    expect(environment).toEqual({
+      CSC_FOR_PULL_REQUEST: "true",
+      CSC_IDENTITY_AUTO_DISCOVERY: "false",
+    });
+  });
+
   it("derives a distinct ad-hoc-signed acceptance identity without mutating the canonical config", () => {
     const canonical = canonicalBuilder();
     const derived = createTelegramAcceptanceBuilderConfiguration(canonical) as {

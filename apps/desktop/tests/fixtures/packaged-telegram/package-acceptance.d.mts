@@ -6,6 +6,9 @@ export const TELEGRAM_ACCEPTANCE_ENTITLEMENTS: Readonly<{
   readonly "com.apple.security.cs.allow-jit": true;
 }>;
 
+export function configureTelegramAcceptanceSigningEnvironment(
+  environment: Record<string, string | undefined>,
+): void;
 export function createTelegramAcceptanceBuilderConfiguration(
   canonical: Record<string, unknown>,
 ): Record<string, unknown>;

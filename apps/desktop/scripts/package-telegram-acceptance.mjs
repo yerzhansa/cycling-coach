@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { extractFile, listPackage } from "@electron/asar";
 import { parse } from "yaml";
 import {
+  configureTelegramAcceptanceSigningEnvironment,
   createTelegramAcceptanceBuilderConfiguration,
   selectTelegramAcceptanceNestedTarget,
   TELEGRAM_ACCEPTANCE_APP_ID,
@@ -176,7 +177,7 @@ async function verifySigningPayload(application, expectedCdHash, rootDescription
   }
 }
 
-process.env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
+configureTelegramAcceptanceSigningEnvironment(process.env);
 const { build } = await import("electron-builder");
 await rm(join(desktopRoot, outputDirectory), { recursive: true, force: true });
 const sourceManifest = JSON.parse(await readFile(join(desktopRoot, "package.json"), "utf8"));
