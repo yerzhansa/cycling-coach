@@ -12,9 +12,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { requireDisposableSafeStorageContext } from "../smoke/safe-storage-test-context.mjs";
 
 delete process.env.FORCE_COLOR;
 delete process.env.CLICOLOR_FORCE;
+requireDisposableSafeStorageContext(process.env, process.platform);
 const { build } = await import("esbuild");
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,6 +24,9 @@ const base = await realpath(process.platform === "darwin" ? "/tmp" : tmpdir());
 const scratch = await mkdtemp(join(base, "eav-"));
 const staging = join(scratch, "fixture");
 const userData = join(scratch, "user-data");
+const electronUserData = join(scratch, "electron-user-data");
+const operatorHome = join(scratch, "operator-home");
+const athleteHome = join(scratch, "athlete-home");
 const commandPath = join(scratch, "command.json");
 const resultPath = join(scratch, "result.json");
 const sentinel = "synthetic-packaged-safe-storage-sentinel";
@@ -134,6 +139,9 @@ try {
   await Promise.all([
     mkdir(staging, { recursive: true, mode: 0o700 }),
     mkdir(userData, { recursive: true, mode: 0o700 }),
+    mkdir(electronUserData, { recursive: true, mode: 0o700 }),
+    mkdir(operatorHome, { recursive: true, mode: 0o700 }),
+    mkdir(athleteHome, { recursive: true, mode: 0o700 }),
   ]);
   await writeFile(join(staging, "main.cjs"), fixtureMain);
   await writeFile(
@@ -217,6 +225,8 @@ try {
   const appExecutable = await executable();
   const launchEnvironment = {
     ...process.env,
+    HOME: operatorHome,
+    ENDURAGENT_HOME: athleteHome,
     W9_SAFE_STORAGE_COMMAND: commandPath,
     FORCE_COLOR: undefined,
     CLICOLOR_FORCE: undefined,
@@ -227,7 +237,11 @@ try {
     { mode: 0o600 },
   );
   await chmod(commandPath, 0o600);
-  const firstExit = await run(appExecutable, [], { env: launchEnvironment, timeoutMs: 20_000 });
+  const launchArguments = [`--user-data-dir=${electronUserData}`];
+  const firstExit = await run(appExecutable, launchArguments, {
+    env: launchEnvironment,
+    timeoutMs: 20_000,
+  });
   if (firstExit.timedOut || firstExit.code !== 0 || firstExit.signal !== null) {
     throw new Error(firstExit.stderr || firstExit.stdout || "first fixture launch failed");
   }
@@ -240,7 +254,10 @@ try {
     JSON.stringify({ mode: "read", userData, resultPath, sentinel, unaffected }),
     { mode: 0o600 },
   );
-  const secondExit = await run(appExecutable, [], { env: launchEnvironment, timeoutMs: 20_000 });
+  const secondExit = await run(appExecutable, launchArguments, {
+    env: launchEnvironment,
+    timeoutMs: 20_000,
+  });
   if (secondExit.timedOut || secondExit.code !== 0 || secondExit.signal !== null) {
     throw new Error(secondExit.stderr || secondExit.stdout || "second fixture launch failed");
   }
