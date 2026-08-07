@@ -58,7 +58,9 @@ export interface VerifyMacosIdentityContinuityDependencies {
     path: string,
     options: { readonly recursive: true; readonly force: true },
   ) => Promise<void>;
+  readonly statAsarFile?: (archivePath: string, filename: string, followLinks: false) => unknown;
   readonly tmpdir?: () => string;
+  readonly uncacheAsar?: (archivePath: string) => boolean;
 }
 
 export interface VerifiedMacosIdentityContinuity {
@@ -75,7 +77,23 @@ export interface VerifiedMacosBaselineApplication {
 
 export interface MacosCodeIdentity {
   readonly codeDirectory: string;
+  readonly codeDirectorySha256: string;
   readonly cdHash: string;
+}
+
+export interface VerifiedMacosReleaseApplication {
+  readonly version: string;
+  readonly enduragentDesktopRelease: true;
+  readonly feedUrl: string;
+  readonly bundleIdentifier: "icu.enduragent.desktop";
+  readonly teamIdentifier: "FA494ACVTF";
+  readonly designatedRequirementSha256: string;
+  readonly codeDirectorySha256: string;
+  readonly cdHash: string;
+}
+
+export interface InspectMacosReleaseApplicationDependencies extends VerifyMacosIdentityContinuityDependencies {
+  readonly readFile?: (path: string) => Promise<Buffer>;
 }
 
 export interface VerifiedMacosReleaseCandidateApplication {
@@ -162,6 +180,10 @@ export function verifyMacosReleaseCandidateApplication(
   options: VerifyMacosIdentityContinuityOptions,
   dependencies?: VerifyMacosIdentityContinuityDependencies,
 ): Promise<VerifiedMacosReleaseCandidateApplication>;
+export function inspectMacosReleaseApplication(
+  application: string,
+  dependencies?: InspectMacosReleaseApplicationDependencies,
+): Promise<VerifiedMacosReleaseApplication>;
 export function verifyMacosReleaseApplicationContents(
   artifactDirectory: string,
   baselineApplication: string,

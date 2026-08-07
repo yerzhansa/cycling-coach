@@ -52,6 +52,7 @@ const verifiedLooseIdentity = Object.freeze({
   teamIdentifier: "FA494ACVTF",
   candidateCodeIdentity: Object.freeze({
     codeDirectory: "v=20500 size=100 flags=0x10000(runtime) hashes=1+7 location=embedded",
+    codeDirectorySha256: "b".repeat(64),
     cdHash: "b".repeat(40),
   }),
 });

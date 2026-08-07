@@ -13,6 +13,13 @@ export interface ReleaseArtifactNames {
   readonly metadata: "latest-mac.yml";
 }
 
+export interface MacosReleaseUpdaterMetadata {
+  readonly provider: "generic";
+  readonly url: string;
+  readonly channel: "latest";
+  readonly updaterCacheDirName: "@enduragentdesktop-updater";
+}
+
 export interface MacosReleaseInput {
   readonly feedUrl: string | undefined;
   readonly identity: string | undefined;
@@ -168,6 +175,9 @@ export function requireNotarizationCredentials(
 ): NotarizationCredentialSelection;
 export function requireStableCalVer(value: unknown): string;
 export function requireGenericFeedUrl(value: unknown): string;
+export function parseMacosReleaseUpdaterMetadata(
+  value: string | Uint8Array,
+): MacosReleaseUpdaterMetadata;
 export function requireDeveloperIdIdentity(value: unknown): string;
 export function requireMacosBaselineApplication(value: unknown): string;
 export function releaseArtifactNames(version: string): ReleaseArtifactNames;
