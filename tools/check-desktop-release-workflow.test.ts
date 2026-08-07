@@ -51,17 +51,46 @@ describe("desktop release workflow policy", () => {
     expect(issues.some((issue) => issue.includes("create-normal-or-leave-existing"))).toBe(true);
   });
 
-  it("rejects direct triggers and a non-failing activation stop", () => {
+  it("rejects direct triggers and activation that bypasses native acceptance", () => {
     const source = sources();
     const desktop = source.desktop
       .replace("workflow_call:", "workflow_call:\n  workflow_dispatch:")
       .replace(
-        "echo '::error::Public activation, compensation, production-feed roundtrip, and GA body activation have not landed; stable publication fails closed.'\n          exit 1",
-        "echo 'unsafe continuation'\n          exit 0",
+        "needs.verify-production-update.result == 'success'",
+        "needs.verify-production-update.result != 'failure'",
       );
     const issues = inspect(source.release, desktop);
     expect(issues.some((issue) => issue.includes("workflow_call-only"))).toBe(true);
-    expect(issues.some((issue) => issue.includes("stop explicitly and nonzero"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("mode-specific acceptance gate"))).toBe(true);
+  });
+
+  it("requires observation, production-feed round trip, and compensation", () => {
+    const source = sources();
+    const mutations = [
+      {
+        desktop: source.desktop.replace(
+          "desktop-release:transaction -- observe",
+          "desktop-release:transaction -- verify",
+        ),
+        issue: "bind latest before provisional publication",
+      },
+      {
+        desktop: source.desktop.replace("test:macos-update-roundtrip", "test:disabled-roundtrip"),
+        issue: "native production-feed N-to-N+1 round trip",
+      },
+      {
+        desktop: source.desktop.replace(
+          "needs.activate-release.result != 'success'",
+          "needs.activate-release.result == 'failure'",
+        ),
+        issue: "restore the observed latest",
+      },
+    ];
+    for (const mutation of mutations) {
+      expect(
+        inspect(source.release, mutation.desktop).some((issue) => issue.includes(mutation.issue)),
+      ).toBe(true);
+    }
   });
 
   it("rejects a reusable call without a write permission ceiling", () => {

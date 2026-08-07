@@ -370,13 +370,23 @@ export function inspectDesktopReleaseWorkflows(
     "desktop.jobs.stage-private-draft",
     issues,
   );
-  const activation = mapping(
-    desktopJobs["desktop-activation-not-implemented"],
-    "desktop.jobs.desktop-activation-not-implemented",
-    issues,
-  );
   const publish = mapping(desktopJobs["publish-assets"], "desktop.jobs.publish-assets", issues);
   const promote = mapping(desktopJobs["promote-latest"], "desktop.jobs.promote-latest", issues);
+  const roundTrip = mapping(
+    desktopJobs["verify-production-update"],
+    "desktop.jobs.verify-production-update",
+    issues,
+  );
+  const activate = mapping(
+    desktopJobs["activate-release"],
+    "desktop.jobs.activate-release",
+    issues,
+  );
+  const compensate = mapping(
+    desktopJobs["compensate-publication"],
+    "desktop.jobs.compensate-publication",
+    issues,
+  );
   exactPermissions(sign.permissions, { contents: "read" }, "macOS signing", issues);
   exactPermissions(
     verify.permissions,
@@ -400,6 +410,24 @@ export function inspectDesktopReleaseWorkflows(
     promote.permissions,
     { actions: "read", contents: "write" },
     "latest promotion",
+    issues,
+  );
+  exactPermissions(
+    roundTrip.permissions,
+    { actions: "read", contents: "read" },
+    "production update verification",
+    issues,
+  );
+  exactPermissions(
+    activate.permissions,
+    { actions: "read", contents: "write" },
+    "release activation",
+    issues,
+  );
+  exactPermissions(
+    compensate.permissions,
+    { actions: "read", contents: "write" },
+    "release compensation",
     issues,
   );
   const signingSecrets = [
@@ -432,27 +460,88 @@ export function inspectDesktopReleaseWorkflows(
   }
   if (
     stage.environment !== "desktop-macos-publication" ||
-    promote.environment !== "desktop-macos-latest"
+    publish.environment !== "desktop-macos-publication" ||
+    promote.environment !== "desktop-macos-latest" ||
+    activate.environment !== "desktop-macos-latest" ||
+    compensate.environment !== "desktop-macos-latest"
   )
     issues.push("write-authority desktop jobs must use protected environments");
   if (!scalar(stage.needs).includes("verify-macos-envelope") || verify.needs !== "sign-macos")
     issues.push("independent macOS verification must follow signing before private staging");
-  const activationRun = runs(activation).join("\n");
+  const publishRun = runs(publish).join("\n");
+  const promoteRun = runs(promote).join("\n");
+  const roundTripRun = runs(roundTrip).join("\n");
+  const activateRun = runs(activate).join("\n");
+  const compensateRun = runs(compensate).join("\n");
+  const observeIndex = publishRun.indexOf("desktop-release:transaction -- observe");
+  const publicationIndex = publishRun.indexOf("desktop-release:transaction -- publish");
   if (
-    activation.needs !== "stage-private-draft" ||
-    !activationRun.includes("stable publication fails closed") ||
-    !/(?:^|\n)\s*exit 1\s*$/u.test(activationRun)
+    !scalar(publish.needs).includes("stage-private-draft") ||
+    observeIndex === -1 ||
+    publicationIndex <= observeIndex ||
+    !publishRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
+    !publishRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
+    !publishRun.includes('--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"') ||
+    scalar(mapping(publish.outputs, "desktop publish outputs", issues).latest_id) !==
+      "${{ steps.observe.outputs.latest_id }}"
   ) {
-    issues.push(
-      "incomplete desktop activation must stop explicitly and nonzero after private staging",
-    );
+    issues.push("public desktop publication must bind latest before provisional publication");
   }
   if (
-    publish.if !== "${{ false && inputs.mode == 'steady' }}" ||
-    !scalar(publish.needs).includes("stage-private-draft") ||
-    !scalar(promote.needs).includes("publish-assets")
+    !scalar(promote.needs).includes("publish-assets") ||
+    !promoteRun.includes("desktop-release:transaction -- promote") ||
+    !promoteRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"')
   ) {
-    issues.push("public desktop publication must remain unreachable until activation lands");
+    issues.push("desktop latest promotion must compare-and-swap the observed release");
+  }
+  const roundTripNeeds = scalar(roundTrip.needs);
+  if (
+    roundTrip.if !== "${{ inputs.mode == 'steady' }}" ||
+    !roundTripNeeds.includes("sign-macos") ||
+    !roundTripNeeds.includes("promote-latest") ||
+    !roundTripRun.includes("desktop-release:transaction -- public-envelope") ||
+    !roundTripRun.includes("test:macos-update-roundtrip") ||
+    !roundTripRun.includes('"$RUNNER_TEMP/desktop-baseline"') ||
+    !roundTripRun.includes('"$CANDIDATE_ENVELOPE"') ||
+    !roundTripRun.includes('"$EVIDENCE"') ||
+    !scalar(roundTrip).includes("desktop-update-evidence-") ||
+    !scalar(roundTrip).includes("needs.sign-macos.outputs.baseline_version")
+  ) {
+    issues.push("steady publication must pass a native production-feed N-to-N+1 round trip");
+  }
+  const activateCondition = scalar(activate.if).replace(/\s+/gu, " ");
+  const activateNeeds = scalar(activate.needs);
+  if (
+    !activateNeeds.includes("publish-assets") ||
+    !activateNeeds.includes("promote-latest") ||
+    !activateNeeds.includes("verify-production-update") ||
+    !activateCondition.includes("always()") ||
+    !activateCondition.includes("needs.publish-assets.result == 'success'") ||
+    !activateCondition.includes("needs.promote-latest.result == 'success'") ||
+    !activateCondition.includes("inputs.mode == 'genesis'") ||
+    !activateCondition.includes("needs.verify-production-update.result == 'skipped'") ||
+    !activateCondition.includes("inputs.mode == 'steady'") ||
+    !activateCondition.includes("needs.verify-production-update.result == 'success'") ||
+    !activateRun.includes("desktop-release:transaction -- activate") ||
+    !activateRun.includes("packages/cycling-coach/CHANGELOG.md")
+  ) {
+    issues.push("general-availability activation must follow the mode-specific acceptance gate");
+  }
+  const compensateCondition = scalar(compensate.if).replace(/\s+/gu, " ");
+  const compensateNeeds = scalar(compensate.needs);
+  if (
+    !compensateNeeds.includes("activate-release") ||
+    !compensateCondition.includes("always()") ||
+    !compensateCondition.includes("needs.publish-assets.outputs.latest_id != ''") ||
+    !compensateCondition.includes("needs.activate-release.result != 'success'") ||
+    !compensateRun.includes("desktop-release:transaction -- compensate") ||
+    !compensateRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
+    !compensateRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
+    !compensateRun.includes('--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"')
+  ) {
+    issues.push(
+      "failed desktop activation must restore the observed latest and withdraw the candidate",
+    );
   }
   const signingSteps = steps(sign);
   const signingStep = namedStep(sign, "Build signed and notarized macOS envelope");
@@ -545,17 +634,25 @@ export function inspectDesktopReleaseWorkflows(
       desktopSource.match(
         /SIGNING_RUN_ATTEMPT: \$\{\{ needs\.sign-macos\.outputs\.workflow_run_attempt \}\}/gu,
       ) ?? []
-    ).length !== 5 ||
+    ).length !== 8 ||
     desktopSource.includes("SIGNING_RUN_ATTEMPT: ${{ github.run_attempt }}") ||
     !independentRun.includes('--workflow-run-attempt "$SIGNING_RUN_ATTEMPT"')
   ) {
     issues.push("desktop verification must bind the successful signing attempt on reruns");
   }
   if (
-    (desktopSource.match(/actions\/download-artifact@[^\n]+# v8/gu) ?? []).length !== 4 ||
-    (desktopSource.match(/digest-mismatch: error/gu) ?? []).length !== 4 ||
+    (desktopSource.match(/actions\/download-artifact@[^\n]+# v8/gu) ?? []).length !== 8 ||
+    (desktopSource.match(/digest-mismatch: error/gu) ?? []).length !== 8 ||
     !desktopSource.includes("artifact_id: ${{ steps.sealed-artifact.outputs.artifact-id }}") ||
-    !desktopSource.includes("artifact_digest: ${{ steps.sealed-artifact.outputs.artifact-digest }}")
+    !desktopSource.includes(
+      "artifact_digest: ${{ steps.sealed-artifact.outputs.artifact-digest }}",
+    ) ||
+    !desktopSource.includes(
+      "baseline_artifact_id: ${{ steps.baseline-artifact.outputs.artifact-id }}",
+    ) ||
+    !desktopSource.includes(
+      "baseline_artifact_digest: ${{ steps.baseline-artifact.outputs.artifact-digest }}",
+    )
   ) {
     issues.push("desktop consumers must bind the exact digest-checked signing artifact");
   }
