@@ -198,13 +198,13 @@ export function createRunningTools(
                 throw err;
               }
               const result = await intervals.events.create({
-                start_date_local: `${input.date}T00:00:00`,
+                startDateLocal: `${input.date}T00:00:00`,
                 category: "WORKOUT",
                 name: input.workout.name,
                 type: "Run",
                 ...buildCoachEventProvenance(input.date, input.workout.name),
-                moving_time: serialized.movingTime,
-                // No icu_training_load — the server derives running Pace Load from the
+                movingTime: serialized.movingTime,
+                // No icuTrainingLoad — the server derives running Pace Load from the
                 // parsed steps against the athlete's own threshold pace.
                 description: serialized.description,
               });

@@ -46,7 +46,7 @@ const validWorkout = {
 };
 
 describe("intervals_create_workout provenance", () => {
-  it("payload carries external_id 'cycling-coach:<date>:<slug>' and tags ['cycling-coach']", async () => {
+  it("payload carries externalId 'cycling-coach:<date>:<slug>' and tags ['cycling-coach']", async () => {
     const { mutations, calls } = fakeMutations();
     const tool = createWorkoutTool(mutations)!;
     const date = tomorrowISODate();
@@ -56,7 +56,8 @@ describe("intervals_create_workout provenance", () => {
     expect(out).toEqual({ created: true, event: { id: 42 } });
     expect(calls).toHaveLength(1);
     const payload = calls[0];
-    expect(payload.external_id).toBe(`cycling-coach:${date}:z2-endurance-90min`);
+    expect(payload.externalId).toBe(`cycling-coach:${date}:z2-endurance-90min`);
+    expect(payload.external_id).toBeUndefined();
     expect(payload.tags).toEqual(["cycling-coach"]);
   });
 

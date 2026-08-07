@@ -18,9 +18,9 @@ export function buildCoachExternalId(date: string, name: string): string {
 export function buildCoachEventProvenance(
   date: string,
   name: string,
-): { external_id: string; tags: string[] } {
+): { externalId: string; tags: string[] } {
   return {
-    external_id: buildCoachExternalId(date, name),
+    externalId: buildCoachExternalId(date, name),
     tags: [COACH_EVENT_TAG],
   };
 }

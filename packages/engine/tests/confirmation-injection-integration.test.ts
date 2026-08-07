@@ -45,7 +45,7 @@ const integrationSport: Sport = {
             ),
             execute: async (input: { date: string; workout: { name: string } }) => {
               const result = await deps.intervals!.events.create({
-                start_date_local: `${input.date}T00:00:00`,
+                startDateLocal: `${input.date}T00:00:00`,
                 category: "WORKOUT",
                 name: input.workout.name,
                 type: "Ride",

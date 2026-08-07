@@ -176,7 +176,7 @@ describe("intervals_create_workout tool", () => {
     expect(tool).toBeDefined();
   });
 
-  it("posts type:'Run', WORKOUT, the serialized description, no icu_training_load", async () => {
+  it("posts type:'Run', WORKOUT, the serialized description, no icuTrainingLoad", async () => {
     const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
     const tool = createWorkoutTool(client)!;
 
@@ -199,10 +199,11 @@ describe("intervals_create_workout tool", () => {
     expect(payload.name).toBe("Easy 30");
     expect(typeof payload.description).toBe("string");
     expect(payload.description).toContain("75% Pace");
+    expect("icuTrainingLoad" in payload).toBe(false);
     expect("icu_training_load" in payload).toBe(false);
   });
 
-  it("payload carries external_id 'cycling-coach:<date>:<slug>' and tags ['cycling-coach']", async () => {
+  it("payload carries externalId 'cycling-coach:<date>:<slug>' and tags ['cycling-coach']", async () => {
     const { client, calls } = fakeIntervals({ ok: true, value: { id: 42 } });
     const tool = createWorkoutTool(client)!;
 
@@ -218,7 +219,8 @@ describe("intervals_create_workout tool", () => {
     );
 
     const payload = calls[0];
-    expect(payload.external_id).toBe(`cycling-coach:${tomorrowISODate()}:easy-30`);
+    expect(payload.externalId).toBe(`cycling-coach:${tomorrowISODate()}:easy-30`);
+    expect(payload.external_id).toBeUndefined();
     expect(payload.tags).toEqual(["cycling-coach"]);
   });
 
@@ -243,7 +245,8 @@ describe("intervals_create_workout tool", () => {
 
     expect(out).toEqual({ created: true, event: { id: 7 } });
     // The distance step's planned time resolved via the passed-through CS.
-    expect(calls[0].moving_time).toBe(94);
+    expect(calls[0].movingTime).toBe(94);
+    expect(calls[0].moving_time).toBeUndefined();
   });
 
   it("returns invalid_workout and does NOT call events.create on a serialization failure", async () => {

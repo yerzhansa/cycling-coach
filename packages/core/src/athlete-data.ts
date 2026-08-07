@@ -1,4 +1,4 @@
-import type { ApiError, IntervalsClient } from "intervals-icu-api";
+import type { ApiError, EventInput, IntervalsClient } from "intervals-icu-api";
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
 import type { CanonicalActivityReader } from "@enduragent/kernel/store";
 import type {
@@ -88,9 +88,7 @@ export function createPlatformAthleteDataReader(intervals: IntervalsClient): Ath
 
 export function createPlatformCalendarMutations(intervals: IntervalsClient): PlatformCalendarMutations {
   return Object.freeze({
-    createEvent: (input: unknown) => platformValue(intervals.events.create(
-      input as Parameters<typeof intervals.events.create>[0],
-    )),
+    createEvent: (input: EventInput) => platformValue(intervals.events.create(input)),
     async readEventForDelete(input: { eventId: number }) {
       const value = await platformValue(intervals.events.get(input.eventId)) as unknown as CalendarEventForDelete;
       return {
