@@ -1594,6 +1594,18 @@ describe("macOS release artifact envelope", () => {
     });
     const candidateIdentity = Object.freeze({
       version,
+      identifier: "icu.enduragent.desktop" as const,
+      productName: "Enduragent" as const,
+      packageName: "@enduragent/desktop" as const,
+      teamIdentifier: "FA494ACVTF" as const,
+      designatedRequirement: canonicalDesignatedRequirement,
+      hardenedRuntime: true as const,
+      authorities: [
+        "Developer ID Application: Enduragent Test (FA494ACVTF)",
+        "Developer ID Certification Authority",
+        "Apple Root CA",
+      ] as const,
+      entitlements: JSON.stringify({ "com.apple.security.cs.allow-jit": true }),
       candidateCodeIdentity: Object.freeze({
         codeDirectory: looseCandidateCodeIdentity.codeDirectory,
         cdHash: looseCandidateCodeIdentity.cdHash,
