@@ -4,7 +4,7 @@ The published `cycling-coach` npm binary. A 7-line shim that wires the cycling s
 
 ## Status: published
 
-Bundled via tsup with `@enduragent/*` **inlined** (`noExternal`). The published tarball's `dist/index.js` contains all the workspace code — Core, sport-cycling, and the binary shim — so end users install one self-contained package. Releases use stable, SemVer-compatible CalVer (`YYYY.MONTH.RELEASE-WITHIN-MONTH`): `.0` starts each UTC month and the third component increments thereafter; binary changeset bump choices are overridden. Historical suffixed versions remain history and are never rewritten. Library packages stay private workspace deps until an external consumer needs them; see ADR-0009.
+Bundled via tsup with `@enduragent/*` **inlined** (`noExternal`). The published tarball's `dist/index.js` contains all the workspace code — Core, sport-cycling, and the binary shim — so end users install one self-contained package. Releases use stable, SemVer-compatible UTC calendar-date versions (`YYYY.M.D`), where the final component is the day of the month; binary changeset bump choices are overridden. Historical counter-based and suffixed versions remain history and are never rewritten. Library packages stay private workspace deps until an external consumer needs them; see ADR-0009.
 
 ## What lives here
 

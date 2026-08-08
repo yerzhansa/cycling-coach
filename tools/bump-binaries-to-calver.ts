@@ -69,6 +69,7 @@ export function nextCalVer(occupiedVersions: readonly string[], now: Date): stri
   if (Number.isNaN(now.getTime())) throw new Error("Current UTC clock is invalid");
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth() + 1;
+  const day = now.getUTCDate();
   if (year < 1000 || year > 9999) {
     throw new Error(`Current UTC year ${year} cannot be represented as CalVer`);
   }
@@ -83,16 +84,15 @@ export function nextCalVer(occupiedVersions: readonly string[], now: Date): stri
   const maximum = occupied.reduce((left, right) =>
     compareCalVer(left, right) >= 0 ? left : right,
   );
-  if (year < maximum.year || (year === maximum.year && month < maximum.month)) {
+  const candidateVersion = `${year}.${month}.${day}`;
+  const candidate = parseCalVer(candidateVersion);
+  if (candidate === null) throw new Error("Current UTC date cannot be represented as CalVer");
+  if (compareCalVer(candidate, maximum) <= 0) {
     throw new Error(
-      `Current UTC period ${year}.${month} precedes occupied version ${maximum.version}`,
+      `Current UTC date ${candidateVersion} does not follow occupied version ${maximum.version}`,
     );
   }
-  if (year !== maximum.year || month !== maximum.month) return `${year}.${month}.0`;
-  if (maximum.patch === Number.MAX_SAFE_INTEGER) {
-    throw new Error(`CalVer patch would overflow after ${maximum.version}`);
-  }
-  return `${year}.${month}.${maximum.patch + 1}`;
+  return candidateVersion;
 }
 
 export interface ChangelogRewrite {

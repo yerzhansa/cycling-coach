@@ -60,18 +60,16 @@ describe("CalVer parsing", () => {
 });
 
 describe("nextCalVer", () => {
-  it("increments stable releases monotonically within the current UTC month", () => {
+  it("uses the current UTC calendar date and refuses a second release that day", () => {
     const now = new Date("2026-07-31T23:59:59.000Z");
-    const third = nextCalVer(["2026.7.2"], now);
-    const fourth = nextCalVer(["2026.7.2", third], now);
+    const version = nextCalVer(["2026.7.2"], now);
 
-    expect(third).toBe("2026.7.3");
-    expect(fourth).toBe("2026.7.4");
-    expect(third).not.toContain("-");
-    expect(fourth).not.toContain("-");
+    expect(version).toBe("2026.7.31");
+    expect(version).not.toContain("-");
+    expect(() => nextCalVer(["2026.7.2", version], now)).toThrow(/does not follow/i);
   });
 
-  it("treats a historical suffix as occupancy and emits the next stable patch", () => {
+  it("treats a historical suffix as occupancy and emits the next UTC date", () => {
     const occupied = ["2026.6.25", "2026.6.25-1"];
     const next = nextCalVer(occupied, new Date("2026-06-26T00:00:00.000Z"));
 
@@ -79,22 +77,19 @@ describe("nextCalVer", () => {
     expect(occupied.every((version) => isStandardSemVerGreater(next, version))).toBe(true);
   });
 
-  it("resets to patch zero after a UTC month or year rollover", () => {
-    expect(nextCalVer(["2026.6.25"], new Date("2026-07-31T23:59:59.000Z"))).toBe("2026.7.0");
-    expect(nextCalVer(["2026.12.9"], new Date("2027-01-01T00:00:00.000Z"))).toBe("2027.1.0");
+  it("uses the actual day after a UTC month or year rollover", () => {
+    expect(nextCalVer(["2026.6.25"], new Date("2026-07-31T23:59:59.000Z"))).toBe("2026.7.31");
+    expect(nextCalVer(["2026.12.9"], new Date("2027-01-01T00:00:00.000Z"))).toBe("2027.1.1");
   });
 
   it("uses the UTC month when the local offset has already crossed midnight", () => {
-    expect(nextCalVer(["2026.7.2"], new Date("2026-08-01T00:30:00+05:00"))).toBe("2026.7.3");
+    expect(nextCalVer(["2026.7.2"], new Date("2026-08-01T00:30:00+05:00"))).toBe("2026.7.31");
   });
 
-  it("fails when the UTC clock is behind occupancy or the patch would overflow", () => {
+  it("fails when the UTC date does not follow the highest occupied version", () => {
     expect(() => nextCalVer(["2026.8.0"], new Date("2026-07-31T23:59:59.000Z"))).toThrow(
-      /precedes occupied version/i,
+      /does not follow occupied version/i,
     );
-    expect(() =>
-      nextCalVer([`2026.7.${Number.MAX_SAFE_INTEGER}`], new Date("2026-07-31T23:59:59.000Z")),
-    ).toThrow(/overflow/i);
   });
 });
 
@@ -116,9 +111,9 @@ describe("planBinaryVersionBump", () => {
 
     expect(plan.oldVersion).toBe("2026.8.0");
     expect(plan.committedVersion).toBe("2026.7.4");
-    expect(plan.newVersion).toBe("2026.7.5");
-    expect(JSON.parse(plan.packageJsonContents).version).toBe("2026.7.5");
-    expect(plan.changelogContents).toContain("## 2026.7.5");
+    expect(plan.newVersion).toBe("2026.7.23");
+    expect(JSON.parse(plan.packageJsonContents).version).toBe("2026.7.23");
+    expect(plan.changelogContents).toContain("## 2026.7.23");
   });
 
   it("rewrites only the first exact matching changelog header", () => {
@@ -159,7 +154,7 @@ describe("planBinaryVersionBump", () => {
         version: "2026.7.2",
       }),
       registryVersionsJson: '["0.0.1","2026.7.2"]',
-      now: new Date("2026-07-23T12:00:00.000Z"),
+      now: new Date("2026-07-03T12:00:00.000Z"),
     };
 
     expect(() =>
@@ -286,13 +281,13 @@ describe("CalVer bump CLI planning", () => {
         ],
       },
     ]);
-    expect(plans[0].newVersion).toBe("2026.7.3");
+    expect(plans[0].newVersion).toBe("2026.7.23");
     expect(fixture.writes).toHaveLength(2);
     expect(JSON.parse(fixture.writes[0].contents)).toMatchObject({
-      version: "2026.7.3",
+      version: "2026.7.23",
       description: "preserved",
     });
-    expect(fixture.writes[1].contents).toContain("## 2026.7.3");
+    expect(fixture.writes[1].contents).toContain("## 2026.7.23");
   });
 
   it("plans every binary before writing when a later registry lookup fails", () => {
@@ -435,21 +430,12 @@ describe("CalVer bump CLI planning", () => {
     {
       name: "future registry maximum",
       options: { registryResults: { "cycling-coach": '["2026.8.0"]' } },
-      expected: /precedes occupied version/i,
+      expected: /does not follow occupied version/i,
     },
     {
       name: "invalid committed version",
       options: { committedVersions: { "cycling-coach": "1.0.0" } },
       expected: /committed version is not valid CalVer/i,
-    },
-    {
-      name: "patch overflow",
-      options: {
-        committedVersions: {
-          "cycling-coach": `2026.7.${Number.MAX_SAFE_INTEGER}`,
-        },
-      },
-      expected: /overflow/i,
     },
     {
       name: "failed committed lookup",
