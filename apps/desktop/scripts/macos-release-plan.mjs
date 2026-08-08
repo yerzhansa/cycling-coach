@@ -86,6 +86,15 @@ function sameReleaseFileIdentity(left, right) {
   );
 }
 
+function sameVerifiedReleaseFileIdentity(left, right) {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.size === right.size
+  );
+}
+
 function releaseDirectoryIdentity(stat) {
   return Object.freeze({ dev: stat.dev, ino: stat.ino, mode: stat.mode });
 }
@@ -661,7 +670,7 @@ export async function promoteMacosReleaseEnvelope(plan, verifyEnvelope, override
     if (
       verifiedSnapshots.some(
         (verified, index) =>
-          !sameReleaseFileIdentity(verified.identity, promotedSnapshots[index].identity) ||
+          !sameVerifiedReleaseFileIdentity(verified.identity, promotedSnapshots[index].identity) ||
           !verified.bytes.equals(promotedSnapshots[index].bytes),
       )
     ) {
