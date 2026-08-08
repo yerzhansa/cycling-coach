@@ -1,7 +1,9 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   completeDesktopShutdown,
   createDesktopQuitCoordinator,
+  installDesktopTerminationSignalHandler,
 } from "../src/main/quit-coordinator.js";
 
 function deferred<T>() {
@@ -15,6 +17,32 @@ function deferred<T>() {
 }
 
 describe("desktop quit coordinator", () => {
+  it("routes repeated termination signals through one coordinated quit", async () => {
+    const signalSource = new EventEmitter();
+    const drain = vi.fn(async () => undefined);
+    const exit = vi.fn();
+    const beforeQuitEvent = { preventDefault: vi.fn() };
+    const coordinator = createDesktopQuitCoordinator({
+      drain,
+      updateController: {
+        completeInstallAfterDrain: () => "not-requested",
+      },
+      exit,
+    });
+    const application = new EventEmitter();
+    application.on("before-quit", (event) => coordinator.beforeQuit(event));
+    const requestQuit = vi.fn(() => application.emit("before-quit", beforeQuitEvent));
+    installDesktopTerminationSignalHandler({ signalSource, requestQuit });
+
+    signalSource.emit("SIGTERM");
+    signalSource.emit("SIGTERM");
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+
+    expect(requestQuit).toHaveBeenCalledOnce();
+    expect(beforeQuitEvent.preventDefault).toHaveBeenCalledOnce();
+    expect(drain).toHaveBeenCalledOnce();
+  });
+
   it("blocks repeated pre-drain quits and permits only the updater-generated post-drain quit", async () => {
     const gate = deferred<void>();
     const drain = vi.fn(() => gate.promise);
