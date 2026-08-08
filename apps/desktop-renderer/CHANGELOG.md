@@ -1,5 +1,13 @@
 # @enduragent/desktop-renderer
 
+## 0.0.3
+
+### Patch Changes
+
+- 0da7580: User-facing: Desktop now uses the Enduragent logo as its app icon and has a simpler sidebar with clearer training-data sync status.
+
+  Replace the default packaged application icon with the website mark, remove sidebar surfaces that duplicate Chat navigation or expose internal process state, and label successful refreshes as "Training data synced."
+
 ## 0.0.2
 
 ### Patch Changes
