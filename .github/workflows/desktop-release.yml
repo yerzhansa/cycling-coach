@@ -108,16 +108,11 @@ jobs:
             echo "baseline_signing_identity=$BASELINE_IDENTITY" >> "$GITHUB_OUTPUT"
             echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
           fi
-      - name: Refuse genesis before unavailable packaging and canonical verification
-        if: ${{ inputs.mode == 'genesis' }}
-        run: |
-          echo '::error::Genesis packaging and baseline-free canonical verification have not landed; genesis staging fails closed.'
-          exit 1
       - name: Build signed and notarized macOS envelope
-        if: ${{ inputs.mode == 'steady' }}
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          RELEASE_MODE: ${{ inputs.mode }}
           ENDURAGENT_DEVELOPER_ID_IDENTITY: ${{ vars.ENDURAGENT_DEVELOPER_ID_IDENTITY }}
           ENDURAGENT_DESKTOP_UPDATE_URL: https://github.com/yerzhansa/enduragent/releases/latest/download/
           ENDURAGENT_MACOS_BASELINE_APP: ${{ steps.baseline.outputs.baseline_app }}
@@ -128,9 +123,20 @@ jobs:
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
         run: |
           set -euo pipefail
+          umask 077
           printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"
           chmod 600 "$APPLE_API_KEY"
-          pnpm --filter @enduragent/desktop package:mac
+          case "$RELEASE_MODE" in
+            genesis)
+              pnpm --filter @enduragent/desktop package:mac:genesis
+              ;;
+            steady)
+              pnpm --filter @enduragent/desktop package:mac
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
       - name: Bind candidate signing evidence
         id: signing-evidence
         run: |
@@ -310,6 +316,7 @@ jobs:
           BASELINE_CDHASH: ${{ needs.sign-macos.outputs.baseline_cdhash }}
           INDEPENDENT_BASELINE_APP: ${{ steps.independent-baseline.outputs.baseline_app }}
         run: |
+          set -euo pipefail
           pnpm desktop-release:transaction -- verify \
             --directory "$RUNNER_TEMP/desktop-release" \
             --tag "$RELEASE_TAG" \
@@ -349,16 +356,27 @@ jobs:
             "$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app"
           spctl --assess --type execute --verbose \
             "$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app"
-          if [ "$RELEASE_MODE" = 'steady' ]; then
-            PUBLIC_ENVELOPE="$RUNNER_TEMP/desktop-public-envelope"
-            pnpm desktop-release:transaction -- public-envelope \
-              --directory "$RUNNER_TEMP/desktop-release" \
-              --output "$PUBLIC_ENVELOPE"
-            pnpm --filter @enduragent/desktop verify:mac-release -- \
-              "$PUBLIC_ENVELOPE" \
-              "$INDEPENDENT_BASELINE_APP" \
-              "$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app"
-          fi
+          PUBLIC_ENVELOPE="$RUNNER_TEMP/desktop-public-envelope"
+          CANDIDATE_APP="$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app"
+          pnpm desktop-release:transaction -- public-envelope \
+            --directory "$RUNNER_TEMP/desktop-release" \
+            --output "$PUBLIC_ENVELOPE"
+          case "$RELEASE_MODE" in
+            genesis)
+              pnpm --filter @enduragent/desktop verify:mac-genesis-release -- \
+                "$PUBLIC_ENVELOPE" \
+                "$CANDIDATE_APP"
+              ;;
+            steady)
+              pnpm --filter @enduragent/desktop verify:mac-release -- \
+                "$PUBLIC_ENVELOPE" \
+                "$INDEPENDENT_BASELINE_APP" \
+                "$CANDIDATE_APP"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
           mkdir "$RUNNER_TEMP/desktop-release-dmg"
           hdiutil attach -readonly -nobrowse \
             -mountpoint "$RUNNER_TEMP/desktop-release-dmg" \
