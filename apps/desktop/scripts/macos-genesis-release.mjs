@@ -101,7 +101,10 @@ async function main() {
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     await main();
-  } catch {
-    throw new TypeError(`macOS genesis release build failed at ${activeStage}`);
+  } catch (error) {
+    const verification = await import("./verify-macos-release.mjs");
+    const detail = verification.safeMacosReleaseVerificationMessage(error);
+    const suffix = detail === undefined ? "" : `: ${detail}`;
+    throw new TypeError(`macOS genesis release build failed at ${activeStage}${suffix}`);
   }
 }

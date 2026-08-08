@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse, stringify } from "yaml";
 import {
   inspectMacosReleaseApplication,
+  safeMacosReleaseVerificationMessage,
   verifyMacosApplication,
   verifyMacosBaselineApplication,
   verifyMacosGenesisReleaseApplicationContents,
@@ -53,6 +54,24 @@ const names = {
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+describe("safe macOS release verification diagnostics", () => {
+  it("reports only failures created by the release verifier", async () => {
+    let verificationFailure: unknown;
+    try {
+      await verifyMacosReleaseArtifacts("relative-artifacts");
+    } catch (error) {
+      verificationFailure = error;
+    }
+
+    expect(safeMacosReleaseVerificationMessage(verificationFailure)).toBe(
+      "artifact directory must be absolute",
+    );
+    expect(
+      safeMacosReleaseVerificationMessage(new Error("must-not-reach-release-logs")),
+    ).toBeUndefined();
+  });
 });
 
 async function releaseFixture() {

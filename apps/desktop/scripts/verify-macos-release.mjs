@@ -54,6 +54,10 @@ function fail(message) {
   throw new MacosReleaseVerificationError(message);
 }
 
+export function safeMacosReleaseVerificationMessage(error) {
+  return error instanceof MacosReleaseVerificationError ? error.message : undefined;
+}
+
 async function executeSystemFile(executable, arguments_) {
   return execFileAsync(executable, [...arguments_], {
     encoding: "utf8",

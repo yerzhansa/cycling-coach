@@ -156,6 +156,8 @@ export interface VerifiedMacosGenesisReleaseEnvelope {
   readonly candidateIdentity: VerifiedMacosReleaseCandidateApplication;
 }
 
+export function safeMacosReleaseVerificationMessage(error: unknown): string | undefined;
+
 export function verifyMacosApplication(
   application: string,
   dependencies?: Pick<VerifyMacosReleaseDependencies, "executeFile">,
