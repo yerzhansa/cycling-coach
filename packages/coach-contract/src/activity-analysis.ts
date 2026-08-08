@@ -452,7 +452,10 @@ export function createActivityAnalysisResultSchema<T extends ActivityAnalysisDat
       powerHeartRate: createAnalysisSectionSchema(data.powerHeartRate).optional(),
     })
     .strict()
-    .refine((value) => Object.keys(value).length > 0, "analysis result needs one section");
+    .refine(
+      (value) => Object.values(value).some((section) => section !== undefined),
+      "analysis result needs one section",
+    );
   return z
     .object({
       schemaVersion: z.literal(ACTIVITY_ANALYSIS_SCHEMA_VERSION),

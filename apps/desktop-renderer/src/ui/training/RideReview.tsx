@@ -320,6 +320,116 @@ function sensorMetric(average: number | null, maximum: number | null, unit: stri
   return `${Math.round(average)} avg · ${Math.round(maximum)} max ${unit}`;
 }
 
+function decimalMetric(value: number | null, unit = ""): ReactNode {
+  if (value === null) return unavailableMetric();
+  const formatted = value.toFixed(1).replace(/\.0$/, "");
+  return unit.length === 0 ? formatted : `${formatted}${unit}`;
+}
+
+function zoneMetric(zone: number | null): ReactNode {
+  return zone === null ? unavailableMetric() : `Zone ${zone}`;
+}
+
+type IntervalMetricsData = Pick<
+  ActivityAnalysisData["intervals"]["intervals"][number],
+  | "movingSeconds"
+  | "elapsedSeconds"
+  | "averagePowerWatts"
+  | "maximumPowerWatts"
+  | "averageHeartRateBpm"
+  | "maximumHeartRateBpm"
+  | "averageCadenceRpm"
+  | "maximumCadenceRpm"
+  | "zone"
+  | "intensityPercent"
+  | "trainingLoad"
+>;
+
+function IntervalMetricGrid(props: {
+  readonly metrics: IntervalMetricsData;
+  readonly units: UnitsPreference;
+  readonly distanceMeters?: number | null;
+}): ReactElement {
+  return (
+    <dl className={styles.intervalMetrics}>
+      <div>
+        <dt>Duration</dt>
+        <dd>{durationMetric(props.metrics.movingSeconds ?? props.metrics.elapsedSeconds)}</dd>
+      </div>
+      {props.distanceMeters === undefined ? null : (
+        <div>
+          <dt>Distance</dt>
+          <dd>{distanceMetric(props.distanceMeters, props.units)}</dd>
+        </div>
+      )}
+      <div>
+        <dt>Power</dt>
+        <dd>
+          {sensorMetric(props.metrics.averagePowerWatts, props.metrics.maximumPowerWatts, "W")}
+        </dd>
+      </div>
+      <div>
+        <dt>Heart rate</dt>
+        <dd>
+          {sensorMetric(
+            props.metrics.averageHeartRateBpm,
+            props.metrics.maximumHeartRateBpm,
+            "bpm",
+          )}
+        </dd>
+      </div>
+      <div>
+        <dt>Cadence</dt>
+        <dd>
+          {sensorMetric(props.metrics.averageCadenceRpm, props.metrics.maximumCadenceRpm, "rpm")}
+        </dd>
+      </div>
+      <div>
+        <dt>Zone</dt>
+        <dd>{zoneMetric(props.metrics.zone)}</dd>
+      </div>
+      <div>
+        <dt>Intensity</dt>
+        <dd>{decimalMetric(props.metrics.intensityPercent, "%")}</dd>
+      </div>
+      <div>
+        <dt>Training load</dt>
+        <dd>{decimalMetric(props.metrics.trainingLoad)}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function IntervalGroupEvidence(props: {
+  readonly groups: ActivityAnalysisData["intervals"]["groups"];
+  readonly units: UnitsPreference;
+}): ReactElement | null {
+  if (props.groups.length === 0) return null;
+  return (
+    <section className={styles.intervalGroups} aria-label="Interval group summaries">
+      <h3>Group summaries</h3>
+      <p>Provider summary metrics for related ordered segments.</p>
+      <ol className={styles.intervalGroupList}>
+        {props.groups.map((group) => (
+          <li key={group.ordinal} className={styles.intervalGroupItem}>
+            <div className={styles.intervalGroupIdentity}>
+              <div>
+                <span>Group {group.ordinal}</span>
+                <strong>{INTERVAL_KIND_COPY[group.kind]} group</strong>
+              </div>
+              <p>
+                {group.intervalOrdinals.length === 1 ? "Segment" : "Segments"}{" "}
+                {group.intervalOrdinals.join(", ")}
+              </p>
+            </div>
+            <IntervalMetricGrid metrics={group} units={props.units} />
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function AnalysisRetry(props: {
   readonly reason: Parameters<typeof analysisUnavailableCopy>[0] | null;
   readonly onRefresh: (() => void) | null;
@@ -393,6 +503,7 @@ function IntervalEvidence(props: {
           : "Ordered laps from the local ride file"}
         {props.data.groups.length === 0 ? "" : ` · ${props.data.groups.length} groups`}
       </p>
+      <IntervalGroupEvidence groups={props.data.groups} units={props.units} />
       {props.data.intervals.length === 0 ? (
         <p className={styles.analysisEmpty}>No intervals or laps were found for this ride.</p>
       ) : (
@@ -409,32 +520,11 @@ function IntervalEvidence(props: {
                   {interval.groupOrdinal === null ? null : <p>Group {interval.groupOrdinal}</p>}
                 </div>
               </div>
-              <dl className={styles.intervalMetrics}>
-                <div>
-                  <dt>Duration</dt>
-                  <dd>{durationMetric(interval.movingSeconds ?? interval.elapsedSeconds)}</dd>
-                </div>
-                <div>
-                  <dt>Distance</dt>
-                  <dd>{distanceMetric(interval.distanceMeters, props.units)}</dd>
-                </div>
-                <div>
-                  <dt>Power</dt>
-                  <dd>
-                    {sensorMetric(interval.averagePowerWatts, interval.maximumPowerWatts, "W")}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Heart rate</dt>
-                  <dd>
-                    {sensorMetric(
-                      interval.averageHeartRateBpm,
-                      interval.maximumHeartRateBpm,
-                      "bpm",
-                    )}
-                  </dd>
-                </div>
-              </dl>
+              <IntervalMetricGrid
+                metrics={interval}
+                units={props.units}
+                distanceMeters={interval.distanceMeters}
+              />
             </li>
           ))}
         </ol>

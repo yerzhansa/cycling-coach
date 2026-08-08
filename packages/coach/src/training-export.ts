@@ -11,6 +11,7 @@ import {
 } from "@enduragent/coach-contract";
 import type { TrustedActivitySourceResolver } from "@enduragent/kernel/store";
 import type { ApiError, BinaryDownload, IntervalsClient, Result } from "intervals-icu-api";
+import { awaitWithSignal } from "./abortable-operation.js";
 
 export const MAX_ACTIVITY_EXPORT_BYTES = 128 * 1_024 * 1_024;
 export const MAX_WORKOUT_ARCHIVE_EXPORT_BYTES = 256 * 1_024 * 1_024;
@@ -22,6 +23,7 @@ export interface TrainingExportWriter {
   write(input: {
     readonly destinationPath: string;
     readonly bytes: Uint8Array;
+    readonly signal?: AbortSignal;
   }): Promise<TrainingExportWriteOutcome>;
 }
 
@@ -188,6 +190,7 @@ export function createDurableTrainingExportWriter(input?: {
     async write(request: {
       readonly destinationPath: string;
       readonly bytes: Uint8Array;
+      readonly signal?: AbortSignal;
     }): Promise<TrainingExportWriteOutcome> {
       const destination = request.destinationPath;
       const fileName = basename(destination);
@@ -208,12 +211,20 @@ export function createDurableTrainingExportWriter(input?: {
       let handle: Awaited<ReturnType<typeof open>> | undefined;
       let renamed = false;
       try {
+        request.signal?.throwIfAborted();
         handle = await openFile(temporary, "wx", 0o600);
-        await handle.writeFile(request.bytes);
+        request.signal?.throwIfAborted();
+        await handle.writeFile(request.bytes, { signal: request.signal });
+        request.signal?.throwIfAborted();
         await handle.chmod(0o600);
+        request.signal?.throwIfAborted();
         await handle.sync();
+        request.signal?.throwIfAborted();
         await handle.close();
         handle = undefined;
+        // No abort may advance past this boundary. Once rename starts, an abort
+        // has an uncertain commit outcome and the service must not invite a retry.
+        request.signal?.throwIfAborted();
         await renameFile(temporary, destination);
         renamed = true;
         await sync(root);
@@ -284,13 +295,25 @@ export function createTrainingExportService(input: {
       request: ExportTrainingFileRpcParams,
       signal: AbortSignal = new AbortController().signal,
     ): Promise<ExportTrainingFileRpcResult> {
-      signal.throwIfAborted();
+      const deadline = AbortSignal.timeout(requestTimeoutMs);
+      const operationSignal = AbortSignal.any([signal, deadline]);
+      const preCommitAbort = (error: unknown): ExportTrainingFileRpcResult => {
+        if (signal.aborted) throw signal.reason ?? error;
+        return refused("timeout");
+      };
+      operationSignal.throwIfAborted();
       let providerActivityId: string | undefined;
       if (request.kind === "activity") {
-        const resolution = await input.sources.resolve({
-          canonicalActivityId: request.canonicalActivityId,
-        });
-        signal.throwIfAborted();
+        let resolution;
+        try {
+          resolution = await awaitWithSignal(
+            input.sources.resolve({ canonicalActivityId: request.canonicalActivityId }),
+            operationSignal,
+          );
+        } catch (error) {
+          if (operationSignal.aborted) return preCommitAbort(error);
+          throw error;
+        }
         if (resolution.kind === "unavailable") {
           return refused(
             resolution.reason === "ambiguous" ? "ambiguous-source" : "source-not-found",
@@ -298,8 +321,13 @@ export function createTrainingExportService(input: {
         }
         providerActivityId = resolution.providerActivityId;
       }
-      const credentials = await input.credentials.read();
-      signal.throwIfAborted();
+      let credentials;
+      try {
+        credentials = await awaitWithSignal(input.credentials.read(), operationSignal);
+      } catch (error) {
+        if (operationSignal.aborted) return preCommitAbort(error);
+        throw error;
+      }
       if (
         credentials.apiKey.length === 0 ||
         (request.kind === "workout-archive" && credentials.athleteId.length === 0)
@@ -312,7 +340,7 @@ export function createTrainingExportService(input: {
       const client = createClient({
         apiKey: credentials.apiKey,
         athleteId: credentials.athleteId,
-        signal,
+        signal: operationSignal,
         baseFetch: createBoundedTrainingExportFetch({
           baseFetch: input.baseFetch ?? globalThis.fetch,
           maximumBytes,
@@ -325,18 +353,28 @@ export function createTrainingExportService(input: {
       try {
         result =
           request.kind === "activity"
-            ? await downloadActivity(client, providerActivityId!, request.format)
-            : await client.workouts.downloadZip({
-                format: request.format,
-                oldest: request.oldest,
-                newest: request.newest,
-                includeMetadata: true,
-              });
+            ? await awaitWithSignal(
+                downloadActivity(client, providerActivityId!, request.format),
+                operationSignal,
+              )
+            : await awaitWithSignal(
+                client.workouts.downloadZip({
+                  format: request.format,
+                  oldest: request.oldest,
+                  newest: request.newest,
+                  includeMetadata: true,
+                }),
+                operationSignal,
+              );
       } catch (error) {
-        if (signal.aborted) throw signal.reason ?? error;
+        if (operationSignal.aborted) return preCommitAbort(error);
         return refused(responseLimitExceeded ? "response-too-large" : "provider-unavailable");
       }
-      signal.throwIfAborted();
+      try {
+        operationSignal.throwIfAborted();
+      } catch (error) {
+        return preCommitAbort(error);
+      }
       if (!result.ok) return refused(providerRefusal(result.error, responseLimitExceeded));
       if (
         !(result.value.bytes instanceof ArrayBuffer) ||
@@ -352,21 +390,35 @@ export function createTrainingExportService(input: {
       }
       const metadata = resultMetadata(result.value);
       const bytes = new Uint8Array(result.value.bytes);
+      let writerOwnsBytes = false;
       try {
         if (!contentBytesMatch(request, bytes)) return refused("invalid-response");
         let outcome: TrainingExportWriteOutcome;
         try {
-          outcome = await writer.write({
+          operationSignal.throwIfAborted();
+        } catch (error) {
+          return preCommitAbort(error);
+        }
+        try {
+          const write = writer.write({
             destinationPath: request.destinationPath,
             bytes,
+            signal: operationSignal,
           });
+          writerOwnsBytes = true;
+          void write.finally(() => bytes.fill(0)).catch(() => {});
+          outcome = await awaitWithSignal(write, operationSignal);
         } catch {
+          if (operationSignal.aborted) return refused("commit-uncertain");
           return refused("write-failed");
         }
         // A successful rename is the commit point. If the caller disconnects while the
         // file is being published, report the committed result rather than encouraging
         // an unsafe retry that could overwrite the file.
         if (outcome !== "committed") {
+          if (outcome === "failed" && operationSignal.aborted) {
+            return preCommitAbort(operationSignal.reason);
+          }
           return refused(outcome === "uncertain" ? "commit-uncertain" : "write-failed");
         }
         return ExportTrainingFileRpcResultSchema.parse({
@@ -375,7 +427,10 @@ export function createTrainingExportService(input: {
           ...metadata,
         });
       } finally {
-        bytes.fill(0);
+        // Once handed off, the writer may still be using the buffer after the
+        // service has conservatively reported commit uncertainty. Its settlement
+        // handler owns zeroization so the bytes cannot change underneath it.
+        if (!writerOwnsBytes) bytes.fill(0);
       }
     },
   });

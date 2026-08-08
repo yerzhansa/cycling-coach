@@ -86,6 +86,18 @@ function axisValue(value: number, unit: ActivityAnalysisData["powerDistribution"
   return `${Math.round(value)} ${unit === "watts" ? "W" : "bpm"}`;
 }
 
+function curveLabel(
+  kind: ActivityAnalysisData["powerHeartRate"]["curves"][number]["kind"],
+): string {
+  if (kind === "all") return "All retained segments";
+  if (kind === "zone-2") return "Zone 2 segments";
+  return "Other provider fit";
+}
+
+function formatCoefficient(value: number): string {
+  return value.toLocaleString("en-US", { maximumSignificantDigits: 8 });
+}
+
 function DistributionChart(props: {
   readonly data: ActivityAnalysisData["powerDistribution"];
   readonly label: string;
@@ -168,6 +180,9 @@ function DistributionChart(props: {
         <summary>Read {props.label.toLowerCase()} as a table</summary>
         <div className={styles.analysisTableScroller}>
           <table className={styles.analysisDataTable}>
+            <caption className={styles.srOnly}>
+              {props.label} measured ride time by recorded range
+            </caption>
             <thead>
               <tr>
                 <th scope="col">Range</th>
@@ -371,6 +386,7 @@ function ScatterChart(props: {
         <summary>Read all power and heart-rate points as a table</summary>
         <div className={styles.analysisTableScroller}>
           <table className={styles.analysisDataTable}>
+            <caption className={styles.srOnly}>Retained power and heart-rate ride segments</caption>
             <thead>
               <tr>
                 <th scope="col">Ride time</th>
@@ -397,6 +413,68 @@ function ScatterChart(props: {
         </div>
       </details>
     </figure>
+  );
+}
+
+function ProviderCurveFits(props: {
+  readonly curves: ActivityAnalysisData["powerHeartRate"]["curves"];
+}): ReactElement | null {
+  if (props.curves.length === 0) return null;
+  return (
+    <section className={styles.responseFits} aria-labelledby="provider-fits-title">
+      <h3 id="provider-fits-title" className={styles.responseFitsTitle}>
+        Provider fitted curves
+      </h3>
+      <ul className={styles.responseFitList} aria-label="Provider fitted curves">
+        {props.curves.map((curve, index) => (
+          <li
+            key={`${curve.kind}-${index}`}
+            className={styles.responseFitItem}
+            data-curve-kind={curve.kind}
+          >
+            <span className={styles.responseFitLine} aria-hidden="true" />
+            <span>
+              <strong>{curveLabel(curve.kind)}</strong>
+              <span>
+                {curve.rSquared === null ? "R² unavailable" : `R² ${curve.rSquared.toFixed(2)}`}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className={styles.responseFitNote}>
+        Fit quality and model terms are supplied by the provider. The desktop does not infer a model
+        equation.
+      </p>
+      <details className={styles.analysisTableDisclosure}>
+        <summary>Read provider fit details</summary>
+        <div className={styles.analysisTableScroller}>
+          <table className={styles.analysisDataTable}>
+            <caption className={styles.srOnly}>
+              Provider-fitted power and heart-rate curve details
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Fit scope</th>
+                <th scope="col">Fit quality</th>
+                <th scope="col">Model terms in provider order</th>
+              </tr>
+            </thead>
+            <tbody>
+              {props.curves.map((curve, index) => (
+                <tr key={`${curve.kind}-${index}`}>
+                  <th scope="row">{curveLabel(curve.kind)}</th>
+                  <td>
+                    {curve.rSquared === null ? "Unavailable" : `R² ${curve.rSquared.toFixed(2)}`}
+                  </td>
+                  <td>{curve.coefficients.map(formatCoefficient).join(", ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </section>
   );
 }
 
@@ -458,6 +536,7 @@ function PowerHeartRateEvidence(props: {
           </dd>
         </div>
       </dl>
+      <ProviderCurveFits curves={props.data.curves} />
       <ScatterChart data={props.data} />
     </>
   );

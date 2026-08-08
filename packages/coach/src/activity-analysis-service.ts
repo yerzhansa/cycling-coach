@@ -26,6 +26,7 @@ import {
   type TrustedActivitySourceResolver,
   type TrustedProviderActivityId,
 } from "@enduragent/kernel/store";
+import { awaitWithSignal } from "./abortable-operation.js";
 
 export const ACTIVITY_ANALYSIS_AGGREGATE_DEADLINE_MS = 90_000;
 export const ACTIVITY_ANALYSIS_SECTION_CONCURRENCY = 2;
@@ -342,12 +343,16 @@ class ActivityAnalysisServiceImplementation implements ActivityAnalysisService {
     const deadline = AbortSignal.timeout(this.aggregateDeadlineMs);
     const operationSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
     return this.activities.run(parsed.canonicalActivityId, operationSignal, async () => {
-      const activity = await this.options.activities.getActivity({ id: parsed.canonicalActivityId });
+      const activity = await awaitWithSignal(
+        this.options.activities.getActivity({ id: parsed.canonicalActivityId }),
+        operationSignal,
+      );
       if (activity === undefined) throw new ActivityAnalysisServiceError("activity-not-found");
       operationSignal.throwIfAborted();
-      const resolution = await this.options.sources.resolve({
-        canonicalActivityId: parsed.canonicalActivityId,
-      });
+      const resolution = await awaitWithSignal(
+        this.options.sources.resolve({ canonicalActivityId: parsed.canonicalActivityId }),
+        operationSignal,
+      );
       const revision = resolution.kind === "resolved" ? resolution.sourceRevision : activity.id;
       const context = { activity, sourceRevision: revision, source: sourceStatus(resolution) };
       const computed = await Promise.all(parsed.sections.map(async (section) => {
@@ -390,9 +395,10 @@ class ActivityAnalysisServiceImplementation implements ActivityAnalysisService {
     signal: AbortSignal,
     deadline: AbortSignal,
   ): Promise<AnalysisSection<unknown>> {
-    const cached = await this.readCache(identity);
-    if (!refresh && cached !== undefined) return persisted(cached);
+    let cached: AnalysisComputed<unknown> | undefined;
     try {
+      cached = await this.readCache(identity, signal);
+      if (!refresh && cached !== undefined) return persisted(cached);
       return await this.consumeShared(identity, context, signal);
     } catch (error) {
       const code = failureCode(error, deadline, signal);
@@ -496,15 +502,20 @@ class ActivityAnalysisServiceImplementation implements ActivityAnalysisService {
     const current = await this.options.sources.resolve({
       canonicalActivityId: identity.canonicalActivityId,
     });
+    signal.throwIfAborted();
     const currentRevision = current.kind === "resolved" ? current.sourceRevision : identity.canonicalActivityId;
     if (currentRevision !== identity.sourceRevision) {
       throw new ActivityAnalysisComputationError("source-changed");
     }
-    await this.writeCache(identity, computed, observed.epochSeconds);
+    await this.writeCache(identity, computed, observed.epochSeconds, signal);
     return computed;
   }
 
-  private async readCache(identity: CacheIdentity): Promise<AnalysisComputed<unknown> | undefined> {
+  private async readCache(
+    identity: CacheIdentity,
+    signal: AbortSignal,
+  ): Promise<AnalysisComputed<unknown> | undefined> {
+    signal.throwIfAborted();
     const key = cacheKey(identity);
     const memory = this.memory.get(key);
     if (memory !== undefined) {
@@ -515,13 +526,17 @@ class ActivityAnalysisServiceImplementation implements ActivityAnalysisService {
     let stored;
     try {
       const accessed = nowInstant(this.now).epochSeconds;
-      stored = await this.cacheAccess((cache) => cache.read({
-        canonicalActivityId: identity.canonicalActivityId,
-        sourceRevision: identity.sourceRevision,
-        contractVersion: ACTIVITY_ANALYSIS_PROJECTION_CONTRACT_VERSION,
-        section: identity.section,
-      }, accessed));
+      stored = await awaitWithSignal(
+        this.cacheAccess((cache) => cache.read({
+          canonicalActivityId: identity.canonicalActivityId,
+          sourceRevision: identity.sourceRevision,
+          contractVersion: ACTIVITY_ANALYSIS_PROJECTION_CONTRACT_VERSION,
+          section: identity.section,
+        }, accessed)),
+        signal,
+      );
     } catch {
+      signal.throwIfAborted();
       return undefined;
     }
     if (stored === undefined) return undefined;
@@ -547,6 +562,7 @@ class ActivityAnalysisServiceImplementation implements ActivityAnalysisService {
     identity: CacheIdentity,
     computed: AnalysisComputed<unknown>,
     cachedEpochSeconds: number,
+    signal: AbortSignal,
   ): Promise<void> {
     try {
       await this.cacheAccess((cache) => cache.write({
@@ -558,8 +574,10 @@ class ActivityAnalysisServiceImplementation implements ActivityAnalysisService {
         observedAt: computed.provenance.observedAt,
         dataJson: JSON.stringify(computed.data),
       }, cachedEpochSeconds));
+      signal.throwIfAborted();
       this.remember(cacheKey(identity), computed);
     } catch {
+      signal.throwIfAborted();
       // A cache failure must not hide a freshly validated computation.
     }
   }
