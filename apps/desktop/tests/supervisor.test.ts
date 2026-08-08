@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ utilityProcess: { fork: vi.fn() } }));
 
-import type { DesktopDaemonResolution } from "@enduragent/coach/enduragent";
+import type {
+  DesktopDaemonResolution,
+  ResolveDesktopDaemonInput,
+} from "@enduragent/coach/enduragent";
 import { UTILITY_EXIT_TIMEOUT_MS, UTILITY_FORCE_EXIT_TIMEOUT_MS } from "../src/main/constants.js";
 import { DesktopDaemonLifecycle } from "../src/main/daemon-lifecycle.js";
 import {
@@ -61,6 +64,43 @@ function connected(
 afterEach(() => vi.useRealTimers());
 
 describe("desktop main supervisor", () => {
+  it("binds the exact utility start frame to the supervisor's desktop app version", async () => {
+    const child = new FakeUtilityProcess();
+    const fork = vi.mocked((await import("electron")).utilityProcess.fork);
+    fork.mockReturnValue(child as never);
+    const exit = deferred<{ readonly exitCode: number | null }>();
+    const home = {
+      root: "/synthetic/athlete",
+      storeDir: "/synthetic/athlete/store",
+      archiveDir: "/synthetic/athlete/archive",
+      configDir: "/synthetic/athlete/config",
+    };
+    const resolveDaemon = vi.fn(async (input: ResolveDesktopDaemonInput) => {
+      const started = input.startAppSupervisedDaemon({ home });
+      child.emit("spawn");
+      await started;
+      return connected(45_001, exit);
+    });
+    const supervisor = new DesktopDaemonSupervisor(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "2026.8.0",
+        signal: new AbortController().signal,
+      },
+      "/synthetic/daemon-utility.js",
+      resolveDaemon,
+    );
+
+    await supervisor.resolve();
+
+    expect(child.postMessage).toHaveBeenCalledWith({
+      type: "start",
+      homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
+    });
+  });
+
   it("deduplicates concurrent resolution and clears only after owned close", async () => {
     const close = vi.fn(async () => {});
     const connected: DesktopDaemonResolution = {
@@ -170,6 +210,7 @@ describe("desktop main supervisor", () => {
     const started = forkAppSupervisedDaemon({
       utilityEntry: "/synthetic/daemon-utility.js",
       homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
       handoffCapability: "h".repeat(43),
     });
     child.emit("spawn");
@@ -186,6 +227,7 @@ describe("desktop main supervisor", () => {
     expect(child.postMessage).toHaveBeenCalledWith({
       type: "start",
       homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
       handoffCapability: "h".repeat(43),
     });
     child.emit("message", { type: "terminal", exitCode: 0 });
@@ -205,6 +247,7 @@ describe("desktop main supervisor", () => {
     const started = forkAppSupervisedDaemon({
       utilityEntry: "/synthetic/daemon-utility.js",
       homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
     });
 
     child.emit("message", { type: "terminal", exitCode: 1, readinessFailure: "unreadable" });
@@ -230,6 +273,7 @@ describe("desktop main supervisor", () => {
     const started = forkAppSupervisedDaemon({
       utilityEntry: "/synthetic/daemon-utility.js",
       homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
     });
     child.emit("spawn");
     const handle = await started;
@@ -252,6 +296,7 @@ describe("desktop main supervisor", () => {
     const started = forkAppSupervisedDaemon({
       utilityEntry: "/synthetic/daemon-utility.js",
       homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
     });
     child.emit("spawn");
     const handle = await started;
@@ -278,6 +323,7 @@ describe("desktop main supervisor", () => {
     const started = forkAppSupervisedDaemon({
       utilityEntry: "/synthetic/daemon-utility.js",
       homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
     });
     child.emit("spawn");
     const handle = await started;
@@ -297,6 +343,7 @@ describe("desktop main supervisor", () => {
     const started = forkAppSupervisedDaemon({
       utilityEntry: "/synthetic/daemon-utility.js",
       homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
     });
     child.emit("spawn");
     const handle = await started;
@@ -321,6 +368,7 @@ describe("desktop main supervisor", () => {
     const started = forkAppSupervisedDaemon({
       utilityEntry: "/synthetic/daemon-utility.js",
       homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
     });
     child.emit("spawn");
     const handle = await started;
@@ -338,6 +386,7 @@ describe("desktop main supervisor", () => {
     const started = forkAppSupervisedDaemon({
       utilityEntry: "/synthetic/daemon-utility.js",
       homeRoot: "/synthetic/athlete",
+      appVersion: "2026.8.0",
     });
     const rejected = expect(started).rejects.toMatchObject({
       name: "AppSupervisedDaemonStartError",

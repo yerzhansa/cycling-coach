@@ -10,18 +10,37 @@ import { createUtilityTerminalFrame } from "../src/utility/protocol.js";
 
 describe("desktop utility protocol", () => {
   it("accepts only strict start and shutdown control frames", () => {
-    expect(isUtilityStartFrame({ type: "start", homeRoot: "/synthetic/athlete" })).toBe(true);
     expect(
       isUtilityStartFrame({
         type: "start",
         homeRoot: "/synthetic/athlete",
+        appVersion: "2026.8.0",
+      }),
+    ).toBe(true);
+    expect(
+      isUtilityStartFrame({
+        type: "start",
+        homeRoot: "/synthetic/athlete",
+        appVersion: "2026.8.0-beta.1",
         handoffCapability: "a".repeat(43),
       }),
     ).toBe(true);
     for (const frame of [
-      { type: "start", homeRoot: "relative" },
-      { type: "start", homeRoot: "/synthetic/athlete", extra: true },
-      { type: "start", homeRoot: "/synthetic/athlete", handoffCapability: "short" },
+      { type: "start", homeRoot: "/synthetic/athlete" },
+      { type: "start", homeRoot: "relative", appVersion: "2026.8.0" },
+      { type: "start", homeRoot: "/synthetic/athlete", appVersion: "latest" },
+      {
+        type: "start",
+        homeRoot: "/synthetic/athlete",
+        appVersion: "2026.8.0",
+        extra: true,
+      },
+      {
+        type: "start",
+        homeRoot: "/synthetic/athlete",
+        appVersion: "2026.8.0",
+        handoffCapability: "short",
+      },
       { type: "unknown" },
     ])
       expect(isUtilityStartFrame(frame)).toBe(false);

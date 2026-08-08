@@ -484,6 +484,23 @@ describe("enduragent executable composition", () => {
     }
   });
 
+  it.each(["", "latest", " 2026.8.0", `1.0.0-${"a".repeat(65)}`])(
+    "rejects an invalid app-supervised version before resolving the athlete home",
+    async (appVersion) => {
+      const io = terminal();
+      const result = await runAppSupervisedEnduragent({
+        env,
+        terminal: io.value,
+        signal: new AbortController().signal,
+        appVersion,
+      });
+
+      expect(result).toEqual({ exitCode: EXIT_AGENT_ERROR });
+      expect(io.stdout.read()).toBe("");
+      expect(io.stderr.read()).toBe("Enduragent could not start.\n");
+    },
+  );
+
   it.each([
     ["not-configured", 4],
     ["unreadable", 1],
@@ -503,17 +520,19 @@ describe("enduragent executable composition", () => {
         return status === "not-configured" ? { status, configPath: privateConfigPath } : { status };
       };
       const privateConfigPath = join(home.configDir, "synthetic-private-profile-token");
+      const readPackageVersion = vi.fn(async () => "0.1.0-internal");
       const result = await runAppSupervisedEnduragent(
         {
           env,
           terminal: io.value,
           signal: new AbortController().signal,
+          appVersion: "2026.8.0",
         },
         {
           resolveAthleteHome: () => home,
           prepareAthleteHome,
           withLocalCoach: withLocalCoachDependency,
-          readPackageVersion: async () => "0.1.0-synthetic",
+          readPackageVersion,
         },
       );
 
@@ -522,6 +541,7 @@ describe("enduragent executable composition", () => {
       expect(Object.keys(result).sort()).toEqual(["exitCode", "readinessFailure"]);
       expect(prepareAthleteHome).toHaveBeenCalledWith(home);
       expect(withLocalCoachCalls).toBe(1);
+      expect(readPackageVersion).not.toHaveBeenCalled();
     },
   );
 

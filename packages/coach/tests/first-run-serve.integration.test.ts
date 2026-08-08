@@ -13,6 +13,17 @@ import {
 
 const binary = fileURLToPath(new URL("../dist/enduragent.js", import.meta.url));
 const fetchStub = fileURLToPath(new URL("./fixtures/serve-fetch-stub.mjs", import.meta.url));
+const packageManifest: unknown = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
+if (
+  packageManifest === null ||
+  typeof packageManifest !== "object" ||
+  typeof (packageManifest as { readonly version?: unknown }).version !== "string"
+) {
+  throw new TypeError("invalid coach package version");
+}
+const coachVersion = (packageManifest as { readonly version: string }).version;
 const roots: string[] = [];
 const children = new Set<ChildProcessWithoutNullStreams>();
 
@@ -185,7 +196,7 @@ describe.skipIf(!hasSockets)("first-run serve process", () => {
     }
     await expect(health.json()).resolves.toMatchObject({
       service: HEALTHZ_SERVICE_MARKER,
-      version: "0.0.1",
+      version: coachVersion,
     });
     await expectPreservedFile(configPath, configBytes, configBeforeServe);
     await expectPreservedFile(profilesPath, profilesBytes, profilesBeforeServe);
