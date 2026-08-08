@@ -713,6 +713,7 @@ jobs:
           fi
           EXPECTED_TITLE="Desktop release $RELEASE_TAG via $COORDINATOR_RUN_ID.$COORDINATOR_RUN_ATTEMPT"
           gh workflow run desktop-release.yml \
+            --repo "$GITHUB_REPOSITORY" \
             --ref "$DESKTOP_WORKFLOW_REF" \
             -f tag="$RELEASE_TAG" \
             -f npm_version="$NPM_VERSION" \
@@ -729,6 +730,7 @@ jobs:
           DESKTOP_RUN_ID=''
           for attempt in $(seq 1 12); do
             DESKTOP_RUNS=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
               --workflow desktop-release.yml \
               --event workflow_dispatch \
               --limit 20 \
@@ -745,7 +747,7 @@ jobs:
             exit 1
           fi
           echo "::notice::Awaiting desktop workflow run $DESKTOP_RUN_ID"
-          gh run watch "$DESKTOP_RUN_ID" --interval 15 --exit-status
+          gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status
   publish-package-only-release:
     runs-on: ubuntu-latest
     needs: [parse-tag, verify-npm-publication]
