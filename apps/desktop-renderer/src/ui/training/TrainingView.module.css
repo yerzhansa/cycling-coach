@@ -1059,7 +1059,7 @@
 .responseFitsTitle {
   margin: 0;
   color: var(--ink-2);
-  font: 600 13px/1.4 var(--f-sans);
+  font: 600 13px/1.4 var(--f-dis);
 }
 
 .responseFitList {
