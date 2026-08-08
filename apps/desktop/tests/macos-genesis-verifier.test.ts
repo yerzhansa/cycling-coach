@@ -17,7 +17,7 @@ function output() {
 
 describe("macOS genesis verifier boundary", () => {
   it("delegates exact absolute paths to the canonical verifier", async () => {
-    const verified = Object.freeze({ version: "2026.8.1" });
+    const verified = Object.freeze({ version: "0.1.0" });
     const verifyEnvelope = vi.fn(async () => verified);
 
     await expect(
@@ -58,7 +58,7 @@ describe("macOS genesis verifier boundary", () => {
 
     await expect(
       runMacosGenesisVerifierCli([artifactDirectory, candidateApplication], {
-        verifyEnvelope: vi.fn(async () => Object.freeze({ version: "2026.8.1" })) as never,
+        verifyEnvelope: vi.fn(async () => Object.freeze({ version: "0.1.0" })) as never,
         stdout: stdout.writer,
         stderr: stderr.writer,
       }),

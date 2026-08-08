@@ -29,10 +29,12 @@ import {
   verifyDesktopRelease,
 } from "./desktop-release-transaction.js";
 
-const version = "2026.8.7";
+const npmVersion = "2026.8.7";
+const desktopVersion = "0.1.7";
 const binding = {
-  tag: `cycling-coach@${version}`,
-  version,
+  tag: `cycling-coach@${npmVersion}`,
+  npmVersion,
+  desktopVersion,
   commit: "a".repeat(40),
   draftId: "123",
   mode: "steady" as const,
@@ -40,7 +42,7 @@ const binding = {
   workflowRunAttempt: "1",
   draftBodySha256: "b".repeat(64),
   npmIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
-  npmAttestationUrl: `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${version}`,
+  npmAttestationUrl: `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${npmVersion}`,
   signingIdentity: "Developer ID Application: Example (FA494ACVTF)",
   candidateCdHash: "c".repeat(40),
   candidateCodeDirectorySha256: "d".repeat(64),
@@ -59,7 +61,7 @@ function sha512(bytes: Uint8Array): string {
 }
 
 function writeEnvelope(extra?: string): void {
-  const [dmgName, zipName, blockmapName] = releaseFileNames(version);
+  const [dmgName, zipName, blockmapName] = releaseFileNames(desktopVersion);
   const dmg = Buffer.from("signed-dmg");
   const zip = Buffer.from("signed-zip");
   writeFileSync(join(directory, dmgName), dmg);
@@ -68,7 +70,7 @@ function writeEnvelope(extra?: string): void {
   writeFileSync(
     join(directory, "latest-mac.yml"),
     stringify({
-      version,
+      version: desktopVersion,
       files: [
         { url: zipName, sha512: sha512(zip), size: zip.length },
         { url: dmgName, sha512: sha512(dmg), size: dmg.length },
@@ -91,12 +93,12 @@ describe("advertised npm attestation claims", () => {
   const integrity = `sha512-${integrityBytes.toString("base64")}`;
   const expectation = {
     name: "cycling-coach",
-    version,
+    version: npmVersion,
     integrity,
     repository: "https://github.com/yerzhansa/enduragent",
     workflow: ".github/workflows/release.yml",
-    ref: `refs/tags/cycling-coach@${version}`,
-    releaseTag: `cycling-coach@${version}`,
+    ref: `refs/tags/cycling-coach@${npmVersion}`,
+    releaseTag: `cycling-coach@${npmVersion}`,
     commit: "a".repeat(40),
     invocationId: "https://github.com/yerzhansa/enduragent/actions/runs/456/attempts/1",
     eventName: "push",
@@ -112,7 +114,7 @@ describe("advertised npm attestation claims", () => {
           : "https://in-toto.io/Statement/v0.1",
       subject: [
         {
-          name: `pkg:npm/cycling-coach@${version}`,
+          name: `pkg:npm/cycling-coach@${npmVersion}`,
           digest: { sha512: integrityBytes.toString("hex") },
         },
       ],
@@ -297,7 +299,12 @@ describe("desktop release envelope", () => {
       ).schemaVersion,
     ).toBe(DESKTOP_RELEASE_SCHEMA_VERSION);
     expect(manifest.feedUrl).toBe(DESKTOP_FEED_URL);
-    expect(manifest.files.map((file) => file.name)).toEqual(releaseFileNames(version));
+    expect(manifest).toMatchObject({
+      tag: `cycling-coach@${npmVersion}`,
+      npmVersion,
+      desktopVersion,
+    });
+    expect(manifest.files.map((file) => file.name)).toEqual(releaseFileNames(desktopVersion));
     expect(manifest.files.at(-1)?.name).toBe("latest-mac.yml");
     await expect(verifyDesktopRelease(directory, binding)).resolves.toEqual(manifest);
   });
@@ -309,7 +316,7 @@ describe("desktop release envelope", () => {
     const output = join(parent, "public");
     try {
       await expect(materializeDesktopPublicEnvelope(directory, output)).resolves.toEqual(manifest);
-      expect(readdirSync(output).sort()).toEqual([...releaseFileNames(version)].sort());
+      expect(readdirSync(output).sort()).toEqual([...releaseFileNames(desktopVersion)].sort());
       expect(readdirSync(output)).not.toContain(DESKTOP_MANIFEST);
       for (const file of manifest.files) {
         expect(lstatSync(join(output, file.name)).ino).toBe(
@@ -359,7 +366,7 @@ describe("desktop release envelope", () => {
 
     rmSync(join(directory, "old-latest.yml"));
     await sealDesktopRelease(directory, binding);
-    writeFileSync(join(directory, releaseFileNames(version)[1]), "conflict");
+    writeFileSync(join(directory, releaseFileNames(desktopVersion)[1]), "conflict");
     await expect(verifyDesktopRelease(directory, binding)).rejects.toThrow("digest mismatch");
   });
 
@@ -420,31 +427,31 @@ describe("desktop release publication guards", () => {
   });
 
   it("refuses genesis after a baseline and steady mode without one", () => {
-    expect(() => assertReleaseMode("genesis", "2026.8.6")).toThrow("genesis");
+    expect(() => assertReleaseMode("genesis", "0.1.6")).toThrow("genesis");
     expect(() => assertReleaseMode("steady", null)).toThrow("baseline");
     expect(() => assertReleaseMode("genesis", null)).not.toThrow();
-    expect(() => assertReleaseMode("steady", "2026.8.6")).not.toThrow();
+    expect(() => assertReleaseMode("steady", "0.1.6")).not.toThrow();
   });
 
   it("requires an unchanged latest observation and monotonic desktop version", () => {
     const observed = { id: 12, tag: "cycling-coach@2026.8.6", metadataSha256: "e".repeat(64) };
-    expect(() => assertLatestCas(version, observed, observed, "2026.8.6")).not.toThrow();
+    expect(() => assertLatestCas(desktopVersion, observed, observed, "0.1.6")).not.toThrow();
     expect(() =>
       assertLatestCas(
-        version,
+        desktopVersion,
         observed,
         { id: 13, tag: "running-coach@2026.8.7", metadataSha256: null },
-        "2026.8.6",
+        "0.1.6",
       ),
     ).toThrow("changed");
     expect(() =>
       assertLatestCas(
-        version,
+        desktopVersion,
         observed,
         { ...observed, metadataSha256: "f".repeat(64) },
-        "2026.8.6",
+        "0.1.6",
       ),
     ).toThrow("changed");
-    expect(() => assertLatestCas(version, observed, observed, "2026.8.8")).toThrow("monotonic");
+    expect(() => assertLatestCas(desktopVersion, observed, observed, "0.1.8")).toThrow("monotonic");
   });
 });

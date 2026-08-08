@@ -22,7 +22,8 @@ import {
   type DesktopReleaseMode,
 } from "./desktop-release-transaction.js";
 
-const candidateVersion = "2026.8.7";
+const candidateVersion = "0.1.7";
+const candidateNpmVersion = "2026.8.7";
 const candidateCommit = "a".repeat(40);
 const realSetImmediate = setImmediate;
 
@@ -81,9 +82,11 @@ async function sealed(
   directories.push(directory);
   writeEnvelope(directory, version);
   const baselineZip = baseline?.manifest.files.find((file) => file.name.endsWith("-arm64.zip"));
+  const npmVersion = `2026.8.${version.split(".")[2]}`;
   const manifest = await sealDesktopRelease(directory, {
-    tag: `cycling-coach@${version}`,
-    version,
+    tag: `cycling-coach@${npmVersion}`,
+    npmVersion,
+    desktopVersion: version,
     commit: version === candidateVersion ? candidateCommit : "b".repeat(40),
     draftId,
     mode,
@@ -91,7 +94,7 @@ async function sealed(
     workflowRunAttempt: "1",
     draftBodySha256: digest(Buffer.from("release body"), "sha256", "hex"),
     npmIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
-    npmAttestationUrl: `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${version}`,
+    npmAttestationUrl: `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${npmVersion}`,
     signingIdentity: "Developer ID Application: Example (FA494ACVTF)",
     candidateCdHash: "d".repeat(40),
     candidateCodeDirectorySha256: "e".repeat(64),
@@ -126,7 +129,7 @@ class FakeGithub {
     this.resolveAnonymousDownloadFailure = resolveFailure;
   });
 
-  constructor(tag = `cycling-coach@${candidateVersion}`, commit = candidateCommit) {
+  constructor(tag = `cycling-coach@${candidateNpmVersion}`, commit = candidateCommit) {
     this.candidate = this.release(123, tag, true);
     this.commits.set(tag, commit);
   }
@@ -143,8 +146,8 @@ class FakeGithub {
     };
   }
 
-  addEnvelope(release: FakeRelease, directory: string): void {
-    for (const name of releaseFileNames(release.tag_name.split("@")[1])) {
+  addEnvelope(release: FakeRelease, directory: string, version: string): void {
+    for (const name of releaseFileNames(version)) {
       this.addAsset(release, name, readFileSync(join(directory, name)));
     }
   }
@@ -267,10 +270,11 @@ async function genesisCandidate(fake: FakeGithub) {
 }
 
 async function steadyCandidate(fake: FakeGithub) {
-  const genesis = await sealed("2026.8.6", "122", "genesis");
-  const baseline = fake.release(122, "cycling-coach@2026.8.6", true);
+  const genesis = await sealed("0.1.6", "122", "genesis");
+  const baseline = fake.release(122, "cycling-coach@2026.8.6", false);
   fake.commits.set(baseline.tag_name, genesis.manifest.commit);
-  fake.addEnvelope(baseline, genesis.directory);
+  fake.addEnvelope(baseline, genesis.directory, "0.1.6");
+  fake.latest = baseline;
   fake.pages = [[baseline]];
   const candidate = await sealed(candidateVersion, "123", "steady", {
     release: baseline,
@@ -420,7 +424,7 @@ describe("GitHub desktop release transaction", () => {
     const observed = await observeDesktopLatest(directory, fake.client());
     await publishDesktopRelease(directory, fake.client(), observed);
     expect(fake.candidate.draft).toBe(false);
-    expect(fake.latest).toBeNull();
+    expect(fake.latest?.id).toBe(122);
     expect(fake.candidate.body).toBe(DESKTOP_PROVISIONAL_RELEASE_BODY);
     const anonymousDownloads = fake.calls.filter((call) =>
       call.url.includes("/releases/download/"),
@@ -485,7 +489,7 @@ describe("GitHub desktop release transaction", () => {
     expect(failed.candidate.body).toBe("release body");
   });
 
-  it("discovers a complete retained draft baseline on a later page", async () => {
+  it("discovers a complete retained baseline on a later page", async () => {
     const fake = new FakeGithub();
     const { baseline } = await steadyCandidate(fake);
     fake.pages = [
@@ -503,23 +507,24 @@ describe("GitHub desktop release transaction", () => {
       target,
       fake.client(),
       "steady",
+      `cycling-coach@${candidateNpmVersion}`,
       candidateVersion,
       baseline.tag_name,
       output,
     );
     expect(readFileSync(output, "utf8")).toContain("baseline_release_id=122");
-    expect(readFileSync(output, "utf8")).toContain("baseline_version=2026.8.6");
-    expect(readdirSync(target).sort()).toEqual([...releaseFileNames("2026.8.6")].sort());
+    expect(readFileSync(output, "utf8")).toContain("baseline_version=0.1.6");
+    expect(readdirSync(target).sort()).toEqual([...releaseFileNames("0.1.6")].sort());
     expect(fake.calls.some((call) => call.url.includes("page=2"))).toBe(true);
   });
 
   it("uses the requested retained baseline instead of a newer failed draft", async () => {
     const fake = new FakeGithub();
     const { baseline } = await steadyCandidate(fake);
-    const failed = await sealed("2026.8.8", "124", "genesis");
+    const failed = await sealed("0.1.8", "124", "genesis");
     const failedRelease = fake.release(124, "cycling-coach@2026.8.8", true);
     fake.commits.set(failedRelease.tag_name, failed.manifest.commit);
-    fake.addEnvelope(failedRelease, failed.directory);
+    fake.addEnvelope(failedRelease, failed.directory, "0.1.8");
     fake.pages = [[failedRelease, baseline]];
     const outputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
     const target = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
@@ -531,7 +536,8 @@ describe("GitHub desktop release transaction", () => {
       target,
       fake.client(),
       "steady",
-      "2026.8.9",
+      "cycling-coach@2026.8.9",
+      "0.1.9",
       baseline.tag_name,
       output,
     );
@@ -543,10 +549,10 @@ describe("GitHub desktop release transaction", () => {
   it("requires N+1 latest instead of reusing N as the N+2 baseline", async () => {
     const fake = new FakeGithub();
     const { baseline } = await steadyCandidate(fake);
-    const accepted = await sealed("2026.8.7", "124", "genesis");
+    const accepted = await sealed("0.1.7", "124", "genesis");
     const latest = fake.release(124, "cycling-coach@2026.8.7", false);
     fake.commits.set(latest.tag_name, accepted.manifest.commit);
-    fake.addEnvelope(latest, accepted.directory);
+    fake.addEnvelope(latest, accepted.directory, "0.1.7");
     fake.latest = latest;
     fake.pages = [[latest, baseline]];
     const outputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
@@ -559,7 +565,8 @@ describe("GitHub desktop release transaction", () => {
         target,
         fake.client(),
         "steady",
-        "2026.8.8",
+        "cycling-coach@2026.8.8",
+        "0.1.8",
         baseline.tag_name,
         output,
       ),
@@ -570,7 +577,7 @@ describe("GitHub desktop release transaction", () => {
     const fake = new FakeGithub();
     const { directory, baseline } = await steadyCandidate(fake);
     fake.candidate.draft = false;
-    fake.addEnvelope(fake.candidate, directory);
+    fake.addEnvelope(fake.candidate, directory, candidateVersion);
     baseline.draft = false;
     fake.latest = baseline;
     const metadata = baseline.assets.find((asset) => asset.name === "latest-mac.yml")!;

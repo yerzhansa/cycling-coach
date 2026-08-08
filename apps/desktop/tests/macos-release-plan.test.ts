@@ -166,7 +166,7 @@ async function metadataSealFixture() {
 }
 
 describe("macOS release plan", () => {
-  it("uses only the cycling package version and creates the exact sealed overlay", async () => {
+  it("uses only the desktop package version and creates the exact sealed overlay", async () => {
     const readVersion = versionReader();
     const plan = await createMacosReleasePlan(
       {
@@ -180,7 +180,7 @@ describe("macOS release plan", () => {
     );
     expect(readVersion).toHaveBeenCalledOnce();
     expect(readVersion).toHaveBeenCalledWith(
-      "/synthetic/repository/packages/cycling-coach/package.json",
+      "/synthetic/repository/apps/desktop/package.json",
       "utf8",
     );
     expect(plan.version).toBe("2026.7.2");
@@ -1388,7 +1388,7 @@ describe("macOS release plan", () => {
     ).toEqual([]);
   });
 
-  it.each(["2026.07.2", "2026.7.02", "2026.13.0", "2026.0.1", "2026.7.2-1", "0.0.1", "", "latest"])(
+  it.each(["01.2.3", "1.02.3", "1.2.03", "1.2", "1.2.3-1", "", "latest"])(
     "rejects a non-stable release version: %s",
     async (version) => {
       await expect(
@@ -1401,7 +1401,7 @@ describe("macOS release plan", () => {
           },
           { readFile: versionReader(version) },
         ),
-      ).rejects.toThrow("stable CalVer");
+      ).rejects.toThrow("stable SemVer");
     },
   );
 
@@ -1462,7 +1462,7 @@ describe("macOS release plan", () => {
     expect(dependencyManifest.version).toBe("2.5.0");
   });
 
-  it("reads the live version authority without consulting the desktop manifest", async () => {
+  it("reads the live desktop version authority without consulting the npm manifest", async () => {
     const plan = await createMacosReleasePlan({
       repositoryRoot,
       desktopRoot,
@@ -1470,9 +1470,9 @@ describe("macOS release plan", () => {
       identity,
       baselineApplication,
     });
-    const manifest = JSON.parse(
-      await readFile(join(repositoryRoot, "packages/cycling-coach/package.json"), "utf8"),
-    ) as { version: string };
+    const manifest = JSON.parse(await readFile(join(desktopRoot, "package.json"), "utf8")) as {
+      version: string;
+    };
     expect(plan.version).toBe(manifest.version);
     expect(plan.version).not.toBe("0.0.1");
   });

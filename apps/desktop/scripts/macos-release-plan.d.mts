@@ -173,7 +173,7 @@ export const DESKTOP_UPDATER_CACHE_DIRECTORY: "@enduragentdesktop-updater";
 export function requireNotarizationCredentials(
   environment?: Readonly<Record<string, string | undefined>>,
 ): NotarizationCredentialSelection;
-export function requireStableCalVer(value: unknown): string;
+export function requireStableSemVer(value: unknown): string;
 export function requireGenericFeedUrl(value: unknown): string;
 export function parseMacosReleaseUpdaterMetadata(
   value: string | Uint8Array,
@@ -181,8 +181,9 @@ export function parseMacosReleaseUpdaterMetadata(
 export function requireDeveloperIdIdentity(value: unknown): string;
 export function requireMacosBaselineApplication(value: unknown): string;
 export function releaseArtifactNames(version: string): ReleaseArtifactNames;
-export function readCyclingCoachVersion(options?: {
+export function readDesktopVersion(options?: {
   readonly repositoryRoot?: string;
+  readonly desktopRoot?: string;
   readonly readFile?: (path: string, encoding: "utf8") => Promise<string>;
 }): Promise<string>;
 export function createMacosReleasePlan(

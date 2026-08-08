@@ -43,7 +43,7 @@ const { buildBlockMap: installedBuildBlockMap } = builderRequire(
 };
 const roots: string[] = [];
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const version = "2026.7.2";
+const version = "0.1.2";
 const names = {
   dmg: `Enduragent-${version}-arm64.dmg`,
   zip: `Enduragent-${version}-arm64.zip`,
@@ -61,11 +61,11 @@ async function releaseFixture() {
   const repositoryRoot = join(root, "repository");
   const artifactDirectory = join(root, "artifacts");
   await Promise.all([
-    mkdir(join(repositoryRoot, "packages/cycling-coach"), { recursive: true }),
+    mkdir(join(repositoryRoot, "apps/desktop"), { recursive: true }),
     mkdir(artifactDirectory, { recursive: true }),
   ]);
   await writeFile(
-    join(repositoryRoot, "packages/cycling-coach/package.json"),
+    join(repositoryRoot, "apps/desktop/package.json"),
     `${JSON.stringify({ version })}\n`,
   );
   const zip = Buffer.from("synthetic signed ZIP bytes\n");
@@ -200,8 +200,8 @@ async function signedIdentityFixture() {
     await finished(archive);
   }
   const metadata = new Map<string, SignedApplicationMetadata>([
-    [baseline, signedApplicationMetadata("2026.7.1", "a".repeat(40))],
-    [candidate, signedApplicationMetadata("2026.7.2", "b".repeat(40))],
+    [baseline, signedApplicationMetadata("0.1.1", "a".repeat(40))],
+    [candidate, signedApplicationMetadata("0.1.2", "b".repeat(40))],
   ]);
   const applicationForPath = (path: string) =>
     [...metadata.keys()].find(
@@ -675,7 +675,7 @@ describe("macOS signed identity continuity", () => {
     {
       label: "package version",
       mutate(metadata: SignedApplicationMetadata) {
-        metadata.manifest.version = "2026.7.1";
+        metadata.manifest.version = "0.1.1";
       },
       error: "macOS package identity is invalid",
     },
@@ -712,7 +712,7 @@ describe("macOS signed identity continuity", () => {
         },
       ),
     ).resolves.toEqual({
-      baselineVersion: "2026.7.1",
+      baselineVersion: "0.1.1",
       teamIdentifier: "FA494ACVTF",
     });
     expect(fixture.executeFile).toHaveBeenCalledWith("/usr/bin/codesign", [
@@ -743,7 +743,7 @@ describe("macOS signed identity continuity", () => {
         },
       ),
     ).resolves.toEqual({
-      baselineVersion: "2026.7.1",
+      baselineVersion: "0.1.1",
       candidateVersion: version,
       teamIdentifier: "FA494ACVTF",
       candidateCodeIdentity: {
@@ -946,7 +946,7 @@ describe("macOS signed identity continuity", () => {
     expect(fixture.executeFile).not.toHaveBeenCalled();
   });
 
-  it.each(["2026.7.2", "2026.7.3"])(
+  it.each(["0.1.2", "0.1.3"])(
     "rejects a baseline that is not older than the candidate: %s",
     async (baselineVersion) => {
       const fixture = await signedIdentityFixture();
@@ -1339,7 +1339,7 @@ async function packagedApplicationFixture(
         throw new Error(`${application}: private signing output`);
       }
       return {
-        baselineVersion: "2026.7.1",
+        baselineVersion: "0.1.1",
         candidateVersion: verificationOptions.candidateVersion,
         teamIdentifier: "FA494ACVTF",
         candidateCodeIdentity:
@@ -2073,7 +2073,7 @@ describe("macOS release artifact envelope", () => {
       zipSha512: fixture.zipSha512,
     });
     const identityContinuity = Object.freeze({
-      baselineVersion: "2026.7.1",
+      baselineVersion: "0.1.1",
       candidateVersion: version,
       teamIdentifier: "FA494ACVTF",
       candidateCodeIdentity: Object.freeze({
@@ -2364,7 +2364,7 @@ describe("macOS release artifact envelope", () => {
   });
 
   it.each([
-    ["version", (source: string) => source.replace(version, "2026.7.1")],
+    ["version", (source: string) => source.replace(version, "0.1.1")],
     ["ZIP filename", (source: string) => source.replace(names.zip, "stale.zip")],
     [
       "ZIP SHA-512",

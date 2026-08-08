@@ -130,7 +130,8 @@ export function inspectDesktopReleaseWorkflows(
   );
   for (const input of [
     "tag",
-    "version",
+    "npm_version",
+    "desktop_version",
     "commit",
     "draft_id",
     "mode",
@@ -335,11 +336,13 @@ export function inspectDesktopReleaseWorkflows(
   );
   const callWith = mapping(desktopCall.with, "desktop call inputs", issues);
   if (
+    callWith.npm_version !== "${{ needs.parse-tag.outputs.version }}" ||
+    callWith.desktop_version !== "${{ needs.parse-tag.outputs.desktop_version }}" ||
     callWith.npm_integrity !== "${{ needs.verify-npm-publication.outputs.npm_integrity }}" ||
     callWith.npm_attestation_url !==
       "${{ needs.verify-npm-publication.outputs.npm_attestation_url }}"
   ) {
-    issues.push("desktop call must consume non-empty verified npm job outputs");
+    issues.push("desktop call must consume frozen version authorities and verified npm outputs");
   }
 
   const packageOnlyText = scalar(packageOnly);
@@ -360,9 +363,12 @@ export function inspectDesktopReleaseWorkflows(
   const parseOutputs = mapping(parseTag.outputs, "parse-tag outputs", issues);
   if (
     parseOutputs.desktop_enabled !== "${{ steps.parse.outputs.desktop_enabled }}" ||
+    parseOutputs.desktop_version !== "${{ steps.parse.outputs.desktop_version }}" ||
+    !releaseSource.includes('git show "$COMMIT:apps/desktop/package.json"') ||
+    !releaseSource.includes('echo "desktop_version=$DESKTOP_VERSION" >> "$GITHUB_OUTPUT"') ||
     (releaseSource.match(/vars\.ENABLE_DESKTOP_MACOS_RELEASE/gu) ?? []).length !== 1
   ) {
-    issues.push("desktop opt-in must be read once and frozen by parse-tag");
+    issues.push("desktop opt-in and version authority must be read once and frozen by parse-tag");
   }
 
   const desktopJobs = mapping(desktop.jobs, "desktop.jobs", issues);
@@ -569,7 +575,10 @@ export function inspectDesktopReleaseWorkflows(
     !signingRun.includes("genesis)") ||
     !signingRun.includes("steady)") ||
     signingEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
-    signingEnvironment.ENDURAGENT_MACOS_GENESIS_VERSION !== "${{ inputs.version }}" ||
+    signingEnvironment.ENDURAGENT_MACOS_GENESIS_VERSION !== "${{ inputs.desktop_version }}" ||
+    !desktopSource.includes('--npm-version "$NPM_VERSION"') ||
+    !desktopSource.includes('--desktop-version "$DESKTOP_VERSION"') ||
+    !desktopSource.includes('--candidate-tag "$RELEASE_TAG"') ||
     nonSigningDesktopText.includes("package:mac")
   ) {
     issues.push("signing must dispatch explicit genesis and steady packaging modes");

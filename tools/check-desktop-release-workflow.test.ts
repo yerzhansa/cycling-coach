@@ -27,6 +27,26 @@ describe("desktop release workflow policy", () => {
   it("accepts the canonical coordinator and reusable workflow", () => {
     const source = sources();
     expect(inspect(source.release, source.desktop, source.version)).toEqual([]);
+    expect(source.release).toContain("desktop_version: ${{ steps.parse.outputs.desktop_version }}");
+    expect(source.release).toContain("npm_version: ${{ needs.parse-tag.outputs.version }}");
+    expect(source.release).toContain(
+      "desktop_version: ${{ needs.parse-tag.outputs.desktop_version }}",
+    );
+    expect(source.desktop).toContain('--npm-version "$NPM_VERSION"');
+    expect(source.desktop).toContain('--desktop-version "$DESKTOP_VERSION"');
+  });
+
+  it("rejects coupling the desktop version back to the npm version", () => {
+    const source = sources();
+    const release = source.release.replace(
+      "desktop_version: ${{ needs.parse-tag.outputs.desktop_version }}",
+      "desktop_version: ${{ needs.parse-tag.outputs.version }}",
+    );
+    expect(
+      inspect(release, source.desktop).some((issue) =>
+        issue.includes("frozen version authorities"),
+      ),
+    ).toBe(true);
   });
 
   it("rejects pnpm separators that become the transaction command", () => {
@@ -180,8 +200,8 @@ describe("desktop release workflow policy", () => {
     const source = sources();
     const wrongPackage = source.desktop.replace("package:mac:genesis", "package:mac");
     const wrongAcknowledgement = source.desktop.replace(
-      "ENDURAGENT_MACOS_GENESIS_VERSION: ${{ inputs.version }}",
-      "ENDURAGENT_MACOS_GENESIS_VERSION: 2026.1.1",
+      "ENDURAGENT_MACOS_GENESIS_VERSION: ${{ inputs.desktop_version }}",
+      "ENDURAGENT_MACOS_GENESIS_VERSION: 0.0.1",
     );
     const missingGenesisVerifier = source.desktop.replace(
       "verify:mac-genesis-release --",
@@ -360,7 +380,7 @@ describe("desktop release workflow policy", () => {
         "/actions/runs/$PUBLICATION_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT",
       );
     const issues = inspect(release, source.desktop);
-    expect(issues.some((issue) => issue.includes("verified npm job outputs"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("verified npm outputs"))).toBe(true);
     expect(issues.some((issue) => issue.includes("exact signed provenance"))).toBe(true);
     expect(issues.some((issue) => issue.includes("publication attempt tuple"))).toBe(true);
   });

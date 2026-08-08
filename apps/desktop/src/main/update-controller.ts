@@ -1,5 +1,5 @@
-import { isStableCalVer, isUpdateAvailable } from "@enduragent/core";
 import type { AppUpdater, UpdateDownloadedEvent } from "electron-updater";
+import { isDesktopUpdateAvailable, isStableDesktopVersion } from "./desktop-version.js";
 
 export type DesktopUpdateState =
   | { readonly status: "disabled" }
@@ -144,8 +144,8 @@ export function createDesktopUpdateController(input: {
         const version = result?.updateInfo.version;
         if (
           result?.isUpdateAvailable !== true ||
-          !isStableCalVer(version) ||
-          !isUpdateAvailable(version, input.currentVersion)
+          !isStableDesktopVersion(version) ||
+          !isDesktopUpdateAvailable(version, input.currentVersion)
         ) {
           targetVersion = undefined;
           publish({ status: "current" });

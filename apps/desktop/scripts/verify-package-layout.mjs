@@ -8,7 +8,7 @@ import { parse } from "yaml";
 import {
   parseMacosReleaseUpdaterMetadata,
   requireGenericFeedUrl,
-  requireStableCalVer,
+  requireStableSemVer,
 } from "./macos-release-plan.mjs";
 import {
   DEVELOPMENT_PACKAGE_NAME,
@@ -730,7 +730,7 @@ export async function verifyPackageLayout(application, options = {}) {
       fail("invalid release package-layout options");
     }
     release = {
-      version: requireStableCalVer(options.release.version),
+      version: requireStableSemVer(options.release.version),
       feedUrl: requireGenericFeedUrl(options.release.feedUrl),
     };
   }

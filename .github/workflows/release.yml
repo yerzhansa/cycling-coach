@@ -59,6 +59,7 @@ jobs:
     outputs:
       package: ${{ steps.parse.outputs.package }}
       version: ${{ steps.parse.outputs.version }}
+      desktop_version: ${{ steps.parse.outputs.desktop_version }}
       ref: ${{ steps.parse.outputs.ref }}
       commit: ${{ steps.parse.outputs.commit }}
       desktop_mode: ${{ steps.parse.outputs.desktop_mode }}
@@ -118,6 +119,11 @@ jobs:
             exit 1
           fi
           COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
+          DESKTOP_VERSION=$(git show "$COMMIT:apps/desktop/package.json" | jq -er '.version')
+          if ! printf '%s' "$DESKTOP_VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::Desktop version '$DESKTOP_VERSION' is not stable SemVer"
+            exit 1
+          fi
           MODE="steady"
           BASELINE_TAG="none"
           DESKTOP_ENABLED=false
@@ -165,6 +171,7 @@ jobs:
           fi
           echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "desktop_version=$DESKTOP_VERSION" >> "$GITHUB_OUTPUT"
           echo "ref=$TAG" >> "$GITHUB_OUTPUT"
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
           echo "desktop_mode=$MODE" >> "$GITHUB_OUTPUT"
@@ -683,7 +690,8 @@ jobs:
     uses: ./.github/workflows/desktop-release.yml
     with:
       tag: ${{ needs.parse-tag.outputs.ref }}
-      version: ${{ needs.parse-tag.outputs.version }}
+      npm_version: ${{ needs.parse-tag.outputs.version }}
+      desktop_version: ${{ needs.parse-tag.outputs.desktop_version }}
       commit: ${{ needs.parse-tag.outputs.commit }}
       draft_id: ${{ needs.prepare-release-draft.outputs.draft_id }}
       mode: ${{ needs.parse-tag.outputs.desktop_mode }}

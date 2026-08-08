@@ -21,9 +21,9 @@ import { extractFile, statFile, uncache as uncacheAsarFile } from "@electron/asa
 import { parse } from "yaml";
 import {
   parseMacosReleaseUpdaterMetadata,
-  readCyclingCoachVersion,
+  readDesktopVersion,
   releaseArtifactNames,
-  requireStableCalVer,
+  requireStableSemVer,
 } from "./macos-release-plan.mjs";
 
 const localRequire = createRequire(import.meta.url);
@@ -274,7 +274,7 @@ function parseBundleMetadata(result) {
     fail("macOS product identity is invalid");
   }
   try {
-    return requireStableCalVer(info.CFBundleShortVersionString);
+    return requireStableSemVer(info.CFBundleShortVersionString);
   } catch {
     fail("macOS product identity is invalid");
   }
@@ -389,7 +389,7 @@ async function inspectMacosApplicationIdentity(application, bundle, dependencies
   });
 }
 
-function olderStableCalVer(left, right) {
+function olderStableSemVer(left, right) {
   const leftParts = left.split(".").map(Number);
   const rightParts = right.split(".").map(Number);
   for (const [index, part] of leftParts.entries()) {
@@ -402,7 +402,7 @@ function olderStableCalVer(left, right) {
 export async function verifyMacosBaselineApplication(baselineApplication, options, overrides = {}) {
   let candidateVersion;
   try {
-    candidateVersion = requireStableCalVer(options?.candidateVersion);
+    candidateVersion = requireStableSemVer(options?.candidateVersion);
   } catch {
     fail("candidate release version is invalid");
   }
@@ -422,7 +422,7 @@ export async function verifyMacosBaselineApplication(baselineApplication, option
   };
   const bundle = await requireApplicationBundle(baselineApplication, "baseline", dependencies);
   const baseline = await inspectMacosApplicationIdentity(baselineApplication, bundle, dependencies);
-  if (!olderStableCalVer(baseline.version, candidateVersion)) {
+  if (!olderStableSemVer(baseline.version, candidateVersion)) {
     fail("baseline application is not older than candidate");
   }
   return Object.freeze({
@@ -468,7 +468,7 @@ export async function verifyMacosReleaseCandidateApplication(
 ) {
   let candidateVersion;
   try {
-    candidateVersion = requireStableCalVer(options?.candidateVersion);
+    candidateVersion = requireStableSemVer(options?.candidateVersion);
   } catch {
     fail("candidate release version is invalid");
   }
@@ -664,7 +664,7 @@ export async function verifyMacosIdentityContinuity(
 ) {
   let candidateVersion;
   try {
-    candidateVersion = requireStableCalVer(options?.candidateVersion);
+    candidateVersion = requireStableSemVer(options?.candidateVersion);
   } catch {
     fail("candidate release version is invalid");
   }
@@ -710,7 +710,7 @@ export async function verifyMacosIdentityContinuity(
     codeDirectorySha256: candidateIdentity.candidateCodeIdentity.codeDirectorySha256,
     cdHash: candidateIdentity.candidateCodeIdentity.cdHash,
   };
-  if (!olderStableCalVer(baseline.version, candidate.version)) {
+  if (!olderStableSemVer(baseline.version, candidate.version)) {
     fail("baseline application is not older than candidate");
   }
   if (
@@ -1158,7 +1158,7 @@ async function verifyMacosReleaseApplicationContentsWithCandidate(
   if (!isAbsolute(artifactDirectory)) fail("artifact directory must be absolute");
   let candidateVersion;
   try {
-    candidateVersion = requireStableCalVer(options?.candidateVersion);
+    candidateVersion = requireStableSemVer(options?.candidateVersion);
   } catch {
     fail("candidate release version is invalid");
   }
@@ -1695,8 +1695,9 @@ export async function verifyMacosReleaseArtifacts(artifactDirectory, options = {
     verifySignature: overrides.verifySignature,
     verifyNotarization: overrides.verifyNotarization,
   };
-  const version = await readCyclingCoachVersion({
+  const version = await readDesktopVersion({
     repositoryRoot: options.repositoryRoot,
+    desktopRoot: options.desktopRoot,
     readFile: options.readVersionFile,
   });
   const names = releaseArtifactNames(version);
@@ -1791,7 +1792,7 @@ export async function verifyMacosReleaseEnvelope(
   const artifacts = await verifyReleaseArtifacts(artifactDirectory, options, overrides);
   let candidateVersion;
   try {
-    candidateVersion = requireStableCalVer(artifacts?.version);
+    candidateVersion = requireStableSemVer(artifacts?.version);
   } catch {
     fail("verified release version is invalid");
   }
@@ -1830,7 +1831,7 @@ export async function verifyMacosGenesisReleaseEnvelope(
   const artifacts = await verifyReleaseArtifacts(artifactDirectory, options, overrides);
   let candidateVersion;
   try {
-    candidateVersion = requireStableCalVer(artifacts?.version);
+    candidateVersion = requireStableSemVer(artifacts?.version);
   } catch {
     fail("verified release version is invalid");
   }

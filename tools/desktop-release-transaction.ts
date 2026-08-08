@@ -8,7 +8,7 @@ import { z } from "zod";
 
 export const DESKTOP_FEED_URL = "https://github.com/yerzhansa/enduragent/releases/latest/download/";
 export const DESKTOP_MANIFEST = "desktop-release-manifest.json";
-export const DESKTOP_RELEASE_SCHEMA_VERSION = 1 as const;
+export const DESKTOP_RELEASE_SCHEMA_VERSION = 2 as const;
 export const DESKTOP_PROVISIONAL_RELEASE_BODY =
   "Desktop update validation is in progress. This release is not yet generally available.";
 
@@ -30,7 +30,8 @@ const DesktopReleaseManifestSchema = z
   .object({
     schemaVersion: z.literal(DESKTOP_RELEASE_SCHEMA_VERSION),
     tag: z.string(),
-    version: z.string(),
+    npmVersion: z.string(),
+    desktopVersion: z.string(),
     commit: z.string(),
     draftId: z.string(),
     mode: z.enum(["steady", "genesis"]),
@@ -116,7 +117,8 @@ export type NpmProvenanceBundleVerifier = (
   identity: NpmProvenanceIdentity,
 ) => Promise<void>;
 
-const versionPattern = /^([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)$/u;
+const desktopVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const npmVersionPattern = /^([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)$/u;
 const commitPattern = /^[0-9a-f]{40}$/u;
 const signingIdentityPattern = /^Developer ID Application: .+ \(FA494ACVTF\)$/u;
 const releasePropagationAttempts = 30;
@@ -132,9 +134,19 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
-export function requireVersion(value: unknown): string {
-  if (typeof value !== "string" || !versionPattern.test(value)) {
+export function requireDesktopVersion(value: unknown): string {
+  if (typeof value !== "string" || !desktopVersionPattern.test(value)) {
     throw new TypeError("desktop release version is invalid");
+  }
+  if (value.split(".").some((part) => !Number.isSafeInteger(Number(part)))) {
+    throw new TypeError("desktop release version is invalid");
+  }
+  return value;
+}
+
+export function requireNpmVersion(value: unknown): string {
+  if (typeof value !== "string" || !npmVersionPattern.test(value)) {
+    throw new TypeError("npm release version is invalid");
   }
   return value;
 }
@@ -147,14 +159,15 @@ export function requireMode(value: unknown): DesktopReleaseMode {
 }
 
 export function releaseFileNames(version: string): readonly [string, string, string, string] {
-  const stableVersion = requireVersion(version);
+  const stableVersion = requireDesktopVersion(version);
   const base = `Enduragent-${stableVersion}-arm64`;
   return [`${base}.dmg`, `${base}.zip`, `${base}.zip.blockmap`, "latest-mac.yml"];
 }
 
 function requireBinding(input: {
   tag: unknown;
-  version: unknown;
+  npmVersion: unknown;
+  desktopVersion: unknown;
   commit: unknown;
   draftId: unknown;
   mode: unknown;
@@ -173,9 +186,10 @@ function requireBinding(input: {
   baselineSigningIdentity?: unknown;
   baselineCdHash?: unknown;
 }): Omit<DesktopReleaseManifest, "schemaVersion" | "feedUrl" | "files" | "transactionSha256"> {
-  const version = requireVersion(input.version);
-  const tag = `cycling-coach@${version}`;
-  if (input.tag !== tag) throw new TypeError("desktop release tag and version do not match");
+  const npmVersion = requireNpmVersion(input.npmVersion);
+  const desktopVersion = requireDesktopVersion(input.desktopVersion);
+  const tag = `cycling-coach@${npmVersion}`;
+  if (input.tag !== tag) throw new TypeError("npm release tag and version do not match");
   if (typeof input.commit !== "string" || !commitPattern.test(input.commit)) {
     throw new TypeError("desktop release commit is invalid");
   }
@@ -204,7 +218,7 @@ function requireBinding(input: {
   if (
     typeof input.npmAttestationUrl !== "string" ||
     input.npmAttestationUrl !==
-      `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${version}`
+      `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${npmVersion}`
   )
     throw new TypeError("npm attestation URL is invalid");
   if (
@@ -243,7 +257,8 @@ function requireBinding(input: {
     throw new TypeError("steady baseline evidence is invalid");
   return {
     tag,
-    version,
+    npmVersion,
+    desktopVersion,
     commit: input.commit,
     draftId: input.draftId,
     mode,
@@ -489,14 +504,14 @@ export async function sealDesktopRelease(
   bindingInput: Parameters<typeof requireBinding>[0],
 ): Promise<DesktopReleaseManifest> {
   const binding = requireBinding(bindingInput);
-  const expected = releaseFileNames(binding.version);
+  const expected = releaseFileNames(binding.desktopVersion);
   const entries = (await readdir(directory)).sort();
   if (entries.length !== expected.length || expected.some((name) => !entries.includes(name))) {
     throw new TypeError("release envelope must contain exactly four updater files before sealing");
   }
   const snapshots = new Map<string, { bytes: Buffer; size: number }>();
   for (const name of expected) snapshots.set(name, await stableFile(resolve(directory, name)));
-  requireMetadata(snapshots.get(expected[3])!.bytes, binding.version, snapshots);
+  requireMetadata(snapshots.get(expected[3])!.bytes, binding.desktopVersion, snapshots);
   const files = expected.map((name) => {
     const snapshot = snapshots.get(name)!;
     return {
@@ -532,7 +547,8 @@ function parseManifest(value: unknown): DesktopReleaseManifest {
   }
   const binding = requireBinding({
     tag: manifest.tag,
-    version: manifest.version,
+    npmVersion: manifest.npmVersion,
+    desktopVersion: manifest.desktopVersion,
     commit: manifest.commit,
     draftId: manifest.draftId,
     mode: manifest.mode,
@@ -551,7 +567,7 @@ function parseManifest(value: unknown): DesktopReleaseManifest {
     baselineSigningIdentity: manifest.baselineSigningIdentity,
     baselineCdHash: manifest.baselineCdHash,
   });
-  const expected = releaseFileNames(binding.version);
+  const expected = releaseFileNames(binding.desktopVersion);
   if (manifest.files.length !== expected.length)
     throw new TypeError("desktop release manifest file set is invalid");
   for (const [index, file] of manifest.files.entries()) {
@@ -580,7 +596,7 @@ export async function verifyDesktopRelease(
     throw new TypeError("desktop release manifest is invalid JSON");
   }
   const manifest = parseManifest(decoded);
-  const expectedNames = [...releaseFileNames(manifest.version), DESKTOP_MANIFEST].sort();
+  const expectedNames = [...releaseFileNames(manifest.desktopVersion), DESKTOP_MANIFEST].sort();
   if (
     names.length !== expectedNames.length ||
     names.some((name, index) => name !== expectedNames[index])
@@ -591,7 +607,8 @@ export async function verifyDesktopRelease(
     const expected = requireBinding(expectedBinding);
     for (const key of [
       "tag",
-      "version",
+      "npmVersion",
+      "desktopVersion",
       "commit",
       "draftId",
       "mode",
@@ -626,7 +643,7 @@ export async function verifyDesktopRelease(
     }
     snapshots.set(file.name, snapshot);
   }
-  requireMetadata(snapshots.get("latest-mac.yml")!.bytes, manifest.version, snapshots);
+  requireMetadata(snapshots.get("latest-mac.yml")!.bytes, manifest.desktopVersion, snapshots);
   return manifest;
 }
 
@@ -658,7 +675,7 @@ export async function materializeDesktopPublicEnvelope(
     }
   }
   const names = (await readdir(target)).sort();
-  const expected = [...releaseFileNames(manifest.version)].sort();
+  const expected = [...releaseFileNames(manifest.desktopVersion)].sort();
   if (names.length !== expected.length || names.some((name, index) => name !== expected[index])) {
     throw new TypeError("public envelope must contain exactly four updater files");
   }
@@ -699,7 +716,7 @@ async function assertResolvedBaseline(
   const baselineZipBytes = baselineZipAsset ? await client.bytes(baselineZipAsset.url) : null;
   if (
     !baseline ||
-    compareVersions(baseline.version, manifest.version) >= 0 ||
+    compareVersions(baseline.version, manifest.desktopVersion) >= 0 ||
     manifest.baselineTag !== baseline.release.tag_name ||
     manifest.baselineReleaseId !== String(baseline.release.id) ||
     manifest.baselineCommit !== baseline.commit ||
@@ -719,8 +736,8 @@ export function assertRemoteAsset(file: DesktopReleaseFile, bytes: Uint8Array): 
 }
 
 export function compareVersions(left: string, right: string): number {
-  const a = requireVersion(left).split(".").map(Number);
-  const b = requireVersion(right).split(".").map(Number);
+  const a = requireDesktopVersion(left).split(".").map(Number);
+  const b = requireDesktopVersion(right).split(".").map(Number);
   for (let index = 0; index < 3; index += 1) {
     if (a[index] !== b[index]) return a[index] < b[index] ? -1 : 1;
   }
@@ -987,14 +1004,20 @@ export class GithubClient {
 }
 
 function desktopReleaseVersion(release: GithubRelease, excludingTag?: string): string | null {
-  if (release.prerelease || release.tag_name === excludingTag) return null;
-  const match = /^cycling-coach@(.+)$/u.exec(release.tag_name);
-  if (!match || !versionPattern.test(match[1])) return null;
-  const expected = [...releaseFileNames(match[1])].sort();
+  if (release.draft || release.prerelease || release.tag_name === excludingTag) return null;
+  const tag = /^cycling-coach@(.+)$/u.exec(release.tag_name);
+  if (!tag || !npmVersionPattern.test(tag[1])) return null;
+  const versions = release.assets.flatMap((asset) => {
+    const match = /^Enduragent-(\d+\.\d+\.\d+)-arm64\.dmg$/u.exec(asset.name);
+    return match ? [match[1]] : [];
+  });
+  if (versions.length !== 1 || !desktopVersionPattern.test(versions[0])) return null;
+  const version = versions[0];
+  const expected = [...releaseFileNames(version)].sort();
   const actual = release.assets.map((asset) => asset.name).sort();
   return actual.length === expected.length &&
     actual.every((name, index) => name === expected[index])
-    ? match[1]
+    ? version
     : null;
 }
 
@@ -1170,7 +1193,7 @@ export async function publishDesktopRelease(
     throw new TypeError("desktop publication requires a bound latest observation");
   }
   assertLatestCas(
-    manifest.version,
+    manifest.desktopVersion,
     observedLatest,
     await client.latest(),
     baseline?.version ?? null,
@@ -1200,7 +1223,7 @@ export async function publishDesktopRelease(
     await waitForAnonymousAsset(client, asset.browser_download_url, file);
   }
   assertLatestCas(
-    manifest.version,
+    manifest.desktopVersion,
     observedLatest,
     await client.latest(),
     baseline?.version ?? null,
@@ -1253,14 +1276,19 @@ export async function promoteDesktopLatest(
     throw new TypeError("published tag commit binding mismatch");
   const current = await client.latest();
   const previous = await newestDesktopRelease(await client.releases(), client, manifest.tag);
-  assertLatestCas(manifest.version, observed, current, previous?.version ?? null);
+  assertLatestCas(manifest.desktopVersion, observed, current, previous?.version ?? null);
   for (const file of manifest.files) {
     const asset = candidate.assets.find((candidateAsset) => candidateAsset.name === file.name);
     if (!asset || asset.state !== "uploaded")
       throw new TypeError(`promotion candidate asset is missing: ${file.name}`);
     await waitForAnonymousAsset(client, asset.browser_download_url, file);
   }
-  assertLatestCas(manifest.version, observed, await client.latest(), previous?.version ?? null);
+  assertLatestCas(
+    manifest.desktopVersion,
+    observed,
+    await client.latest(),
+    previous?.version ?? null,
+  );
   await client.request(`/repos/${client.repository()}/releases/${candidate.id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1498,14 +1526,18 @@ export async function prepareDesktopBaseline(
   directory: string,
   client: GithubClient,
   mode: DesktopReleaseMode,
+  candidateTag: string,
   candidateVersion: string,
   requestedBaselineTag: string,
   output: string,
 ): Promise<void> {
-  const version = requireVersion(candidateVersion);
+  if (!/^cycling-coach@([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)$/u.test(candidateTag)) {
+    throw new TypeError("candidate npm release tag is invalid");
+  }
+  const version = requireDesktopVersion(candidateVersion);
   const releases = await client.releases();
   if (mode === "genesis") {
-    const baseline = await newestDesktopRelease(releases, client, `cycling-coach@${version}`);
+    const baseline = await newestDesktopRelease(releases, client, candidateTag);
     if (baseline !== null)
       throw new TypeError("genesis release refused after a desktop baseline exists");
     await writeFile(
@@ -1554,7 +1586,8 @@ function argument(name: string): string {
 function bindingArguments(): Parameters<typeof requireBinding>[0] {
   return {
     tag: argument("tag"),
-    version: argument("version"),
+    npmVersion: argument("npm-version"),
+    desktopVersion: argument("desktop-version"),
     commit: argument("commit"),
     draftId: argument("draft-id"),
     mode: argument("mode"),
@@ -1618,7 +1651,7 @@ async function main(): Promise<void> {
       metadata,
       {
         name: argument("name"),
-        version: requireVersion(argument("version")),
+        version: requireNpmVersion(argument("version")),
         integrity: argument("integrity"),
         repository: argument("repository"),
         workflow: argument("workflow"),
@@ -1662,7 +1695,8 @@ async function main(): Promise<void> {
       directory,
       client,
       requireMode(argument("mode")),
-      requireVersion(argument("candidate-version")),
+      argument("candidate-tag"),
+      requireDesktopVersion(argument("candidate-version")),
       argument("baseline-tag"),
       argument("github-output"),
     );
