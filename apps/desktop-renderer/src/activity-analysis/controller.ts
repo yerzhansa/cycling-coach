@@ -31,6 +31,9 @@ export const DEFAULT_RIDE_ANALYSIS_SECTIONS = [
   "aerobic-drift",
   "intervals",
   "best-efforts",
+  "power-distribution",
+  "heart-rate-distribution",
+  "power-heart-rate",
 ] as const satisfies readonly ActivityAnalysisSection[];
 
 export const EMPTY_RIDE_ANALYSIS: RideAnalysisViewState = Object.freeze({

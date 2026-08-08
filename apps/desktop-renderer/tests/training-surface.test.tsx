@@ -558,6 +558,104 @@ describe("training page", () => {
     expect(document.body).not.toHaveTextContent(ride.id);
   });
 
+  it("shows independent accessible distributions and a distinct server power/HR response", async () => {
+    const user = userEvent.setup();
+    if (context.recentRides.kind !== "computed") throw new Error("expected fixture rides");
+    const ride = context.recentRides.items[0]!;
+    const provenance = {
+      source: "provider" as const,
+      delivery: "live" as const,
+      observedAt: "1998-07-19T08:00:00.000Z",
+    };
+    useEnduragentStore.setState({
+      rideAnalysis: {
+        activityId: ride.id,
+        status: "ready",
+        revision: "c".repeat(64),
+        loadingSections: [],
+        failedSections: [],
+        sections: {
+          powerDistribution: {
+            kind: "computed",
+            data: {
+              unit: "watts",
+              buckets: [
+                { lower: 0, upper: 100, seconds: 300 },
+                { lower: 100, upper: 200, seconds: 600 },
+                { lower: 225, upper: 300, seconds: 120 },
+              ],
+              totalSeconds: 1_020,
+            },
+            provenance,
+          },
+          heartRateDistribution: {
+            kind: "computed",
+            data: {
+              unit: "bpm",
+              buckets: [
+                { lower: 110, upper: 130, seconds: 420 },
+                { lower: 130, upper: 150, seconds: 600 },
+              ],
+              totalSeconds: 1_020,
+            },
+            provenance,
+          },
+          powerHeartRate: {
+            kind: "computed",
+            data: {
+              source: "provider",
+              rows: Array.from({ length: 6 }, (_, index) => ({
+                startSeconds: index * 60,
+                watts: 150 + index * 10,
+                heartRateBpm: 120 + index * 2,
+                cadenceRpm: index === 0 ? null : 85 + index,
+                movingSeconds: 60,
+                seconds: 60,
+              })),
+              curves: [{ kind: "all", coefficients: [100, 0.1], rSquared: 0.9 }],
+              coverageFraction: 0.6,
+              heartRateLagSeconds: 15,
+              warmupSeconds: 60,
+              cooldownSeconds: 30,
+            },
+            provenance,
+          },
+        },
+      },
+    });
+    render(<TrainingView />);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Review road ride from 1998-07-09 · 22:00, 1h 31m, 42.1 km",
+      }),
+    );
+
+    const power = screen.getByRole("region", { name: "Power distribution" });
+    expect(power).toHaveTextContent("17 min of measured ride time · 3 recorded buckets");
+    expect(power).toHaveTextContent("Gaps are left as recorded");
+    await user.click(within(power).getByText("Read power distribution as a table"));
+    const powerTable = within(power).getByRole("table");
+    expect(within(powerTable).getByText("0 W–100 W")).toBeInTheDocument();
+    expect(within(powerTable).getAllByRole("row")).toHaveLength(4);
+
+    const heartRate = screen.getByRole("region", { name: "Heart-rate distribution" });
+    expect(heartRate).toHaveTextContent("can load even when power data is unavailable");
+    await user.click(within(heartRate).getByText("Read heart-rate distribution as a table"));
+    expect(within(heartRate).getByText("110 bpm–130 bpm")).toBeInTheDocument();
+
+    const response = screen.getByRole("region", { name: "Power and heart-rate response" });
+    expect(response).toHaveTextContent("server-cleaned ride segment");
+    expect(response).toHaveTextContent("No missing points or lines are interpolated");
+    expect(response).toHaveTextContent("60%");
+    expect(response).toHaveTextContent("Limited coverage");
+    expect(response).toHaveTextContent("separate from the local aerobic drift estimate");
+    await user.click(within(response).getByText("Read all power and heart-rate points as a table"));
+    expect(within(response).getByRole("table")).toHaveTextContent("150 W");
+    expect(document.body).not.toHaveTextContent("provider-");
+    expect(document.body).not.toHaveTextContent(ride.id);
+  });
+
   it("explains deterministic unavailable states without offering a pointless retry", async () => {
     const user = userEvent.setup();
     if (context.recentRides.kind !== "computed") throw new Error("expected fixture rides");

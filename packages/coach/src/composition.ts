@@ -108,7 +108,9 @@ import {
 } from "./activity-analysis-provider.js";
 import {
   createProviderActivityBestEffortsArchive,
+  createProviderActivityHistogramArchive,
   createProviderActivityIntervalsArchive,
+  createProviderActivityPowerHeartRateArchive,
   createProviderActivityStreamArchive,
 } from "./activity-analysis-archive.js";
 import {
@@ -119,6 +121,15 @@ import {
   createBestEffortAnalyzer,
   createProviderActivityBestEffortReader,
 } from "./activity-best-efforts.js";
+import {
+  createHeartRateDistributionAnalyzer,
+  createPowerDistributionAnalyzer,
+  createProviderActivityHistogramReader,
+} from "./activity-distribution.js";
+import {
+  createPowerHeartRateAnalyzer,
+  createProviderActivityPowerHeartRateReader,
+} from "./activity-power-heart-rate.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -1055,6 +1066,14 @@ export async function createLocalCoachComposition(
       access: providerAccess,
       archive: createProviderActivityBestEffortsArchive({ ...archiveDependencies }),
     });
+    const providerHistograms = createProviderActivityHistogramReader({
+      access: providerAccess,
+      archive: createProviderActivityHistogramArchive({ ...archiveDependencies }),
+    });
+    const providerPowerHeartRate = createProviderActivityPowerHeartRateReader({
+      access: providerAccess,
+      archive: createProviderActivityPowerHeartRateArchive({ ...archiveDependencies }),
+    });
     const activityAnalysis = createStoredActivityAnalysisService({
       store: input.context.store,
       activities: canonicalActivities,
@@ -1066,6 +1085,11 @@ export async function createLocalCoachComposition(
         }),
         intervals: createIntervalReviewAnalyzer({ provider: providerIntervals }),
         bestEfforts: createBestEffortAnalyzer({ provider: providerBestEfforts }),
+        powerDistribution: createPowerDistributionAnalyzer({ provider: providerHistograms }),
+        heartRateDistribution: createHeartRateDistributionAnalyzer({
+          provider: providerHistograms,
+        }),
+        powerHeartRate: createPowerHeartRateAnalyzer({ provider: providerPowerHeartRate }),
       },
       runCacheWrite: (work) => runtime!.runExclusive(work),
       now,

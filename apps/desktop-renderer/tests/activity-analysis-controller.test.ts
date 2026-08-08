@@ -97,7 +97,14 @@ describe("ride analysis controller", () => {
       "getActivityAnalysis",
       {
         canonicalActivityId: FIRST,
-        sections: ["aerobic-drift", "intervals", "best-efforts"],
+        sections: [
+          "aerobic-drift",
+          "intervals",
+          "best-efforts",
+          "power-distribution",
+          "heart-rate-distribution",
+          "power-heart-rate",
+        ],
       },
       { signal: expect.any(AbortSignal) },
     );

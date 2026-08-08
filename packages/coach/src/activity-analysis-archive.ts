@@ -1,6 +1,11 @@
 import { canonicalJson, type ArchiveManager } from "@enduragent/kernel/archive";
 import type { IntervalsSourceRepository, SqlStore } from "@enduragent/kernel/store";
-import type { ActivityIntervals, BestEfforts } from "intervals-icu-api";
+import type {
+  ActivityIntervals,
+  BestEfforts,
+  HistogramBucket,
+  PowerVsHeartRatePlot,
+} from "intervals-icu-api";
 import type {
   ProviderActivityStreamArchive,
   ProviderActivityStreamArchiveRequest,
@@ -37,6 +42,27 @@ export interface ProviderActivityBestEffortsArchiveRequest {
 
 export interface ProviderActivityBestEffortsArchive {
   write(input: ProviderActivityBestEffortsArchiveRequest): Promise<void>;
+}
+
+export interface ProviderActivityHistogramArchiveRequest {
+  readonly sourceRevision: string;
+  readonly metric: "power" | "heart-rate";
+  readonly response: readonly HistogramBucket[];
+  readonly signal: AbortSignal;
+}
+
+export interface ProviderActivityHistogramArchive {
+  write(input: ProviderActivityHistogramArchiveRequest): Promise<void>;
+}
+
+export interface ProviderActivityPowerHeartRateArchiveRequest {
+  readonly sourceRevision: string;
+  readonly response: PowerVsHeartRatePlot;
+  readonly signal: AbortSignal;
+}
+
+export interface ProviderActivityPowerHeartRateArchive {
+  write(input: ProviderActivityPowerHeartRateArchiveRequest): Promise<void>;
 }
 
 function cloneJson<T>(value: T): T {
@@ -165,6 +191,61 @@ export function createProviderActivityBestEffortsArchive(
         landing: {
           duration_seconds: request.durationSeconds,
           effort_count: response.efforts.length,
+          schema_version: 1,
+          source_revision: request.sourceRevision,
+        },
+        signal: request.signal,
+      });
+    },
+  });
+}
+
+export function createProviderActivityHistogramArchive(
+  input: ProviderActivityAnalysisArchiveDependencies,
+): ProviderActivityHistogramArchive {
+  return Object.freeze({
+    async write(request: ProviderActivityHistogramArchiveRequest) {
+      const response = cloneJson(request.response);
+      await publishEvidence({
+        dependencies: input,
+        sourceRevision: request.sourceRevision,
+        externalPrefix: `${request.metric}-histogram`,
+        snapshot: {
+          schema_version: 1,
+          source_revision: request.sourceRevision,
+          metric: request.metric,
+          response,
+        },
+        landing: {
+          bucket_count: response.length,
+          metric: request.metric,
+          schema_version: 1,
+          source_revision: request.sourceRevision,
+        },
+        signal: request.signal,
+      });
+    },
+  });
+}
+
+export function createProviderActivityPowerHeartRateArchive(
+  input: ProviderActivityAnalysisArchiveDependencies,
+): ProviderActivityPowerHeartRateArchive {
+  return Object.freeze({
+    async write(request: ProviderActivityPowerHeartRateArchiveRequest) {
+      const response = cloneJson(request.response);
+      await publishEvidence({
+        dependencies: input,
+        sourceRevision: request.sourceRevision,
+        externalPrefix: "power-heart-rate",
+        snapshot: {
+          schema_version: 1,
+          source_revision: request.sourceRevision,
+          response,
+        },
+        landing: {
+          curve_count: Array.isArray(response.curves) ? response.curves.length : 0,
+          row_count: Array.isArray(response.series) ? response.series.length : 0,
           schema_version: 1,
           source_revision: request.sourceRevision,
         },

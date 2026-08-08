@@ -11,6 +11,7 @@ import type { RideAnalysisViewState } from "../../activity-analysis/controller.j
 import { formatDateLabel } from "../../training-context/format.js";
 import { Page } from "../shared/Page.js";
 import { analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy.js";
+import { RideResponseReview } from "./RideResponseReview.js";
 import styles from "./TrainingView.module.css";
 
 const RIDE_KIND: Readonly<Record<string, string>> = {
@@ -716,6 +717,11 @@ export function RideDetailView(props: {
             ? null
             : () => props.onRefreshAnalysis?.(["best-efforts"])
         }
+      />
+      <RideResponseReview
+        rideId={props.ride.id}
+        analysis={props.analysis}
+        onRefresh={props.onRefreshAnalysis}
       />
     </Page>
   );

@@ -275,6 +275,63 @@ function makeScript(
                 observedAt: "2026-07-19T08:00:00.000Z",
               },
             },
+            powerDistribution: {
+              kind: "computed",
+              data: {
+                unit: "watts",
+                buckets: [
+                  { lower: 0, upper: 100, seconds: 300 },
+                  { lower: 100, upper: 200, seconds: 600 },
+                  { lower: 225, upper: 300, seconds: 120 },
+                ],
+                totalSeconds: 1_020,
+              },
+              provenance: {
+                source: "provider",
+                delivery: "live",
+                observedAt: "2026-07-19T08:00:00.000Z",
+              },
+            },
+            heartRateDistribution: {
+              kind: "computed",
+              data: {
+                unit: "bpm",
+                buckets: [
+                  { lower: 110, upper: 130, seconds: 420 },
+                  { lower: 130, upper: 150, seconds: 600 },
+                ],
+                totalSeconds: 1_020,
+              },
+              provenance: {
+                source: "provider",
+                delivery: "live",
+                observedAt: "2026-07-19T08:00:00.000Z",
+              },
+            },
+            powerHeartRate: {
+              kind: "computed",
+              data: {
+                source: "provider",
+                rows: Array.from({ length: 6 }, (_, index) => ({
+                  startSeconds: index * 60,
+                  watts: 150 + index * 10,
+                  heartRateBpm: 120 + index * 2,
+                  cadenceRpm: index === 0 ? null : 85 + index,
+                  movingSeconds: 60,
+                  seconds: 60,
+                })),
+                curves: [{ kind: "all", coefficients: [100, 0.1], rSquared: 0.9 }],
+                coverageFraction: 0.6,
+                heartRateLagSeconds: 15,
+                warmupSeconds: 60,
+                cooldownSeconds: 30,
+              },
+              provenance: {
+                source: "provider",
+                delivery: "live",
+                observedAt: "2026-07-19T08:00:00.000Z",
+              },
+            },
           },
         });
       }
@@ -1445,6 +1502,11 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly documentOverflow: boolean;
       readonly drift: string;
       readonly limitation: string;
+      readonly interval: string;
+      readonly efforts: string;
+      readonly powerDistribution: boolean;
+      readonly heartRateDistribution: boolean;
+      readonly powerHeartRate: boolean;
     }>(`
       const recent = document.querySelector('[data-panel="recent-rides"]');
       const opener = recent.querySelector("button");
@@ -1457,12 +1519,17 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const page = document.querySelector('section[aria-label="Ride review"]');
       const analysisDeadline = Date.now() + 5000;
       while (
-        (!page.textContent.includes("+4.8%") || !page.textContent.includes("Threshold")) &&
+        (!page.textContent.includes("+4.8%") ||
+          !page.textContent.includes("Threshold") ||
+          !page.textContent.includes("17 min of measured ride time · 3 recorded buckets") ||
+          !page.textContent.includes("17 min of measured ride time · 2 recorded buckets") ||
+          !page.textContent.includes("60%ride coverage")) &&
         Date.now() < analysisDeadline
       ) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       const title = page.querySelector("h1");
+      const powerHeartRatePanel = page.querySelector('[aria-labelledby="power-heart-rate-title"]');
       return {
         page: page.getAttribute("aria-label"),
         titleFocused: document.activeElement === title,
@@ -1476,6 +1543,15 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         limitation: page.querySelector('[aria-label="Analysis limitations"]')?.textContent ?? "",
         interval: page.querySelector('[aria-labelledby="interval-review-title"]')?.textContent ?? "",
         efforts: page.querySelector('[aria-labelledby="best-efforts-title"]')?.textContent ?? "",
+        powerDistribution: page
+          .querySelector('[aria-labelledby="powerDistribution-title"]')
+          ?.textContent.includes("17 min of measured ride time · 3 recorded buckets") ?? false,
+        heartRateDistribution: page
+          .querySelector('[aria-labelledby="heartRateDistribution-title"]')
+          ?.textContent.includes("17 min of measured ride time · 2 recorded buckets") ?? false,
+        powerHeartRate:
+          powerHeartRatePanel?.textContent.includes("60%ride coverage") === true &&
+          powerHeartRatePanel.textContent.includes("No missing points or lines are interpolated."),
       };
     `);
     expect(rideReview).toEqual({
@@ -1491,6 +1567,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "Ordered ride segmentsIntervals and lapsShows recorded segments in order. Missing metrics stay unavailable, and no planned workout targets are inferred.Ordered analysis from intervals.icu1WorkThresholdDuration5 minDistance2.5 kmPower250 avg · 310 max WHeart rate155 avg · 170 max bpm",
       efforts:
         "Selected-ride scopeFive-minute best effortsRanks measured five-minute power efforts from this ride only. It does not compare against other rides or all-history results.This ride · power · 5 min · equal efforts rank the earlier start first#1310 W2.6 km",
+      powerDistribution: true,
+      heartRateDistribution: true,
+      powerHeartRate: true,
     });
     const rideReturn = await fixture.evaluate<{
       readonly page: string | null;
@@ -1583,7 +1662,14 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         method: "getActivityAnalysis",
         params: {
           canonicalActivityId: "c".repeat(64),
-          sections: ["aerobic-drift", "intervals", "best-efforts"],
+          sections: [
+            "aerobic-drift",
+            "intervals",
+            "best-efforts",
+            "power-distribution",
+            "heart-rate-distribution",
+            "power-heart-rate",
+          ],
         },
       },
     ]);

@@ -844,6 +844,190 @@
   font: 9.5px/1.4 var(--f-mono);
 }
 
+.distributionFigure,
+.responseFigure {
+  margin: 16px 0 0;
+}
+
+.distributionChart,
+.responseChart {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.chartAxis {
+  stroke: var(--line-2);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.chartTick {
+  fill: var(--ink-3);
+  font: 9px var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.distributionBar {
+  fill: var(--brand);
+  opacity: 0.78;
+}
+
+.distributionChart[data-unit="bpm"] .distributionBar {
+  fill: var(--ink-2);
+}
+
+.distributionFigure figcaption,
+.responseFigure figcaption {
+  max-width: 660px;
+  margin: 8px 0 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.analysisTableDisclosure {
+  margin: 13px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.analysisTableDisclosure summary {
+  width: fit-content;
+  padding: 11px 2px 2px;
+  color: var(--ink-2);
+  cursor: pointer;
+  font: 10px/1.4 var(--f-mono);
+}
+
+.analysisTableDisclosure summary:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+}
+
+.analysisTableScroller {
+  max-height: 320px;
+  margin-top: 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.analysisDataTable {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--ink-2);
+  font: 10px/1.4 var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.analysisDataTable th,
+.analysisDataTable td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.analysisDataTable thead th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--surface);
+  color: var(--ink-3);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.analysisDataTable tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.analysisDataTable tbody th {
+  font-weight: 500;
+}
+
+.responsePoint {
+  fill: var(--brand);
+  stroke: var(--surface);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.responseSummary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: center;
+  margin: 16px 0 0;
+}
+
+.responseSummary > div {
+  min-width: 0;
+  padding-right: 12px;
+  border-right: 1px solid var(--line);
+}
+
+.responseSummary p {
+  margin: 0;
+}
+
+.responseSummary > div > p:last-child {
+  margin-top: 4px;
+  color: var(--ink-3);
+  font-size: 10px;
+}
+
+.responseValue {
+  font: 600 22px/1 var(--f-dis);
+  font-variant-numeric: tabular-nums;
+}
+
+.responseCoverage {
+  justify-self: end;
+  padding: 5px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font: 9px/1 var(--f-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.responseCoverage[data-limited="true"] {
+  border-color: var(--brand);
+}
+
+.responseMeta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.responseMeta > div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.responseMeta dt {
+  color: var(--ink-3);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.responseMeta dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-2);
+  font: 10px/1.4 var(--f-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .rideEyebrow {
   margin: 0 0 8px;
   color: var(--ink-3);
@@ -926,6 +1110,19 @@
 
   .effortList {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .responseSummary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .responseCoverage {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .responseMeta {
+    grid-template-columns: 1fr;
   }
 }
 
