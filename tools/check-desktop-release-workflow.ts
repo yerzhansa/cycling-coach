@@ -121,10 +121,18 @@ export function inspectDesktopReleaseWorkflows(
   if (!("push" in releaseOn) || !("workflow_dispatch" in releaseOn))
     issues.push("release.yml must remain the tag/manual coordinator");
   const desktopOn = mapping(desktop.on, "desktop.on", issues);
-  if (Object.keys(desktopOn).length !== 1 || !("workflow_call" in desktopOn))
-    issues.push("desktop-release.yml must be workflow_call-only");
-  const workflowCall = mapping(desktopOn.workflow_call, "desktop.workflow_call", issues);
-  const inputs = mapping(workflowCall.inputs, "desktop.workflow_call.inputs", issues);
+  if (Object.keys(desktopOn).length !== 1 || !("workflow_dispatch" in desktopOn))
+    issues.push("desktop-release.yml must be workflow_dispatch-only");
+  const workflowDispatch = mapping(
+    desktopOn.workflow_dispatch,
+    "desktop.workflow_dispatch",
+    issues,
+  );
+  const inputs = mapping(
+    workflowDispatch.inputs,
+    "desktop.workflow_dispatch.inputs",
+    issues,
+  );
   for (const input of [
     "tag",
     "npm_version",
@@ -136,14 +144,17 @@ export function inspectDesktopReleaseWorkflows(
     "npm_integrity",
     "npm_attestation_url",
     "baseline_tag",
+    "coordinator_run_id",
+    "coordinator_run_attempt",
   ]) {
-    if (!(input in inputs)) issues.push(`desktop workflow_call is missing ${input}`);
+    const declaration = mapping(
+      inputs[input],
+      `desktop.workflow_dispatch.inputs.${input}`,
+      issues,
+    );
+    if (declaration.required !== true || declaration.type !== "string")
+      issues.push(`desktop workflow_dispatch must require string input ${input}`);
   }
-  const workflowCallSecrets = mapping(
-    workflowCall.secrets,
-    "desktop.workflow_call.secrets",
-    issues,
-  );
   const requiredSigningSecrets = [
     "CSC_LINK",
     "CSC_KEY_PASSWORD",
@@ -151,15 +162,11 @@ export function inspectDesktopReleaseWorkflows(
     "APPLE_API_ISSUER",
     "APPLE_API_KEY_P8_BASE64",
   ];
-  for (const secret of requiredSigningSecrets) {
-    const declaration = mapping(
-      workflowCallSecrets[secret],
-      `desktop.workflow_call.secrets.${secret}`,
-      issues,
-    );
-    if (declaration.required !== false)
-      issues.push(`desktop workflow_call must declare environment secret ${secret}`);
-  }
+  if (
+    desktop["run-name"] !==
+    "Desktop release ${{ inputs.tag }} via ${{ inputs.coordinator_run_id }}.${{ inputs.coordinator_run_attempt }}"
+  )
+    issues.push("desktop workflow run name must bind its coordinator invocation");
 
   requireQueue(release.concurrency, "stable-desktop-coordinator", "release coordinator", issues);
   requireQueue(desktop.concurrency, "stable-desktop", "desktop release", issues);
@@ -344,23 +351,49 @@ export function inspectDesktopReleaseWorkflows(
     "${{ needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true' }}";
   if (draft.if !== desktopGate || desktopCall.if !== desktopGate)
     issues.push("desktop transaction must use the frozen coordinator opt-in decision");
-  if (desktopCall.uses !== "./.github/workflows/desktop-release.yml")
-    issues.push("release.yml must coordinate the reusable desktop workflow");
+  if ("uses" in desktopCall || desktopCall["runs-on"] !== "ubuntu-latest")
+    issues.push("release.yml must directly dispatch the environment-bound desktop workflow");
   exactPermissions(
     desktopCall.permissions,
-    { actions: "read", contents: "write" },
-    "desktop reusable call",
+    { actions: "write", contents: "read" },
+    "desktop dispatcher",
     issues,
   );
-  const callWith = mapping(desktopCall.with, "desktop call inputs", issues);
+  const dispatchStep = namedStep(
+    desktopCall,
+    "Dispatch and await environment-bound desktop transaction",
+  );
+  const dispatchEnvironment = mapping(
+    dispatchStep?.env,
+    "desktop dispatcher environment",
+    issues,
+  );
+  const dispatchRun = typeof dispatchStep?.run === "string" ? dispatchStep.run : "";
   if (
-    callWith.npm_version !== "${{ needs.parse-tag.outputs.version }}" ||
-    callWith.desktop_version !== "${{ needs.parse-tag.outputs.desktop_version }}" ||
-    callWith.npm_integrity !== "${{ needs.verify-npm-publication.outputs.npm_integrity }}" ||
-    callWith.npm_attestation_url !==
-      "${{ needs.verify-npm-publication.outputs.npm_attestation_url }}"
+    dispatchEnvironment.NPM_VERSION !== "${{ needs.parse-tag.outputs.version }}" ||
+    dispatchEnvironment.DESKTOP_VERSION !==
+      "${{ needs.parse-tag.outputs.desktop_version }}" ||
+    dispatchEnvironment.NPM_INTEGRITY !==
+      "${{ needs.verify-npm-publication.outputs.npm_integrity }}" ||
+    dispatchEnvironment.NPM_ATTESTATION_URL !==
+      "${{ needs.verify-npm-publication.outputs.npm_attestation_url }}" ||
+    dispatchEnvironment.COORDINATOR_RUN_ID !== "${{ github.run_id }}" ||
+    dispatchEnvironment.COORDINATOR_RUN_ATTEMPT !== "${{ github.run_attempt }}"
   ) {
-    issues.push("desktop call must consume frozen version authorities and verified npm outputs");
+    issues.push(
+      "desktop dispatch must consume frozen version authorities and verified npm outputs",
+    );
+  }
+  if (
+    !dispatchRun.includes("gh workflow run desktop-release.yml \\") ||
+    !dispatchRun.includes('--ref "$DESKTOP_WORKFLOW_REF"') ||
+    !dispatchRun.includes('-f coordinator_run_id="$COORDINATOR_RUN_ID"') ||
+    !dispatchRun.includes('-f coordinator_run_attempt="$COORDINATOR_RUN_ATTEMPT"') ||
+    !dispatchRun.includes('--arg title "$EXPECTED_TITLE"') ||
+    !dispatchRun.includes('gh run watch "$DESKTOP_RUN_ID" --interval 15 --exit-status') ||
+    !dispatchRun.includes('if [ "$COORDINATOR_REF" = "refs/tags/$RELEASE_TAG" ]')
+  ) {
+    issues.push("desktop coordinator must dispatch, correlate, and await the exact child run");
   }
 
   const packageOnlyText = scalar(packageOnly);
@@ -390,6 +423,11 @@ export function inspectDesktopReleaseWorkflows(
   }
 
   const desktopJobs = mapping(desktop.jobs, "desktop.jobs", issues);
+  const authorize = mapping(
+    desktopJobs["authorize-coordinator"],
+    "desktop.jobs.authorize-coordinator",
+    issues,
+  );
   const sign = mapping(desktopJobs["sign-macos"], "desktop.jobs.sign-macos", issues);
   const verify = mapping(
     desktopJobs["verify-macos-envelope"],
@@ -418,6 +456,24 @@ export function inspectDesktopReleaseWorkflows(
     "desktop.jobs.compensate-publication",
     issues,
   );
+  exactPermissions(
+    authorize.permissions,
+    { actions: "read", contents: "read" },
+    "desktop coordinator authorization",
+    issues,
+  );
+  const authorizeStep = namedStep(authorize, "Bind dispatch to the active release coordinator");
+  const authorizeRun = typeof authorizeStep?.run === "string" ? authorizeStep.run : "";
+  if (
+    sign.needs !== "authorize-coordinator" ||
+    !authorizeRun.includes('gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID"') ||
+    !authorizeRun.includes(".github/workflows/release.yml") ||
+    !authorizeRun.includes(".run_attempt") ||
+    !authorizeRun.includes(".status") ||
+    !authorizeRun.includes("in_progress")
+  ) {
+    issues.push("desktop signing must bind to its active release coordinator");
+  }
   exactPermissions(sign.permissions, { contents: "read" }, "macOS signing", issues);
   exactPermissions(
     verify.permissions,
