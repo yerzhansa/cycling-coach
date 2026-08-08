@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isStableCalVer } from "@enduragent/core";
+import { isStableDesktopVersion } from "./desktop-version.js";
 
 const PACKAGE_JSON_LIMIT = 64 * 1024;
 
@@ -16,7 +16,7 @@ export function isDesktopUpdateReleaseEligible(input: {
     !input.isPackaged ||
     input.platform !== "darwin" ||
     input.securitySmokeMode ||
-    !isStableCalVer(input.currentVersion)
+    !isStableDesktopVersion(input.currentVersion)
   ) {
     return false;
   }
@@ -33,7 +33,7 @@ export function isDesktopUpdateReleaseEligible(input: {
       metadata.enduragentDesktopRelease === true &&
       Object.hasOwn(metadata, "version") &&
       metadata.version === input.currentVersion &&
-      isStableCalVer(metadata.version)
+      isStableDesktopVersion(metadata.version)
     );
   } catch {
     return false;

@@ -67,7 +67,7 @@ function activeController(
   const clearInterval = vi.fn();
   const controller = createDesktopUpdateController({
     releaseEligible: true,
-    currentVersion: "2026.7.22",
+    currentVersion: "0.1.0",
     loadUpdater: vi.fn(async () => updater),
     requestQuit: quit,
     setInterval: vi.fn((callback, interval) => {
@@ -87,7 +87,7 @@ describe("desktop update controller", () => {
     const setInterval = vi.fn();
     const controller = createDesktopUpdateController({
       releaseEligible: false,
-      currentVersion: "2026.7.22",
+      currentVersion: "0.1.0",
       loadUpdater,
       requestQuit: vi.fn(),
       setInterval,
@@ -103,7 +103,7 @@ describe("desktop update controller", () => {
 
   it("configures a quiet updater, performs startup and unref'd daily checks, and cleans up", async () => {
     const fake = fakeUpdater();
-    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("2026.7.22"));
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.0"));
     const subject = activeController(fake.updater);
 
     await subject.controller.start();
@@ -132,13 +132,13 @@ describe("desktop update controller", () => {
     const first = deferred<never>();
     vi.mocked(fake.updater.checkForUpdates)
       .mockReturnValueOnce(first.promise)
-      .mockResolvedValueOnce(updateResult("2026.7.22"));
+      .mockResolvedValueOnce(updateResult("0.1.0"));
     const subject = activeController(fake.updater);
     const startup = subject.controller.start();
     await vi.waitFor(() => expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce());
 
     const concurrent = subject.controller.check();
-    first.resolve(updateResult("2026.7.22"));
+    first.resolve(updateResult("0.1.0"));
     await expect(concurrent).resolves.toEqual({ status: "current" });
     await startup;
     await subject.controller.check();
@@ -147,48 +147,41 @@ describe("desktop update controller", () => {
 
   it("downloads only a strictly newer stable target and accepts only its exact event", async () => {
     const fake = fakeUpdater();
-    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("2026.7.23"));
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.1"));
     const subject = activeController(fake.updater);
     await subject.controller.start();
 
     expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce();
     expect(subject.controller.state()).toEqual({
       status: "downloading",
-      version: "2026.7.23",
+      version: "0.1.1",
     });
     expect(subject.quit).not.toHaveBeenCalled();
-    fake.emit("update-downloaded", { version: "2026.7.23", downloadedFile: "/private/raw.zip" });
+    fake.emit("update-downloaded", { version: "0.1.1", downloadedFile: "/private/raw.zip" });
     expect(subject.controller.state()).toEqual({
       status: "downloaded",
-      version: "2026.7.23",
+      version: "0.1.1",
     });
     expect(JSON.stringify(subject.controller.state())).not.toContain("raw.zip");
   });
 
-  it.each([
-    "2026.7.22",
-    "2026.7.21",
-    "2026.7.23-beta.1",
-    "2026.0.23",
-    "2026.13.23",
-    "2026.7.9007199254740992",
-    "999.7.23",
-    "10000.7.23",
-    "not-a-version",
-  ])("refuses non-newer or non-stable target %s", async (version) => {
-    const fake = fakeUpdater();
-    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult(version));
-    const subject = activeController(fake.updater);
-    await subject.controller.start();
-    expect(subject.controller.state()).toEqual({ status: "current" });
-    expect(fake.updater.downloadUpdate).not.toHaveBeenCalled();
-  });
+  it.each(["0.1.0", "0.0.9", "0.1.1-beta.1", "0.01.1", "0.1.9007199254740992", "not-a-version"])(
+    "refuses non-newer or non-stable target %s",
+    async (version) => {
+      const fake = fakeUpdater();
+      vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult(version));
+      const subject = activeController(fake.updater);
+      await subject.controller.start();
+      expect(subject.controller.state()).toEqual({ status: "current" });
+      expect(fake.updater.downloadUpdate).not.toHaveBeenCalled();
+    },
+  );
 
   it("clears a failed candidate when the updater reports a newer version unavailable", async () => {
     const fake = fakeUpdater();
     vi.mocked(fake.updater.checkForUpdates)
-      .mockResolvedValueOnce(updateResult("2026.7.23"))
-      .mockResolvedValueOnce(updateResult("2026.7.24", false));
+      .mockResolvedValueOnce(updateResult("0.1.1"))
+      .mockResolvedValueOnce(updateResult("0.1.2", false));
     vi.mocked(fake.updater.downloadUpdate).mockRejectedValueOnce(
       new Error("synthetic download failure"),
     );
@@ -200,19 +193,19 @@ describe("desktop update controller", () => {
 
     expect(subject.controller.state()).toEqual({ status: "current" });
     expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce();
-    fake.emit("update-downloaded", { version: "2026.7.23" });
+    fake.emit("update-downloaded", { version: "0.1.1" });
     expect(subject.controller.state()).toEqual({ status: "current" });
   });
 
   it("fails closed on a mismatched downloaded event and contains updater diagnostics", async () => {
     const fake = fakeUpdater();
-    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("2026.7.23"));
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.1"));
     const states: unknown[] = [];
     const subject = activeController(fake.updater);
     subject.controller.subscribe((state) => states.push(state));
     await subject.controller.start();
     fake.emit("update-downloaded", {
-      version: "2026.7.24",
+      version: "0.1.2",
       downloadedFile: "/Users/athlete/private/update.zip",
     });
     fake.emit("error", new Error("Authorization: secret"));
@@ -224,18 +217,18 @@ describe("desktop update controller", () => {
 
   it("requests an explicit quit only after download and installs once after a successful drain", async () => {
     const fake = fakeUpdater();
-    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("2026.7.23"));
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.1"));
     const subject = activeController(fake.updater);
     await subject.controller.start();
 
     expect(subject.controller.restart()).toEqual({
       status: "downloading",
-      version: "2026.7.23",
+      version: "0.1.1",
     });
-    fake.emit("update-downloaded", { version: "2026.7.23" });
+    fake.emit("update-downloaded", { version: "0.1.1" });
     expect(subject.controller.restart()).toEqual({
       status: "installing",
-      version: "2026.7.23",
+      version: "0.1.1",
     });
     subject.controller.restart();
     expect(subject.quit).toHaveBeenCalledOnce();

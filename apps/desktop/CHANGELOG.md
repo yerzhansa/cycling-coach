@@ -1,5 +1,11 @@
 # @enduragent/desktop
 
+## 0.1.0
+
+### Minor Changes
+
+- Start the independent desktop SemVer sequence and bind packaged application identity, update metadata, signed artifacts, and native update acceptance to that version.
+
 ## 0.0.3
 
 ### Patch Changes

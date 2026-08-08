@@ -7,7 +7,7 @@ import { parse, stringify } from "yaml";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const canonicalRepositoryRoot = resolve(scriptDirectory, "../../..");
-const stableCalVerPattern = /^([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)$/u;
+const stableSemVerPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const builderCertificateClassPrefixes = [
   "Developer ID Application:",
   "Developer ID Installer:",
@@ -212,13 +212,13 @@ async function replaceMetadataAtomically(metadataPath, metadata) {
   }
 }
 
-export function requireStableCalVer(value) {
-  if (typeof value !== "string" || value.length > 32 || !stableCalVerPattern.test(value)) {
-    throw new TypeError("release version must be a stable CalVer");
+export function requireStableSemVer(value) {
+  if (typeof value !== "string" || value.length > 32 || !stableSemVerPattern.test(value)) {
+    throw new TypeError("desktop release version must be stable SemVer");
   }
-  const patch = Number(value.split(".")[2]);
-  if (!Number.isSafeInteger(patch)) {
-    throw new TypeError("release version must be a stable CalVer");
+  const parts = value.split(".").map(Number);
+  if (parts.some((part) => !Number.isSafeInteger(part))) {
+    throw new TypeError("desktop release version must be stable SemVer");
   }
   return value;
 }
@@ -330,27 +330,31 @@ export function requireMacosBaselineApplication(value) {
   return value;
 }
 
-export async function readCyclingCoachVersion(options = {}) {
+export async function readDesktopVersion(options = {}) {
   const repositoryRoot = options.repositoryRoot ?? canonicalRepositoryRoot;
   if (!isAbsolute(repositoryRoot)) {
     throw new TypeError("repository root must be absolute");
   }
+  const desktopRoot = options.desktopRoot ?? join(repositoryRoot, "apps/desktop");
+  if (!isAbsolute(desktopRoot)) {
+    throw new TypeError("desktop root must be absolute");
+  }
   const read = options.readFile ?? readFile;
-  const manifestPath = join(repositoryRoot, "packages/cycling-coach/package.json");
+  const manifestPath = join(desktopRoot, "package.json");
   let manifest;
   try {
     manifest = JSON.parse(await read(manifestPath, "utf8"));
   } catch {
-    throw new TypeError("cycling-coach release manifest is invalid");
+    throw new TypeError("desktop release manifest is invalid");
   }
   if (!exactObject(manifest) || !Object.hasOwn(manifest, "version")) {
-    throw new TypeError("cycling-coach release manifest is invalid");
+    throw new TypeError("desktop release manifest is invalid");
   }
-  return requireStableCalVer(manifest.version);
+  return requireStableSemVer(manifest.version);
 }
 
 export function releaseArtifactNames(version) {
-  const stableVersion = requireStableCalVer(version);
+  const stableVersion = requireStableSemVer(version);
   const base = `Enduragent-${stableVersion}-arm64`;
   return Object.freeze({
     dmg: `${base}.dmg`,
@@ -366,8 +370,9 @@ async function createMacosReleasePlanCore(input, dependencies = {}) {
   if (!isAbsolute(desktopRoot)) {
     throw new TypeError("desktop root must be absolute");
   }
-  const version = await readCyclingCoachVersion({
+  const version = await readDesktopVersion({
     repositoryRoot,
+    desktopRoot,
     readFile: dependencies.readFile,
   });
   const feedUrl = requireGenericFeedUrl(input.feedUrl);

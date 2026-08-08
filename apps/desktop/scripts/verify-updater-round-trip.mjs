@@ -17,7 +17,7 @@ import { PROTOCOL_VERSION } from "@enduragent/coach-contract";
 import {
   DESKTOP_UPDATER_CACHE_DIRECTORY,
   requireGenericFeedUrl,
-  requireStableCalVer,
+  requireStableSemVer,
 } from "./macos-release-plan.mjs";
 import {
   inspectMacosReleaseApplication,
@@ -73,7 +73,7 @@ function exactKeys(value, expected) {
   );
 }
 
-function olderStableCalVer(left, right) {
+function olderStableSemVer(left, right) {
   const leftParts = left.split(".").map(Number);
   const rightParts = right.split(".").map(Number);
   for (const [index, part] of leftParts.entries()) {
@@ -119,12 +119,12 @@ export function requireMacosUpdaterRoundTripInput(input, context = {}) {
   let baselineVersion;
   let candidateVersion;
   try {
-    baselineVersion = requireStableCalVer(input.baselineVersion);
-    candidateVersion = requireStableCalVer(input.candidateVersion);
+    baselineVersion = requireStableSemVer(input.baselineVersion);
+    candidateVersion = requireStableSemVer(input.candidateVersion);
   } catch {
     fail("round-trip versions are invalid");
   }
-  if (!olderStableCalVer(baselineVersion, candidateVersion)) {
+  if (!olderStableSemVer(baselineVersion, candidateVersion)) {
     fail("round-trip candidate must be newer than baseline");
   }
   const paths = {
@@ -1013,14 +1013,14 @@ export function createMacosUpdaterRoundTripEvidence(input) {
   let baselineVersion;
   let candidateVersion;
   try {
-    baselineVersion = requireStableCalVer(input?.baselineVersion);
-    candidateVersion = requireStableCalVer(input?.candidateVersion);
+    baselineVersion = requireStableSemVer(input?.baselineVersion);
+    candidateVersion = requireStableSemVer(input?.candidateVersion);
   } catch {
     fail("round-trip evidence is invalid");
   }
   if (
     !exactObject(input) ||
-    !olderStableCalVer(baselineVersion, candidateVersion) ||
+    !olderStableSemVer(baselineVersion, candidateVersion) ||
     !Number.isSafeInteger(input.initialPid) ||
     input.initialPid < 1 ||
     !Number.isSafeInteger(input.relaunchedPid) ||

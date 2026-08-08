@@ -6,7 +6,10 @@ on:
       tag:
         required: true
         type: string
-      version:
+      npm_version:
+        required: true
+        type: string
+      desktop_version:
         required: true
         type: string
       commit:
@@ -83,7 +86,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_MODE: ${{ inputs.mode }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
         run: |
           set -euo pipefail
@@ -91,7 +95,8 @@ jobs:
           pnpm desktop-release:transaction baseline \
             --directory "$RUNNER_TEMP/desktop-baseline" \
             --mode "$RELEASE_MODE" \
-            --candidate-version "$RELEASE_VERSION" \
+            --candidate-tag "$RELEASE_TAG" \
+            --candidate-version "$DESKTOP_VERSION" \
             --baseline-tag "$RELEASE_BASELINE_TAG" \
             --github-output "$GITHUB_OUTPUT"
           if [ "$RELEASE_MODE" = 'steady' ]; then
@@ -120,7 +125,7 @@ jobs:
           ENDURAGENT_DEVELOPER_ID_IDENTITY: ${{ vars.ENDURAGENT_DEVELOPER_ID_IDENTITY }}
           ENDURAGENT_DESKTOP_UPDATE_URL: https://github.com/yerzhansa/enduragent/releases/latest/download/
           ENDURAGENT_MACOS_BASELINE_APP: ${{ steps.baseline.outputs.baseline_app }}
-          ENDURAGENT_MACOS_GENESIS_VERSION: ${{ inputs.version }}
+          ENDURAGENT_MACOS_GENESIS_VERSION: ${{ inputs.desktop_version }}
           APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -164,7 +169,8 @@ jobs:
       - name: Seal digest-bound release manifest
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          NPM_VERSION: ${{ inputs.npm_version }}
+          DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
           RELEASE_MODE: ${{ inputs.mode }}
@@ -184,9 +190,10 @@ jobs:
           BASELINE_CDHASH: ${{ steps.baseline.outputs.baseline_cdhash }}
         run: |
           pnpm desktop-release:transaction seal \
-            --directory "apps/desktop/dist/release-envelope-$RELEASE_VERSION-mac-arm64" \
+            --directory "apps/desktop/dist/release-envelope-$DESKTOP_VERSION-mac-arm64" \
             --tag "$RELEASE_TAG" \
-            --version "$RELEASE_VERSION" \
+            --npm-version "$NPM_VERSION" \
+            --desktop-version "$DESKTOP_VERSION" \
             --commit "$RELEASE_COMMIT" \
             --draft-id "$RELEASE_DRAFT_ID" \
             --mode "$RELEASE_MODE" \
@@ -209,7 +216,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: apps/desktop/dist/release-envelope-${{ inputs.version }}-mac-arm64/
+          path: apps/desktop/dist/release-envelope-${{ inputs.desktop_version }}-mac-arm64/
           if-no-files-found: error
           compression-level: 0
           retention-days: 90
@@ -262,13 +269,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_MODE: ${{ inputs.mode }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
         run: |
           pnpm desktop-release:transaction baseline \
             --directory "$RUNNER_TEMP/independent-baseline" \
             --mode "$RELEASE_MODE" \
-            --candidate-version "$RELEASE_VERSION" \
+            --candidate-tag "$RELEASE_TAG" \
+            --candidate-version "$DESKTOP_VERSION" \
             --baseline-tag "$RELEASE_BASELINE_TAG" \
             --github-output "$GITHUB_OUTPUT"
           if [ "$RELEASE_MODE" = 'steady' ]; then
@@ -310,7 +319,8 @@ jobs:
       - name: Independently verify signed updater envelope
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          NPM_VERSION: ${{ inputs.npm_version }}
+          DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
           RELEASE_MODE: ${{ inputs.mode }}
@@ -334,7 +344,8 @@ jobs:
           pnpm desktop-release:transaction verify \
             --directory "$RUNNER_TEMP/desktop-release" \
             --tag "$RELEASE_TAG" \
-            --version "$RELEASE_VERSION" \
+            --npm-version "$NPM_VERSION" \
+            --desktop-version "$DESKTOP_VERSION" \
             --commit "$RELEASE_COMMIT" \
             --draft-id "$RELEASE_DRAFT_ID" \
             --mode "$RELEASE_MODE" \
@@ -352,11 +363,11 @@ jobs:
             --baseline-zip-sha256 "$BASELINE_ZIP_SHA256" \
             --baseline-signing-identity "$BASELINE_SIGNING_IDENTITY" \
             --baseline-cdhash "$BASELINE_CDHASH"
-          hdiutil verify "$RUNNER_TEMP/desktop-release/Enduragent-$RELEASE_VERSION-arm64.dmg"
+          hdiutil verify "$RUNNER_TEMP/desktop-release/Enduragent-$DESKTOP_VERSION-arm64.dmg"
           spctl --assess --type open --context context:primary-signature --verbose \
-            "$RUNNER_TEMP/desktop-release/Enduragent-$RELEASE_VERSION-arm64.dmg"
+            "$RUNNER_TEMP/desktop-release/Enduragent-$DESKTOP_VERSION-arm64.dmg"
           mkdir "$RUNNER_TEMP/desktop-release-unpacked"
-          ditto -x -k "$RUNNER_TEMP/desktop-release/Enduragent-$RELEASE_VERSION-arm64.zip" \
+          ditto -x -k "$RUNNER_TEMP/desktop-release/Enduragent-$DESKTOP_VERSION-arm64.zip" \
             "$RUNNER_TEMP/desktop-release-unpacked"
           INDEPENDENT_EVIDENCE=$(codesign --display --verbose=4 \
             "$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app" 2>&1)
@@ -394,7 +405,7 @@ jobs:
           mkdir "$RUNNER_TEMP/desktop-release-dmg"
           hdiutil attach -readonly -nobrowse \
             -mountpoint "$RUNNER_TEMP/desktop-release-dmg" \
-            "$RUNNER_TEMP/desktop-release/Enduragent-$RELEASE_VERSION-arm64.dmg"
+            "$RUNNER_TEMP/desktop-release/Enduragent-$DESKTOP_VERSION-arm64.dmg"
           trap 'hdiutil detach "$RUNNER_TEMP/desktop-release-dmg"' EXIT
           codesign --verify --deep --strict --verbose=2 \
             "$RUNNER_TEMP/desktop-release-dmg/Enduragent.app"
@@ -595,7 +606,7 @@ jobs:
         env:
           ENDURAGENT_MACOS_UPDATE_ROUNDTRIP_MODE: steady
           BASELINE_VERSION: ${{ needs.sign-macos.outputs.baseline_version }}
-          CANDIDATE_VERSION: ${{ inputs.version }}
+          CANDIDATE_VERSION: ${{ inputs.desktop_version }}
         run: |
           set -euo pipefail
           CANDIDATE_ENVELOPE="$RUNNER_TEMP/desktop-public-envelope"

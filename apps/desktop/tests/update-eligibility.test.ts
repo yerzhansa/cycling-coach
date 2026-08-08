@@ -11,15 +11,15 @@ function eligibility(
     platform: "darwin",
     securitySmokeMode: false,
     appPath,
-    currentVersion: "2026.7.23",
-    readPackageJson: () => JSON.stringify({ version: "2026.7.23", enduragentDesktopRelease: true }),
+    currentVersion: "0.1.0",
+    readPackageJson: () => JSON.stringify({ version: "0.1.0", enduragentDesktopRelease: true }),
     ...overrides,
   });
 }
 
 describe("desktop update release eligibility", () => {
   it("accepts only the marked packaged mac release with its exact stable version", () => {
-    const readPackageJson = vi.fn(() => '{"version":"2026.7.23","enduragentDesktopRelease":true}');
+    const readPackageJson = vi.fn(() => '{"version":"0.1.0","enduragentDesktopRelease":true}');
     expect(eligibility({ readPackageJson })).toBe(true);
     expect(readPackageJson).toHaveBeenCalledWith(`${appPath}/package.json`);
   });
@@ -38,42 +38,42 @@ describe("desktop update release eligibility", () => {
 
   it.each([
     ["ordinary package", JSON.stringify({ version: "0.0.1" }), "0.0.1"],
-    ["unmarked stable package", JSON.stringify({ version: "2026.7.23" }), "2026.7.23"],
+    ["unmarked stable package", JSON.stringify({ version: "0.1.0" }), "0.1.0"],
     [
       "ordinary package with false marker",
-      JSON.stringify({ version: "2026.7.23", enduragentDesktopRelease: false }),
-      "2026.7.23",
+      JSON.stringify({ version: "0.1.0", enduragentDesktopRelease: false }),
+      "0.1.0",
     ],
     [
       "nested marker",
       JSON.stringify({
-        version: "2026.7.23",
+        version: "0.1.0",
         build: { enduragentDesktopRelease: true },
       }),
-      "2026.7.23",
+      "0.1.0",
     ],
     [
       "mismatched version",
-      JSON.stringify({ version: "2026.7.24", enduragentDesktopRelease: true }),
-      "2026.7.23",
+      JSON.stringify({ version: "0.1.1", enduragentDesktopRelease: true }),
+      "0.1.0",
     ],
     [
-      "impossible month",
-      JSON.stringify({ version: "2026.13.1", enduragentDesktopRelease: true }),
-      "2026.13.1",
+      "leading-zero minor",
+      JSON.stringify({ version: "0.01.0", enduragentDesktopRelease: true }),
+      "0.01.0",
     ],
     [
       "unsafe patch",
       JSON.stringify({
-        version: "2026.7.9007199254740992",
+        version: "0.1.9007199254740992",
         enduragentDesktopRelease: true,
       }),
-      "2026.7.9007199254740992",
+      "0.1.9007199254740992",
     ],
     [
-      "invalid year",
-      JSON.stringify({ version: "26.7.23", enduragentDesktopRelease: true }),
-      "26.7.23",
+      "prerelease",
+      JSON.stringify({ version: "0.1.0-beta.1", enduragentDesktopRelease: true }),
+      "0.1.0-beta.1",
     ],
   ])("rejects %s", (_case, raw, currentVersion) => {
     expect(eligibility({ currentVersion, readPackageJson: () => raw })).toBe(false);

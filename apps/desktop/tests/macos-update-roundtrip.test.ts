@@ -11,8 +11,8 @@ import {
 } from "../scripts/verify-updater-round-trip.mjs";
 import type { VerifiedMacosReleaseApplication } from "../scripts/verify-macos-release.mjs";
 
-const baselineVersion = "2026.8.7";
-const candidateVersion = "2026.8.8";
+const baselineVersion = "0.1.0";
+const candidateVersion = "0.1.1";
 
 const input: MacosUpdaterRoundTripInput = {
   baselineVersion,
@@ -106,9 +106,9 @@ describe("macOS updater round-trip input", () => {
 
   it.each([
     { baselineVersion: candidateVersion },
-    { baselineVersion: "2026.9.1" },
-    { candidateVersion: "v2026.8.8" },
-    { candidateVersion: "2026.08.8" },
+    { baselineVersion: "0.2.0" },
+    { candidateVersion: "v0.1.1" },
+    { candidateVersion: "0.01.1" },
   ])("rejects a non-increasing or non-canonical version pair", (patch) => {
     expect(() =>
       requireMacosUpdaterRoundTripInput(
@@ -157,7 +157,7 @@ describe("macOS updater identity continuity", () => {
     () => ({ candidate: identity(candidateVersion, "a".repeat(64)) }),
     () => ({ installedBaseline: identity(baselineVersion, "d".repeat(64)) }),
     () => ({ relaunched: identity(candidateVersion, "d".repeat(64)) }),
-    () => ({ candidate: identity("2026.8.9", "b".repeat(64)) }),
+    () => ({ candidate: identity("0.1.2", "b".repeat(64)) }),
     () => ({
       candidate: {
         ...identity(candidateVersion, "b".repeat(64)),
