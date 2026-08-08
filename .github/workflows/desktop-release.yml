@@ -33,6 +33,17 @@ on:
       baseline_tag:
         required: true
         type: string
+    secrets:
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
+      APPLE_API_KEY_ID:
+        required: false
+      APPLE_API_ISSUER:
+        required: false
+      APPLE_API_KEY_P8_BASE64:
+        required: false
 permissions:
   actions: read
   contents: read
@@ -78,6 +89,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
       - name: Refuse invalid release mode
         if: ${{ inputs.mode != 'steady' && inputs.mode != 'genesis' }}
         run: exit 1
@@ -133,6 +145,12 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          for secret_name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_API_KEY_P8_BASE64; do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "::error::Required desktop signing secret $secret_name is unavailable"
+              exit 1
+            fi
+          done
           printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"
           chmod 600 "$APPLE_API_KEY"
           case "$RELEASE_MODE" in
