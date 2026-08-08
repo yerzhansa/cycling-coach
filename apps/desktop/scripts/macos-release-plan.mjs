@@ -31,7 +31,28 @@ const notarizationCredentialSets = [
     required: ["APPLE_KEYCHAIN_PROFILE"],
   },
 ];
+const safeReleaseArtifactMessagePattern =
+  /^(?:missing|invalid|unreadable|unstable) (?:(?:promoted|verified) )?(?:DMG artifact|ZIP artifact|ZIP blockmap|latest-mac\.yml)$/u;
+const safeReleasePlanMessages = new Set([
+  "release envelope verifier is required",
+  "release envelope cleanup failed",
+  "release envelope cleanup target changed",
+  "release envelope destination is inaccessible",
+  "release envelope destination already exists",
+  "promoted release artifact differs from builder output",
+  "promoted release artifact envelope differs",
+  "release artifact changed during promotion",
+  "release envelope changed during verification",
+]);
 export const DESKTOP_UPDATER_CACHE_DIRECTORY = "@enduragentdesktop-updater";
+
+export function safeMacosReleasePlanMessage(error) {
+  return error instanceof TypeError &&
+    (safeReleasePlanMessages.has(error.message) ||
+      safeReleaseArtifactMessagePattern.test(error.message))
+    ? error.message
+    : undefined;
+}
 
 function exactObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -800,7 +821,8 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
     await main();
   } catch (error) {
     const verification = await import("./verify-macos-release.mjs");
-    const detail = verification.safeMacosReleaseVerificationMessage(error);
+    const detail =
+      verification.safeMacosReleaseVerificationMessage(error) ?? safeMacosReleasePlanMessage(error);
     const suffix = detail === undefined ? "" : `: ${detail}`;
     throw new TypeError(`macOS release build failed at ${activeStage}${suffix}`);
   }

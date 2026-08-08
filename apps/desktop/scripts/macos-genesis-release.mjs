@@ -5,6 +5,7 @@ import {
   notarizeMacosDmg,
   promoteMacosReleaseEnvelope,
   requireNotarizationCredentials,
+  safeMacosReleasePlanMessage,
   sealMacosReleaseMetadata,
 } from "./macos-release-plan.mjs";
 
@@ -103,7 +104,8 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
     await main();
   } catch (error) {
     const verification = await import("./verify-macos-release.mjs");
-    const detail = verification.safeMacosReleaseVerificationMessage(error);
+    const detail =
+      verification.safeMacosReleaseVerificationMessage(error) ?? safeMacosReleasePlanMessage(error);
     const suffix = detail === undefined ? "" : `: ${detail}`;
     throw new TypeError(`macOS genesis release build failed at ${activeStage}${suffix}`);
   }

@@ -28,6 +28,7 @@ import {
   requireMacosBaselineApplication,
   requireNotarizationCredentials,
   runMacosRelease,
+  safeMacosReleasePlanMessage,
   sealMacosReleaseMetadata,
 } from "../scripts/macos-release-plan.mjs";
 import { runMacosGenesisRelease } from "../scripts/macos-genesis-release.mjs";
@@ -167,6 +168,18 @@ async function metadataSealFixture() {
 }
 
 describe("macOS release plan", () => {
+  it("exposes only controlled release-plan failures to the release log", () => {
+    expect(
+      safeMacosReleasePlanMessage(new TypeError("release envelope changed during verification")),
+    ).toBe("release envelope changed during verification");
+    expect(safeMacosReleasePlanMessage(new TypeError("unstable verified DMG artifact"))).toBe(
+      "unstable verified DMG artifact",
+    );
+    expect(
+      safeMacosReleasePlanMessage(new TypeError("must-not-reach-release-logs")),
+    ).toBeUndefined();
+  });
+
   it("uses only the desktop package version and creates the exact sealed overlay", async () => {
     const readVersion = versionReader();
     const plan = await createMacosReleasePlan(
