@@ -9,28 +9,35 @@ import {
   type AppSupervisedEnduragentResult,
 } from "@enduragent/coach/enduragent";
 import { UTILITY_TERMINAL_ACK_TIMEOUT_MS } from "../main/constants.js";
-import { createUtilityTerminalFrame } from "./protocol.js";
+import { createUtilityTerminalFrame, isDesktopAppVersion } from "./protocol.js";
 
 const parentPort = process.parentPort;
 
 type UtilityStartFrame = {
   readonly type: "start";
   readonly homeRoot: string;
+  readonly appVersion: string;
   readonly handoffCapability?: string;
 };
 function startFrame(value: unknown): UtilityStartFrame | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  const optionalCapability = keys.length === 3 && keys[0] === "handoffCapability";
+  const optionalCapability = keys.length === 4 && keys[1] === "handoffCapability";
   if (
     record.type !== "start" ||
     typeof record.homeRoot !== "string" ||
     !isAbsolute(record.homeRoot) ||
-    (!optionalCapability && (keys.length !== 2 || keys[0] !== "homeRoot" || keys[1] !== "type")) ||
+    !isDesktopAppVersion(record.appVersion) ||
+    (!optionalCapability &&
+      (keys.length !== 3 ||
+        keys[0] !== "appVersion" ||
+        keys[1] !== "homeRoot" ||
+        keys[2] !== "type")) ||
     (optionalCapability &&
-      (keys[1] !== "homeRoot" ||
-        keys[2] !== "type" ||
+      (keys[0] !== "appVersion" ||
+        keys[2] !== "homeRoot" ||
+        keys[3] !== "type" ||
         typeof record.handoffCapability !== "string" ||
         !/^[A-Za-z0-9_-]{43}$/.test(record.handoffCapability)))
   ) {
@@ -39,6 +46,7 @@ function startFrame(value: unknown): UtilityStartFrame | undefined {
   return {
     type: "start",
     homeRoot: record.homeRoot,
+    appVersion: record.appVersion,
     ...(optionalCapability ? { handoffCapability: record.handoffCapability as string } : {}),
   };
 }
@@ -147,6 +155,7 @@ async function run(): Promise<void> {
         isTTY: false,
       },
       signal: controller.signal,
+      appVersion: frame.appVersion,
       ...(frame.handoffCapability === undefined
         ? {}
         : { handoffCapability: frame.handoffCapability }),

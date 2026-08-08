@@ -1,5 +1,89 @@
 # @enduragent/core
 
+## 0.1.3
+
+### Patch Changes
+
+- a6f259c: Add resumable incremental activity-history preparation and materialization while retaining the full Reference layer rebuild as an invariant oracle. Internal operator infrastructure; ships nothing to athletes.
+- ec24061: User-facing: Prevent ambiguous duplicate activity streams from producing misleading training analysis.
+- d22fb9a: User-facing: ChatGPT sign-in now finishes promptly after browser approval, shows clear progress, supports cancellation, and can retry coach activation without another login.
+- 8619dc3: Reuse the daemon lifecycle's authoritative store writer during refresh windows instead of attempting a nested writer acquisition, so a fresh athlete home starts normally and Reference sync errors render usefully.
+- 68e2a75: Parameterize per-binary environment variable names (setup/update/managed-deploy
+  knobs derive from the binary name instead of hardcoding one binary's prefix),
+  ship the MIT NOTICE file inside the published npm tarball, and arm the
+  package-dependency lint family with empty kernel package scaffolds.
+- 61a8940: Added desktop PKCE sign-in, daemon-owned OAuth profile storage, and keyless runtime configuration for the ChatGPT subscription provider.
+- 0115dfe: Preserve closed configuration-readiness failures through app-supervised utility termination without retrying terminal configuration errors.
+- b4e5365: Let Desktop start from an existing configuration that omits `data_dir`.
+- 78971cb: Adds boundary-scoped archived conversation reads (list plus a cursor-namespaced page reader) through the durable transcript store, daemon RPC registry, main-process IPC, and the validated preload bridge. Current-conversation hydration is untouched; the archived surface has no composer, retry, or resume path. Protocol version moves to 11 because the wire method set grew.
+- a42fb2c: Fetch bounded release metadata only after an explicit Desktop action, validate it across the preload boundary, and render remote note text without HTML or Markdown interpretation.
+- 2e61329: Add curated and custom model selection, write-only endpoint overrides, explicit provider activation, and retry-safe non-secret Setup drafts.
+- 1977c1b: Added provider-reported OpenRouter costs and aggregate authenticated spend methods for the desktop client.
+- 67369bb: Add an internal append-only transcript writer with a 262,144-byte serialized-record bound and conversation reset boundaries for durable Desktop capture. Renderer history and hydration are not exposed in this slice.
+- 810b29e: Add bounded, cursor-stable transcript pagination for the canonical Desktop conversation across the durable store, daemon RPC, main-process IPC, and validated preload bridge.
+- e932ede: Route the CLI REPL and the Telegram channel through an in-process engine seam
+  (createCoachEngine) that delegates verbatim to the coaching agent. Pure
+  wiring refactor: no behavior change, proven by the replay gate's zero-diff
+  baseline and the untouched channel test suites.
+- 517a34f: Add the Reference layer intervals.icu source with archive-first activity, stream,
+  wellness, sport-setting, and FIT hydration plus deterministic activity revisions.
+  Private infrastructure; ships nothing to athletes.
+- 037a09a: Upgrade the Intervals.icu client to 0.3.1 and keep canonical managed activities separate from the snake_case Reference persistence boundary.
+- 68821e7: Add immutable Reference capture sidecars with replayable endpoint evidence and exact live-fetch ordering. Private infrastructure; ships nothing to athletes.
+- 10c6d16: Add read-only local bundle projection for the Reference layer.
+- 9a7961c: Relocate portable Reference layer and concurrency sources into the kernel,
+  preserving core consumers through compatibility shims and explicit subpaths.
+- 22364df: Adds per-role model routing for the background compaction caller (provider-dependent default lane, LLM_COMPACT_MODEL / llm.compact_model override), restructures compaction calls into a cache-capable system+messages shape with an enlarged pinned instruction block, reserves the sync-triage and dream caller roles, and lands the operator-run compaction quality gate tooling.
+- 0d1ad65: Deterministic replay gate for agent-turn behavior: `pnpm s8a` replays committed
+  mocked-LLM scenarios and asserts prompt hashes, tool-call sequences and arguments,
+  message-array shape, memory and ledger writes, and budget charges against recorded
+  baselines; `pnpm s8a --self-test` proves the gate can fail via a seeded-drift fixture
+  and a determinism probe. Runs offline in CI on every push and PR.
+
+  Pure-infra changeset.
+
+- 118c2a6: Widen the sport identity unions: `SportId` gains `swimming` and `triathlon`; `IntervalsActivityType` gains `Swim`, `OpenWaterSwim`, and `VirtualRun`. Type-level only — no sport declares the new activity types yet and no runtime behavior changes.
+- 89a6522: Migrate managed calendar writes to the Intervals.icu client's canonical camelCase request contract.
+- 0afbcad: User-facing: Local coaching can read historical athlete data from the training store and disclose when it was last synchronized.
+- b25c3c1: Split the cached system prompt into a stable prefix block and a volatile athlete-context block with per-block cache breakpoints on breakpoint-capable routes (direct Anthropic; OpenRouter qwen), add a message-level cache breakpoint on the last message, and stamp a schema version on persisted prompt-lineage session lines with back-compat for unversioned lines.
+- Updated dependencies [8ac6eec]
+- Updated dependencies [4f99951]
+- Updated dependencies [a6f259c]
+- Updated dependencies [ec24061]
+- Updated dependencies [d22fb9a]
+- Updated dependencies [fc9ed36]
+- Updated dependencies [5428c22]
+- Updated dependencies [61a8940]
+- Updated dependencies [78971cb]
+- Updated dependencies [1977c1b]
+- Updated dependencies [2e437f8]
+- Updated dependencies [67369bb]
+- Updated dependencies [810b29e]
+- Updated dependencies [0ab935f]
+- Updated dependencies [42c6efa]
+- Updated dependencies [517a34f]
+- Updated dependencies [c122f29]
+- Updated dependencies [111261c]
+- Updated dependencies [4e996bc]
+- Updated dependencies [66fc866]
+- Updated dependencies [b8a8ef0]
+- Updated dependencies [0b73876]
+- Updated dependencies [00ee9f4]
+- Updated dependencies [e09a645]
+- Updated dependencies [037a09a]
+- Updated dependencies [68821e7]
+- Updated dependencies [10c6d16]
+- Updated dependencies [9a7961c]
+- Updated dependencies [ded6067]
+- Updated dependencies [67174e9]
+- Updated dependencies [aebc383]
+- Updated dependencies [336462d]
+- Updated dependencies [89a6522]
+- Updated dependencies [fd9cd3a]
+  - @enduragent/kernel@0.1.0
+  - @enduragent/coach-contract@0.1.1
+  - @enduragent/engine@0.0.2
+
 ## 0.1.2
 
 ### Patch Changes

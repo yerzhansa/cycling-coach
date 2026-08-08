@@ -95,6 +95,13 @@ import { serializeBoundaryError } from "./daemon/error-boundary.js";
 import { CoachStoreWriterError } from "./runtime.js";
 import { runCoachServe } from "./serve.js";
 
+const ENDURAGENT_APP_VERSION_RE =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+function isEnduragentAppVersion(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 64 && ENDURAGENT_APP_VERSION_RE.test(value);
+}
+
 export interface RunEnduragentInput {
   readonly argv: readonly string[];
   readonly env: Record<string, string | undefined>;
@@ -2109,6 +2116,7 @@ export interface RunAppSupervisedEnduragentInput {
   readonly env: Record<string, string | undefined>;
   readonly terminal: CoachCliTerminal;
   readonly signal: AbortSignal;
+  readonly appVersion: string;
   readonly handoffCapability?: string;
 }
 
@@ -2155,6 +2163,11 @@ export async function runAppSupervisedEnduragent(
   input: RunAppSupervisedEnduragentInput,
   dependencies?: EnduragentDependencies,
 ): Promise<AppSupervisedEnduragentResult> {
+  if (!isEnduragentAppVersion(input.appVersion)) {
+    return {
+      exitCode: renderEnduragentFailure(new TypeError("invalid app version"), input.terminal),
+    };
+  }
   if (
     input.handoffCapability !== undefined &&
     !/^[A-Za-z0-9_-]{43}$/.test(input.handoffCapability)
@@ -2185,7 +2198,7 @@ export async function runAppSupervisedEnduragent(
         signal: input.signal,
       },
       home,
-      appVersion: await resolvedDependencies.readPackageVersion(),
+      appVersion: input.appVersion,
       dependencies: resolvedDependencies,
       reportReadinessFailure: (status) => {
         readinessFailure = status;

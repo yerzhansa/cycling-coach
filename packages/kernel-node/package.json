@@ -1,10 +1,12 @@
 {
   "name": "@enduragent/kernel-node",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "description": "Node host adapter for the pure kernel — node:sqlite / node:fs / WebCrypto drivers behind the kernel's ports (scaffold, no content yet).",
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     "./sqlite": "./dist/sqlite.js",
     "./archive": "./dist/archive/index.js",

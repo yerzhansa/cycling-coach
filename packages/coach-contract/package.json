@@ -1,6 +1,6 @@
 {
   "name": "@enduragent/coach-contract",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Engine/UI contract seam: CoachEngine interface, request/response schemas, TurnEvent union, AthleteState, protocol version, exit codes.",
   "type": "module",
@@ -9,7 +9,9 @@
   "exports": {
     ".": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "license": "MIT",
   "scripts": {
     "build": "tsup",

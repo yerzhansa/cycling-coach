@@ -15,13 +15,14 @@ import {
   UTILITY_FORCE_EXIT_TIMEOUT_MS,
   UTILITY_SPAWN_TIMEOUT_MS,
 } from "./constants.js";
-import type { UtilityTerminalFrame } from "../utility/protocol.js";
+import { isDesktopAppVersion, type UtilityTerminalFrame } from "../utility/protocol.js";
 
 export type { UtilityTerminalFrame } from "../utility/protocol.js";
 
 export type UtilityStartFrame = {
   readonly type: "start";
   readonly homeRoot: string;
+  readonly appVersion: string;
   readonly handoffCapability?: string;
 };
 export type UtilityShutdownFrame = { readonly type: "shutdown" };
@@ -38,16 +39,19 @@ export function isUtilityStartFrame(value: unknown): value is UtilityStartFrame 
   if (
     record.type !== "start" ||
     typeof record.homeRoot !== "string" ||
-    !isAbsolute(record.homeRoot)
+    !isAbsolute(record.homeRoot) ||
+    !isDesktopAppVersion(record.appVersion)
   ) {
     return false;
   }
-  if (keys.length === 2) return keys[0] === "homeRoot" && keys[1] === "type";
+  if (keys.length === 3)
+    return keys[0] === "appVersion" && keys[1] === "homeRoot" && keys[2] === "type";
   return (
-    keys.length === 3 &&
-    keys[0] === "handoffCapability" &&
-    keys[1] === "homeRoot" &&
-    keys[2] === "type" &&
+    keys.length === 4 &&
+    keys[0] === "appVersion" &&
+    keys[1] === "handoffCapability" &&
+    keys[2] === "homeRoot" &&
+    keys[3] === "type" &&
     typeof record.handoffCapability === "string" &&
     /^[A-Za-z0-9_-]{43}$/.test(record.handoffCapability)
   );
@@ -242,12 +246,14 @@ async function terminateUnacknowledgedUtility(
 export async function forkAppSupervisedDaemon(input: {
   readonly utilityEntry: string;
   readonly homeRoot: string;
+  readonly appVersion: string;
   readonly handoffCapability?: string;
   readonly signal?: AbortSignal;
 }): Promise<AppSupervisedChildHandle> {
   const start = {
     type: "start",
     homeRoot: input.homeRoot,
+    appVersion: input.appVersion,
     ...(input.handoffCapability === undefined
       ? {}
       : { handoffCapability: input.handoffCapability }),
@@ -368,6 +374,7 @@ export class DesktopDaemonSupervisor {
         forkAppSupervisedDaemon({
           utilityEntry: this.utilityEntry,
           homeRoot: home.root,
+          appVersion: this.input.appVersion,
           signal: this.input.signal,
           ...(handoffCapability === undefined ? {} : { handoffCapability }),
         }),
