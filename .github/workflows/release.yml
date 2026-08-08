@@ -592,7 +592,7 @@ jobs:
           if [ "$PUBLISHED_NEW" = "false" ]; then
             ALLOW_PRIOR_INVOCATION=true
           fi
-          pnpm desktop-release:transaction -- verify-npm-provenance \
+          pnpm desktop-release:transaction verify-npm-provenance \
             --metadata "$ATTESTATION_FILE" \
             --name "$RELEASE_PACKAGE" \
             --version "$RELEASE_VERSION" \
