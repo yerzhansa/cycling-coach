@@ -669,6 +669,9 @@ export function inspectDesktopReleaseWorkflows(
     "apps/desktop/scripts/macos-genesis-release.mjs",
     "apps/desktop/scripts/macos-release-plan.d.mts",
     "apps/desktop/scripts/macos-release-plan.mjs",
+    "apps/desktop/scripts/verify-macos-release.d.mts",
+    "apps/desktop/scripts/verify-macos-release.mjs",
+    "apps/desktop/tests/macos-release-artifacts.test.ts",
     "apps/desktop/tests/macos-release-plan.test.ts",
     "tools/check-desktop-release-workflow.test.ts",
     "tools/check-desktop-release-workflow.ts",
@@ -677,6 +680,7 @@ export function inspectDesktopReleaseWorkflows(
     "apps/desktop/scripts/macos-genesis-release.mjs",
     "apps/desktop/scripts/macos-release-plan.d.mts",
     "apps/desktop/scripts/macos-release-plan.mjs",
+    "apps/desktop/scripts/verify-macos-release.mjs",
   ];
   const recoveryAllowlistMatch = recoveryToolingRun.match(
     /case "\$changed_path" in\n([\s\S]*?)\n\s+\*\)/u,
