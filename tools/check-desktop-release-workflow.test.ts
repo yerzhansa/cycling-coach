@@ -214,6 +214,38 @@ describe("desktop release workflow policy", () => {
     ).toBe(true);
   });
 
+  it("binds manual recovery tooling to the coordinator and release-only paths", () => {
+    const source = sources();
+    const unboundDispatch = source.release.replace(
+      '-f tooling_commit="$RELEASE_TOOLING_COMMIT" \\\n',
+      "",
+    );
+    const unboundCoordinator = source.desktop.replace(
+      'test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"',
+      "true",
+    );
+    const productOverlay = source.desktop.replace(
+      "              apps/desktop/tests/macos-release-plan.test.ts | \\\n",
+      "              apps/desktop/src/main/index.ts | \\\n",
+    );
+
+    expect(
+      inspect(unboundDispatch, source.desktop).some((issue) =>
+        issue.includes("dispatch, correlate, and await"),
+      ),
+    ).toBe(true);
+    expect(
+      inspect(source.release, unboundCoordinator).some((issue) =>
+        issue.includes("active release coordinator"),
+      ),
+    ).toBe(true);
+    expect(
+      inspect(source.release, productOverlay).some((issue) =>
+        issue.includes("overlay only audited release tooling"),
+      ),
+    ).toBe(true);
+  });
+
   it("uses a byte-deterministic npm alias packer", () => {
     const source = sources();
     expect(source.release).toContain('npm pack "$ALIAS_DIR/extract/package"');

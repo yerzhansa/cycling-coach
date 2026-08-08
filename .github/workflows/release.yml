@@ -696,6 +696,7 @@ jobs:
           NPM_VERSION: ${{ needs.parse-tag.outputs.version }}
           DESKTOP_VERSION: ${{ needs.parse-tag.outputs.desktop_version }}
           RELEASE_COMMIT: ${{ needs.parse-tag.outputs.commit }}
+          RELEASE_TOOLING_COMMIT: ${{ github.sha }}
           RELEASE_DRAFT_ID: ${{ needs.prepare-release-draft.outputs.draft_id }}
           RELEASE_MODE: ${{ needs.parse-tag.outputs.desktop_mode }}
           RELEASE_BODY_SHA256: ${{ needs.prepare-release-draft.outputs.draft_body_sha256 }}
@@ -719,6 +720,7 @@ jobs:
             -f npm_version="$NPM_VERSION" \
             -f desktop_version="$DESKTOP_VERSION" \
             -f commit="$RELEASE_COMMIT" \
+            -f tooling_commit="$RELEASE_TOOLING_COMMIT" \
             -f draft_id="$RELEASE_DRAFT_ID" \
             -f mode="$RELEASE_MODE" \
             -f draft_body_sha256="$RELEASE_BODY_SHA256" \

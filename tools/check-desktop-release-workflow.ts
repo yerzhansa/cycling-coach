@@ -138,6 +138,7 @@ export function inspectDesktopReleaseWorkflows(
     "npm_version",
     "desktop_version",
     "commit",
+    "tooling_commit",
     "draft_id",
     "mode",
     "draft_body_sha256",
@@ -377,6 +378,7 @@ export function inspectDesktopReleaseWorkflows(
       "${{ needs.verify-npm-publication.outputs.npm_integrity }}" ||
     dispatchEnvironment.NPM_ATTESTATION_URL !==
       "${{ needs.verify-npm-publication.outputs.npm_attestation_url }}" ||
+    dispatchEnvironment.RELEASE_TOOLING_COMMIT !== "${{ github.sha }}" ||
     dispatchEnvironment.COORDINATOR_RUN_ID !== "${{ github.run_id }}" ||
     dispatchEnvironment.COORDINATOR_RUN_ATTEMPT !== "${{ github.run_attempt }}"
   ) {
@@ -388,6 +390,7 @@ export function inspectDesktopReleaseWorkflows(
     !dispatchRun.includes("gh workflow run desktop-release.yml \\") ||
     (dispatchRun.match(/--repo "\$GITHUB_REPOSITORY"/gu) ?? []).length !== 3 ||
     !dispatchRun.includes('--ref "$DESKTOP_WORKFLOW_REF"') ||
+    !dispatchRun.includes('-f tooling_commit="$RELEASE_TOOLING_COMMIT"') ||
     !dispatchRun.includes('-f coordinator_run_id="$COORDINATOR_RUN_ID"') ||
     !dispatchRun.includes('-f coordinator_run_attempt="$COORDINATOR_RUN_ATTEMPT"') ||
     !dispatchRun.includes('--arg title "$EXPECTED_TITLE"') ||
@@ -473,7 +476,12 @@ export function inspectDesktopReleaseWorkflows(
     !authorizeRun.includes(".github/workflows/release.yml") ||
     !authorizeRun.includes(".run_attempt") ||
     !authorizeRun.includes(".status") ||
-    !authorizeRun.includes("in_progress")
+    !authorizeRun.includes("in_progress") ||
+    !authorizeRun.includes(".head_sha") ||
+    !authorizeRun.includes('test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"') ||
+    !authorizeRun.includes('if [ "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT" ]') ||
+    !authorizeRun.includes(".head_branch") ||
+    !authorizeRun.includes("workflow_dispatch")
   ) {
     issues.push("desktop signing must bind to its active release coordinator");
   }
@@ -634,7 +642,14 @@ export function inspectDesktopReleaseWorkflows(
     );
   }
   const signingSteps = steps(sign);
+  const recoveryToolingStep = namedStep(sign, "Bind recovery release tooling");
+  const recoveryToolingRun =
+    typeof recoveryToolingStep?.run === "string" ? recoveryToolingStep.run : "";
   const signingStep = namedStep(sign, "Build signed and notarized macOS envelope");
+  const signingCheckoutIndex = signingSteps.findIndex(
+    (step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout@"),
+  );
+  const recoveryToolingIndex = signingSteps.indexOf(recoveryToolingStep ?? {});
   const signingInstallIndex = signingSteps.findIndex(
     (step) => step.run === "pnpm install --frozen-lockfile",
   );
@@ -648,6 +663,54 @@ export function inspectDesktopReleaseWorkflows(
     'printf \'%s\' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"',
   );
   const privateUmask = signingRun.indexOf("umask 077");
+  const expectedRecoveryPaths = [
+    ".github/workflows/desktop-release.yml",
+    ".github/workflows/release.yml",
+    "apps/desktop/scripts/macos-genesis-release.mjs",
+    "apps/desktop/scripts/macos-release-plan.d.mts",
+    "apps/desktop/scripts/macos-release-plan.mjs",
+    "apps/desktop/tests/macos-release-plan.test.ts",
+    "tools/check-desktop-release-workflow.test.ts",
+    "tools/check-desktop-release-workflow.ts",
+  ];
+  const recoveryToolingFiles = [
+    "apps/desktop/scripts/macos-genesis-release.mjs",
+    "apps/desktop/scripts/macos-release-plan.d.mts",
+    "apps/desktop/scripts/macos-release-plan.mjs",
+  ];
+  const recoveryAllowlistMatch = recoveryToolingRun.match(
+    /case "\$changed_path" in\n([\s\S]*?)\n\s+\*\)/u,
+  );
+  const recoveryAllowedPaths = (recoveryAllowlistMatch?.[1] ?? "")
+    .split("|")
+    .map((path) => path.replaceAll("\\", "").replace(/\)\s*;;$/u, "").trim())
+    .filter(Boolean)
+    .sort();
+  if (
+    recoveryToolingIndex <= signingCheckoutIndex ||
+    recoveryToolingIndex >= signingInstallIndex ||
+    !recoveryToolingRun.includes('test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"') ||
+    !recoveryToolingRun.includes(
+      'git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"',
+    ) ||
+    !recoveryToolingRun.includes(
+      'done < <(git diff --name-only "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT")',
+    ) ||
+    !recoveryToolingRun.includes('git restore --source="$RELEASE_TOOLING_COMMIT" --worktree --') ||
+    recoveryAllowedPaths.length !== expectedRecoveryPaths.length ||
+    [...expectedRecoveryPaths]
+      .sort()
+      .some((path, index) => recoveryAllowedPaths[index] !== path) ||
+    recoveryToolingFiles.some(
+      (path) =>
+        (recoveryToolingRun.match(new RegExp(path.replaceAll(".", "\\."), "gu")) ?? []).length !==
+        2,
+    )
+  ) {
+    issues.push(
+      "manual recovery must bind the coordinator commit and overlay only audited release tooling",
+    );
+  }
   if (
     signingInstallIndex === -1 ||
     signingWorkspaceBuildIndex <= signingInstallIndex ||

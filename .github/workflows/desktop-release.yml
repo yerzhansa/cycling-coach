@@ -20,6 +20,10 @@ on:
         description: Exact tagged source commit
         required: true
         type: string
+      tooling_commit:
+        description: Exact coordinator commit supplying audited release-only tooling
+        required: true
+        type: string
       draft_id:
         description: Bound unpublished GitHub Release id
         required: true
@@ -73,15 +77,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           COORDINATOR_RUN_ID: ${{ inputs.coordinator_run_id }}
           COORDINATOR_RUN_ATTEMPT: ${{ inputs.coordinator_run_attempt }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
+          WORKFLOW_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           printf '%s' "$COORDINATOR_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$COORDINATOR_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$RELEASE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
+          printf '%s' "$RELEASE_TOOLING_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
+          test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"
           COORDINATOR=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID")
           test "$(printf '%s' "$COORDINATOR" | jq -r '.path')" = '.github/workflows/release.yml'
           test "$(printf '%s' "$COORDINATOR" | jq -r '.run_attempt')" = "$COORDINATOR_RUN_ATTEMPT"
           test "$(printf '%s' "$COORDINATOR" | jq -r '.status')" = 'in_progress'
+          test "$(printf '%s' "$COORDINATOR" | jq -r '.head_sha')" = "$RELEASE_TOOLING_COMMIT"
           printf '%s' "$COORDINATOR" | jq -er '.event == "push" or .event == "workflow_dispatch"' >/dev/null
+          if [ "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT" ]; then
+            test "$(printf '%s' "$COORDINATOR" | jq -r '.event')" = 'workflow_dispatch'
+            test "$(printf '%s' "$COORDINATOR" | jq -r '.head_branch')" = 'main'
+          fi
 
   sign-macos:
     runs-on: macos-15
@@ -113,6 +128,40 @@ jobs:
           ref: ${{ inputs.commit }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Bind recovery release tooling
+        env:
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
+            exit 0
+          fi
+          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
+          git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              .github/workflows/desktop-release.yml | \
+              .github/workflows/release.yml | \
+              apps/desktop/scripts/macos-genesis-release.mjs | \
+              apps/desktop/scripts/macos-release-plan.d.mts | \
+              apps/desktop/scripts/macos-release-plan.mjs | \
+              apps/desktop/tests/macos-release-plan.test.ts | \
+              tools/check-desktop-release-workflow.test.ts | \
+              tools/check-desktop-release-workflow.ts)
+                ;;
+              *)
+                echo "::error::Recovery tooling commit changes non-release path $changed_path"
+                exit 1
+                ;;
+            esac
+          done < <(git diff --name-only "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT")
+          git restore --source="$RELEASE_TOOLING_COMMIT" --worktree -- \
+            apps/desktop/scripts/macos-genesis-release.mjs \
+            apps/desktop/scripts/macos-release-plan.d.mts \
+            apps/desktop/scripts/macos-release-plan.mjs
+          test "$(git diff --name-only | wc -l | tr -d ' ')" = '3'
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
