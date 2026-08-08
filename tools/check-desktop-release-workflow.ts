@@ -598,7 +598,10 @@ export function inspectDesktopReleaseWorkflows(
     !roundTripNeeds.includes("sign-macos") ||
     !roundTripNeeds.includes("promote-latest") ||
     !roundTripRun.includes("desktop-release:transaction public-envelope") ||
-    !roundTripRun.includes("test:macos-update-roundtrip") ||
+    countShellLine(
+      roundTripRun,
+      "pnpm --filter @enduragent/desktop test:macos-update-roundtrip \\",
+    ) !== 1 ||
     !roundTripRun.includes('"$RUNNER_TEMP/desktop-baseline"') ||
     !roundTripRun.includes('"$CANDIDATE_ENVELOPE"') ||
     !roundTripRun.includes('"$EVIDENCE"') ||
