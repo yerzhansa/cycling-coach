@@ -31,6 +31,7 @@ function fakeUpdater() {
     logger: {} as unknown,
     autoDownload: true,
     autoInstallOnAppQuit: true,
+    autoRunAppAfterInstall: false,
     allowPrerelease: true,
     allowDowngrade: true,
     checkForUpdates: vi.fn<DesktopAutoUpdater["checkForUpdates"]>(),
@@ -111,6 +112,7 @@ describe("desktop update controller", () => {
       logger: null,
       autoDownload: false,
       autoInstallOnAppQuit: false,
+      autoRunAppAfterInstall: true,
       allowPrerelease: false,
       allowDowngrade: false,
     });

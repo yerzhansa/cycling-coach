@@ -70,6 +70,30 @@ describe("desktop update renderer controller", () => {
     expect(subject.bridge.checkForUpdates).not.toHaveBeenCalled();
   });
 
+  it("preserves a downloaded update and retries when restart fails", async () => {
+    const downloaded = { status: "downloaded", version: "2026.7.23" } as const;
+    const subject = setupController(downloaded);
+    vi.mocked(subject.bridge.restartToUpdate)
+      .mockRejectedValueOnce(new Error("synthetic restart failure"))
+      .mockResolvedValueOnce({ status: "installing", version: downloaded.version });
+    await subject.controller.start();
+
+    subject.action();
+    await vi.waitFor(() => expect(subject.bridge.restartToUpdate).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(subject.view.render).toHaveBeenLastCalledWith(downloaded));
+    expect(subject.view.render).not.toHaveBeenCalledWith({ status: "failed", stage: "check" });
+
+    subject.action();
+    await vi.waitFor(() => expect(subject.bridge.restartToUpdate).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(subject.view.render).toHaveBeenLastCalledWith({
+        status: "installing",
+        version: downloaded.version,
+      }),
+    );
+    expect(subject.bridge.checkForUpdates).not.toHaveBeenCalled();
+  });
+
   it("contains rejected diagnostics and disposes its subscription and view", async () => {
     const raw = "Authorization: secret https://private.invalid/feed";
     const subject = setupController();
