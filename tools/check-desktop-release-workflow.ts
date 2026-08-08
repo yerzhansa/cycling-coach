@@ -386,11 +386,14 @@ export function inspectDesktopReleaseWorkflows(
   }
   if (
     !dispatchRun.includes("gh workflow run desktop-release.yml \\") ||
+    (dispatchRun.match(/--repo "\$GITHUB_REPOSITORY"/gu) ?? []).length !== 3 ||
     !dispatchRun.includes('--ref "$DESKTOP_WORKFLOW_REF"') ||
     !dispatchRun.includes('-f coordinator_run_id="$COORDINATOR_RUN_ID"') ||
     !dispatchRun.includes('-f coordinator_run_attempt="$COORDINATOR_RUN_ATTEMPT"') ||
     !dispatchRun.includes('--arg title "$EXPECTED_TITLE"') ||
-    !dispatchRun.includes('gh run watch "$DESKTOP_RUN_ID" --interval 15 --exit-status') ||
+    !dispatchRun.includes(
+      'gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status',
+    ) ||
     !dispatchRun.includes('if [ "$COORDINATOR_REF" = "refs/tags/$RELEASE_TAG" ]')
   ) {
     issues.push("desktop coordinator must dispatch, correlate, and await the exact child run");

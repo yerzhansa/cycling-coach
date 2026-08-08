@@ -33,7 +33,9 @@ describe("desktop release workflow policy", () => {
       "DESKTOP_VERSION: ${{ needs.parse-tag.outputs.desktop_version }}",
     );
     expect(source.release).toContain("gh workflow run desktop-release.yml");
-    expect(source.release).toContain('gh run watch "$DESKTOP_RUN_ID" --interval 15 --exit-status');
+    expect(source.release).toContain(
+      'gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status',
+    );
     expect(source.desktop).toContain('--npm-version "$NPM_VERSION"');
     expect(source.desktop).toContain('--desktop-version "$DESKTOP_VERSION"');
   });
@@ -177,9 +179,22 @@ describe("desktop release workflow policy", () => {
     const release = source.release
       .replace('--arg title "$EXPECTED_TITLE"', '--arg title "$RELEASE_TAG"')
       .replace(
-        'gh run watch "$DESKTOP_RUN_ID" --interval 15 --exit-status',
+        'gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status',
         'gh run view "$DESKTOP_RUN_ID"',
       );
+    expect(
+      inspect(release, source.desktop).some((issue) =>
+        issue.includes("dispatch, correlate, and await the exact child run"),
+      ),
+    ).toBe(true);
+  });
+
+  it("requires explicit repository context without a checkout", () => {
+    const source = sources();
+    const release = source.release.replace(
+      '--repo "$GITHUB_REPOSITORY"',
+      '--repo "missing/repository"',
+    );
     expect(
       inspect(release, source.desktop).some((issue) =>
         issue.includes("dispatch, correlate, and await the exact child run"),
