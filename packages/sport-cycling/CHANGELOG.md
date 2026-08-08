@@ -1,5 +1,44 @@
 # @enduragent/sport-cycling
 
+## 0.0.6
+
+### Patch Changes
+
+- e2ef5f7: User-facing: Cycling Coach now waits for you to ask before proposing a workout, while still creating workouts you explicitly request.
+
+  Add cycling's unauthored-envelope capability metadata and disabled autonomous-prescription posture.
+
+- 037a09a: Upgrade the Intervals.icu client to 0.3.1 and keep canonical managed activities separate from the snake_case Reference persistence boundary.
+- 89a6522: Migrate managed calendar writes to the Intervals.icu client's canonical camelCase request contract.
+- 0afbcad: User-facing: Local coaching can read historical athlete data from the training store and disclose when it was last synchronized.
+- Updated dependencies [8ac6eec]
+- Updated dependencies [a6f259c]
+- Updated dependencies [ec24061]
+- Updated dependencies [5428c22]
+- Updated dependencies [61a8940]
+- Updated dependencies [1977c1b]
+- Updated dependencies [67369bb]
+- Updated dependencies [0ab935f]
+- Updated dependencies [42c6efa]
+- Updated dependencies [517a34f]
+- Updated dependencies [c122f29]
+- Updated dependencies [111261c]
+- Updated dependencies [4e996bc]
+- Updated dependencies [66fc866]
+- Updated dependencies [b8a8ef0]
+- Updated dependencies [0b73876]
+- Updated dependencies [00ee9f4]
+- Updated dependencies [037a09a]
+- Updated dependencies [68821e7]
+- Updated dependencies [10c6d16]
+- Updated dependencies [9a7961c]
+- Updated dependencies [ded6067]
+- Updated dependencies [336462d]
+- Updated dependencies [89a6522]
+- Updated dependencies [fd9cd3a]
+  - @enduragent/kernel@0.1.0
+  - @enduragent/engine@0.0.2
+
 ## 0.0.5
 
 ### Patch Changes

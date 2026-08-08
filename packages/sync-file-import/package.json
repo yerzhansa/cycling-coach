@@ -1,10 +1,12 @@
 {
   "name": "@enduragent/sync-file-import",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Private stable file source for the Reference layer.",
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": "./dist/index.js",
     "./manual": "./dist/manual.js",

@@ -1,6 +1,6 @@
 {
   "name": "@enduragent/coach-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Contract-only terminal surface for the enduragent coach.",
   "type": "module",
@@ -9,7 +9,9 @@
   "exports": {
     ".": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=24"
   },

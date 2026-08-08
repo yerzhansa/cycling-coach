@@ -1,5 +1,159 @@
 # cycling-coach
 
+## 2026.8.0
+
+### Minor Changes
+
+- af0582c: User-facing: Added a Claude subscription provider that drives your locally installed Claude Code CLI (bring your own login, no API key).
+
+  The lane runs the user-installed CLI as a model transport under the existing coach loop: one query per generation, tools served over an in-process MCP server, sanitized child env, and a persisted session cursor that falls back to a rebuild from our canonical transcript whenever it drifts. A three-layer kill switch (`ENDURAGENT_CLAUDE_CLI_DISABLED`, `llm.claude_cli.enabled: false`, desktop eligibility) is re-checked every turn, so disabling it takes effect on the next turn without a restart. macOS and Linux only this wave; Windows is unsupported for this lane.
+
+- 83b0275: User-facing: Experimental (off by default): a Codex provider that drives your locally installed, ChatGPT-signed-in codex CLI as the coaching agent. Enable it in config.yaml with llm.provider: codex-agent and llm.codex_agent.enabled: true.
+
+  Config-file only — deliberately absent from the setup wizard, the model catalogue and the desktop onboarding UI, so it can only be reached by editing `config.yaml`. macOS and Linux only; win32 is refused before the enabled check so a Windows user gets the accurate message.
+
+  Architecturally this is agent delegation rather than CLI-as-transport: `turn/start` runs Codex's own agentic loop, the 18 coaching tools are injected over a loopback MCP endpoint, and the coach persona is applied as developer instructions rather than as a system prompt. One coaching turn is one billed call against the subscription regardless of how many model calls Codex makes internally, so every ledger row is stamped notional and excluded from the spending cap.
+
+  Safety posture: the child environment is allowlist-built from an empty object rather than filtered from the parent, `account/read` must report a ChatGPT account on every turn-carrying child and not just the cached readiness census, the model provider and endpoint are pinned, and the user's own `~/.codex/config.toml` MCP servers, plugins, hooks, shell execution, multi-agent, browser use and web search are all disabled for the duration of a coaching turn. Verification reads the effective config back from the spawned child and refuses rather than degrading. No CLI binary is bundled and no native module is added — the user installs `codex` and signs in themselves.
+
+### Patch Changes
+
+- 8ac6eec: Record one store-level owner fingerprint from the resolved intervals.icu athlete identifier at sync time, compare it read-only before credential saves, allow saves when the comparison is unavailable, and keep credential rotation independent from account ownership.
+- c0cf65b: User-facing: Desktop activity analysis now uses a bounded local cache, preserves last-good results when refreshes fail, and keeps provider activity IDs out of the interface.
+- c01e27a: Apply timezone, daily reset, idle reset, history budget, and future archive-retention changes through one redacted runtime lifecycle.
+- 4f99951: Add strict shared contracts for bounded activity analysis results.
+- e2ef5f7: User-facing: Cycling Coach now waits for you to ask before proposing a workout, while still creating workouts you explicitly request.
+
+  Add cycling's unauthored-envelope capability metadata and disabled autonomous-prescription posture.
+
+- ec24061: User-facing: Prevent ambiguous duplicate activity streams from producing misleading training analysis.
+- 86a1697: Add Desktop in-app update checks and an explicit restart action when a new Desktop release is ready.
+- 2109fbf: Read coaching activity details and streams directly from the canonical store, report import publication availability separately from durable ingestion, and bump the daemon protocol for the breaking import-result contract.
+- d22fb9a: User-facing: ChatGPT sign-in now finishes promptly after browser approval, shows clear progress, supports cancellation, and can retry coach activation without another login.
+- 9c60b50: Feed verified current Power Progress snapshots into existing local metrics without making duplicate provider requests.
+- 1788b65: Refresh Power Progress curve evidence in the normal desktop sync window without blocking base training-data updates.
+- 68e2a75: Parameterize per-binary environment variable names (setup/update/managed-deploy
+  knobs derive from the binary name instead of hardcoding one binary's prefix),
+  ship the MIT NOTICE file inside the published npm tarball, and arm the
+  package-dependency lint family with empty kernel package scaffolds.
+- 760a670: Add the desktop chat-first surface and persisted-state training panels.
+- cf0cca5: Count cached input tokens in the Desktop ChatGPT subscription spend total and cap warnings.
+- 381ad9f: Refuse Desktop ChatGPT sign-in instead of opening an unusable browser tab when another local sign-in flow holds the callback port.
+- 61a8940: Added desktop PKCE sign-in, daemon-owned OAuth profile storage, and keyless runtime configuration for the ChatGPT subscription provider.
+- e4543b7: Render Desktop coach prose in the native system font, dropping the bundled Source Serif 4 webfont and its NOTICE entry.
+- 0115dfe: Preserve closed configuration-readiness failures through app-supervised utility termination without retrying terminal configuration errors.
+- b4e5365: Let Desktop start from an existing configuration that omits `data_dir`.
+- 0047eb8: Isolate local Desktop packages and packaged security checks from the production macOS application identity so development verification cannot alter production Keychain access state.
+- 352bfa5: Add an authenticated packaged-app self-test with a Vitest-free runner, dual-location SHA-256 resource verification, and stable machine-readable exits.
+- 78971cb: Adds boundary-scoped archived conversation reads (list plus a cursor-namespaced page reader) through the durable transcript store, daemon RPC registry, main-process IPC, and the validated preload bridge. Current-conversation hydration is untouched; the archived surface has no composer, retry, or resume path. Protocol version moves to 11 because the wire method set grew.
+- a42fb2c: Fetch bounded release metadata only after an explicit Desktop action, validate it across the preload boundary, and render remote note text without HTML or Markdown interpretation.
+- 2e61329: Add curated and custom model selection, write-only endpoint overrides, explicit provider activation, and retry-safe non-secret Setup drafts.
+- 1977c1b: Added provider-reported OpenRouter costs and aggregate authenticated spend methods for the desktop client.
+- 6cf11bd: Report the latest successful sync time separately from when training data last changed in Desktop.
+- 2e437f8: User-facing: Added an optional Desktop-hosted Telegram bot with private pairing, local-only availability, and separate Telegram chat history.
+
+  Added main-only clipboard capture, a strict redacted mutation contract, a coherent encrypted bot profile, visible replacement controls, background startup, transient sleep/resume handling, and generation-drained token replacement for Desktop Telegram setup.
+
+- 01d652e: Expose credential and environment-ownership state without secrets, and return fixed account-guard refusals across the desktop runtime protocol.
+- 810b29e: Add bounded, cursor-stable transcript pagination for the canonical Desktop conversation across the durable store, daemon RPC, main-process IPC, and validated preload bridge.
+- 153f1c4: User-facing: Added the Cobalt palette to desktop appearance settings, with matching light and dark colors.
+  User-facing: Refreshed the desktop app's visual design — DM Sans typography, softer surfaces with a subtle paper grain, consistent button and input shapes, and quieter scrollbars.
+
+  The desktop renderer now uses shared geometry, elevation and typography tokens in
+  `theme/tokens.css`, plus a CSS Modules primitive sheet (`theme/surface.module.css`) that every
+  view composes for cards, controls, fields, chips and list rows. Filled controls invert to `--ink`
+  rather than an accent hue, so the chrome stays monochrome across all thirteen palettes.
+
+- e63b351: User-facing: Ride review now includes accessible power and heart-rate distribution charts with exact tables, plus a coverage-qualified server power and heart-rate response view.
+- 153f1c4: User-facing: Setup no longer asks whether you have had a bone stress injury — the clinician-clearance question now appears only when you are managing or returning from an injury.
+
+  The flag was collected, validated and stored but never read: nothing fed it into the coach
+  prompt or any ride-volume logic, so its "affects how quickly we build volume" subtitle
+  described behaviour that did not exist. The cycling-only setup now asks only about an injury
+  the athlete is currently managing or returning from.
+
+  The clearance question now keys off `injury_status` alone. It still requires an answer from
+  anyone managing or returning from an injury; it no longer appears for a historical injury with
+  no current return-to-training context. The pre-release store schema no longer carries the unused
+  field. Protocol 11 retains it only as an ignored compatibility value, with the new client always
+  sending `false`. The footer note names the one question that is outstanding.
+
+- cc259c7: Add the Electron launch surface, supervised local service connection, protocol-2 operational RPC, and renderer security boundary.
+- 5d035ce: User-facing: The coach is now also published as enduragent — npm i -g enduragent installs the enduragent command, and container images additionally ship as ghcr.io/yerzhansa/enduragent; existing cycling-coach installs keep working unchanged.
+- 0ab935f: Add a trusted canonical-activity resolver and revision key for bounded ride analysis.
+- 2e437f8: User-facing: Desktop now starts with a fresh Enduragent profile and leaves old npm-library data untouched.
+
+  Removed the obsolete automatic home migrator from local coach startup and made first-run Desktop configuration independent of the old npm home.
+
+- 48f6ac2: User-facing: Ride review now shows ordered intervals or laps with available timing, distance, power, and heart-rate metrics, plus five-minute power efforts scoped explicitly to the selected ride.
+- 9f9d8c2: User-facing: Setup now remembers the Claude subscription lane instead of showing Anthropic when you reopen it.
+
+  `credential_configured` was derived from a non-empty `llm.api_key` for every provider except `openai-codex`, so the keyless lanes that never write a key — `claude-cli` and `codex-agent` — were structurally false forever. That nulled the onboarding wizard's active provider, and the Setup draft then fell through to the first entry in the provider catalogue. The runtime check now short-circuits on `isKeylessProvider` and only falls through to the key-length test for providers that actually hold a key. The `openai-codex` branch stays ahead of that short-circuit, so the ChatGPT lane still depends on a stored auth profile rather than reporting itself configured with nothing on disk.
+
+  Populating the active provider exposed a latent assumption in the Settings coach panel: it treated an active provider that is absent from the public model catalogue as an unloadable configuration. `codex-agent` is deliberately absent from the catalogue, so that path became reachable for the first time and would have left those athletes on a dead error screen with no way to switch away. The panel now loads with the provider list intact and no draft selection, and the coach route row reads the active provider off the runtime snapshot instead of the draft, so it no longer reports "Not configured" for a provider that is actually serving turns. An empty catalogue is still a genuine load error.
+
+- f33b088: User-facing: Fixed season review failing with a "Configured model credentials are unavailable" error when using the Claude CLI provider.
+
+  The keyless-provider test was hand-written as a two-arm disjunction in a dozen places, and the season review guard only ever knew about the older keyless lane, so it demanded an API key from every Claude CLI athlete. The predicate now lives once in the contract package as `KEYLESS_LLM_PROVIDERS` / `isKeylessProvider`, is re-exported from the core runtime config for core, coach and desktop consumers, and a source-level assertion keeps the disjunction from being written by hand again.
+
+- 3d434bc: User-facing: Ride review now shows a whole-ride local aerobic drift estimate when power, heart-rate, timing, duration, and coverage checks pass, with clear limitations instead of a good-or-bad judgment.
+- 4d8712a: Add Desktop Settings actions that delete locally saved provider, ChatGPT, and intervals.icu credentials, immediately stop active use, and route back to Setup.
+- fa0f19d: User-facing: Telegram settings now replace expired pairing instructions with the bot's current pairing state.
+
+  Reconcile action feedback against semantic bot, power, channel, and pairing state so successful instructions cannot outlive the state that produced them, while preserving warnings and errors across health polls.
+
+- e09a645: Project verified curve evidence into a bounded Power Progress training contract with independent freshness, stale-last-good failure context, and no raw provider data.
+- 7a16dbc: User-facing: Desktop now compares five key power durations across your latest two 28-day periods, with optional heart-rate and durability context and clear stale-data warnings.
+- 2e437f8: Bind protocol-12 daemon connections to a physical athlete home and give the Desktop renderer a restricted, process-scoped capability instead of the privileged daemon token.
+- aa1d66d: Add immutable local storage for complete Power Progress curve generations and last-good refresh state.
+- 037a09a: Upgrade the Intervals.icu client to 0.3.1 and keep canonical managed activities separate from the snake_case Reference persistence boundary.
+- 359c4ef: User-facing: The desktop app no longer triggers macOS prompts asking for your music library or your Desktop folder.
+
+  Two unrelated causes, both incidental rather than intentional access.
+
+  Chromium registers with the macOS Now Playing / media-key integration on startup, which macOS reports as a media-library access request even though the app has no audio surface at all. `disableChromiumMediaSessionIntegration()` appends `MediaSessionService` and `HardwareMediaKeyHandling` to Chromium's `disable-features`, merging with Electron's own defaults rather than replacing them.
+
+  The ride-file chooser called `showOpenDialog` without a `defaultPath`, so the non-sandboxed `NSOpenPanel` opened at the system default — the Desktop — and the app itself was the accessing process. The chooser now opens at the home root, which is not a protected location. Navigating into Desktop or Documents still asks, which is the correct consent-in-context behaviour.
+
+  Neither the app nor its entitlements ever requested this access; the prompts became visible only because code signing changed the app's privacy identity.
+
+- 6e8d2cf: Classify refresh failures structurally through profile and engine retries, preserve transient retry eligibility, keep partial coach drafts without empty transcript rows, and add a guarded Sign in again action to configured onboarding.
+- 3a079dd: User-facing: Desktop Training now lists recent locally stored cycling rides and opens a keyboard-accessible ride review with date, duration, distance, and the athlete's preferred units.
+- d1e548d: Read intervals.icu credentials live in Reference layer sync so automatic training-data sync picks up a key entered during Desktop onboarding.
+- bc475b8: User-facing: The project's GitHub home moved to https://github.com/yerzhansa/enduragent (formerly cycling-coach); old links redirect.
+- 2d88151: Use one canonical runtime configuration authority for startup, credential replay, and daemon replacement.
+- aebc383: User-facing: Desktop ride reviews can now save FIT or GPX files, and the visible training plan can be saved as a ZIP of ZWO, MRC, ERG, or FIT workouts.
+
+  Keep export credentials, provider identifiers, file paths, and downloaded bytes in trusted processes; enforce bounded downloads and atomically publish private mode-0600 files selected through the native save dialog.
+
+- 153f1c4: User-facing: Setup is now one screen — choose what powers your coach, connect intervals.icu, answer the injury questions, and start coaching, instead of a four-step wizard.
+
+  Setup is rebuilt as a single `Page` holding one bordered card of divider-separated rows: an AI row that behaves like a native popup button, its browser-sign-in and API-key sub-panels, an intervals.icu row that edits in place, an injury-status row, and a clinician-clearance row when the athlete is managing or returning from an injury. A single controller readiness projection gates `finish()` directly. Completion requires an active provider, usable training data, and a complete intake.
+
+  Supporting changes: the credential-draft harvest takes an explicit slot filter so a model-key save can never write the intervals.icu secret; readiness is computed once in the controller and published on the surface; the popup and the two information affordances use Base UI (`Menu`, `Tooltip`) instead of hand-rolled keyboard and focus handling; the whole onboarding surface is Tailwind-only and its CSS module is deleted.
+
+- 336462d: Add atomic request reservations for bounded analytics refreshes.
+- 89a6522: Migrate managed calendar writes to the Intervals.icu client's canonical camelCase request contract.
+- 0afbcad: User-facing: Local coaching can read historical athlete data from the training store and disclose when it was last synchronized.
+- 4ddfb89: Activate progressive chat events inside the Engine while preserving background generation and per-model-call usage accounting. Rendering remains owned by later CLI and desktop consumers.
+- 1fd7ebc: User-facing: Fixed Desktop Telegram turning itself back on after the user chose Turn off.
+
+  Treat the stored power choice as authoritative across status polling, reconciliation, restart recovery, pairing cancellation, and pairing-lease races while preserving the configured bot and paired primary user for a later explicit Turn on.
+
+- 2e437f8: User-facing: Fixed Telegram messages being ignored after a bot restarts following a week of inactivity.
+
+  Persist a timestamped update-ID epoch, upgrade the prior offset schema from its file timestamp, and fail open when persisted deduplication state is not trustworthy.
+
+- 24437a7: User-facing: Telegram setup now explains how to recover when secure token storage or Keychain access is unavailable without changing the current bot.
+
+  Preserve closed secure-storage refusal reasons across the Desktop process boundary, refuse unencrypted token storage, and emit stage-and-reason-only local diagnostics without exposing credential details.
+
+- 2e437f8: User-facing: Restricted raw Telegram diagnostic snapshots to the bot's primary operator.
+
+  Allowed secondary senders can still use normal coaching commands but can no longer load or receive raw Reference snapshots.
+
+- 8b8fae2: Prepare bounded, archive-first Power Progress curve refreshes with strict response validation.
+
 ## 2026.7.28
 
 ### Minor Changes
