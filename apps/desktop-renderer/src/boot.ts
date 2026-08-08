@@ -57,6 +57,10 @@ function focusComposer(): void {
 export function bootRenderer(): Disposer {
   const store = useEnduragentStore;
   store.getState().setOnboardingStartupSettled(false);
+  const onLifecycle = (event: WindowEventMap["enduragent-lifecycle"]): void => {
+    document.documentElement.dataset.rpc = event.detail.status;
+  };
+  window.addEventListener("enduragent-lifecycle", onLifecycle);
 
   const releaseNotesAdapter = createReleaseNotesSettingsAdapter({
     publish: (patch) => store.getState().patchSettings(patch),
@@ -388,6 +392,15 @@ export function bootRenderer(): Disposer {
       .openOnStartup(() => onboarding.open())
       .then(() => store.getState().setOnboardingStartupSettled(true));
   }
+  void clients.getClient().then(
+    () => {
+      document.documentElement.dataset.rpc = "connected";
+    },
+    () => {
+      document.documentElement.dataset.rpc = "failed";
+    },
+  );
+
   let disposed = false;
   const dispose = (): void => {
     if (disposed) return;
@@ -401,6 +414,7 @@ export function bootRenderer(): Disposer {
     store.getState().bindTrainingExportActions(null);
     store.getState().bindOnboardingActions(null);
     disposeRideAnalysisSelection();
+    window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();
     desktopUpdateController.dispose();
