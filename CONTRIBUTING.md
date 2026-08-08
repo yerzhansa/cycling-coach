@@ -1,5 +1,6 @@
 <!-- trademark-lint:skip-file — the "Trademark hygiene" section below documents
 the substitution table and must legitimately name the forbidden tokens. -->
+
 # Contributing
 
 ## Branch Naming
@@ -41,21 +42,22 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 **Types:**
 
-| Type | When |
-|------|------|
-| `feat` | New feature or capability |
-| `fix` | Bug fix |
-| `chore` | Maintenance, deps, config |
-| `docs` | Documentation only |
+| Type       | When                                   |
+| ---------- | -------------------------------------- |
+| `feat`     | New feature or capability              |
+| `fix`      | Bug fix                                |
+| `chore`    | Maintenance, deps, config              |
+| `docs`     | Documentation only                     |
 | `refactor` | Code restructuring, no behavior change |
-| `test` | Adding or updating tests |
-| `perf` | Performance improvement |
-| `ci` | CI/CD changes |
-| `style` | Formatting, no logic change |
+| `test`     | Adding or updating tests               |
+| `perf`     | Performance improvement                |
+| `ci`       | CI/CD changes                          |
+| `style`    | Formatting, no logic change            |
 
 **Scope** is optional — use the module name when helpful: `core`, `telegram`, `soul`, `config`, `tools`, `memory`.
 
 **Examples:**
+
 ```
 feat(core): add rate limit retry with backoff
 fix(soul): prevent coaching tone drift and emoji-only responses
@@ -66,6 +68,7 @@ docs(readme): document the /whatsnew command
 ```
 
 **Rules:**
+
 - Imperative mood: "add X", "fix Y", not "added X" or "fixes Y"
 - Lowercase after the colon
 - One logical change per commit when practical
@@ -83,7 +86,7 @@ docs(readme): document the /whatsnew command
 The Reference submodule (`packages/core/src/reference/`) ports from an MIT-licensed upstream; the full attribution (author, copyright, license text, and source link) lives in [`NOTICE.md`](./NOTICE.md). That upstream was authored against TrainingPeaks vocabulary; this codebase uses [intervals.icu](https://intervals.icu)'s plain-English alternatives throughout. **PRs that introduce the forbidden tokens in Reference source or docs are rejected by the lint.**
 
 | TrainingPeaks (forbidden) | intervals.icu (use this) |
-|---------------------------|--------------------------|
+| ------------------------- | ------------------------ |
 | CTL                       | Fitness                  |
 | ATL                       | Fatigue                  |
 | TSB                       | Form                     |
@@ -139,7 +142,7 @@ The bot enforces a per-user-ID allowlist via `~/.cycling-coach/allowed-senders.j
 
 ## Versioning
 
-Calendar-based for npm-published binaries: stable, SemVer-compatible `YYYY.MONTH.RELEASE-WITHIN-MONTH` (for example, `2026.7.0` is the first release in July UTC, followed by `2026.7.1`; August resets to `2026.8.0`). New releases increment the third component and never use a prerelease suffix. Historical `YYYY.M.P-N` versions remain accepted as release history but their successors use stable `P+1`. Private workspace packages (`@enduragent/*`, stub binaries) use SemVer and are not published. See ADR-0007 and ADR-0009.
+Calendar-based for npm-published binaries: stable, SemVer-compatible UTC calendar dates in `YYYY.M.D` form (for example, 2026-08-08 is `2026.8.8`). The final component is the day of the month, not a release counter, and new releases never use a prerelease suffix. Historical counter-based and suffixed versions remain accepted as release history but are never generated again. If the current UTC date is already occupied or would not be greater than published history, release automation fails closed rather than inventing a suffix or future date. Private workspace packages (`@enduragent/*`, stub binaries) use SemVer and are not published. See ADR-0007 and ADR-0009.
 
 ## Releasing
 
@@ -148,6 +151,7 @@ Changesets-driven and CI-automated. Contributors do **not** create tags or GitHu
 1. **Add a changeset to your PR.** Run `pnpm exec changeset`, pick the affected publishable package(s), describe the change in athlete-readable language. Commit the resulting `.changeset/<slug>.md`. A PR with a user-visible change but no changeset will skip release — this is intentional, not a bug. The required patch/minor/major choice is overridden by the CalVer policy for binary packages.
 
    For user-visible changes, add a `User-facing: <one-sentence description>` line at the top of the changeset body — see `.changeset/README.md` for the convention. The bot's `/whatsnew` command surfaces only those lines to athletes; engineering details, hashes, and infra-only changesets stay in `CHANGELOG.md` for git history but never reach users.
+
 2. **Merge your PR to `main`.** `version-pr.yml` opens (or updates) a bot-managed "Version Packages" PR aggregating all pending changesets.
 3. **Merge the "Version Packages" PR when ready to ship.** It bumps `package.json` + CHANGELOG.md for the listed packages plus their internal dependents (per `updateInternalDependencies: "patch"` in `.changeset/config.json`). On merge, `version-pr.yml` then auto-pushes `<package>@<version>` tags for every **non-private** bumped package.
 4. **`release.yml` fires on the tag.** It builds, runs tests, packs the binary and smoke-installs the tarball, publishes to npm via OIDC trusted publisher (no `NPM_TOKEN`), and auto-creates the GitHub Release with notes extracted from `CHANGELOG.md`.

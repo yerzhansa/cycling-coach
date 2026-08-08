@@ -45,7 +45,7 @@ jobs:
         with:
           # `version` consumes .changeset/*.md, bumps package.json, updates
           # CHANGELOG.md, then bump-binaries-to-calver.ts overrides binary
-          # versions to today's CalVer (and rewrites their CHANGELOG headers
+          # versions to today's UTC YYYY.M.D (and rewrites their CHANGELOG headers
           # to match). All run inside pnpm's shell so `&&` chaining works.
           version: pnpm release-version
           # No `publish:` field — publishing happens in release.yml on tag
