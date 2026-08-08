@@ -297,6 +297,141 @@ describe("training export service", () => {
     ).resolves.toMatchObject({ status: "exported", byteLength: validZipBytes.length });
   });
 
+  it("bounds stalled source, credential, and provider dependencies", async () => {
+    const request = {
+      kind: "activity" as const,
+      canonicalActivityId,
+      format: "fit" as const,
+      destinationPath: "/tmp/ride.fit",
+    };
+    const never = <T>(): Promise<T> => new Promise(() => {});
+    const stalledSource = createTrainingExportService({
+      credentials: credentials(),
+      sources: { resolve: () => never() },
+      requestTimeoutMs: 20,
+      createClient: clientFactory({}),
+    });
+    await expect(stalledSource.export(request)).resolves.toEqual({
+      status: "refused",
+      reason: "timeout",
+    });
+
+    const stalledCredentials = createTrainingExportService({
+      credentials: { read: () => never() },
+      sources: availableSource(),
+      requestTimeoutMs: 20,
+      createClient: clientFactory({}),
+    });
+    await expect(stalledCredentials.export(request)).resolves.toEqual({
+      status: "refused",
+      reason: "timeout",
+    });
+
+    const stalledProvider = createTrainingExportService({
+      credentials: credentials(),
+      sources: availableSource(),
+      requestTimeoutMs: 20,
+      createClient: clientFactory({ downloadFitFile: vi.fn(() => never()) }),
+    });
+    await expect(stalledProvider.export(request)).resolves.toEqual({
+      status: "refused",
+      reason: "timeout",
+    });
+  });
+
+  it.each(["resolves", "rejects"] as const)(
+    "keeps writer-owned bytes intact after timeout, then zeroes them when it %s",
+    async (settlement) => {
+      let writerSignal: AbortSignal | undefined;
+      let retained: Uint8Array | undefined;
+      let settle!: () => void;
+      const pending = new Promise<"failed">((resolve, reject) => {
+        settle = () => {
+          if (settlement === "resolves") resolve("failed");
+          else reject(new Error("private late writer failure"));
+        };
+      });
+      const service = createTrainingExportService({
+        credentials: credentials(),
+        sources: availableSource(),
+        requestTimeoutMs: 20,
+        writer: {
+          write: vi.fn(({ bytes, signal }) => {
+            writerSignal = signal;
+            retained = bytes;
+            return pending;
+          }),
+        },
+        createClient: clientFactory({ downloadFitFile: vi.fn(async () => binary(validFitBytes)) }),
+      });
+
+      await expect(
+        service.export({
+          kind: "activity",
+          canonicalActivityId,
+          format: "fit",
+          destinationPath: "/tmp/ride.fit",
+        }),
+      ).resolves.toEqual({ status: "refused", reason: "commit-uncertain" });
+      expect(writerSignal?.aborted).toBe(true);
+      expect(Array.from(retained!)).toEqual(validFitBytes);
+
+      settle();
+      await vi.waitFor(() => {
+        expect(Array.from(retained!)).toEqual(validFitBytes.map(() => 0));
+      });
+    },
+  );
+
+  it("reports timeout when a signal-aware writer confirms it stopped before commit", async () => {
+    const service = createTrainingExportService({
+      credentials: credentials(),
+      sources: availableSource(),
+      requestTimeoutMs: 20,
+      writer: {
+        write: vi.fn(
+          ({ signal }) =>
+            new Promise<"failed">((resolve) => {
+              signal!.addEventListener("abort", () => resolve("failed"), { once: true });
+            }),
+        ),
+      },
+      createClient: clientFactory({ downloadFitFile: vi.fn(async () => binary(validFitBytes)) }),
+    });
+
+    await expect(
+      service.export({
+        kind: "activity",
+        canonicalActivityId,
+        format: "fit",
+        destinationPath: "/tmp/ride.fit",
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "timeout" });
+  });
+
+  it("propagates caller cancellation before writing starts", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("caller detached");
+    const service = createTrainingExportService({
+      credentials: credentials(),
+      sources: { resolve: () => new Promise(() => {}) },
+      requestTimeoutMs: 1_000,
+      createClient: clientFactory({}),
+    });
+    const result = service.export(
+      {
+        kind: "activity",
+        canonicalActivityId,
+        format: "fit",
+        destinationPath: "/tmp/ride.fit",
+      },
+      controller.signal,
+    );
+
+    controller.abort(cancellation);
+    await expect(result).rejects.toBe(cancellation);
+  });
+
   it("rejects empty, oversized, or unexpected content without exposing metadata", async () => {
     const request = {
       kind: "workout-archive" as const,
@@ -455,5 +590,34 @@ describe("durable training export writer", () => {
       "uncertain",
     );
     expect(await readFile(destinationPath)).toEqual(Buffer.from([2]));
+  });
+
+  it("does not rename when cancellation is observed before the commit point", async () => {
+    const controller = new AbortController();
+    const renameFile = vi.fn(async () => {});
+    const handle = {
+      writeFile: vi.fn(async () => {
+        controller.abort(new Error("caller detached"));
+      }),
+      chmod: vi.fn(async () => {}),
+      sync: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const writer = createDurableTrainingExportWriter({
+      createTemporaryId: () => "cancelled",
+      openFile: vi.fn(async () => handle) as never,
+      renameFile,
+      removeFile: vi.fn(async () => {}) as never,
+    });
+
+    await expect(
+      writer.write({
+        destinationPath: "/tmp/ride.fit",
+        bytes: Uint8Array.from(validFitBytes),
+        signal: controller.signal,
+      }),
+    ).resolves.toBe("failed");
+    expect(renameFile).not.toHaveBeenCalled();
+    expect(handle.chmod).not.toHaveBeenCalled();
   });
 });

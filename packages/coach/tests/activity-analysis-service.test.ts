@@ -97,6 +97,7 @@ function setup(input: {
   readonly resolver?: TrustedActivitySourceResolver;
   readonly projectionCache?: ActivityAnalysisProjectionRepository;
   readonly activityValue?: CanonicalActivityDetail;
+  readonly aggregateDeadlineMs?: number;
 }) {
   const analyzer = input.analyzer ?? { analyze: async () => ({
     kind: "computed" as const,
@@ -110,6 +111,7 @@ function setup(input: {
     cache: input.projectionCache ?? cache(),
     analyzers: { aerobicDrift: analyzer },
     now: () => Date.parse("1998-07-06T12:00:00.000Z"),
+    aggregateDeadlineMs: input.aggregateDeadlineMs,
   });
   return { service, getActivity, analyzer };
 }
@@ -401,5 +403,215 @@ describe("activity analysis service", () => {
       sections: ["intervals"],
     })).rejects.toEqual(new ActivityAnalysisServiceError("activity-not-found"));
     expect(service).toBeDefined();
+  });
+
+  it("bounds a stalled activity lookup and releases the activity gate", async () => {
+    const otherActivityId = "d".repeat(64);
+    const getActivity = vi.fn(({ id }: { readonly id: string }) =>
+      id === ACTIVITY_ID
+        ? new Promise<CanonicalActivityDetail | undefined>(() => {})
+        : Promise.resolve({ ...activity, id }),
+    );
+    const service = createActivityAnalysisService({
+      activities: { getActivity },
+      sources: source(async ({ canonicalActivityId }) => ({
+        kind: "resolved",
+        providerActivityId: "provider-42" as never,
+        sourceRevision: canonicalActivityId,
+      })),
+      cache: cache(),
+      analyzers: {
+        aerobicDrift: {
+          analyze: async () => ({
+            kind: "computed",
+            data: drift,
+            source: "local-canonical",
+          }),
+        },
+      },
+      aggregateDeadlineMs: 20,
+      now: () => Date.parse("1998-07-06T12:00:00.000Z"),
+    });
+
+    await expect(
+      service.getActivityAnalysis({
+        canonicalActivityId: ACTIVITY_ID,
+        sections: ["aerobic-drift"],
+      }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    await expect(
+      service.getActivityAnalysis({
+        canonicalActivityId: otherActivityId,
+        sections: ["aerobic-drift"],
+      }),
+    ).resolves.toMatchObject({ activity: { id: otherActivityId } });
+    expect(getActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds stalled source resolution before section work starts", async () => {
+    const analyze = vi.fn(async () => ({
+      kind: "computed" as const,
+      data: drift,
+      source: "local-canonical" as const,
+    }));
+    const { service } = setup({
+      aggregateDeadlineMs: 20,
+      resolver: source(() => new Promise(() => {})),
+      analyzer: { analyze },
+    });
+
+    await expect(
+      service.getActivityAnalysis({
+        canonicalActivityId: ACTIVITY_ID,
+        sections: ["aerobic-drift"],
+      }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it("turns a stalled persistent-cache read into a bounded timeout section", async () => {
+    const projectionCache: ActivityAnalysisProjectionRepository = {
+      read: () => new Promise(() => {}),
+      write: async () => {},
+    };
+    const analyze = vi.fn(async () => ({
+      kind: "computed" as const,
+      data: drift,
+      source: "local-canonical" as const,
+    }));
+    const { service } = setup({
+      projectionCache,
+      aggregateDeadlineMs: 20,
+      analyzer: { analyze },
+    });
+
+    await expect(
+      service.getActivityAnalysis({
+        canonicalActivityId: ACTIVITY_ID,
+        sections: ["aerobic-drift"],
+      }),
+    ).resolves.toMatchObject({
+      sections: { aerobicDrift: { kind: "unavailable", reason: "timeout" } },
+    });
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
+  it("keeps section permits until aborted physical analyzers actually settle", async () => {
+    const otherActivityId = "d".repeat(64);
+    let releaseDrift!: () => void;
+    let releaseIntervals!: () => void;
+    const driftWait = new Promise<void>((resolve) => {
+      releaseDrift = resolve;
+    });
+    const intervalsWait = new Promise<void>((resolve) => {
+      releaseIntervals = resolve;
+    });
+    const started: string[] = [];
+    const service = createActivityAnalysisService({
+      activities: { getActivity: async ({ id }) => ({ ...activity, id }) },
+      sources: source(async ({ canonicalActivityId }) => ({
+        kind: "resolved",
+        providerActivityId: "provider-42" as never,
+        sourceRevision: canonicalActivityId,
+      })),
+      cache: cache(),
+      analyzers: {
+        aerobicDrift: {
+          async analyze({ activity: selected }) {
+            started.push(`drift:${selected.id}`);
+            if (selected.id === ACTIVITY_ID) await driftWait;
+            return { kind: "computed", data: drift, source: "local-canonical" };
+          },
+        },
+        intervals: {
+          async analyze({ activity: selected }) {
+            started.push(`intervals:${selected.id}`);
+            await intervalsWait;
+            return {
+              kind: "computed",
+              data: { source: "local-canonical", intervals: [], groups: [] },
+              source: "local-canonical",
+            };
+          },
+        },
+      },
+      aggregateDeadlineMs: 1_000,
+      now: () => Date.parse("1998-07-06T12:00:00.000Z"),
+    });
+    const controller = new AbortController();
+    const first = service.getActivityAnalysis(
+      {
+        canonicalActivityId: ACTIVITY_ID,
+        sections: ["aerobic-drift", "intervals"],
+      },
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(started).toHaveLength(2));
+    controller.abort();
+    await expect(first).resolves.toMatchObject({
+      sections: {
+        aerobicDrift: { kind: "unavailable", reason: "cancelled" },
+        intervals: { kind: "unavailable", reason: "cancelled" },
+      },
+    });
+
+    const second = service.getActivityAnalysis({
+      canonicalActivityId: otherActivityId,
+      sections: ["aerobic-drift"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(started).not.toContain(`drift:${otherActivityId}`);
+
+    releaseDrift();
+    releaseIntervals();
+    await expect(second).resolves.toMatchObject({
+      sections: { aerobicDrift: { kind: "computed" } },
+    });
+    expect(started).toContain(`drift:${otherActivityId}`);
+  });
+
+  it("bounds the post-analysis source revision check", async () => {
+    let resolutions = 0;
+    const { service } = setup({
+      aggregateDeadlineMs: 20,
+      resolver: source(async () => {
+        resolutions += 1;
+        if (resolutions > 1) return new Promise(() => {});
+        return {
+          kind: "resolved",
+          providerActivityId: "provider-42" as never,
+          sourceRevision: REVISION,
+        };
+      }),
+    });
+
+    await expect(
+      service.getActivityAnalysis({
+        canonicalActivityId: ACTIVITY_ID,
+        sections: ["aerobic-drift"],
+      }),
+    ).resolves.toMatchObject({
+      sections: { aerobicDrift: { kind: "unavailable", reason: "timeout" } },
+    });
+    expect(resolutions).toBe(2);
+  });
+
+  it("bounds a stalled persistent-cache write", async () => {
+    const write = vi.fn(() => new Promise<void>(() => {}));
+    const projectionCache: ActivityAnalysisProjectionRepository = {
+      read: async () => undefined,
+      write,
+    };
+    const { service } = setup({ projectionCache, aggregateDeadlineMs: 20 });
+
+    await expect(
+      service.getActivityAnalysis({
+        canonicalActivityId: ACTIVITY_ID,
+        sections: ["aerobic-drift"],
+      }),
+    ).resolves.toMatchObject({
+      sections: { aerobicDrift: { kind: "unavailable", reason: "timeout" } },
+    });
+    expect(write).toHaveBeenCalledOnce();
   });
 });

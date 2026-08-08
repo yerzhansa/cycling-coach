@@ -672,14 +672,19 @@ describe("training page", () => {
     expect(power).toHaveTextContent("17 min of measured ride time · 3 recorded buckets");
     expect(power).toHaveTextContent("Gaps are left as recorded");
     await user.click(within(power).getByText("Read power distribution as a table"));
-    const powerTable = within(power).getByRole("table");
+    const powerTable = within(power).getByRole("table", {
+      name: "Power distribution measured ride time by recorded range",
+    });
     expect(within(powerTable).getByText("0 W–100 W")).toBeInTheDocument();
     expect(within(powerTable).getAllByRole("row")).toHaveLength(4);
 
     const heartRate = screen.getByRole("region", { name: "Heart-rate distribution" });
     expect(heartRate).toHaveTextContent("can load even when power data is unavailable");
     await user.click(within(heartRate).getByText("Read heart-rate distribution as a table"));
-    expect(within(heartRate).getByText("110 bpm–130 bpm")).toBeInTheDocument();
+    const heartRateTable = within(heartRate).getByRole("table", {
+      name: "Heart-rate distribution measured ride time by recorded range",
+    });
+    expect(within(heartRateTable).getByText("110 bpm–130 bpm")).toBeInTheDocument();
 
     const response = screen.getByRole("region", { name: "Power and heart-rate response" });
     expect(response).toHaveTextContent("server-cleaned ride segment");
@@ -687,8 +692,20 @@ describe("training page", () => {
     expect(response).toHaveTextContent("60%");
     expect(response).toHaveTextContent("Limited coverage");
     expect(response).toHaveTextContent("separate from the local aerobic drift estimate");
+    const fittedCurves = within(response).getByRole("list", { name: "Provider fitted curves" });
+    expect(fittedCurves).toHaveTextContent("All retained segments");
+    expect(fittedCurves).toHaveTextContent("R² 0.90");
+    expect(fittedCurves.querySelector('[data-curve-kind="all"]')).not.toBeNull();
+    await user.click(within(response).getByText("Read provider fit details"));
+    const fitTable = within(response).getByRole("table", {
+      name: "Provider-fitted power and heart-rate curve details",
+    });
+    expect(fitTable).toHaveTextContent("Model terms in provider order");
+    expect(fitTable).toHaveTextContent("100, 0.1");
     await user.click(within(response).getByText("Read all power and heart-rate points as a table"));
-    expect(within(response).getByRole("table")).toHaveTextContent("150 W");
+    expect(
+      within(response).getByRole("table", { name: "Retained power and heart-rate ride segments" }),
+    ).toHaveTextContent("150 W");
     expect(document.body).not.toHaveTextContent("provider-");
     expect(document.body).not.toHaveTextContent(ride.id);
   });

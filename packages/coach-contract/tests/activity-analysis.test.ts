@@ -124,6 +124,7 @@ describe("activity analysis contract", () => {
       { ...base, revision: "provider-revision" },
       { ...base, providerActivityId: "i42" },
       { ...base, sections: {} },
+      { ...base, sections: { aerobicDrift: undefined } },
       { ...base, sections: { rawPayload: { kind: "unavailable", reason: "unsupported" } } },
       { ...base, sections: { aerobicDrift: { ...base.sections.aerobicDrift, data: { value: 2.5, raw: {} } } } },
       { ...base, sections: { aerobicDrift: { kind: "unavailable", reason: "network", message: "/private/path" } } },
