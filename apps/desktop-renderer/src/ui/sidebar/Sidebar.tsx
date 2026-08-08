@@ -8,6 +8,7 @@ import { ConnectionStatus } from "./ConnectionStatus.js";
 import { HistoryList } from "./HistoryList.js";
 import styles from "./Sidebar.module.css";
 import { SyncChip } from "./SyncChip.js";
+import { UpdateAvailableButton } from "./UpdateAvailableButton.js";
 
 export function Sidebar(): ReactElement {
   const activeView = useEnduragentStore((state) => state.activeView);
@@ -82,6 +83,7 @@ export function Sidebar(): ReactElement {
       <div className={styles.sec}>Conversations</div>
       <HistoryList locked={navigationLocked} />
       <div className={styles.railFoot}>
+        <UpdateAvailableButton locked={navigationLocked || onboardingOpen} />
         <SyncChip />
         <ConnectionStatus />
       </div>
