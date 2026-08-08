@@ -9,9 +9,11 @@ import type {
 import { ActivityAnalysisComputationError } from "./activity-analysis-service.js";
 
 export const ACTIVITY_STREAM_RESPONSE_LIMIT_BYTES = 16 * 1_024 * 1_024;
+export const MAX_PROVIDER_ACTIVITY_REQUESTS_PER_REVISION = 8;
 const MAX_STREAM_DESCRIPTORS = 16;
 const MAX_STREAM_SAMPLES = 1_000_000;
 const MAX_TOTAL_STREAM_SAMPLES = 4_000_000;
+const MAX_TRACKED_PROVIDER_REVISIONS = 128;
 const PROVIDER_REQUEST_TIMEOUT_MS = 30_000;
 const REQUESTED_STREAMS = ["time", "watts", "heartrate", "moving"] as const;
 
@@ -39,18 +41,35 @@ export interface ProviderActivityStreamRequest {
   readonly signal: AbortSignal;
 }
 
-interface ProviderStreamClient {
-  readonly activities: Pick<IntervalsClient["activities"], "getStreamMap">;
+export interface ProviderActivityAnalysisClient {
+  readonly activities: IntervalsClient["activities"];
 }
 
-type ProviderStreamClientFactory = (input: {
+export type ProviderActivityAnalysisClientFactory = (input: {
   readonly apiKey: string;
   readonly athleteId: string;
   readonly signal: AbortSignal;
   readonly baseFetch: typeof globalThis.fetch;
-}) => ProviderStreamClient;
+}) => ProviderActivityAnalysisClient;
 
-function failure(error: ApiError, responseLimitExceeded: boolean, signal: AbortSignal): never {
+export interface ProviderActivityAnalysisClientLease {
+  readonly client: ProviderActivityAnalysisClient;
+  responseLimitExceeded(): boolean;
+}
+
+export interface ProviderActivityAnalysisClientAccess {
+  open(input: {
+    readonly sourceRevision: string;
+    readonly signal: AbortSignal;
+    readonly maximumBytes: number;
+  }): Promise<ProviderActivityAnalysisClientLease>;
+}
+
+export function providerActivityFailure(
+  error: ApiError,
+  responseLimitExceeded: boolean,
+  signal: AbortSignal,
+): never {
   signal.throwIfAborted();
   if (responseLimitExceeded) throw new ActivityAnalysisComputationError("response-too-large");
   if (error.kind === "RateLimit") throw new ActivityAnalysisComputationError("rate-limited");
@@ -129,14 +148,20 @@ export function createBoundedActivityStreamFetch(input: {
   };
 }
 
-export function createProviderActivityStreamReader(input: {
+export function createProviderActivityAnalysisClientAccess(input: {
   readonly credentials: {
     read(): Promise<{ readonly apiKey: string; readonly athleteId: string }>;
   };
-  readonly archive: ProviderActivityStreamArchive;
-  readonly createClient?: ProviderStreamClientFactory;
+  readonly createClient?: ProviderActivityAnalysisClientFactory;
   readonly baseFetch?: typeof globalThis.fetch;
-}): ProviderActivityStreamReader {
+  readonly maximumRequestsPerRevision?: number;
+}): ProviderActivityAnalysisClientAccess {
+  const maximumRequests =
+    input.maximumRequestsPerRevision ?? MAX_PROVIDER_ACTIVITY_REQUESTS_PER_REVISION;
+  if (!Number.isSafeInteger(maximumRequests) || maximumRequests < 1) {
+    throw new TypeError("provider activity request budget is invalid");
+  }
+  const requests = new Map<string, number>();
   const createClient =
     input.createClient ??
     ((options) =>
@@ -147,32 +172,73 @@ export function createProviderActivityStreamReader(input: {
         perRequestMs: PROVIDER_REQUEST_TIMEOUT_MS,
         baseFetch: options.baseFetch,
       }));
-  const reader: ProviderActivityStreamReader = {
-    async read(request: ProviderActivityStreamRequest) {
-      request.signal.throwIfAborted();
+  return Object.freeze({
+    async open(options: {
+      readonly sourceRevision: string;
+      readonly signal: AbortSignal;
+      readonly maximumBytes: number;
+    }) {
+      options.signal.throwIfAborted();
+      if (!/^[0-9a-f]{64}$/.test(options.sourceRevision)) {
+        throw new TypeError("provider activity source revision is invalid");
+      }
       const credentials = await input.credentials.read();
-      request.signal.throwIfAborted();
+      options.signal.throwIfAborted();
       if (credentials.apiKey.length === 0) {
         throw new ActivityAnalysisComputationError("provider-unavailable");
       }
-      let responseLimitExceeded = false;
+      const used = requests.get(options.sourceRevision) ?? 0;
+      if (used >= maximumRequests) {
+        throw new ActivityAnalysisComputationError("request-budget-exhausted");
+      }
+      requests.delete(options.sourceRevision);
+      requests.set(options.sourceRevision, used + 1);
+      while (requests.size > MAX_TRACKED_PROVIDER_REVISIONS) {
+        const oldest = requests.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        requests.delete(oldest);
+      }
+      let exceeded = false;
       const client = createClient({
         apiKey: credentials.apiKey,
         athleteId: credentials.athleteId,
-        signal: request.signal,
+        signal: options.signal,
         baseFetch: createBoundedActivityStreamFetch({
           baseFetch: input.baseFetch ?? globalThis.fetch,
+          maximumBytes: options.maximumBytes,
           noteLimitExceeded: () => {
-            responseLimitExceeded = true;
+            exceeded = true;
           },
         }),
       });
-      const result = await client.activities.getStreamMap(request.providerActivityId, {
+      return Object.freeze({
+        client,
+        responseLimitExceeded: () => exceeded,
+      });
+    },
+  });
+}
+
+export function createProviderActivityStreamReader(input: {
+  readonly access: ProviderActivityAnalysisClientAccess;
+  readonly archive: ProviderActivityStreamArchive;
+}): ProviderActivityStreamReader {
+  const reader: ProviderActivityStreamReader = {
+    async read(request: ProviderActivityStreamRequest) {
+      request.signal.throwIfAborted();
+      const lease = await input.access.open({
+        sourceRevision: request.sourceRevision,
+        signal: request.signal,
+        maximumBytes: ACTIVITY_STREAM_RESPONSE_LIMIT_BYTES,
+      });
+      const result = await lease.client.activities.getStreamMap(request.providerActivityId, {
         types: REQUESTED_STREAMS,
         includeDefaults: false,
       });
       request.signal.throwIfAborted();
-      if (!result.ok) failure(result.error, responseLimitExceeded, request.signal);
+      if (!result.ok) {
+        providerActivityFailure(result.error, lease.responseLimitExceeded(), request.signal);
+      }
       if (!boundedDescriptors(result.value)) {
         throw new ActivityAnalysisComputationError("response-too-large");
       }

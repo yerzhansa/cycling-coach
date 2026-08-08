@@ -335,7 +335,9 @@ export function TrainingView(): ReactElement {
         ride={selectedRide}
         units={training.unitsPreference.value}
         analysis={rideAnalysis}
-        onRefreshAnalysis={rideAnalysisActions?.refresh ?? null}
+        onRefreshAnalysis={
+          rideAnalysisActions === null ? null : (sections) => rideAnalysisActions.refresh(sections)
+        }
         titleRef={title}
         onBack={closeRide}
       />

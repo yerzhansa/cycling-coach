@@ -213,6 +213,68 @@ function makeScript(
                 observedAt: "2026-07-19T08:00:00.000Z",
               },
             },
+            intervals: {
+              kind: "computed",
+              data: {
+                source: "provider",
+                intervals: [
+                  {
+                    ordinal: 1,
+                    groupOrdinal: null,
+                    kind: "work",
+                    label: "Threshold",
+                    startIndex: 0,
+                    endIndex: 299,
+                    startSeconds: 0,
+                    endSeconds: 300,
+                    movingSeconds: 300,
+                    elapsedSeconds: 300,
+                    distanceMeters: 2_500,
+                    averagePowerWatts: 250,
+                    maximumPowerWatts: 310,
+                    averageHeartRateBpm: 155,
+                    maximumHeartRateBpm: 170,
+                    averageCadenceRpm: 91,
+                    maximumCadenceRpm: 104,
+                    zone: 4,
+                    intensityPercent: 96,
+                    trainingLoad: 12,
+                  },
+                ],
+                groups: [],
+              },
+              provenance: {
+                source: "provider",
+                delivery: "live",
+                observedAt: "2026-07-19T08:00:00.000Z",
+              },
+            },
+            bestEfforts: {
+              kind: "computed",
+              data: {
+                scope: {
+                  kind: "selected-activity",
+                  stream: "power",
+                  durationSeconds: 300,
+                  tieRule: "earliest-start",
+                },
+                efforts: [
+                  {
+                    rank: 1,
+                    startIndex: 900,
+                    endIndex: 1_199,
+                    durationSeconds: 300,
+                    distanceMeters: 2_600,
+                    averageWatts: 310,
+                  },
+                ],
+              },
+              provenance: {
+                source: "provider",
+                delivery: "live",
+                observedAt: "2026-07-19T08:00:00.000Z",
+              },
+            },
           },
         });
       }
@@ -1394,7 +1456,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       }
       const page = document.querySelector('section[aria-label="Ride review"]');
       const analysisDeadline = Date.now() + 5000;
-      while (!page.textContent.includes("+4.8%") && Date.now() < analysisDeadline) {
+      while (
+        (!page.textContent.includes("+4.8%") || !page.textContent.includes("Threshold")) &&
+        Date.now() < analysisDeadline
+      ) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       const title = page.querySelector("h1");
@@ -1409,6 +1474,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         drift: page.querySelector('[aria-label^="Observed efficiency-factor change"]')?.textContent ?? "",
         limitation: page.querySelector('[aria-label="Analysis limitations"]')?.textContent ?? "",
+        interval: page.querySelector('[aria-labelledby="interval-review-title"]')?.textContent ?? "",
+        efforts: page.querySelector('[aria-labelledby="best-efforts-title"]')?.textContent ?? "",
       };
     `);
     expect(rideReview).toEqual({
@@ -1420,6 +1487,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       documentOverflow: false,
       drift: "+4.8%",
       limitation: "No moving-status stream was available, so stopped time may be included.",
+      interval:
+        "Ordered ride segmentsIntervals and lapsShows recorded segments in order. Missing metrics stay unavailable, and no planned workout targets are inferred.Ordered analysis from intervals.icu1WorkThresholdDuration5 minDistance2.5 kmPower250 avg · 310 max WHeart rate155 avg · 170 max bpm",
+      efforts:
+        "Selected-ride scopeFive-minute best effortsRanks measured five-minute power efforts from this ride only. It does not compare against other rides or all-history results.This ride · power · 5 min · equal efforts rank the earlier start first#1310 W2.6 km",
     });
     const rideReturn = await fixture.evaluate<{
       readonly page: string | null;
@@ -1510,7 +1581,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       {
         jsonrpc: "2.0",
         method: "getActivityAnalysis",
-        params: { canonicalActivityId: "c".repeat(64), sections: ["aerobic-drift"] },
+        params: {
+          canonicalActivityId: "c".repeat(64),
+          sections: ["aerobic-drift", "intervals", "best-efforts"],
+        },
       },
     ]);
     await fixture.setViewport(720, 800);

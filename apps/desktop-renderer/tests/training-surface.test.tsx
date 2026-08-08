@@ -360,6 +360,7 @@ describe("training page", () => {
         status: "refresh-unavailable",
         revision: "c".repeat(64),
         loadingSections: [],
+        failedSections: ["aerobic-drift"],
         sections: {
           aerobicDrift: {
             kind: "computed",
@@ -428,6 +429,135 @@ describe("training page", () => {
     expect(document.body).not.toHaveTextContent(ride.id);
   });
 
+  it("shows ordered intervals and explicitly scoped five-minute best efforts", async () => {
+    const user = userEvent.setup();
+    if (context.recentRides.kind !== "computed") throw new Error("expected fixture rides");
+    const ride = context.recentRides.items[0]!;
+    const emptyMetrics = {
+      movingSeconds: null,
+      elapsedSeconds: null,
+      distanceMeters: null,
+      averagePowerWatts: null,
+      maximumPowerWatts: null,
+      averageHeartRateBpm: null,
+      maximumHeartRateBpm: null,
+      averageCadenceRpm: null,
+      maximumCadenceRpm: null,
+      zone: null,
+      intensityPercent: null,
+      trainingLoad: null,
+    } as const;
+    const provenance = {
+      source: "provider" as const,
+      delivery: "live" as const,
+      observedAt: "1998-07-19T08:00:00.000Z",
+    };
+    useEnduragentStore.setState({
+      rideAnalysis: {
+        activityId: ride.id,
+        status: "ready",
+        revision: "c".repeat(64),
+        loadingSections: [],
+        failedSections: [],
+        sections: {
+          intervals: {
+            kind: "computed",
+            data: {
+              source: "provider",
+              intervals: [
+                {
+                  ...emptyMetrics,
+                  ordinal: 1,
+                  groupOrdinal: null,
+                  kind: "work",
+                  label: "Threshold",
+                  startIndex: 0,
+                  endIndex: 299,
+                  startSeconds: 0,
+                  endSeconds: 300,
+                  movingSeconds: 300,
+                  elapsedSeconds: 300,
+                  distanceMeters: 2_500,
+                  averagePowerWatts: 250,
+                  maximumPowerWatts: 310,
+                  averageHeartRateBpm: 155,
+                  maximumHeartRateBpm: 170,
+                },
+                {
+                  ...emptyMetrics,
+                  ordinal: 2,
+                  groupOrdinal: null,
+                  kind: "recovery",
+                  label: null,
+                  startIndex: 300,
+                  endIndex: 419,
+                  startSeconds: 300,
+                  endSeconds: 420,
+                  movingSeconds: 120,
+                  elapsedSeconds: 120,
+                },
+              ],
+              groups: [],
+            },
+            provenance,
+          },
+          bestEfforts: {
+            kind: "computed",
+            data: {
+              scope: {
+                kind: "selected-activity",
+                stream: "power",
+                durationSeconds: 300,
+                tieRule: "earliest-start",
+              },
+              efforts: [
+                {
+                  rank: 1,
+                  startIndex: 900,
+                  endIndex: 1_199,
+                  durationSeconds: 300,
+                  distanceMeters: 2_600,
+                  averageWatts: 310,
+                },
+                {
+                  rank: 2,
+                  startIndex: 300,
+                  endIndex: 599,
+                  durationSeconds: 300,
+                  distanceMeters: null,
+                  averageWatts: 300,
+                },
+              ],
+            },
+            provenance,
+          },
+        },
+      },
+    });
+    render(<TrainingView />);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Review road ride from 1998-07-09 · 22:00, 1h 31m, 42.1 km",
+      }),
+    );
+
+    const intervals = screen.getByRole("region", { name: "Intervals and laps" });
+    expect(within(intervals).getByText("Threshold")).toBeInTheDocument();
+    expect(within(intervals).getByText("Recovery")).toBeInTheDocument();
+    expect(within(intervals).getByText("250 avg · 310 max W")).toBeInTheDocument();
+    expect(within(intervals).getAllByLabelText("Unavailable").length).toBeGreaterThan(0);
+    expect(intervals).toHaveTextContent("no planned workout targets are inferred");
+
+    const efforts = screen.getByRole("region", { name: "Five-minute best efforts" });
+    expect(within(efforts).getByText("#1")).toBeInTheDocument();
+    expect(within(efforts).getByText("310 W")).toBeInTheDocument();
+    expect(within(efforts).getByText(/This ride · power · 5 min/)).toBeInTheDocument();
+    expect(efforts).toHaveTextContent("does not compare against other rides");
+    expect(efforts).not.toHaveTextContent(/\bPR\b/);
+    expect(document.body).not.toHaveTextContent(ride.id);
+  });
+
   it("explains deterministic unavailable states without offering a pointless retry", async () => {
     const user = userEvent.setup();
     if (context.recentRides.kind !== "computed") throw new Error("expected fixture rides");
@@ -438,6 +568,7 @@ describe("training page", () => {
         status: "ready",
         revision: "c".repeat(64),
         loadingSections: [],
+        failedSections: [],
         sections: { aerobicDrift: { kind: "unavailable", reason: "activity-too-short" } },
       },
       rideAnalysisActions: { refresh: vi.fn() },
