@@ -1,5 +1,14 @@
 # cycling-coach
 
+## 2026.8.1
+
+### Patch Changes
+
+- cc9779d: User-facing: Desktop now shows an accessible sidebar action when an update is ready to install.
+- 9803ad8: User-facing: Desktop updates now reopen the app reliably after installation and remain ready to retry if restarting fails.
+- 1301a98: User-facing: Desktop now shuts down cleanly when macOS terminates it during an update or normal quit.
+- a3a3214: Prepare the protected, digest-bound macOS desktop release transaction while keeping public activation fail-closed.
+
 ## 2026.8.0
 
 ### Minor Changes
