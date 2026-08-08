@@ -663,33 +663,13 @@ export function inspectDesktopReleaseWorkflows(
     'printf \'%s\' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"',
   );
   const privateUmask = signingRun.indexOf("umask 077");
-  const expectedRecoveryPaths = [
-    ".github/workflows/desktop-release.yml",
-    ".github/workflows/release.yml",
-    "apps/desktop/scripts/macos-genesis-release.mjs",
-    "apps/desktop/scripts/macos-release-plan.d.mts",
-    "apps/desktop/scripts/macos-release-plan.mjs",
-    "apps/desktop/scripts/verify-macos-release.d.mts",
-    "apps/desktop/scripts/verify-macos-release.mjs",
-    "apps/desktop/tests/macos-release-artifacts.test.ts",
-    "apps/desktop/tests/macos-release-plan.test.ts",
-    "tools/check-desktop-release-workflow.test.ts",
-    "tools/check-desktop-release-workflow.ts",
-  ];
   const recoveryToolingFiles = [
     "apps/desktop/scripts/macos-genesis-release.mjs",
     "apps/desktop/scripts/macos-release-plan.d.mts",
     "apps/desktop/scripts/macos-release-plan.mjs",
     "apps/desktop/scripts/verify-macos-release.mjs",
   ];
-  const recoveryAllowlistMatch = recoveryToolingRun.match(
-    /case "\$changed_path" in\n([\s\S]*?)\n\s+\*\)/u,
-  );
-  const recoveryAllowedPaths = (recoveryAllowlistMatch?.[1] ?? "")
-    .split("|")
-    .map((path) => path.replaceAll("\\", "").replace(/\)\s*;;$/u, "").trim())
-    .filter(Boolean)
-    .sort();
+  const expectedRecoveryDiff = recoveryToolingFiles.join("\\n");
   if (
     recoveryToolingIndex <= signingCheckoutIndex ||
     recoveryToolingIndex >= signingInstallIndex ||
@@ -697,14 +677,9 @@ export function inspectDesktopReleaseWorkflows(
     !recoveryToolingRun.includes(
       'git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"',
     ) ||
-    !recoveryToolingRun.includes(
-      'done < <(git diff --name-only "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT")',
-    ) ||
     !recoveryToolingRun.includes('git restore --source="$RELEASE_TOOLING_COMMIT" --worktree --') ||
-    recoveryAllowedPaths.length !== expectedRecoveryPaths.length ||
-    [...expectedRecoveryPaths]
-      .sort()
-      .some((path, index) => recoveryAllowedPaths[index] !== path) ||
+    !recoveryToolingRun.includes(`EXPECTED_RECOVERY_DIFF=$'${expectedRecoveryDiff}'`) ||
+    !recoveryToolingRun.includes('test "$(git diff --name-only)" = "$EXPECTED_RECOVERY_DIFF"') ||
     recoveryToolingFiles.some(
       (path) =>
         (recoveryToolingRun.match(new RegExp(path.replaceAll(".", "\\."), "gu")) ?? []).length !==

@@ -214,7 +214,7 @@ describe("desktop release workflow policy", () => {
     ).toBe(true);
   });
 
-  it("binds manual recovery tooling to the coordinator and release-only paths", () => {
+  it("binds manual recovery tooling to the coordinator and exact release overlay", () => {
     const source = sources();
     const unboundDispatch = source.release.replace(
       '-f tooling_commit="$RELEASE_TOOLING_COMMIT" \\\n',
@@ -225,8 +225,12 @@ describe("desktop release workflow policy", () => {
       "true",
     );
     const productOverlay = source.desktop.replace(
-      "              apps/desktop/tests/macos-release-plan.test.ts | \\\n",
-      "              apps/desktop/src/main/index.ts | \\\n",
+      "apps/desktop/scripts/macos-release-plan.d.mts\\n",
+      "apps/desktop/src/main/index.ts\\n",
+    );
+
+    expect(source.desktop).not.toContain(
+      'git diff --name-only "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"',
     );
 
     expect(
