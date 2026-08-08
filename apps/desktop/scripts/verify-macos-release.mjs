@@ -17,9 +17,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { extractFile } from "@electron/asar";
+import { extractFile, statFile, uncache as uncacheAsarFile } from "@electron/asar";
 import { parse } from "yaml";
 import {
+  parseMacosReleaseUpdaterMetadata,
   readCyclingCoachVersion,
   releaseArtifactNames,
   requireStableCalVer,
@@ -32,8 +33,13 @@ const canonicalBundleIdentifier = "icu.enduragent.desktop";
 const canonicalProductName = "Enduragent";
 const canonicalPackageName = "@enduragent/desktop";
 const canonicalTeamIdentifier = "FA494ACVTF";
+const maximumPackageManifestBytes = 16_384;
+const maximumUpdaterMetadataBytes = 16_384;
 const canonicalEntitlements = JSON.stringify({ "com.apple.security.cs.allow-jit": true });
 const canonicalDesignatedRequirement = `identifier "${canonicalBundleIdentifier}" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = ${canonicalTeamIdentifier}`;
+const canonicalDesignatedRequirementSha256 = createHash("sha256")
+  .update(canonicalDesignatedRequirement)
+  .digest("hex");
 const canonicalDesignatedRequirementPattern =
   /^identifier "icu\.enduragent\.desktop" and anchor apple generic and certificate 1\[field\.1\.2\.840\.113635\.100\.6\.2\.6\] (?:exists|\/\* exists \*\/) and certificate leaf\[field\.1\.2\.840\.113635\.100\.6\.1\.13\] (?:exists|\/\* exists \*\/) and certificate leaf\[subject\.OU\] = (?:FA494ACVTF|"FA494ACVTF")$/u;
 
@@ -196,7 +202,16 @@ function parseSignatureMetadata(result) {
   const identifier = exactLine(output, /^Identifier=([^\r\n]+)$/gmu);
   const teamIdentifier = exactLine(output, /^TeamIdentifier=([^\r\n]+)$/gmu);
   const codeDirectory = exactLine(output, /^CodeDirectory ([^\r\n]+)$/gmu);
-  const cdHash = exactLine(output, /^CDHash=([0-9a-f]{40,128})$/gimu)?.toLowerCase();
+  const cdHash = exactLine(output, /^CDHash=([0-9a-f]{40})$/gimu)?.toLowerCase();
+  const candidateCDHashFullLines = Array.from(
+    output.matchAll(/^CandidateCDHashFull[^\r\n]*$/gmu),
+    (match) => match[0],
+  );
+  const candidateCDHashFullMatch =
+    candidateCDHashFullLines.length === 1
+      ? /^CandidateCDHashFull sha256=([0-9a-f]{64})$/iu.exec(candidateCDHashFullLines[0])
+      : null;
+  const codeDirectorySha256 = candidateCDHashFullMatch?.[1].toLowerCase();
   const flags = exactLine(output, /^CodeDirectory [^\r\n]* flags=0x[0-9a-f]+\(([^\r\n)]*)\)/gimu);
   const authorities = Array.from(output.matchAll(/^Authority=([^\r\n]+)$/gmu), (match) => match[1]);
   if (
@@ -204,6 +219,8 @@ function parseSignatureMetadata(result) {
     teamIdentifier !== canonicalTeamIdentifier ||
     codeDirectory === undefined ||
     cdHash === undefined ||
+    codeDirectorySha256 === undefined ||
+    cdHash !== codeDirectorySha256.slice(0, 40) ||
     flags === undefined ||
     !flags
       .split(",")
@@ -221,6 +238,7 @@ function parseSignatureMetadata(result) {
     identifier,
     teamIdentifier,
     codeDirectory,
+    codeDirectorySha256,
     cdHash,
     hardenedRuntime: true,
     authorities: Object.freeze([...authorities]),
@@ -263,61 +281,110 @@ function parseBundleMetadata(result) {
 }
 
 async function readPackagedManifest(archivePath, dependencies) {
+  let entry;
   let manifest;
+  let cacheReadAttempted = false;
+  let failure = null;
   try {
+    dependencies.uncacheAsar(archivePath);
+    cacheReadAttempted = true;
+    entry = dependencies.statAsarFile(archivePath, "package.json", false);
+    if (
+      !exactObject(entry) ||
+      "files" in entry ||
+      "link" in entry ||
+      entry.unpacked === true ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size <= 0 ||
+      entry.size > maximumPackageManifestBytes
+    ) {
+      fail("macOS package identity is invalid");
+    }
     const bytes = await dependencies.extractAsarFile(archivePath, "package.json");
+    if (
+      !(bytes instanceof Uint8Array) ||
+      bytes.length !== entry.size ||
+      bytes.length > maximumPackageManifestBytes
+    ) {
+      fail("macOS package identity is invalid");
+    }
     manifest = JSON.parse(Buffer.from(bytes).toString("utf8"));
-  } catch {
-    fail("macOS package identity is invalid");
+  } catch (error) {
+    failure =
+      error instanceof MacosReleaseVerificationError
+        ? error
+        : new MacosReleaseVerificationError("macOS package identity is invalid");
   }
+
+  let cleanupFailure;
+  if (cacheReadAttempted) {
+    try {
+      const removed = dependencies.uncacheAsar(archivePath);
+      if (entry !== undefined && removed !== true) {
+        cleanupFailure = new MacosReleaseVerificationError(
+          "macOS package identity cache cleanup failed",
+        );
+      }
+    } catch {
+      cleanupFailure = new MacosReleaseVerificationError(
+        "macOS package identity cache cleanup failed",
+      );
+    }
+  }
+  if (cleanupFailure !== undefined) throw cleanupFailure;
+  if (failure !== null) throw failure;
   if (!exactObject(manifest) || manifest.name !== canonicalPackageName) {
     fail("macOS package identity is invalid");
   }
-  return manifest.version;
+  return Object.freeze({
+    version: manifest.version,
+    enduragentDesktopRelease: manifest.enduragentDesktopRelease,
+  });
 }
 
 async function inspectMacosApplicationIdentity(application, bundle, dependencies) {
   await verifyMacosApplication(application, { executeFile: dependencies.executeFile });
-  const [signatureResult, requirementResult, infoResult, entitlements, packageVersion] =
-    await Promise.all([
-      inspectSystemFile(dependencies.executeFile, "/usr/bin/codesign", [
-        "--display",
-        "--verbose=4",
-        application,
-      ]),
-      inspectSystemFile(dependencies.executeFile, "/usr/bin/codesign", [
-        "--display",
-        "--requirements",
-        "-",
-        application,
-      ]),
-      inspectSystemFile(dependencies.executeFile, "/usr/bin/plutil", [
-        "-convert",
-        "json",
-        "-o",
-        "-",
-        "--",
-        bundle.infoPath,
-      ]),
-      readNormalizedEntitlements(application, dependencies),
-      readPackagedManifest(bundle.archivePath, dependencies),
-    ]);
+  const signatureResult = await inspectSystemFile(dependencies.executeFile, "/usr/bin/codesign", [
+    "--display",
+    "--verbose=4",
+    application,
+  ]);
   const signature = parseSignatureMetadata(signatureResult);
+  const [requirementResult, infoResult, entitlements, packageMetadata] = await Promise.all([
+    inspectSystemFile(dependencies.executeFile, "/usr/bin/codesign", [
+      "--display",
+      "--requirements",
+      "-",
+      application,
+    ]),
+    inspectSystemFile(dependencies.executeFile, "/usr/bin/plutil", [
+      "-convert",
+      "json",
+      "-o",
+      "-",
+      "--",
+      bundle.infoPath,
+    ]),
+    readNormalizedEntitlements(application, dependencies),
+    readPackagedManifest(bundle.archivePath, dependencies),
+  ]);
   const designatedRequirement = parseDesignatedRequirement(requirementResult);
   const version = parseBundleMetadata(infoResult);
-  if (packageVersion !== version) fail("macOS package identity is invalid");
+  if (packageMetadata.version !== version) fail("macOS package identity is invalid");
   if (entitlements !== canonicalEntitlements) fail("macOS signed entitlements are invalid");
   return Object.freeze({
     version,
     identifier: signature.identifier,
     productName: canonicalProductName,
     packageName: canonicalPackageName,
+    enduragentDesktopRelease: packageMetadata.enduragentDesktopRelease,
     teamIdentifier: signature.teamIdentifier,
     designatedRequirement,
     entitlements,
     hardenedRuntime: signature.hardenedRuntime,
     authorities: signature.authorities,
     codeDirectory: signature.codeDirectory,
+    codeDirectorySha256: signature.codeDirectorySha256,
     cdHash: signature.cdHash,
   });
 }
@@ -349,7 +416,9 @@ export async function verifyMacosBaselineApplication(baselineApplication, option
     mkdtemp: overrides.mkdtemp ?? mkdtemp,
     realpath: overrides.realpath ?? realpath,
     rm: overrides.rm ?? rm,
+    statAsarFile: overrides.statAsarFile ?? statFile,
     tmpdir: overrides.tmpdir ?? tmpdir,
+    uncacheAsar: overrides.uncacheAsar ?? uncacheAsarFile,
   };
   const bundle = await requireApplicationBundle(baselineApplication, "baseline", dependencies);
   const baseline = await inspectMacosApplicationIdentity(baselineApplication, bundle, dependencies);
@@ -386,6 +455,7 @@ async function verifyMacosReleaseCandidateBundle(
     entitlements: candidate.entitlements,
     candidateCodeIdentity: Object.freeze({
       codeDirectory: candidate.codeDirectory,
+      codeDirectorySha256: candidate.codeDirectorySha256,
       cdHash: candidate.cdHash,
     }),
   });
@@ -412,7 +482,9 @@ export async function verifyMacosReleaseCandidateApplication(
     mkdtemp: overrides.mkdtemp ?? mkdtemp,
     realpath: overrides.realpath ?? realpath,
     rm: overrides.rm ?? rm,
+    statAsarFile: overrides.statAsarFile ?? statFile,
     tmpdir: overrides.tmpdir ?? tmpdir,
+    uncacheAsar: overrides.uncacheAsar ?? uncacheAsarFile,
   };
   const bundle = await requireApplicationBundle(candidateApplication, "candidate", dependencies);
   return verifyMacosReleaseCandidateBundle(
@@ -421,6 +493,167 @@ export async function verifyMacosReleaseCandidateApplication(
     bundle,
     dependencies,
   );
+}
+
+async function readMacosReleaseUpdaterMetadata(application, dependencies) {
+  const path = join(application, "Contents/Resources/app-update.yml");
+  let before;
+  let bytes;
+  try {
+    before = await dependencies.lstat(path);
+  } catch {
+    fail("macOS release updater metadata is invalid");
+  }
+  if (
+    before.isSymbolicLink() ||
+    !before.isFile() ||
+    !Number.isSafeInteger(before.size) ||
+    before.size <= 0 ||
+    before.size > maximumUpdaterMetadataBytes
+  ) {
+    fail("macOS release updater metadata is invalid");
+  }
+  try {
+    bytes = await dependencies.readFile(path);
+  } catch {
+    fail("macOS release updater metadata is invalid");
+  }
+  let after;
+  try {
+    after = await dependencies.lstat(path);
+  } catch {
+    fail("macOS release updater metadata is invalid");
+  }
+  if (
+    after.isSymbolicLink() ||
+    !after.isFile() ||
+    !(bytes instanceof Uint8Array) ||
+    bytes.length !== before.size ||
+    after.dev !== before.dev ||
+    after.ino !== before.ino ||
+    after.mode !== before.mode ||
+    after.size !== before.size ||
+    after.mtimeMs !== before.mtimeMs ||
+    after.ctimeMs !== before.ctimeMs
+  ) {
+    fail("macOS release updater metadata is invalid");
+  }
+  try {
+    return parseMacosReleaseUpdaterMetadata(bytes);
+  } catch {
+    fail("macOS release updater metadata is invalid");
+  }
+}
+
+async function copyMacosReleaseApplication(source, destination, dependencies) {
+  try {
+    await dependencies.executeFile("/usr/bin/ditto", [
+      "--rsrc",
+      "--extattr",
+      "--qtn",
+      "--acl",
+      source,
+      destination,
+    ]);
+  } catch {
+    fail("macOS release application snapshot failed");
+  }
+}
+
+export async function inspectMacosReleaseApplication(application, overrides = {}) {
+  if (
+    typeof application !== "string" ||
+    !isAbsolute(application) ||
+    !application.endsWith(".app")
+  ) {
+    fail("release application path must be one absolute .app path");
+  }
+  const dependencies = {
+    executeFile: overrides.executeFile ?? executeSystemFile,
+    extractAsarFile: overrides.extractAsarFile ?? extractFile,
+    lstat: overrides.lstat ?? lstat,
+    mkdtemp: overrides.mkdtemp ?? mkdtemp,
+    readFile: overrides.readFile ?? readFile,
+    realpath: overrides.realpath ?? realpath,
+    rm: overrides.rm ?? rm,
+    statAsarFile: overrides.statAsarFile ?? statFile,
+    tmpdir: overrides.tmpdir ?? tmpdir,
+    uncacheAsar: overrides.uncacheAsar ?? uncacheAsarFile,
+  };
+
+  await requireApplicationBundle(application, "release", dependencies);
+  await verifyMacosApplication(application, { executeFile: dependencies.executeFile });
+
+  const temporaryPrefix = join(dependencies.tmpdir(), "enduragent-release-inspector-");
+  let temporaryDirectory;
+  let temporaryDirectoryIdentity;
+  let result;
+  let failure = null;
+  try {
+    const candidate = await dependencies.mkdtemp(temporaryPrefix);
+    temporaryDirectoryIdentity = await requireSecureTemporaryDirectory(
+      candidate,
+      temporaryPrefix,
+      dependencies,
+    );
+    temporaryDirectory = candidate;
+    const snapshot = join(temporaryDirectory, `${canonicalProductName}.app`);
+    await copyMacosReleaseApplication(application, snapshot, dependencies);
+    const bundle = await requireApplicationBundle(snapshot, "release snapshot", dependencies);
+    const identity = await inspectMacosApplicationIdentity(snapshot, bundle, dependencies);
+    if (identity.enduragentDesktopRelease !== true) {
+      fail("macOS release marker is invalid");
+    }
+    const updater = await readMacosReleaseUpdaterMetadata(snapshot, dependencies);
+    result = Object.freeze({
+      version: identity.version,
+      enduragentDesktopRelease: true,
+      feedUrl: updater.url,
+      bundleIdentifier: identity.identifier,
+      teamIdentifier: identity.teamIdentifier,
+      designatedRequirementSha256: canonicalDesignatedRequirementSha256,
+      codeDirectorySha256: identity.codeDirectorySha256,
+      cdHash: identity.cdHash,
+    });
+  } catch (error) {
+    failure =
+      error instanceof MacosReleaseVerificationError
+        ? error
+        : new MacosReleaseVerificationError("macOS release application inspection failed");
+  }
+
+  let cleanupFailure;
+  if (temporaryDirectory !== undefined && temporaryDirectoryIdentity !== undefined) {
+    try {
+      await requireSameSecureDirectory(
+        temporaryDirectory,
+        temporaryDirectoryIdentity,
+        dependencies,
+        "macOS release application snapshot cleanup failed",
+      );
+      await dependencies.rm(temporaryDirectory, { recursive: true, force: true });
+      try {
+        await dependencies.lstat(temporaryDirectory);
+        cleanupFailure = new MacosReleaseVerificationError(
+          "macOS release application snapshot cleanup failed",
+        );
+      } catch (error) {
+        if (!missingPathError(error)) {
+          cleanupFailure = new MacosReleaseVerificationError(
+            "macOS release application snapshot cleanup failed",
+          );
+        }
+      }
+    } catch {
+      cleanupFailure = new MacosReleaseVerificationError(
+        "macOS release application snapshot cleanup failed",
+      );
+    }
+  }
+  if (cleanupFailure !== undefined) throw cleanupFailure;
+  if (failure !== null) throw failure;
+  if (result === undefined) fail("macOS release application inspection failed");
+  return result;
 }
 
 export async function verifyMacosIdentityContinuity(
@@ -451,7 +684,9 @@ export async function verifyMacosIdentityContinuity(
     mkdtemp: overrides.mkdtemp ?? mkdtemp,
     realpath: overrides.realpath ?? realpath,
     rm: overrides.rm ?? rm,
+    statAsarFile: overrides.statAsarFile ?? statFile,
     tmpdir: overrides.tmpdir ?? tmpdir,
+    uncacheAsar: overrides.uncacheAsar ?? uncacheAsarFile,
   };
   const [baselineBundle, candidateBundle] = await Promise.all([
     requireApplicationBundle(baselineApplication, "baseline", dependencies),
@@ -472,6 +707,7 @@ export async function verifyMacosIdentityContinuity(
   const candidate = {
     ...candidateIdentity,
     codeDirectory: candidateIdentity.candidateCodeIdentity.codeDirectory,
+    codeDirectorySha256: candidateIdentity.candidateCodeIdentity.codeDirectorySha256,
     cdHash: candidateIdentity.candidateCodeIdentity.cdHash,
   };
   if (!olderStableCalVer(baseline.version, candidate.version)) {
@@ -491,6 +727,7 @@ export async function verifyMacosIdentityContinuity(
     teamIdentifier: candidate.teamIdentifier,
     candidateCodeIdentity: Object.freeze({
       codeDirectory: candidate.codeDirectory,
+      codeDirectorySha256: candidate.codeDirectorySha256,
       cdHash: candidate.cdHash,
     }),
   });
@@ -502,8 +739,11 @@ function requireCandidateCodeIdentity(value) {
     typeof value.codeDirectory !== "string" ||
     value.codeDirectory.length === 0 ||
     value.codeDirectory.length > 16_384 ||
+    typeof value.codeDirectorySha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(value.codeDirectorySha256) ||
     typeof value.cdHash !== "string" ||
-    !/^[0-9a-f]{40,128}$/u.test(value.cdHash)
+    !/^[0-9a-f]{40}$/u.test(value.cdHash) ||
+    value.cdHash !== value.codeDirectorySha256.slice(0, 40)
   ) {
     fail("loose candidate code identity is invalid");
   }
@@ -902,6 +1142,7 @@ async function inspectPackagedApplication(application, expectedCodeIdentity, ver
   const actualCodeIdentity = requireCandidateCodeIdentity(verifiedCandidate?.candidateCodeIdentity);
   if (
     actualCodeIdentity.codeDirectory !== expectedCodeIdentity.codeDirectory ||
+    actualCodeIdentity.codeDirectorySha256 !== expectedCodeIdentity.codeDirectorySha256 ||
     actualCodeIdentity.cdHash !== expectedCodeIdentity.cdHash
   ) {
     fail("packaged macOS application differs from the loose candidate");

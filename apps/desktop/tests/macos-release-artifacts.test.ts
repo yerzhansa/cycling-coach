@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  cp,
   lstat,
   mkdir,
   mkdtemp,
@@ -15,10 +16,13 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { createPackage, uncache } from "@electron/asar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse, stringify } from "yaml";
 import {
+  inspectMacosReleaseApplication,
   verifyMacosApplication,
   verifyMacosBaselineApplication,
   verifyMacosGenesisReleaseApplicationContents,
@@ -125,13 +129,16 @@ interface SignedApplicationMetadata {
   entitlements: Record<string, unknown>;
   extraAuthorities: string[];
   codeDirectory: string;
+  candidateCDHashFullLines: string[];
   cdHash: string;
 }
 
 const canonicalDesignatedRequirement =
   'identifier "icu.enduragent.desktop" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = FA494ACVTF';
+const syntheticPackageManifestBytes = 8_192;
 
 function signedApplicationMetadata(version: string, cdHash: string): SignedApplicationMetadata {
+  const codeDirectorySha256 = `${cdHash}${cdHash.slice(0, 24)}`;
   return {
     version,
     teamIdentifier: "FA494ACVTF",
@@ -139,6 +146,7 @@ function signedApplicationMetadata(version: string, cdHash: string): SignedAppli
     requirement: canonicalDesignatedRequirement,
     flags: "runtime",
     codeDirectory: "v=20500 size=100 flags=0x10000(runtime) hashes=1+7 location=embedded",
+    candidateCDHashFullLines: [`CandidateCDHashFull sha256=${codeDirectorySha256}`],
     cdHash,
     info: {
       CFBundleIdentifier: "icu.enduragent.desktop",
@@ -164,23 +172,59 @@ async function signedIdentityFixture() {
   roots.push(root);
   const baseline = join(root, "baseline/Enduragent.app");
   const candidate = join(root, "candidate/Enduragent.app");
-  for (const application of [baseline, candidate]) {
+  for (const [index, application] of [baseline, candidate].entries()) {
     await mkdir(join(application, "Contents/Resources"), { recursive: true });
+    const archiveSource = join(root, `archive-source-${index}`);
+    await mkdir(archiveSource);
     await Promise.all([
       writeFile(join(application, "Contents/Info.plist"), "synthetic plist authority\n"),
-      writeFile(join(application, "Contents/Resources/app.asar"), "synthetic ASAR authority\n"),
+      writeFile(
+        join(archiveSource, "package.json"),
+        "{}".padEnd(syntheticPackageManifestBytes, " "),
+      ),
+      writeFile(
+        join(application, "Contents/Resources/app-update.yml"),
+        [
+          "provider: generic",
+          "url: https://github.com/yerzhansa/enduragent/releases/latest/download/",
+          "channel: latest",
+          "updaterCacheDirName: '@enduragentdesktop-updater'",
+          "",
+        ].join("\n"),
+      ),
     ]);
+    const archive = await createPackage(
+      archiveSource,
+      join(application, "Contents/Resources/app.asar"),
+    );
+    await finished(archive);
   }
   const metadata = new Map<string, SignedApplicationMetadata>([
     [baseline, signedApplicationMetadata("2026.7.1", "a".repeat(40))],
     [candidate, signedApplicationMetadata("2026.7.2", "b".repeat(40))],
   ]);
   const applicationForPath = (path: string) =>
-    path.startsWith(baseline) ? baseline : path.startsWith(candidate) ? candidate : undefined;
+    [...metadata.keys()].find(
+      (application) => path === application || path.startsWith(`${application}/`),
+    );
   const temporaryEntitlements = new Map<string, Record<string, unknown>>();
   const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
     const finalArgument = arguments_.at(-1);
     if (typeof finalArgument !== "string") throw new Error("synthetic command shape rejected");
+    if (executable === "/usr/bin/ditto") {
+      const source = arguments_.at(-2);
+      if (
+        typeof source !== "string" ||
+        arguments_.slice(0, -2).join(" ") !== "--rsrc --extattr --qtn --acl" ||
+        metadata.has(source) === false ||
+        metadata.has(finalArgument)
+      ) {
+        throw new Error("synthetic application snapshot shape rejected");
+      }
+      await cp(source, finalArgument, { recursive: true });
+      metadata.set(finalArgument, structuredClone(metadata.get(source)!));
+      return { stdout: "", stderr: "" };
+    }
     if (executable === "/usr/bin/xcrun" || executable === "/usr/sbin/spctl") {
       return { stdout: "", stderr: "" };
     }
@@ -197,6 +241,7 @@ async function signedIdentityFixture() {
             `Executable=${application}/Contents/MacOS/Enduragent`,
             `Identifier=${selected.identifier}`,
             `CodeDirectory ${selected.codeDirectory.replace(`(${selected.codeDirectory.includes("runtime") ? "runtime" : "none"})`, `(${selected.flags})`)}`,
+            ...selected.candidateCDHashFullLines,
             `CDHash=${selected.cdHash}`,
             `Authority=Developer ID Application: Enduragent Test (${selected.teamIdentifier})`,
             "Authority=Developer ID Certification Authority",
@@ -260,12 +305,331 @@ async function signedIdentityFixture() {
   const extractAsarFile = vi.fn(async (archivePath: string) => {
     const application = applicationForPath(archivePath);
     if (application === undefined) throw new Error("synthetic ASAR path rejected");
-    return Buffer.from(JSON.stringify(metadata.get(application)!.manifest));
+    const serialized = Buffer.from(JSON.stringify(metadata.get(application)!.manifest));
+    if (serialized.length > syntheticPackageManifestBytes) {
+      throw new Error("synthetic manifest exceeds fixed ASAR entry");
+    }
+    return Buffer.concat([
+      serialized,
+      Buffer.alloc(syntheticPackageManifestBytes - serialized.length, 0x20),
+    ]);
   });
   return { baseline, candidate, executeFile, extractAsarFile, metadata };
 }
 
 describe("macOS signed identity continuity", () => {
+  it("inspects one marked release application through the canonical native identity pipeline", async () => {
+    const fixture = await signedIdentityFixture();
+    const uncacheAsar = vi.fn(uncache);
+
+    const inspected = await inspectMacosReleaseApplication(fixture.candidate, {
+      executeFile: fixture.executeFile,
+      extractAsarFile: fixture.extractAsarFile,
+      uncacheAsar,
+    });
+
+    expect(inspected).toEqual({
+      version,
+      enduragentDesktopRelease: true,
+      feedUrl: "https://github.com/yerzhansa/enduragent/releases/latest/download/",
+      bundleIdentifier: "icu.enduragent.desktop",
+      teamIdentifier: "FA494ACVTF",
+      designatedRequirementSha256: createHash("sha256")
+        .update(canonicalDesignatedRequirement)
+        .digest("hex"),
+      codeDirectorySha256: "b".repeat(64),
+      cdHash: "b".repeat(40),
+    });
+    expect(Object.isFrozen(inspected)).toBe(true);
+    expect(uncacheAsar.mock.results.map(({ value }) => value)).toEqual([false, true]);
+  });
+
+  it.each(["missing", "false", "nested"])("rejects a %s packaged release marker", async (shape) => {
+    const fixture = await signedIdentityFixture();
+    const manifest = fixture.metadata.get(fixture.candidate)!.manifest;
+    if (shape === "missing") delete manifest.enduragentDesktopRelease;
+    else if (shape === "false") manifest.enduragentDesktopRelease = false;
+    else {
+      delete manifest.enduragentDesktopRelease;
+      manifest.build = { enduragentDesktopRelease: true };
+    }
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+      }),
+    ).rejects.toThrow("macOS release marker is invalid");
+  });
+
+  it("rejects a noncanonical signer before inspecting the packaged manifest", async () => {
+    const fixture = await signedIdentityFixture();
+    fixture.metadata.get(fixture.candidate)!.teamIdentifier = "ZZZZZ99999";
+    const statAsarFile = vi.fn((_archivePath: string, _filename: string, _followLinks: false) => ({
+      size: syntheticPackageManifestBytes,
+    }));
+    const uncacheAsar = vi.fn(() => false);
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+        statAsarFile,
+        uncacheAsar,
+      }),
+    ).rejects.toThrow("macOS signed identity is invalid");
+    expect(statAsarFile).not.toHaveBeenCalled();
+    expect(fixture.extractAsarFile).not.toHaveBeenCalled();
+    expect(uncacheAsar).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized packaged manifest metadata before extracting bytes", async () => {
+    const fixture = await signedIdentityFixture();
+    const statAsarFile = vi.fn((_archivePath: string, _filename: string, _followLinks: false) => ({
+      size: 16_385,
+    }));
+    const uncacheAsar = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+        statAsarFile,
+        uncacheAsar,
+      }),
+    ).rejects.toThrow("macOS package identity is invalid");
+    expect(statAsarFile).toHaveBeenCalledOnce();
+    expect(fixture.extractAsarFile).not.toHaveBeenCalled();
+    expect(uncacheAsar).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects inspection when packaged manifest cache eviction cannot be confirmed", async () => {
+    const fixture = await signedIdentityFixture();
+    const statAsarFile = vi.fn((_archivePath: string, _filename: string, _followLinks: false) => ({
+      size: syntheticPackageManifestBytes,
+    }));
+    const uncacheAsar = vi.fn(() => false);
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+        statAsarFile,
+        uncacheAsar,
+      }),
+    ).rejects.toThrow("macOS package identity cache cleanup failed");
+    expect(fixture.extractAsarFile).toHaveBeenCalledOnce();
+    expect(uncacheAsar).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [
+      "provider",
+      "provider: github\nurl: https://github.com/yerzhansa/enduragent/releases/latest/download/\nchannel: latest\nupdaterCacheDirName: '@enduragentdesktop-updater'\n",
+    ],
+    [
+      "channel",
+      "provider: generic\nurl: https://github.com/yerzhansa/enduragent/releases/latest/download/\nchannel: beta\nupdaterCacheDirName: '@enduragentdesktop-updater'\n",
+    ],
+    [
+      "cache directory",
+      "provider: generic\nurl: https://github.com/yerzhansa/enduragent/releases/latest/download/\nchannel: latest\nupdaterCacheDirName: alternate\n",
+    ],
+    [
+      "HTTPS feed",
+      "provider: generic\nurl: http://github.com/yerzhansa/enduragent/releases/latest/download/\nchannel: latest\nupdaterCacheDirName: '@enduragentdesktop-updater'\n",
+    ],
+    [
+      "exact keys",
+      "provider: generic\nurl: https://github.com/yerzhansa/enduragent/releases/latest/download/\nchannel: latest\nupdaterCacheDirName: '@enduragentdesktop-updater'\nextra: forbidden\n",
+    ],
+  ])("rejects updater metadata with invalid %s", async (_label, contents) => {
+    const fixture = await signedIdentityFixture();
+    await writeFile(join(fixture.candidate, "Contents/Resources/app-update.yml"), contents);
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+      }),
+    ).rejects.toThrow("macOS release updater metadata is invalid");
+  });
+
+  it.each(["missing", "directory", "symlink", "malformed"])(
+    "rejects %s updater metadata",
+    async (shape) => {
+      const fixture = await signedIdentityFixture();
+      const updaterPath = join(fixture.candidate, "Contents/Resources/app-update.yml");
+      await rm(updaterPath);
+      if (shape === "directory") await mkdir(updaterPath);
+      if (shape === "symlink") await symlink("app.asar", updaterPath);
+      if (shape === "malformed") await writeFile(updaterPath, "[unterminated\n");
+
+      await expect(
+        inspectMacosReleaseApplication(fixture.candidate, {
+          executeFile: fixture.executeFile,
+          extractAsarFile: fixture.extractAsarFile,
+        }),
+      ).rejects.toThrow("macOS release updater metadata is invalid");
+    },
+  );
+
+  it("rejects updater metadata that changes while it is read", async () => {
+    const fixture = await signedIdentityFixture();
+    let updaterInspectionCount = 0;
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+        lstat: async (path) => {
+          const stat = await lstat(path);
+          if (
+            !path.endsWith("/Contents/Resources/app-update.yml") ||
+            ++updaterInspectionCount === 1
+          ) {
+            return stat;
+          }
+          return new Proxy(stat, {
+            get(target, property) {
+              if (property === "mtimeMs") return target.mtimeMs + 1;
+              const value = Reflect.get(target, property, target);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        },
+      }),
+    ).rejects.toThrow("macOS release updater metadata is invalid");
+  });
+
+  it("rejects oversized updater metadata without reading it", async () => {
+    const fixture = await signedIdentityFixture();
+    await writeFile(
+      join(fixture.candidate, "Contents/Resources/app-update.yml"),
+      "x".repeat(16_385),
+    );
+    const readUpdater = vi.fn((path: string) => readFile(path));
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+        readFile: readUpdater,
+      }),
+    ).rejects.toThrow("macOS release updater metadata is invalid");
+    expect(readUpdater).not.toHaveBeenCalled();
+  });
+
+  it("derives marker and updater evidence only from the verified snapshot", async () => {
+    const fixture = await signedIdentityFixture();
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      const result = await fixture.executeFile(executable, arguments_);
+      if (executable === "/usr/bin/ditto") {
+        fixture.metadata.get(fixture.candidate)!.manifest.enduragentDesktopRelease = false;
+        await writeFile(
+          join(fixture.candidate, "Contents/Resources/app-update.yml"),
+          "provider: github\nurl: http://invalid.example/\n",
+        );
+      }
+      return result;
+    });
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+      }),
+    ).resolves.toMatchObject({
+      enduragentDesktopRelease: true,
+      feedUrl: "https://github.com/yerzhansa/enduragent/releases/latest/download/",
+    });
+    expect(executeFile).toHaveBeenCalledWith(
+      "/usr/bin/ditto",
+      expect.arrayContaining([fixture.candidate]),
+    );
+  });
+
+  it("does not read updater metadata before the snapshot signature verifies", async () => {
+    const fixture = await signedIdentityFixture();
+    const readUpdater = vi.fn((path: string) => readFile(path));
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      const application = arguments_.at(-1);
+      if (
+        executable === "/usr/bin/codesign" &&
+        arguments_.includes("--verify") &&
+        typeof application === "string" &&
+        application.includes("/enduragent-release-inspector-")
+      ) {
+        throw new Error("synthetic snapshot signature failure");
+      }
+      return fixture.executeFile(executable, arguments_);
+    });
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+        readFile: readUpdater,
+      }),
+    ).rejects.toThrow("macOS application signature verification failed");
+    expect(readUpdater).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["absent", []],
+    [
+      "duplicate",
+      [
+        `CandidateCDHashFull sha256=${"b".repeat(64)}`,
+        `CandidateCDHashFull sha256=${"b".repeat(64)}`,
+      ],
+    ],
+    ["malformed", ["CandidateCDHashFull sha256=not-a-digest"]],
+    ["CDHash prefix mismatch", [`CandidateCDHashFull sha256=${"c".repeat(64)}`]],
+  ])("rejects an %s full CodeDirectory digest", async (_label, lines) => {
+    const fixture = await signedIdentityFixture();
+    fixture.metadata.get(fixture.candidate)!.candidateCDHashFullLines = lines;
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+      }),
+    ).rejects.toThrow("macOS signed identity is invalid");
+  });
+
+  it("normalizes the full CodeDirectory digest and CDHash to lowercase", async () => {
+    const fixture = await signedIdentityFixture();
+    const metadata = fixture.metadata.get(fixture.candidate)!;
+    metadata.candidateCDHashFullLines = [`CandidateCDHashFull sha256=${"B".repeat(64)}`];
+    metadata.cdHash = "B".repeat(40);
+
+    await expect(
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+      }),
+    ).resolves.toMatchObject({
+      codeDirectorySha256: "b".repeat(64),
+      cdHash: "b".repeat(40),
+    });
+  });
+
+  it.each([undefined, "Enduragent.app", "/tmp/Enduragent"])(
+    "rejects a non-absolute or non-app inspector input before native inspection: %s",
+    async (application) => {
+      const fixture = await signedIdentityFixture();
+
+      await expect(
+        inspectMacosReleaseApplication(application as never, {
+          executeFile: fixture.executeFile,
+          extractAsarFile: fixture.extractAsarFile,
+        }),
+      ).rejects.toThrow("release application path must be one absolute .app path");
+      expect(fixture.executeFile).not.toHaveBeenCalled();
+    },
+  );
+
   it("proves a canonical candidate without requiring an older baseline", async () => {
     const fixture = await signedIdentityFixture();
 
@@ -294,6 +658,7 @@ describe("macOS signed identity continuity", () => {
       entitlements: JSON.stringify({ "com.apple.security.cs.allow-jit": true }),
       candidateCodeIdentity: {
         codeDirectory: "v=20500 size=100 flags=0x10000(runtime) hashes=1+7 location=embedded",
+        codeDirectorySha256: "b".repeat(64),
         cdHash: "b".repeat(40),
       },
     });
@@ -383,6 +748,7 @@ describe("macOS signed identity continuity", () => {
       teamIdentifier: "FA494ACVTF",
       candidateCodeIdentity: {
         codeDirectory: "v=20500 size=100 flags=0x10000(runtime) hashes=1+7 location=embedded",
+        codeDirectorySha256: "b".repeat(64),
         cdHash: "b".repeat(40),
       },
     });
@@ -464,6 +830,21 @@ describe("macOS signed identity continuity", () => {
         { executeFile: fixture.executeFile, extractAsarFile: fixture.extractAsarFile },
       ),
     ).resolves.toMatchObject({ teamIdentifier: "FA494ACVTF" });
+
+    const [commented, canonical] = await Promise.all([
+      inspectMacosReleaseApplication(fixture.baseline, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+      }),
+      inspectMacosReleaseApplication(fixture.candidate, {
+        executeFile: fixture.executeFile,
+        extractAsarFile: fixture.extractAsarFile,
+      }),
+    ]);
+    expect(commented.designatedRequirementSha256).toBe(canonical.designatedRequirementSha256);
+    expect(canonical.designatedRequirementSha256).toBe(
+      createHash("sha256").update(canonicalDesignatedRequirement).digest("hex"),
+    );
   });
 
   it.each([
@@ -707,11 +1088,13 @@ type PackagedRootShape =
   | "valid";
 interface PackagedCodeIdentity {
   readonly codeDirectory: string;
+  readonly codeDirectorySha256: string;
   readonly cdHash: string;
 }
 
 const looseCandidateCodeIdentity: PackagedCodeIdentity = Object.freeze({
   codeDirectory: "v=20500 size=100 flags=0x10000(runtime) hashes=1+7 location=embedded",
+  codeDirectorySha256: "b".repeat(64),
   cdHash: "b".repeat(40),
 });
 
@@ -1107,6 +1490,7 @@ describe("macOS packaged application identity binding", () => {
     async (source) => {
       const mismatchedCodeIdentity = {
         ...looseCandidateCodeIdentity,
+        codeDirectorySha256: "c".repeat(64),
         cdHash: "c".repeat(40),
       };
       const fixture = await packagedApplicationFixture(
@@ -1399,7 +1783,31 @@ describe("macOS packaged application identity binding", () => {
     ["DMG", { dmgCodeIdentity: { ...looseCandidateCodeIdentity, codeDirectory: "different" } }],
     [
       "same signed identity but different CDHash",
-      { dmgCodeIdentity: { ...looseCandidateCodeIdentity, cdHash: "c".repeat(40) } },
+      {
+        dmgCodeIdentity: {
+          ...looseCandidateCodeIdentity,
+          codeDirectorySha256: "c".repeat(64),
+          cdHash: "c".repeat(40),
+        },
+      },
+    ],
+    [
+      "ZIP with the same signed identity and CDHash prefix but different full digest content",
+      {
+        zipCodeIdentity: {
+          ...looseCandidateCodeIdentity,
+          codeDirectorySha256: `${"b".repeat(40)}${"c".repeat(24)}`,
+        },
+      },
+    ],
+    [
+      "DMG with the same signed identity and CDHash prefix but different full digest content",
+      {
+        dmgCodeIdentity: {
+          ...looseCandidateCodeIdentity,
+          codeDirectorySha256: `${"b".repeat(40)}${"c".repeat(24)}`,
+        },
+      },
     ],
   ])("rejects %s application drift", async (_label, options) => {
     const fixture = await packagedApplicationFixture(options);
@@ -1608,6 +2016,7 @@ describe("macOS release artifact envelope", () => {
       entitlements: JSON.stringify({ "com.apple.security.cs.allow-jit": true }),
       candidateCodeIdentity: Object.freeze({
         codeDirectory: looseCandidateCodeIdentity.codeDirectory,
+        codeDirectorySha256: looseCandidateCodeIdentity.codeDirectorySha256,
         cdHash: looseCandidateCodeIdentity.cdHash,
       }),
     });
@@ -1669,6 +2078,7 @@ describe("macOS release artifact envelope", () => {
       teamIdentifier: "FA494ACVTF",
       candidateCodeIdentity: Object.freeze({
         codeDirectory: "v=20500 size=100 flags=0x10000(runtime) hashes=1+7 location=embedded",
+        codeDirectorySha256: "b".repeat(64),
         cdHash: "b".repeat(40),
       }),
     });

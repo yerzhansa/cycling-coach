@@ -253,6 +253,43 @@ export function requireGenericFeedUrl(value) {
   return value;
 }
 
+export function parseMacosReleaseUpdaterMetadata(value) {
+  let metadata;
+  try {
+    const source =
+      typeof value === "string"
+        ? value
+        : value instanceof Uint8Array
+          ? Buffer.from(value).toString("utf8")
+          : undefined;
+    if (source === undefined) throw new TypeError();
+    metadata = parse(source);
+  } catch {
+    throw new TypeError("release updater metadata is invalid");
+  }
+  if (
+    !exactObject(metadata) ||
+    !hasExactKeys(metadata, ["provider", "url", "channel", "updaterCacheDirName"]) ||
+    metadata.provider !== "generic" ||
+    metadata.channel !== "latest" ||
+    metadata.updaterCacheDirName !== DESKTOP_UPDATER_CACHE_DIRECTORY
+  ) {
+    throw new TypeError("release updater metadata is invalid");
+  }
+  let url;
+  try {
+    url = requireGenericFeedUrl(metadata.url);
+  } catch {
+    throw new TypeError("release updater metadata is invalid");
+  }
+  return Object.freeze({
+    provider: "generic",
+    url,
+    channel: "latest",
+    updaterCacheDirName: DESKTOP_UPDATER_CACHE_DIRECTORY,
+  });
+}
+
 export function requireDeveloperIdIdentity(value) {
   const hasControlCharacter =
     typeof value === "string" &&

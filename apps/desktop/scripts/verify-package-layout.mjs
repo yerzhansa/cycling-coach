@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { extractFile, listPackage, statFile, uncache } from "@electron/asar";
 import { parse } from "yaml";
 import {
-  DESKTOP_UPDATER_CACHE_DIRECTORY,
+  parseMacosReleaseUpdaterMetadata,
   requireGenericFeedUrl,
   requireStableCalVer,
 } from "./macos-release-plan.mjs";
@@ -668,17 +668,11 @@ function validateRequiredAsarFiles(asar, sourceManifest, release, development) {
 function validateAppUpdate(bytes, release) {
   let update;
   try {
-    update = parse(bytes.toString("utf8"));
+    update = parseMacosReleaseUpdaterMetadata(bytes);
   } catch {
     fail("invalid release app-update.yml", "Contents/Resources/app-update.yml");
   }
-  const expected = {
-    provider: "generic",
-    url: release.feedUrl,
-    channel: "latest",
-    updaterCacheDirName: DESKTOP_UPDATER_CACHE_DIRECTORY,
-  };
-  if (!exactObject(update) || !isDeepStrictEqual(update, expected)) {
+  if (update.url !== release.feedUrl) {
     fail("invalid release app-update.yml", "Contents/Resources/app-update.yml");
   }
 }
