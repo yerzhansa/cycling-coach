@@ -184,6 +184,7 @@ export interface PromoteMacosReleaseEnvelopeDependencies {
 }
 
 export const DESKTOP_UPDATER_CACHE_DIRECTORY: "@enduragentdesktop-updater";
+export function safeMacosReleasePlanMessage(error: unknown): string | undefined;
 export function requireNotarizationCredentials(
   environment?: Readonly<Record<string, string | undefined>>,
 ): NotarizationCredentialSelection;
