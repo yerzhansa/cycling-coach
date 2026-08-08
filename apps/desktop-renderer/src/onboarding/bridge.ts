@@ -3,6 +3,7 @@ import { CoachClientDisconnectedError, connectCoachClient } from "@enduragent/co
 import {
   ImportFilesRpcParamsSchema,
   SaveIntakeRpcParamsSchema,
+  type GetSetupStatusRpcResult,
   type CoachOperationProgressNotificationEnvelope,
   type ImportFilesRpcResult,
   type LlmProvider,
@@ -118,6 +119,7 @@ export interface ChatGptLoginInput {
 }
 
 export interface OnboardingBridge {
+  getSetupStatus?(): Promise<GetSetupStatusRpcResult>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: OnboardingCredentialWriteInput): Promise<CredentialWriteResult>;

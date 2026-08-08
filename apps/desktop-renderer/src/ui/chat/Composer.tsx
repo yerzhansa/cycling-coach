@@ -9,6 +9,7 @@ import {
 } from "react";
 import { filterSlashCommands } from "../../chat/commands.js";
 import { useEnduragentStore } from "../../state/store.js";
+import { setupReady } from "../../state/onboarding-slice.js";
 import styles from "./Composer.module.css";
 import { SlashPopup } from "./SlashPopup.js";
 
@@ -26,6 +27,7 @@ export function Composer(props: {
   const sendDisabled = useEnduragentStore((state) => state.chat.sendDisabled);
   const inputDisabled = useEnduragentStore((state) => state.chat.inputDisabled);
   const actions = useEnduragentStore((state) => state.chatActions);
+  const canChat = useEnduragentStore(setupReady);
 
   const matches = useMemo(() => filterSlashCommands(draft), [draft]);
   const open = matches.length > 0 && !dismissed;
@@ -50,7 +52,7 @@ export function Composer(props: {
 
   const submit = (): void => {
     const input = textarea.current;
-    if (input === null || sendDisabled) return;
+    if (input === null || sendDisabled || !canChat) return;
     const value = input.value;
     if (!/\S/u.test(value)) return;
     input.value = "";
@@ -122,7 +124,7 @@ export function Composer(props: {
           id="message"
           ref={textarea}
           rows={2}
-          disabled={inputDisabled}
+          disabled={inputDisabled || !canChat}
           onChange={(event) => {
             setDraft(event.currentTarget.value);
             setSelected(0);
@@ -137,7 +139,7 @@ export function Composer(props: {
           type="submit"
           className={styles.send}
           aria-label="Send message"
-          disabled={sendDisabled}
+          disabled={sendDisabled || !canChat}
         >
           ↑
         </button>

@@ -39,6 +39,7 @@ export function mountWizard(input: {
   readonly rideImports?: RideImportController;
   readonly onRideImportPresentationChange?: (presenting: boolean) => void;
   readonly onComplete?: (completion: OnboardingCompletion) => void;
+  readonly credentialMutationsBlocked?: () => boolean;
   readonly createOperationId?: () => string;
   readonly afterPaint?: (callback: () => void) => () => void;
 }): MountedWizard {
@@ -56,6 +57,9 @@ export function mountWizard(input: {
       : { onRideImportPresentationChange: input.onRideImportPresentationChange }),
     focusOpener,
     onComplete: input.onComplete ?? vi.fn(),
+    ...(input.credentialMutationsBlocked === undefined
+      ? {}
+      : { credentialMutationsBlocked: input.credentialMutationsBlocked }),
     ...(input.createOperationId === undefined
       ? {}
       : { createOperationId: input.createOperationId }),

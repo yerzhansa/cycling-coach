@@ -155,6 +155,20 @@ describe("setup card", () => {
     warm.controller.dispose();
   });
 
+  it("keeps completed Chat setup changes quiet and omits deletion controls", async () => {
+    const wizard = mountWizard({ bridge: readyEverythingBridge() });
+    await wizard.open();
+    await waitFor(() => {
+      expect(rowState("ai")).toBe("ready");
+      expect(rowState("training")).toBe("ready");
+    });
+
+    expect(trigger("ai").className).toContain("border-transparent");
+    expect(trigger("training").className).toContain("border-transparent");
+    expect(screen.queryByRole("button", { name: /Delete the/u })).toBeNull();
+    wizard.controller.dispose();
+  });
+
   it("opens a menu of the offered lanes with the current one ticked", async () => {
     const user = userEvent.setup();
     const wizard = mountWizard({ bridge: claudeReadyBridge() });
@@ -431,7 +445,7 @@ describe("setup card", () => {
 
     const controls = Array.from(
       document.querySelectorAll<HTMLElement>(
-        ".onboarding input, .onboarding select, .onboarding textarea",
+        ".setup-panel input, .setup-panel select, .setup-panel textarea",
       ),
     );
     expect(controls.length).toBeGreaterThan(5);
@@ -513,7 +527,7 @@ describe("setup card", () => {
     expect(tick?.className).toContain("text-ok");
     const pending = setupRow("injury-status").querySelector('[data-setup-disc="pending"]');
     expect(pending).toBeNull();
-    expect(document.querySelector(".onboarding")?.outerHTML).not.toMatch(/brand/u);
+    expect(document.querySelector(".setup-panel")?.outerHTML).not.toMatch(/brand/u);
     wizard.controller.dispose();
   });
 

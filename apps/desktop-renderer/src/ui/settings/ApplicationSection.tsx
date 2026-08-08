@@ -148,24 +148,6 @@ export function ApplicationSection(): ReactElement {
             What’s new
           </button>
         </div>
-        <div className={styles.row}>
-          <div className={styles.label}>
-            <div className={styles.rowTitle}>Re-run setup</div>
-            <div className={styles.rowDetail}>
-              Walk through coach keys, training data and the safety intake again
-            </div>
-          </div>
-          <button
-            type="button"
-            className={styles.button}
-            disabled={mutating}
-            onClick={() => {
-              ports?.openSetup();
-            }}
-          >
-            Open setup
-          </button>
-        </div>
       </section>
       <h2 className={styles.heading}>Danger</h2>
       <section className={styles.group} aria-label="Danger">

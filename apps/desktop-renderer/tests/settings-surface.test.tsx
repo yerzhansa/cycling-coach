@@ -15,6 +15,11 @@ import type {
   ClaudeCliStatus,
   CredentialSlotStatus,
 } from "../src/onboarding/machine.js";
+import { createOnboardingState } from "../src/onboarding/machine.js";
+import {
+  onboardingCredentialMutationActive,
+  type OnboardingController,
+} from "../src/onboarding/controller.js";
 import { createReleaseNotesController } from "../src/release-notes/controller.js";
 import { createAthleteSettingsController } from "../src/settings/athlete-controller.js";
 import { createCredentialSettingsController } from "../src/settings/credential-controller.js";
@@ -36,6 +41,7 @@ import { createSpendSettingsAdapter } from "../src/state/adapters/spend.js";
 import { createTelegramSettingsAdapter } from "../src/state/adapters/telegram.js";
 import { createUpdateSettingsAdapter } from "../src/state/adapters/update.js";
 import { CLOSED_PANE, EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
+import { READY_ONBOARDING, setupReady } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import type { DesktopUpdateState } from "../src/update/controller.js";
 import { createDesktopUpdateController } from "../src/update/controller.js";
@@ -45,14 +51,17 @@ import { SettingsView } from "../src/ui/settings/SettingsView.js";
 interface Deferred<T> {
   readonly promise: Promise<T>;
   resolve(value: T): void;
+  reject(error: unknown): void;
 }
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function snapshot(overrides: Partial<RuntimeConfigSnapshot> = {}): RuntimeConfigSnapshot {
@@ -157,6 +166,7 @@ interface HarnessOptions {
   ) => Promise<OnboardingLlmSelectionResult>;
   readonly llm?: () => OnboardingLlmConfiguration;
   readonly credentialStatuses?: readonly CredentialSlotStatus[];
+  readonly loadCredentialStatuses?: () => Promise<readonly CredentialSlotStatus[]>;
   readonly chatGptStatus?: ChatGptStatus;
   readonly claudeCliStatus?: () => Promise<ClaudeCliStatus>;
   readonly deleteCredential?: () => Promise<CredentialDeleteResult>;
@@ -253,11 +263,13 @@ function createHarness(options: HarnessOptions = {}) {
   });
   const credentialController = createCredentialSettingsController({
     clients,
-    loadStatuses: async () =>
-      options.credentialStatuses ?? [
-        { slot: "anthropic", state: "configured", runtimeState: "active" },
-        { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
-      ],
+    loadStatuses:
+      options.loadCredentialStatuses ??
+      (async () =>
+        options.credentialStatuses ?? [
+          { slot: "anthropic", state: "configured", runtimeState: "active" },
+          { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+        ]),
     loadChatGptStatus: async () =>
       options.chatGptStatus ?? { state: "absent", runtimeReady: false },
     ...(options.claudeCliStatus === undefined
@@ -265,6 +277,8 @@ function createHarness(options: HarnessOptions = {}) {
       : { loadClaudeCliStatus: options.claudeCliStatus }),
     deleteCredential,
     openSetup,
+    credentialMutationsBlocked: () =>
+      onboardingCredentialMutationActive(store.getState().onboarding),
     beginMutation: () => store.getState().beginSettingsMutation("credential"),
     view: credentialAdapter.view,
   });
@@ -403,11 +417,57 @@ function createHarness(options: HarnessOptions = {}) {
 let harness: ReturnType<typeof createHarness> | undefined;
 
 beforeEach(() => {
+  const configuration = llmConfiguration();
+  const provider = configuration.providers[0]!;
+  const statuses = [
+    { slot: "anthropic", state: "configured", runtimeState: "active" },
+    { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+    { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+  ] as const;
   useEnduragentStore.setState({
     activeView: "settings",
     settings: EMPTY_SETTINGS_SURFACE,
     settingsPorts: null,
     chatActions: null,
+    onboarding: {
+      ...READY_ONBOARDING,
+      wizard: createOnboardingState(statuses),
+      statuses,
+      configuration,
+      draft: {
+        provider,
+        modelChoice: provider.defaultModel,
+        customModel: "",
+        endpointMode: "automatic",
+        customEndpoint: "",
+      },
+    },
+    onboardingActions: {
+      selectProvider(selected: string) {
+        useEnduragentStore.setState((state) => {
+          const selectedProvider = state.onboarding.configuration?.providers.find(
+            (entry) => entry.provider === selected,
+          );
+          if (selectedProvider === undefined) return state;
+          return {
+            onboarding: {
+              ...state.onboarding,
+              draft: {
+                provider: selectedProvider,
+                modelChoice: selectedProvider.defaultModel,
+                customModel: "",
+                endpointMode: "automatic",
+                customEndpoint: "",
+              },
+            },
+          };
+        });
+      },
+      selectModel() {},
+      setCustomModel() {},
+      setEndpointMode() {},
+      setCustomEndpoint() {},
+    } as unknown as OnboardingController,
   });
 });
 
@@ -432,6 +492,66 @@ async function renderSettings(options: HarnessOptions = {}) {
   });
   return harness;
 }
+
+describe("settings setup inventory", () => {
+  it("renders setup first without standalone Credentials or Application setup actions", async () => {
+    await renderSettings();
+    const settings = screen.getByRole("region", { name: "Settings" });
+    const setup = settings.querySelector('[data-setup-host="settings"]');
+    expect(setup).not.toBeNull();
+    expect(setup?.nextElementSibling?.textContent).toBe("Coach");
+    const aiRow = setup?.querySelector<HTMLElement>('[data-setup-row="ai"]');
+    const trainingRow = setup?.querySelector<HTMLElement>('[data-setup-row="training"]');
+    expect(aiRow).not.toBeNull();
+    expect(trainingRow).not.toBeNull();
+    expect(
+      within(aiRow as HTMLElement).getByRole("button", { name: "Change what powers your coach" })
+        .className,
+    ).toContain("border-ink-2");
+    expect(
+      within(aiRow as HTMLElement).getByRole("button", {
+        name: "Delete the Anthropic credential",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(trainingRow as HTMLElement).getByRole("button", {
+        name: "Delete the intervals.icu credential",
+      }),
+    ).toBeInTheDocument();
+    expect(setup?.querySelector('[data-setup-row="saved-anthropic"]')).toBeNull();
+    expect(setup?.querySelector('[data-setup-row="saved-openrouter"]')).not.toBeNull();
+    expect(screen.queryByRole("region", { name: "Credentials" })).toBeNull();
+    expect(
+      within(screen.getByRole("region", { name: "Application" })).queryByRole("button", {
+        name: "Open setup",
+      }),
+    ).toBeNull();
+  });
+
+  it("opens the chooser for an inactive saved key without changing active readiness", async () => {
+    const user = userEvent.setup();
+    await renderSettings();
+    const inactive = document.querySelector<HTMLElement>('[data-setup-row="saved-openrouter"]');
+    expect(inactive).not.toBeNull();
+
+    await user.click(
+      within(inactive as HTMLElement).getByRole("button", {
+        name: "Change the OpenRouter credential",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-setup-panel="api-key"]')).not.toBeNull(),
+    );
+    expect(document.querySelector('[data-setup-menu="ai"]')).toBeNull();
+    expect(screen.getByLabelText("Provider")).toHaveValue("openrouter");
+    expect(useEnduragentStore.getState().onboarding.configuration?.active).toEqual({
+      provider: "anthropic",
+      model: "synthetic-model",
+    });
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+  });
+});
 
 describe("Telegram settings surface", () => {
   it("warns that an uncertain primary claim may become visible after restart", async () => {
@@ -470,10 +590,10 @@ describe("settings mutation lock", () => {
     expect(screen.getByRole("button", { name: "Save athlete ID" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: /Provider/u })).toBeDisabled();
     expect(
-      within(screen.getByRole("region", { name: "Application" })).getByRole("button", {
+      within(screen.getByRole("region", { name: "Application" })).queryByRole("button", {
         name: "Open setup",
       }),
-    ).toBeDisabled();
+    ).toBeNull();
 
     act(() => {
       useEnduragentStore.getState().setActiveView("chat");
@@ -594,6 +714,71 @@ describe("settings lifecycle", () => {
 });
 
 describe("credential deletion", () => {
+  it("cross-locks setup changes while deletion is confirmed and pending", async () => {
+    const user = userEvent.setup();
+    const deletion = deferred<CredentialDeleteResult>();
+    const subject = await renderSettings({ deleteCredential: () => deletion.promise });
+
+    await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
+    expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change the OpenRouter credential" })).toBeDisabled();
+
+    await user.click(
+      screen.getByRole("button", { name: "Confirm deletion of the OpenRouter credential" }),
+    );
+    await waitFor(() => expect(subject.deleteCredential).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+
+    act(() =>
+      deletion.resolve({
+        credential: "openrouter",
+        status: "refused",
+        reason: "storage-failed",
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Change the OpenRouter credential" }),
+      ).toBeEnabled();
+    });
+  });
+
+  it("cross-locks delete and saved-key changes while onboarding mutates credentials", async () => {
+    await renderSettings();
+
+    act(() => {
+      useEnduragentStore.setState((state) => ({
+        onboarding: {
+          ...state.onboarding,
+          wizard: { ...state.onboarding.wizard, busy: true },
+        },
+      }));
+    });
+
+    expect(screen.getByRole("button", { name: "Delete the Anthropic credential" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the intervals.icu credential" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change the OpenRouter credential" })).toBeDisabled();
+
+    act(() => {
+      useEnduragentStore.setState((state) => ({
+        onboarding: {
+          ...state.onboarding,
+          wizard: { ...state.onboarding.wizard, busy: false },
+        },
+      }));
+    });
+    expect(screen.getByRole("button", { name: "Delete the Anthropic credential" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Change the OpenRouter credential" })).toBeEnabled();
+  });
+
   it("confirms in two steps and restores focus when cancelled", async () => {
     const user = userEvent.setup();
     const subject = await renderSettings();
@@ -634,7 +819,21 @@ describe("credential deletion", () => {
     });
   });
 
-  it("announces uncertain deletion neutrally without claiming either storage outcome", async () => {
+  it("returns focus to the matching setup action after active deletion", async () => {
+    const user = userEvent.setup();
+    await renderSettings();
+
+    await user.click(screen.getByRole("button", { name: "Delete the Anthropic credential" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm deletion of the Anthropic credential" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Change what powers your coach" })).toHaveFocus();
+    });
+  });
+
+  it("globally locks credentials and clears an open provider secret after uncertain deletion", async () => {
     const user = userEvent.setup();
     await renderSettings({
       deleteCredential: async () => ({
@@ -643,6 +842,11 @@ describe("credential deletion", () => {
         reason: "storage-uncertain",
       }),
     });
+
+    await user.click(screen.getByRole("button", { name: "Change the OpenRouter credential" }));
+    const secret = await screen.findByLabelText("OpenRouter API key");
+    await user.type(secret, "synthetic-openrouter-secret");
+    expect(secret).toHaveValue("synthetic-openrouter-secret");
 
     await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
     await user.click(
@@ -656,6 +860,205 @@ describe("credential deletion", () => {
     expect(feedback.textContent?.toLowerCase()).not.toContain("credential deleted");
     expect(feedback.textContent?.toLowerCase()).not.toContain("remains stored");
     expect(feedback.textContent?.toLowerCase()).not.toContain("was not deleted");
+    await waitFor(() => expect(feedback.parentElement).toHaveFocus());
+    await waitFor(() => {
+      expect(document.querySelector('[data-setup-panel="api-key"]')).toBeNull();
+      expect(secret).toHaveValue("");
+      expect(useEnduragentStore.getState().onboarding.draft?.provider.provider).toBe("anthropic");
+    });
+    expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete the Anthropic credential" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change the OpenRouter credential" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the intervals.icu credential" }),
+    ).toBeDisabled();
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Reload credential status" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Change the OpenRouter credential" }),
+      ).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Change what powers your coach" })).toHaveFocus();
+      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeEnabled();
+    });
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+  });
+
+  it("clears an open training secret and keeps global repair feedback stable", async () => {
+    const user = userEvent.setup();
+    await renderSettings({
+      deleteCredential: async () => ({
+        slot: "intervals-icu",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Change Intervals.icu" }));
+    const secret = await screen.findByLabelText("Intervals.icu API key");
+    await user.type(secret, "synthetic-intervals-secret");
+    expect(secret).toHaveValue("synthetic-intervals-secret");
+
+    await user.click(screen.getByRole("button", { name: "Delete the intervals.icu credential" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Confirm deletion of the intervals.icu credential",
+      }),
+    );
+
+    const feedback = await screen.findByText(
+      "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
+    );
+    await waitFor(() => {
+      expect(feedback.parentElement).toHaveFocus();
+      expect(document.querySelector('[data-setup-panel="training"]')).toBeNull();
+      expect(secret).toHaveValue("");
+    });
+    expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete the Anthropic credential" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change the OpenRouter credential" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the intervals.icu credential" }),
+    ).toBeDisabled();
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Reload credential status" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toHaveFocus();
+      expect(
+        screen.getByRole("button", { name: "Change the OpenRouter credential" }),
+      ).toBeEnabled();
+    });
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+  });
+
+  it("keeps the repair lock and feedback through pending and failed reloads", async () => {
+    const user = userEvent.setup();
+    const pendingReload = deferred<readonly CredentialSlotStatus[]>();
+    const statuses = [
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+    ] as const;
+    const loadCredentialStatuses = vi
+      .fn<() => Promise<readonly CredentialSlotStatus[]>>()
+      .mockResolvedValueOnce(statuses)
+      .mockImplementationOnce(() => pendingReload.promise)
+      .mockResolvedValueOnce(statuses);
+    await renderSettings({
+      loadCredentialStatuses,
+      deleteCredential: async () => ({
+        slot: "openrouter",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm deletion of the OpenRouter credential" }),
+    );
+    const message =
+      "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.";
+    const feedback = await screen.findByText(message);
+    const reload = screen.getByRole("button", { name: "Reload credential status" });
+
+    await user.click(reload);
+    await waitFor(() => {
+      expect(loadCredentialStatuses).toHaveBeenCalledTimes(2);
+      expect(reload).toBeDisabled();
+      expect(feedback.parentElement).toHaveFocus();
+    });
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+
+    act(() => pendingReload.reject(new Error("synthetic reload failure")));
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+        status: "error",
+        kind: "load",
+        repairCredential: "openrouter",
+      });
+      expect(screen.getByRole("button", { name: "Reload credential status" })).toBeEnabled();
+      expect(screen.getByText(message).parentElement).toHaveFocus();
+    });
+    expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Reload credential status" }));
+    await waitFor(() => {
+      expect(loadCredentialStatuses).toHaveBeenCalledTimes(3);
+      expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeEnabled();
+    });
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+  });
+
+  it("preserves repair across navigation until re-entry reload succeeds", async () => {
+    const user = userEvent.setup();
+    const reentryReload = deferred<readonly CredentialSlotStatus[]>();
+    const statuses = [
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+    ] as const;
+    const loadCredentialStatuses = vi
+      .fn<() => Promise<readonly CredentialSlotStatus[]>>()
+      .mockResolvedValueOnce(statuses)
+      .mockImplementationOnce(() => reentryReload.promise);
+    harness = createHarness({
+      loadCredentialStatuses,
+      deleteCredential: async () => ({
+        slot: "openrouter",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      }),
+    });
+    const firstVisit = render(<SettingsView />);
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().settings.credentials.status).toBe("ready");
+    });
+
+    await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm deletion of the OpenRouter credential" }),
+    );
+    await screen.findByRole("button", { name: "Reload credential status" });
+    firstVisit.unmount();
+
+    expect(useEnduragentStore.getState().settings.credentials).toEqual({
+      status: "closed",
+      repairCredential: "openrouter",
+    });
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+
+    render(<SettingsView />);
+    await waitFor(() => expect(loadCredentialStatuses).toHaveBeenCalledTimes(2));
+    expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+      status: "loading",
+      repairCredential: "openrouter",
+    });
+    expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
+      ).parentElement,
+    ).toHaveFocus();
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+
+    act(() => reentryReload.resolve(statuses));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeEnabled();
+    });
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
   });
 });
 
@@ -732,7 +1135,7 @@ describe("coach route", () => {
     expect(await screen.findByText("Coach settings saved.")).toBeInTheDocument();
   });
 
-  it("offers Open setup when the provider needs a credential", async () => {
+  it("focuses the setup area when the provider needs a credential", async () => {
     const user = userEvent.setup();
     const subject = await renderSettings({
       applyLlmSelection: async () => ({ status: "refused", reason: "credential-required" }),
@@ -743,7 +1146,7 @@ describe("coach route", () => {
 
     const openSetup = await within(screen.getByRole("region", { name: "Coach" })).findByRole(
       "button",
-      { name: "Open setup" },
+      { name: "Review setup" },
     );
     await user.click(openSetup);
     expect(subject.openSetup).toHaveBeenCalledTimes(1);

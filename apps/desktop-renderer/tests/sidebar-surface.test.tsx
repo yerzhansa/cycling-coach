@@ -7,7 +7,7 @@ import {
   restoreManualSyncFocus,
   setManualSyncFocusTarget,
 } from "../src/state/manual-sync-focus.js";
-import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
@@ -49,7 +49,7 @@ beforeEach(() => {
     training: EMPTY_TRAINING_SURFACE,
     sync: IDLE_MANUAL_SYNC,
     syncActions: null,
-    onboarding: CLOSED_ONBOARDING,
+    onboarding: READY_ONBOARDING,
     onboardingActions: null,
     connection: "connecting",
     settings: EMPTY_SETTINGS_SURFACE,
@@ -188,7 +188,7 @@ describe("sidebar update action", () => {
       onboarding: { ...CLOSED_ONBOARDING, open: true },
     });
     expect(announcement).toHaveTextContent("Update version 1998.7.7 is available");
-    expect(screen.getByRole("button", { name: "Install update version 1998.7.7" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Install update version 1998.7.7" })).toBeEnabled();
 
     update({
       onboarding: CLOSED_ONBOARDING,
@@ -322,40 +322,15 @@ describe("sidebar connection status", () => {
   });
 });
 
-describe("sidebar setup navigation", () => {
-  it("opens Setup through the onboarding controller", async () => {
+describe("sidebar setup gating", () => {
+  it("has no Setup destination and keeps non-chat destinations usable", async () => {
     const user = userEvent.setup();
-    const open = vi.fn(async () => {});
-    useEnduragentStore.setState({ onboardingActions: { open } as never });
+    useEnduragentStore.setState({ onboarding: CLOSED_ONBOARDING });
     render(<Sidebar />);
 
-    await user.click(screen.getByRole("button", { name: "Setup" }));
-
-    expect(open).toHaveBeenCalledOnce();
-  });
-
-  it("highlights Setup from onboarding state and dismisses it before navigating away", async () => {
-    const user = userEvent.setup();
-    const dismiss = vi.fn(() => {
-      useEnduragentStore.getState().setOnboarding(CLOSED_ONBOARDING);
-    });
-    useEnduragentStore.setState({
-      activeView: "chat",
-      onboarding: { ...CLOSED_ONBOARDING, open: true },
-      onboardingActions: { dismiss } as never,
-    });
-    render(<Sidebar />);
-
-    expect(screen.getByRole("button", { name: "Setup" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: "Chat" })).not.toHaveAttribute("aria-current");
-
+    expect(screen.queryByRole("button", { name: "Setup" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New chat" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Training" }));
-
-    expect(dismiss).toHaveBeenCalledOnce();
     expect(useEnduragentStore.getState().activeView).toBe("training");
-    expect(screen.getByRole("button", { name: "Training" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
   });
 });

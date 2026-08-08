@@ -18,7 +18,13 @@ import {
   offeredLanes,
   type SetupLane,
 } from "../../onboarding/lanes.js";
-import type { LlmSelectionDraft } from "../../onboarding/selection.js";
+import { llmSelectionFromDraft, type LlmSelectionDraft } from "../../onboarding/selection.js";
+import {
+  credentialChangesBlocked,
+  repairRequiredCredential,
+} from "../../settings/credential-controller.js";
+import { settingsMutationActive } from "../../state/settings-slice.js";
+import { useEnduragentStore } from "../../state/store.js";
 import {
   AI_CANCEL_LABEL,
   AI_PANEL_ANNOUNCEMENTS,
@@ -42,6 +48,13 @@ import {
 } from "./copy.js";
 import { CredentialField } from "./CredentialField.js";
 import { InfoTip } from "./InfoTip.js";
+import {
+  CredentialDeleteButton,
+  CredentialDeleteConfirmation,
+  SETUP_CREDENTIAL_EDIT_EVENT,
+  desktopCredentialId,
+  type SetupCredentialEditDetail,
+} from "../settings/CredentialsSection.js";
 import {
   BUTTON_OUTLINE_SM,
   BUTTON_QUIET_SM,
@@ -67,14 +80,27 @@ const MENU_ACTION_CLASS =
 export function AiRow(props: {
   readonly surface: OnboardingSurfaceState;
   readonly actions: OnboardingActions | null;
+  readonly placement: "chat" | "settings";
 }): ReactElement {
   const { surface, actions } = props;
   const wizard = surface.wizard;
   const configuration = surface.configuration;
   const draft = surface.draft;
   const busy = wizard.busy;
-  const ready = surface.readiness.provider;
+  const credentialSettings = useEnduragentStore((state) => state.settings.credentials);
+  const settingsMutating = useEnduragentStore((state) => settingsMutationActive(state.settings));
+  const repairRequired = repairRequiredCredential(credentialSettings) !== null;
+  const controlsDisabled =
+    busy || surface.loading || credentialChangesBlocked(credentialSettings, settingsMutating);
   const provider = draft?.provider.provider ?? null;
+  const parsedDraft = llmSelectionFromDraft(draft ?? undefined);
+  const ready =
+    surface.readiness.provider &&
+    parsedDraft.error === null &&
+    configuration?.active?.provider === parsedDraft.selection.provider &&
+    configuration.active.model === parsedDraft.selection.model;
+  const activeCredential = desktopCredentialId(configuration?.active?.provider);
+  const primaryCredential = activeCredential === provider ? activeCredential : null;
   const activeLane = laneForProvider(provider);
   const [picked, setPicked] = useState<SetupLane | null>(null);
   const [restoreDraft, setRestoreDraft] = useState<LlmSelectionDraft | null>(null);
@@ -118,6 +144,26 @@ export function AiRow(props: {
     setRestoreDraft(null);
   }, [chatGptPhase, panelLane]);
 
+  useEffect(() => {
+    const trigger = triggerRef.current;
+    if (trigger === null) return;
+    const editCredential = (event: Event): void => {
+      const credential = (event as CustomEvent<SetupCredentialEditDetail>).detail?.credential;
+      if (controlsDisabled || credential === undefined) {
+        return;
+      }
+      const next = configuration?.providers.find((entry) => entry.provider === credential);
+      const nextLane = laneForProvider(next?.provider);
+      if (next === undefined || nextLane === null) return;
+      if (panelLane === null) setRestoreDraft(draft === null ? null : { ...draft });
+      actions?.selectProvider(next.provider);
+      setPicked(nextLane);
+      setPanelLane(nextLane);
+    };
+    trigger.addEventListener(SETUP_CREDENTIAL_EDIT_EVENT, editCredential);
+    return () => trigger.removeEventListener(SETUP_CREDENTIAL_EDIT_EVENT, editCredential);
+  }, [actions, configuration, controlsDisabled, credentialSettings, draft, panelLane]);
+
   const activeProviderStored =
     (provider !== null &&
       isKeylessProvider(provider) &&
@@ -130,8 +176,9 @@ export function AiRow(props: {
   const lane = picked ?? (ready || hasActiveSelection ? activeLane : null);
   const autoChatGptPanel =
     panelLane === null && provider === "openai-codex" && chatGptStored && !chatGptIsReady;
-  const panel =
-    panelLane === "openai-codex" || autoChatGptPanel
+  const panel = repairRequired
+    ? null
+    : (panelLane === "openai-codex" && chatGptPhase !== "ready") || autoChatGptPanel
       ? "chatgpt"
       : panelLane === "api-key"
         ? "api-key"
@@ -177,7 +224,7 @@ export function AiRow(props: {
     setPanelLane(opensPanel ? next : null);
   };
 
-  const revert = (): void => {
+  const revert = (restoreFocus = true): void => {
     if (restoreDraft !== null) {
       actions?.selectProvider(restoreDraft.provider.provider);
       actions?.selectModel(restoreDraft.modelChoice);
@@ -188,20 +235,34 @@ export function AiRow(props: {
     setPicked(null);
     setRestoreDraft(null);
     setPanelLane(null);
-    triggerRef.current?.focus();
+    if (restoreFocus) triggerRef.current?.focus();
   };
+
+  useEffect(() => {
+    if (!repairRequired) return;
+    if (restoreDraft !== null) {
+      actions?.selectProvider(restoreDraft.provider.provider);
+      actions?.selectModel(restoreDraft.modelChoice);
+      actions?.setCustomModel(restoreDraft.customModel);
+      actions?.setEndpointMode(restoreDraft.endpointMode);
+      actions?.setCustomEndpoint(restoreDraft.customEndpoint);
+    }
+    setPicked(null);
+    setRestoreDraft(null);
+    setPanelLane(null);
+  }, [actions, repairRequired, restoreDraft]);
 
   const revertLane = laneForProvider(restoreDraft?.provider.provider ?? null);
   const revertLabel = revertLane === null ? "Cancel" : `Keep ${SETUP_LANE_LABELS[revertLane]}`;
 
   const save = (): void => {
-    if (actions === null || busy) return;
+    if (actions === null || controlsDisabled) return;
     setOperation("provider-requested");
     actions.saveModelKey();
   };
 
   const login = (): void => {
-    if (actions === null || busy || chatGptLoginPending || chatGptActivating) return;
+    if (actions === null || controlsDisabled || chatGptLoginPending || chatGptActivating) return;
     actions.startChatGptLogin();
   };
 
@@ -241,84 +302,98 @@ export function AiRow(props: {
           />
         }
         trailing={
-          <Menu.Root>
-            <Menu.Trigger
-              ref={triggerRef}
-              data-setup-trigger="ai"
-              disabled={busy || chatGptActivating}
-              aria-label={lane === null ? AI_TRIGGER_LABELS.unset : AI_TRIGGER_LABELS.set}
-              className={lane === null ? BUTTON_OUTLINE_SM : BUTTON_QUIET_SM}
-            >
-              {lane === null ? "Choose" : "Change"}
-            </Menu.Trigger>
-            <Menu.Portal>
-              <Menu.Positioner side="bottom" align="end" sideOffset={6}>
-                <Menu.Popup
-                  data-setup-menu="ai"
-                  className="w-[262px] rounded-md border border-line-2 bg-surface p-[5px] shadow-elev-3"
-                >
-                  <Menu.RadioGroup value={lane}>
-                    <Menu.GroupLabel className="px-[9px] pt-1.5 pb-1 text-[11px] font-semibold tracking-wider text-ink-2 uppercase">
-                      {SETUP_MENU_LABEL}
-                    </Menu.GroupLabel>
-                    {lanes.map((entry) => (
-                      <Menu.RadioItem
-                        key={entry}
-                        value={entry}
-                        data-lane={entry}
-                        closeOnClick
-                        className={MENU_ITEM_CLASS}
-                        onClick={() => {
-                          choose(entry);
-                        }}
-                      >
-                        <span className="mt-px grid size-[15px] shrink-0 place-items-center text-ok">
-                          <Menu.RadioItemIndicator>
-                            <Check size={11} strokeWidth={3.2} aria-hidden="true" />
-                          </Menu.RadioItemIndicator>
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <b className="block text-[13.5px] font-medium">
-                            {SETUP_LANE_LABELS[entry]}
-                          </b>
-                          <i className="mt-px block text-xs text-ink-2 not-italic">
-                            {SETUP_LANE_MENU_HINTS[entry]}
-                          </i>
-                        </span>
-                      </Menu.RadioItem>
-                    ))}
-                  </Menu.RadioGroup>
-                  {note === null ? null : (
-                    <div className="mt-1 border-t border-line px-[9px] pt-2 pb-1">
-                      <p
-                        data-setup-note="claude-cli"
-                        className="text-[11.5px] leading-normal text-ink-2"
-                      >
-                        {note}
-                      </p>
-                      <Menu.Item
-                        className={MENU_ACTION_CLASS}
-                        onClick={() => {
-                          actions?.recheckClaudeCli();
-                        }}
-                      >
-                        {CLAUDE_CLI_RECHECK_LABEL}
-                      </Menu.Item>
-                    </div>
-                  )}
-                </Menu.Popup>
-              </Menu.Positioner>
-            </Menu.Portal>
-          </Menu.Root>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Menu.Root>
+              <Menu.Trigger
+                ref={triggerRef}
+                data-setup-trigger="ai"
+                disabled={controlsDisabled || chatGptActivating}
+                aria-label={lane === null ? AI_TRIGGER_LABELS.unset : AI_TRIGGER_LABELS.set}
+                className={
+                  lane === null || props.placement === "settings"
+                    ? BUTTON_OUTLINE_SM
+                    : BUTTON_QUIET_SM
+                }
+              >
+                {lane === null ? "Choose" : "Change"}
+              </Menu.Trigger>
+              <Menu.Portal>
+                <Menu.Positioner side="bottom" align="end" sideOffset={6}>
+                  <Menu.Popup
+                    data-setup-menu="ai"
+                    className="w-[262px] rounded-md border border-line-2 bg-surface p-[5px] shadow-elev-3"
+                  >
+                    <Menu.RadioGroup value={lane}>
+                      <Menu.GroupLabel className="px-[9px] pt-1.5 pb-1 text-[11px] font-semibold tracking-wider text-ink-2 uppercase">
+                        {SETUP_MENU_LABEL}
+                      </Menu.GroupLabel>
+                      {lanes.map((entry) => (
+                        <Menu.RadioItem
+                          key={entry}
+                          value={entry}
+                          data-lane={entry}
+                          closeOnClick
+                          disabled={controlsDisabled}
+                          className={MENU_ITEM_CLASS}
+                          onClick={() => {
+                            choose(entry);
+                          }}
+                        >
+                          <span className="mt-px grid size-[15px] shrink-0 place-items-center text-ok">
+                            <Menu.RadioItemIndicator>
+                              <Check size={11} strokeWidth={3.2} aria-hidden="true" />
+                            </Menu.RadioItemIndicator>
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <b className="block text-[13.5px] font-medium">
+                              {SETUP_LANE_LABELS[entry]}
+                            </b>
+                            <i className="mt-px block text-xs text-ink-2 not-italic">
+                              {SETUP_LANE_MENU_HINTS[entry]}
+                            </i>
+                          </span>
+                        </Menu.RadioItem>
+                      ))}
+                    </Menu.RadioGroup>
+                    {note === null ? null : (
+                      <div className="mt-1 border-t border-line px-[9px] pt-2 pb-1">
+                        <p
+                          data-setup-note="claude-cli"
+                          className="text-[11.5px] leading-normal text-ink-2"
+                        >
+                          {note}
+                        </p>
+                        <Menu.Item
+                          disabled={controlsDisabled}
+                          className={MENU_ACTION_CLASS}
+                          onClick={() => {
+                            actions?.recheckClaudeCli();
+                          }}
+                        >
+                          {CLAUDE_CLI_RECHECK_LABEL}
+                        </Menu.Item>
+                      </div>
+                    )}
+                  </Menu.Popup>
+                </Menu.Positioner>
+              </Menu.Portal>
+            </Menu.Root>
+            {props.placement === "settings" && primaryCredential !== null ? (
+              <CredentialDeleteButton credential={primaryCredential} />
+            ) : null}
+          </div>
         }
       />
+      {props.placement === "settings" && primaryCredential !== null ? (
+        <CredentialDeleteConfirmation credential={primaryCredential} />
+      ) : null}
       {panel === "chatgpt" ? (
         <SetupSubPanel name="chatgpt">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               className={BUTTON_SOLID_SM}
-              disabled={busy || chatGptLoginPending || chatGptActivating}
+              disabled={controlsDisabled || chatGptLoginPending || chatGptActivating}
               onClick={() => {
                 if (chatGptStored) actions?.retryChatGptActivation();
                 else login();
@@ -330,7 +405,9 @@ export function AiRow(props: {
               <button
                 type="button"
                 className={BUTTON_QUIET_SM}
-                disabled={chatGptLoginPending ? false : busy || chatGptActivating}
+                disabled={
+                  chatGptLoginPending ? surface.loading : controlsDisabled || chatGptActivating
+                }
                 {...(chatGptLoginPending
                   ? { "aria-label": CHATGPT_CANCEL_SIGN_IN_LABEL }
                   : revertLane === null
@@ -377,7 +454,7 @@ export function AiRow(props: {
               <select
                 id="onboarding-llm-provider"
                 className={SETUP_FIELD_CLASS}
-                disabled={busy}
+                disabled={controlsDisabled}
                 value={draft.provider.provider}
                 onChange={(event) => {
                   actions?.selectProvider(event.target.value);
@@ -394,7 +471,7 @@ export function AiRow(props: {
                   <CredentialField
                     slot={keySlot}
                     label={`${ONBOARDING_LLM_PROVIDER_LABELS[draft.provider.provider]} API key`}
-                    disabled={busy}
+                    disabled={controlsDisabled}
                     {...(describedBy === undefined ? {} : { describedBy })}
                     onEnter={save}
                   />
@@ -404,7 +481,7 @@ export function AiRow(props: {
                 <button
                   type="button"
                   className={BUTTON_SOLID_SM}
-                  disabled={busy}
+                  disabled={controlsDisabled}
                   aria-label={AI_SAVE_LABEL}
                   onClick={save}
                 >
@@ -413,9 +490,9 @@ export function AiRow(props: {
                 <button
                   type="button"
                   className={BUTTON_QUIET_SM}
-                  disabled={busy}
+                  disabled={controlsDisabled}
                   aria-label={AI_CANCEL_LABEL}
-                  onClick={revert}
+                  onClick={() => revert()}
                 >
                   Cancel
                 </button>
@@ -431,7 +508,7 @@ export function AiRow(props: {
                     <select
                       id="onboarding-llm-model"
                       className={SETUP_FIELD_CLASS}
-                      disabled={busy}
+                      disabled={controlsDisabled}
                       value={draft.modelChoice}
                       onChange={(event) => {
                         actions?.selectModel(event.target.value);
@@ -458,7 +535,7 @@ export function AiRow(props: {
                         type="text"
                         autoComplete="off"
                         maxLength={512}
-                        disabled={busy}
+                        disabled={controlsDisabled}
                         value={draft.customModel}
                         aria-describedby={describedBy}
                         onChange={(event) => {
@@ -476,7 +553,7 @@ export function AiRow(props: {
                         <select
                           id="onboarding-endpoint-mode"
                           className={SETUP_FIELD_CLASS}
-                          disabled={busy}
+                          disabled={controlsDisabled}
                           value={draft.endpointMode}
                           onChange={(event) => {
                             actions?.setEndpointMode(event.target.value);
@@ -500,7 +577,7 @@ export function AiRow(props: {
                             type="url"
                             autoComplete="off"
                             maxLength={4096}
-                            disabled={busy}
+                            disabled={controlsDisabled}
                             value={draft.customEndpoint}
                             aria-describedby={describedBy}
                             onChange={(event) => {

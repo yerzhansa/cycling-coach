@@ -17,10 +17,10 @@ export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "runtime-unavailable":
     "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
   "credential-status-unavailable":
-    "That key was saved, but its status could not be refreshed. Close and reopen Setup to check again.",
+    "That key was saved, but its status could not be refreshed. Check the setup area again.",
   "credential-reenter-required": "That saved key could not be used. Enter it again to continue.",
   "configuration-unavailable":
-    "Coach choices are unavailable right now. Close and reopen Setup to try again.",
+    "Coach choices are unavailable right now. Check the setup area again.",
   "model-selection-required": "Choose a model or enter a custom model name.",
   "endpoint-invalid": "Enter a valid HTTPS endpoint, or a loopback HTTP endpoint.",
   "model-runtime-unavailable":
@@ -48,7 +48,7 @@ export const CHATGPT_REFUSAL_COPY: Readonly<Record<ChatGptLoginRefusalReason, st
   "runtime-unavailable": "ChatGPT sign-in was saved, but the coach could not be configured.",
 };
 
-export const SETUP_HEADING = "Get your coach running";
+export const SETUP_HEADING = "Get your coach running before you can chat";
 
 export const SETUP_MENU_LABEL = "AI that powers your coach";
 

@@ -357,6 +357,7 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "getActivityAnalysis",
   "importFiles",
   "sync",
+  "getSetupStatus",
   "saveIntake",
   "configureRuntime",
   "getRuntimeConfig",
@@ -893,6 +894,19 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 generic.data.params,
               );
               result = await input.operations.saveIntake(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getSetupStatus":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.getSetupStatus.requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations.getSetupStatus === undefined) {
+                throw new TypeError("Setup status read is unavailable.");
+              }
+              result = await input.operations.getSetupStatus(request);
             } catch (error) {
               invocationFailure = { error };
             }

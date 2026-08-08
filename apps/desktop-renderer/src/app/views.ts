@@ -1,15 +1,14 @@
 import {
   Activity,
   History,
-  ListChecks,
   MessageSquare,
   Settings,
   type LucideIcon,
 } from "lucide-react";
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
-export type ViewId = "chat" | "archive" | "training" | "setup" | "settings";
-export type StoredViewId = Exclude<ViewId, "setup">;
+export type ViewId = "chat" | "archive" | "training" | "settings";
+export type StoredViewId = ViewId;
 
 export const REACT_CHAT_REGION = "react-chat-region";
 
@@ -45,15 +44,6 @@ export const VIEWS: readonly ViewDefinition[] = Object.freeze([
     title: "Training",
     page: lazy(async () => ({
       default: (await import("../ui/training/TrainingView.js")).TrainingView,
-    })),
-  },
-  {
-    id: "setup",
-    label: "Setup",
-    icon: ListChecks,
-    title: "Setup",
-    page: lazy(async () => ({
-      default: (await import("../ui/onboarding/OnboardingWizard.js")).OnboardingWizard,
     })),
   },
   {

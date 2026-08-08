@@ -4,6 +4,8 @@ import {
   chatScrollAnchor,
 } from "../../state/chat-stream.js";
 import { useEnduragentStore } from "../../state/store.js";
+import { setupRequired } from "../../state/onboarding-slice.js";
+import { SetupPanel } from "../onboarding/OnboardingWizard.js";
 import styles from "./ChatView.module.css";
 import { Composer, type ComposerHandle } from "./Composer.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
@@ -33,7 +35,7 @@ export function ChatView(): ReactElement {
   const composerWrap = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
   const activeView = useEnduragentStore((state) => state.activeView);
-  const onboardingOpen = useEnduragentStore((state) => state.onboarding.open);
+  const needsSetup = useEnduragentStore(setupRequired);
   const status = useEnduragentStore((state) => state.chat.status);
   const announcement = useEnduragentStore((state) => state.chat.announcement);
   const hydrationStatus = useEnduragentStore((state) => state.chat.hydrationStatus);
@@ -49,8 +51,8 @@ export function ChatView(): ReactElement {
   }, []);
 
   useLayoutEffect(() => {
-    if (activeView === "chat" && !onboardingOpen) chatScrollAnchor.reanchor();
-  }, [activeView, onboardingOpen]);
+    if (activeView === "chat" && !needsSetup) chatScrollAnchor.reanchor();
+  }, [activeView, needsSetup]);
 
   useLayoutEffect(() => {
     const host = composerWrap.current;
@@ -102,6 +104,7 @@ export function ChatView(): ReactElement {
         ref={conversation}
       >
         <div className={`${styles.thread} thread`}>
+          {activeView === "chat" && needsSetup ? <SetupPanel placement="chat" /> : null}
           <Transcript />
           <FirstSyncCard />
         </div>

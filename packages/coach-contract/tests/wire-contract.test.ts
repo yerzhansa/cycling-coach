@@ -22,6 +22,8 @@ import {
   DeleteTelegramWebhookRpcParamsSchema,
   GetRuntimeConfigRpcParamsSchema,
   GetRuntimeConfigRpcResultSchema,
+  GetSetupStatusRpcParamsSchema,
+  GetSetupStatusRpcResultSchema,
   GetArchivedTranscriptPageRpcParamsSchema,
   GetArchivedTranscriptPageRpcResultSchema,
   GetTranscriptPageRpcParamsSchema,
@@ -664,6 +666,22 @@ describe("coach request and event projection", () => {
       schemaVersion: 1,
       saved: true,
     });
+    const setupStatus = {
+      schemaVersion: 1,
+      intake: clearedIntake,
+      durableTrainingData: true,
+    } as const;
+    expect(GetSetupStatusRpcParamsSchema.parse({})).toEqual({});
+    expect(GetSetupStatusRpcResultSchema.parse(setupStatus)).toEqual(setupStatus);
+    for (const invalid of [
+      { ...setupStatus, apiKey: "must-not-cross-boundary" },
+      { ...setupStatus, intake: { ...setupStatus.intake, credential: "must-not-cross-boundary" } },
+      { ...setupStatus, intake: { ...clearedIntake, clinician_cleared: null } },
+      { ...setupStatus, intake: { ...safeIntake, clinician_cleared: true } },
+      { ...setupStatus, importedPaths: [] },
+    ]) {
+      expect(GetSetupStatusRpcResultSchema.safeParse(invalid).success).toBe(false);
+    }
 
     const llm = {
       provider: "openrouter",
@@ -968,6 +986,11 @@ describe("coach request and event projection", () => {
         referenceSucceeded: true,
         requests: { store: 0, reference: 0, total: 0 },
       }),
+      getSetupStatus: async () => ({
+        schemaVersion: 1,
+        intake: null,
+        durableTrainingData: false,
+      }),
       saveIntake: async () => ({ schemaVersion: 1, saved: true }),
       configureRuntime: async ({ llm, intervals, session }) => ({
         schemaVersion: 3,
@@ -1094,6 +1117,12 @@ describe("coach request and event projection", () => {
       requestSchema: SyncRpcParamsSchema,
       responseSchema: SyncRpcResultSchema,
       eventSchema: OperationProgressEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.getSetupStatus).toEqual({
+      wireName: "getSetupStatus",
+      requestSchema: GetSetupStatusRpcParamsSchema,
+      responseSchema: GetSetupStatusRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.saveIntake).toEqual({
       wireName: "saveIntake",
@@ -1509,7 +1538,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-16 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-17 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1517,8 +1546,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 16,
-      serverProtocolVersion: 16,
+      clientProtocolVersion: 17,
+      serverProtocolVersion: 17,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1573,9 +1602,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 16 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 17 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(16);
+    expect(client.clientProtocolVersion).toBe(17);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -1705,7 +1734,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version sixteen", () => {
-    expect(PROTOCOL_VERSION).toBe(16);
+  it("uses protocol version seventeen", () => {
+    expect(PROTOCOL_VERSION).toBe(17);
   });
 });

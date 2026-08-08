@@ -31,9 +31,14 @@ import { observeConnectionLifecycle } from "./state/connection-slice.js";
 import { credentialDrafts } from "./state/credential-drafts.js";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
 import { useEnduragentStore } from "./state/store.js";
+import { setupReady, setupRequired } from "./state/onboarding-slice.js";
+import { settingsMutationActive } from "./state/settings-slice.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { createOnboardingCompletionController } from "./onboarding/completion.js";
-import { createOnboardingController } from "./onboarding/controller.js";
+import {
+  createOnboardingController,
+  onboardingCredentialMutationActive,
+} from "./onboarding/controller.js";
 import { createTrainingContextController } from "./training-context/controller.js";
 import { createManualSyncController } from "./training-context/manual-sync.js";
 import { createTrainingSyncCoordinator } from "./training-sync.js";
@@ -44,7 +49,10 @@ import { createProviderModelSettingsController } from "./settings/provider-model
 import { createAthleteSettingsController } from "./settings/athlete-controller.js";
 import { createSessionSettingsController } from "./settings/session-controller.js";
 import { createTelegramSettingsController } from "./settings/telegram-controller.js";
-import { createCredentialSettingsController } from "./settings/credential-controller.js";
+import {
+  credentialChangesBlocked,
+  createCredentialSettingsController,
+} from "./settings/credential-controller.js";
 import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
 import { createTrainingExportController } from "./training-export/controller.js";
 
@@ -154,6 +162,7 @@ export function bootRenderer(): Disposer {
     refreshTrainingContext: () => trainingContextController.refresh(),
     refreshSpend: () => spendController.refresh(),
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
+    canChat: () => setupReady(store.getState()),
   });
 
   const archiveAdapter = createArchiveViewAdapter({
@@ -202,6 +211,10 @@ export function bootRenderer(): Disposer {
     return client;
   };
   const onboardingBridge: OnboardingBridge = {
+    async getSetupStatus() {
+      const client = await onboardingClient();
+      return client.call("getSetupStatus", {});
+    },
     credentialStatuses: () => window.enduragentAuth.credentialStatuses(),
     retryFailedCredentials: () => window.enduragentAuth.retryFailedCredentials(),
     writeCredential: (value) => window.enduragentAuth.writeCredential(value),
@@ -270,11 +283,22 @@ export function bootRenderer(): Disposer {
       store.getState().setRideImportSuppressed(presenting),
     focusOpener: () => {},
     onComplete: (completion) => onboardingCompletion.complete(completion),
+    onReady: focusComposer,
+    ownsDroppedImportFiles: () => {
+      const state = store.getState();
+      return (
+        state.activeView === "settings" || (state.activeView === "chat" && setupRequired(state))
+      );
+    },
+    credentialMutationsBlocked: () => {
+      const state = store.getState();
+      return credentialChangesBlocked(
+        state.settings.credentials,
+        settingsMutationActive(state.settings),
+      );
+    },
   });
   store.getState().bindOnboardingActions(onboarding);
-  const openSetupFlow = (): void => {
-    void onboardingCompletion.openManually(() => onboarding.open());
-  };
   const closePanes = (): void => {
     providerModelSettingsController.close();
     credentialSettingsController.close();
@@ -283,9 +307,9 @@ export function bootRenderer(): Disposer {
     telegramSettingsController.close();
   };
   const openSetupFromSettings = (): void => {
-    closePanes();
-    store.getState().leaveSettings();
-    openSetupFlow();
+    const heading = document.querySelector<HTMLElement>("#setup-panel-title");
+    heading?.scrollIntoView({ block: "start" });
+    heading?.focus();
   };
   const coachAdapter = createCoachSettingsAdapter({
     publish: (state) => store.getState().patchSettings({ coach: state }),
@@ -314,6 +338,9 @@ export function bootRenderer(): Disposer {
     loadClaudeCliStatus: () => window.enduragentAuth.claudeCliStatus(),
     deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
     openSetup: openSetupFromSettings,
+    onDeleted: () => onboarding.refresh(),
+    credentialMutationsBlocked: () =>
+      onboardingCredentialMutationActive(store.getState().onboarding),
     beginMutation: () => store.getState().beginSettingsMutation("credential"),
     view: credentialAdapter.view,
   });
@@ -385,13 +412,7 @@ export function bootRenderer(): Disposer {
   void trainingContextController.start();
   spendController.start();
   void chatController.start();
-  if (onboardingCompletion.isCompleted()) {
-    store.getState().setOnboardingStartupSettled(true);
-  } else {
-    void onboardingCompletion
-      .openOnStartup(() => onboarding.open())
-      .then(() => store.getState().setOnboardingStartupSettled(true));
-  }
+  void onboarding.open().finally(() => store.getState().setOnboardingStartupSettled(true));
   void clients.getClient().then(
     () => store.getState().setConnection("connected"),
     () => store.getState().setConnection("failed"),

@@ -1,10 +1,10 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Shell } from "../src/app/Shell.js";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
 import { resetChatStream } from "../src/state/chat-stream.js";
-import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 
 function stubActions(): ChatActions {
@@ -21,14 +21,24 @@ function stubActions(): ChatActions {
   };
 }
 
+async function preloadLazyViews(): Promise<void> {
+  await Promise.all([
+    import("../src/ui/archive/ArchiveView.js"),
+    import("../src/ui/training/TrainingView.js"),
+    import("../src/ui/settings/SettingsView.js"),
+  ]);
+}
+
 describe("shell", () => {
+  beforeAll(preloadLazyViews);
+
   beforeEach(() => {
     useEnduragentStore.setState({
       activeView: "chat",
       runtimeReady: true,
       chat: { ...EMPTY_CHAT_SURFACE, newConversationUnavailable: false },
       chatActions: stubActions(),
-      onboarding: CLOSED_ONBOARDING,
+      onboarding: READY_ONBOARDING,
       onboardingActions: null,
       onboardingStartupSettled: true,
     });
@@ -57,7 +67,7 @@ describe("shell", () => {
     expect(document.querySelector("textarea#message")).not.toBeNull();
     expect(document.querySelector("button.sync-chip")).not.toBeNull();
     expect(document.querySelector('[data-view="chat"]')).not.toBeNull();
-    expect(document.querySelector('[data-onboarding="closed"]')).not.toBeNull();
+    expect(document.querySelector('[data-onboarding="settled"]')).not.toBeNull();
   });
 
   it("retires the training drawer, data spine and topbar strip", () => {
@@ -81,6 +91,9 @@ describe("shell", () => {
   it("switches the main region between the registered views", async () => {
     const user = userEvent.setup();
     render(<Shell onReady={() => {}} />);
+
+    await user.click(screen.getByRole("button", { name: "Past chats" }));
+    expect(await screen.findByRole("region", { name: "Past chats" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Training" }));
     expect(await screen.findByRole("region", { name: "Training" })).toBeInTheDocument();
@@ -112,31 +125,33 @@ describe("shell", () => {
     expect(onReady).toHaveBeenCalledTimes(1);
   });
 
-  it("derives Setup from onboarding and returns to the stored view when it closes", async () => {
-    const dismiss = vi.fn();
+  it("mounts exactly one setup host while moving between Chat and Settings", async () => {
+    const user = userEvent.setup();
+    useEnduragentStore.setState({ onboarding: CLOSED_ONBOARDING });
+    render(<Shell onReady={() => {}} />);
+
+    expect(document.querySelectorAll('[data-setup-host="chat"]')).toHaveLength(1);
+    expect(document.querySelectorAll("#setup-panel-title")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByRole("region", { name: "Settings" });
+    expect(document.querySelectorAll('[data-setup-host="chat"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-setup-host="settings"]')).toHaveLength(1);
+    expect(document.querySelectorAll("#setup-panel-title")).toHaveLength(1);
+  });
+
+  it("keeps the selected destination active while setup is required", async () => {
     useEnduragentStore.setState({
       activeView: "training",
       onboarding: { ...CLOSED_ONBOARDING, open: true },
-      onboardingActions: { dismiss } as never,
     });
     render(<Shell onReady={() => {}} />);
 
-    expect(await screen.findByRole("region", { name: "Setup" })).toBeInTheDocument();
-    expect(document.querySelector('[data-view="setup"]')).not.toBeNull();
-    expect(document.querySelector('[data-onboarding="open"]')).not.toBeNull();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(document.querySelector(".onboarding-scrim")).toBeNull();
-    expect(useEnduragentStore.getState().activeView).toBe("training");
-
-    act(() => {
-      useEnduragentStore.getState().setOnboarding(CLOSED_ONBOARDING);
-    });
-
     expect(await screen.findByRole("region", { name: "Training" })).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Setup" })).toBeNull();
+    expect(document.querySelector('[data-view="training"]')).not.toBeNull();
     expect(document.querySelector('[data-view="setup"]')).toBeNull();
+    expect(document.querySelector('[data-setup-host]')).toBeNull();
     expect(useEnduragentStore.getState().activeView).toBe("training");
-    expect(dismiss).not.toHaveBeenCalled();
   });
 
   it("never renders Setup while onboarding is closed", async () => {
@@ -160,7 +175,7 @@ describe("shell", () => {
     act(() => {
       useEnduragentStore.getState().setOnboardingStartupSettled(true);
     });
-    expect(document.querySelector('[data-onboarding="closed"]')).not.toBeNull();
+    expect(document.querySelector('[data-onboarding="settled"]')).not.toBeNull();
   });
 
   it("disables the new chat button until the chat controller is bound", () => {

@@ -65,6 +65,7 @@ function fakeView() {
   };
   return {
     view,
+    retry: () => handlers?.onRetry(),
     requestDelete: (credential: DesktopCredentialId) => handlers?.onRequestDelete(credential),
     cancelDelete: () => handlers?.onCancelDelete(),
     confirmDelete: () => handlers?.onConfirmDelete(),
@@ -79,6 +80,8 @@ function createSubject(input: {
   readonly deletion?: CredentialDeleteResult;
   readonly openSetup?: () => void;
   readonly claudeCli?: () => Promise<ClaudeCliStatus>;
+  readonly onDeleted?: () => Promise<void> | void;
+  readonly credentialMutationsBlocked?: () => boolean;
 }) {
   let activeRuntime = input.runtime ?? runtime();
   let statuses =
@@ -122,6 +125,10 @@ function createSubject(input: {
     ...(input.claudeCli === undefined ? {} : { loadClaudeCliStatus: input.claudeCli }),
     deleteCredential,
     openSetup: input.openSetup ?? vi.fn(),
+    ...(input.onDeleted === undefined ? {} : { onDeleted: input.onDeleted }),
+    ...(input.credentialMutationsBlocked === undefined
+      ? {}
+      : { credentialMutationsBlocked: input.credentialMutationsBlocked }),
     beginMutation: () => vi.fn(),
     view: subject.view,
   });
@@ -291,7 +298,7 @@ describe("credential settings controller", () => {
       status: "deleted",
       announcement: "Credential deleted locally.",
       recoveryAvailable: true,
-      focus: { target: "setup" },
+      focus: { target: "setup", credential: "anthropic" },
     });
     subject.openSetup();
     expect(openSetup).toHaveBeenCalledOnce();
@@ -325,7 +332,7 @@ describe("credential settings controller", () => {
   });
 
   it("reports deletion uncertainty neutrally and requires repair before another action", async () => {
-    const { controller, subject } = createSubject({
+    const { controller, subject, deleteCredential } = createSubject({
       deletion: {
         slot: "anthropic",
         status: "uncertain",
@@ -343,13 +350,83 @@ describe("credential settings controller", () => {
       kind: "delete",
       reason: "storage-uncertain",
       confirmation: null,
+      repairCredential: "anthropic",
       announcement:
         "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
-      focus: null,
+      focus: { target: "feedback" },
     });
     const announcement = content(controller.state()).announcement.toLowerCase();
     expect(announcement).not.toContain("credential deleted");
     expect(announcement).not.toContain("remains stored");
     expect(announcement).not.toContain("was not deleted");
+
+    const repairState = controller.state();
+    subject.requestDelete("anthropic");
+    expect(controller.state()).toBe(repairState);
+    subject.requestDelete("openrouter");
+    expect(controller.state()).toBe(repairState);
+    expect(deleteCredential).toHaveBeenCalledOnce();
+
+    subject.retry();
+    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+    expect(content(controller.state()).repairCredential).toBeNull();
+  });
+
+  it("blocks deletion entry and confirmation while onboarding owns a credential mutation", async () => {
+    let onboardingMutating = true;
+    const { controller, subject, deleteCredential } = createSubject({
+      credentialMutationsBlocked: () => onboardingMutating,
+    });
+    await controller.activate();
+
+    const ready = controller.state();
+    subject.requestDelete("openrouter");
+    expect(controller.state()).toBe(ready);
+
+    onboardingMutating = false;
+    subject.requestDelete("openrouter");
+    expect(controller.state().status).toBe("confirming");
+
+    onboardingMutating = true;
+    subject.confirmDelete();
+    expect(controller.state().status).toBe("confirming");
+    expect(deleteCredential).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "refused",
+      deletion: {
+        credential: "anthropic",
+        status: "refused",
+        reason: "storage-failed",
+      } as const,
+    },
+    {
+      name: "uncertain",
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      } as const,
+    },
+  ])("refreshes setup only after confirmed deletion, not $name outcomes", async ({ deletion }) => {
+    const onDeleted = vi.fn(async () => {});
+    const { controller, subject } = createSubject({ deletion, onDeleted });
+    await controller.activate();
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+    expect(onDeleted).not.toHaveBeenCalled();
+  });
+
+  it("refreshes setup after a confirmed deletion", async () => {
+    const onDeleted = vi.fn(async () => {});
+    const { controller, subject } = createSubject({ onDeleted });
+    await controller.activate();
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("deleted"));
+    expect(onDeleted).toHaveBeenCalledOnce();
   });
 });

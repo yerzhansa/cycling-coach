@@ -39,6 +39,7 @@ import {
   withError,
   withImportedRideFileCount,
   withIntake,
+  withPersistedIntake,
   type ChatGptStatus,
   type ChatGptUiPhase,
   type CredentialSlotStatus,
@@ -62,6 +63,8 @@ export interface OnboardingReadiness {
 
 export interface OnboardingSurfaceState {
   readonly open: boolean;
+  readonly initialized: boolean;
+  readonly loading: boolean;
   readonly wizard: OnboardingState;
   readonly statuses: readonly CredentialSlotStatus[];
   readonly configuration: OnboardingLlmConfiguration | null;
@@ -71,6 +74,16 @@ export interface OnboardingSurfaceState {
   readonly readiness: OnboardingReadiness;
   readonly lastCommit: SetupCommit;
   readonly actionStatus: OnboardingActionStatus;
+}
+
+export function onboardingCredentialMutationActive(surface: OnboardingSurfaceState): boolean {
+  return (
+    surface.loading ||
+    surface.wizard.busy ||
+    surface.wizard.chatGptLoginPhase !== "idle" ||
+    surface.wizard.chatGptRuntimeState === "activating" ||
+    surface.rideImport.status === "running"
+  );
 }
 
 export type OnboardingActionStatus =
@@ -106,6 +119,7 @@ export interface OnboardingActions {
 
 export interface OnboardingController extends OnboardingActions {
   open(): Promise<void>;
+  refresh(): Promise<void>;
   close(): void;
   dispose(): void;
   state(): OnboardingState;
@@ -125,6 +139,9 @@ export interface OnboardingControllerOptions {
   readonly onRideImportPresentationChange?: (presenting: boolean) => void;
   readonly focusOpener: () => void;
   readonly onComplete: (completion: OnboardingCompletion) => void;
+  readonly onReady?: () => void;
+  readonly ownsDroppedImportFiles?: () => boolean;
+  readonly credentialMutationsBlocked?: () => boolean;
   readonly createOperationId?: () => string;
   readonly afterPaint?: (callback: () => void) => () => void;
 }
@@ -226,6 +243,11 @@ export function createOnboardingController(
   let rideImportState: RideImportState = rideImports.state();
   let credentialStatuses: readonly CredentialSlotStatus[] = [];
   let presenting = false;
+  let initialized = false;
+  let loading = false;
+  let durableTrainingData = false;
+  let intakeSaved = false;
+  const readsAuthoritativeSetupStatus = options.bridge.getSetupStatus !== undefined;
   let completed = false;
   let disposed = false;
   let opening = false;
@@ -245,6 +267,7 @@ export function createOnboardingController(
 
   const createOperationId = options.createOperationId ?? (() => crypto.randomUUID());
   const scheduleAfterPaint = options.afterPaint ?? afterNextPaint;
+  const credentialMutationsBlocked = (): boolean => options.credentialMutationsBlocked?.() ?? false;
 
   const selectedProviderIsReady = (): boolean => {
     const parsed = llmSelectionFromDraft(llmDraft);
@@ -253,15 +276,22 @@ export function createOnboardingController(
       : false;
   };
 
+  const activeProviderIsReady = (): boolean => {
+    const active = llmConfiguration?.active ?? null;
+    return selectedProviderReady(state, active, active);
+  };
+
   const currentReadiness = (): OnboardingReadiness => ({
-    provider: selectedProviderIsReady(),
-    trainingData: hasTrainingData(state),
-    intake: intakeComplete(state.intake),
+    provider: activeProviderIsReady(),
+    trainingData: durableTrainingData || hasTrainingData(state),
+    intake: (readsAuthoritativeSetupStatus ? intakeSaved : true) && intakeComplete(state.intake),
   });
 
   const publish = (): void => {
     options.view.render({
       open: presenting,
+      initialized,
+      loading,
       wizard: state,
       statuses: credentialStatuses,
       configuration: llmConfiguration ?? null,
@@ -489,7 +519,7 @@ export function createOnboardingController(
     );
 
   const saveModelKey = async (): Promise<void> => {
-    if (disposed || !presenting || state.busy) return;
+    if (disposed || !presenting || loading || state.busy || credentialMutationsBlocked()) return;
     const submitVisit = visit;
     lastCommit = "provider";
     actionStatus = null;
@@ -545,7 +575,16 @@ export function createOnboardingController(
   };
 
   const saveTrainingKey = async (): Promise<void> => {
-    if (disposed || !presenting || state.busy || rideImports.isBusy()) return;
+    if (
+      disposed ||
+      !presenting ||
+      loading ||
+      state.busy ||
+      rideImports.isBusy() ||
+      credentialMutationsBlocked()
+    ) {
+      return;
+    }
     const submitVisit = visit;
     lastCommit = "training";
     actionStatus = null;
@@ -568,12 +607,21 @@ export function createOnboardingController(
     const readiness = currentReadiness();
     if (!readiness.provider) return "credential-required";
     if (!readiness.trainingData) return "training-data-required";
-    if (!readiness.intake) return "intake-incomplete";
+    if (!intakeComplete(state.intake)) return "intake-incomplete";
     return null;
   };
 
   const finishSetup = async (): Promise<void> => {
-    if (disposed || !presenting || state.busy || rideImports.isBusy()) return;
+    if (
+      disposed ||
+      !presenting ||
+      loading ||
+      state.busy ||
+      rideImports.isBusy() ||
+      credentialMutationsBlocked()
+    ) {
+      return;
+    }
     const gateError = walkGates();
     if (gateError !== null) {
       state = withError(state, gateError);
@@ -604,17 +652,16 @@ export function createOnboardingController(
       publish();
       return;
     }
+    intakeSaved = true;
     state = withBusy(state, false);
     if (completed) {
       publish();
       return;
     }
     completed = true;
-    visit += 1;
-    presenting = false;
-    setRideImportPresentation(false);
     publish();
     options.onComplete(toOnboardingCompletion(state));
+    options.onReady?.();
   };
 
   const beginChatGptActivation = (
@@ -625,6 +672,7 @@ export function createOnboardingController(
       disposed ||
       visit !== expectedVisit ||
       !presenting ||
+      credentialMutationsBlocked() ||
       !chatGptSignedIn(state) ||
       state.chatGptRuntimeState === "activating"
     ) {
@@ -700,58 +748,91 @@ export function createOnboardingController(
     rideImportState = next;
     if (next.status === "succeeded") {
       state = withImportedRideFileCount(state, rideImports.importedFileCount());
+      if (next.result.files.imported > 0) durableTrainingData = true;
     } else if (next.status === "running" && next.owner === "onboarding") {
       state = { ...state, fixedError: null };
     }
     publish();
   });
 
-  return {
-    async open(): Promise<void> {
-      if (disposed || presenting || opening) return;
-      opening = true;
-      const openVisit = ++visit;
-      authGeneration += 1;
-      statusRefreshGeneration += 1;
-      clearProgressDetailTimer();
-      clearScheduledActivation();
-      completed = false;
-      lastCommit = null;
-      actionStatus = null;
-      let statuses: readonly CredentialSlotStatus[] = [];
-      let restoredChatGptStatus: ChatGptStatus = { state: "absent", runtimeReady: false };
-      const restored = await Promise.all([
-        settleWithin(options.bridge.credentialStatuses(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
-        settleWithin(options.bridge.chatGptStatus(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
-        settleWithin(options.bridge.llmConfiguration(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
-      ]);
-      if (restored[0].status === "fulfilled") statuses = restored[0].value;
-      if (restored[1].status === "fulfilled") restoredChatGptStatus = restored[1].value;
-      llmConfiguration = restored[2].status === "fulfilled" ? restored[2].value : undefined;
-      llmDrafts = {};
-      setLlmDraft(
-        llmConfiguration === undefined
-          ? undefined
-          : initialLlmDraft(llmConfiguration, statuses, restoredChatGptStatus),
-      );
-      if (disposed || visit !== openVisit || presenting) {
-        opening = false;
-        return;
-      }
-      credentialStatuses = statuses;
-      state = createOnboardingState(statuses, restoredChatGptStatus);
-      const restoredPhase = chatGptUiPhase(state);
-      if (restoredPhase === "signed-in" || restoredPhase === "ready") {
-        actionStatus = restoredPhase;
-      }
-      if (llmDraft === undefined) state = withError(state, "configuration-unavailable");
-      state = withImportedRideFileCount(state, rideImports.importedFileCount());
-      presenting = true;
-      setRideImportPresentation(true);
-      focusTitle();
-      publish();
+  const load = async (hydrateIntake: boolean): Promise<void> => {
+    if (disposed || opening) return;
+    const currentIntake = state.intake;
+    opening = true;
+    presenting = true;
+    loading = true;
+    publish();
+    const openVisit = ++visit;
+    authGeneration += 1;
+    statusRefreshGeneration += 1;
+    clearProgressDetailTimer();
+    clearScheduledActivation();
+    completed = false;
+    lastCommit = null;
+    actionStatus = null;
+    let statuses: readonly CredentialSlotStatus[] = [];
+    let restoredChatGptStatus: ChatGptStatus = { state: "absent", runtimeReady: false };
+    const restored = await Promise.all([
+      settleWithin(options.bridge.credentialStatuses(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
+      settleWithin(options.bridge.chatGptStatus(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
+      settleWithin(options.bridge.llmConfiguration(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
+      settleWithin(
+        options.bridge.getSetupStatus?.() ??
+          Promise.resolve({ schemaVersion: 1 as const, intake: null, durableTrainingData: false }),
+        ONBOARDING_STATUS_REFRESH_TIMEOUT_MS,
+      ),
+    ]);
+    if (restored[0].status === "fulfilled") statuses = restored[0].value;
+    if (restored[1].status === "fulfilled") restoredChatGptStatus = restored[1].value;
+    llmConfiguration = restored[2].status === "fulfilled" ? restored[2].value : undefined;
+    llmDrafts = {};
+    setLlmDraft(
+      llmConfiguration === undefined
+        ? undefined
+        : initialLlmDraft(llmConfiguration, statuses, restoredChatGptStatus),
+    );
+    if (disposed || visit !== openVisit) {
       opening = false;
-      loadClaudeCliStatus(openVisit);
+      return;
+    }
+    credentialStatuses = statuses;
+    state = createOnboardingState(statuses, restoredChatGptStatus);
+    if (!hydrateIntake) state = withIntake(state, currentIntake);
+    if (restored[3].status === "fulfilled") {
+      durableTrainingData = restored[3].value.durableTrainingData;
+      if (hydrateIntake) {
+        state = withPersistedIntake(state, restored[3].value.intake);
+        intakeSaved = restored[3].value.intake !== null;
+      } else {
+        intakeSaved = intakeSaved && restored[3].value.intake !== null;
+      }
+    } else {
+      durableTrainingData = false;
+      intakeSaved = false;
+    }
+    const restoredPhase = chatGptUiPhase(state);
+    if (restoredPhase === "signed-in" || restoredPhase === "ready") {
+      actionStatus = restoredPhase;
+    }
+    if (llmDraft === undefined) state = withError(state, "configuration-unavailable");
+    state = withImportedRideFileCount(state, rideImports.importedFileCount());
+    initialized = true;
+    loading = false;
+    setRideImportPresentation(true);
+    focusTitle();
+    publish();
+    opening = false;
+    loadClaudeCliStatus(openVisit);
+  };
+
+  return {
+    open(): Promise<void> {
+      if (disposed || presenting || opening) return Promise.resolve();
+      return load(true);
+    },
+    refresh(): Promise<void> {
+      if (disposed || opening) return Promise.resolve();
+      return load(false);
     },
     close,
     dispose(): void {
@@ -771,9 +852,21 @@ export function createOnboardingController(
       disposeImportState();
     },
     state: () => state,
-    ownsDroppedImportFiles: () => !disposed && presenting,
+    ownsDroppedImportFiles: () =>
+      !disposed &&
+      presenting &&
+      !loading &&
+      !credentialMutationsBlocked() &&
+      (options.ownsDroppedImportFiles?.() ?? true),
     importDroppedFiles(paths) {
-      if (!disposed && presenting && !state.busy && !rideImports.isBusy()) {
+      if (
+        !disposed &&
+        presenting &&
+        !loading &&
+        !state.busy &&
+        !rideImports.isBusy() &&
+        !credentialMutationsBlocked()
+      ) {
         void rideImports.importPaths("onboarding", paths);
       }
     },
@@ -788,7 +881,7 @@ export function createOnboardingController(
     },
     dismiss: close,
     retrySavedKeys(): void {
-      if (disposed || !presenting || state.busy) return;
+      if (disposed || !presenting || loading || state.busy || credentialMutationsBlocked()) return;
       const retryVisit = visit;
       const retryAuthGeneration = authGeneration;
       lastCommit = "training";
@@ -825,7 +918,9 @@ export function createOnboardingController(
       if (
         disposed ||
         !presenting ||
+        loading ||
         state.busy ||
+        credentialMutationsBlocked() ||
         state.chatGptLoginPhase !== "idle" ||
         state.chatGptRuntimeState === "activating"
       ) {
@@ -922,14 +1017,16 @@ export function createOnboardingController(
       );
     },
     cancelChatGptLogin(): void {
-      if (disposed || !presenting || state.chatGptLoginPhase === "idle") return;
+      if (disposed || !presenting || loading || state.chatGptLoginPhase === "idle") return;
       cancelActiveChatGptLogin();
     },
     retryChatGptActivation(): void {
       if (
         disposed ||
         !presenting ||
+        loading ||
         state.busy ||
+        credentialMutationsBlocked() ||
         !chatGptSignedIn(state) ||
         selectedProviderIsReady() ||
         state.chatGptRuntimeState === "activating"
@@ -944,7 +1041,7 @@ export function createOnboardingController(
       beginChatGptActivation(parsedSelection.selection, visit);
     },
     recheckClaudeCli(): void {
-      if (disposed || !presenting || state.busy) return;
+      if (disposed || !presenting || loading || state.busy) return;
       const recheckVisit = visit;
       actionStatus = null;
       state = withBusy(state, true);
@@ -963,11 +1060,20 @@ export function createOnboardingController(
       );
     },
     chooseImportFiles(): void {
-      if (disposed || !presenting || state.busy || rideImports.isBusy()) return;
+      if (
+        disposed ||
+        !presenting ||
+        loading ||
+        state.busy ||
+        rideImports.isBusy() ||
+        credentialMutationsBlocked()
+      ) {
+        return;
+      }
       void rideImports.chooseAndImport("onboarding");
     },
     selectProvider(provider): void {
-      if (state.chatGptRuntimeState === "activating") return;
+      if (loading || state.chatGptRuntimeState === "activating") return;
       const next = llmConfiguration?.providers.find((entry) => entry.provider === provider);
       if (next === undefined) return;
       setLlmDraft(llmDrafts[next.provider] ?? draftForProvider(next));
@@ -988,7 +1094,7 @@ export function createOnboardingController(
       if (canActivateWithoutInput && !selectedProviderIsReady()) void saveModelKey();
     },
     selectModel(model): void {
-      if (llmDraft === undefined) return;
+      if (loading || llmDraft === undefined) return;
       setLlmDraft({
         ...llmDraft,
         modelChoice: model,
@@ -997,23 +1103,25 @@ export function createOnboardingController(
       setFixedError(null);
     },
     setCustomModel(model): void {
-      if (llmDraft === undefined) return;
+      if (loading || llmDraft === undefined) return;
       setLlmDraft({ ...llmDraft, customModel: model });
       setFixedError(null);
     },
     setEndpointMode(mode): void {
-      if (llmDraft === undefined) return;
+      if (loading || llmDraft === undefined) return;
       const parsed = ENDPOINT_MODES.find((candidate) => candidate === mode);
       if (parsed === undefined) return;
       setLlmDraft({ ...llmDraft, endpointMode: parsed });
       setFixedError(null);
     },
     setCustomEndpoint(endpoint): void {
-      if (llmDraft === undefined) return;
+      if (loading || llmDraft === undefined) return;
       setLlmDraft({ ...llmDraft, customEndpoint: endpoint });
       setFixedError(null);
     },
     setIntake(key, value): void {
+      if (loading) return;
+      intakeSaved = false;
       state = withIntake(state, { [key]: value });
       publish();
     },

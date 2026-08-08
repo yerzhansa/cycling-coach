@@ -19,13 +19,15 @@ export function createOnboardingCompletionController(options: {
   readonly storage: () => OnboardingCompletionStorage;
   readonly onComplete: (completion: OnboardingCompletion) => void;
 }): OnboardingCompletionController {
-  const completed = (): boolean => {
+  const storedCompletion = (): boolean => {
     try {
       return options.storage().getItem(COMPLETION_STORAGE_KEY) === COMPLETION_STORAGE_VALUE;
     } catch {
       return false;
     }
   };
+  let completionObserved = storedCompletion();
+  const completed = (): boolean => completionObserved || storedCompletion();
 
   return {
     isCompleted: completed,
@@ -34,10 +36,12 @@ export function createOnboardingCompletionController(options: {
     },
     openManually: (openSetup) => openSetup(),
     complete(completion) {
+      const firstCompletion = !completed();
+      completionObserved = true;
       try {
         options.storage().setItem(COMPLETION_STORAGE_KEY, COMPLETION_STORAGE_VALUE);
       } catch {}
-      options.onComplete(completion);
+      if (firstCompletion) options.onComplete(completion);
     },
   };
 }

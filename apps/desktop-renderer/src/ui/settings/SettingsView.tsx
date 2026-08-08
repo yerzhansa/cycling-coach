@@ -2,10 +2,10 @@ import { useEffect, type ReactElement } from "react";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { Page } from "../shared/Page.js";
+import { SetupPanel } from "../onboarding/OnboardingWizard.js";
 import { ApplicationSection } from "./ApplicationSection.js";
 import { CoachSection } from "./CoachSection.js";
 import { ConversationSection } from "./ConversationSection.js";
-import { CredentialsSection } from "./CredentialsSection.js";
 import { PreferencesSection } from "./PreferencesSection.js";
 import { SpendSection } from "./SpendSection.js";
 import { TelegramSection } from "./TelegramSection.js";
@@ -26,8 +26,8 @@ export function SettingsView(): ReactElement {
 
   return (
     <Page title="Settings" subtitle={busy ? "Saving…" : undefined} busy={busy}>
+      <SetupPanel placement="settings" />
       <CoachSection />
-      <CredentialsSection />
       <TrainingAccountSection />
       <ConversationSection />
       <TelegramSection />

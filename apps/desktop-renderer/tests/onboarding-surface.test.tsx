@@ -109,23 +109,20 @@ describe("mounted onboarding", () => {
     resetOnboardingStore();
   });
 
-  it("presents the setup page and dismisses through the controller", async () => {
-    const user = userEvent.setup();
+  it("presents the embedded setup block without a bypass action", async () => {
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    const page = screen.getByRole("region", { name: "Setup" });
-    expect(page).toHaveClass("onboarding");
-    expect(control("onboarding-title")).toBeInTheDocument();
+    const page = document.querySelector('[data-setup-host="chat"]');
+    expect(page).not.toBeNull();
+    expect(control("setup-panel-title")).toHaveTextContent(
+      "Get your coach running before you can chat",
+    );
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.querySelector(".onboarding-scrim")).toBeNull();
-    expect(document.activeElement).toBe(control("onboarding-title"));
-
-    await user.click(button("Dismiss"));
-
-    expect(screen.queryByRole("region", { name: "Setup" })).toBeNull();
-    expect(wizard.focusOpener).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(control("setup-panel-title"));
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
     wizard.controller.dispose();
   });
 
@@ -134,7 +131,8 @@ describe("mounted onboarding", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    const page = screen.getByRole("region", { name: "Setup" });
+    const page = document.querySelector('[data-setup-host="chat"]');
+    if (!(page instanceof HTMLElement)) throw new TypeError("setup host missing");
     expect(fireEvent.keyDown(page, { key: "Escape" })).toBe(true);
 
     expect(page).toBeInTheDocument();
@@ -147,13 +145,52 @@ describe("mounted onboarding", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    const page = screen.getByRole("region", { name: "Setup" });
-    const dismiss = button("Dismiss");
+    const page = document.querySelector('[data-setup-host="chat"]');
+    if (!(page instanceof HTMLElement)) throw new TypeError("setup host missing");
+    const first = button("Change what powers your coach");
     expect(primaryButton()).toBeDisabled();
 
-    dismiss.focus();
+    first.focus();
     expect(fireEvent.keyDown(page, { key: "Tab" })).toBe(true);
-    expect(document.activeElement).toBe(dismiss);
+    expect(document.activeElement).toBe(first);
+    wizard.controller.dispose();
+  });
+
+  it("blocks direct and scheduled ChatGPT activation when credential mutations are locked", async () => {
+    let mutationsBlocked = false;
+    let scheduledActivation: (() => void) | undefined;
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    const wizard = mountWizard({
+      bridge,
+      credentialMutationsBlocked: () => mutationsBlocked,
+      afterPaint(callback) {
+        scheduledActivation = callback;
+        return () => {
+          if (scheduledActivation === callback) scheduledActivation = undefined;
+        };
+      },
+    });
+    await wizard.open();
+
+    act(() => wizard.controller.startChatGptLogin());
+    await waitFor(() => {
+      expect(bridge.chatGptLogin).toHaveBeenCalledOnce();
+      expect(wizard.controller.state()).toMatchObject({
+        chatGptCredentialState: "stored",
+        chatGptRuntimeState: "inactive",
+      });
+      expect(scheduledActivation).toBeTypeOf("function");
+    });
+
+    mutationsBlocked = true;
+    const flushActivation = scheduledActivation;
+    if (flushActivation === undefined) throw new Error("ChatGPT activation was not scheduled");
+    act(() => flushActivation());
+    act(() => wizard.controller.selectProvider("openai-codex"));
+
+    expect(bridge.applyLlmSelection).not.toHaveBeenCalled();
+    expect(wizard.controller.state().chatGptRuntimeState).toBe("inactive");
     wizard.controller.dispose();
   });
 
@@ -920,7 +957,7 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("explains when a saved key's post-write status cannot be refreshed", async () => {
+  it("keeps the active coach available when a draft key status cannot be refreshed", async () => {
     const user = userEvent.setup();
     const exceptionDetail = "status exception detail must stay private";
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
@@ -948,11 +985,11 @@ describe("mounted onboarding", () => {
       expect(wizard.controller.state().fixedError).toBe("credential-status-unavailable");
     });
     expect(errorText()).toBe(
-      "That key was saved, but its status could not be refreshed. Close and reopen Setup to check again.",
+      "That key was saved, but its status could not be refreshed. Check the setup area again.",
     );
     expect(document.body.textContent).not.toContain(exceptionDetail);
     expect(rowState("ai")).toBe("pending");
-    expect(primaryButton()).toBeDisabled();
+    expect(primaryButton()).toBeEnabled();
     expect(secret.value).toBe("");
     expect(bridge.credentialStatuses).toHaveBeenCalledTimes(2);
     wizard.controller.dispose();

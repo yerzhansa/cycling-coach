@@ -7,16 +7,12 @@ import { REACT_CHAT_REGION, VIEWS } from "./views.js";
 
 export function Shell(props: { readonly onReady: () => void }): ReactElement {
   const activeView = useEnduragentStore((state) => state.activeView);
-  const onboardingOpen = useEnduragentStore((state) => state.onboarding.open);
   const onboardingStartupSettled = useEnduragentStore(
     (state) => state.onboardingStartupSettled,
   );
   const onReady = props.onReady;
-  const effectiveView = onboardingOpen ? "setup" : activeView;
   const onboardingState = onboardingStartupSettled
-    ? onboardingOpen
-      ? "open"
-      : "closed"
+    ? "settled"
     : "pending";
 
   useEffect(() => {
@@ -24,15 +20,15 @@ export function Shell(props: { readonly onReady: () => void }): ReactElement {
   }, [onReady]);
 
   return (
-    <div className={styles.win} data-view={effectiveView} data-onboarding={onboardingState}>
+    <div className={styles.win} data-view={activeView} data-onboarding={onboardingState}>
       <Sidebar />
       <div className={styles.main}>
         <div className={styles.views}>
-          <div className={effectiveView === "chat" ? styles.chatRegion : styles.away}>
+          <div className={activeView === "chat" ? styles.chatRegion : styles.away}>
             <ChatView />
           </div>
           {VIEWS.filter(
-            (view) => view.id === effectiveView && view.page !== REACT_CHAT_REGION,
+            (view) => view.id === activeView && view.page !== REACT_CHAT_REGION,
           ).map(
             (view) => {
               const Page = view.page as Exclude<typeof view.page, typeof REACT_CHAT_REGION>;

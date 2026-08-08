@@ -3,6 +3,7 @@ import { useEffect, useRef, type ReactElement } from "react";
 import { VIEWS } from "../../app/views.js";
 import { registerNewConversationOpener } from "../../state/new-conversation-opener.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
+import { setupReady } from "../../state/onboarding-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { ConnectionStatus } from "./ConnectionStatus.js";
 import { HistoryList } from "./HistoryList.js";
@@ -16,8 +17,7 @@ export function Sidebar(): ReactElement {
   const unavailable = useEnduragentStore((state) => state.chat.newConversationUnavailable);
   const resetPhase = useEnduragentStore((state) => state.chat.resetPhase);
   const actions = useEnduragentStore((state) => state.chatActions);
-  const onboardingOpen = useEnduragentStore((state) => state.onboarding.open);
-  const onboardingActions = useEnduragentStore((state) => state.onboardingActions);
+  const canChat = useEnduragentStore(setupReady);
   const settingsBusy = useEnduragentStore((state) => settingsMutationActive(state.settings));
   const opener = useRef<HTMLButtonElement>(null);
   const navigationLocked = activeView === "settings" && settingsBusy;
@@ -39,7 +39,9 @@ export function Sidebar(): ReactElement {
           type="button"
           ref={opener}
           className={`${styles.newButton} new-conversation-button`}
-          disabled={navigationLocked || actions === null || (unavailable && !focusableUncertain)}
+          disabled={
+            !canChat || navigationLocked || actions === null || (unavailable && !focusableUncertain)
+          }
           aria-disabled={focusableUncertain ? "true" : undefined}
           onClick={() => {
             if (focusableUncertain) return;
@@ -53,8 +55,7 @@ export function Sidebar(): ReactElement {
       </div>
       <nav className={styles.nav} aria-label="Main navigation">
         {VIEWS.map((view) => {
-          const active =
-            view.id === "setup" ? onboardingOpen : view.id === activeView && !onboardingOpen;
+          const active = view.id === activeView;
           return (
             <button
               key={view.id}
@@ -62,16 +63,10 @@ export function Sidebar(): ReactElement {
               className={active ? `${styles.navItem} ${styles.on}` : styles.navItem}
               aria-current={active ? "page" : undefined}
               disabled={
-                (navigationLocked && !onboardingOpen && view.id !== activeView) ||
-                (view.id === "setup" && onboardingActions === null)
+                navigationLocked && view.id !== activeView
               }
               onClick={() => {
-                if (view.id === "setup") {
-                  void onboardingActions?.open();
-                } else {
-                  if (onboardingOpen) onboardingActions?.dismiss();
-                  setActiveView(view.id);
-                }
+                setActiveView(view.id);
               }}
             >
               <view.icon className={styles.glyph} size={16} aria-hidden="true" />
@@ -83,7 +78,7 @@ export function Sidebar(): ReactElement {
       <div className={styles.sec}>Conversations</div>
       <HistoryList locked={navigationLocked} />
       <div className={styles.railFoot}>
-        <UpdateAvailableButton locked={navigationLocked || onboardingOpen} />
+        <UpdateAvailableButton locked={navigationLocked} />
         <SyncChip />
         <ConnectionStatus />
       </div>

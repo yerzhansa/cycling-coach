@@ -62,7 +62,7 @@ export function IntakeRows(props: {
   const { surface, actions } = props;
   const wizard = surface.wizard;
   const intake = wizard.intake;
-  const busy = wizard.busy;
+  const controlsDisabled = wizard.busy || surface.loading;
   const needsClearance = intake.injuryStatus !== null && intake.injuryStatus !== "none";
   const ownsError = errorSection(wizard.fixedError, surface.lastCommit) === "intake";
   const describedBy = ownsError ? { describedBy: "onboarding-error" } : {};
@@ -80,7 +80,7 @@ export function IntakeRows(props: {
             id="onboarding-injury-status"
             value={intake.injuryStatus ?? UNSET}
             options={INJURY_OPTIONS}
-            disabled={busy}
+            disabled={controlsDisabled}
             {...describedBy}
             onSelect={(value) => {
               actions?.setIntake(
@@ -103,7 +103,7 @@ export function IntakeRows(props: {
               id="onboarding-clinician-cleared"
               value={boolValue(intake.clinicianCleared)}
               options={YES_NO_OPTIONS}
-              disabled={busy}
+              disabled={controlsDisabled}
               {...describedBy}
               onSelect={(value) => {
                 actions?.setIntake("clinicianCleared", parseBool(value));

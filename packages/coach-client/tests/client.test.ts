@@ -67,6 +67,7 @@ const rpcDeadlineCases = [
   ],
   ["importFiles", { paths: ["/synthetic/ride.fit"] }, 3_600_000],
   ["sync", {}, 86_400_000],
+  ["getSetupStatus", {}, 30_000],
   [
     "saveIntake",
     {
@@ -829,6 +830,18 @@ describe("RPC receive and observers", () => {
           referenceSucceeded: true,
           requests: { store: 1, reference: 1, total: 2 },
         },
+        getSetupStatus: {
+          schemaVersion: 1,
+          intake: {
+            swim_skill_floor: null,
+            continuous_distance_capable: null,
+            open_water_comfort: null,
+            prior_bsi: false,
+            clinician_cleared: null,
+            injury_status: "none",
+          },
+          durableTrainingData: true,
+        },
         saveIntake: { schemaVersion: 1, saved: true },
         configureRuntime: {
           schemaVersion: 3,
@@ -979,6 +992,18 @@ describe("RPC receive and observers", () => {
       client.call("importFiles", { paths: ["/synthetic/ride.fit"] }),
     ).resolves.toMatchObject({ schemaVersion: 2 });
     await expect(client.call("sync", {})).resolves.toMatchObject({ schemaVersion: 1 });
+    await expect(client.call("getSetupStatus", {})).resolves.toEqual({
+      schemaVersion: 1,
+      intake: {
+        swim_skill_floor: null,
+        continuous_distance_capable: null,
+        open_water_comfort: null,
+        prior_bsi: false,
+        clinician_cleared: null,
+        injury_status: "none",
+      },
+      durableTrainingData: true,
+    });
     await expect(
       client.call("saveIntake", {
         swim_skill_floor: null,
@@ -1002,7 +1027,7 @@ describe("RPC receive and observers", () => {
       llm: { provider: "anthropic", model: "synthetic-model" },
     });
     expect(received.map((value) => (value as { id: number }).id)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
     ]);
     expect(received.map((value) => (value as { method: string }).method)).toEqual([
       "chat",
@@ -1014,6 +1039,7 @@ describe("RPC receive and observers", () => {
       "getAthleteState",
       "importFiles",
       "sync",
+      "getSetupStatus",
       "saveIntake",
       "configureRuntime",
       "getRuntimeConfig",
@@ -1026,7 +1052,7 @@ describe("RPC receive and observers", () => {
       value: "imperial",
       source: "cycling",
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([13, 14]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([14, 15]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getUnitsPreference",
       "setUnitsPreference",
@@ -1100,7 +1126,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([33, 34]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([34, 35]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",

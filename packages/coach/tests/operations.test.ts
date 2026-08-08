@@ -199,7 +199,8 @@ describe("coach operations", () => {
       archiveDir: join(root, "archive"),
       configDir: join(root, "config"),
     };
-    const store = openSqliteStorage(join(root, "coach.db"));
+    const databasePath = join(root, "coach.db");
+    let store = openSqliteStorage(databasePath);
     try {
       await runMigrations(store, MIGRATIONS);
       const liveContext: CoachStoreWriterContext = {
@@ -230,6 +231,31 @@ describe("coach operations", () => {
       const second = await operations.importFiles({ paths });
       expect(second.changes.rawFilesInserted).toBe(0);
       expect(Number((await store.get("SELECT count(*) AS count FROM raw_file"))?.count)).toBe(3);
+      await expect(operations.getSetupStatus?.({})).resolves.toEqual({
+        schemaVersion: 1,
+        intake: null,
+        durableTrainingData: true,
+      });
+      await store.close();
+      store = openSqliteStorage(databasePath);
+      await runMigrations(store, MIGRATIONS);
+      const relaunchedOperations = createCoachOperations({
+        home: liveHome,
+        context: {
+          home: liveHome,
+          store,
+          listener: {} as CoachStoreWriterContext["listener"],
+        },
+        runtime: operationRuntime(),
+        intervalsCredentials: intervalsCredentials(),
+        historyNewestDate: () => "1998-07-18",
+        applyRuntimeConfig: async () => {},
+      });
+      await expect(relaunchedOperations.getSetupStatus?.({})).resolves.toEqual({
+        schemaVersion: 1,
+        intake: null,
+        durableTrainingData: true,
+      });
     } finally {
       await store.close();
       await rm(root, { recursive: true, force: true });
@@ -298,6 +324,18 @@ describe("coach operations", () => {
       });
       expect(second?.id).not.toBe(first?.id);
       expect(Number(second?.hlc_counter)).toBeGreaterThanOrEqual(Number(first?.hlc_counter));
+      await expect(operations.getSetupStatus?.({})).resolves.toEqual({
+        schemaVersion: 1,
+        intake: {
+          swim_skill_floor: null,
+          continuous_distance_capable: null,
+          open_water_comfort: null,
+          prior_bsi: false,
+          clinician_cleared: false,
+          injury_status: "managing",
+        },
+        durableTrainingData: false,
+      });
       await expect(async () =>
         operations.saveIntake({
           swim_skill_floor: null,
@@ -323,6 +361,40 @@ describe("coach operations", () => {
       await store.close();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("fails setup readiness closed when persisted state is unreadable", async () => {
+    const unreadableStore = {
+      get: vi.fn(async () => ({ present: 1 })),
+    } as unknown as CoachStoreWriterContext["store"];
+    const operations = createCoachOperations(
+      {
+        home,
+        context: {
+          home,
+          store: unreadableStore,
+          listener: {} as CoachStoreWriterContext["listener"],
+        },
+        runtime: operationRuntime(),
+        intervalsCredentials: intervalsCredentials(),
+        historyNewestDate: () => "1998-07-18",
+        applyRuntimeConfig: async () => {},
+      },
+      {
+        createIntakeRepository: () => ({
+          replace: async () => {},
+          read: async () => {
+            throw new TypeError("corrupt intake row");
+          },
+        }),
+      },
+    );
+
+    await expect(operations.getSetupStatus?.({})).resolves.toEqual({
+      schemaVersion: 1,
+      intake: null,
+      durableTrainingData: false,
+    });
   });
 
   it("maps canonical import and sync reports with exact progress", async () => {

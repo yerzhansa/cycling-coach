@@ -200,6 +200,20 @@ describe("onboarding completion", () => {
     expect(openSetup).not.toHaveBeenCalled();
   });
 
+  it("uses the completion marker as a one-time first-sync guard", () => {
+    const storage = memoryStorage();
+    const firstSync = vi.fn();
+    const controller = createOnboardingCompletionController({
+      storage: () => storage,
+      onComplete: firstSync,
+    });
+
+    controller.complete(completion);
+    controller.complete(completion);
+
+    expect(firstSync).toHaveBeenCalledOnce();
+  });
+
   it("always opens Setup for a manual replay after completion", async () => {
     const storage = memoryStorage([
       ["enduragent.desktop.onboarding", '{"version":1,"completed":true}'],
@@ -264,9 +278,11 @@ describe("onboarding completion", () => {
     });
 
     expect(() => controller.complete(completion)).not.toThrow();
+    expect(() => controller.complete(completion)).not.toThrow();
     await controller.openManually(openSetup);
 
     expect(firstSync).toHaveBeenCalledWith(completion);
+    expect(firstSync).toHaveBeenCalledOnce();
     expect(openSetup).toHaveBeenCalledOnce();
   });
 });
@@ -317,7 +333,7 @@ describe("onboarding runtime completion gate", () => {
     harness.controller.dispose();
   });
 
-  it("fails closed when automatic Claude activation is refused", async () => {
+  it("keeps the active coach ready when a draft Claude activation is refused", async () => {
     const bridge = activationBridge(async () => ({
       status: "refused",
       reason: "runtime-unavailable",
@@ -337,10 +353,11 @@ describe("onboarding runtime completion gate", () => {
         fixedError: "model-runtime-unavailable",
       });
     });
-    expect(harness.surface().readiness.provider).toBe(false);
-    harness.controller.finish();
-    expect(bridge.saveIntake).not.toHaveBeenCalled();
-    expect(harness.onComplete).not.toHaveBeenCalled();
+    expect(harness.surface().readiness.provider).toBe(true);
+    expect(harness.surface().configuration?.active).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
     harness.controller.dispose();
   });
 

@@ -12,7 +12,7 @@ import {
   type ChatSurfaceState,
 } from "../src/state/chat-slice.js";
 import { resetChatStream } from "../src/state/chat-stream.js";
-import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { SLASH_COMMANDS } from "../src/chat/commands.js";
 import { ChatView } from "../src/ui/chat/ChatView.js";
@@ -61,7 +61,7 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       chatActions: actions,
-      onboarding: CLOSED_ONBOARDING,
+      onboarding: READY_ONBOARDING,
     });
   });
 

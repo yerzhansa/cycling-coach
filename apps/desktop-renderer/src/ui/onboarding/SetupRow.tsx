@@ -30,9 +30,10 @@ function StatusDisc(props: { readonly status: SetupRowStatus }): ReactElement | 
 
 export function SetupRow(props: {
   readonly id: string;
+  readonly dataProvider?: string;
   readonly status: SetupRowStatus;
   readonly title: string;
-  readonly subtitle: string;
+  readonly subtitle: ReactNode;
   readonly info?: ReactNode;
   readonly trailing?: ReactNode;
   readonly titleFor?: string;
@@ -56,17 +57,13 @@ export function SetupRow(props: {
       className="flex w-full items-center gap-[11px] px-[15px] py-3"
       data-setup-row={props.id}
       data-state={props.status}
+      {...(props.dataProvider === undefined ? {} : { "data-provider": props.dataProvider })}
     >
       <StatusDisc status={props.status} />
       <div className="min-w-0 flex-1">
         {title}
         <span className="mt-px block text-xs text-ink-2">{props.subtitle}</span>
-        <span
-          className="sr-only"
-          role="status"
-          aria-live="polite"
-          data-setup-announce={props.id}
-        >
+        <span className="sr-only" role="status" aria-live="polite" data-setup-announce={props.id}>
           {props.announce ?? ""}
         </span>
       </div>

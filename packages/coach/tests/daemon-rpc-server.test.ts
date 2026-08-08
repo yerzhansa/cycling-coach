@@ -637,9 +637,21 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     await client.close();
   });
 
-  it("dispatches authenticated intake and runtime operations without value echo", async () => {
+  it("dispatches authenticated setup, intake, and runtime operations without value echo", async () => {
     const token = "x".repeat(43);
     const saveIntake = vi.fn(async () => ({ schemaVersion: 1 as const, saved: true as const }));
+    const getSetupStatus = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      intake: {
+        swim_skill_floor: null,
+        continuous_distance_capable: null,
+        open_water_comfort: null,
+        prior_bsi: false,
+        clinician_cleared: true,
+        injury_status: "returning" as const,
+      },
+      durableTrainingData: true,
+    }));
     const configureRuntime = vi.fn(async ({ llm, intervals, session }) => ({
       schemaVersion: 3 as const,
       status: "applied" as const,
@@ -679,7 +691,13 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     const getRuntimeConfig = vi.fn(async () => runtimeSnapshot);
     const rpc = createCoachRpcServer({
       engine: engine(),
-      operations: { ...operations, saveIntake, configureRuntime, getRuntimeConfig },
+      operations: {
+        ...operations,
+        getSetupStatus,
+        saveIntake,
+        configureRuntime,
+        getRuntimeConfig,
+      },
       token,
       owner: "app-supervised",
     });
@@ -708,6 +726,34 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       result: { schemaVersion: 1, saved: true },
     });
     expect(saveIntake).toHaveBeenCalledWith(intake);
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "setup-status",
+        method: "getSetupStatus",
+        params: {},
+      }),
+    );
+    const setupStatusResponse = parseCoachRpcEnvelope(await client.frames.next());
+    expect(setupStatusResponse).toEqual({
+      jsonrpc: "2.0",
+      id: "setup-status",
+      result: {
+        schemaVersion: 1,
+        intake: {
+          swim_skill_floor: null,
+          continuous_distance_capable: null,
+          open_water_comfort: null,
+          prior_bsi: false,
+          clinician_cleared: true,
+          injury_status: "returning",
+        },
+        durableTrainingData: true,
+      },
+    });
+    expect(JSON.stringify(setupStatusResponse)).not.toContain("placeholder");
+    expect(getSetupStatus).toHaveBeenCalledWith({});
 
     const runtime = {
       llm: { provider: "openrouter", model: "model-a", api_key: "placeholder" },
