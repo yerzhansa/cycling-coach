@@ -6,13 +6,7 @@ import type { ManualSyncViewState } from "../../training-context/manual-sync.js"
 import { formatUtcTimestamp } from "../../training-context/format.js";
 import styles from "./Sidebar.module.css";
 
-type SyncChipStatus =
-  | "loading"
-  | "syncing"
-  | "attention"
-  | "synced"
-  | "never"
-  | "unavailable";
+type SyncChipStatus = "loading" | "syncing" | "attention" | "synced" | "never" | "unavailable";
 
 function syncChipStatus(
   training: TrainingContextViewState,
@@ -29,7 +23,7 @@ const HEADLINE: Readonly<Record<SyncChipStatus, string>> = {
   loading: "Loading training data",
   syncing: "Syncing",
   attention: "Sync needs attention",
-  synced: "Synced",
+  synced: "Training data synced",
   never: "Not synced yet",
   unavailable: "Training data unavailable",
 };
@@ -50,7 +44,7 @@ export function SyncChip(): ReactElement {
       className={`${styles.sync} sync-chip`}
       data-status={status}
       disabled={sync.disabled || actions === null}
-      aria-label={`${sync.label} · ${HEADLINE[status]}`}
+      aria-label={[sync.label, HEADLINE[status], detail].filter(Boolean).join(" · ")}
       onClick={(event) => {
         const keyboard = event.detail === 0;
         setManualSyncFocusTarget(keyboard ? chip.current : null);

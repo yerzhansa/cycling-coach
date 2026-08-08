@@ -19,7 +19,6 @@ import {
   type ActivityAnalysisSlice,
 } from "./activity-analysis-slice.js";
 import { createChatSlice, type ChatSlice } from "./chat-slice.js";
-import { createConnectionSlice, type ConnectionSlice } from "./connection-slice.js";
 import { createOnboardingSlice, type OnboardingSlice } from "./onboarding-slice.js";
 import { createRideImportSlice, type RideImportSlice } from "./ride-import-slice.js";
 import {
@@ -40,7 +39,6 @@ export interface EnduragentState
     TrainingExportSlice,
     ActivityAnalysisSlice,
     SyncSlice,
-    ConnectionSlice,
     RideImportSlice,
     OnboardingSlice {
   readonly activeView: StoredViewId;
@@ -72,7 +70,6 @@ export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
   ...createTrainingExportSlice(set, get, api),
   ...createActivityAnalysisSlice(set, get, api),
   ...createSyncSlice(set, get, api),
-  ...createConnectionSlice(set, get, api),
   ...createRideImportSlice(set, get, api),
   ...createOnboardingSlice(set, get, api),
   activeView: "chat",

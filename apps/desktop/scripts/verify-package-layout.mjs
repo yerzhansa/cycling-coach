@@ -54,7 +54,7 @@ const reservedResourceNames = new Set([
   "app.asar",
   "app.asar.unpacked",
   "app-update.yml",
-  "electron.icns",
+  "icon.icns",
   "en.lproj",
 ]);
 const forbiddenDirectoryNames = new Set([
@@ -265,7 +265,9 @@ export async function readBuilderAuthority(desktopRoot = canonicalDesktopRoot) {
     !exactObject(config.directories) ||
     config.directories.output !== "dist" ||
     !Array.isArray(config.files) ||
-    !Array.isArray(config.extraResources)
+    !Array.isArray(config.extraResources) ||
+    !exactObject(config.mac) ||
+    config.mac.icon !== "resources/app-icon.png"
   ) {
     fail("invalid builder packaging authority", "electron-builder.yml");
   }
@@ -685,15 +687,15 @@ async function validateResourceEnvelope(resourcesRoot, externalSource, release) 
       fail("external resources collide with reserved package entries", "dist/extra-resources");
     }
   }
-  const expected = new Set(["app.asar", "electron.icns", "en.lproj", ...sourceTopLevel]);
+  const expected = new Set(["app.asar", "icon.icns", "en.lproj", ...sourceTopLevel]);
   if (release !== undefined) expected.add("app-update.yml");
   if (names.includes("app.asar.unpacked")) expected.add("app.asar.unpacked");
   if (names.length !== expected.size || names.some((name) => !expected.has(name))) {
     fail("undeclared package resource", "Contents/Resources");
   }
 
-  const iconPath = join(resourcesRoot, "electron.icns");
-  const iconLabel = "Contents/Resources/electron.icns";
+  const iconPath = join(resourcesRoot, "icon.icns");
+  const iconLabel = "Contents/Resources/icon.icns";
   const iconStat = await safeLstat(iconPath, iconLabel);
   assertRegularFile(iconStat, iconLabel);
   inspectContents(await safeReadFile(iconPath, iconLabel), iconLabel);

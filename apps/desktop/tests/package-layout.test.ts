@@ -148,6 +148,8 @@ function builderYaml(
     "extraResources:",
     `  - from: ${externalSource}`,
     "    to: .",
+    "mac:",
+    "  icon: resources/app-icon.png",
     "",
   ].join("\n");
 }
@@ -187,7 +189,7 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
   await Promise.all([
     writeFile(join(desktop, "electron-builder.yml"), builderYaml()),
     writeFile(join(desktop, "package.json"), sourceManifestBytes),
-    writeFile(join(resources, "electron.icns"), "synthetic icon"),
+    writeFile(join(resources, "icon.icns"), "synthetic icon"),
     writeFile(join(asarSource, "resources/self-test/matrix.json"), matrix),
     writeFile(join(asarSource, "resources/self-test/matrix.sha256"), matrixChecksum),
     writeFile(join(externalSource, "self-test/matrix.json"), matrix),
@@ -554,13 +556,7 @@ describe("desktop package layout", () => {
     ],
     [
       "mac.extraFiles",
-      [
-        "mac:",
-        "  extraFiles:",
-        "    - from: dist/extra-files",
-        "      to: leaked.test.js",
-        "",
-      ].join("\n"),
+      ["  extraFiles:", "    - from: dist/extra-files", "      to: leaked.test.js", ""].join("\n"),
     ],
   ])("rejects the alternate builder copy surface %s", async (_label, addition) => {
     const fixture = await syntheticPackage();
@@ -792,10 +788,7 @@ describe("desktop package layout", () => {
 
   it("scans the packaged icon for synthetic secret markers", async () => {
     const fixture = await syntheticPackage();
-    await writeFile(
-      join(fixture.resources, "electron.icns"),
-      "sentinel-google-generative-ai-api-key",
-    );
+    await writeFile(join(fixture.resources, "icon.icns"), "sentinel-google-generative-ai-api-key");
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
     ).rejects.toThrow("known plaintext secret marker");

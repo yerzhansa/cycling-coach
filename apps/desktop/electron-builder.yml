@@ -29,6 +29,7 @@ extraResources:
   - from: dist/extra-resources
     to: .
 mac:
+  icon: resources/app-icon.png
   target:
     - target: dir
       arch: [arm64]
