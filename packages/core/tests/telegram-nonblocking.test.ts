@@ -261,7 +261,7 @@ describe("setMyCommands menu list", () => {
   it("includes the full command set (with start) and excludes snapshot when reference is present", async () => {
     const reference: StubReference = { runSync: vi.fn(), loadLatest: vi.fn() };
     const { bot } = await buildBot({ reference });
-    expect(bot.api.setMyCommands).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(bot.api.setMyCommands).toHaveBeenCalledTimes(1));
     const menu = bot.api.setMyCommands.mock.calls[0][0] as {
       command: string;
       description: string;
@@ -289,6 +289,7 @@ describe("setMyCommands menu list", () => {
 
   it("excludes sync when reference is undefined", async () => {
     const { bot } = await buildBot();
+    await vi.waitFor(() => expect(bot.api.setMyCommands).toHaveBeenCalledTimes(1));
     const menu = bot.api.setMyCommands.mock.calls[0][0] as {
       command: string;
       description: string;

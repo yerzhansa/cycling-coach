@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createProviderActivityBestEffortsArchive,
+  createProviderActivityHistogramArchive,
   createProviderActivityIntervalsArchive,
+  createProviderActivityPowerHeartRateArchive,
   createProviderActivityStreamArchive,
 } from "../src/activity-analysis-archive.js";
 
@@ -135,6 +137,39 @@ describe("provider activity stream archive", () => {
     });
     expect(JSON.stringify(efforts.landingDrafts[0])).not.toContain("333");
     expect(JSON.stringify(efforts.landingDrafts[0])).not.toContain("2500");
+
+    const histogram = setup();
+    await createProviderActivityHistogramArchive(histogram.dependencies).write({
+      sourceRevision: REVISION,
+      metric: "power",
+      response: [{ min: 200, max: 225, secs: 601 }],
+      signal: new AbortController().signal,
+    });
+    expect(JSON.stringify(histogram.snapshots[0])).toContain("601");
+    expect(histogram.artifactDrafts[0]).toMatchObject({
+      lane: "streams",
+      externalId: `power-histogram:analysis:${REVISION}:${ADDRESS}`,
+    });
+    expect(JSON.stringify(histogram.landingDrafts[0])).not.toContain("200");
+    expect(JSON.stringify(histogram.landingDrafts[0])).not.toContain("601");
+
+    const powerHeartRate = setup();
+    await createProviderActivityPowerHeartRateArchive(powerHeartRate.dependencies).write({
+      sourceRevision: REVISION,
+      response: {
+        series: [{ start: 0, watts: 244, hr: 151, secs: 60 }],
+        curves: [{ id: "private-curve", coefficients: [120, 0.1] }],
+      },
+      signal: new AbortController().signal,
+    });
+    expect(JSON.stringify(powerHeartRate.snapshots[0])).toContain("244");
+    expect(powerHeartRate.artifactDrafts[0]).toMatchObject({
+      lane: "streams",
+      externalId: `power-heart-rate:analysis:${REVISION}:${ADDRESS}`,
+    });
+    expect(JSON.stringify(powerHeartRate.landingDrafts[0])).not.toContain("244");
+    expect(JSON.stringify(powerHeartRate.landingDrafts[0])).not.toContain("151");
+    expect(JSON.stringify(powerHeartRate.landingDrafts[0])).not.toContain("private-curve");
   });
 
   it("does not publish store evidence after cancellation", async () => {

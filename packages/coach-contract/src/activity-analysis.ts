@@ -366,7 +366,7 @@ export const DistributionBucketSchema = z
 export const DistributionDataSchema = z
   .object({
     unit: z.enum(["watts", "bpm"]),
-    buckets: z.array(DistributionBucketSchema).max(MAX_ACTIVITY_ANALYSIS_BUCKETS),
+    buckets: z.array(DistributionBucketSchema).min(1).max(MAX_ACTIVITY_ANALYSIS_BUCKETS),
     totalSeconds: NonnegativeFiniteSchema.max(7 * 86_400),
   })
   .strict()
@@ -404,7 +404,7 @@ export const PowerHeartRateCurveSchema = z
 export const PowerHeartRateDataSchema = z
   .object({
     source: z.literal("provider"),
-    rows: z.array(PowerHeartRateRowSchema).max(MAX_ACTIVITY_ANALYSIS_POWER_HEART_RATE_ROWS),
+    rows: z.array(PowerHeartRateRowSchema).min(1).max(MAX_ACTIVITY_ANALYSIS_POWER_HEART_RATE_ROWS),
     curves: z.array(PowerHeartRateCurveSchema).max(MAX_ACTIVITY_ANALYSIS_POWER_HEART_RATE_CURVES),
     coverageFraction: z.number().finite().min(0).max(1),
     heartRateLagSeconds: NullableNonnegativeFiniteSchema,

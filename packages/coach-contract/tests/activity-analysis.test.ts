@@ -233,6 +233,16 @@ describe("activity analysis contract", () => {
     expect(ActivityAnalysisResultSchema.safeParse({
       ...concrete,
       sections: {
+        powerDistribution: {
+          kind: "computed",
+          data: { unit: "watts", buckets: [], totalSeconds: 0 },
+          provenance: { ...provenance, source: "provider" },
+        },
+      },
+    }).success).toBe(false);
+    expect(ActivityAnalysisResultSchema.safeParse({
+      ...concrete,
+      sections: {
         powerHeartRate: {
           kind: "computed",
           data: {
@@ -244,7 +254,7 @@ describe("activity analysis contract", () => {
             warmupSeconds: null,
             cooldownSeconds: null,
           },
-          provenance,
+          provenance: { ...provenance, source: "provider" },
         },
       },
     }).success).toBe(false);
