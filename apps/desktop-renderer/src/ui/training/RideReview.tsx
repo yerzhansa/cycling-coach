@@ -13,6 +13,7 @@ import { Page } from "../shared/Page.js";
 import { analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy.js";
 import { RideResponseReview } from "./RideResponseReview.js";
 import styles from "./TrainingView.module.css";
+import { ActivityExportControl } from "./TrainingExportControls.js";
 
 const RIDE_KIND: Readonly<Record<string, string>> = {
   road: "Road ride",
@@ -691,6 +692,7 @@ export function RideDetailView(props: {
         <h2 id="ride-overview-title">{rideKind(props.ride)}</h2>
         <RideSummary ride={props.ride} units={props.units} />
       </section>
+      <ActivityExportControl canonicalActivityId={props.ride.id} localDate={props.ride.localDate} />
       <AerobicDriftPanel
         rideId={props.ride.id}
         analysis={props.analysis}

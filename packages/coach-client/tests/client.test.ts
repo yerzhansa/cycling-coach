@@ -55,6 +55,16 @@ const rpcDeadlineCases = [
     { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
     90_000,
   ],
+  [
+    "exportTrainingFile",
+    {
+      kind: "activity",
+      canonicalActivityId: "a".repeat(64),
+      format: "fit",
+      destinationPath: "/synthetic/ride.fit",
+    },
+    120_000,
+  ],
   ["importFiles", { paths: ["/synthetic/ride.fit"] }, 3_600_000],
   ["sync", {}, 86_400_000],
   [
@@ -795,6 +805,12 @@ describe("RPC receive and observers", () => {
           },
           revision: "c".repeat(64),
           sections: { intervals: { kind: "unavailable", reason: "unsupported" } },
+        },
+        exportTrainingFile: {
+          status: "exported",
+          byteLength: 4_096,
+          suggestedFilename: "synthetic.fit",
+          contentType: "application/octet-stream",
         },
         importFiles: {
           schemaVersion: 2,

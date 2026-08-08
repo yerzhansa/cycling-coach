@@ -364,6 +364,38 @@
   font: 11px/1.4 var(--f-mono);
 }
 
+.planExport {
+  padding-top: 14px;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.exportControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.exportControls label {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.exportSelect {
+  composes: control from "../../theme/surface.module.css";
+  min-width: 86px;
+}
+
+.exportStatus {
+  margin: 10px 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .wellness {
   display: grid;
   gap: 10px;

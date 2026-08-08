@@ -71,6 +71,7 @@ interface AuthBridge {
   addTelegramAllowedSender(input: unknown): Promise<unknown>;
   removeTelegramAllowedSender(input: unknown): Promise<unknown>;
   acknowledgeTelegramGapWarning(): Promise<unknown>;
+  exportTrainingFile(input: unknown): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
   restartToUpdate(): Promise<unknown>;
@@ -241,6 +242,7 @@ describe("desktop preload ChatGPT auth", () => {
         "deleteCredential",
         "disableTelegram",
         "enableTelegram",
+        "exportTrainingFile",
         "getUpdateState",
         "getDaemonConnection",
         "getTranscriptPage",
@@ -269,6 +271,51 @@ describe("desktop preload ChatGPT auth", () => {
 
   it("keeps the release-gate smoke bridge list byte-equal to the sorted public bridge", () => {
     expect(pinnedSmokeBridgeKeys()).toEqual(Object.keys(bridge).sort());
+  });
+
+  it("exports only a closed training request and validates the minimized result", async () => {
+    const request = {
+      kind: "activity",
+      canonicalActivityId: "a".repeat(64),
+      localDate: "1998-07-19",
+      format: "fit",
+    };
+    mocks.invoke.mockResolvedValue({ status: "saved", byteLength: 4096 });
+
+    await expect(bridge.exportTrainingFile(request)).resolves.toEqual({
+      status: "saved",
+      byteLength: 4096,
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:training:export", request);
+
+    await expect(
+      bridge.exportTrainingFile({ ...request, canonicalActivityId: "provider-activity-42" }),
+    ).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      bridge.exportTrainingFile({ ...request, localDate: "1998-02-30" }),
+    ).rejects.toBeInstanceOf(TypeError);
+    await expect(
+      bridge.exportTrainingFile({ ...request, destinationPath: "/tmp/private.fit" }),
+    ).rejects.toBeInstanceOf(TypeError);
+
+    mocks.invoke.mockResolvedValue({ status: "saved", byteLength: 0 });
+    await expect(bridge.exportTrainingFile(request)).rejects.toBeInstanceOf(TypeError);
+    mocks.invoke.mockResolvedValue({ status: "refused", reason: "private-provider-detail" });
+    await expect(bridge.exportTrainingFile(request)).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("accepts closed workout archive ranges and rejects inverted ranges", async () => {
+    const request = {
+      kind: "workout-archive",
+      oldest: "1998-07-20",
+      newest: "1998-07-26",
+      format: "zwo",
+    };
+    mocks.invoke.mockResolvedValue({ status: "cancelled" });
+    await expect(bridge.exportTrainingFile(request)).resolves.toEqual({ status: "cancelled" });
+    await expect(
+      bridge.exportTrainingFile({ ...request, oldest: "1998-07-27" }),
+    ).rejects.toBeInstanceOf(TypeError);
   });
 
   it("exposes semantic Telegram controls and validates redacted snapshots", async () => {

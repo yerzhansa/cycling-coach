@@ -14,6 +14,7 @@ import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
+import { IDLE_TRAINING_EXPORT } from "../src/training-export/controller.js";
 import type { TrainingContextViewState } from "../src/training-context/controller.js";
 import { toManualSyncViewState } from "../src/training-context/manual-sync.js";
 import { TrainingView } from "../src/ui/training/TrainingView.js";
@@ -264,6 +265,8 @@ beforeEach(() => {
     rideImport: IDLE_RIDE_IMPORT,
     rideImportSuppressed: false,
     rideImportActions: null,
+    trainingExport: IDLE_TRAINING_EXPORT,
+    trainingExportActions: null,
   });
 });
 
@@ -279,6 +282,8 @@ afterEach(() => {
     rideImport: IDLE_RIDE_IMPORT,
     rideImportSuppressed: false,
     rideImportActions: null,
+    trainingExport: IDLE_TRAINING_EXPORT,
+    trainingExportActions: null,
   });
 });
 
@@ -334,6 +339,38 @@ describe("training page", () => {
         name: "Review road ride from 1998-07-09 · 22:00, 1h 31m, 42.1 km",
       }),
     ).toHaveFocus();
+  });
+
+  it("exports a ride through the bound desktop action without rendering its canonical ID", async () => {
+    const user = userEvent.setup();
+    const exportActivity = vi.fn(async () => {});
+    const exportWorkoutArchive = vi.fn(async () => {});
+    useEnduragentStore.setState({
+      trainingExportActions: { exportActivity, exportWorkoutArchive },
+    });
+    render(<TrainingView />);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Review road ride from 1998-07-09 · 22:00, 1h 31m, 42.1 km",
+      }),
+    );
+
+    const panel = screen.getByRole("region", { name: "Export ride" });
+    await user.selectOptions(within(panel).getByRole("combobox", { name: "File format" }), "gpx");
+    await user.click(within(panel).getByRole("button", { name: "Export ride" }));
+    expect(exportActivity).toHaveBeenCalledWith({
+      canonicalActivityId: "a".repeat(64),
+      localDate: "1998-07-09",
+      format: "gpx",
+    });
+    expect(document.body).not.toHaveTextContent("a".repeat(64));
+
+    act(() => {
+      useEnduragentStore.setState({
+        trainingExport: { status: "saved", target: "activity", byteLength: 4_096 },
+      });
+    });
+    expect(within(panel).getByRole("status")).toHaveTextContent("Export saved locally.");
   });
 
   it("uses the cycling unit preference and explicit unavailable ride metadata", () => {
@@ -817,6 +854,24 @@ describe("training page", () => {
     expect(plan.getAllByRole("listitem")).toHaveLength(7);
     expect(plan.getByText("Endurance ride 1")).toBeInTheDocument();
     expect(plan.queryByText("Endurance ride 8")).toBeNull();
+  });
+
+  it("exports exactly the visible planned-workout date range", async () => {
+    const user = userEvent.setup();
+    const exportWorkoutArchive = vi.fn(async () => {});
+    useEnduragentStore.setState({
+      trainingExportActions: { exportActivity: vi.fn(async () => {}), exportWorkoutArchive },
+    });
+    render(<TrainingView />);
+
+    const plan = screen.getByRole("region", { name: "Plan" });
+    await user.selectOptions(within(plan).getByRole("combobox", { name: "Workout format" }), "fit");
+    await user.click(within(plan).getByRole("button", { name: "Export workouts" }));
+    expect(exportWorkoutArchive).toHaveBeenCalledWith({
+      oldest: "1998-07-11",
+      newest: "1998-07-17",
+      format: "fit",
+    });
   });
 
   it("draws a sparkline per wellness series from the athlete-state readings", () => {

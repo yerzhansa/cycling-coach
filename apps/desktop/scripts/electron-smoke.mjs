@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { connect } from "node:net";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -89,8 +89,8 @@ async function startElectron(flag, env, extraArgs = []) {
   };
 }
 
-async function launch(flag, env) {
-  const running = await startElectron(flag, env);
+async function launch(flag, env, extraArgs = []) {
+  const running = await startElectron(flag, env, extraArgs);
   const result = await running.exited;
   const { stdout, stderr } = running.output();
   if (result.code !== 0 || result.signal !== null)
@@ -106,21 +106,31 @@ function summaryLine(stdout, prefix) {
 }
 
 async function runtime() {
-  const result = await launch("--desktop-runtime-smoke", {
-    ...process.env,
-    FORCE_COLOR: undefined,
-    CLICOLOR_FORCE: undefined,
-  });
-  const summary = summaryLine(result.stdout, "DESKTOP_RUNTIME_SMOKE");
-  if (
-    summary.electron !== "43.1.1" ||
-    summary.node !== "24.18.0" ||
-    summary.result !== "tempo threshold" ||
-    existsSync(summary.directory)
-  ) {
-    throw new Error("desktop runtime assertions failed");
+  const base = await realpath(process.platform === "darwin" ? "/tmp" : tmpdir());
+  const userDataDirectory = await mkdtemp(join(base, "ear-"));
+  try {
+    const result = await launch(
+      "--desktop-runtime-smoke",
+      {
+        ...process.env,
+        FORCE_COLOR: undefined,
+        CLICOLOR_FORCE: undefined,
+      },
+      [`--user-data-dir=${userDataDirectory}`],
+    );
+    const summary = summaryLine(result.stdout, "DESKTOP_RUNTIME_SMOKE");
+    if (
+      summary.electron !== "43.1.1" ||
+      summary.node !== "24.18.0" ||
+      summary.result !== "tempo threshold" ||
+      existsSync(summary.directory)
+    ) {
+      throw new Error("desktop runtime assertions failed");
+    }
+    process.stdout.write(`DESKTOP_RUNTIME_SMOKE ${JSON.stringify(summary)}\n`);
+  } finally {
+    await rm(userDataDirectory, { recursive: true, force: true });
   }
-  process.stdout.write(`DESKTOP_RUNTIME_SMOKE ${JSON.stringify(summary)}\n`);
 }
 
 async function spoofOriginResponse(url) {
@@ -285,6 +295,7 @@ async function security() {
             "deleteCredential",
             "disableTelegram",
             "enableTelegram",
+            "exportTrainingFile",
             "getArchivedTranscriptPage",
             "getDaemonConnection",
             "getTranscriptPage",

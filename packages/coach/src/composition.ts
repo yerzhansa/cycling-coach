@@ -130,6 +130,7 @@ import {
   createPowerHeartRateAnalyzer,
   createProviderActivityPowerHeartRateReader,
 } from "./activity-power-heart-rate.js";
+import { createTrainingExportService } from "./training-export.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -1074,10 +1075,11 @@ export async function createLocalCoachComposition(
       access: providerAccess,
       archive: createProviderActivityPowerHeartRateArchive({ ...archiveDependencies }),
     });
+    const trustedActivitySources = createTrustedActivitySourceResolver(input.context.store);
     const activityAnalysis = createStoredActivityAnalysisService({
       store: input.context.store,
       activities: canonicalActivities,
-      sources: createTrustedActivitySourceResolver(input.context.store),
+      sources: trustedActivitySources,
       analyzers: {
         aerobicDrift: createAerobicDriftAnalyzer({
           activities: canonicalActivities,
@@ -1093,6 +1095,10 @@ export async function createLocalCoachComposition(
       },
       runCacheWrite: (work) => runtime!.runExclusive(work),
       now,
+    });
+    const trainingExport = createTrainingExportService({
+      credentials: options.liveIntervals,
+      sources: trustedActivitySources,
     });
     const operations = {
       ...createCoachOperations(
@@ -1114,6 +1120,7 @@ export async function createLocalCoachComposition(
       ),
       getActivityAnalysis: (request, signal) =>
         activityAnalysis.getActivityAnalysis(request, signal),
+      exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
     } satisfies CoachOperations;
     return {
       engine: reconfigurable.engine,

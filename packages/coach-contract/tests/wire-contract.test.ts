@@ -947,6 +947,10 @@ describe("coach request and event projection", () => {
       getActivityAnalysis: async () => {
         throw new Error("not exercised by registry exhaustiveness");
       },
+      exportTrainingFile: async () => ({
+        status: "refused",
+        reason: "not-configured",
+      }),
       importFiles: async ({ paths }) => ({
         schemaVersion: 2,
         files: { total: paths.length, imported: paths.length, quarantined: 0 },
@@ -1505,7 +1509,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-15 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-16 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1513,8 +1517,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 15,
-      serverProtocolVersion: 15,
+      clientProtocolVersion: 16,
+      serverProtocolVersion: 16,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1569,9 +1573,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 15 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 16 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(15);
+    expect(client.clientProtocolVersion).toBe(16);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -1701,7 +1705,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version fifteen", () => {
-    expect(PROTOCOL_VERSION).toBe(15);
+  it("uses protocol version sixteen", () => {
+    expect(PROTOCOL_VERSION).toBe(16);
   });
 });

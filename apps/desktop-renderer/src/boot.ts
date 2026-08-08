@@ -46,6 +46,7 @@ import { createSessionSettingsController } from "./settings/session-controller.j
 import { createTelegramSettingsController } from "./settings/telegram-controller.js";
 import { createCredentialSettingsController } from "./settings/credential-controller.js";
 import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
+import { createTrainingExportController } from "./training-export/controller.js";
 
 export type Disposer = () => void;
 
@@ -89,6 +90,11 @@ export function bootRenderer(): Disposer {
       void rideAnalysisController.load(sections, true);
     },
   });
+  const trainingExportController = createTrainingExportController({
+    transport: window.enduragentAuth,
+    view: { render: (next) => store.getState().setTrainingExport(next) },
+  });
+  store.getState().bindTrainingExportActions(trainingExportController);
   let selectedAnalysisRide = store.getState().selectedRide?.id ?? null;
   const disposeRideAnalysisSelection = store.subscribe((next) => {
     const selected = next.selectedRide?.id ?? null;
@@ -401,6 +407,7 @@ export function bootRenderer(): Disposer {
     store.getState().bindSyncActions(null);
     store.getState().bindRideImportActions(null);
     store.getState().bindRideAnalysisActions(null);
+    store.getState().bindTrainingExportActions(null);
     store.getState().bindOnboardingActions(null);
     disposeLifecycle();
     disposeRideAnalysisSelection();

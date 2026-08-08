@@ -20,6 +20,7 @@ import {
   DESKTOP_TELEGRAM_REMOVE_CHANNEL,
   DESKTOP_TELEGRAM_REMOVE_WEBHOOK_CHANNEL,
   DESKTOP_TELEGRAM_STATUS_CHANNEL,
+  DESKTOP_TRAINING_EXPORT_CHANNEL,
   DESKTOP_UPDATE_CHECK_CHANNEL,
   DESKTOP_UPDATE_GET_CHANNEL,
   DESKTOP_UPDATE_RESTART_CHANNEL,
@@ -115,6 +116,22 @@ const CLAUDE_CLI_STATES = new Set([
   "disabled",
 ]);
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
+const ACTIVITY_EXPORT_FORMATS = new Set(["fit", "gpx"]);
+const WORKOUT_ARCHIVE_FORMATS = new Set(["zwo", "mrc", "erg", "fit"]);
+const TRAINING_EXPORT_REFUSAL_REASONS = new Set([
+  "not-configured",
+  "source-not-found",
+  "ambiguous-source",
+  "provider-unavailable",
+  "not-supported",
+  "rate-limited",
+  "network",
+  "timeout",
+  "response-too-large",
+  "invalid-response",
+  "write-failed",
+  "commit-uncertain",
+]);
 const TELEGRAM_DESKTOP_ERROR_CODES = new Set([
   "telegram-credential-storage-failed",
   "telegram-credential-encryption-unavailable",
@@ -171,6 +188,79 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+
+function isCivilDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
+}
+
+function parseTrainingExportRequest(value: unknown): unknown {
+  if (!record(value) || typeof value.kind !== "string") throw new TypeError();
+  if (value.kind === "activity") {
+    if (
+      !exactKeys(value, ["kind", "canonicalActivityId", "localDate", "format"]) ||
+      typeof value.canonicalActivityId !== "string" ||
+      !BOUNDARY_REF_PATTERN.test(value.canonicalActivityId) ||
+      !isCivilDate(value.localDate) ||
+      typeof value.format !== "string" ||
+      !ACTIVITY_EXPORT_FORMATS.has(value.format)
+    ) {
+      throw new TypeError();
+    }
+    return {
+      kind: value.kind,
+      canonicalActivityId: value.canonicalActivityId,
+      localDate: value.localDate,
+      format: value.format,
+    };
+  }
+  if (
+    value.kind !== "workout-archive" ||
+    !exactKeys(value, ["kind", "oldest", "newest", "format"]) ||
+    !isCivilDate(value.oldest) ||
+    !isCivilDate(value.newest) ||
+    value.oldest > value.newest ||
+    typeof value.format !== "string" ||
+    !WORKOUT_ARCHIVE_FORMATS.has(value.format)
+  ) {
+    throw new TypeError();
+  }
+  return {
+    kind: value.kind,
+    oldest: value.oldest,
+    newest: value.newest,
+    format: value.format,
+  };
+}
+
+function parseTrainingExportResult(value: unknown): unknown {
+  if (!record(value) || typeof value.status !== "string") throw new TypeError();
+  if (value.status === "cancelled" && exactKeys(value, ["status"])) return { status: value.status };
+  if (
+    value.status === "saved" &&
+    exactKeys(value, ["status", "byteLength"]) &&
+    typeof value.byteLength === "number" &&
+    Number.isSafeInteger(value.byteLength) &&
+    value.byteLength > 0
+  ) {
+    return { status: value.status, byteLength: value.byteLength };
+  }
+  if (
+    value.status === "refused" &&
+    exactKeys(value, ["status", "reason"]) &&
+    typeof value.reason === "string" &&
+    TRAINING_EXPORT_REFUSAL_REASONS.has(value.reason)
+  ) {
+    return { status: value.status, reason: value.reason };
+  }
+  throw new TypeError();
 }
 
 function decodedBase64Url(value: string): Uint8Array | null {
@@ -1398,6 +1488,12 @@ contextBridge.exposeInMainWorld(
     },
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),
+    exportTrainingFile: async (input: unknown) => {
+      const request = parseTrainingExportRequest(input);
+      return parseTrainingExportResult(
+        await ipcRenderer.invoke(DESKTOP_TRAINING_EXPORT_CHANNEL, request),
+      );
+    },
     releaseNotes: async () =>
       parseReleaseNotes(await ipcRenderer.invoke(DESKTOP_RELEASE_NOTES_CHANNEL)),
     getUpdateState: async () =>
