@@ -19,6 +19,7 @@ permissions:
 concurrency:
   group: version-pr
   cancel-in-progress: false
+  queue: max
 
 jobs:
   version-pr:
@@ -31,6 +32,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -56,8 +58,8 @@ jobs:
         # Closes the manual gap between "Version PR merged" and "release fires".
         # When the operator merges the changesets-bot PR, package.json versions
         # bump on main but no tag is created — release.yml never sees it. This
-        # step pushes <name>@<version> for every non-private packages/*/package.json
-        # whose tag is missing on origin, then dispatches release.yml for it.
+        # step ensures <name>@<version> for every non-private packages/*/package.json
+        # resolves to this commit, then dispatches release.yml for it.
         #
         # Why dispatch instead of relying on the `push: tags:` trigger in
         # release.yml: GitHub blocks workflow runs from events triggered by
@@ -75,6 +77,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          RELEASE_COMMIT=$(git rev-parse HEAD)
           for pkg_json in packages/*/package.json; do
             PRIVATE=$(node -p "require('./$pkg_json').private === true")
             if [ "$PRIVATE" = "true" ]; then
@@ -84,11 +87,31 @@ jobs:
             VERSION=$(node -p "require('./$pkg_json').version")
             TAG="$NAME@$VERSION"
             if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "::notice::Tag $TAG already on origin — skipping"
-              continue
+              git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+              TAG_COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
+              if [ "$TAG_COMMIT" != "$RELEASE_COMMIT" ]; then
+                echo "::error::Existing tag $TAG resolves to $TAG_COMMIT, expected $RELEASE_COMMIT"
+                exit 1
+              fi
+              echo "::notice::Existing tag $TAG resolves to the Version Packages commit"
+            else
+              gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                -f ref="refs/tags/$TAG" -f sha="$RELEASE_COMMIT" >/dev/null
+              echo "::notice::Created tag $TAG at $RELEASE_COMMIT"
             fi
-            git tag "$TAG"
-            git push origin "$TAG"
-            gh workflow run release.yml --ref main -f tag="$TAG"
-            echo "::notice::Pushed tag $TAG and dispatched release.yml"
+            DISPATCHED=false
+            for attempt in $(seq 1 6); do
+              if gh workflow run release.yml --ref "$TAG" -f tag="$TAG"; then
+                DISPATCHED=true
+                break
+              fi
+              if [ "$attempt" -lt 6 ]; then
+                sleep $((attempt * 2))
+              fi
+            done
+            if [ "$DISPATCHED" != "true" ]; then
+              echo "::error::Unable to dispatch release.yml on exact tag $TAG after bounded retries"
+              exit 1
+            fi
+            echo "::notice::Dispatched release.yml on exact tag $TAG"
           done
