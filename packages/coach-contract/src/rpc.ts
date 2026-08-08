@@ -28,6 +28,12 @@ import {
   type ActivityAnalysisResult,
 } from "./activity-analysis.js";
 import {
+  ExportTrainingFileRpcParamsSchema,
+  ExportTrainingFileRpcResultSchema,
+  type ExportTrainingFileRpcParams,
+  type ExportTrainingFileRpcResult,
+} from "./training-export.js";
+import {
   ConfigureTelegramRpcParamsSchema,
   DeleteTelegramWebhookRpcParamsSchema,
   InspectTelegramCredentialRpcParamsSchema,
@@ -149,6 +155,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "getArchivedTranscriptPage",
   "getAthleteState",
   "getActivityAnalysis",
+  "exportTrainingFile",
   "importFiles",
   "sync",
   "saveIntake",
@@ -821,6 +828,10 @@ export interface CoachOperations {
     request: ActivityAnalysisRequest,
     signal?: AbortSignal,
   ): Promise<ActivityAnalysisResult>;
+  exportTrainingFile?(
+    request: ExportTrainingFileRpcParams,
+    signal?: AbortSignal,
+  ): Promise<ExportTrainingFileRpcResult>;
   importFiles(
     request: ImportFilesRpcParams,
     onEvent?: (event: OperationProgressEvent) => void,
@@ -948,6 +959,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("getActivityAnalysis"),
       params: ActivityAnalysisRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("exportTrainingFile"),
+      params: ExportTrainingFileRpcParamsSchema,
     })
     .strict(),
   z
@@ -1305,6 +1324,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "getActivityAnalysis",
     requestSchema: ActivityAnalysisRequestSchema,
     responseSchema: ActivityAnalysisResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  exportTrainingFile: {
+    wireName: "exportTrainingFile",
+    requestSchema: ExportTrainingFileRpcParamsSchema,
+    responseSchema: ExportTrainingFileRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   importFiles: {

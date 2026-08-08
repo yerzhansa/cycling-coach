@@ -99,6 +99,11 @@ import {
   installDesktopTranscriptIpc,
   type DesktopTranscriptReader,
 } from "./transcript-ipc.js";
+import {
+  createConnectionTrainingExporter,
+  installDesktopTrainingExportIpc,
+  type DesktopTrainingExporter,
+} from "./training-export-ipc.js";
 
 registerDesktopScheme();
 
@@ -179,6 +184,7 @@ async function runDesktop(): Promise<void> {
   let protocolInstalled = false;
   let disposeConnectionIpc: (() => void) | undefined;
   let disposeTranscriptIpc: (() => void) | undefined;
+  let disposeTrainingExportIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
@@ -216,6 +222,8 @@ async function runDesktop(): Promise<void> {
       disposeConnectionIpc = undefined;
       disposeTranscriptIpc?.();
       disposeTranscriptIpc = undefined;
+      disposeTrainingExportIpc?.();
+      disposeTrainingExportIpc = undefined;
       disposeExternalLinkIpc?.();
       disposeExternalLinkIpc = undefined;
       disposeReleaseNotesIpc?.();
@@ -307,6 +315,7 @@ async function runDesktop(): Promise<void> {
       readonly authority: RuntimeConfigurationAuthority;
       readonly credentials: CredentialRuntimeApplication;
       readonly transcript: DesktopTranscriptReader;
+      readonly trainingExporter: DesktopTrainingExporter;
     };
     let activeRuntimeBinding: RuntimeBinding | undefined;
     const preparedRuntimeBindings = new Map<
@@ -419,6 +428,7 @@ async function runDesktop(): Promise<void> {
       return {
         authority,
         transcript: createConnectionTranscriptReader(boundConnection),
+        trainingExporter: createConnectionTrainingExporter(boundConnection),
         credentials: createCredentialRuntimeApplication({
           configureRuntime: authority.configureRuntime,
           clearRuntimeCredential: authority.clearCredential,
@@ -795,6 +805,18 @@ async function runDesktop(): Promise<void> {
         readActiveTranscript((reader) => reader.listArchivedConversations(request)),
       readArchivedPage: (request) =>
         readActiveTranscript((reader) => reader.getArchivedTranscriptPage(request)),
+    });
+    disposeTrainingExportIpc = installDesktopTrainingExportIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      dialog,
+      exporter: () => {
+        const binding = activeRuntimeBinding;
+        const lifecycleState = daemonLifecycle?.snapshot();
+        return binding !== undefined && lifecycleState?.status === "ready"
+          ? binding.trainingExporter
+          : undefined;
+      },
     });
     disposeExternalLinkIpc = installDesktopExternalLinkIpc({
       ipcMain,

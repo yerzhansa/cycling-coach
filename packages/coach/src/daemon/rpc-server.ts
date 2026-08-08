@@ -816,6 +816,22 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               invocationFailure = { error };
             }
             break;
+          case "exportTrainingFile":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.exportTrainingFile.requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations.exportTrainingFile === undefined) {
+                throw new TypeError("Training export operation is unavailable.");
+              }
+              result = await input.operations.exportTrainingFile(
+                request,
+                state.detachController.signal,
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
           case "importFiles":
             try {
               const request = COACH_RPC_METHOD_REGISTRY.importFiles.requestSchema.parse(

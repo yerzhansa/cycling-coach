@@ -64,6 +64,12 @@ const state: AthleteState = {
 };
 
 const operations: CoachOperations = {
+  exportTrainingFile: async () => ({
+    status: "exported",
+    byteLength: 4_096,
+    suggestedFilename: "synthetic.fit",
+    contentType: "application/octet-stream",
+  }),
   getActivityAnalysis: async ({ canonicalActivityId }) => ({
     schemaVersion: 1,
     activity: {
@@ -511,6 +517,10 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       }),
       operations: {
         ...operations,
+        exportTrainingFile: async (request, signal) => {
+          calls.push("exportTrainingFile");
+          return operations.exportTrainingFile!(request, signal);
+        },
         getActivityAnalysis: async (request) => {
           calls.push("getActivityAnalysis");
           return operations.getActivityAnalysis!(request);
@@ -559,6 +569,16 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         method: "getActivityAnalysis",
         params: { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
       },
+      {
+        id: 6,
+        method: "exportTrainingFile",
+        params: {
+          kind: "activity",
+          canonicalActivityId: "a".repeat(64),
+          format: "fit",
+          destinationPath: "/tmp/synthetic-export.fit",
+        },
+      },
     ];
     for (const value of requests) {
       client.ws.send(JSON.stringify({ jsonrpc: "2.0", ...value }));
@@ -571,6 +591,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       "hasSession:chat",
       "getAthleteState",
       "getActivityAnalysis",
+      "exportTrainingFile",
     ]);
     await client.close();
   });
@@ -2094,6 +2115,43 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       if (client === undefined) await rpc.close();
       else await client.close();
     }
+  });
+
+  it("keeps file export outside renderer authority", async () => {
+    const exportTrainingFile = vi.fn(operations.exportTrainingFile!);
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, exportTrainingFile },
+      token: "x".repeat(43),
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(
+      JSON.stringify(
+        createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+      ),
+    );
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "export",
+        method: "exportTrainingFile",
+        params: {
+          kind: "activity",
+          canonicalActivityId: "a".repeat(64),
+          format: "fit",
+          destinationPath: "/tmp/renderer-must-not-write.fit",
+        },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "export",
+      error: { code: -32601, message: "Method not found" },
+    });
+    expect(exportTrainingFile).not.toHaveBeenCalled();
+    await client.close();
   });
 });
 

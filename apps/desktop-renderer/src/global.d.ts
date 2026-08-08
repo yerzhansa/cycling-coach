@@ -50,6 +50,7 @@ interface EnduragentAuth {
   }): Promise<DesktopTelegramAllowedSendersMutationResult>;
   acknowledgeTelegramGapWarning(): Promise<DesktopTelegramMutationResult>;
   chooseImportFiles(): Promise<readonly string[]>;
+  exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
   getUpdateState(): Promise<DesktopUpdateState>;
@@ -57,6 +58,39 @@ interface EnduragentAuth {
   restartToUpdate(): Promise<DesktopUpdateState>;
   onUpdateState(listener: (state: DesktopUpdateState) => void): () => void;
 }
+
+type DesktopTrainingExportRequest =
+  | {
+      readonly kind: "activity";
+      readonly canonicalActivityId: string;
+      readonly localDate: string;
+      readonly format: "fit" | "gpx";
+    }
+  | {
+      readonly kind: "workout-archive";
+      readonly oldest: string;
+      readonly newest: string;
+      readonly format: "zwo" | "mrc" | "erg" | "fit";
+    };
+
+type DesktopTrainingExportRefusalReason =
+  | "not-configured"
+  | "source-not-found"
+  | "ambiguous-source"
+  | "provider-unavailable"
+  | "not-supported"
+  | "rate-limited"
+  | "network"
+  | "timeout"
+  | "response-too-large"
+  | "invalid-response"
+  | "write-failed"
+  | "commit-uncertain";
+
+type DesktopTrainingExportResult =
+  | { readonly status: "cancelled" }
+  | { readonly status: "saved"; readonly byteLength: number }
+  | { readonly status: "refused"; readonly reason: DesktopTrainingExportRefusalReason };
 
 interface EnduragentTrayStatus {
   readonly channelState:

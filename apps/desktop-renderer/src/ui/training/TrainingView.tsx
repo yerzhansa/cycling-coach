@@ -34,6 +34,7 @@ import styles from "./TrainingView.module.css";
 import { PowerProgressContent } from "./PowerProgressPanel.js";
 import { RecentRidesStatePanel, RideDetailView } from "./RideReview.js";
 import { WellnessSparkline } from "./WellnessSparkline.js";
+import { WorkoutArchiveExportControl } from "./TrainingExportControls.js";
 
 function Panel(props: {
   readonly name: string;
@@ -196,6 +197,12 @@ function UpcomingPlanPanel(props: { readonly panel: PlanPanel }): ReactElement {
       </Panel>
     );
   }
+  const dates = props.panel.items
+    .slice(0, MAX_VISIBLE_PLAN_ITEMS)
+    .map((item) => item.date)
+    .sort();
+  const oldest = dates[0];
+  const newest = dates.at(-1);
   return (
     <Panel name="plan" title="Plan">
       <ol className={styles.plan}>
@@ -208,6 +215,9 @@ function UpcomingPlanPanel(props: { readonly panel: PlanPanel }): ReactElement {
           </li>
         ))}
       </ol>
+      {oldest === undefined || newest === undefined ? null : (
+        <WorkoutArchiveExportControl oldest={oldest} newest={newest} />
+      )}
     </Panel>
   );
 }

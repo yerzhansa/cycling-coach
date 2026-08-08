@@ -378,6 +378,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "deleteCredential",
       "disableTelegram",
       "enableTelegram",
+      "exportTrainingFile",
       "getArchivedTranscriptPage",
       "getDaemonConnection",
       "getTranscriptPage",
