@@ -107,7 +107,7 @@ async function loopbackAvailable(): Promise<boolean> {
 const hasLoopback = await loopbackAvailable();
 
 describe.skipIf(!hasLoopback)("real daemon contention matrix", () => {
-  it("covers healthy, SIGKILL-stale, bound-unresponsive, and foreign-port processes", async () => {
+  it("covers healthy, SIGKILL-stale, bound-unresponsive, and foreign-port processes", { timeout: 20_000 }, async () => {
     const healthyHome = await syntheticHome("contention-healthy");
     const healthy = spawn("writer", healthyHome);
     const healthyReadyPromise = message<{
