@@ -470,12 +470,12 @@ jobs:
             --output "$PUBLIC_ENVELOPE"
           case "$RELEASE_MODE" in
             genesis)
-              pnpm --filter @enduragent/desktop verify:mac-genesis-release -- \
+              pnpm --filter @enduragent/desktop verify:mac-genesis-release \
                 "$PUBLIC_ENVELOPE" \
                 "$CANDIDATE_APP"
               ;;
             steady)
-              pnpm --filter @enduragent/desktop verify:mac-release -- \
+              pnpm --filter @enduragent/desktop verify:mac-release \
                 "$PUBLIC_ENVELOPE" \
                 "$INDEPENDENT_BASELINE_APP" \
                 "$CANDIDATE_APP"
