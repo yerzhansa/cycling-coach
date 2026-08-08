@@ -1,5 +1,19 @@
 # cycling-coach
 
+## 2026.8.8
+
+### Patch Changes
+
+- d060028: User-facing: Desktop ride analysis now shows complete interval details and provider power-versus-heart-rate curve evidence with accessible chart tables.
+
+  Bound activity analysis and training exports across their full operation, and tighten activity-analysis result validation.
+
+- ddcf6d4: User-facing: Desktop releases now use an independent, easy-to-read version sequence starting at 0.1.0.
+
+  Keep the npm package on its existing calendar-version sequence while binding signed desktop builds, updater metadata, artifacts, and native update acceptance to `apps/desktop/package.json` SemVer.
+
+- 1c059f4: Use the UTC calendar date as the npm package version and fail closed instead of generating a monthly release counter, same-day suffix, or future date.
+
 ## 2026.8.1
 
 ### Patch Changes
