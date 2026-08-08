@@ -74,6 +74,35 @@ describe("desktop release workflow policy", () => {
     expect(issues.some((issue) => issue.includes("escaped the signing job"))).toBe(true);
   });
 
+  it("requires workspace dependencies before macOS packaging", () => {
+    const source = sources();
+    const desktop = source.desktop.replace("      - run: pnpm -r build\n", "");
+    expect(
+      inspect(source.release, desktop).some((issue) =>
+        issue.includes("build workspace dependencies before packaging"),
+      ),
+    ).toBe(true);
+  });
+
+  it("requires declared and available signing environment secrets", () => {
+    const source = sources();
+    const undeclared = source.desktop.replace("      CSC_LINK:\n", "      UNUSED_LINK:\n");
+    const unchecked = source.desktop.replace(
+      "for secret_name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_API_KEY_P8_BASE64; do",
+      "for secret_name in CSC_LINK; do",
+    );
+    expect(
+      inspect(source.release, undeclared).some((issue) =>
+        issue.includes("declare environment secret CSC_LINK"),
+      ),
+    ).toBe(true);
+    expect(
+      inspect(source.release, unchecked).some((issue) =>
+        issue.includes("fail closed when an environment secret is unavailable"),
+      ),
+    ).toBe(true);
+  });
+
   it("rejects reordered jobs and draft semantics on the default package-only path", () => {
     const source = sources();
     const desktop = source.desktop.replace("needs: sign-macos", "needs: promote-latest");

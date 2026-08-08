@@ -123,11 +123,8 @@ export function inspectDesktopReleaseWorkflows(
   const desktopOn = mapping(desktop.on, "desktop.on", issues);
   if (Object.keys(desktopOn).length !== 1 || !("workflow_call" in desktopOn))
     issues.push("desktop-release.yml must be workflow_call-only");
-  const inputs = mapping(
-    mapping(desktopOn.workflow_call, "desktop.workflow_call", issues).inputs,
-    "desktop.workflow_call.inputs",
-    issues,
-  );
+  const workflowCall = mapping(desktopOn.workflow_call, "desktop.workflow_call", issues);
+  const inputs = mapping(workflowCall.inputs, "desktop.workflow_call.inputs", issues);
   for (const input of [
     "tag",
     "npm_version",
@@ -141,6 +138,27 @@ export function inspectDesktopReleaseWorkflows(
     "baseline_tag",
   ]) {
     if (!(input in inputs)) issues.push(`desktop workflow_call is missing ${input}`);
+  }
+  const workflowCallSecrets = mapping(
+    workflowCall.secrets,
+    "desktop.workflow_call.secrets",
+    issues,
+  );
+  const requiredSigningSecrets = [
+    "CSC_LINK",
+    "CSC_KEY_PASSWORD",
+    "APPLE_API_KEY_ID",
+    "APPLE_API_ISSUER",
+    "APPLE_API_KEY_P8_BASE64",
+  ];
+  for (const secret of requiredSigningSecrets) {
+    const declaration = mapping(
+      workflowCallSecrets[secret],
+      `desktop.workflow_call.secrets.${secret}`,
+      issues,
+    );
+    if (declaration.required !== false)
+      issues.push(`desktop workflow_call must declare environment secret ${secret}`);
   }
 
   requireQueue(release.concurrency, "stable-desktop-coordinator", "release coordinator", issues);
@@ -558,6 +576,11 @@ export function inspectDesktopReleaseWorkflows(
   }
   const signingSteps = steps(sign);
   const signingStep = namedStep(sign, "Build signed and notarized macOS envelope");
+  const signingInstallIndex = signingSteps.findIndex(
+    (step) => step.run === "pnpm install --frozen-lockfile",
+  );
+  const signingWorkspaceBuildIndex = signingSteps.findIndex((step) => step.run === "pnpm -r build");
+  const signingPackageIndex = signingSteps.indexOf(signingStep ?? {});
   const signingEnvironment = mapping(signingStep?.env, "macOS signing step environment", issues);
   const signingRun = typeof signingStep?.run === "string" ? signingStep.run : "";
   const keyCleanupStep = namedStep(sign, "Remove temporary notarization key");
@@ -566,6 +589,20 @@ export function inspectDesktopReleaseWorkflows(
     'printf \'%s\' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"',
   );
   const privateUmask = signingRun.indexOf("umask 077");
+  if (
+    signingInstallIndex === -1 ||
+    signingWorkspaceBuildIndex <= signingInstallIndex ||
+    signingWorkspaceBuildIndex >= signingPackageIndex
+  ) {
+    issues.push("macOS signing must build workspace dependencies before packaging");
+  }
+  if (
+    countShellLine(signingRun, `for secret_name in ${requiredSigningSecrets.join(" ")}; do`) !==
+      1 ||
+    !signingRun.includes("Required desktop signing secret $secret_name is unavailable")
+  ) {
+    issues.push("macOS signing must fail closed when an environment secret is unavailable");
+  }
   if (
     (signingRun.match(/pnpm --filter @enduragent\/desktop package:mac:genesis(?:\s|$)/gu) ?? [])
       .length !== 1 ||
