@@ -1,5 +1,4 @@
 ---
-"cycling-coach": patch
 "@enduragent/desktop": patch
 "@enduragent/desktop-renderer": patch
 ---

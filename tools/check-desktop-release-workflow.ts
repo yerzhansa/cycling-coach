@@ -16,7 +16,7 @@ function mapping(value: unknown, label: string, issues: string[]): Mapping {
 }
 
 function scalar(value: unknown): string {
-  return typeof value === "string" ? value : JSON.stringify(value);
+  return typeof value === "string" ? value : (JSON.stringify(value) ?? "");
 }
 
 function steps(job: Mapping): Mapping[] {
@@ -40,6 +40,12 @@ function countShellLine(script: string, expected: string): number {
   return script.split(/\r?\n/u).filter((line) => line.trim() === expected).length;
 }
 
+function exactKeys(value: Mapping, expected: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
 function exactPermissions(
   value: unknown,
   expected: Mapping,
@@ -47,12 +53,9 @@ function exactPermissions(
   issues: string[],
 ): void {
   const permissions = mapping(value, `${label} permissions`, issues);
-  const keys = Object.keys(permissions).sort();
-  const expectedKeys = Object.keys(expected).sort();
   if (
-    keys.length !== expectedKeys.length ||
-    keys.some((key, index) => key !== expectedKeys[index]) ||
-    expectedKeys.some((key) => permissions[key] !== expected[key])
+    !exactKeys(permissions, Object.keys(expected)) ||
+    Object.entries(expected).some(([key, permission]) => permissions[key] !== permission)
   ) {
     issues.push(`${label} permissions are not least-privilege`);
   }
@@ -74,132 +77,271 @@ function requireQueue(
   }
 }
 
-function checkCheckouts(source: string, workflow: Mapping, label: string, issues: string[]): void {
+function checkCheckouts(workflow: Mapping, label: string, issues: string[]): void {
   const jobs = mapping(workflow.jobs, `${label}.jobs`, issues);
   for (const [jobName, rawJob] of Object.entries(jobs)) {
     const job = mapping(rawJob, `${label}.jobs.${jobName}`, issues);
     for (const step of steps(job)) {
       if (typeof step.uses === "string" && step.uses.startsWith("actions/checkout@")) {
         const withInputs = mapping(step.with, `${label}.${jobName}.checkout.with`, issues);
-        if (withInputs["persist-credentials"] !== false)
+        if (withInputs["persist-credentials"] !== false) {
           issues.push(`${label} checkout credentials must never persist`);
+        }
+      }
+      if (typeof step.run === "string" && step.run.includes("${{")) {
+        issues.push(`${label} run scripts must receive contexts through env`);
       }
     }
   }
-  for (const run of Object.values(jobs).flatMap((raw) => runs(mapping(raw, label, issues)))) {
-    if (run.includes("${{")) issues.push(`${label} run scripts must receive contexts through env`);
-  }
-  if (source.includes("github.event.inputs") && !source.includes("DISPATCH_TAG_INPUT:"))
-    issues.push("manual release inputs must be routed through step environment variables");
 }
 
-export function inspectDesktopReleaseWorkflows(
-  releaseSource: string,
-  desktopSource: string,
-  versionSource: string,
-): string[] {
-  const issues: string[] = [];
-  let release: Mapping;
-  let desktop: Mapping;
-  let version: Mapping;
-  try {
-    release = mapping(parse(releaseSource), "release workflow", issues);
-    desktop = mapping(parse(desktopSource), "desktop workflow", issues);
-    version = mapping(parse(versionSource), "version workflow", issues);
-  } catch {
-    return ["release workflows must be valid YAML"];
+function checkCoordinator(source: string, coordinator: Mapping, issues: string[]): void {
+  const workflowOn = mapping(coordinator.on, "desktop coordinator.on", issues);
+  if (Object.keys(workflowOn).length !== 1 || !("workflow_dispatch" in workflowOn)) {
+    issues.push("desktop release coordinator must be workflow_dispatch-only");
   }
-
-  if (
-    releaseSource.includes("desktop-release:transaction --") ||
-    desktopSource.includes("desktop-release:transaction --")
-  ) {
-    issues.push("release transaction commands must not pass a pnpm argument separator");
-  }
-
-  const releaseOn = mapping(release.on, "release.on", issues);
-  if (!("push" in releaseOn) || !("workflow_dispatch" in releaseOn))
-    issues.push("release.yml must remain the tag/manual coordinator");
-  const desktopOn = mapping(desktop.on, "desktop.on", issues);
-  if (Object.keys(desktopOn).length !== 1 || !("workflow_dispatch" in desktopOn))
-    issues.push("desktop-release.yml must be workflow_dispatch-only");
   const workflowDispatch = mapping(
-    desktopOn.workflow_dispatch,
-    "desktop.workflow_dispatch",
+    workflowOn.workflow_dispatch,
+    "desktop coordinator.workflow_dispatch",
     issues,
   );
   const inputs = mapping(
     workflowDispatch.inputs,
-    "desktop.workflow_dispatch.inputs",
+    "desktop coordinator.workflow_dispatch.inputs",
     issues,
   );
-  for (const input of [
+  if (!exactKeys(inputs, ["tag", "desktop_mode", "desktop_baseline_tag"])) {
+    issues.push("desktop coordinator inputs must remain desktop-only");
+  }
+  const tagInput = mapping(inputs.tag, "desktop coordinator tag input", issues);
+  const modeInput = mapping(inputs.desktop_mode, "desktop coordinator mode input", issues);
+  if (tagInput.required !== true || tagInput.type !== "string") {
+    issues.push("desktop coordinator must require a string candidate tag");
+  }
+  if (
+    modeInput.type !== "choice" ||
+    modeInput.default !== "steady" ||
+    scalar(modeInput.options) !== '["steady","genesis"]'
+  ) {
+    issues.push("desktop coordinator must expose only steady and genesis modes");
+  }
+  if (coordinator["run-name"] !== "Desktop release coordinator ${{ inputs.tag }}") {
+    issues.push("desktop coordinator run name must bind the candidate tag");
+  }
+  exactPermissions(coordinator.permissions, { contents: "read" }, "desktop coordinator", issues);
+  requireQueue(
+    coordinator.concurrency,
+    "stable-desktop-coordinator",
+    "desktop release coordinator",
+    issues,
+  );
+
+  const jobs = mapping(coordinator.jobs, "desktop coordinator.jobs", issues);
+  const bind = mapping(jobs["bind-release"], "desktop coordinator.jobs.bind-release", issues);
+  const draft = mapping(
+    jobs["prepare-release-draft"],
+    "desktop coordinator.jobs.prepare-release-draft",
+    issues,
+  );
+  const dispatch = mapping(
+    jobs["dispatch-desktop-release"],
+    "desktop coordinator.jobs.dispatch-desktop-release",
+    issues,
+  );
+  exactPermissions(bind.permissions, { contents: "read" }, "desktop candidate binding", issues);
+  exactPermissions(draft.permissions, { contents: "write" }, "desktop draft preparation", issues);
+  exactPermissions(
+    dispatch.permissions,
+    { actions: "write", contents: "read" },
+    "desktop child dispatcher",
+    issues,
+  );
+
+  const bindOutputs = mapping(bind.outputs, "desktop coordinator bind outputs", issues);
+  const expectedBindOutputs: Mapping = {
+    tag: "${{ steps.bind.outputs.tag }}",
+    desktop_version: "${{ steps.bind.outputs.desktop_version }}",
+    commit: "${{ steps.bind.outputs.commit }}",
+    mode: "${{ steps.bind.outputs.mode }}",
+    baseline_tag: "${{ steps.bind.outputs.baseline_tag }}",
+  };
+  if (
+    !exactKeys(bindOutputs, Object.keys(expectedBindOutputs)) ||
+    Object.entries(expectedBindOutputs).some(([key, value]) => bindOutputs[key] !== value)
+  ) {
+    issues.push("desktop coordinator must freeze the candidate release tuple once");
+  }
+  const bindStep = namedStep(bind, "Bind desktop tag, version, and source commit");
+  const bindEnvironment = mapping(bindStep?.env, "desktop candidate binding environment", issues);
+  const bindRun = typeof bindStep?.run === "string" ? bindStep.run : "";
+  if (
+    bindEnvironment.RELEASE_TAG_INPUT !== "${{ inputs.tag }}" ||
+    bindEnvironment.DESKTOP_ENABLED !== "${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}" ||
+    bindEnvironment.WORKFLOW_REF !== "${{ github.ref }}" ||
+    bindEnvironment.WORKFLOW_SHA !== "${{ github.sha }}" ||
+    (source.match(/vars\.ENABLE_DESKTOP_MACOS_RELEASE/gu) ?? []).length !== 1 ||
+    !bindRun.includes("test \"$DESKTOP_ENABLED\" = 'true'") ||
+    !bindRun.includes(
+      "printf '%s' \"$TAG\" | grep -Eq '^enduragent-desktop@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$'",
+    ) ||
+    !bindRun.includes('VERSION="${TAG#enduragent-desktop@}"') ||
+    !bindRun.includes('git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"') ||
+    !bindRun.includes('COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")') ||
+    !bindRun.includes('test "$WORKFLOW_REF" = "refs/tags/$TAG"') ||
+    !bindRun.includes('test "$WORKFLOW_SHA" = "$COMMIT"') ||
+    !bindRun.includes('git show "$COMMIT:apps/desktop/package.json"') ||
+    !bindRun.includes('if [ "$MANIFEST_VERSION" != "$VERSION" ]') ||
+    !bindRun.includes('git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main') ||
+    !bindRun.includes('echo "desktop_version=$VERSION" >> "$GITHUB_OUTPUT"')
+  ) {
+    issues.push(
+      "desktop candidate tag must be stable enduragent-desktop SemVer bound to apps/desktop/package.json",
+    );
+  }
+
+  const draftNeeds = scalar(draft.needs);
+  const draftOutputs = mapping(draft.outputs, "desktop coordinator draft outputs", issues);
+  const draftStep = namedStep(draft, "Create or validate bound desktop release draft");
+  const draftRun = typeof draftStep?.run === "string" ? draftStep.run : "";
+  if (
+    !draftNeeds.includes("bind-release") ||
+    draftOutputs.draft_id !== "${{ steps.release-draft.outputs.draft_id }}" ||
+    draftOutputs.body_sha256 !== "${{ steps.release-draft.outputs.body_sha256 }}" ||
+    !draftRun.includes("apps/desktop/CHANGELOG.md") ||
+    draftRun.includes("packages/cycling-coach/CHANGELOG.md") ||
+    !draftRun.includes('test "$FIRST_HEADING" = "## $RELEASE_VERSION"') ||
+    !draftRun.includes("--json body,databaseId,isDraft,isPrerelease,tagName") ||
+    !draftRun.includes(".isDraft')\" = 'true'") ||
+    !draftRun.includes(".isPrerelease')\" = 'false'") ||
+    !draftRun.includes('test "$EXISTING_BODY_SHA256" = "$BODY_SHA256"') ||
+    !draftRun.includes(
+      'gh release create "$RELEASE_TAG" --draft --latest=false --target "$RELEASE_COMMIT"',
+    )
+  ) {
+    issues.push(
+      "desktop coordinator must create a bound non-latest draft from the desktop changelog",
+    );
+  }
+
+  const dispatchNeeds = scalar(dispatch.needs);
+  const dispatchStep = namedStep(
+    dispatch,
+    "Dispatch and await environment-bound desktop transaction",
+  );
+  const dispatchEnvironment = mapping(
+    dispatchStep?.env,
+    "desktop coordinator dispatch environment",
+    issues,
+  );
+  const dispatchRun = typeof dispatchStep?.run === "string" ? dispatchStep.run : "";
+  const expectedDispatchEnvironment: Mapping = {
+    RELEASE_TAG: "${{ needs.bind-release.outputs.tag }}",
+    DESKTOP_VERSION: "${{ needs.bind-release.outputs.desktop_version }}",
+    RELEASE_COMMIT: "${{ needs.bind-release.outputs.commit }}",
+    RELEASE_TOOLING_COMMIT: "${{ github.sha }}",
+    RELEASE_DRAFT_ID: "${{ needs.prepare-release-draft.outputs.draft_id }}",
+    RELEASE_MODE: "${{ needs.bind-release.outputs.mode }}",
+    RELEASE_BODY_SHA256: "${{ needs.prepare-release-draft.outputs.body_sha256 }}",
+    RELEASE_BASELINE_TAG: "${{ needs.bind-release.outputs.baseline_tag }}",
+    COORDINATOR_RUN_ID: "${{ github.run_id }}",
+    COORDINATOR_RUN_ATTEMPT: "${{ github.run_attempt }}",
+  };
+  const dispatchedInputs = Array.from(
+    dispatchRun.matchAll(/(?:^|\s)-f ([a-z0-9_]+)=/gu),
+    (match) => match[1],
+  );
+  const expectedDispatchedInputs = [
     "tag",
-    "npm_version",
     "desktop_version",
     "commit",
     "tooling_commit",
     "draft_id",
     "mode",
     "draft_body_sha256",
-    "npm_integrity",
-    "npm_attestation_url",
     "baseline_tag",
     "coordinator_run_id",
     "coordinator_run_attempt",
-  ]) {
-    const declaration = mapping(
-      inputs[input],
-      `desktop.workflow_dispatch.inputs.${input}`,
-      issues,
-    );
-    if (declaration.required !== true || declaration.type !== "string")
-      issues.push(`desktop workflow_dispatch must require string input ${input}`);
-  }
-  const requiredSigningSecrets = [
-    "CSC_LINK",
-    "CSC_KEY_PASSWORD",
-    "APPLE_API_KEY_ID",
-    "APPLE_API_ISSUER",
-    "APPLE_API_KEY_P8_BASE64",
   ];
   if (
-    desktop["run-name"] !==
-    "Desktop release ${{ inputs.tag }} via ${{ inputs.coordinator_run_id }}.${{ inputs.coordinator_run_attempt }}"
-  )
-    issues.push("desktop workflow run name must bind its coordinator invocation");
+    !dispatchNeeds.includes("bind-release") ||
+    !dispatchNeeds.includes("prepare-release-draft") ||
+    Object.entries(expectedDispatchEnvironment).some(
+      ([key, value]) => dispatchEnvironment[key] !== value,
+    ) ||
+    !exactKeys(
+      Object.fromEntries(dispatchedInputs.map((input) => [input, true])),
+      expectedDispatchedInputs,
+    ) ||
+    dispatchedInputs.length !== expectedDispatchedInputs.length ||
+    !dispatchRun.includes("gh workflow run desktop-release.yml \\") ||
+    !dispatchRun.includes('--ref "$RELEASE_TAG"') ||
+    (dispatchRun.match(/--repo "\$GITHUB_REPOSITORY"/gu) ?? []).length !== 3 ||
+    !dispatchRun.includes('--arg title "$EXPECTED_TITLE"') ||
+    !dispatchRun.includes(
+      'gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status',
+    ) ||
+    /npm_version|npm_integrity|npm_attestation_url/u.test(dispatchRun)
+  ) {
+    issues.push("desktop coordinator must dispatch and await one npm-independent child tuple");
+  }
+}
 
-  requireQueue(release.concurrency, "stable-desktop-coordinator", "release coordinator", issues);
-  requireQueue(desktop.concurrency, "stable-desktop", "desktop release", issues);
-  requireQueue(version.concurrency, "version-pr", "version dispatcher", issues);
-  checkCheckouts(releaseSource, release, "release", issues);
-  checkCheckouts(desktopSource, desktop, "desktop", issues);
-  checkCheckouts(versionSource, version, "version", issues);
+function checkNpmRelease(source: string, release: Mapping, issues: string[]): void {
+  const workflowOn = mapping(release.on, "npm release.on", issues);
+  if (!("push" in workflowOn) || !("workflow_dispatch" in workflowOn)) {
+    issues.push("release.yml must remain the npm tag/manual coordinator");
+  }
+  const push = mapping(workflowOn.push, "npm release push trigger", issues);
+  const tags = Array.isArray(push.tags) ? push.tags.map(String) : [];
+  const dispatch = mapping(workflowOn.workflow_dispatch, "npm release workflow_dispatch", issues);
+  const dispatchInputs = mapping(dispatch.inputs, "npm release workflow_dispatch inputs", issues);
+  if (
+    tags.length === 0 ||
+    tags.some((tag) => tag.startsWith("enduragent-desktop@")) ||
+    !exactKeys(dispatchInputs, ["package", "tag"])
+  ) {
+    issues.push("npm release triggers must not authorize desktop candidates");
+  }
+  exactPermissions(release.permissions, { contents: "read" }, "npm release", issues);
+  requireQueue(release.concurrency, "npm-release-coordinator", "npm release", issues);
 
-  const releaseJobs = mapping(release.jobs, "release.jobs", issues);
-  const smoke = mapping(releaseJobs.smoke, "release.jobs.smoke", issues);
-  const npmPublish = mapping(releaseJobs["publish-npm"], "release.jobs.publish-npm", issues);
+  const jobs = mapping(release.jobs, "npm release.jobs", issues);
+  for (const legacyJobName of ["prepare-release-draft", "desktop-release"]) {
+    if (
+      legacyJobName in jobs &&
+      mapping(jobs[legacyJobName], `npm release.jobs.${legacyJobName}`, issues).if !==
+        "${{ false }}"
+    ) {
+      issues.push("legacy npm-side desktop jobs must remain literally disabled");
+    }
+  }
+  const liveJobsText = Object.entries(jobs)
+    .filter(([, rawJob]) => mapping(rawJob, "npm release live job", issues).if !== "${{ false }}")
+    .map(([, rawJob]) => scalar(rawJob))
+    .join("\n");
+  const parseTag = mapping(jobs["parse-tag"], "npm release.jobs.parse-tag", issues);
+  const parseOutputs = mapping(parseTag.outputs, "npm parse-tag outputs", issues);
+  if (
+    Object.keys(parseOutputs).some((key) => key.startsWith("desktop")) ||
+    /apps\/desktop|ENABLE_DESKTOP_MACOS_RELEASE|enduragent-desktop@|desktop-release\.yml/u.test(
+      liveJobsText,
+    )
+  ) {
+    issues.push("npm release workflow must have no live desktop parse or dispatch authority");
+  }
+
+  const smoke = mapping(jobs.smoke, "npm release.jobs.smoke", issues);
+  const npmPublish = mapping(jobs["publish-npm"], "npm release.jobs.publish-npm", issues);
   const npmVerify = mapping(
-    releaseJobs["verify-npm-publication"],
-    "release.jobs.verify-npm-publication",
+    jobs["verify-npm-publication"],
+    "npm release.jobs.verify-npm-publication",
     issues,
   );
-  const draft = mapping(
-    releaseJobs["prepare-release-draft"],
-    "release.jobs.prepare-release-draft",
+  const packageRelease = mapping(
+    jobs["publish-package-only-release"],
+    "npm release.jobs.publish-package-only-release",
     issues,
   );
-  const desktopCall = mapping(
-    releaseJobs["desktop-release"],
-    "release.jobs.desktop-release",
-    issues,
-  );
-  const packageOnly = mapping(
-    releaseJobs["publish-package-only-release"],
-    "release.jobs.publish-package-only-release",
-    issues,
-  );
-
   exactPermissions(
     npmPublish.permissions,
     { actions: "read", contents: "read", "id-token": "write" },
@@ -212,14 +354,15 @@ export function inspectDesktopReleaseWorkflows(
     "npm verification",
     issues,
   );
-  const expectedNpmEnvironment =
-    "${{ needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true' && 'npm-production' || '' }}";
-  if (npmPublish.environment !== expectedNpmEnvironment)
-    issues.push("desktop npm publication must use the conditional protected environment");
-  if (!scalar(npmVerify.needs).includes("publish-npm") || "environment" in npmVerify)
+  exactPermissions(packageRelease.permissions, { contents: "write" }, "npm GitHub release", issues);
+  if (npmPublish.environment !== "npm-production") {
+    issues.push("npm publication must use the protected npm-production environment");
+  }
+  if (!scalar(npmVerify.needs).includes("publish-npm") || "environment" in npmVerify) {
     issues.push("no-OIDC npm verification must follow publication outside a protected environment");
+  }
 
-  const smokeOutputs = mapping(smoke.outputs, "smoke outputs", issues);
+  const smokeOutputs = mapping(smoke.outputs, "npm smoke outputs", issues);
   for (const output of [
     "artifact_id",
     "artifact_digest",
@@ -230,7 +373,9 @@ export function inspectDesktopReleaseWorkflows(
     "alias_filename",
     "alias_sha512",
   ]) {
-    if (!(output in smokeOutputs)) issues.push(`immutable npm preparation is missing ${output}`);
+    if (!(output in smokeOutputs)) {
+      issues.push(`immutable npm preparation is missing ${output}`);
+    }
   }
   const npmPublishOutputs = mapping(npmPublish.outputs, "npm publish outputs", issues);
   for (const output of [
@@ -241,22 +386,23 @@ export function inspectDesktopReleaseWorkflows(
     "publication_event_name",
     "publication_commit",
   ]) {
-    if (!(output in npmPublishOutputs)) issues.push(`npm publication tuple is missing ${output}`);
+    if (!(output in npmPublishOutputs)) {
+      issues.push(`npm publication tuple is missing ${output}`);
+    }
   }
   const npmVerifyOutputs = mapping(npmVerify.outputs, "npm verification outputs", issues);
   if (
     npmVerifyOutputs.npm_integrity !== "${{ steps.verify.outputs.npm_integrity }}" ||
     npmVerifyOutputs.npm_attestation_url !== "${{ steps.verify.outputs.npm_attestation_url }}"
   ) {
-    issues.push("verified npm integrity and attestation URL must be exposed as job outputs");
+    issues.push("verified npm integrity and attestation URL must remain exposed as job outputs");
   }
 
   const publishText = runs(npmPublish).join("\n");
   const verifyText = runs(npmVerify).join("\n");
   const smokeText = runs(smoke).join("\n");
-  const publishSteps = steps(npmPublish);
   if (
-    publishSteps.some(
+    steps(npmPublish).some(
       (step) =>
         typeof step.uses === "string" &&
         (step.uses.startsWith("actions/checkout@") || step.uses.startsWith("pnpm/action-setup@")),
@@ -268,10 +414,10 @@ export function inspectDesktopReleaseWorkflows(
     );
   }
   if (
-    !releaseSource.includes("actions/upload-artifact@") ||
-    (releaseSource.match(/actions\/download-artifact@[^\n]+# v8/gu) ?? []).length < 2 ||
-    (releaseSource.match(/artifact-ids:/gu) ?? []).length < 2 ||
-    (releaseSource.match(/digest-mismatch: error/gu) ?? []).length < 2
+    !source.includes("actions/upload-artifact@") ||
+    (source.match(/actions\/download-artifact@[^\n]+# v8/gu) ?? []).length < 2 ||
+    (source.match(/artifact-ids:/gu) ?? []).length < 2 ||
+    (source.match(/digest-mismatch: error/gu) ?? []).length < 2
   ) {
     issues.push("npm prepare, publish, and verify must reuse one digest-checked Actions artifact");
   }
@@ -281,9 +427,7 @@ export function inspectDesktopReleaseWorkflows(
     (publishText.match(/--provenance/gu) ?? []).length !== 2 ||
     (publishText.match(/--ignore-scripts/gu) ?? []).length !== 2
   ) {
-    issues.push(
-      "both npm identities must publish exact tarballs through the explicit public registry",
-    );
+    issues.push("both npm identities must publish exact tarballs through the public registry");
   }
   if (
     !smokeText.includes('npm pack "$ALIAS_DIR/extract/package"') ||
@@ -309,11 +453,9 @@ export function inspectDesktopReleaseWorkflows(
     !verifyText.includes(".dist.integrity") ||
     !verifyText.includes(".dist.attestations.url") ||
     verifyText.includes("._attestations") ||
-    releaseSource.includes(".gitHead")
+    source.includes(".gitHead")
   ) {
-    issues.push(
-      "no-OIDC verification must bind public bytes, signatures, and exact signed provenance",
-    );
+    issues.push("no-OIDC verification must bind public bytes, signatures, and exact provenance");
   }
   if (
     !verifyText.includes("PUBLICATION_RUN_ATTEMPT") ||
@@ -331,137 +473,107 @@ export function inspectDesktopReleaseWorkflows(
     canonicalUrl === -1 ||
     fetchUrl <= canonicalUrl ||
     !verifyText.includes('test "$OBSERVED_ATTESTATION_URL" = "$EXPECTED_ATTESTATION_URL"')
-  )
+  ) {
     issues.push("npm attestation URL must be canonicalized before network fetch");
+  }
 
-  exactPermissions(draft.permissions, { contents: "write" }, "draft preparation", issues);
+  const packageReleaseText = runs(packageRelease).join("\n");
   if (
-    !scalar(draft.needs).includes("verify-npm-publication") ||
-    !scalar(packageOnly.needs).includes("verify-npm-publication") ||
-    !scalar(desktopCall.needs).includes("verify-npm-publication")
+    !scalar(packageRelease.needs).includes("verify-npm-publication") ||
+    !packageReleaseText.includes('gh release view "$TAG"') ||
+    !packageReleaseText.includes("Leaving it untouched") ||
+    !packageReleaseText.includes('gh release create "$TAG" --latest=false') ||
+    packageReleaseText.includes("--draft")
   ) {
-    issues.push("GitHub release paths must wait for verified npm publication");
+    issues.push(
+      "npm GitHub releases must be verified, non-latest, and never replace existing releases",
+    );
+  }
+}
+
+function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): void {
+  const workflowOn = mapping(desktop.on, "desktop child.on", issues);
+  if (Object.keys(workflowOn).length !== 1 || !("workflow_dispatch" in workflowOn)) {
+    issues.push("desktop-release.yml must be workflow_dispatch-only");
+  }
+  const workflowDispatch = mapping(workflowOn.workflow_dispatch, "desktop child dispatch", issues);
+  const inputs = mapping(workflowDispatch.inputs, "desktop child inputs", issues);
+  const expectedInputs = [
+    "tag",
+    "desktop_version",
+    "commit",
+    "tooling_commit",
+    "draft_id",
+    "mode",
+    "draft_body_sha256",
+    "baseline_tag",
+    "coordinator_run_id",
+    "coordinator_run_attempt",
+  ];
+  if (!exactKeys(inputs, expectedInputs)) {
+    issues.push("desktop child must accept only the frozen desktop release tuple");
+  }
+  for (const input of expectedInputs) {
+    const declaration = mapping(inputs[input], `desktop child input ${input}`, issues);
+    if (declaration.required !== true || declaration.type !== "string") {
+      issues.push(`desktop workflow_dispatch must require string input ${input}`);
+    }
   }
   if (
-    !releaseSource.includes("--json body,databaseId,isDraft,isPrerelease,tagName") ||
-    !releaseSource.includes('"$IS_PRERELEASE" != "false"')
+    /\bnpm_(?:version|integrity|attestation_url)\b|--npm-(?:version|integrity|attestation-url)\b/u.test(
+      source,
+    )
   ) {
-    issues.push("stable desktop draft preparation must reject prereleases");
+    issues.push("desktop child must not consume npm release identity or provenance");
   }
-  const desktopGate =
-    "${{ needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true' }}";
-  if (draft.if !== desktopGate || desktopCall.if !== desktopGate)
-    issues.push("desktop transaction must use the frozen coordinator opt-in decision");
-  if ("uses" in desktopCall || desktopCall["runs-on"] !== "ubuntu-latest")
-    issues.push("release.yml must directly dispatch the environment-bound desktop workflow");
+  if (
+    desktop["run-name"] !==
+    "Desktop release ${{ inputs.tag }} via ${{ inputs.coordinator_run_id }}.${{ inputs.coordinator_run_attempt }}"
+  ) {
+    issues.push("desktop child run name must bind its coordinator invocation");
+  }
   exactPermissions(
-    desktopCall.permissions,
-    { actions: "write", contents: "read" },
-    "desktop dispatcher",
+    desktop.permissions,
+    { actions: "read", contents: "read" },
+    "desktop child",
     issues,
   );
-  const dispatchStep = namedStep(
-    desktopCall,
-    "Dispatch and await environment-bound desktop transaction",
-  );
-  const dispatchEnvironment = mapping(
-    dispatchStep?.env,
-    "desktop dispatcher environment",
-    issues,
-  );
-  const dispatchRun = typeof dispatchStep?.run === "string" ? dispatchStep.run : "";
-  if (
-    dispatchEnvironment.NPM_VERSION !== "${{ needs.parse-tag.outputs.version }}" ||
-    dispatchEnvironment.DESKTOP_VERSION !==
-      "${{ needs.parse-tag.outputs.desktop_version }}" ||
-    dispatchEnvironment.NPM_INTEGRITY !==
-      "${{ needs.verify-npm-publication.outputs.npm_integrity }}" ||
-    dispatchEnvironment.NPM_ATTESTATION_URL !==
-      "${{ needs.verify-npm-publication.outputs.npm_attestation_url }}" ||
-    dispatchEnvironment.RELEASE_TOOLING_COMMIT !== "${{ github.sha }}" ||
-    dispatchEnvironment.COORDINATOR_RUN_ID !== "${{ github.run_id }}" ||
-    dispatchEnvironment.COORDINATOR_RUN_ATTEMPT !== "${{ github.run_attempt }}"
-  ) {
-    issues.push(
-      "desktop dispatch must consume frozen version authorities and verified npm outputs",
-    );
-  }
-  if (
-    !dispatchRun.includes("gh workflow run desktop-release.yml \\") ||
-    (dispatchRun.match(/--repo "\$GITHUB_REPOSITORY"/gu) ?? []).length !== 3 ||
-    !dispatchRun.includes('--ref "$DESKTOP_WORKFLOW_REF"') ||
-    !dispatchRun.includes('-f tooling_commit="$RELEASE_TOOLING_COMMIT"') ||
-    !dispatchRun.includes('-f coordinator_run_id="$COORDINATOR_RUN_ID"') ||
-    !dispatchRun.includes('-f coordinator_run_attempt="$COORDINATOR_RUN_ATTEMPT"') ||
-    !dispatchRun.includes('--arg title "$EXPECTED_TITLE"') ||
-    !dispatchRun.includes(
-      'gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status',
-    ) ||
-    !dispatchRun.includes('if [ "$COORDINATOR_REF" = "refs/tags/$RELEASE_TAG" ]')
-  ) {
-    issues.push("desktop coordinator must dispatch, correlate, and await the exact child run");
-  }
+  requireQueue(desktop.concurrency, "stable-desktop", "desktop release", issues);
 
-  const packageOnlyText = scalar(packageOnly);
-  if (
-    packageOnly.if !==
-      "${{ needs.parse-tag.outputs.package != 'cycling-coach' || needs.parse-tag.outputs.desktop_enabled != 'true' }}" ||
-    !packageOnlyText.includes("gh release view") ||
-    !packageOnlyText.includes("Leaving it untouched") ||
-    !packageOnlyText.includes("gh release create") ||
-    packageOnlyText.includes("--draft") ||
-    packageOnlyText.includes("--latest=false")
-  ) {
-    issues.push(
-      "disabled desktop releases must retain the package-only create-normal-or-leave-existing behavior",
-    );
-  }
-  const parseTag = mapping(releaseJobs["parse-tag"], "release.jobs.parse-tag", issues);
-  const parseOutputs = mapping(parseTag.outputs, "parse-tag outputs", issues);
-  if (
-    parseOutputs.desktop_enabled !== "${{ steps.parse.outputs.desktop_enabled }}" ||
-    parseOutputs.desktop_version !== "${{ steps.parse.outputs.desktop_version }}" ||
-    !releaseSource.includes('git show "$COMMIT:apps/desktop/package.json"') ||
-    !releaseSource.includes('echo "desktop_version=$DESKTOP_VERSION" >> "$GITHUB_OUTPUT"') ||
-    (releaseSource.match(/vars\.ENABLE_DESKTOP_MACOS_RELEASE/gu) ?? []).length !== 1
-  ) {
-    issues.push("desktop opt-in and version authority must be read once and frozen by parse-tag");
-  }
-
-  const desktopJobs = mapping(desktop.jobs, "desktop.jobs", issues);
+  const requiredSigningSecrets = [
+    "CSC_LINK",
+    "CSC_KEY_PASSWORD",
+    "APPLE_API_KEY_ID",
+    "APPLE_API_ISSUER",
+    "APPLE_API_KEY_P8_BASE64",
+  ];
+  const jobs = mapping(desktop.jobs, "desktop.jobs", issues);
   const authorize = mapping(
-    desktopJobs["authorize-coordinator"],
+    jobs["authorize-coordinator"],
     "desktop.jobs.authorize-coordinator",
     issues,
   );
-  const sign = mapping(desktopJobs["sign-macos"], "desktop.jobs.sign-macos", issues);
+  const sign = mapping(jobs["sign-macos"], "desktop.jobs.sign-macos", issues);
   const verify = mapping(
-    desktopJobs["verify-macos-envelope"],
+    jobs["verify-macos-envelope"],
     "desktop.jobs.verify-macos-envelope",
     issues,
   );
-  const stage = mapping(
-    desktopJobs["stage-private-draft"],
-    "desktop.jobs.stage-private-draft",
-    issues,
-  );
-  const publish = mapping(desktopJobs["publish-assets"], "desktop.jobs.publish-assets", issues);
-  const promote = mapping(desktopJobs["promote-latest"], "desktop.jobs.promote-latest", issues);
+  const stage = mapping(jobs["stage-private-draft"], "desktop.jobs.stage-private-draft", issues);
+  const publish = mapping(jobs["publish-assets"], "desktop.jobs.publish-assets", issues);
+  const promote = mapping(jobs["promote-latest"], "desktop.jobs.promote-latest", issues);
   const roundTrip = mapping(
-    desktopJobs["verify-production-update"],
+    jobs["verify-production-update"],
     "desktop.jobs.verify-production-update",
     issues,
   );
-  const activate = mapping(
-    desktopJobs["activate-release"],
-    "desktop.jobs.activate-release",
-    issues,
-  );
+  const activate = mapping(jobs["activate-release"], "desktop.jobs.activate-release", issues);
   const compensate = mapping(
-    desktopJobs["compensate-publication"],
+    jobs["compensate-publication"],
     "desktop.jobs.compensate-publication",
     issues,
   );
+
   exactPermissions(
     authorize.permissions,
     { actions: "read", contents: "read" },
@@ -473,18 +585,19 @@ export function inspectDesktopReleaseWorkflows(
   if (
     sign.needs !== "authorize-coordinator" ||
     !authorizeRun.includes('gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID"') ||
-    !authorizeRun.includes(".github/workflows/release.yml") ||
+    !authorizeRun.includes(".github/workflows/desktop-release-coordinator.yml") ||
+    authorizeRun.includes(".github/workflows/release.yml") ||
     !authorizeRun.includes(".run_attempt") ||
     !authorizeRun.includes(".status") ||
     !authorizeRun.includes("in_progress") ||
     !authorizeRun.includes(".head_sha") ||
     !authorizeRun.includes('test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"') ||
-    !authorizeRun.includes('if [ "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT" ]') ||
-    !authorizeRun.includes(".head_branch") ||
-    !authorizeRun.includes("workflow_dispatch")
+    !authorizeRun.includes("workflow_dispatch") ||
+    authorizeRun.includes('.event == "push"')
   ) {
-    issues.push("desktop signing must bind to its active release coordinator");
+    issues.push("desktop signing must authorize only its active desktop coordinator");
   }
+
   exactPermissions(sign.permissions, { contents: "read" }, "macOS signing", issues);
   exactPermissions(
     verify.permissions,
@@ -528,6 +641,7 @@ export function inspectDesktopReleaseWorkflows(
     "release compensation",
     issues,
   );
+
   const signingSecrets = [
     "CSC_LINK",
     "CSC_KEY_PASSWORD",
@@ -537,18 +651,20 @@ export function inspectDesktopReleaseWorkflows(
     "APPLE_API_KEY_P8_BASE64",
     "ENDURAGENT_DEVELOPER_ID_IDENTITY",
   ];
-  const nonSigningDesktopText = Object.entries(desktopJobs)
+  const nonSigningText = Object.entries(jobs)
     .filter(([jobName]) => jobName !== "sign-macos")
     .map(([jobName, rawJob]) => scalar(mapping(rawJob, `desktop.jobs.${jobName}`, issues)))
     .join("\n");
   for (const secret of signingSecrets) {
-    if (new RegExp(`\\b${secret}\\b`, "u").test(nonSigningDesktopText))
+    if (new RegExp(`\\b${secret}\\b`, "u").test(nonSigningText)) {
       issues.push(`signing secret ${secret} escaped the signing job`);
+    }
   }
-  if (sign.environment !== "desktop-macos-signing")
+  if (sign.environment !== "desktop-macos-signing") {
     issues.push("signing secrets must come from desktop-macos-signing environment");
+  }
   if (
-    Object.entries(desktopJobs).some(
+    Object.entries(jobs).some(
       ([jobName, rawJob]) =>
         jobName !== "sign-macos" &&
         mapping(rawJob, `desktop.jobs.${jobName}`, issues).environment === "desktop-macos-signing",
@@ -562,10 +678,14 @@ export function inspectDesktopReleaseWorkflows(
     promote.environment !== "desktop-macos-latest" ||
     activate.environment !== "desktop-macos-latest" ||
     compensate.environment !== "desktop-macos-latest"
-  )
+  ) {
     issues.push("write-authority desktop jobs must use protected environments");
-  if (!scalar(stage.needs).includes("verify-macos-envelope") || verify.needs !== "sign-macos")
+  }
+  if (!scalar(stage.needs).includes("verify-macos-envelope") || verify.needs !== "sign-macos") {
     issues.push("independent macOS verification must follow signing before private staging");
+  }
+
+  const stageRun = runs(stage).join("\n");
   const publishRun = runs(publish).join("\n");
   const promoteRun = runs(promote).join("\n");
   const roundTripRun = runs(roundTrip).join("\n");
@@ -574,6 +694,7 @@ export function inspectDesktopReleaseWorkflows(
   const observeIndex = publishRun.indexOf("desktop-release:transaction observe");
   const publicationIndex = publishRun.indexOf("desktop-release:transaction publish");
   if (
+    !stageRun.includes("desktop-release:transaction stage") ||
     !scalar(publish.needs).includes("stage-private-draft") ||
     observeIndex === -1 ||
     publicationIndex <= observeIndex ||
@@ -583,15 +704,18 @@ export function inspectDesktopReleaseWorkflows(
     scalar(mapping(publish.outputs, "desktop publish outputs", issues).latest_id) !==
       "${{ steps.observe.outputs.latest_id }}"
   ) {
-    issues.push("public desktop publication must bind latest before provisional publication");
+    issues.push("desktop publication must stage exact assets and bind latest before metadata-last");
   }
   if (
     !scalar(promote.needs).includes("publish-assets") ||
     !promoteRun.includes("desktop-release:transaction promote") ||
-    !promoteRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"')
+    !promoteRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
+    !promoteRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
+    !promoteRun.includes('--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"')
   ) {
     issues.push("desktop latest promotion must compare-and-swap the observed release");
   }
+
   const roundTripNeeds = scalar(roundTrip.needs);
   if (
     roundTrip.if !== "${{ inputs.mode == 'steady' }}" ||
@@ -610,6 +734,7 @@ export function inspectDesktopReleaseWorkflows(
   ) {
     issues.push("steady publication must pass a native production-feed N-to-N+1 round trip");
   }
+
   const activateCondition = scalar(activate.if).replace(/\s+/gu, " ");
   const activateNeeds = scalar(activate.needs);
   if (
@@ -624,9 +749,12 @@ export function inspectDesktopReleaseWorkflows(
     !activateCondition.includes("inputs.mode == 'steady'") ||
     !activateCondition.includes("needs.verify-production-update.result == 'success'") ||
     !activateRun.includes("desktop-release:transaction activate") ||
-    !activateRun.includes("packages/cycling-coach/CHANGELOG.md")
+    !activateRun.includes("apps/desktop/CHANGELOG.md") ||
+    activateRun.includes("packages/cycling-coach/CHANGELOG.md")
   ) {
-    issues.push("general-availability activation must follow the mode-specific acceptance gate");
+    issues.push(
+      "desktop activation must follow mode-specific acceptance and desktop release notes",
+    );
   }
   const compensateCondition = scalar(compensate.if).replace(/\s+/gu, " ");
   const compensateNeeds = scalar(compensate.needs);
@@ -636,67 +764,65 @@ export function inspectDesktopReleaseWorkflows(
     !compensateCondition.includes("needs.publish-assets.outputs.latest_id != ''") ||
     !compensateCondition.includes("needs.activate-release.result != 'success'") ||
     !compensateRun.includes("desktop-release:transaction compensate") ||
+    !compensateRun.includes("apps/desktop/CHANGELOG.md") ||
     !compensateRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
     !compensateRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
     !compensateRun.includes('--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"')
   ) {
-    issues.push(
-      "failed desktop activation must restore the observed latest and withdraw the candidate",
-    );
+    issues.push("failed desktop activation must restore prior latest and withdraw the candidate");
   }
+
   const signingSteps = steps(sign);
-  const recoveryToolingStep = namedStep(sign, "Bind recovery release tooling");
-  const recoveryToolingRun =
-    typeof recoveryToolingStep?.run === "string" ? recoveryToolingStep.run : "";
+  const recoveryStep = namedStep(sign, "Bind recovery release tooling");
+  const recoveryRun = typeof recoveryStep?.run === "string" ? recoveryStep.run : "";
   const signingStep = namedStep(sign, "Build signed and notarized macOS envelope");
   const signingCheckoutIndex = signingSteps.findIndex(
     (step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout@"),
   );
-  const recoveryToolingIndex = signingSteps.indexOf(recoveryToolingStep ?? {});
-  const signingInstallIndex = signingSteps.findIndex(
+  const recoveryIndex = signingSteps.indexOf(recoveryStep ?? {});
+  const installIndex = signingSteps.findIndex(
     (step) => step.run === "pnpm install --frozen-lockfile",
   );
-  const signingWorkspaceBuildIndex = signingSteps.findIndex((step) => step.run === "pnpm -r build");
-  const signingPackageIndex = signingSteps.indexOf(signingStep ?? {});
-  const signingEnvironment = mapping(signingStep?.env, "macOS signing step environment", issues);
+  const workspaceBuildIndex = signingSteps.findIndex((step) => step.run === "pnpm -r build");
+  const packageIndex = signingSteps.indexOf(signingStep ?? {});
+  const signingEnvironment = mapping(signingStep?.env, "macOS signing environment", issues);
   const signingRun = typeof signingStep?.run === "string" ? signingStep.run : "";
-  const keyCleanupStep = namedStep(sign, "Remove temporary notarization key");
-  const keyCleanupRun = typeof keyCleanupStep?.run === "string" ? keyCleanupStep.run : "";
+  const cleanupStep = namedStep(sign, "Remove temporary notarization key");
+  const cleanupRun = typeof cleanupStep?.run === "string" ? cleanupStep.run : "";
   const keyCreation = signingRun.indexOf(
     'printf \'%s\' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"',
   );
   const privateUmask = signingRun.indexOf("umask 077");
-  const recoveryToolingFiles = [
+  const recoveryFiles = [
     "apps/desktop/scripts/macos-genesis-release.mjs",
     "apps/desktop/scripts/macos-release-plan.d.mts",
     "apps/desktop/scripts/macos-release-plan.mjs",
     "apps/desktop/scripts/verify-macos-release.mjs",
   ];
-  const expectedRecoveryDiff = recoveryToolingFiles.join("\\n");
+  const expectedRecoveryDiff = recoveryFiles.join("\\n");
   if (
-    recoveryToolingIndex <= signingCheckoutIndex ||
-    recoveryToolingIndex >= signingInstallIndex ||
-    !recoveryToolingRun.includes('test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"') ||
-    !recoveryToolingRun.includes(
+    recoveryIndex <= signingCheckoutIndex ||
+    recoveryIndex >= installIndex ||
+    !recoveryRun.includes('test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"') ||
+    !recoveryRun.includes(
       'git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"',
     ) ||
-    !recoveryToolingRun.includes('git restore --source="$RELEASE_TOOLING_COMMIT" --worktree --') ||
-    !recoveryToolingRun.includes(`EXPECTED_RECOVERY_DIFF=$'${expectedRecoveryDiff}'`) ||
-    !recoveryToolingRun.includes('test "$(git diff --name-only)" = "$EXPECTED_RECOVERY_DIFF"') ||
-    recoveryToolingFiles.some(
+    !recoveryRun.includes('git restore --source="$RELEASE_TOOLING_COMMIT" --worktree --') ||
+    !recoveryRun.includes(`EXPECTED_RECOVERY_DIFF=$'${expectedRecoveryDiff}'`) ||
+    !recoveryRun.includes('test "$(git diff --name-only)" = "$EXPECTED_RECOVERY_DIFF"') ||
+    recoveryFiles.some(
       (path) =>
-        (recoveryToolingRun.match(new RegExp(path.replaceAll(".", "\\."), "gu")) ?? []).length !==
-        2,
+        (recoveryRun.match(new RegExp(path.replaceAll(".", "\\."), "gu")) ?? []).length !== 2,
     )
   ) {
     issues.push(
-      "manual recovery must bind the coordinator commit and overlay only audited release tooling",
+      "manual recovery must bind the coordinator and overlay only audited release tooling",
     );
   }
   if (
-    signingInstallIndex === -1 ||
-    signingWorkspaceBuildIndex <= signingInstallIndex ||
-    signingWorkspaceBuildIndex >= signingPackageIndex
+    installIndex === -1 ||
+    workspaceBuildIndex <= installIndex ||
+    workspaceBuildIndex >= packageIndex
   ) {
     issues.push("macOS signing must build workspace dependencies before packaging");
   }
@@ -717,28 +843,28 @@ export function inspectDesktopReleaseWorkflows(
     !signingRun.includes("steady)") ||
     signingEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
     signingEnvironment.ENDURAGENT_MACOS_GENESIS_VERSION !== "${{ inputs.desktop_version }}" ||
-    !desktopSource.includes('--npm-version "$NPM_VERSION"') ||
-    !desktopSource.includes('--desktop-version "$DESKTOP_VERSION"') ||
-    !desktopSource.includes('--candidate-tag "$RELEASE_TAG"') ||
-    nonSigningDesktopText.includes("package:mac")
+    !source.includes('--desktop-version "$DESKTOP_VERSION"') ||
+    !source.includes('--candidate-tag "$RELEASE_TAG"') ||
+    nonSigningText.includes("package:mac")
   ) {
-    issues.push("signing must dispatch explicit genesis and steady packaging modes");
+    issues.push("signing must dispatch explicit genesis and steady desktop packaging modes");
   }
   if (
     keyCreation === -1 ||
     privateUmask === -1 ||
     privateUmask > keyCreation ||
     signingEnvironment.APPLE_API_KEY !== "${{ runner.temp }}/AuthKey.p8" ||
-    keyCleanupStep?.if !== "${{ always() }}" ||
-    signingSteps.indexOf(keyCleanupStep ?? {}) <= signingSteps.indexOf(signingStep ?? {}) ||
-    countShellLine(keyCleanupRun, 'rm -f "$RUNNER_TEMP/AuthKey.p8"') !== 1
+    cleanupStep?.if !== "${{ always() }}" ||
+    signingSteps.indexOf(cleanupStep ?? {}) <= signingSteps.indexOf(signingStep ?? {}) ||
+    countShellLine(cleanupRun, 'rm -f "$RUNNER_TEMP/AuthKey.p8"') !== 1
   ) {
     issues.push("temporary notarization key must be created privately and always removed");
   }
+
   const independentStep = namedStep(verify, "Independently verify signed updater envelope");
   const independentEnvironment = mapping(
     independentStep?.env,
-    "independent macOS verification step environment",
+    "independent macOS verification environment",
     issues,
   );
   const independentRun = typeof independentStep?.run === "string" ? independentStep.run : "";
@@ -777,7 +903,7 @@ export function inspectDesktopReleaseWorkflows(
     !steadyCase.includes('"$PUBLIC_ENVELOPE"') ||
     !steadyCase.includes('"$INDEPENDENT_BASELINE_APP"') ||
     !steadyCase.includes('"$CANDIDATE_APP"') ||
-    desktopSource.split("\\(FA494ACVTF\\)$").length - 1 !== 3 ||
+    source.split("\\(FA494ACVTF\\)$").length - 1 !== 3 ||
     countShellLine(independentRun, 'test "$INDEPENDENT_CDHASH" = "$CANDIDATE_CDHASH"') !== 1 ||
     countShellLine(
       independentRun,
@@ -786,52 +912,115 @@ export function inspectDesktopReleaseWorkflows(
     countShellLine(independentRun, 'test "$INDEPENDENT_SIGNING_IDENTITY" = "$SIGNING_IDENTITY"') !==
       1
   ) {
-    issues.push(
-      "mode-specific native verification must consume a signed exact-four public envelope",
-    );
+    issues.push("native verification must consume the signed exact-four public envelope");
   }
   if (
     (
-      desktopSource.match(
+      source.match(
         /SIGNING_RUN_ATTEMPT: \$\{\{ needs\.sign-macos\.outputs\.workflow_run_attempt \}\}/gu,
       ) ?? []
     ).length !== 8 ||
-    desktopSource.includes("SIGNING_RUN_ATTEMPT: ${{ github.run_attempt }}") ||
+    source.includes("SIGNING_RUN_ATTEMPT: ${{ github.run_attempt }}") ||
     !independentRun.includes('--workflow-run-attempt "$SIGNING_RUN_ATTEMPT"')
   ) {
     issues.push("desktop verification must bind the successful signing attempt on reruns");
   }
   if (
-    (desktopSource.match(/actions\/download-artifact@[^\n]+# v8/gu) ?? []).length !== 8 ||
-    (desktopSource.match(/digest-mismatch: error/gu) ?? []).length !== 8 ||
-    !desktopSource.includes("artifact_id: ${{ steps.sealed-artifact.outputs.artifact-id }}") ||
-    !desktopSource.includes(
-      "artifact_digest: ${{ steps.sealed-artifact.outputs.artifact-digest }}",
-    ) ||
-    !desktopSource.includes(
-      "baseline_artifact_id: ${{ steps.baseline-artifact.outputs.artifact-id }}",
-    ) ||
-    !desktopSource.includes(
+    (source.match(/actions\/download-artifact@[^\n]+# v8/gu) ?? []).length !== 8 ||
+    (source.match(/digest-mismatch: error/gu) ?? []).length !== 8 ||
+    !source.includes("artifact_id: ${{ steps.sealed-artifact.outputs.artifact-id }}") ||
+    !source.includes("artifact_digest: ${{ steps.sealed-artifact.outputs.artifact-digest }}") ||
+    !source.includes("baseline_artifact_id: ${{ steps.baseline-artifact.outputs.artifact-id }}") ||
+    !source.includes(
       "baseline_artifact_digest: ${{ steps.baseline-artifact.outputs.artifact-digest }}",
     )
   ) {
     issues.push("desktop consumers must bind the exact digest-checked signing artifact");
   }
+}
 
-  const versionJobs = mapping(version.jobs, "version.jobs", issues);
-  const versionJob = mapping(versionJobs["version-pr"], "version.jobs.version-pr", issues);
+function checkVersionDispatch(version: Mapping, issues: string[]): void {
+  requireQueue(version.concurrency, "version-pr", "version dispatcher", issues);
+  const jobs = mapping(version.jobs, "version.jobs", issues);
+  const versionJob = mapping(jobs["version-pr"], "version.jobs.version-pr", issues);
   const versionText = runs(versionJob).join("\n");
+  const previousPackageVersion = versionText.indexOf(
+    "PREVIOUS_VERSION=$(git show \"$PREVIOUS_COMMIT:$pkg_json\" | jq -er '.version')",
+  );
+  const packageSkip = versionText.indexOf('if [ "$VERSION" = "$PREVIOUS_VERSION" ]; then');
+  const packageTag = versionText.indexOf('TAG="$NAME@$VERSION"');
   if (
+    !versionText.includes("PREVIOUS_COMMIT=$(git rev-parse HEAD^)") ||
+    previousPackageVersion === -1 ||
+    packageSkip <= previousPackageVersion ||
+    packageTag <= packageSkip ||
+    !versionText.slice(packageSkip, packageTag).includes("continue") ||
     !versionText.includes('git rev-parse "refs/tags/$TAG^{commit}"') ||
     !versionText.includes('"$TAG_COMMIT" != "$RELEASE_COMMIT"') ||
     !versionText.includes('gh workflow run release.yml --ref "$TAG" -f tag="$TAG"') ||
-    !versionText.includes("for attempt in $(seq 1 6)") ||
     versionText.includes("Tag $TAG already on origin — skipping")
   ) {
     issues.push(
-      "version dispatcher must verify existing tags and retry exact-tag release dispatch",
+      "version dispatcher must skip unchanged npm versions and verify exact changed tags",
     );
   }
+  if (
+    !versionText.includes("DESKTOP_PACKAGE_JSON=apps/desktop/package.json") ||
+    !versionText.includes("DESKTOP_VERSION=$(jq -er '.version' \"$DESKTOP_PACKAGE_JSON\")") ||
+    !versionText.includes(
+      "PREVIOUS_DESKTOP_VERSION=$(git show \"$PREVIOUS_COMMIT:$DESKTOP_PACKAGE_JSON\" | jq -er '.version')",
+    ) ||
+    !versionText.includes('if [ "$DESKTOP_VERSION" = "$PREVIOUS_DESKTOP_VERSION" ]; then') ||
+    !versionText.includes("skipping desktop release") ||
+    !versionText.includes('DESKTOP_TAG="enduragent-desktop@$DESKTOP_VERSION"') ||
+    !versionText.includes('git rev-parse "refs/tags/$DESKTOP_TAG^{commit}"') ||
+    !versionText.includes('"$DESKTOP_TAG_COMMIT" != "$RELEASE_COMMIT"') ||
+    !versionText.includes(
+      'gh workflow run desktop-release-coordinator.yml --ref "$DESKTOP_TAG" \\',
+    ) ||
+    !versionText.includes('-f tag="$DESKTOP_TAG" -f desktop_mode=steady') ||
+    versionText.includes("gh workflow run desktop-release.yml") ||
+    (versionText.match(/for attempt in \$\(seq 1 6\)/gu) ?? []).length < 2
+  ) {
+    issues.push("version dispatcher must independently tag and dispatch changed desktop SemVer");
+  }
+}
+
+export function inspectDesktopReleaseWorkflows(
+  releaseSource: string,
+  coordinatorSource: string,
+  desktopSource: string,
+  versionSource: string,
+): string[] {
+  const issues: string[] = [];
+  let release: Mapping;
+  let coordinator: Mapping;
+  let desktop: Mapping;
+  let version: Mapping;
+  try {
+    release = mapping(parse(releaseSource), "npm release workflow", issues);
+    coordinator = mapping(parse(coordinatorSource), "desktop coordinator workflow", issues);
+    desktop = mapping(parse(desktopSource), "desktop child workflow", issues);
+    version = mapping(parse(versionSource), "version workflow", issues);
+  } catch {
+    return ["release workflows must be valid YAML"];
+  }
+
+  if (
+    coordinatorSource.includes("desktop-release:transaction --") ||
+    desktopSource.includes("desktop-release:transaction --") ||
+    releaseSource.includes("desktop-release:transaction --")
+  ) {
+    issues.push("release transaction commands must not pass a pnpm argument separator");
+  }
+  checkCheckouts(release, "npm release", issues);
+  checkCheckouts(coordinator, "desktop coordinator", issues);
+  checkCheckouts(desktop, "desktop child", issues);
+  checkCheckouts(version, "version", issues);
+  checkNpmRelease(releaseSource, release, issues);
+  checkCoordinator(coordinatorSource, coordinator, issues);
+  checkDesktopChild(desktopSource, desktop, issues);
+  checkVersionDispatch(version, issues);
   return issues;
 }
 
@@ -839,11 +1028,16 @@ export function main(): void {
   const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
   const issues = inspectDesktopReleaseWorkflows(
     readFileSync(resolve(root, ".github/workflows/release.yml"), "utf8"),
+    readFileSync(resolve(root, ".github/workflows/desktop-release-coordinator.yml"), "utf8"),
     readFileSync(resolve(root, ".github/workflows/desktop-release.yml"), "utf8"),
     readFileSync(resolve(root, ".github/workflows/version-pr.yml"), "utf8"),
   );
-  if (issues.length > 0) throw new TypeError(issues.map((issue) => `- ${issue}`).join("\n"));
+  if (issues.length > 0) {
+    throw new TypeError(issues.map((issue) => `- ${issue}`).join("\n"));
+  }
   process.stdout.write("Desktop release workflow structure verified\n");
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
