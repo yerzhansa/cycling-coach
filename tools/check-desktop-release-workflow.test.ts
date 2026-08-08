@@ -313,8 +313,8 @@ describe("desktop release workflow policy", () => {
       "ENDURAGENT_MACOS_GENESIS_VERSION: 0.0.1",
     );
     const missingGenesisVerifier = source.desktop.replace(
-      "verify:mac-genesis-release --",
-      "verify:mac-release --",
+      "verify:mac-genesis-release \\",
+      "verify:mac-release \\",
     );
     const sealedGenesisVerifier = source.desktop.replace(
       '                "$PUBLIC_ENVELOPE" \\\n',
@@ -328,6 +328,9 @@ describe("desktop release workflow policy", () => {
       "RELEASE_MODE: ${{ inputs.mode }}\n          ENDURAGENT_DEVELOPER_ID_IDENTITY:",
       "RELEASE_MODE: steady\n          ENDURAGENT_DEVELOPER_ID_IDENTITY:",
     );
+
+    expect(source.desktop).not.toContain("verify:mac-genesis-release --");
+    expect(source.desktop).not.toContain("verify:mac-release --");
     const constantVerificationMode = source.desktop.replace(
       '--output "$PUBLIC_ENVELOPE"\n          case "$RELEASE_MODE" in',
       '--output "$PUBLIC_ENVELOPE"\n          case "genesis" in',

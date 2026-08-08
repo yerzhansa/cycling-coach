@@ -742,10 +742,10 @@ export function inspectDesktopReleaseWorkflows(
   const transactionVerification = independentRun.indexOf("desktop-release:transaction verify");
   const publicEnvelope = independentRun.indexOf("desktop-release:transaction public-envelope");
   const genesisVerification = independentRun.indexOf(
-    "verify:mac-genesis-release --",
+    "verify:mac-genesis-release \\",
     publicEnvelope,
   );
-  const steadyVerification = independentRun.indexOf("verify:mac-release --", publicEnvelope);
+  const steadyVerification = independentRun.indexOf("verify:mac-release \\", publicEnvelope);
   const genesisCase = independentRun.slice(
     independentRun.indexOf("genesis)", publicEnvelope),
     independentRun.indexOf(";;", independentRun.indexOf("genesis)", publicEnvelope)),
@@ -761,8 +761,12 @@ export function inspectDesktopReleaseWorkflows(
     steadyVerification <= publicEnvelope ||
     independentEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
     countShellLine(independentRun, 'case "$RELEASE_MODE" in') !== 1 ||
-    (independentRun.match(/verify:mac-genesis-release --/gu) ?? []).length !== 1 ||
-    (independentRun.match(/verify:mac-release --/gu) ?? []).length !== 1 ||
+    countShellLine(
+      independentRun,
+      "pnpm --filter @enduragent/desktop verify:mac-genesis-release \\",
+    ) !== 1 ||
+    countShellLine(independentRun, "pnpm --filter @enduragent/desktop verify:mac-release \\") !==
+      1 ||
     (independentRun.slice(publicEnvelope).match(/"\$PUBLIC_ENVELOPE"/gu) ?? []).length !== 3 ||
     !genesisCase.includes('"$PUBLIC_ENVELOPE"') ||
     !genesisCase.includes('"$CANDIDATE_APP"') ||
