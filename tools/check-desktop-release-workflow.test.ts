@@ -148,6 +148,13 @@ describe("desktop release workflow policy", () => {
       },
       {
         desktop: source.desktop.replace(
+          "test:macos-update-roundtrip \\",
+          "test:macos-update-roundtrip -- \\",
+        ),
+        issue: "native production-feed N-to-N+1 round trip",
+      },
+      {
+        desktop: source.desktop.replace(
           "needs.activate-release.result != 'success'",
           "needs.activate-release.result == 'failure'",
         ),

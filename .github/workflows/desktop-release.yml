@@ -696,7 +696,7 @@ jobs:
           pnpm desktop-release:transaction public-envelope \
             --directory "$RUNNER_TEMP/desktop-release" \
             --output "$CANDIDATE_ENVELOPE"
-          pnpm --filter @enduragent/desktop test:macos-update-roundtrip -- \
+          pnpm --filter @enduragent/desktop test:macos-update-roundtrip \
             "$BASELINE_VERSION" \
             "$CANDIDATE_VERSION" \
             "$RUNNER_TEMP/desktop-baseline" \
