@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "yaml";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DESKTOP_FEED_URL,
+  DESKTOP_PROVISIONAL_RELEASE_BODY,
   GithubClient,
+  activateDesktopRelease,
+  compensateDesktopRelease,
+  observeDesktopLatest,
   prepareDesktopBaseline,
   promoteDesktopLatest,
   publishDesktopRelease,
@@ -20,6 +24,7 @@ import {
 
 const candidateVersion = "2026.8.7";
 const candidateCommit = "a".repeat(40);
+const realSetImmediate = setImmediate;
 
 interface FakeAsset {
   id: number;
@@ -115,6 +120,11 @@ class FakeGithub {
   latest: FakeRelease | null = null;
   nextAssetId = 1000;
   failNextUploadWithStarter = false;
+  anonymousDownloadFailures = 0;
+  private resolveAnonymousDownloadFailure!: () => void;
+  readonly anonymousDownloadFailureObserved = new Promise<void>((resolveFailure) => {
+    this.resolveAnonymousDownloadFailure = resolveFailure;
+  });
 
   constructor(tag = `cycling-coach@${candidateVersion}`, commit = candidateCommit) {
     this.candidate = this.release(123, tag, true);
@@ -159,6 +169,10 @@ class FakeGithub {
     return asset;
   }
 
+  findRelease(id: number): FakeRelease | undefined {
+    return [this.candidate, ...this.pages.flat()].find((release) => release.id === id);
+  }
+
   client(): GithubClient {
     return new GithubClient("yerzhansa/enduragent", "token", this.fetch);
   }
@@ -179,7 +193,11 @@ class FakeGithub {
           : null,
         { status },
       );
-    if (url.endsWith("/releases/123") && method === "GET") return json(this.candidate);
+    const releaseMatch = /\/releases\/([1-9]\d*)$/u.exec(new URL(url).pathname);
+    if (releaseMatch && method === "GET") {
+      const release = this.findRelease(Number(releaseMatch[1]));
+      return release ? json(release) : json({}, 404);
+    }
     if (url.includes("/git/ref/tags/")) {
       const tag = decodeURIComponent(url.split("/git/ref/tags/")[1]);
       const commit = this.commits.get(tag);
@@ -209,15 +227,28 @@ class FakeGithub {
       this.bytes.delete(asset.browser_download_url);
       return new Response(null, { status: 204 });
     }
-    if (url.endsWith("/releases/123") && method === "PATCH") {
-      const update = JSON.parse(String(init.body)) as { draft?: boolean; make_latest?: string };
-      if (update.draft === false) this.candidate.draft = false;
-      if (update.make_latest === "true") this.latest = this.candidate;
-      return json(this.candidate);
+    if (releaseMatch && method === "PATCH") {
+      const release = this.findRelease(Number(releaseMatch[1]));
+      if (!release) return json({}, 404);
+      const update = JSON.parse(String(init.body)) as {
+        body?: string;
+        draft?: boolean;
+        make_latest?: string;
+      };
+      if (update.body !== undefined) release.body = update.body;
+      if (update.draft !== undefined) release.draft = update.draft;
+      if (update.make_latest === "true") this.latest = release;
+      if (release.draft && this.latest?.id === release.id) this.latest = null;
+      return json(release);
     }
     if (url === `${DESKTOP_FEED_URL}latest-mac.yml`) {
       const asset = this.latest?.assets.find((candidate) => candidate.name === "latest-mac.yml");
       return asset ? binary(this.bytes.get(asset.url)) : binary(undefined, 404);
+    }
+    if (url.includes("/releases/download/") && this.anonymousDownloadFailures > 0) {
+      this.anonymousDownloadFailures -= 1;
+      this.resolveAnonymousDownloadFailure();
+      return binary(undefined, 404);
     }
     const bytes = this.bytes.get(url);
     if (bytes) return binary(bytes);
@@ -382,12 +413,15 @@ describe("GitHub desktop release transaction", () => {
     ).rejects.toThrow("outside the bound repository");
   });
 
-  it("publishes steady assets non-latest and verifies tag downloads anonymously", async () => {
+  it("publishes steady assets provisionally and verifies tag downloads anonymously", async () => {
     const fake = new FakeGithub();
     const { directory } = await steadyCandidate(fake);
-    await publishDesktopRelease(directory, fake.client());
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
     expect(fake.candidate.draft).toBe(false);
     expect(fake.latest).toBeNull();
+    expect(fake.candidate.body).toBe(DESKTOP_PROVISIONAL_RELEASE_BODY);
     const anonymousDownloads = fake.calls.filter((call) =>
       call.url.includes("/releases/download/"),
     );
@@ -397,6 +431,58 @@ describe("GitHub desktop release transaction", () => {
       .filter((call) => call.method === "POST")
       .map((call) => new URL(call.url).searchParams.get("name"));
     expect(uploads.at(-1)).toBe("latest-mac.yml");
+  });
+
+  it("waits for transient tag-specific asset propagation", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = new FakeGithub();
+      const { directory } = await steadyCandidate(fake);
+      await stageDesktopRelease(directory, fake.client());
+      const observed = await observeDesktopLatest(directory, fake.client());
+      fake.anonymousDownloadFailures = 1;
+      const publication = publishDesktopRelease(directory, fake.client(), observed);
+      await fake.anonymousDownloadFailureObserved;
+      await new Promise<void>((resolveTurn) => realSetImmediate(resolveTurn));
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await publication;
+      expect(fake.candidate.body).toBe(DESKTOP_PROVISIONAL_RELEASE_BODY);
+      expect(fake.anonymousDownloadFailures).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("activates only after promotion and restores the observed latest on compensation", async () => {
+    const successful = new FakeGithub();
+    const accepted = await steadyCandidate(successful);
+    accepted.baseline.draft = false;
+    successful.latest = accepted.baseline;
+    await stageDesktopRelease(accepted.directory, successful.client());
+    const observed = await observeDesktopLatest(accepted.directory, successful.client());
+    await publishDesktopRelease(accepted.directory, successful.client(), observed);
+    await promoteDesktopLatest(accepted.directory, successful.client(), observed);
+    const bodyDirectory = mkdtempSync(join(tmpdir(), "desktop-release-body-"));
+    directories.push(bodyDirectory);
+    const bodyPath = join(bodyDirectory, "body.md");
+    writeFileSync(bodyPath, "release body");
+    await activateDesktopRelease(accepted.directory, bodyPath, successful.client());
+    expect(successful.latest?.id).toBe(successful.candidate.id);
+    expect(successful.candidate.body).toBe("release body");
+
+    const failed = new FakeGithub();
+    const compensating = await steadyCandidate(failed);
+    compensating.baseline.draft = false;
+    failed.latest = compensating.baseline;
+    await stageDesktopRelease(compensating.directory, failed.client());
+    const prior = await observeDesktopLatest(compensating.directory, failed.client());
+    await publishDesktopRelease(compensating.directory, failed.client(), prior);
+    await promoteDesktopLatest(compensating.directory, failed.client(), prior);
+    await compensateDesktopRelease(compensating.directory, bodyPath, failed.client(), prior);
+    expect(failed.latest?.id).toBe(compensating.baseline.id);
+    expect(failed.candidate.draft).toBe(true);
+    expect(failed.candidate.body).toBe("release body");
   });
 
   it("discovers a complete retained draft baseline on a later page", async () => {
@@ -422,6 +508,8 @@ describe("GitHub desktop release transaction", () => {
       output,
     );
     expect(readFileSync(output, "utf8")).toContain("baseline_release_id=122");
+    expect(readFileSync(output, "utf8")).toContain("baseline_version=2026.8.6");
+    expect(readdirSync(target).sort()).toEqual([...releaseFileNames("2026.8.6")].sort());
     expect(fake.calls.some((call) => call.url.includes("page=2"))).toBe(true);
   });
 
