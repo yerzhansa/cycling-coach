@@ -29,6 +29,21 @@ describe("desktop release workflow policy", () => {
     expect(inspect(source.release, source.desktop, source.version)).toEqual([]);
   });
 
+  it("rejects pnpm separators that become the transaction command", () => {
+    const source = sources();
+    const release = source.release.replace(
+      "desktop-release:transaction verify-npm-provenance",
+      "desktop-release:transaction -- verify-npm-provenance",
+    );
+    const desktop = source.desktop.replace(
+      "desktop-release:transaction baseline",
+      "desktop-release:transaction -- baseline",
+    );
+    for (const mutated of [inspect(release, source.desktop), inspect(source.release, desktop)]) {
+      expect(mutated.some((issue) => issue.includes("pnpm argument separator"))).toBe(true);
+    }
+  });
+
   it("rejects signing write permission and publication signing secrets", () => {
     const source = sources();
     const mutated = source.desktop
@@ -69,8 +84,8 @@ describe("desktop release workflow policy", () => {
     const mutations = [
       {
         desktop: source.desktop.replace(
-          "desktop-release:transaction -- observe",
-          "desktop-release:transaction -- verify",
+          "desktop-release:transaction observe",
+          "desktop-release:transaction verify",
         ),
         issue: "bind latest before provisional publication",
       },
@@ -177,8 +192,8 @@ describe("desktop release workflow policy", () => {
       '                "$RUNNER_TEMP/desktop-release" \\\n',
     );
     const escapedPackaging = source.desktop.replace(
-      "pnpm desktop-release:transaction -- verify \\\n",
-      "pnpm --filter @enduragent/desktop package:mac:genesis\n          pnpm desktop-release:transaction -- verify \\\n",
+      "pnpm desktop-release:transaction verify \\\n",
+      "pnpm --filter @enduragent/desktop package:mac:genesis\n          pnpm desktop-release:transaction verify \\\n",
     );
     const constantSigningMode = source.desktop.replace(
       "RELEASE_MODE: ${{ inputs.mode }}\n          ENDURAGENT_DEVELOPER_ID_IDENTITY:",

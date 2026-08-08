@@ -110,6 +110,13 @@ export function inspectDesktopReleaseWorkflows(
     return ["release workflows must be valid YAML"];
   }
 
+  if (
+    releaseSource.includes("desktop-release:transaction --") ||
+    desktopSource.includes("desktop-release:transaction --")
+  ) {
+    issues.push("release transaction commands must not pass a pnpm argument separator");
+  }
+
   const releaseOn = mapping(release.on, "release.on", issues);
   if (!("push" in releaseOn) || !("workflow_dispatch" in releaseOn))
     issues.push("release.yml must remain the tag/manual coordinator");
@@ -473,8 +480,8 @@ export function inspectDesktopReleaseWorkflows(
   const roundTripRun = runs(roundTrip).join("\n");
   const activateRun = runs(activate).join("\n");
   const compensateRun = runs(compensate).join("\n");
-  const observeIndex = publishRun.indexOf("desktop-release:transaction -- observe");
-  const publicationIndex = publishRun.indexOf("desktop-release:transaction -- publish");
+  const observeIndex = publishRun.indexOf("desktop-release:transaction observe");
+  const publicationIndex = publishRun.indexOf("desktop-release:transaction publish");
   if (
     !scalar(publish.needs).includes("stage-private-draft") ||
     observeIndex === -1 ||
@@ -489,7 +496,7 @@ export function inspectDesktopReleaseWorkflows(
   }
   if (
     !scalar(promote.needs).includes("publish-assets") ||
-    !promoteRun.includes("desktop-release:transaction -- promote") ||
+    !promoteRun.includes("desktop-release:transaction promote") ||
     !promoteRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"')
   ) {
     issues.push("desktop latest promotion must compare-and-swap the observed release");
@@ -499,7 +506,7 @@ export function inspectDesktopReleaseWorkflows(
     roundTrip.if !== "${{ inputs.mode == 'steady' }}" ||
     !roundTripNeeds.includes("sign-macos") ||
     !roundTripNeeds.includes("promote-latest") ||
-    !roundTripRun.includes("desktop-release:transaction -- public-envelope") ||
+    !roundTripRun.includes("desktop-release:transaction public-envelope") ||
     !roundTripRun.includes("test:macos-update-roundtrip") ||
     !roundTripRun.includes('"$RUNNER_TEMP/desktop-baseline"') ||
     !roundTripRun.includes('"$CANDIDATE_ENVELOPE"') ||
@@ -522,7 +529,7 @@ export function inspectDesktopReleaseWorkflows(
     !activateCondition.includes("needs.verify-production-update.result == 'skipped'") ||
     !activateCondition.includes("inputs.mode == 'steady'") ||
     !activateCondition.includes("needs.verify-production-update.result == 'success'") ||
-    !activateRun.includes("desktop-release:transaction -- activate") ||
+    !activateRun.includes("desktop-release:transaction activate") ||
     !activateRun.includes("packages/cycling-coach/CHANGELOG.md")
   ) {
     issues.push("general-availability activation must follow the mode-specific acceptance gate");
@@ -534,7 +541,7 @@ export function inspectDesktopReleaseWorkflows(
     !compensateCondition.includes("always()") ||
     !compensateCondition.includes("needs.publish-assets.outputs.latest_id != ''") ||
     !compensateCondition.includes("needs.activate-release.result != 'success'") ||
-    !compensateRun.includes("desktop-release:transaction -- compensate") ||
+    !compensateRun.includes("desktop-release:transaction compensate") ||
     !compensateRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
     !compensateRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
     !compensateRun.includes('--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"')
@@ -585,8 +592,8 @@ export function inspectDesktopReleaseWorkflows(
     issues,
   );
   const independentRun = typeof independentStep?.run === "string" ? independentStep.run : "";
-  const transactionVerification = independentRun.indexOf("desktop-release:transaction -- verify");
-  const publicEnvelope = independentRun.indexOf("desktop-release:transaction -- public-envelope");
+  const transactionVerification = independentRun.indexOf("desktop-release:transaction verify");
+  const publicEnvelope = independentRun.indexOf("desktop-release:transaction public-envelope");
   const genesisVerification = independentRun.indexOf(
     "verify:mac-genesis-release --",
     publicEnvelope,

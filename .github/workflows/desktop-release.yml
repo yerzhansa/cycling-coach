@@ -88,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/desktop-baseline"
-          pnpm desktop-release:transaction -- baseline \
+          pnpm desktop-release:transaction baseline \
             --directory "$RUNNER_TEMP/desktop-baseline" \
             --mode "$RELEASE_MODE" \
             --candidate-version "$RELEASE_VERSION" \
@@ -183,7 +183,7 @@ jobs:
           BASELINE_SIGNING_IDENTITY: ${{ steps.baseline.outputs.baseline_signing_identity }}
           BASELINE_CDHASH: ${{ steps.baseline.outputs.baseline_cdhash }}
         run: |
-          pnpm desktop-release:transaction -- seal \
+          pnpm desktop-release:transaction seal \
             --directory "apps/desktop/dist/release-envelope-$RELEASE_VERSION-mac-arm64" \
             --tag "$RELEASE_TAG" \
             --version "$RELEASE_VERSION" \
@@ -265,7 +265,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
         run: |
-          pnpm desktop-release:transaction -- baseline \
+          pnpm desktop-release:transaction baseline \
             --directory "$RUNNER_TEMP/independent-baseline" \
             --mode "$RELEASE_MODE" \
             --candidate-version "$RELEASE_VERSION" \
@@ -331,7 +331,7 @@ jobs:
           INDEPENDENT_BASELINE_APP: ${{ steps.independent-baseline.outputs.baseline_app }}
         run: |
           set -euo pipefail
-          pnpm desktop-release:transaction -- verify \
+          pnpm desktop-release:transaction verify \
             --directory "$RUNNER_TEMP/desktop-release" \
             --tag "$RELEASE_TAG" \
             --version "$RELEASE_VERSION" \
@@ -372,7 +372,7 @@ jobs:
             "$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app"
           PUBLIC_ENVELOPE="$RUNNER_TEMP/desktop-public-envelope"
           CANDIDATE_APP="$RUNNER_TEMP/desktop-release-unpacked/Enduragent.app"
-          pnpm desktop-release:transaction -- public-envelope \
+          pnpm desktop-release:transaction public-envelope \
             --directory "$RUNNER_TEMP/desktop-release" \
             --output "$PUBLIC_ENVELOPE"
           case "$RELEASE_MODE" in
@@ -438,7 +438,7 @@ jobs:
       - name: Upload updater envelope to the private draft
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm desktop-release:transaction -- stage --directory "$RUNNER_TEMP/desktop-release"
+        run: pnpm desktop-release:transaction stage --directory "$RUNNER_TEMP/desktop-release"
 
   publish-assets:
     runs-on: ubuntu-latest
@@ -483,7 +483,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          pnpm desktop-release:transaction -- observe \
+          pnpm desktop-release:transaction observe \
             --directory "$RUNNER_TEMP/desktop-release" \
             --github-output "$GITHUB_OUTPUT"
       - name: Publish verified release without changing latest
@@ -493,7 +493,7 @@ jobs:
           EXPECTED_LATEST_TAG: ${{ steps.observe.outputs.latest_tag }}
           EXPECTED_LATEST_METADATA_SHA256: ${{ steps.observe.outputs.latest_metadata_sha256 }}
         run: |
-          pnpm desktop-release:transaction -- publish \
+          pnpm desktop-release:transaction publish \
             --directory "$RUNNER_TEMP/desktop-release" \
             --expected-latest-id "$EXPECTED_LATEST_ID" \
             --expected-latest-tag "$EXPECTED_LATEST_TAG" \
@@ -540,7 +540,7 @@ jobs:
           EXPECTED_LATEST_TAG: ${{ needs.publish-assets.outputs.latest_tag }}
           EXPECTED_LATEST_METADATA_SHA256: ${{ needs.publish-assets.outputs.latest_metadata_sha256 }}
         run: |
-          pnpm desktop-release:transaction -- promote \
+          pnpm desktop-release:transaction promote \
             --directory "$RUNNER_TEMP/desktop-release" \
             --expected-latest-id "$EXPECTED_LATEST_ID" \
             --expected-latest-tag "$EXPECTED_LATEST_TAG" \
@@ -600,7 +600,7 @@ jobs:
           set -euo pipefail
           CANDIDATE_ENVELOPE="$RUNNER_TEMP/desktop-public-envelope"
           EVIDENCE="$RUNNER_TEMP/macos-update-roundtrip.json"
-          pnpm desktop-release:transaction -- public-envelope \
+          pnpm desktop-release:transaction public-envelope \
             --directory "$RUNNER_TEMP/desktop-release" \
             --output "$CANDIDATE_ENVELOPE"
           pnpm --filter @enduragent/desktop test:macos-update-roundtrip -- \
@@ -664,7 +664,7 @@ jobs:
           set -euo pipefail
           BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' packages/cycling-coach/CHANGELOG.md | tail -n +2)
           printf '%s' "$BODY" > "$RUNNER_TEMP/desktop-release-body.md"
-          pnpm desktop-release:transaction -- activate \
+          pnpm desktop-release:transaction activate \
             --directory "$RUNNER_TEMP/desktop-release" \
             --body-file "$RUNNER_TEMP/desktop-release-body.md"
 
@@ -715,7 +715,7 @@ jobs:
           set -euo pipefail
           BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' packages/cycling-coach/CHANGELOG.md | tail -n +2)
           printf '%s' "$BODY" > "$RUNNER_TEMP/desktop-release-body.md"
-          pnpm desktop-release:transaction -- compensate \
+          pnpm desktop-release:transaction compensate \
             --directory "$RUNNER_TEMP/desktop-release" \
             --body-file "$RUNNER_TEMP/desktop-release-body.md" \
             --expected-latest-id "$EXPECTED_LATEST_ID" \
