@@ -23,7 +23,7 @@ import {
 } from "./desktop-release-transaction.js";
 
 const candidateVersion = "0.1.7";
-const candidateNpmVersion = "2026.8.7";
+const candidateTag = `enduragent-desktop@${candidateVersion}`;
 const candidateCommit = "a".repeat(40);
 const realSetImmediate = setImmediate;
 
@@ -82,10 +82,8 @@ async function sealed(
   directories.push(directory);
   writeEnvelope(directory, version);
   const baselineZip = baseline?.manifest.files.find((file) => file.name.endsWith("-arm64.zip"));
-  const npmVersion = `2026.8.${version.split(".")[2]}`;
   const manifest = await sealDesktopRelease(directory, {
-    tag: `cycling-coach@${npmVersion}`,
-    npmVersion,
+    tag: `enduragent-desktop@${version}`,
     desktopVersion: version,
     commit: version === candidateVersion ? candidateCommit : "b".repeat(40),
     draftId,
@@ -93,8 +91,6 @@ async function sealed(
     workflowRunId: "456",
     workflowRunAttempt: "1",
     draftBodySha256: digest(Buffer.from("release body"), "sha256", "hex"),
-    npmIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
-    npmAttestationUrl: `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${npmVersion}`,
     signingIdentity: "Developer ID Application: Example (FA494ACVTF)",
     candidateCdHash: "d".repeat(40),
     candidateCodeDirectorySha256: "e".repeat(64),
@@ -129,7 +125,7 @@ class FakeGithub {
     this.resolveAnonymousDownloadFailure = resolveFailure;
   });
 
-  constructor(tag = `cycling-coach@${candidateNpmVersion}`, commit = candidateCommit) {
+  constructor(tag = candidateTag, commit = candidateCommit) {
     this.candidate = this.release(123, tag, true);
     this.commits.set(tag, commit);
   }
@@ -271,7 +267,7 @@ async function genesisCandidate(fake: FakeGithub) {
 
 async function steadyCandidate(fake: FakeGithub) {
   const genesis = await sealed("0.1.6", "122", "genesis");
-  const baseline = fake.release(122, "cycling-coach@2026.8.6", false);
+  const baseline = fake.release(122, "enduragent-desktop@0.1.6", false);
   fake.commits.set(baseline.tag_name, genesis.manifest.commit);
   fake.addEnvelope(baseline, genesis.directory, "0.1.6");
   fake.latest = baseline;
@@ -507,7 +503,7 @@ describe("GitHub desktop release transaction", () => {
       target,
       fake.client(),
       "steady",
-      `cycling-coach@${candidateNpmVersion}`,
+      candidateTag,
       candidateVersion,
       baseline.tag_name,
       output,
@@ -518,11 +514,94 @@ describe("GitHub desktop release transaction", () => {
     expect(fake.calls.some((call) => call.url.includes("page=2"))).toBe(true);
   });
 
+  it("accepts only the exact legacy first-signed desktop baseline", async () => {
+    const fake = new FakeGithub();
+    const legacyEnvelope = await sealed("0.1.0", "121", "genesis");
+    const legacy = fake.release(121, "cycling-coach@2026.8.8", false);
+    fake.commits.set(legacy.tag_name, legacyEnvelope.manifest.commit);
+    fake.addEnvelope(legacy, legacyEnvelope.directory, "0.1.0");
+    fake.latest = legacy;
+    fake.pages = [[legacy]];
+    const outputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
+    const target = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
+    directories.push(outputDirectory, target);
+    const output = join(outputDirectory, "output");
+    writeFileSync(output, "");
+
+    await prepareDesktopBaseline(
+      target,
+      fake.client(),
+      "steady",
+      "enduragent-desktop@0.1.1",
+      "0.1.1",
+      legacy.tag_name,
+      output,
+    );
+
+    expect(readFileSync(output, "utf8")).toContain("baseline_tag=cycling-coach@2026.8.8");
+    expect(readFileSync(output, "utf8")).toContain("baseline_version=0.1.0");
+    expect(readdirSync(target).sort()).toEqual([...releaseFileNames("0.1.0")].sort());
+  });
+
+  it.each([
+    ["cycling-coach@2026.8.9", "0.1.0"],
+    ["cycling-coach@2026.8.8", "0.1.1"],
+    ["enduragent-desktop@0.1.1", "0.1.0"],
+  ])("rejects a noncanonical desktop baseline %s carrying %s assets", async (tag, version) => {
+    const fake = new FakeGithub();
+    const envelope = await sealed(version, "121", "genesis");
+    const release = fake.release(121, tag, false);
+    fake.commits.set(release.tag_name, envelope.manifest.commit);
+    fake.addEnvelope(release, envelope.directory, version);
+    fake.latest = release;
+    fake.pages = [[release]];
+    const outputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
+    const target = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
+    directories.push(outputDirectory, target);
+    const output = join(outputDirectory, "output");
+    writeFileSync(output, "");
+
+    await expect(
+      prepareDesktopBaseline(
+        target,
+        fake.client(),
+        "steady",
+        candidateTag,
+        candidateVersion,
+        tag,
+        output,
+      ),
+    ).rejects.toThrow("desktop baseline");
+    expect(readdirSync(target)).toEqual([]);
+  });
+
+  it("requires the candidate desktop tag to equal the candidate app version", async () => {
+    const fake = new FakeGithub();
+    const outputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
+    const target = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
+    directories.push(outputDirectory, target);
+    const output = join(outputDirectory, "output");
+    writeFileSync(output, "");
+
+    await expect(
+      prepareDesktopBaseline(
+        target,
+        fake.client(),
+        "genesis",
+        "enduragent-desktop@0.1.8",
+        candidateVersion,
+        "none",
+        output,
+      ),
+    ).rejects.toThrow("tag and version do not match");
+    expect(fake.calls).toEqual([]);
+  });
+
   it("uses the requested retained baseline instead of a newer failed draft", async () => {
     const fake = new FakeGithub();
     const { baseline } = await steadyCandidate(fake);
     const failed = await sealed("0.1.8", "124", "genesis");
-    const failedRelease = fake.release(124, "cycling-coach@2026.8.8", true);
+    const failedRelease = fake.release(124, "enduragent-desktop@0.1.8", true);
     fake.commits.set(failedRelease.tag_name, failed.manifest.commit);
     fake.addEnvelope(failedRelease, failed.directory, "0.1.8");
     fake.pages = [[failedRelease, baseline]];
@@ -536,7 +615,7 @@ describe("GitHub desktop release transaction", () => {
       target,
       fake.client(),
       "steady",
-      "cycling-coach@2026.8.9",
+      "enduragent-desktop@0.1.9",
       "0.1.9",
       baseline.tag_name,
       output,
@@ -550,7 +629,7 @@ describe("GitHub desktop release transaction", () => {
     const fake = new FakeGithub();
     const { baseline } = await steadyCandidate(fake);
     const accepted = await sealed("0.1.7", "124", "genesis");
-    const latest = fake.release(124, "cycling-coach@2026.8.7", false);
+    const latest = fake.release(124, "enduragent-desktop@0.1.7", false);
     fake.commits.set(latest.tag_name, accepted.manifest.commit);
     fake.addEnvelope(latest, accepted.directory, "0.1.7");
     fake.latest = latest;
@@ -565,7 +644,7 @@ describe("GitHub desktop release transaction", () => {
         target,
         fake.client(),
         "steady",
-        "cycling-coach@2026.8.8",
+        "enduragent-desktop@0.1.8",
         "0.1.8",
         baseline.tag_name,
         output,

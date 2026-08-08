@@ -32,24 +32,13 @@ on:
         description: 'Exact release tag; a main-ref dispatch can only resume versions already present on npm'
         required: false
         default: ''
-      desktop_mode:
-        description: 'macOS release continuity mode (genesis is manual-dispatch only)'
-        type: choice
-        default: steady
-        options:
-          - steady
-          - genesis
-      desktop_baseline_tag:
-        description: 'Explicit retained genesis baseline tag; leave empty to require repository latest'
-        required: false
-        default: ''
 
 # PG-16: per-job least-privilege; id-token only on publish.
 permissions:
   contents: read
 
 concurrency:
-  group: stable-desktop-coordinator
+  group: npm-release-coordinator
   cancel-in-progress: false
   queue: max
 
@@ -59,12 +48,8 @@ jobs:
     outputs:
       package: ${{ steps.parse.outputs.package }}
       version: ${{ steps.parse.outputs.version }}
-      desktop_version: ${{ steps.parse.outputs.desktop_version }}
       ref: ${{ steps.parse.outputs.ref }}
       commit: ${{ steps.parse.outputs.commit }}
-      desktop_mode: ${{ steps.parse.outputs.desktop_mode }}
-      desktop_baseline_tag: ${{ steps.parse.outputs.desktop_baseline_tag }}
-      desktop_enabled: ${{ steps.parse.outputs.desktop_enabled }}
     steps:
       # Needed only when workflow_dispatch is invoked with an empty tag input —
       # we resolve the version from packages/<package>/package.json on the
@@ -74,11 +59,8 @@ jobs:
           persist-credentials: false
       - id: parse
         env:
-          DESKTOP_ENABLED_INPUT: ${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}
           DISPATCH_TAG_INPUT: ${{ github.event.inputs.tag }}
           DISPATCH_PACKAGE_INPUT: ${{ github.event.inputs.package }}
-          DISPATCH_MODE_INPUT: ${{ github.event.inputs.desktop_mode }}
-          DISPATCH_BASELINE_TAG_INPUT: ${{ github.event.inputs.desktop_baseline_tag }}
           WORKFLOW_EVENT_NAME: ${{ github.event_name }}
           WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_REF_NAME: ${{ github.ref_name }}
@@ -119,47 +101,6 @@ jobs:
             exit 1
           fi
           COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
-          DESKTOP_VERSION=$(git show "$COMMIT:apps/desktop/package.json" | jq -er '.version')
-          if ! printf '%s' "$DESKTOP_VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-            echo "::error::Desktop version '$DESKTOP_VERSION' is not stable SemVer"
-            exit 1
-          fi
-          MODE="steady"
-          BASELINE_TAG="none"
-          DESKTOP_ENABLED=false
-          if [ "$DESKTOP_ENABLED_INPUT" = "true" ]; then
-            DESKTOP_ENABLED=true
-          fi
-          if [ "$WORKFLOW_EVENT_NAME" = "workflow_dispatch" ]; then
-            MODE="$DISPATCH_MODE_INPUT"
-            if [ -n "$DISPATCH_BASELINE_TAG_INPUT" ]; then
-              BASELINE_TAG="$DISPATCH_BASELINE_TAG_INPUT"
-            fi
-          fi
-          if [ "$MODE" = "genesis" ] && [ "$WORKFLOW_EVENT_NAME" != "workflow_dispatch" ]; then
-            echo "::error::Genesis mode is allowed only by an explicit manual dispatch"
-            exit 1
-          fi
-          if [ "$MODE" = "genesis" ] && { [ -z "$INPUT_TAG" ] || [ "$PACKAGE" != "cycling-coach" ]; }; then
-            echo "::error::Genesis requires an explicitly supplied cycling-coach tag"
-            exit 1
-          fi
-          if [ "$MODE" = "genesis" ] && [ "$DESKTOP_ENABLED" != "true" ]; then
-            echo "::error::Genesis requires ENABLE_DESKTOP_MACOS_RELEASE=true"
-            exit 1
-          fi
-          if [ "$MODE" = "genesis" ] && [ "$BASELINE_TAG" != "none" ]; then
-            echo "::error::Genesis cannot consume a prior desktop baseline"
-            exit 1
-          fi
-          if [ "$BASELINE_TAG" != "none" ] && ! printf '%s' "$BASELINE_TAG" | grep -Eq '^cycling-coach@[1-9][0-9]{3}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)$'; then
-            echo "::error::Explicit desktop baseline tag is invalid"
-            exit 1
-          fi
-          if [ "$MODE" != "steady" ] && [ "$MODE" != "genesis" ]; then
-            echo "::error::Unsupported desktop release mode '$MODE'"
-            exit 1
-          fi
           if [ "$WORKFLOW_EVENT_NAME" = "workflow_dispatch" ] && \
              [ "$WORKFLOW_REF" != "refs/heads/main" ] && [ "$WORKFLOW_REF" != "refs/tags/$TAG" ]; then
             echo "::error::Manual release dispatch must run from main or the exact release tag"
@@ -171,12 +112,8 @@ jobs:
           fi
           echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "desktop_version=$DESKTOP_VERSION" >> "$GITHUB_OUTPUT"
           echo "ref=$TAG" >> "$GITHUB_OUTPUT"
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
-          echo "desktop_mode=$MODE" >> "$GITHUB_OUTPUT"
-          echo "desktop_baseline_tag=$BASELINE_TAG" >> "$GITHUB_OUTPUT"
-          echo "desktop_enabled=$DESKTOP_ENABLED" >> "$GITHUB_OUTPUT"
           echo "::notice::Releasing $PACKAGE @ $VERSION (ref: $TAG)"
 
   build:
@@ -320,7 +257,7 @@ jobs:
   publish-npm:
     runs-on: ubuntu-latest
     needs: [parse-tag, smoke]
-    environment: ${{ needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true' && 'npm-production' || '' }}
+    environment: npm-production
     # Per-package serialization. Two cycling-coach releases on the same day
     # never run in parallel (avoids any same-tag publish race), but cycling
     # and running can publish at the same time once both are real binaries.
@@ -380,9 +317,8 @@ jobs:
         # is granted (no NPM_TOKEN secret needed). The trusted publisher
         # must be configured per-package on npmjs.com (one-time operator
         # action; matches repo `yerzhansa/enduragent` + workflow
-        # `release.yml`). Keep the npm publisher environment-unbound while
-        # package-only releases remain environment-free; the conditional
-        # `npm-production` environment above is a GitHub approval boundary.
+        # `release.yml`). The `npm-production` environment is the package
+        # publication boundary; desktop tags cannot enter it.
         run: |
           set -euo pipefail
           PACKAGE="$RELEASE_PACKAGE"
@@ -620,7 +556,7 @@ jobs:
   prepare-release-draft:
     runs-on: ubuntu-latest
     needs: [parse-tag, verify-npm-publication]
-    if: ${{ needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true' }}
+    if: ${{ false }}
     permissions:
       contents: write
     outputs:
@@ -684,7 +620,7 @@ jobs:
   desktop-release:
     runs-on: ubuntu-latest
     needs: [parse-tag, verify-npm-publication, prepare-release-draft]
-    if: ${{ needs.parse-tag.outputs.package == 'cycling-coach' && needs.parse-tag.outputs.desktop_enabled == 'true' }}
+    if: ${{ false }}
     permissions:
       actions: write
       contents: read
@@ -753,7 +689,6 @@ jobs:
   publish-package-only-release:
     runs-on: ubuntu-latest
     needs: [parse-tag, verify-npm-publication]
-    if: ${{ needs.parse-tag.outputs.package != 'cycling-coach' || needs.parse-tag.outputs.desktop_enabled != 'true' }}
     permissions:
       contents: write
     steps:
@@ -761,7 +696,7 @@ jobs:
         with:
           ref: ${{ needs.parse-tag.outputs.commit }}
           persist-credentials: false
-      - name: Preserve package-only GitHub Release behavior
+      - name: Publish non-latest package GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_PACKAGE: ${{ needs.parse-tag.outputs.package }}
@@ -774,6 +709,6 @@ jobs:
             echo "::notice::Release $TAG already exists (likely created via UI). Leaving it untouched."
           else
             BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' "packages/$PACKAGE/CHANGELOG.md" | tail -n +2)
-            gh release create "$TAG" --title "$TAG" --notes "$BODY"
+            gh release create "$TAG" --latest=false --title "$TAG" --notes "$BODY"
             echo "::notice::Created GitHub Release $TAG"
           fi

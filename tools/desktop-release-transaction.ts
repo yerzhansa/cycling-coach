@@ -8,7 +8,7 @@ import { z } from "zod";
 
 export const DESKTOP_FEED_URL = "https://github.com/yerzhansa/enduragent/releases/latest/download/";
 export const DESKTOP_MANIFEST = "desktop-release-manifest.json";
-export const DESKTOP_RELEASE_SCHEMA_VERSION = 2 as const;
+export const DESKTOP_RELEASE_SCHEMA_VERSION = 3 as const;
 export const DESKTOP_PROVISIONAL_RELEASE_BODY =
   "Desktop update validation is in progress. This release is not yet generally available.";
 
@@ -30,7 +30,6 @@ const DesktopReleaseManifestSchema = z
   .object({
     schemaVersion: z.literal(DESKTOP_RELEASE_SCHEMA_VERSION),
     tag: z.string(),
-    npmVersion: z.string(),
     desktopVersion: z.string(),
     commit: z.string(),
     draftId: z.string(),
@@ -39,8 +38,6 @@ const DesktopReleaseManifestSchema = z
     workflowRunId: z.string(),
     workflowRunAttempt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     draftBodySha256: sha256HexSchema,
-    npmIntegrity: z.string(),
-    npmAttestationUrl: z.string(),
     signingIdentity: z.string(),
     candidateCdHash: z.string(),
     candidateCodeDirectorySha256: sha256HexSchema,
@@ -119,6 +116,9 @@ export type NpmProvenanceBundleVerifier = (
 
 const desktopVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const npmVersionPattern = /^([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)$/u;
+const desktopTagPrefix = "enduragent-desktop@";
+const legacyDesktopBaselineTag = "cycling-coach@2026.8.8";
+const legacyDesktopBaselineVersion = "0.1.0";
 const commitPattern = /^[0-9a-f]{40}$/u;
 const signingIdentityPattern = /^Developer ID Application: .+ \(FA494ACVTF\)$/u;
 const releasePropagationAttempts = 30;
@@ -158,6 +158,24 @@ export function requireMode(value: unknown): DesktopReleaseMode {
   return value;
 }
 
+function desktopTag(version: string): string {
+  return `${desktopTagPrefix}${requireDesktopVersion(version)}`;
+}
+
+function versionFromDesktopTag(tag: string): string | null {
+  if (!tag.startsWith(desktopTagPrefix)) return null;
+  const version = tag.slice(desktopTagPrefix.length);
+  try {
+    return desktopTag(version) === tag ? version : null;
+  } catch {
+    return null;
+  }
+}
+
+function validDesktopBaselineTag(tag: string): boolean {
+  return tag === legacyDesktopBaselineTag || versionFromDesktopTag(tag) !== null;
+}
+
 export function releaseFileNames(version: string): readonly [string, string, string, string] {
   const stableVersion = requireDesktopVersion(version);
   const base = `Enduragent-${stableVersion}-arm64`;
@@ -166,7 +184,6 @@ export function releaseFileNames(version: string): readonly [string, string, str
 
 function requireBinding(input: {
   tag: unknown;
-  npmVersion: unknown;
   desktopVersion: unknown;
   commit: unknown;
   draftId: unknown;
@@ -174,8 +191,6 @@ function requireBinding(input: {
   workflowRunId?: unknown;
   workflowRunAttempt?: unknown;
   draftBodySha256?: unknown;
-  npmIntegrity?: unknown;
-  npmAttestationUrl?: unknown;
   signingIdentity?: unknown;
   candidateCdHash?: unknown;
   candidateCodeDirectorySha256?: unknown;
@@ -186,10 +201,9 @@ function requireBinding(input: {
   baselineSigningIdentity?: unknown;
   baselineCdHash?: unknown;
 }): Omit<DesktopReleaseManifest, "schemaVersion" | "feedUrl" | "files" | "transactionSha256"> {
-  const npmVersion = requireNpmVersion(input.npmVersion);
   const desktopVersion = requireDesktopVersion(input.desktopVersion);
-  const tag = `cycling-coach@${npmVersion}`;
-  if (input.tag !== tag) throw new TypeError("npm release tag and version do not match");
+  const tag = desktopTag(desktopVersion);
+  if (input.tag !== tag) throw new TypeError("desktop release tag and version do not match");
   if (typeof input.commit !== "string" || !commitPattern.test(input.commit)) {
     throw new TypeError("desktop release commit is invalid");
   }
@@ -211,17 +225,6 @@ function requireBinding(input: {
   )
     throw new TypeError("candidate CodeDirectory hash is invalid");
   if (
-    typeof input.npmIntegrity !== "string" ||
-    !/^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(input.npmIntegrity)
-  )
-    throw new TypeError("npm integrity is invalid");
-  if (
-    typeof input.npmAttestationUrl !== "string" ||
-    input.npmAttestationUrl !==
-      `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${npmVersion}`
-  )
-    throw new TypeError("npm attestation URL is invalid");
-  if (
     typeof input.signingIdentity !== "string" ||
     !signingIdentityPattern.test(input.signingIdentity)
   )
@@ -238,7 +241,7 @@ function requireBinding(input: {
   if (
     mode === "genesis"
       ? baselineTag !== "none" || baselineEvidence.some((value) => value !== "none")
-      : !baselineTag.startsWith("cycling-coach@")
+      : !validDesktopBaselineTag(baselineTag)
   )
     throw new TypeError("baseline evidence is invalid");
   if (
@@ -257,7 +260,6 @@ function requireBinding(input: {
     throw new TypeError("steady baseline evidence is invalid");
   return {
     tag,
-    npmVersion,
     desktopVersion,
     commit: input.commit,
     draftId: input.draftId,
@@ -265,8 +267,6 @@ function requireBinding(input: {
     workflowRunId: input.workflowRunId,
     workflowRunAttempt,
     draftBodySha256: input.draftBodySha256 as string,
-    npmIntegrity: input.npmIntegrity,
-    npmAttestationUrl: input.npmAttestationUrl,
     signingIdentity: input.signingIdentity,
     candidateCdHash: input.candidateCdHash as string,
     candidateCodeDirectorySha256: input.candidateCodeDirectorySha256 as string,
@@ -547,7 +547,6 @@ function parseManifest(value: unknown): DesktopReleaseManifest {
   }
   const binding = requireBinding({
     tag: manifest.tag,
-    npmVersion: manifest.npmVersion,
     desktopVersion: manifest.desktopVersion,
     commit: manifest.commit,
     draftId: manifest.draftId,
@@ -555,8 +554,6 @@ function parseManifest(value: unknown): DesktopReleaseManifest {
     workflowRunId: manifest.workflowRunId,
     workflowRunAttempt: manifest.workflowRunAttempt,
     draftBodySha256: manifest.draftBodySha256,
-    npmIntegrity: manifest.npmIntegrity,
-    npmAttestationUrl: manifest.npmAttestationUrl,
     signingIdentity: manifest.signingIdentity,
     candidateCdHash: manifest.candidateCdHash,
     candidateCodeDirectorySha256: manifest.candidateCodeDirectorySha256,
@@ -607,7 +604,6 @@ export async function verifyDesktopRelease(
     const expected = requireBinding(expectedBinding);
     for (const key of [
       "tag",
-      "npmVersion",
       "desktopVersion",
       "commit",
       "draftId",
@@ -615,8 +611,6 @@ export async function verifyDesktopRelease(
       "workflowRunId",
       "workflowRunAttempt",
       "draftBodySha256",
-      "npmIntegrity",
-      "npmAttestationUrl",
       "signingIdentity",
       "candidateCdHash",
       "candidateCodeDirectorySha256",
@@ -1005,13 +999,16 @@ export class GithubClient {
 
 function desktopReleaseVersion(release: GithubRelease, excludingTag?: string): string | null {
   if (release.draft || release.prerelease || release.tag_name === excludingTag) return null;
-  const tag = /^cycling-coach@(.+)$/u.exec(release.tag_name);
-  if (!tag || !npmVersionPattern.test(tag[1])) return null;
+  const tagVersion =
+    release.tag_name === legacyDesktopBaselineTag
+      ? legacyDesktopBaselineVersion
+      : versionFromDesktopTag(release.tag_name);
+  if (tagVersion === null) return null;
   const versions = release.assets.flatMap((asset) => {
     const match = /^Enduragent-(\d+\.\d+\.\d+)-arm64\.dmg$/u.exec(asset.name);
     return match ? [match[1]] : [];
   });
-  if (versions.length !== 1 || !desktopVersionPattern.test(versions[0])) return null;
+  if (versions.length !== 1 || versions[0] !== tagVersion) return null;
   const version = versions[0];
   const expected = [...releaseFileNames(version)].sort();
   const actual = release.assets.map((asset) => asset.name).sort();
@@ -1531,10 +1528,10 @@ export async function prepareDesktopBaseline(
   requestedBaselineTag: string,
   output: string,
 ): Promise<void> {
-  if (!/^cycling-coach@([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)$/u.test(candidateTag)) {
-    throw new TypeError("candidate npm release tag is invalid");
-  }
   const version = requireDesktopVersion(candidateVersion);
+  if (candidateTag !== desktopTag(version)) {
+    throw new TypeError("candidate desktop release tag and version do not match");
+  }
   const releases = await client.releases();
   if (mode === "genesis") {
     const baseline = await newestDesktopRelease(releases, client, candidateTag);
@@ -1586,7 +1583,6 @@ function argument(name: string): string {
 function bindingArguments(): Parameters<typeof requireBinding>[0] {
   return {
     tag: argument("tag"),
-    npmVersion: argument("npm-version"),
     desktopVersion: argument("desktop-version"),
     commit: argument("commit"),
     draftId: argument("draft-id"),
@@ -1594,8 +1590,6 @@ function bindingArguments(): Parameters<typeof requireBinding>[0] {
     workflowRunId: argument("workflow-run-id"),
     workflowRunAttempt: argument("workflow-run-attempt"),
     draftBodySha256: argument("draft-body-sha256"),
-    npmIntegrity: argument("npm-integrity"),
-    npmAttestationUrl: argument("npm-attestation-url"),
     signingIdentity: argument("signing-identity"),
     candidateCdHash: argument("candidate-cdhash"),
     candidateCodeDirectorySha256: argument("candidate-code-directory-sha256"),

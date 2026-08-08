@@ -5,11 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Exact cycling-coach release tag
-        required: true
-        type: string
-      npm_version:
-        description: Frozen npm package version
+        description: Exact enduragent-desktop release tag
         required: true
         type: string
       desktop_version:
@@ -34,14 +30,6 @@ on:
         type: string
       draft_body_sha256:
         description: Bound draft release-notes digest
-        required: true
-        type: string
-      npm_integrity:
-        description: Verified public npm integrity
-        required: true
-        type: string
-      npm_attestation_url:
-        description: Verified public npm provenance URL
         required: true
         type: string
       baseline_tag:
@@ -88,15 +76,11 @@ jobs:
           printf '%s' "$RELEASE_TOOLING_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
           test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"
           COORDINATOR=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID")
-          test "$(printf '%s' "$COORDINATOR" | jq -r '.path')" = '.github/workflows/release.yml'
+          test "$(printf '%s' "$COORDINATOR" | jq -r '.path')" = '.github/workflows/desktop-release-coordinator.yml'
           test "$(printf '%s' "$COORDINATOR" | jq -r '.run_attempt')" = "$COORDINATOR_RUN_ATTEMPT"
           test "$(printf '%s' "$COORDINATOR" | jq -r '.status')" = 'in_progress'
           test "$(printf '%s' "$COORDINATOR" | jq -r '.head_sha')" = "$RELEASE_TOOLING_COMMIT"
-          printf '%s' "$COORDINATOR" | jq -er '.event == "push" or .event == "workflow_dispatch"' >/dev/null
-          if [ "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT" ]; then
-            test "$(printf '%s' "$COORDINATOR" | jq -r '.event')" = 'workflow_dispatch'
-            test "$(printf '%s' "$COORDINATOR" | jq -r '.head_branch')" = 'main'
-          fi
+          test "$(printf '%s' "$COORDINATOR" | jq -r '.event')" = 'workflow_dispatch'
 
   sign-macos:
     runs-on: macos-15
@@ -251,7 +235,6 @@ jobs:
       - name: Seal digest-bound release manifest
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          NPM_VERSION: ${{ inputs.npm_version }}
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
@@ -259,8 +242,6 @@ jobs:
           WORKFLOW_RUN_ID: ${{ github.run_id }}
           WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
-          NPM_INTEGRITY: ${{ inputs.npm_integrity }}
-          NPM_ATTESTATION_URL: ${{ inputs.npm_attestation_url }}
           SIGNING_IDENTITY: ${{ steps.signing-evidence.outputs.signing_identity }}
           CANDIDATE_CDHASH: ${{ steps.signing-evidence.outputs.cdhash }}
           CANDIDATE_CODE_DIRECTORY_SHA256: ${{ steps.signing-evidence.outputs.code_directory_sha256 }}
@@ -274,7 +255,6 @@ jobs:
           pnpm desktop-release:transaction seal \
             --directory "apps/desktop/dist/release-envelope-$DESKTOP_VERSION-mac-arm64" \
             --tag "$RELEASE_TAG" \
-            --npm-version "$NPM_VERSION" \
             --desktop-version "$DESKTOP_VERSION" \
             --commit "$RELEASE_COMMIT" \
             --draft-id "$RELEASE_DRAFT_ID" \
@@ -282,8 +262,6 @@ jobs:
             --workflow-run-id "$WORKFLOW_RUN_ID" \
             --workflow-run-attempt "$WORKFLOW_RUN_ATTEMPT" \
             --draft-body-sha256 "$RELEASE_BODY_SHA256" \
-            --npm-integrity "$NPM_INTEGRITY" \
-            --npm-attestation-url "$NPM_ATTESTATION_URL" \
             --signing-identity "$SIGNING_IDENTITY" \
             --candidate-cdhash "$CANDIDATE_CDHASH" \
             --candidate-code-directory-sha256 "$CANDIDATE_CODE_DIRECTORY_SHA256" \
@@ -401,7 +379,6 @@ jobs:
       - name: Independently verify signed updater envelope
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          NPM_VERSION: ${{ inputs.npm_version }}
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
@@ -409,8 +386,6 @@ jobs:
           WORKFLOW_RUN_ID: ${{ github.run_id }}
           SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.workflow_run_attempt }}
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
-          NPM_INTEGRITY: ${{ inputs.npm_integrity }}
-          NPM_ATTESTATION_URL: ${{ inputs.npm_attestation_url }}
           SIGNING_IDENTITY: ${{ needs.sign-macos.outputs.signing_identity }}
           CANDIDATE_CDHASH: ${{ needs.sign-macos.outputs.cdhash }}
           CANDIDATE_CODE_DIRECTORY_SHA256: ${{ needs.sign-macos.outputs.code_directory_sha256 }}
@@ -426,7 +401,6 @@ jobs:
           pnpm desktop-release:transaction verify \
             --directory "$RUNNER_TEMP/desktop-release" \
             --tag "$RELEASE_TAG" \
-            --npm-version "$NPM_VERSION" \
             --desktop-version "$DESKTOP_VERSION" \
             --commit "$RELEASE_COMMIT" \
             --draft-id "$RELEASE_DRAFT_ID" \
@@ -434,8 +408,6 @@ jobs:
             --workflow-run-id "$WORKFLOW_RUN_ID" \
             --workflow-run-attempt "$SIGNING_RUN_ATTEMPT" \
             --draft-body-sha256 "$RELEASE_BODY_SHA256" \
-            --npm-integrity "$NPM_INTEGRITY" \
-            --npm-attestation-url "$NPM_ATTESTATION_URL" \
             --signing-identity "$SIGNING_IDENTITY" \
             --candidate-cdhash "$CANDIDATE_CDHASH" \
             --candidate-code-directory-sha256 "$CANDIDATE_CODE_DIRECTORY_SHA256" \
@@ -755,7 +727,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' packages/cycling-coach/CHANGELOG.md | tail -n +2)
+          BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' apps/desktop/CHANGELOG.md | tail -n +2)
           printf '%s' "$BODY" > "$RUNNER_TEMP/desktop-release-body.md"
           pnpm desktop-release:transaction activate \
             --directory "$RUNNER_TEMP/desktop-release" \
@@ -806,7 +778,7 @@ jobs:
           EXPECTED_LATEST_METADATA_SHA256: ${{ needs.publish-assets.outputs.latest_metadata_sha256 }}
         run: |
           set -euo pipefail
-          BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' packages/cycling-coach/CHANGELOG.md | tail -n +2)
+          BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' apps/desktop/CHANGELOG.md | tail -n +2)
           printf '%s' "$BODY" > "$RUNNER_TEMP/desktop-release-body.md"
           pnpm desktop-release:transaction compensate \
             --directory "$RUNNER_TEMP/desktop-release" \

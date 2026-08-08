@@ -1,0 +1,196 @@
+name: Desktop release coordinator
+run-name: Desktop release coordinator ${{ inputs.tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Exact enduragent-desktop@<version> tag'
+        required: true
+        type: string
+      desktop_mode:
+        description: 'macOS release continuity mode'
+        type: choice
+        default: steady
+        options:
+          - steady
+          - genesis
+      desktop_baseline_tag:
+        description: 'Explicit prior signed desktop release tag; leave empty to require repository latest'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-desktop-coordinator
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  bind-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.bind.outputs.tag }}
+      desktop_version: ${{ steps.bind.outputs.desktop_version }}
+      commit: ${{ steps.bind.outputs.commit }}
+      mode: ${{ steps.bind.outputs.mode }}
+      baseline_tag: ${{ steps.bind.outputs.baseline_tag }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind desktop tag, version, and source commit
+        id: bind
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.tag }}
+          RELEASE_MODE_INPUT: ${{ inputs.desktop_mode }}
+          RELEASE_BASELINE_TAG_INPUT: ${{ inputs.desktop_baseline_tag }}
+          DESKTOP_ENABLED: ${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$DESKTOP_ENABLED" = 'true'
+          TAG="$RELEASE_TAG_INPUT"
+          if ! printf '%s' "$TAG" | grep -Eq '^enduragent-desktop@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::Desktop tag '$TAG' is invalid"
+            exit 1
+          fi
+          VERSION="${TAG#enduragent-desktop@}"
+          git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+          COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
+          test "$WORKFLOW_REF" = "refs/tags/$TAG"
+          test "$WORKFLOW_SHA" = "$COMMIT"
+          MANIFEST_VERSION=$(git show "$COMMIT:apps/desktop/package.json" | jq -er '.version')
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "::error::Desktop tag version $VERSION does not match apps/desktop/package.json $MANIFEST_VERSION"
+            exit 1
+          fi
+          git fetch --force --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main; then
+            echo '::error::Desktop release commit must be merged into main'
+            exit 1
+          fi
+          MODE="$RELEASE_MODE_INPUT"
+          BASELINE_TAG=none
+          if [ -n "$RELEASE_BASELINE_TAG_INPUT" ]; then
+            BASELINE_TAG="$RELEASE_BASELINE_TAG_INPUT"
+          fi
+          if [ "$MODE" != 'steady' ] && [ "$MODE" != 'genesis' ]; then
+            echo "::error::Unsupported desktop release mode '$MODE'"
+            exit 1
+          fi
+          if [ "$MODE" = 'genesis' ] && [ "$BASELINE_TAG" != 'none' ]; then
+            echo '::error::Genesis cannot consume a prior desktop baseline'
+            exit 1
+          fi
+          if [ "$BASELINE_TAG" != 'none' ] && \
+             [ "$BASELINE_TAG" != 'cycling-coach@2026.8.8' ] && \
+             ! printf '%s' "$BASELINE_TAG" | grep -Eq '^enduragent-desktop@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo '::error::Explicit desktop baseline tag is invalid'
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "desktop_version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "baseline_tag=$BASELINE_TAG" >> "$GITHUB_OUTPUT"
+
+  prepare-release-draft:
+    runs-on: ubuntu-latest
+    needs: bind-release
+    permissions:
+      contents: write
+    outputs:
+      draft_id: ${{ steps.release-draft.outputs.draft_id }}
+      body_sha256: ${{ steps.release-draft.outputs.body_sha256 }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.bind-release.outputs.commit }}
+          persist-credentials: false
+      - name: Create or validate bound desktop release draft
+        id: release-draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.bind-release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.bind-release.outputs.desktop_version }}
+          RELEASE_COMMIT: ${{ needs.bind-release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          FIRST_HEADING=$(grep -m1 '^## ' apps/desktop/CHANGELOG.md)
+          test "$FIRST_HEADING" = "## $RELEASE_VERSION"
+          BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' apps/desktop/CHANGELOG.md | tail -n +2)
+          test -n "$BODY"
+          BODY_SHA256=$(printf '%s' "$BODY" | shasum -a 256 | awk '{print $1}')
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            RELEASE_JSON=$(gh release view "$RELEASE_TAG" --json body,databaseId,isDraft,isPrerelease,tagName)
+            test "$(printf '%s' "$RELEASE_JSON" | jq -r '.tagName')" = "$RELEASE_TAG"
+            test "$(printf '%s' "$RELEASE_JSON" | jq -r '.isDraft')" = 'true'
+            test "$(printf '%s' "$RELEASE_JSON" | jq -r '.isPrerelease')" = 'false'
+            EXISTING_BODY_SHA256=$(printf '%s' "$RELEASE_JSON" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
+            test "$EXISTING_BODY_SHA256" = "$BODY_SHA256"
+          else
+            gh release create "$RELEASE_TAG" --draft --latest=false --target "$RELEASE_COMMIT" \
+              --title "Enduragent Desktop $RELEASE_VERSION" --notes "$BODY"
+            RELEASE_JSON=$(gh release view "$RELEASE_TAG" --json databaseId,isDraft,isPrerelease,tagName)
+          fi
+          DRAFT_ID=$(printf '%s' "$RELEASE_JSON" | jq -r '.databaseId')
+          printf '%s' "$DRAFT_ID" | grep -Eq '^[1-9][0-9]*$'
+          echo "draft_id=$DRAFT_ID" >> "$GITHUB_OUTPUT"
+          echo "body_sha256=$BODY_SHA256" >> "$GITHUB_OUTPUT"
+
+  dispatch-desktop-release:
+    runs-on: ubuntu-latest
+    needs: [bind-release, prepare-release-draft]
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch and await environment-bound desktop transaction
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.bind-release.outputs.tag }}
+          DESKTOP_VERSION: ${{ needs.bind-release.outputs.desktop_version }}
+          RELEASE_COMMIT: ${{ needs.bind-release.outputs.commit }}
+          RELEASE_TOOLING_COMMIT: ${{ github.sha }}
+          RELEASE_DRAFT_ID: ${{ needs.prepare-release-draft.outputs.draft_id }}
+          RELEASE_MODE: ${{ needs.bind-release.outputs.mode }}
+          RELEASE_BODY_SHA256: ${{ needs.prepare-release-draft.outputs.body_sha256 }}
+          RELEASE_BASELINE_TAG: ${{ needs.bind-release.outputs.baseline_tag }}
+          COORDINATOR_RUN_ID: ${{ github.run_id }}
+          COORDINATOR_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          EXPECTED_TITLE="Desktop release $RELEASE_TAG via $COORDINATOR_RUN_ID.$COORDINATOR_RUN_ATTEMPT"
+          gh workflow run desktop-release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$RELEASE_TAG" \
+            -f tag="$RELEASE_TAG" \
+            -f desktop_version="$DESKTOP_VERSION" \
+            -f commit="$RELEASE_COMMIT" \
+            -f tooling_commit="$RELEASE_TOOLING_COMMIT" \
+            -f draft_id="$RELEASE_DRAFT_ID" \
+            -f mode="$RELEASE_MODE" \
+            -f draft_body_sha256="$RELEASE_BODY_SHA256" \
+            -f baseline_tag="$RELEASE_BASELINE_TAG" \
+            -f coordinator_run_id="$COORDINATOR_RUN_ID" \
+            -f coordinator_run_attempt="$COORDINATOR_RUN_ATTEMPT"
+          DESKTOP_RUN_ID=''
+          for attempt in $(seq 1 12); do
+            DESKTOP_RUNS=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow desktop-release.yml \
+              --event workflow_dispatch --limit 20 --json databaseId,displayTitle)
+            DESKTOP_RUN_ID=$(printf '%s' "$DESKTOP_RUNS" | jq -r --arg title "$EXPECTED_TITLE" \
+              '[.[] | select(.displayTitle == $title)] | first | .databaseId // empty')
+            if [ -n "$DESKTOP_RUN_ID" ]; then
+              break
+            fi
+            sleep 5
+          done
+          test -n "$DESKTOP_RUN_ID"
+          gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status

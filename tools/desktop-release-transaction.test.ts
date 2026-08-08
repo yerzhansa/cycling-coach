@@ -32,8 +32,7 @@ import {
 const npmVersion = "2026.8.7";
 const desktopVersion = "0.1.7";
 const binding = {
-  tag: `cycling-coach@${npmVersion}`,
-  npmVersion,
+  tag: `enduragent-desktop@${desktopVersion}`,
   desktopVersion,
   commit: "a".repeat(40),
   draftId: "123",
@@ -41,12 +40,10 @@ const binding = {
   workflowRunId: "456",
   workflowRunAttempt: "1",
   draftBodySha256: "b".repeat(64),
-  npmIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
-  npmAttestationUrl: `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${npmVersion}`,
   signingIdentity: "Developer ID Application: Example (FA494ACVTF)",
   candidateCdHash: "c".repeat(40),
   candidateCodeDirectorySha256: "d".repeat(64),
-  baselineTag: "cycling-coach@2026.8.6",
+  baselineTag: "enduragent-desktop@0.1.6",
   baselineReleaseId: "122",
   baselineCommit: "e".repeat(40),
   baselineZipSha256: "f".repeat(64),
@@ -300,10 +297,12 @@ describe("desktop release envelope", () => {
     ).toBe(DESKTOP_RELEASE_SCHEMA_VERSION);
     expect(manifest.feedUrl).toBe(DESKTOP_FEED_URL);
     expect(manifest).toMatchObject({
-      tag: `cycling-coach@${npmVersion}`,
-      npmVersion,
+      tag: `enduragent-desktop@${desktopVersion}`,
       desktopVersion,
     });
+    expect(manifest).not.toHaveProperty("npmVersion");
+    expect(manifest).not.toHaveProperty("npmIntegrity");
+    expect(manifest).not.toHaveProperty("npmAttestationUrl");
     expect(manifest.files.map((file) => file.name)).toEqual(releaseFileNames(desktopVersion));
     expect(manifest.files.at(-1)?.name).toBe("latest-mac.yml");
     await expect(verifyDesktopRelease(directory, binding)).resolves.toEqual(manifest);
@@ -344,20 +343,36 @@ describe("desktop release envelope", () => {
     await expect(sealDesktopRelease(directory, binding)).rejects.toThrow("latest-mac.yml");
   });
 
-  it("pins the npm attestation endpoint and Developer ID team", async () => {
+  it("requires the desktop tag to match the app version and pins the Developer ID team", async () => {
     writeEnvelope();
     await expect(
       sealDesktopRelease(directory, {
         ...binding,
-        npmAttestationUrl: "https://example.invalid/attestations/cycling-coach",
+        tag: "enduragent-desktop@0.1.8",
       }),
-    ).rejects.toThrow("npm attestation URL");
+    ).rejects.toThrow("tag and version do not match");
     await expect(
       sealDesktopRelease(directory, {
         ...binding,
         signingIdentity: "Developer ID Application: Example (ABCDE12345)",
       }),
     ).rejects.toThrow("signing identity");
+  });
+
+  it("allows only desktop tags and the exact legacy first-signed tag as baseline evidence", async () => {
+    writeEnvelope();
+    await expect(
+      sealDesktopRelease(directory, {
+        ...binding,
+        baselineTag: "cycling-coach@2026.8.9",
+      }),
+    ).rejects.toThrow("baseline evidence");
+    await expect(
+      sealDesktopRelease(directory, {
+        ...binding,
+        baselineTag: "cycling-coach@2026.8.8",
+      }),
+    ).resolves.toMatchObject({ baselineTag: "cycling-coach@2026.8.8" });
   });
 
   it("rejects an extra pre-seal file and post-seal byte changes", async () => {
@@ -388,6 +403,16 @@ describe("desktop release envelope", () => {
     manifest.unexpected = true;
     writeFileSync(path, `${JSON.stringify(manifest)}\n`);
     await expect(verifyDesktopRelease(directory, binding)).rejects.toThrow("manifest is invalid");
+  });
+
+  it("rejects legacy npm release fields in the desktop manifest", async () => {
+    writeEnvelope();
+    await sealDesktopRelease(directory, binding);
+    const path = join(directory, DESKTOP_MANIFEST);
+    const manifest = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    manifest.npmVersion = npmVersion;
+    writeFileSync(path, `${JSON.stringify(manifest)}\n`);
+    await expect(verifyDesktopRelease(directory)).rejects.toThrow("manifest is invalid");
   });
 
   it("rejects unknown nested-file manifest keys", async () => {
@@ -434,7 +459,11 @@ describe("desktop release publication guards", () => {
   });
 
   it("requires an unchanged latest observation and monotonic desktop version", () => {
-    const observed = { id: 12, tag: "cycling-coach@2026.8.6", metadataSha256: "e".repeat(64) };
+    const observed = {
+      id: 12,
+      tag: "enduragent-desktop@0.1.6",
+      metadataSha256: "e".repeat(64),
+    };
     expect(() => assertLatestCas(desktopVersion, observed, observed, "0.1.6")).not.toThrow();
     expect(() =>
       assertLatestCas(
