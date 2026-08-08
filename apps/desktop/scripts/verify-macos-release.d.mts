@@ -78,6 +78,23 @@ export interface MacosCodeIdentity {
   readonly cdHash: string;
 }
 
+export interface VerifiedMacosReleaseCandidateApplication {
+  readonly version: string;
+  readonly identifier: "icu.enduragent.desktop";
+  readonly productName: "Enduragent";
+  readonly packageName: "@enduragent/desktop";
+  readonly teamIdentifier: "FA494ACVTF";
+  readonly designatedRequirement: string;
+  readonly hardenedRuntime: true;
+  readonly authorities: readonly [
+    `Developer ID Application: ${string} (FA494ACVTF)`,
+    "Developer ID Certification Authority",
+    "Apple Root CA",
+  ];
+  readonly entitlements: string;
+  readonly candidateCodeIdentity: MacosCodeIdentity;
+}
+
 export interface VerifyMacosReleaseApplicationContentsOptions {
   readonly candidateVersion: string;
   readonly looseCandidateCodeIdentity: MacosCodeIdentity;
@@ -95,6 +112,7 @@ export interface VerifyMacosReleaseApplicationContentsDependencies extends Verif
     options: { readonly flag: "wx"; readonly mode: 0o600 },
   ) => Promise<unknown>;
   readonly verifyIdentityContinuity?: typeof verifyMacosIdentityContinuity;
+  readonly verifyCandidateApplication?: typeof verifyMacosReleaseCandidateApplication;
 }
 
 export interface VerifyMacosReleaseEnvelopeDependencies
@@ -103,9 +121,21 @@ export interface VerifyMacosReleaseEnvelopeDependencies
   readonly verifyReleaseApplicationContents?: typeof verifyMacosReleaseApplicationContents;
 }
 
+export interface VerifyMacosGenesisReleaseEnvelopeDependencies extends Omit<
+  VerifyMacosReleaseEnvelopeDependencies,
+  "verifyReleaseApplicationContents"
+> {
+  readonly verifyReleaseApplicationContents?: typeof verifyMacosGenesisReleaseApplicationContents;
+}
+
 export interface VerifiedMacosReleaseEnvelope {
   readonly artifacts: VerifiedMacosReleaseArtifacts;
   readonly identityContinuity: VerifiedMacosIdentityContinuity;
+}
+
+export interface VerifiedMacosGenesisReleaseEnvelope {
+  readonly artifacts: VerifiedMacosReleaseArtifacts;
+  readonly candidateIdentity: VerifiedMacosReleaseCandidateApplication;
 }
 
 export function verifyMacosApplication(
@@ -127,9 +157,19 @@ export function verifyMacosBaselineApplication(
   options: VerifyMacosIdentityContinuityOptions,
   dependencies?: VerifyMacosIdentityContinuityDependencies,
 ): Promise<VerifiedMacosBaselineApplication>;
+export function verifyMacosReleaseCandidateApplication(
+  candidateApplication: string,
+  options: VerifyMacosIdentityContinuityOptions,
+  dependencies?: VerifyMacosIdentityContinuityDependencies,
+): Promise<VerifiedMacosReleaseCandidateApplication>;
 export function verifyMacosReleaseApplicationContents(
   artifactDirectory: string,
   baselineApplication: string,
+  options: VerifyMacosReleaseApplicationContentsOptions,
+  dependencies?: VerifyMacosReleaseApplicationContentsDependencies,
+): Promise<void>;
+export function verifyMacosGenesisReleaseApplicationContents(
+  artifactDirectory: string,
   options: VerifyMacosReleaseApplicationContentsOptions,
   dependencies?: VerifyMacosReleaseApplicationContentsDependencies,
 ): Promise<void>;
@@ -145,3 +185,9 @@ export function verifyMacosReleaseEnvelope(
   options?: VerifyMacosReleaseOptions,
   dependencies?: VerifyMacosReleaseEnvelopeDependencies,
 ): Promise<VerifiedMacosReleaseEnvelope>;
+export function verifyMacosGenesisReleaseEnvelope(
+  artifactDirectory: string,
+  looseCandidateApplication: string,
+  options?: VerifyMacosReleaseOptions,
+  dependencies?: VerifyMacosGenesisReleaseEnvelopeDependencies,
+): Promise<VerifiedMacosGenesisReleaseEnvelope>;
