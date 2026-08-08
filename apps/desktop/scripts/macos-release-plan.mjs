@@ -696,7 +696,9 @@ export async function notarizeMacosDmg(dmgPath, credentials, dependencies = {}) 
 }
 
 export async function runMacosRelease(input, dependencies = {}) {
+  dependencies.reportStage?.("release-plan");
   const plan = await createMacosReleasePlan(input, dependencies);
+  dependencies.reportStage?.("notarization-credentials");
   const notarizationCredentials = requireNotarizationCredentials(
     dependencies.environment ?? process.env,
   );
@@ -707,15 +709,18 @@ export async function runMacosRelease(input, dependencies = {}) {
       verification.verifyMacosBaselineApplication(baseline, options, {
         executeFile: dependencies.executeFile,
       }));
+  dependencies.reportStage?.("baseline-verification");
   await verifyBaselineApplication(plan.baselineApplication, {
     candidateVersion: plan.version,
   });
   const build = dependencies.build ?? (await import("electron-builder")).build;
+  dependencies.reportStage?.("electron-builder");
   const artifacts = await build(plan.builderOptions);
   const application = join(plan.builderOptions.projectDir, "dist/mac-arm64/Enduragent.app");
   const verifyPackageLayout =
     dependencies.verifyPackageLayout ??
     (await import("./verify-package-layout.mjs")).verifyPackageLayout;
+  dependencies.reportStage?.("package-layout");
   await verifyPackageLayout(application, {
     desktopRoot: plan.builderOptions.projectDir,
     release: {
@@ -735,15 +740,19 @@ export async function runMacosRelease(input, dependencies = {}) {
       verification.verifyMacosDmg(path, {
         executeFile: dependencies.executeFile,
       }));
+  dependencies.reportStage?.("identity-continuity");
   await verifyIdentityContinuity(plan.baselineApplication, application, {
     candidateVersion: plan.version,
   });
   const dmgPath = join(plan.builderOptions.projectDir, "dist", plan.artifactNames.dmg);
+  dependencies.reportStage?.("dmg-notarization");
   await notarizeMacosDmg(dmgPath, notarizationCredentials, {
     notarize: dependencies.notarize,
   });
+  dependencies.reportStage?.("dmg-verification");
   await verifyDmg(dmgPath);
   const sealReleaseMetadata = dependencies.sealReleaseMetadata ?? sealMacosReleaseMetadata;
+  dependencies.reportStage?.("metadata-sealing");
   await sealReleaseMetadata(plan);
   const verifyEnvelope = (artifactDirectory) =>
     verification.verifyMacosReleaseEnvelope(
@@ -762,17 +771,27 @@ export async function runMacosRelease(input, dependencies = {}) {
       },
     );
   const promoteReleaseEnvelope = dependencies.promoteReleaseEnvelope ?? promoteMacosReleaseEnvelope;
+  dependencies.reportStage?.("envelope-promotion");
   const envelopePath = await promoteReleaseEnvelope(plan, verifyEnvelope);
   return { plan, artifacts, envelopePath };
 }
 
+let activeStage = "initialization";
+
 async function main() {
   if (process.argv.length !== 2) throw new TypeError("arguments are not supported");
-  const result = await runMacosRelease({
-    feedUrl: process.env.ENDURAGENT_DESKTOP_UPDATE_URL,
-    identity: process.env.ENDURAGENT_DEVELOPER_ID_IDENTITY,
-    baselineApplication: process.env.ENDURAGENT_MACOS_BASELINE_APP,
-  });
+  const result = await runMacosRelease(
+    {
+      feedUrl: process.env.ENDURAGENT_DESKTOP_UPDATE_URL,
+      identity: process.env.ENDURAGENT_DEVELOPER_ID_IDENTITY,
+      baselineApplication: process.env.ENDURAGENT_MACOS_BASELINE_APP,
+    },
+    {
+      reportStage(stage) {
+        activeStage = stage;
+      },
+    },
+  );
   process.stdout.write(`macOS release envelope: ${result.envelopePath}\n`);
 }
 
@@ -780,7 +799,6 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
   try {
     await main();
   } catch {
-    process.stderr.write("macOS release build failed\n");
-    process.exitCode = 1;
+    throw new TypeError(`macOS release build failed at ${activeStage}`);
   }
 }

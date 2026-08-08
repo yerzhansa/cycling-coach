@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   lstat,
   mkdir,
@@ -376,6 +377,7 @@ describe("macOS release plan", () => {
         return envelopePath;
       },
     );
+    const reportStage = vi.fn();
 
     const result = await runMacosGenesisRelease(
       {
@@ -397,6 +399,7 @@ describe("macOS release plan", () => {
         verifyReleaseArtifacts,
         verifyReleaseApplicationContents,
         promoteReleaseEnvelope,
+        reportStage,
       },
     );
 
@@ -429,6 +432,38 @@ describe("macOS release plan", () => {
     expect(sealReleaseMetadata.mock.invocationCallOrder[0]).toBeLessThan(
       promoteReleaseEnvelope.mock.invocationCallOrder[0]!,
     );
+    expect(reportStage.mock.calls.map(([stage]) => stage)).toEqual([
+      "release-plan",
+      "notarization-credentials",
+      "electron-builder",
+      "package-layout",
+      "candidate-verification",
+      "dmg-notarization",
+      "dmg-verification",
+      "metadata-sealing",
+      "envelope-promotion",
+    ]);
+  });
+
+  it("fails the genesis CLI with a safe actionable stage", () => {
+    const secretSentinel = "must-not-reach-stderr";
+    const result = spawnSync(
+      process.execPath,
+      [join(desktopRoot, "scripts/macos-genesis-release.mjs")],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: {
+          ENDURAGENT_DESKTOP_UPDATE_URL: "not-a-url",
+          ENDURAGENT_DEVELOPER_ID_IDENTITY: secretSentinel,
+          ENDURAGENT_MACOS_GENESIS_VERSION: "0.1.0",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("macOS genesis release build failed at release-plan");
+    expect(result.stderr).not.toContain(secretSentinel);
   });
 
   it("rejects a missing absolute baseline before invoking electron-builder", async () => {
@@ -560,6 +595,7 @@ describe("macOS release plan", () => {
     const verifyReleaseArtifacts = vi.fn(async (artifactDirectory: string) =>
       verifiedReleaseArtifactsAt(artifactDirectory),
     );
+    const reportStage = vi.fn();
     const result = await runMacosRelease(
       {
         repositoryRoot: "/synthetic/repository",
@@ -581,6 +617,7 @@ describe("macOS release plan", () => {
         verifyReleaseApplicationContents,
         promoteReleaseEnvelope,
         verifyReleaseArtifacts,
+        reportStage,
       },
     );
     expect(build).toHaveBeenCalledOnce();
@@ -683,6 +720,18 @@ describe("macOS release plan", () => {
     expect(verifyReleaseApplicationContents.mock.invocationCallOrder[0]).toBeLessThan(
       promotionCommitted.mock.invocationCallOrder[0]!,
     );
+    expect(reportStage.mock.calls.map(([stage]) => stage)).toEqual([
+      "release-plan",
+      "notarization-credentials",
+      "baseline-verification",
+      "electron-builder",
+      "package-layout",
+      "identity-continuity",
+      "dmg-notarization",
+      "dmg-verification",
+      "metadata-sealing",
+      "envelope-promotion",
+    ]);
   });
 
   it("propagates release package-layout verification failures", async () => {
