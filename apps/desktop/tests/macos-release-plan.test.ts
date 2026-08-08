@@ -9,6 +9,7 @@ import {
   rename,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -1271,6 +1272,32 @@ describe("macOS release plan", () => {
     }
     expect((await lstat(builderApplication)).isDirectory()).toBe(true);
     expect((await lstat(builderScratch)).isDirectory()).toBe(true);
+  });
+
+  it("accepts verification-only timestamp changes when file identity and bytes are stable", async () => {
+    const fixture = await metadataSealFixture();
+    await sealMacosReleaseMetadata(fixture.plan);
+    const sourceBytes = new Map(
+      await Promise.all(
+        Object.values(fixture.plan.artifactNames).map(
+          async (name) => [name, await readFile(join(fixture.artifactDirectory, name))] as const,
+        ),
+      ),
+    );
+    const verificationTimestamp = new Date("2000-01-01T00:00:00.000Z");
+
+    const envelopePath = await promoteMacosReleaseEnvelope(fixture.plan, async (candidatePath) => {
+      await Promise.all(
+        Object.values(fixture.plan.artifactNames).map((name) =>
+          utimes(join(candidatePath, name), verificationTimestamp, verificationTimestamp),
+        ),
+      );
+    });
+
+    for (const [name, bytes] of sourceBytes) {
+      expect(await readFile(join(envelopePath, name))).toEqual(bytes);
+      expect(await readFile(join(fixture.artifactDirectory, name))).toEqual(bytes);
+    }
   });
 
   it("never overwrites a stale release envelope", async () => {
