@@ -50,7 +50,6 @@ beforeEach(() => {
     syncActions: null,
     onboarding: CLOSED_ONBOARDING,
     onboardingActions: null,
-    connection: "connecting",
     settings: EMPTY_SETTINGS_SURFACE,
     settingsPorts: null,
   });
@@ -66,7 +65,6 @@ afterEach(() => {
     syncActions: null,
     onboarding: CLOSED_ONBOARDING,
     onboardingActions: null,
-    connection: "connecting",
     settings: EMPTY_SETTINGS_SURFACE,
     settingsPorts: null,
   });
@@ -238,6 +236,9 @@ describe("sidebar sync chip", () => {
     expect(chip()).toHaveAttribute("data-status", "synced");
     expect(chip()).toHaveTextContent("Training data synced");
     expect(chip()).toHaveTextContent("1998-07-19 07:55:00 UTC");
+    expect(chip()).toHaveAccessibleName(
+      "Sync now · Training data synced · 1998-07-19 07:55:00 UTC",
+    );
 
     update({ sync: toManualSyncViewState({ status: "running", operation: 1 }) });
     expect(chip()).toHaveAttribute("data-status", "syncing");

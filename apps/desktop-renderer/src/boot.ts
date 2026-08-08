@@ -27,7 +27,6 @@ import { createTelegramSettingsAdapter } from "./state/adapters/telegram.js";
 import { createManualSyncViewAdapter } from "./state/adapters/sync.js";
 import { createTrainingViewAdapter } from "./state/adapters/training.js";
 import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
-import { observeConnectionLifecycle } from "./state/connection-slice.js";
 import { credentialDrafts } from "./state/credential-drafts.js";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
 import { useEnduragentStore } from "./state/store.js";
@@ -59,9 +58,6 @@ export function bootRenderer(): Disposer {
   const store = useEnduragentStore;
   store.getState().setOnboardingStartupSettled(false);
 
-  const disposeLifecycle = observeConnectionLifecycle((status) => {
-    store.getState().setConnection(status);
-  });
   const releaseNotesAdapter = createReleaseNotesSettingsAdapter({
     publish: (patch) => store.getState().patchSettings(patch),
   });
@@ -392,11 +388,6 @@ export function bootRenderer(): Disposer {
       .openOnStartup(() => onboarding.open())
       .then(() => store.getState().setOnboardingStartupSettled(true));
   }
-  void clients.getClient().then(
-    () => store.getState().setConnection("connected"),
-    () => store.getState().setConnection("failed"),
-  );
-
   let disposed = false;
   const dispose = (): void => {
     if (disposed) return;
@@ -409,7 +400,6 @@ export function bootRenderer(): Disposer {
     store.getState().bindRideAnalysisActions(null);
     store.getState().bindTrainingExportActions(null);
     store.getState().bindOnboardingActions(null);
-    disposeLifecycle();
     disposeRideAnalysisSelection();
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();
