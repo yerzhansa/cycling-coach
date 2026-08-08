@@ -108,7 +108,21 @@ export type NotarizationCredentialSelection =
       };
     };
 
+export type MacosReleaseStage =
+  | "release-plan"
+  | "notarization-credentials"
+  | "baseline-verification"
+  | "electron-builder"
+  | "package-layout"
+  | "candidate-verification"
+  | "identity-continuity"
+  | "dmg-notarization"
+  | "dmg-verification"
+  | "metadata-sealing"
+  | "envelope-promotion";
+
 export interface MacosReleaseDependencies {
+  readonly reportStage?: (stage: MacosReleaseStage) => void;
   readonly readFile?: (path: string, encoding: "utf8") => Promise<string>;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly build?: (options: MacosReleaseBuilderOptions) => Promise<readonly string[]>;
