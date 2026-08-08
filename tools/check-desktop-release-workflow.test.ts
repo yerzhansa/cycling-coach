@@ -24,14 +24,16 @@ function inspect(release: string, desktop: string, version = sources().version):
 }
 
 describe("desktop release workflow policy", () => {
-  it("accepts the canonical coordinator and reusable workflow", () => {
+  it("accepts the canonical coordinator and environment-bound workflow", () => {
     const source = sources();
     expect(inspect(source.release, source.desktop, source.version)).toEqual([]);
     expect(source.release).toContain("desktop_version: ${{ steps.parse.outputs.desktop_version }}");
-    expect(source.release).toContain("npm_version: ${{ needs.parse-tag.outputs.version }}");
+    expect(source.release).toContain("NPM_VERSION: ${{ needs.parse-tag.outputs.version }}");
     expect(source.release).toContain(
-      "desktop_version: ${{ needs.parse-tag.outputs.desktop_version }}",
+      "DESKTOP_VERSION: ${{ needs.parse-tag.outputs.desktop_version }}",
     );
+    expect(source.release).toContain("gh workflow run desktop-release.yml");
+    expect(source.release).toContain('gh run watch "$DESKTOP_RUN_ID" --interval 15 --exit-status');
     expect(source.desktop).toContain('--npm-version "$NPM_VERSION"');
     expect(source.desktop).toContain('--desktop-version "$DESKTOP_VERSION"');
   });
@@ -39,8 +41,8 @@ describe("desktop release workflow policy", () => {
   it("rejects coupling the desktop version back to the npm version", () => {
     const source = sources();
     const release = source.release.replace(
-      "desktop_version: ${{ needs.parse-tag.outputs.desktop_version }}",
-      "desktop_version: ${{ needs.parse-tag.outputs.version }}",
+      "DESKTOP_VERSION: ${{ needs.parse-tag.outputs.desktop_version }}",
+      "DESKTOP_VERSION: ${{ needs.parse-tag.outputs.version }}",
     );
     expect(
       inspect(release, source.desktop).some((issue) =>
@@ -84,16 +86,16 @@ describe("desktop release workflow policy", () => {
     ).toBe(true);
   });
 
-  it("requires declared and available signing environment secrets", () => {
+  it("requires a direct dispatch and available signing environment secrets", () => {
     const source = sources();
-    const undeclared = source.desktop.replace("      CSC_LINK:\n", "      UNUSED_LINK:\n");
+    const reusable = source.desktop.replace("workflow_dispatch:", "workflow_call:");
     const unchecked = source.desktop.replace(
       "for secret_name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_API_KEY_P8_BASE64; do",
       "for secret_name in CSC_LINK; do",
     );
     expect(
-      inspect(source.release, undeclared).some((issue) =>
-        issue.includes("declare environment secret CSC_LINK"),
+      inspect(source.release, reusable).some((issue) =>
+        issue.includes("workflow_dispatch-only"),
       ),
     ).toBe(true);
     expect(
@@ -115,16 +117,16 @@ describe("desktop release workflow policy", () => {
     expect(issues.some((issue) => issue.includes("create-normal-or-leave-existing"))).toBe(true);
   });
 
-  it("rejects direct triggers and activation that bypasses native acceptance", () => {
+  it("rejects reusable triggers and activation that bypasses native acceptance", () => {
     const source = sources();
     const desktop = source.desktop
-      .replace("workflow_call:", "workflow_call:\n  workflow_dispatch:")
+      .replace("workflow_dispatch:", "workflow_call:")
       .replace(
         "needs.verify-production-update.result == 'success'",
         "needs.verify-production-update.result != 'failure'",
       );
     const issues = inspect(source.release, desktop);
-    expect(issues.some((issue) => issue.includes("workflow_call-only"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("workflow_dispatch-only"))).toBe(true);
     expect(issues.some((issue) => issue.includes("mode-specific acceptance gate"))).toBe(true);
   });
 
@@ -157,15 +159,42 @@ describe("desktop release workflow policy", () => {
     }
   });
 
-  it("rejects a reusable call without a write permission ceiling", () => {
+  it("rejects a desktop dispatcher without actions write permission", () => {
     const source = sources();
     const release = source.release.replace(
-      "    permissions:\n      actions: read\n      contents: write\n    uses: ./.github/workflows/desktop-release.yml",
-      "    uses: ./.github/workflows/desktop-release.yml",
+      "    permissions:\n      actions: write\n      contents: read\n    steps:",
+      "    steps:",
     );
     expect(
       inspect(release, source.desktop).some((issue) =>
-        issue.includes("desktop reusable call permissions"),
+        issue.includes("desktop dispatcher permissions"),
+      ),
+    ).toBe(true);
+  });
+
+  it("requires the coordinator to correlate and await the dispatched desktop run", () => {
+    const source = sources();
+    const release = source.release
+      .replace('--arg title "$EXPECTED_TITLE"', '--arg title "$RELEASE_TAG"')
+      .replace(
+        'gh run watch "$DESKTOP_RUN_ID" --interval 15 --exit-status',
+        'gh run view "$DESKTOP_RUN_ID"',
+      );
+    expect(
+      inspect(release, source.desktop).some((issue) =>
+        issue.includes("dispatch, correlate, and await the exact child run"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects desktop signing that is not bound to an active release coordinator", () => {
+    const source = sources();
+    const desktop = source.desktop
+      .replace("    needs: authorize-coordinator\n", "")
+      .replace("test \"$(printf '%s' \"$COORDINATOR\" | jq -r '.status')\" = 'in_progress'", "true");
+    expect(
+      inspect(source.release, desktop).some((issue) =>
+        issue.includes("bind to its active release coordinator"),
       ),
     ).toBe(true);
   });
@@ -400,8 +429,8 @@ describe("desktop release workflow policy", () => {
     const source = sources();
     const release = source.release
       .replace(
-        "npm_integrity: ${{ needs.verify-npm-publication.outputs.npm_integrity }}",
-        "npm_integrity: ${{ needs.publish-npm.outputs.npm_integrity }}",
+        "NPM_INTEGRITY: ${{ needs.verify-npm-publication.outputs.npm_integrity }}",
+        "NPM_INTEGRITY: ${{ needs.publish-npm.outputs.npm_integrity }}",
       )
       .replace("--workflow .github/workflows/release.yml", "--workflow release.yml")
       .replace(

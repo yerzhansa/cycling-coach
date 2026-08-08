@@ -1,49 +1,57 @@
 name: Desktop release
+run-name: Desktop release ${{ inputs.tag }} via ${{ inputs.coordinator_run_id }}.${{ inputs.coordinator_run_attempt }}
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       tag:
+        description: Exact cycling-coach release tag
         required: true
         type: string
       npm_version:
+        description: Frozen npm package version
         required: true
         type: string
       desktop_version:
+        description: Frozen desktop SemVer
         required: true
         type: string
       commit:
+        description: Exact tagged source commit
         required: true
         type: string
       draft_id:
+        description: Bound unpublished GitHub Release id
         required: true
         type: string
       mode:
+        description: Desktop continuity mode
         required: true
         type: string
       draft_body_sha256:
+        description: Bound draft release-notes digest
         required: true
         type: string
       npm_integrity:
+        description: Verified public npm integrity
         required: true
         type: string
       npm_attestation_url:
+        description: Verified public npm provenance URL
         required: true
         type: string
       baseline_tag:
+        description: Prior signed desktop release tag or none
         required: true
         type: string
-    secrets:
-      CSC_LINK:
-        required: false
-      CSC_KEY_PASSWORD:
-        required: false
-      APPLE_API_KEY_ID:
-        required: false
-      APPLE_API_ISSUER:
-        required: false
-      APPLE_API_KEY_P8_BASE64:
-        required: false
+      coordinator_run_id:
+        description: Parent release workflow run id
+        required: true
+        type: string
+      coordinator_run_attempt:
+        description: Parent release workflow attempt
+        required: true
+        type: string
 permissions:
   actions: read
   contents: read
@@ -54,8 +62,30 @@ concurrency:
   queue: max
 
 jobs:
+  authorize-coordinator:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Bind dispatch to the active release coordinator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COORDINATOR_RUN_ID: ${{ inputs.coordinator_run_id }}
+          COORDINATOR_RUN_ATTEMPT: ${{ inputs.coordinator_run_attempt }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$COORDINATOR_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$COORDINATOR_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
+          COORDINATOR=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID")
+          test "$(printf '%s' "$COORDINATOR" | jq -r '.path')" = '.github/workflows/release.yml'
+          test "$(printf '%s' "$COORDINATOR" | jq -r '.run_attempt')" = "$COORDINATOR_RUN_ATTEMPT"
+          test "$(printf '%s' "$COORDINATOR" | jq -r '.status')" = 'in_progress'
+          printf '%s' "$COORDINATOR" | jq -er '.event == "push" or .event == "workflow_dispatch"' >/dev/null
+
   sign-macos:
     runs-on: macos-15
+    needs: authorize-coordinator
     environment: desktop-macos-signing
     permissions:
       contents: read
