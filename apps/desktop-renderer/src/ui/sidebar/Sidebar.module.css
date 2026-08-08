@@ -56,56 +56,10 @@
   color: var(--ink-2);
 }
 
-.sec {
-  padding: 16px calc(var(--inset) + var(--row-inset)) 6px;
-  color: var(--ink-3);
-  font-size: 11px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.hist {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 0;
-  padding: 0 var(--inset) var(--inset);
-  overflow: auto;
-}
-
-.histItem {
-  composes: row from "../../theme/surface.module.css";
-  flex-direction: column;
-  gap: 1px;
-  align-items: stretch;
-  padding: 6px var(--row-inset);
-  font-size: 13px;
-}
-
-.histTitle {
-  display: block;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.histWhen {
-  display: block;
-  color: var(--ink-3);
-  font: 11px var(--f-mono);
-}
-
-.histNote {
-  margin: 8px var(--row-inset) 0;
-  color: var(--ink-3);
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
 .railFoot {
   display: grid;
   gap: 2px;
+  margin-top: auto;
   padding: var(--inset);
   border-top: 1px solid var(--line);
 }
@@ -175,16 +129,6 @@
   font-size: 12px;
 }
 
-.connection {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin: 0;
-  padding: 4px var(--row-inset);
-  color: var(--ink-3);
-  font-size: 12px;
-}
-
 .dot {
   flex: none;
   width: 7px;
@@ -204,16 +148,4 @@
 .dot[data-status="attention"],
 .dot[data-status="unavailable"] {
   background: var(--warn);
-}
-
-.dot[data-tone="connected"] {
-  background: var(--ok);
-}
-
-.dot[data-tone="recovering"] {
-  background: var(--warn);
-}
-
-.dot[data-tone="unavailable"] {
-  background: var(--danger);
 }
