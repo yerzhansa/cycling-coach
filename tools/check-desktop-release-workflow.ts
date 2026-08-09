@@ -1272,14 +1272,41 @@ fi`;
     );
   }
 
+  const roundTripSteps = steps(roundTrip);
+  const roundTripInstallIndex = roundTripSteps.findIndex(
+    (step) => step.run === "pnpm install --frozen-lockfile",
+  );
+  const dependencyBuildCommand = "pnpm --filter '@enduragent/desktop^...' build";
+  const nativeUpdaterCommand = "pnpm --filter @enduragent/desktop test:macos-update-roundtrip \\";
+  const dependencyBuildIndexes = roundTripSteps.flatMap((step, index) =>
+    step.name === "Build updater acceptance dependencies" &&
+    step.if === undefined &&
+    step.run === dependencyBuildCommand
+      ? [index]
+      : [],
+  );
+  const roundTripExerciseIndexes = roundTripSteps.flatMap((step, index) =>
+    step.name === "Exercise native production-feed update" &&
+    typeof step.run === "string" &&
+    countShellLine(step.run, nativeUpdaterCommand) === 1
+      ? [index]
+      : [],
+  );
+  const dependencyBuildIndex = dependencyBuildIndexes[0];
+  const roundTripExerciseIndex = roundTripExerciseIndexes[0];
+
   if (
+    dependencyBuildIndexes.length !== 1 ||
+    countShellLine(roundTripRun, dependencyBuildCommand) !== 1 ||
+    roundTripExerciseIndexes.length !== 1 ||
+    dependencyBuildIndex === undefined ||
+    roundTripExerciseIndex === undefined ||
+    dependencyBuildIndex <= roundTripInstallIndex ||
+    dependencyBuildIndex >= roundTripExerciseIndex ||
     roundTrip.if !== "${{ inputs.mode == 'steady' }}" ||
     !exactStringSet(roundTrip.needs, ["sign-macos", "reconcile-latest"]) ||
     !roundTripRun.includes("desktop-release:transaction public-envelope") ||
-    countShellLine(
-      roundTripRun,
-      "pnpm --filter @enduragent/desktop test:macos-update-roundtrip \\",
-    ) !== 1 ||
+    countShellLine(roundTripRun, nativeUpdaterCommand) !== 1 ||
     !roundTripRun.includes('"$RUNNER_TEMP/desktop-baseline"') ||
     !roundTripRun.includes('"$CANDIDATE_ENVELOPE"') ||
     !roundTripRun.includes('"$EVIDENCE"') ||
