@@ -62,6 +62,7 @@ export interface MacosUpdaterRoundTripPersistenceView {
     readonly sha256: string;
     readonly sha512: string;
   };
+  readonly latest: { readonly size: number; readonly sha256: string; readonly sha512: string };
   readonly memory: { readonly size: number; readonly sha256: string; readonly sha512: string };
   readonly session: { readonly size: number; readonly sha256: string; readonly sha512: string };
   readonly runtimeConfig: unknown;

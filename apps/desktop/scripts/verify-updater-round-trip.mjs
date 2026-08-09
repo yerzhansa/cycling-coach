@@ -14,6 +14,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "@enduragent/coach-contract";
+import { LATEST_SCHEMA_VERSION, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import {
   DESKTOP_UPDATER_CACHE_DIRECTORY,
   requireGenericFeedUrl,
@@ -30,6 +31,7 @@ import {
   terminateAcceptanceChild,
   withAcceptanceDeadline,
 } from "../tests/fixtures/packaged-telegram/acceptance-deadline.ts";
+import { prepareDisposableKeychain } from "../tests/fixtures/packaged-telegram/disposable-keychain.ts";
 import {
   observeTelegramAcceptanceChild,
   telegramAcceptanceDebuggerListenerOwner,
@@ -47,6 +49,8 @@ const shutdownTimeoutMs = 30_000;
 const cleanupTerminationGraceMs = 2_000;
 const cleanupKillGraceMs = 2_000;
 const cleanupSocketGraceMs = 1_000;
+const rendererRpcTimeoutMs = 30_000;
+const rendererDebuggerTimeoutSlackMs = 5_000;
 const credentialDirectoryName = "credentials-v1";
 const persistenceCredentialSlot = "openrouter";
 const persistenceChatId = "desktop";
@@ -534,12 +538,17 @@ async function waitUntil(description, probe, timeoutMs, intervalMs = 100) {
   fail(`${description} timed out`);
 }
 
-async function evaluateRenderer(connection, expression) {
-  const response = await callAcceptanceCdp(connection, "Runtime.evaluate", {
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
+async function evaluateRenderer(connection, expression, timeoutMs = 5_000) {
+  const response = await callAcceptanceCdp(
+    connection,
+    "Runtime.evaluate",
+    {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    },
+    timeoutMs,
+  );
   if (response.exceptionDetails !== undefined || !exactObject(response.result)) {
     fail("renderer evaluation failed");
   }
@@ -573,11 +582,13 @@ async function callAuthBridge(connection, method, args = []) {
 }
 
 async function callRendererRpc(connection, expectedAthleteHome, method, params) {
+  const timeoutMs = rendererRpcTimeoutMs;
   const input = JSON.stringify({
     expectedAthleteHome,
     method,
     params,
     protocolVersion: PROTOCOL_VERSION,
+    timeoutMs,
   });
   const response = await evaluateRenderer(
     connection,
@@ -590,7 +601,7 @@ async function callRendererRpc(connection, expectedAthleteHome, method, params) 
         const timer = setTimeout(() => {
           socket.close();
           reject(new Error("RPC timeout"));
-        }, 10000);
+        }, input.timeoutMs);
         const finish = (callback, value) => {
           clearTimeout(timer);
           socket.close();
@@ -643,6 +654,7 @@ async function callRendererRpc(connection, expectedAthleteHome, method, params) 
         });
       });
     })()`,
+    timeoutMs + rendererDebuggerTimeoutSlackMs,
   );
   if (
     !exactObject(response) ||
@@ -693,6 +705,7 @@ export function verifyMacosUpdaterRoundTripPersistence(input) {
       "athleteState",
       "credentialCiphertext",
       "credentialStatuses",
+      "latest",
       "memory",
       "owner",
       "runtimeConfig",
@@ -704,6 +717,7 @@ export function verifyMacosUpdaterRoundTripPersistence(input) {
       "athleteState",
       "credentialCiphertext",
       "credentialStatuses",
+      "latest",
       "memory",
       "owner",
       "runtimeConfig",
@@ -718,6 +732,7 @@ export function verifyMacosUpdaterRoundTripPersistence(input) {
     !configuredCredential(before.credentialStatuses) ||
     !configuredCredential(after.credentialStatuses) ||
     !sameDigest(before.credentialCiphertext, after.credentialCiphertext) ||
+    !sameDigest(before.latest, after.latest) ||
     !sameDigest(before.memory, after.memory) ||
     !sameDigest(before.session, after.session) ||
     canonicalJson(before.runtimeConfig) !== canonicalJson(after.runtimeConfig) ||
@@ -739,15 +754,32 @@ export function verifyMacosUpdaterRoundTripPersistence(input) {
 }
 
 async function seedSyntheticDurableState(athleteHome) {
+  const dataDirectory = join(athleteHome, "data");
   const memoryDirectory = join(athleteHome, "memory");
   const sessionsDirectory = join(athleteHome, "sessions");
   await Promise.all([
+    mkdir(dataDirectory, { recursive: true, mode: 0o700 }),
     mkdir(memoryDirectory, { recursive: true, mode: 0o700 }),
     mkdir(sessionsDirectory, { recursive: true, mode: 0o700 }),
   ]);
+  const latestPath = join(dataDirectory, "latest.json");
   const memoryPath = join(memoryDirectory, "MEMORY.md");
   const sessionPath = join(sessionsDirectory, `${persistenceChatId}.jsonl`);
+  const latest = LatestJsonSchema.parse({
+    metadata: {
+      schema_version: LATEST_SCHEMA_VERSION,
+      last_updated: "2000-01-01T00:00:00.000Z",
+      freshness: "fresh",
+    },
+    athlete_profile: null,
+    current_status: null,
+    derived_metrics: {},
+    recent_activities: [],
+    planned_workouts: [],
+    wellness_data: null,
+  });
   await Promise.all([
+    writeFile(latestPath, `${JSON.stringify(latest)}\n`, { flag: "wx", mode: 0o600 }),
     writeFile(
       memoryPath,
       "## Athlete\n_updated: 2000-01-01\nSynthetic update continuity marker.\n",
@@ -766,7 +798,7 @@ async function seedSyntheticDurableState(athleteHome) {
       { flag: "wx", mode: 0o600 },
     ),
   ]);
-  return Object.freeze({ memoryPath, sessionPath });
+  return Object.freeze({ latestPath, memoryPath, sessionPath });
 }
 
 async function requirePrivateDigest(path, label) {
@@ -797,6 +829,7 @@ async function readPersistenceView(connection, input) {
     athleteHome: runtimeConfig.athleteHome,
     credentialStatuses,
     credentialCiphertext: await requirePrivateDigest(input.credentialPath, "encrypted credential"),
+    latest: await requirePrivateDigest(input.latestPath, "athlete state"),
     memory: await requirePrivateDigest(input.memoryPath, "memory state"),
     session: await requirePrivateDigest(input.sessionPath, "session state"),
     runtimeConfig: runtimeConfig.result,
@@ -841,18 +874,22 @@ async function seedApplicationState(connection, input) {
   ) {
     fail("synthetic unit settings were not stored by the application");
   }
-  const intakeWrite = await callRendererRpc(connection, input.athleteHome, "saveIntake", {
-    swim_skill_floor: null,
-    continuous_distance_capable: null,
-    open_water_comfort: null,
-    prior_bsi: false,
-    clinician_cleared: null,
-    injury_status: "none",
-  });
-  if (canonicalJson(intakeWrite.result) !== canonicalJson({ schemaVersion: 1, saved: true })) {
-    fail("synthetic athlete state was not stored by the application");
+  const persistence = await readPersistenceView(connection, input);
+  const athleteState = persistence.athleteState;
+  if (
+    !exactObject(athleteState) ||
+    athleteState.schemaVersion !== LATEST_SCHEMA_VERSION ||
+    athleteState.lastUpdated !== "2000-01-01T00:00:00.000Z" ||
+    athleteState.athleteProfile !== null ||
+    athleteState.currentStatus !== null ||
+    canonicalJson(athleteState.derivedMetrics) !== "{}" ||
+    canonicalJson(athleteState.recentActivities) !== "[]" ||
+    canonicalJson(athleteState.plannedWorkouts) !== "[]" ||
+    athleteState.wellness !== null
+  ) {
+    fail("synthetic athlete state was not loaded by the application");
   }
-  return readPersistenceView(connection, input);
+  return persistence;
 }
 
 async function fileContains(path, needle) {
@@ -1255,6 +1292,16 @@ async function cleanupRoundTripResources(input) {
   return [...connectionResults, ...childResults, applicationTerminated].every(Boolean);
 }
 
+async function restoreRoundTripKeychain(keychain) {
+  if (keychain === undefined) return true;
+  try {
+    await keychain.restore();
+    return keychain.restored();
+  } catch {
+    return false;
+  }
+}
+
 export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
   let phase = "input-validation";
   let failurePhase;
@@ -1299,6 +1346,7 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
     let debuggerConnection;
     let verificationConnection;
     let installedApplication;
+    let keychain;
     let completed = false;
     try {
       phase = "extract-release-applications";
@@ -1330,11 +1378,30 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       const home = join(scratch.path, "home");
       const athleteHome = join(scratch.path, "athlete");
       const userData = join(scratch.path, "user-data");
+      const keychainDirectory = join(home, "Library/Keychains");
+      const preferencesDirectory = join(home, "Library/Preferences");
+      const keychainPath = join(keychainDirectory, "acceptance.keychain-db");
       await Promise.all([
         mkdir(home, { recursive: true, mode: 0o700 }),
         mkdir(athleteHome, { recursive: true, mode: 0o700 }),
         mkdir(userData, { recursive: true, mode: 0o700 }),
+        mkdir(keychainDirectory, { recursive: true, mode: 0o700 }),
+        mkdir(preferencesDirectory, { recursive: true, mode: 0o700 }),
       ]);
+      phase = "prepare-keychain";
+      keychain = await prepareDisposableKeychain({
+        home,
+        path: keychainPath,
+        password: randomBytes(32).toString("base64url"),
+        environment: process.env,
+        run: async (args, options) => {
+          return runAcceptanceCommand("/usr/bin/security", args, {
+            allowFailure: true,
+            environment: options.environment,
+          });
+        },
+      });
+      await keychain.activate();
       phase = "prepare-persistence";
       const durableState = await seedSyntheticDurableState(athleteHome);
       const credentialPlaintext = `enduragent-update-${randomBytes(32).toString("hex")}`;
@@ -1382,6 +1449,7 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         athleteHome,
         credentialPath,
         credentialPlaintext,
+        latestPath: durableState.latestPath,
         memoryPath: durableState.memoryPath,
         sessionPath: durableState.sessionPath,
       };
@@ -1533,6 +1601,10 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         },
         persistence,
       });
+      phase = "restore-keychain";
+      if (!(await restoreRoundTripKeychain(keychain))) {
+        fail("updater acceptance keychain restoration failed");
+      }
       phase = "write-evidence";
       await removeScratch(scratch);
       await writeEvidenceFile(input.evidencePath, evidence);
@@ -1552,8 +1624,9 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         observeProcesses,
         terminateApplication: !completed,
       }).catch(() => false);
-      cleanup = cleaned ? "complete" : "incomplete";
-      if (!cleaned && failurePhase === undefined) {
+      const keychainRestored = cleaned ? await restoreRoundTripKeychain(keychain) : false;
+      cleanup = cleaned && keychainRestored ? "complete" : "incomplete";
+      if ((!cleaned || !keychainRestored) && failurePhase === undefined) {
         fail("round-trip cleanup failed");
       }
     }
