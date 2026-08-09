@@ -27,6 +27,37 @@ export interface MacosApplicationProcessObservation {
   readonly mainPids: readonly number[];
 }
 
+export interface MacosProcessIdentity {
+  readonly pid: number;
+  readonly parentPid: number;
+  readonly startedAt: string;
+}
+
+export interface MacosTrackedApplicationProcessObservation extends MacosApplicationProcessObservation {
+  readonly ownedPids: readonly number[];
+  readonly ownedProcesses: readonly MacosProcessIdentity[];
+}
+
+export interface MacosApplicationProcessObserverContext {
+  readonly observeBundleProcesses?: () => Promise<MacosApplicationProcessObservation>;
+  readonly readProcessTable?: () => Promise<readonly MacosProcessIdentity[]>;
+  readonly signalProcess?: (pid: number, signal: NodeJS.Signals) => void;
+  readonly trackingIntervalMs?: number;
+}
+
+export interface MacosApplicationProcessObserver {
+  readonly close: () => Promise<void>;
+  readonly freezeAll: () => Promise<void>;
+  readonly freezeRoot: (identity: MacosProcessIdentity) => Promise<readonly MacosProcessIdentity[]>;
+  readonly observe: () => Promise<MacosTrackedApplicationProcessObservation>;
+  readonly signalAll: (signal: NodeJS.Signals) => Promise<boolean>;
+  readonly signalIdentity: (
+    identity: MacosProcessIdentity,
+    signal: NodeJS.Signals,
+  ) => Promise<boolean>;
+  readonly trackRoot: (pid: number) => Promise<MacosProcessIdentity>;
+}
+
 export interface MacosDownloadedUpdateInfo {
   readonly fileName: string;
   readonly sha512: string;
@@ -118,6 +149,7 @@ export interface MacosUpdaterRoundTripOverrides extends MacosUpdaterRoundTripCon
     readonly identity: { readonly dev: number; readonly ino: number; readonly mode: number };
   }) => Promise<void>;
   readonly observeProcesses?: (application: string) => Promise<MacosApplicationProcessObservation>;
+  readonly readProcessTable?: () => Promise<readonly MacosProcessIdentity[]>;
   readonly writeEvidence?: (path: string, evidence: MacosUpdaterRoundTripEvidence) => Promise<void>;
 }
 
@@ -145,6 +177,15 @@ export function parseMacosApplicationProcessObservation(
   bytes: Uint8Array,
   application: string,
 ): MacosApplicationProcessObservation;
+
+export function parseMacosProcessTableObservation(
+  bytes: Uint8Array,
+): readonly MacosProcessIdentity[];
+
+export function createMacosApplicationProcessObserver(
+  application: string,
+  context?: MacosApplicationProcessObserverContext,
+): MacosApplicationProcessObserver;
 
 export function verifyMacosUpdaterRoundTripPersistence(input: {
   readonly before: MacosUpdaterRoundTripPersistenceView;

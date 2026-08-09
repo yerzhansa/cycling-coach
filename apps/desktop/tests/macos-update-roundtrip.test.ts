@@ -4,6 +4,7 @@ import {
   MACOS_UPDATER_ROUND_TRIP_FEED_URL,
   createMacosUpdaterRoundTripEvidence,
   parseMacosApplicationProcessObservation,
+  parseMacosProcessTableObservation,
   parseMacosDownloadedUpdateInfo,
   requireMacosUpdaterRoundTripInput,
   verifyMacosUpdaterRoundTripIdentities,
@@ -364,6 +365,19 @@ describe("macOS application process authority", () => {
     Buffer.from(["p0", "ftxt", `n${executable}`, ""].join("\0")),
   ])("rejects malformed or out-of-authority process observations", (bytes) => {
     expect(() => parseMacosApplicationProcessObservation(bytes, application)).toThrow();
+  });
+});
+
+describe("macOS launched process-tree authority", () => {
+  it("records parentage and process birth identity without command-line data", () => {
+    const bytes = Buffer.from(
+      [" 101 1 Sun Aug  9 16:56:31 2026", " 102 101 Sun Aug  9 16:56:32 2026", ""].join("\n"),
+    );
+
+    expect(parseMacosProcessTableObservation(bytes)).toEqual([
+      { pid: 101, parentPid: 1, startedAt: "Sun Aug 9 16:56:31 2026" },
+      { pid: 102, parentPid: 101, startedAt: "Sun Aug 9 16:56:32 2026" },
+    ]);
   });
 });
 
