@@ -1,6 +1,7 @@
 import { act, fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useEnduragentStore } from "../src/state/store.js";
 import {
   chooseLane,
   mountWizard,
@@ -279,7 +280,9 @@ describe("ChatGPT onboarding lifecycle", () => {
     const staleStatus = deferred<{ readonly state: "absent"; readonly runtimeReady: false }>();
     const paint = manualPaintScheduler();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
-    bridge.chatGptStatus.mockImplementation(() => staleStatus.promise);
+    bridge.chatGptStatus
+      .mockImplementationOnce(() => staleStatus.promise)
+      .mockResolvedValue({ state: "absent", runtimeReady: false });
     const wizard = mountWizard({
       bridge,
       createOperationId: () => "status-race-operation",
@@ -293,6 +296,10 @@ describe("ChatGPT onboarding lifecycle", () => {
       await opening;
     });
     expect(wizard.controller.state().chatGptCredentialState).toBe("absent");
+    expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(true);
+
+    await act(async () => wizard.controller.refresh());
+    expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(false);
 
     await act(async () => {
       wizard.controller.startChatGptLogin();

@@ -50,6 +50,11 @@ export const CHATGPT_REFUSAL_COPY: Readonly<Record<ChatGptLoginRefusalReason, st
 
 export const SETUP_HEADING = "Get your coach running before you can chat";
 
+export const SETUP_STATUS_UNAVAILABLE_COPY =
+  "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.";
+
+export const RETRY_SETUP_STATUS_LABEL = "Retry setup status";
+
 export const SETUP_MENU_LABEL = "AI that powers your coach";
 
 export const SETUP_LANE_LABELS = {

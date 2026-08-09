@@ -62,6 +62,7 @@ export interface ChatView {
 
 export interface ChatController {
   start(): Promise<void>;
+  resume(): Promise<void>;
   submit(message: string): Promise<void>;
   removeQueued(id: string): void;
   retryInterrupted(): Promise<void>;
@@ -407,6 +408,9 @@ export function createChatController(input: {
       })();
       probeTask = task;
       return task;
+    },
+    resume() {
+      return drain();
     },
     submit(message) {
       if (!canChat() || !/\S/u.test(message) || disposed || resetBlocksWork()) {

@@ -240,37 +240,29 @@ export function createCoachOperations(
     getSetupStatus(request: GetSetupStatusRpcParams): Promise<GetSetupStatusRpcResult> {
       GetSetupStatusRpcParamsSchema.parse(request);
       return input.runtime.runExclusive(async () => {
-        try {
-          const [savedIntake, activity] = await Promise.all([
-            intake.read(),
-            store.get("SELECT 1 AS present FROM workout LIMIT 1"),
-          ]);
-          const present = activity?.present;
-          if (present !== undefined && present !== 1) {
-            throw new TypeError("setup activity evidence is invalid");
-          }
-          return GetSetupStatusRpcResultSchema.parse({
-            schemaVersion: 1,
-            intake:
-              savedIntake === undefined
-                ? null
-                : {
-                    swim_skill_floor: null,
-                    continuous_distance_capable: null,
-                    open_water_comfort: null,
-                    prior_bsi: false,
-                    clinician_cleared: savedIntake.clinician_cleared,
-                    injury_status: savedIntake.injury_status,
-                  },
-            durableTrainingData: present === 1,
-          });
-        } catch {
-          return GetSetupStatusRpcResultSchema.parse({
-            schemaVersion: 1,
-            intake: null,
-            durableTrainingData: false,
-          });
+        const [savedIntake, activity] = await Promise.all([
+          intake.read(),
+          store.get("SELECT 1 AS present FROM workout LIMIT 1"),
+        ]);
+        const present = activity?.present;
+        if (present !== undefined && present !== 1) {
+          throw new TypeError("setup activity evidence is invalid");
         }
+        return GetSetupStatusRpcResultSchema.parse({
+          schemaVersion: 1,
+          intake:
+            savedIntake === undefined
+              ? null
+              : {
+                  swim_skill_floor: null,
+                  continuous_distance_capable: null,
+                  open_water_comfort: null,
+                  prior_bsi: false,
+                  clinician_cleared: savedIntake.clinician_cleared,
+                  injury_status: savedIntake.injury_status,
+                },
+          durableTrainingData: present === 1,
+        });
       });
     },
     saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult> {

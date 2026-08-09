@@ -16,7 +16,7 @@ import { createOnboardingViewAdapter } from "../src/state/adapters/onboarding.js
 import { credentialDrafts } from "../src/state/credential-drafts.js";
 import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
-import { OnboardingWizard } from "../src/ui/onboarding/OnboardingWizard.js";
+import { OnboardingWizard, SetupPanel } from "../src/ui/onboarding/OnboardingWizard.js";
 
 export type UserEvent = ReturnType<typeof userEvent.setup>;
 
@@ -42,6 +42,7 @@ export function mountWizard(input: {
   readonly credentialMutationsBlocked?: () => boolean;
   readonly createOperationId?: () => string;
   readonly afterPaint?: (callback: () => void) => () => void;
+  readonly placement?: "chat" | "settings";
 }): MountedWizard {
   const focusOpener = vi.fn<() => void>();
   const adapter = createOnboardingViewAdapter({
@@ -66,7 +67,9 @@ export function mountWizard(input: {
     ...(input.afterPaint === undefined ? {} : { afterPaint: input.afterPaint }),
   });
   useEnduragentStore.getState().bindOnboardingActions(controller);
-  const rendered = render(<OnboardingWizard />);
+  const rendered = render(
+    input.placement === "settings" ? <SetupPanel placement="settings" /> : <OnboardingWizard />,
+  );
 
   return {
     controller,

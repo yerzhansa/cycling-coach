@@ -1,4 +1,5 @@
-import { act, fireEvent } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupReady } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
@@ -126,6 +127,81 @@ describe("authoritative setup readiness", () => {
       injuryStatus: "managing",
       clinicianCleared: false,
     });
+    wizard.controller.dispose();
+  });
+
+  it("shows unavailable setup status, disables controls, and recovers through Retry", async () => {
+    const user = userEvent.setup();
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.getSetupStatus = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("synthetic setup read failure"))
+      .mockResolvedValueOnce({
+        schemaVersion: 1 as const,
+        intake: savedIntake,
+        durableTrainingData: true,
+      });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+
+    expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(true);
+    expect(setupReady(useEnduragentStore.getState())).toBe(false);
+    expect(
+      screen.getByText(
+        "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(document.querySelector<HTMLButtonElement>('[data-setup-trigger="ai"]')).toBeDisabled();
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-setup-trigger="training"]'),
+    ).toBeDisabled();
+    expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start coaching" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Retry setup status" }));
+
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(false);
+      expect(setupReady(useEnduragentStore.getState())).toBe(true);
+    });
+    expect(bridge.getSetupStatus).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Retry setup status" })).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('[data-setup-trigger="ai"]')).toBeEnabled();
+    expect(
+      document.querySelector<HTMLButtonElement>('[data-setup-trigger="training"]'),
+    ).toBeEnabled();
+    expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeEnabled();
+    wizard.controller.dispose();
+  });
+
+  it("retains unsaved provider and intake drafts across an unavailable refresh and retry", async () => {
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.getSetupStatus = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      intake: savedIntake,
+      durableTrainingData: true,
+    }));
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    wizard.controller.selectProvider("openrouter");
+    wizard.controller.selectModel("__custom__");
+    wizard.controller.setCustomModel("vendor/unsaved-model");
+    wizard.controller.setIntake("injuryStatus", "none");
+    const draftBeforeFailure = useEnduragentStore.getState().onboarding.draft;
+    const intakeBeforeFailure = wizard.controller.state().intake;
+    bridge.llmConfiguration.mockRejectedValueOnce(new TypeError("synthetic catalogue failure"));
+
+    await act(async () => wizard.controller.refresh());
+
+    expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(true);
+    expect(useEnduragentStore.getState().onboarding.draft).toEqual(draftBeforeFailure);
+    expect(wizard.controller.state().intake).toEqual(intakeBeforeFailure);
+
+    await act(async () => wizard.controller.refresh());
+
+    expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(false);
+    expect(useEnduragentStore.getState().onboarding.draft).toEqual(draftBeforeFailure);
+    expect(wizard.controller.state().intake).toEqual(intakeBeforeFailure);
     wizard.controller.dispose();
   });
 

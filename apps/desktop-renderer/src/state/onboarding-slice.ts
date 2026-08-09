@@ -1,6 +1,7 @@
 import type { StateCreator } from "zustand";
 import type { OnboardingController, OnboardingSurfaceState } from "../onboarding/controller.js";
 import { createOnboardingState } from "../onboarding/machine.js";
+import { repairRequiredCredential } from "../settings/credential-controller.js";
 import { IDLE_RIDE_IMPORT } from "./ride-import-slice.js";
 import type { EnduragentState } from "./store.js";
 
@@ -8,6 +9,7 @@ export const CLOSED_ONBOARDING: OnboardingSurfaceState = Object.freeze({
   open: false,
   initialized: false,
   loading: true,
+  loadUnavailable: false,
   wizard: createOnboardingState(),
   statuses: Object.freeze([]),
   configuration: null,
@@ -35,20 +37,20 @@ export interface OnboardingSlice {
   setOnboardingStartupSettled: (settled: boolean) => void;
 }
 
-export function setupReady(
-  state: Pick<EnduragentState, "onboarding">,
-): boolean {
-  const { initialized, loading, readiness } = state.onboarding;
+export function setupReady(state: Pick<EnduragentState, "onboarding" | "settings">): boolean {
+  const { initialized, loading, loadUnavailable, readiness } = state.onboarding;
   return (
+    repairRequiredCredential(state.settings.credentials) === null &&
     initialized &&
     !loading &&
+    !loadUnavailable &&
     readiness.provider &&
     readiness.trainingData &&
     readiness.intake
   );
 }
 
-export function setupRequired(state: Pick<EnduragentState, "onboarding">): boolean {
+export function setupRequired(state: Pick<EnduragentState, "onboarding" | "settings">): boolean {
   return !setupReady(state);
 }
 

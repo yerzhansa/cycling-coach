@@ -1,8 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
-import {
-  CHAT_AUTO_LOAD_EARLIER_THRESHOLD,
-  chatScrollAnchor,
-} from "../../state/chat-stream.js";
+import { CHAT_AUTO_LOAD_EARLIER_THRESHOLD, chatScrollAnchor } from "../../state/chat-stream.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { setupRequired } from "../../state/onboarding-slice.js";
 import { SetupPanel } from "../onboarding/OnboardingWizard.js";
@@ -42,6 +39,7 @@ export function ChatView(): ReactElement {
   const hasEarlier = useEnduragentStore((state) => state.chat.hydrationHasEarlier);
   const workBlocked = useEnduragentStore((state) => state.chat.workBlocked);
   const actions = useEnduragentStore((state) => state.chatActions);
+  const previousNeedsSetup = useRef(needsSetup);
 
   useLayoutEffect(() => {
     chatScrollAnchor.attach(conversation.current);
@@ -51,7 +49,14 @@ export function ChatView(): ReactElement {
   }, []);
 
   useLayoutEffect(() => {
-    if (activeView === "chat" && !needsSetup) chatScrollAnchor.reanchor();
+    const setupFinished = previousNeedsSetup.current && !needsSetup;
+    previousNeedsSetup.current = needsSetup;
+    const chatActive = activeView === "chat";
+    chatScrollAnchor.setStartPinned(chatActive && needsSetup);
+    if (chatActive && !needsSetup) {
+      chatScrollAnchor.reanchor();
+      if (setupFinished) composer.current?.focus();
+    }
   }, [activeView, needsSetup]);
 
   useLayoutEffect(() => {

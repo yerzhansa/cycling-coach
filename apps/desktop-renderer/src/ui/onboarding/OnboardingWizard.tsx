@@ -13,7 +13,9 @@ import {
   FOOTER_NOTE,
   OUTSTANDING_NOTE,
   PRIMARY_LABEL,
+  RETRY_SETUP_STATUS_LABEL,
   SETUP_HEADING,
+  SETUP_STATUS_UNAVAILABLE_COPY,
 } from "./copy.js";
 import { IntakeRows } from "./IntakeRows.js";
 import { intakeComplete } from "../../onboarding/machine.js";
@@ -58,20 +60,23 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
   const blocked =
     credentialMutationBlocked ||
     surface.loading ||
+    surface.loadUnavailable ||
     wizard.busy ||
     surface.rideImport.status === "running" ||
     !readiness.provider ||
     !readiness.trainingData ||
     !intakeComplete(wizard.intake);
-  const outstanding = !readiness.provider
-    ? "coach"
-    : !readiness.trainingData
-      ? "training"
-      : !readiness.intake && !intakeComplete(wizard.intake)
-        ? wizard.intake.injuryStatus === null
-          ? "intake"
-          : "clearance"
-        : null;
+  const outstanding = surface.loadUnavailable
+    ? null
+    : !readiness.provider
+      ? "coach"
+      : !readiness.trainingData
+        ? "training"
+        : !readiness.intake && !intakeComplete(wizard.intake)
+          ? wizard.intake.injuryStatus === null
+            ? "intake"
+            : "clearance"
+          : null;
 
   return (
     <section
@@ -87,6 +92,26 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
       >
         {SETUP_HEADING}
       </h2>
+      {surface.loadUnavailable ? (
+        <div
+          className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line-2 bg-surface px-3 py-2.5"
+          data-setup-load-unavailable
+          role="status"
+          aria-live="polite"
+        >
+          <span className="text-[13px] text-ink-2">{SETUP_STATUS_UNAVAILABLE_COPY}</span>
+          <button
+            type="button"
+            className={BUTTON_PRIMARY}
+            disabled={surface.loading}
+            onClick={() => {
+              void actions?.refresh();
+            }}
+          >
+            {RETRY_SETUP_STATUS_LABEL}
+          </button>
+        </div>
+      ) : null}
       <SetupCard>
         <AiRow surface={surface} actions={actions} placement={props.placement} />
         <TrainingRow surface={surface} actions={actions} placement={props.placement} />

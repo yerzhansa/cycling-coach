@@ -155,6 +155,39 @@ describe("setup card", () => {
     warm.controller.dispose();
   });
 
+  it("shows an active off-catalogue provider as ready in Settings until replacement", async () => {
+    const user = userEvent.setup();
+    const bridge = readyEverythingBridge();
+    bridge.llmConfiguration.mockResolvedValue({
+      ...CLAUDE_CONFIGURATION,
+      active: { provider: "codex-agent", model: "synthetic-codex" },
+    });
+    const wizard = mountWizard({ bridge, placement: "settings" });
+    await wizard.open();
+
+    expect(rowState("ai")).toBe("ready");
+    expect(setupRow("ai").textContent).toContain("Codex agent (experimental)");
+    expect(rowSubtitle("ai")).toBe("Powers your coach");
+    expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeEnabled();
+
+    await openLaneMenu(user);
+    expect(laneItems().map((item) => item.dataset.lane)).not.toContain("codex-agent");
+    const apiKeyLane = document.querySelector<HTMLElement>('[data-lane="api-key"]');
+    expect(apiKeyLane).not.toBeNull();
+    await user.click(apiKeyLane as HTMLElement);
+    await waitFor(() => {
+      expect(panel("api-key")).not.toBeNull();
+    });
+    expect(rowState("ai")).toBe("pending");
+    expect(
+      Array.from(
+        control<HTMLSelectElement>("onboarding-llm-provider").options,
+        (option) => option.value,
+      ),
+    ).not.toContain("codex-agent");
+    wizard.controller.dispose();
+  });
+
   it("keeps completed Chat setup changes quiet and omits deletion controls", async () => {
     const wizard = mountWizard({ bridge: readyEverythingBridge() });
     await wizard.open();

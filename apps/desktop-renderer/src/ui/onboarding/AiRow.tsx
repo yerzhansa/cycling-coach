@@ -91,14 +91,12 @@ export function AiRow(props: {
   const settingsMutating = useEnduragentStore((state) => settingsMutationActive(state.settings));
   const repairRequired = repairRequiredCredential(credentialSettings) !== null;
   const controlsDisabled =
-    busy || surface.loading || credentialChangesBlocked(credentialSettings, settingsMutating);
+    busy ||
+    surface.loading ||
+    surface.loadUnavailable ||
+    credentialChangesBlocked(credentialSettings, settingsMutating);
   const provider = draft?.provider.provider ?? null;
   const parsedDraft = llmSelectionFromDraft(draft ?? undefined);
-  const ready =
-    surface.readiness.provider &&
-    parsedDraft.error === null &&
-    configuration?.active?.provider === parsedDraft.selection.provider &&
-    configuration.active.model === parsedDraft.selection.model;
   const activeCredential = desktopCredentialId(configuration?.active?.provider);
   const primaryCredential = activeCredential === provider ? activeCredential : null;
   const activeLane = laneForProvider(provider);
@@ -109,6 +107,18 @@ export function AiRow(props: {
     null,
   );
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const draftIsActive =
+    surface.readiness.provider &&
+    parsedDraft.error === null &&
+    configuration?.active?.provider === parsedDraft.selection.provider &&
+    configuration.active.model === parsedDraft.selection.model;
+  const activeProviderOutsideCatalogue =
+    configuration?.active !== null &&
+    configuration?.active !== undefined &&
+    !configuration.providers.some((entry) => entry.provider === configuration.active?.provider);
+  const showsActiveProviderOutsideCatalogue =
+    surface.readiness.provider && activeProviderOutsideCatalogue && picked === null;
+  const ready = draftIsActive || showsActiveProviderOutsideCatalogue;
   const chatGptPhase = chatGptUiPhase(wizard);
   const chatGptStored = chatGptSignedIn(wizard);
   const chatGptIsReady = chatGptReady(wizard);
@@ -173,7 +183,13 @@ export function AiRow(props: {
       (slot) => slot === provider && wizard.credentialStatus[slot] === "configured",
     );
   const hasActiveSelection = configuration?.active?.provider === provider && activeProviderStored;
-  const lane = picked ?? (ready || hasActiveSelection ? activeLane : null);
+  const lane =
+    picked ??
+    (showsActiveProviderOutsideCatalogue
+      ? null
+      : draftIsActive || hasActiveSelection
+        ? activeLane
+        : null);
   const autoChatGptPanel =
     panelLane === null && provider === "openai-codex" && chatGptStored && !chatGptIsReady;
   const panel = repairRequired
@@ -185,7 +201,13 @@ export function AiRow(props: {
         : null;
   const lanes = offeredLanes(configuration, wizard, lane);
   const note = claudeCliNote(configuration, wizard);
-  const copy = aiRowCopy(lane, wizard, ready);
+  const copy = showsActiveProviderOutsideCatalogue
+    ? {
+        title: ONBOARDING_LLM_PROVIDER_LABELS[configuration.active!.provider],
+        subtitle: "Powers your coach",
+      }
+    : aiRowCopy(lane, wizard, ready);
+  const hasDisplayedProvider = lane !== null || showsActiveProviderOutsideCatalogue;
   const keyProviders = apiKeyProviders(configuration);
   const keySlot = DESKTOP_CREDENTIAL_SLOTS.find((slot) => slot === draft?.provider.provider);
   const ownsError = errorSection(wizard.fixedError, surface.lastCommit) === "provider";
@@ -308,14 +330,14 @@ export function AiRow(props: {
                 ref={triggerRef}
                 data-setup-trigger="ai"
                 disabled={controlsDisabled || chatGptActivating}
-                aria-label={lane === null ? AI_TRIGGER_LABELS.unset : AI_TRIGGER_LABELS.set}
+                aria-label={hasDisplayedProvider ? AI_TRIGGER_LABELS.set : AI_TRIGGER_LABELS.unset}
                 className={
-                  lane === null || props.placement === "settings"
+                  !hasDisplayedProvider || props.placement === "settings"
                     ? BUTTON_OUTLINE_SM
                     : BUTTON_QUIET_SM
                 }
               >
-                {lane === null ? "Choose" : "Change"}
+                {hasDisplayedProvider ? "Change" : "Choose"}
               </Menu.Trigger>
               <Menu.Portal>
                 <Menu.Positioner side="bottom" align="end" sideOffset={6}>

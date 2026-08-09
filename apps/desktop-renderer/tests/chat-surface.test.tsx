@@ -154,6 +154,20 @@ describe("chat surface", () => {
   });
 
   describe("composer", () => {
+    it("focuses the enabled composer after required setup completes in Chat", () => {
+      useEnduragentStore.setState({ onboarding: CLOSED_ONBOARDING });
+      render(<Harness />);
+
+      expect(composer()).toBeDisabled();
+
+      act(() => {
+        useEnduragentStore.setState({ onboarding: READY_ONBOARDING });
+      });
+
+      expect(composer()).toBeEnabled();
+      expect(composer()).toHaveFocus();
+    });
+
     it("never submits while an IME composition is in flight", async () => {
       render(<Harness />);
       const textarea = composer();

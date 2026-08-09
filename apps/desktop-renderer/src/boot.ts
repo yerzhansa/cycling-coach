@@ -164,6 +164,9 @@ export function bootRenderer(): Disposer {
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
     canChat: () => setupReady(store.getState()),
   });
+  const disposeSetupReadiness = store.subscribe((state, previousState) => {
+    if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
+  });
 
   const archiveAdapter = createArchiveViewAdapter({
     publish: (next) => store.getState().setArchive(next),
@@ -283,7 +286,6 @@ export function bootRenderer(): Disposer {
       store.getState().setRideImportSuppressed(presenting),
     focusOpener: () => {},
     onComplete: (completion) => onboardingCompletion.complete(completion),
-    onReady: focusComposer,
     ownsDroppedImportFiles: () => {
       const state = store.getState();
       return (
@@ -339,6 +341,10 @@ export function bootRenderer(): Disposer {
     deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
     openSetup: openSetupFromSettings,
     onDeleted: () => onboarding.refresh(),
+    onReconciled: async () => {
+      await onboarding.refresh();
+      if (store.getState().onboarding.loadUnavailable) throw new TypeError();
+    },
     credentialMutationsBlocked: () =>
       onboardingCredentialMutationActive(store.getState().onboarding),
     beginMutation: () => store.getState().beginSettingsMutation("credential"),
@@ -432,6 +438,7 @@ export function bootRenderer(): Disposer {
     store.getState().bindOnboardingActions(null);
     disposeLifecycle();
     disposeRideAnalysisSelection();
+    disposeSetupReadiness();
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();
     desktopUpdateController.dispose();

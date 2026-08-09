@@ -10,6 +10,7 @@ import {
 } from "../src/onboarding/completion.js";
 import {
   createOnboardingController,
+  ONBOARDING_STATUS_REFRESH_TIMEOUT_MS,
   type OnboardingSurfaceState,
 } from "../src/onboarding/controller.js";
 import type { CredentialDraftPort } from "../src/onboarding/credentials.js";
@@ -288,6 +289,81 @@ describe("onboarding completion", () => {
 });
 
 describe("onboarding runtime completion gate", () => {
+  it("blocks controller mutations after a setup read timeout until a full retry succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseBridge = activationBridge(async () => ({
+        status: "configured",
+        runtimeReady: true,
+      }));
+      baseBridge.credentialStatuses.mockImplementationOnce(
+        async () => await new Promise<never>(() => undefined),
+      );
+      const bridge = {
+        ...baseBridge,
+        getSetupStatus: vi.fn<NonNullable<OnboardingBridge["getSetupStatus"]>>(async () => ({
+          schemaVersion: 1,
+          intake: {
+            swim_skill_floor: null,
+            continuous_distance_capable: null,
+            open_water_comfort: null,
+            prior_bsi: false,
+            clinician_cleared: null,
+            injury_status: "none",
+          },
+          durableTrainingData: true,
+        })),
+      };
+      const harness = onboardingHarness(bridge);
+
+      const opening = harness.controller.open();
+      await vi.advanceTimersByTimeAsync(ONBOARDING_STATUS_REFRESH_TIMEOUT_MS);
+      await opening;
+
+      expect(harness.surface().loadUnavailable).toBe(true);
+      const stateBeforeMutations = harness.controller.state();
+      harness.controller.selectProvider("anthropic");
+      harness.controller.selectModel("claude-sonnet-4-6");
+      harness.controller.setCustomModel("synthetic-model");
+      harness.controller.setEndpointMode("default");
+      harness.controller.setCustomEndpoint("https://example.test/v1");
+      harness.controller.setIntake("injuryStatus", "none");
+      harness.controller.saveModelKey();
+      harness.controller.saveTrainingKey();
+      harness.controller.retrySavedKeys();
+      harness.controller.startChatGptLogin();
+      harness.controller.retryChatGptActivation();
+      harness.controller.recheckClaudeCli();
+      harness.controller.chooseImportFiles();
+      harness.controller.importDroppedFiles(["/tmp/synthetic.fit"]);
+      harness.controller.finish();
+      await Promise.resolve();
+
+      expect(harness.controller.state()).toBe(stateBeforeMutations);
+      expect(bridge.writeCredential).not.toHaveBeenCalled();
+      expect(bridge.retryFailedCredentials).not.toHaveBeenCalled();
+      expect(bridge.chatGptLogin).not.toHaveBeenCalled();
+      expect(bridge.applyLlmSelection).not.toHaveBeenCalled();
+      expect(bridge.claudeCliRecheck).not.toHaveBeenCalled();
+      expect(bridge.chooseImportFiles).not.toHaveBeenCalled();
+      expect(bridge.importFiles).not.toHaveBeenCalled();
+      expect(bridge.saveIntake).not.toHaveBeenCalled();
+      expect(harness.controller.ownsDroppedImportFiles()).toBe(false);
+
+      await harness.controller.refresh();
+
+      expect(harness.surface().loadUnavailable).toBe(false);
+      expect(harness.surface().readiness).toEqual({
+        provider: true,
+        trainingData: true,
+        intake: true,
+      });
+      harness.controller.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("activates a selected ready Claude lane and ignores Finish while activation is pending", async () => {
     const pending = deferred<OnboardingLlmSelectionResult>();
     const bridge = activationBridge(() => pending.promise);

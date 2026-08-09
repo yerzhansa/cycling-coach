@@ -62,7 +62,7 @@ export function IntakeRows(props: {
   const { surface, actions } = props;
   const wizard = surface.wizard;
   const intake = wizard.intake;
-  const controlsDisabled = wizard.busy || surface.loading;
+  const controlsDisabled = wizard.busy || surface.loading || surface.loadUnavailable;
   const needsClearance = intake.injuryStatus !== null && intake.injuryStatus !== "none";
   const ownsError = errorSection(wizard.fixedError, surface.lastCommit) === "intake";
   const describedBy = ownsError ? { describedBy: "onboarding-error" } : {};

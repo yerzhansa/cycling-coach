@@ -47,7 +47,10 @@ export function TrainingRow(props: {
   const settingsMutating = useEnduragentStore((state) => settingsMutationActive(state.settings));
   const repairRequired = repairRequiredCredential(credentialSettings) !== null;
   const controlsDisabled =
-    busy || surface.loading || credentialChangesBlocked(credentialSettings, settingsMutating);
+    busy ||
+    surface.loading ||
+    surface.loadUnavailable ||
+    credentialChangesBlocked(credentialSettings, settingsMutating);
   const importing = surface.rideImport.status === "running";
   const connected = wizard.credentialStatus["intervals-icu"] === "configured";
   const ready = surface.readiness.trainingData;

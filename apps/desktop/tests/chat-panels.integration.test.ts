@@ -131,6 +131,19 @@ const athleteState = {
   trainingContext,
 } as const;
 
+const readySetupStatus = {
+  schemaVersion: 1,
+  intake: {
+    swim_skill_floor: null,
+    continuous_distance_capable: null,
+    open_water_comfort: null,
+    prior_bsi: false,
+    clinician_cleared: null,
+    injury_status: "none",
+  },
+  durableTrainingData: true,
+} as const;
+
 const tallTurn =
   "Long ride notes that make the newest restored turn taller than the window. ".repeat(52);
 
@@ -154,6 +167,9 @@ function makeScript(
       calls.push(request);
       if (request.method === "getAthleteState") {
         return response({ ...athleteState, lastSynced });
+      }
+      if (request.method === "getSetupStatus") {
+        return response(readySetupStatus);
       }
       if (request.method === "getActivityAnalysis") {
         const canonicalActivityId = (request.params as { readonly canonicalActivityId: string })
@@ -463,8 +479,8 @@ ${"nonwrapping".repeat(36)}
         return response({
           schemaVersion: 3,
           llm: {
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
+            provider: "codex-agent",
+            model: "synthetic-codex",
             credential_configured: true,
           },
           intervals: {
@@ -526,34 +542,18 @@ async function launch(input: {
     const onboardingDeadline = Date.now() + 10000;
     const onboardingState = () =>
       document.querySelector("[data-onboarding]")?.getAttribute("data-onboarding") ?? null;
-    while (
-      (onboardingState() === null || onboardingState() === "pending") &&
-      Date.now() < onboardingDeadline
-    ) {
+    while (onboardingState() !== "settled" && Date.now() < onboardingDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    if (onboardingState() === null || onboardingState() === "pending") {
+    if (onboardingState() !== "settled") {
       throw new Error("onboarding startup decision did not settle");
     }
-    if (onboardingState() === "open") {
-      const dismissDeadline = Date.now() + 10000;
-      while (
-        document.querySelector(".onboarding-dismiss") === null &&
-        onboardingState() === "open" &&
-        Date.now() < dismissDeadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      if (onboardingState() === "open") {
-        const dismiss = document.querySelector(".onboarding-dismiss");
-        if (!(dismiss instanceof HTMLButtonElement)) throw new Error("setup dismiss did not mount");
-        dismiss.click();
-      }
-      const closedDeadline = Date.now() + 10000;
-      while (onboardingState() !== "closed" && Date.now() < closedDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      if (onboardingState() !== "closed") throw new Error("setup dismiss did not close onboarding");
+    if (document.querySelector("[data-setup-host]") !== null) {
+      throw new Error("ready fixture unexpectedly requires setup");
+    }
+    const composer = document.querySelector("textarea#message");
+    if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) {
+      throw new Error("ready fixture did not enable chat");
     }
   `);
   return { fixture, calls };
@@ -1565,7 +1565,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       drift: "+4.8%",
       limitation: "No moving-status stream was available, so stopped time may be included.",
       interval:
-        "Ordered ride segmentsIntervals and lapsShows recorded segments in order. Missing metrics stay unavailable, and no planned workout targets are inferred.Ordered analysis from intervals.icu1WorkThresholdDuration5 minDistance2.5 kmPower250 avg · 310 max WHeart rate155 avg · 170 max bpm",
+        "Ordered ride segmentsIntervals and lapsShows recorded segments in order. Missing metrics stay unavailable, and no planned workout targets are inferred.Ordered analysis from intervals.icu1WorkThresholdDuration5 minDistance2.5 kmPower250 avg · 310 max WHeart rate155 avg · 170 max bpmCadence91 avg · 104 max rpmZoneZone 4Intensity96%Training load12",
       efforts:
         "Selected-ride scopeFive-minute best effortsRanks measured five-minute power efforts from this ride only. It does not compare against other rides or all-history results.This ride · power · 5 min · equal efforts rank the earlier start first#1310 W2.6 km",
       powerDistribution: true,
@@ -1760,6 +1760,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly horizontalOverflow: boolean;
       readonly withinViewport: boolean;
       readonly saveReachableAfterScroll: boolean;
+      readonly scrolled: boolean;
       readonly resetWarningVisible: boolean;
       readonly retentionWarningVisible: boolean;
     }>(`
@@ -1779,15 +1780,29 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         (entry) => entry.textContent === "Save conversation settings",
       );
       const rect = page.getBoundingClientRect();
+      const scroll = page.querySelector("[data-page-scroll]");
+      if (!(scroll instanceof HTMLElement)) throw new Error("page scrollport did not mount");
+      const layoutDeadline = Date.now() + 2000;
+      let previousScrollHeight = -1;
+      let stableFrames = 0;
+      while (stableFrames < 2 && Date.now() < layoutDeadline) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const nextScrollHeight = scroll.scrollHeight;
+        stableFrames = nextScrollHeight === previousScrollHeight ? stableFrames + 1 : 0;
+        previousScrollHeight = nextScrollHeight;
+      }
+      if (stableFrames < 2) throw new Error("page scrollport did not stabilize");
       sessionSave.scrollIntoView({ block: "nearest" });
       await new Promise((resolve) => requestAnimationFrame(resolve));
       const saveRect = sessionSave.getBoundingClientRect();
+      const scrollRect = scroll.getBoundingClientRect();
+      const subpixelTolerance = 1;
       const copy = page.textContent;
       return {
         open: page.getAttribute("aria-hidden") === null,
         onePage: document.querySelectorAll('section[aria-label="Settings"]').length === 1,
         hasEverySection:
-          ["Coach", "Credentials", "Training account", "Conversation and time", "Spending", "Preferences", "Application"].every(
+          ["Coach", "Training account", "Conversation and time", "Spending", "Preferences", "Application"].every(
             (label) => document.querySelectorAll('section[aria-label="' + label + '"]').length === 1,
           ) &&
           copy.includes("Coach route") &&
@@ -1804,10 +1819,11 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
           rect.top >= 0 &&
           rect.bottom <= window.innerHeight,
         saveReachableAfterScroll:
-          saveRect.left >= rect.left &&
-          saveRect.right <= rect.right &&
-          saveRect.top >= rect.top &&
-          saveRect.bottom <= Math.min(rect.bottom, window.innerHeight),
+          saveRect.left >= scrollRect.left - subpixelTolerance &&
+          saveRect.right <= scrollRect.right + subpixelTolerance &&
+          saveRect.top >= scrollRect.top - subpixelTolerance &&
+          saveRect.bottom <= scrollRect.bottom + subpixelTolerance,
+        scrolled: scroll.scrollTop > 0,
         resetWarningVisible: copy.includes(
           "may make your next message start a fresh conversation",
         ),
@@ -1821,6 +1837,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       horizontalOverflow: false,
       withinViewport: true,
       saveReachableAfterScroll: true,
+      scrolled: true,
       resetWarningVisible: true,
       retentionWarningVisible: true,
     });

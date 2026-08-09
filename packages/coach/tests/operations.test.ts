@@ -363,7 +363,7 @@ describe("coach operations", () => {
     }
   });
 
-  it("fails setup readiness closed when persisted state is unreadable", async () => {
+  it("rejects setup status when persisted intake is unreadable", async () => {
     const unreadableStore = {
       get: vi.fn(async () => ({ present: 1 })),
     } as unknown as CoachStoreWriterContext["store"];
@@ -390,11 +390,37 @@ describe("coach operations", () => {
       },
     );
 
-    await expect(operations.getSetupStatus?.({})).resolves.toEqual({
-      schemaVersion: 1,
-      intake: null,
-      durableTrainingData: false,
-    });
+    await expect(operations.getSetupStatus?.({})).rejects.toThrow("corrupt intake row");
+  });
+
+  it("rejects setup status when durable workout evidence is unreadable", async () => {
+    const unreadableStore = {
+      get: vi.fn(async () => {
+        throw new TypeError("corrupt workout store");
+      }),
+    } as unknown as CoachStoreWriterContext["store"];
+    const operations = createCoachOperations(
+      {
+        home,
+        context: {
+          home,
+          store: unreadableStore,
+          listener: {} as CoachStoreWriterContext["listener"],
+        },
+        runtime: operationRuntime(),
+        intervalsCredentials: intervalsCredentials(),
+        historyNewestDate: () => "1998-07-18",
+        applyRuntimeConfig: async () => {},
+      },
+      {
+        createIntakeRepository: () => ({
+          replace: async () => {},
+          read: async () => undefined,
+        }),
+      },
+    );
+
+    await expect(operations.getSetupStatus?.({})).rejects.toThrow("corrupt workout store");
   });
 
   it("maps canonical import and sync reports with exact progress", async () => {

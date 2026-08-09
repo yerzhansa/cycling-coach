@@ -14,6 +14,7 @@ import styles from "./Composer.module.css";
 import { SlashPopup } from "./SlashPopup.js";
 
 export interface ComposerHandle {
+  focus(): void;
   reset(): void;
 }
 
@@ -36,6 +37,9 @@ export function Composer(props: {
   useImperativeHandle(
     props.handle,
     () => ({
+      focus() {
+        textarea.current?.focus();
+      },
       reset() {
         const input = textarea.current;
         if (input !== null) {
