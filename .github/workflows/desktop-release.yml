@@ -65,8 +65,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           COORDINATOR_RUN_ID: ${{ inputs.coordinator_run_id }}
           COORDINATOR_RUN_ATTEMPT: ${{ inputs.coordinator_run_attempt }}
+          RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
           WORKFLOW_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -75,11 +79,22 @@ jobs:
           printf '%s' "$RELEASE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$RELEASE_TOOLING_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
           test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"
+          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
+            test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"
+            test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"
+          else
+            test "$RELEASE_MODE" = 'steady'
+            RECOVERY_REVISION="${WORKFLOW_REF_NAME#"${RELEASE_TAG}-recovery."}"
+            printf '%s' "$RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$'
+            test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${RECOVERY_REVISION}"
+            test "$WORKFLOW_REF" = "refs/tags/$WORKFLOW_REF_NAME"
+          fi
           COORDINATOR=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID")
           test "$(printf '%s' "$COORDINATOR" | jq -r '.path')" = '.github/workflows/desktop-release-coordinator.yml'
           test "$(printf '%s' "$COORDINATOR" | jq -r '.run_attempt')" = "$COORDINATOR_RUN_ATTEMPT"
           test "$(printf '%s' "$COORDINATOR" | jq -r '.status')" = 'in_progress'
           test "$(printf '%s' "$COORDINATOR" | jq -r '.head_sha')" = "$RELEASE_TOOLING_COMMIT"
+          test "$(printf '%s' "$COORDINATOR" | jq -r '.head_branch')" = "$WORKFLOW_REF_NAME"
           test "$(printf '%s' "$COORDINATOR" | jq -r '.event')" = 'workflow_dispatch'
 
   sign-macos:
@@ -124,13 +139,14 @@ jobs:
           fi
           git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
           git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --worktree -- \
-            apps/desktop/scripts/macos-genesis-release.mjs \
-            apps/desktop/scripts/macos-release-plan.d.mts \
-            apps/desktop/scripts/macos-release-plan.mjs \
-            apps/desktop/scripts/verify-macos-release.mjs
-          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/macos-genesis-release.mjs\napps/desktop/scripts/macos-release-plan.d.mts\napps/desktop/scripts/macos-release-plan.mjs\napps/desktop/scripts/verify-macos-release.mjs'
-          test "$(git diff --name-only)" = "$EXPECTED_RECOVERY_DIFF"
+          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
+            apps/desktop/scripts/macos-release-cli.mjs \
+            apps/desktop/scripts/macos-release-plan.mjs
+          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/macos-release-cli.mjs\napps/desktop/scripts/macos-release-plan.mjs'
+          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:

@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   readdir,
   rename,
   rm,
@@ -478,6 +479,64 @@ describe("macOS release plan", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("macOS genesis release build failed at release-plan");
     expect(result.stderr).not.toContain(secretSentinel);
+  });
+
+  it("fails the steady CLI with a safe actionable stage", () => {
+    const secretSentinel = "must-not-reach-stderr";
+    const result = spawnSync(
+      process.execPath,
+      [join(desktopRoot, "scripts/macos-release-plan.mjs")],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: {
+          ENDURAGENT_DESKTOP_UPDATE_URL: feedUrl,
+          ENDURAGENT_DEVELOPER_ID_IDENTITY: identity,
+          ENDURAGENT_MACOS_BASELINE_APP: "/synthetic/missing/Enduragent.app",
+          APPLE_API_KEY: `/synthetic/${secretSentinel}.p8`,
+          APPLE_API_KEY_ID: "SYNTHETICKEY",
+          APPLE_API_ISSUER: "00000000-0000-0000-0000-000000000000",
+          NODE_OPTIONS: "--unhandled-rejections=none",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "macOS release build failed at baseline-verification: baseline application bundle is invalid",
+    );
+    expect(result.stderr).not.toContain("unsettled top-level await");
+    expect(result.stderr).not.toContain(secretSentinel);
+  });
+
+  it("fails closed when the steady release command never settles", async () => {
+    const root = await mkdtemp(join(tmpdir(), "desktop-release-cli-unsettled-"));
+    temporaryRoots.push(root);
+    const scripts = join(await realpath(root), "scripts");
+    await mkdir(scripts);
+    const releaseCli = await readFile(join(desktopRoot, "scripts/macos-release-cli.mjs"), "utf8");
+    await Promise.all([
+      writeFile(join(scripts, "macos-release-cli.mjs"), releaseCli),
+      writeFile(
+        join(scripts, "macos-release-plan.mjs"),
+        [
+          "export function safeMacosReleasePlanMessage() { return undefined; }",
+          "export async function runMacosRelease() { await new Promise(() => {}); }",
+          "",
+        ].join("\n"),
+      ),
+      writeFile(
+        join(scripts, "verify-macos-release.mjs"),
+        "export function safeMacosReleaseVerificationMessage() { return undefined; }\n",
+      ),
+    ]);
+
+    const result = spawnSync(process.execPath, [join(scripts, "macos-release-cli.mjs")], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(13);
+    expect(result.signal).toBeNull();
   });
 
   it("rejects a missing absolute baseline before invoking electron-builder", async () => {

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -806,33 +807,19 @@ export async function runMacosRelease(input, dependencies = {}) {
   return { plan, artifacts, envelopePath };
 }
 
-let activeStage = "initialization";
-
-async function main() {
-  if (process.argv.length !== 2) throw new TypeError("arguments are not supported");
-  const result = await runMacosRelease(
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const result = spawnSync(
+    process.execPath,
+    [join(scriptDirectory, "macos-release-cli.mjs"), ...process.argv.slice(2)],
     {
-      feedUrl: process.env.ENDURAGENT_DESKTOP_UPDATE_URL,
-      identity: process.env.ENDURAGENT_DEVELOPER_ID_IDENTITY,
-      baselineApplication: process.env.ENDURAGENT_MACOS_BASELINE_APP,
-    },
-    {
-      reportStage(stage) {
-        activeStage = stage;
-      },
+      env: process.env,
+      stdio: "inherit",
     },
   );
-  process.stdout.write(`macOS release envelope: ${result.envelopePath}\n`);
-}
-
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    await main();
-  } catch (error) {
-    const verification = await import("./verify-macos-release.mjs");
-    const detail =
-      verification.safeMacosReleaseVerificationMessage(error) ?? safeMacosReleasePlanMessage(error);
-    const suffix = detail === undefined ? "" : `: ${detail}`;
-    throw new TypeError(`macOS release build failed at ${activeStage}${suffix}`);
+  if (result.error !== undefined || result.signal !== null || result.status === null) {
+    process.stderr.write("macOS release build failed at initialization\n");
+    process.exitCode = 1;
+  } else {
+    process.exitCode = result.status;
   }
 }

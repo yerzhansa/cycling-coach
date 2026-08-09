@@ -5,20 +5,25 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Exact enduragent-desktop@<version> tag'
+        description: "Exact enduragent-desktop@<version> tag"
         required: true
         type: string
       desktop_mode:
-        description: 'macOS release continuity mode'
+        description: "macOS release continuity mode"
         type: choice
         default: steady
         options:
           - steady
           - genesis
       desktop_baseline_tag:
-        description: 'Explicit prior signed desktop release tag; leave empty to require repository latest'
+        description: "Explicit prior signed desktop release tag; leave empty to require repository latest"
         required: false
-        default: ''
+        default: ""
+      recovery_tooling_tag:
+        description: "Optional immutable enduragent-desktop@<version>-recovery.<revision> tooling tag"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -37,6 +42,8 @@ jobs:
       tag: ${{ steps.bind.outputs.tag }}
       desktop_version: ${{ steps.bind.outputs.desktop_version }}
       commit: ${{ steps.bind.outputs.commit }}
+      workflow_ref: ${{ steps.bind.outputs.workflow_ref }}
+      tooling_commit: ${{ steps.bind.outputs.tooling_commit }}
       mode: ${{ steps.bind.outputs.mode }}
       baseline_tag: ${{ steps.bind.outputs.baseline_tag }}
     steps:
@@ -50,6 +57,7 @@ jobs:
           RELEASE_TAG_INPUT: ${{ inputs.tag }}
           RELEASE_MODE_INPUT: ${{ inputs.desktop_mode }}
           RELEASE_BASELINE_TAG_INPUT: ${{ inputs.desktop_baseline_tag }}
+          RECOVERY_TOOLING_TAG_INPUT: ${{ inputs.recovery_tooling_tag }}
           DESKTOP_ENABLED: ${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}
           WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -64,8 +72,6 @@ jobs:
           VERSION="${TAG#enduragent-desktop@}"
           git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
           COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
-          test "$WORKFLOW_REF" = "refs/tags/$TAG"
-          test "$WORKFLOW_SHA" = "$COMMIT"
           MANIFEST_VERSION=$(git show "$COMMIT:apps/desktop/package.json" | jq -er '.version')
           if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
             echo "::error::Desktop tag version $VERSION does not match apps/desktop/package.json $MANIFEST_VERSION"
@@ -77,13 +83,46 @@ jobs:
             exit 1
           fi
           MODE="$RELEASE_MODE_INPUT"
-          BASELINE_TAG=none
-          if [ -n "$RELEASE_BASELINE_TAG_INPUT" ]; then
-            BASELINE_TAG="$RELEASE_BASELINE_TAG_INPUT"
-          fi
           if [ "$MODE" != 'steady' ] && [ "$MODE" != 'genesis' ]; then
             echo "::error::Unsupported desktop release mode '$MODE'"
             exit 1
+          fi
+          CHILD_WORKFLOW_REF="$TAG"
+          TOOLING_COMMIT="$COMMIT"
+          if [ -n "$RECOVERY_TOOLING_TAG_INPUT" ]; then
+            if [ "$MODE" != 'steady' ]; then
+              echo '::error::Recovery tooling is allowed only for steady desktop releases'
+              exit 1
+            fi
+            RECOVERY_TAG="$RECOVERY_TOOLING_TAG_INPUT"
+            RECOVERY_REVISION="${RECOVERY_TAG#"${TAG}-recovery."}"
+            if ! printf '%s' "$RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$' || \
+               [ "$RECOVERY_TAG" != "${TAG}-recovery.${RECOVERY_REVISION}" ]; then
+              echo "::error::Recovery tooling tag must be exactly ${TAG}-recovery.<positive integer>"
+              exit 1
+            fi
+            git fetch --force --no-tags origin \
+              "refs/tags/$RECOVERY_TAG:refs/tags/$RECOVERY_TAG"
+            TOOLING_COMMIT=$(git rev-parse "refs/tags/$RECOVERY_TAG^{commit}")
+            test "$TOOLING_COMMIT" != "$COMMIT"
+            test "$WORKFLOW_REF" = "refs/tags/$RECOVERY_TAG"
+            test "$WORKFLOW_SHA" = "$TOOLING_COMMIT"
+            if ! git merge-base --is-ancestor "$COMMIT" "$TOOLING_COMMIT"; then
+              echo '::error::Candidate commit must be an ancestor of recovery tooling'
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$TOOLING_COMMIT" refs/remotes/origin/main; then
+              echo '::error::Recovery tooling commit must be merged into main'
+              exit 1
+            fi
+            CHILD_WORKFLOW_REF="$RECOVERY_TAG"
+          else
+            test "$WORKFLOW_REF" = "refs/tags/$TAG"
+            test "$WORKFLOW_SHA" = "$COMMIT"
+          fi
+          BASELINE_TAG=none
+          if [ -n "$RELEASE_BASELINE_TAG_INPUT" ]; then
+            BASELINE_TAG="$RELEASE_BASELINE_TAG_INPUT"
           fi
           if [ "$MODE" = 'genesis' ] && [ "$BASELINE_TAG" != 'none' ]; then
             echo '::error::Genesis cannot consume a prior desktop baseline'
@@ -98,6 +137,8 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "desktop_version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "workflow_ref=$CHILD_WORKFLOW_REF" >> "$GITHUB_OUTPUT"
+          echo "tooling_commit=$TOOLING_COMMIT" >> "$GITHUB_OUTPUT"
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "baseline_tag=$BASELINE_TAG" >> "$GITHUB_OUTPUT"
 
@@ -158,7 +199,8 @@ jobs:
           RELEASE_TAG: ${{ needs.bind-release.outputs.tag }}
           DESKTOP_VERSION: ${{ needs.bind-release.outputs.desktop_version }}
           RELEASE_COMMIT: ${{ needs.bind-release.outputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ github.sha }}
+          RELEASE_WORKFLOW_REF: ${{ needs.bind-release.outputs.workflow_ref }}
+          RELEASE_TOOLING_COMMIT: ${{ needs.bind-release.outputs.tooling_commit }}
           RELEASE_DRAFT_ID: ${{ needs.prepare-release-draft.outputs.draft_id }}
           RELEASE_MODE: ${{ needs.bind-release.outputs.mode }}
           RELEASE_BODY_SHA256: ${{ needs.prepare-release-draft.outputs.body_sha256 }}
@@ -170,7 +212,7 @@ jobs:
           EXPECTED_TITLE="Desktop release $RELEASE_TAG via $COORDINATOR_RUN_ID.$COORDINATOR_RUN_ATTEMPT"
           gh workflow run desktop-release.yml \
             --repo "$GITHUB_REPOSITORY" \
-            --ref "$RELEASE_TAG" \
+            --ref "$RELEASE_WORKFLOW_REF" \
             -f tag="$RELEASE_TAG" \
             -f desktop_version="$DESKTOP_VERSION" \
             -f commit="$RELEASE_COMMIT" \

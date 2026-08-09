@@ -110,11 +110,16 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     "desktop coordinator.workflow_dispatch.inputs",
     issues,
   );
-  if (!exactKeys(inputs, ["tag", "desktop_mode", "desktop_baseline_tag"])) {
+  if (!exactKeys(inputs, ["tag", "desktop_mode", "desktop_baseline_tag", "recovery_tooling_tag"])) {
     issues.push("desktop coordinator inputs must remain desktop-only");
   }
   const tagInput = mapping(inputs.tag, "desktop coordinator tag input", issues);
   const modeInput = mapping(inputs.desktop_mode, "desktop coordinator mode input", issues);
+  const recoveryToolingTagInput = mapping(
+    inputs.recovery_tooling_tag,
+    "desktop coordinator recovery tooling tag input",
+    issues,
+  );
   if (tagInput.required !== true || tagInput.type !== "string") {
     issues.push("desktop coordinator must require a string candidate tag");
   }
@@ -124,6 +129,13 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     scalar(modeInput.options) !== '["steady","genesis"]'
   ) {
     issues.push("desktop coordinator must expose only steady and genesis modes");
+  }
+  if (
+    recoveryToolingTagInput.type !== "string" ||
+    recoveryToolingTagInput.required !== false ||
+    recoveryToolingTagInput.default !== ""
+  ) {
+    issues.push("desktop coordinator recovery tooling tag must be an optional string");
   }
   if (coordinator["run-name"] !== "Desktop release coordinator ${{ inputs.tag }}") {
     issues.push("desktop coordinator run name must bind the candidate tag");
@@ -162,6 +174,8 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     tag: "${{ steps.bind.outputs.tag }}",
     desktop_version: "${{ steps.bind.outputs.desktop_version }}",
     commit: "${{ steps.bind.outputs.commit }}",
+    workflow_ref: "${{ steps.bind.outputs.workflow_ref }}",
+    tooling_commit: "${{ steps.bind.outputs.tooling_commit }}",
     mode: "${{ steps.bind.outputs.mode }}",
     baseline_tag: "${{ steps.bind.outputs.baseline_tag }}",
   };
@@ -176,6 +190,7 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   const bindRun = typeof bindStep?.run === "string" ? bindStep.run : "";
   if (
     bindEnvironment.RELEASE_TAG_INPUT !== "${{ inputs.tag }}" ||
+    bindEnvironment.RECOVERY_TOOLING_TAG_INPUT !== "${{ inputs.recovery_tooling_tag }}" ||
     bindEnvironment.DESKTOP_ENABLED !== "${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}" ||
     bindEnvironment.WORKFLOW_REF !== "${{ github.ref }}" ||
     bindEnvironment.WORKFLOW_SHA !== "${{ github.sha }}" ||
@@ -196,6 +211,29 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   ) {
     issues.push(
       "desktop candidate tag must be stable enduragent-desktop SemVer bound to apps/desktop/package.json",
+    );
+  }
+  if (
+    !bindRun.includes('CHILD_WORKFLOW_REF="$TAG"') ||
+    !bindRun.includes('TOOLING_COMMIT="$COMMIT"') ||
+    !bindRun.includes('if [ -n "$RECOVERY_TOOLING_TAG_INPUT" ]; then') ||
+    !bindRun.includes("if [ \"$MODE\" != 'steady' ]; then") ||
+    !bindRun.includes('RECOVERY_REVISION="${RECOVERY_TAG#"${TAG}-recovery."}"') ||
+    !bindRun.includes("printf '%s' \"$RECOVERY_REVISION\" | grep -Eq '^[1-9][0-9]*$'") ||
+    !bindRun.includes('[ "$RECOVERY_TAG" != "${TAG}-recovery.${RECOVERY_REVISION}" ]') ||
+    !bindRun.includes('"refs/tags/$RECOVERY_TAG:refs/tags/$RECOVERY_TAG"') ||
+    !bindRun.includes('TOOLING_COMMIT=$(git rev-parse "refs/tags/$RECOVERY_TAG^{commit}")') ||
+    !bindRun.includes('test "$TOOLING_COMMIT" != "$COMMIT"') ||
+    !bindRun.includes('test "$WORKFLOW_REF" = "refs/tags/$RECOVERY_TAG"') ||
+    !bindRun.includes('test "$WORKFLOW_SHA" = "$TOOLING_COMMIT"') ||
+    !bindRun.includes('git merge-base --is-ancestor "$COMMIT" "$TOOLING_COMMIT"') ||
+    !bindRun.includes('git merge-base --is-ancestor "$TOOLING_COMMIT" refs/remotes/origin/main') ||
+    !bindRun.includes('CHILD_WORKFLOW_REF="$RECOVERY_TAG"') ||
+    !bindRun.includes('echo "workflow_ref=$CHILD_WORKFLOW_REF" >> "$GITHUB_OUTPUT"') ||
+    !bindRun.includes('echo "tooling_commit=$TOOLING_COMMIT" >> "$GITHUB_OUTPUT"')
+  ) {
+    issues.push(
+      "desktop recovery tooling must use a distinct immutable steady-only tag merged into main",
     );
   }
 
@@ -238,7 +276,8 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     RELEASE_TAG: "${{ needs.bind-release.outputs.tag }}",
     DESKTOP_VERSION: "${{ needs.bind-release.outputs.desktop_version }}",
     RELEASE_COMMIT: "${{ needs.bind-release.outputs.commit }}",
-    RELEASE_TOOLING_COMMIT: "${{ github.sha }}",
+    RELEASE_WORKFLOW_REF: "${{ needs.bind-release.outputs.workflow_ref }}",
+    RELEASE_TOOLING_COMMIT: "${{ needs.bind-release.outputs.tooling_commit }}",
     RELEASE_DRAFT_ID: "${{ needs.prepare-release-draft.outputs.draft_id }}",
     RELEASE_MODE: "${{ needs.bind-release.outputs.mode }}",
     RELEASE_BODY_SHA256: "${{ needs.prepare-release-draft.outputs.body_sha256 }}",
@@ -262,6 +301,18 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     "coordinator_run_id",
     "coordinator_run_attempt",
   ];
+  const expectedDispatchedAssignments: Mapping = {
+    tag: "RELEASE_TAG",
+    desktop_version: "DESKTOP_VERSION",
+    commit: "RELEASE_COMMIT",
+    tooling_commit: "RELEASE_TOOLING_COMMIT",
+    draft_id: "RELEASE_DRAFT_ID",
+    mode: "RELEASE_MODE",
+    draft_body_sha256: "RELEASE_BODY_SHA256",
+    baseline_tag: "RELEASE_BASELINE_TAG",
+    coordinator_run_id: "COORDINATOR_RUN_ID",
+    coordinator_run_attempt: "COORDINATOR_RUN_ATTEMPT",
+  };
   if (
     !dispatchNeeds.includes("bind-release") ||
     !dispatchNeeds.includes("prepare-release-draft") ||
@@ -273,8 +324,11 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
       expectedDispatchedInputs,
     ) ||
     dispatchedInputs.length !== expectedDispatchedInputs.length ||
+    Object.entries(expectedDispatchedAssignments).some(
+      ([input, variable]) => !dispatchRun.includes(`-f ${input}="$${variable}"`),
+    ) ||
     !dispatchRun.includes("gh workflow run desktop-release.yml \\") ||
-    !dispatchRun.includes('--ref "$RELEASE_TAG"') ||
+    !dispatchRun.includes('--ref "$RELEASE_WORKFLOW_REF"') ||
     (dispatchRun.match(/--repo "\$GITHUB_REPOSITORY"/gu) ?? []).length !== 3 ||
     !dispatchRun.includes('--arg title "$EXPECTED_TITLE"') ||
     !dispatchRun.includes(
@@ -581,9 +635,18 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     issues,
   );
   const authorizeStep = namedStep(authorize, "Bind dispatch to the active release coordinator");
+  const authorizeEnvironment = mapping(
+    authorizeStep?.env,
+    "desktop coordinator authorization environment",
+    issues,
+  );
   const authorizeRun = typeof authorizeStep?.run === "string" ? authorizeStep.run : "";
   if (
     sign.needs !== "authorize-coordinator" ||
+    authorizeEnvironment.RELEASE_TAG !== "${{ inputs.tag }}" ||
+    authorizeEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
+    authorizeEnvironment.WORKFLOW_REF !== "${{ github.ref }}" ||
+    authorizeEnvironment.WORKFLOW_REF_NAME !== "${{ github.ref_name }}" ||
     !authorizeRun.includes('gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID"') ||
     !authorizeRun.includes(".github/workflows/desktop-release-coordinator.yml") ||
     authorizeRun.includes(".github/workflows/release.yml") ||
@@ -592,6 +655,20 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     !authorizeRun.includes("in_progress") ||
     !authorizeRun.includes(".head_sha") ||
     !authorizeRun.includes('test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"') ||
+    !authorizeRun.includes(".head_branch") ||
+    !authorizeRun.includes(
+      'test "$(printf \'%s\' "$COORDINATOR" | jq -r \'.head_branch\')" = "$WORKFLOW_REF_NAME"',
+    ) ||
+    !authorizeRun.includes('if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then') ||
+    !authorizeRun.includes('test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"') ||
+    !authorizeRun.includes('test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"') ||
+    !authorizeRun.includes("test \"$RELEASE_MODE\" = 'steady'") ||
+    !authorizeRun.includes('RECOVERY_REVISION="${WORKFLOW_REF_NAME#"${RELEASE_TAG}-recovery."}"') ||
+    !authorizeRun.includes("grep -Eq '^[1-9][0-9]*$'") ||
+    !authorizeRun.includes(
+      'test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${RECOVERY_REVISION}"',
+    ) ||
+    !authorizeRun.includes('test "$WORKFLOW_REF" = "refs/tags/$WORKFLOW_REF_NAME"') ||
     !authorizeRun.includes("workflow_dispatch") ||
     authorizeRun.includes('.event == "push"')
   ) {
@@ -794,22 +871,28 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
   );
   const privateUmask = signingRun.indexOf("umask 077");
   const recoveryFiles = [
-    "apps/desktop/scripts/macos-genesis-release.mjs",
-    "apps/desktop/scripts/macos-release-plan.d.mts",
+    "apps/desktop/scripts/macos-release-cli.mjs",
     "apps/desktop/scripts/macos-release-plan.mjs",
-    "apps/desktop/scripts/verify-macos-release.mjs",
   ];
   const expectedRecoveryDiff = recoveryFiles.join("\\n");
+  const observedRecoveryPaths =
+    recoveryRun.match(/apps\/desktop\/scripts\/[A-Za-z0-9_.-]+/gu) ?? [];
   if (
     recoveryIndex <= signingCheckoutIndex ||
     recoveryIndex >= installIndex ||
-    !recoveryRun.includes('test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"') ||
+    countShellLine(recoveryRun, 'test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"') !== 2 ||
     !recoveryRun.includes(
       'git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"',
     ) ||
-    !recoveryRun.includes('git restore --source="$RELEASE_TOOLING_COMMIT" --worktree --') ||
+    !recoveryRun.includes(
+      'git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree --',
+    ) ||
     !recoveryRun.includes(`EXPECTED_RECOVERY_DIFF=$'${expectedRecoveryDiff}'`) ||
-    !recoveryRun.includes('test "$(git diff --name-only)" = "$EXPECTED_RECOVERY_DIFF"') ||
+    !recoveryRun.includes('test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"') ||
+    !recoveryRun.includes('test -z "$(git diff --name-only)"') ||
+    !recoveryRun.includes('test -z "$(git ls-files --others --exclude-standard)"') ||
+    observedRecoveryPaths.length !== recoveryFiles.length * 2 ||
+    observedRecoveryPaths.some((path) => !recoveryFiles.includes(path)) ||
     recoveryFiles.some(
       (path) =>
         (recoveryRun.match(new RegExp(path.replaceAll(".", "\\."), "gu")) ?? []).length !== 2,
