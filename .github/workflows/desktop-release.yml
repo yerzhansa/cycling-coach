@@ -1,8 +1,7 @@
 name: Desktop release
-run-name: Desktop release ${{ inputs.tag }} via ${{ inputs.coordinator_run_id }}.${{ inputs.coordinator_run_attempt }} binding ${{ inputs.dispatch_binding_sha256 }}
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       tag:
         description: Exact enduragent-desktop release tag
@@ -40,30 +39,9 @@ on:
         description: Failed source run id or none
         required: true
         type: string
-      coordinator_run_id:
-        description: Parent release workflow run id
-        required: true
-        type: string
-      coordinator_run_attempt:
-        description: Parent release workflow attempt
-        required: true
-        type: string
-      dispatch_nonce:
-        description: Coordinator-generated one-time dispatch nonce
-        required: true
-        type: string
-      dispatch_binding_sha256:
-        description: SHA-256 of the coordinator-sealed child dispatch tuple
-        required: true
-        type: string
 permissions:
   actions: read
   contents: read
-
-concurrency:
-  group: stable-desktop
-  cancel-in-progress: false
-  queue: max
 
 jobs:
   authorize-coordinator:
@@ -85,12 +63,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Bind dispatch to the active release coordinator
+      - name: Bind call to the active release coordinator
         id: authorize
         env:
           GH_TOKEN: ${{ github.token }}
-          COORDINATOR_RUN_ID: ${{ inputs.coordinator_run_id }}
-          COORDINATOR_RUN_ATTEMPT: ${{ inputs.coordinator_run_attempt }}
           RELEASE_TAG: ${{ inputs.tag }}
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_COMMIT: ${{ inputs.commit }}
@@ -100,27 +76,29 @@ jobs:
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
           RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          DISPATCH_NONCE: ${{ inputs.dispatch_nonce }}
-          DISPATCH_BINDING_SHA256: ${{ inputs.dispatch_binding_sha256 }}
           WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_REF_NAME: ${{ github.ref_name }}
           WORKFLOW_COMMIT: ${{ github.sha }}
-          RUN_ACTOR: ${{ github.actor }}
-          RUN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CALLED_WORKFLOW_REF: ${{ job.workflow_ref }}
+          CALLED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          CALLED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          CALLED_WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
           REPOSITORY_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
-          test "$RUN_ACTOR" = 'github-actions[bot]'
-          test "$RUN_TRIGGERING_ACTOR" = 'github-actions[bot]'
-          printf '%s' "$COORDINATOR_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$COORDINATOR_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$CURRENT_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$CURRENT_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$DESKTOP_VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           printf '%s' "$RELEASE_DRAFT_ID" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$RELEASE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$RELEASE_TOOLING_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$RELEASE_BODY_SHA256" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$DISPATCH_NONCE" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$DISPATCH_BINDING_SHA256" | grep -Eq '^[0-9a-f]{64}$'
+          test "$EVENT_NAME" = 'workflow_dispatch'
           test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"
           CURRENT_RECOVERY_REVISION=none
           if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
@@ -133,69 +111,12 @@ jobs:
             test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${CURRENT_RECOVERY_REVISION}"
             test "$WORKFLOW_REF" = "refs/tags/$WORKFLOW_REF_NAME"
           fi
-          COORDINATOR=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID")
-          test "$(printf '%s' "$COORDINATOR" | jq -r '.path')" = '.github/workflows/desktop-release-coordinator.yml'
-          test "$(printf '%s' "$COORDINATOR" | jq -r '.run_attempt')" = "$COORDINATOR_RUN_ATTEMPT"
-          test "$(printf '%s' "$COORDINATOR" | jq -r '.status')" = 'in_progress'
-          test "$(printf '%s' "$COORDINATOR" | jq -r '.head_sha')" = "$RELEASE_TOOLING_COMMIT"
-          test "$(printf '%s' "$COORDINATOR" | jq -r '.head_branch')" = "$WORKFLOW_REF_NAME"
-          test "$(printf '%s' "$COORDINATOR" | jq -r '.event')" = 'workflow_dispatch'
-          BINDING=$(jq -cnS \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --arg repositoryId "$REPOSITORY_ID" \
-            --arg coordinatorRunId "$COORDINATOR_RUN_ID" \
-            --arg coordinatorRunAttempt "$COORDINATOR_RUN_ATTEMPT" \
-            --arg workflowRef "$WORKFLOW_REF" \
-            --arg workflowSha "$WORKFLOW_COMMIT" \
-            --arg childWorkflowRef "$WORKFLOW_REF_NAME" \
-            --arg tag "$RELEASE_TAG" \
-            --arg desktopVersion "$DESKTOP_VERSION" \
-            --arg commit "$RELEASE_COMMIT" \
-            --arg toolingCommit "$RELEASE_TOOLING_COMMIT" \
-            --arg draftId "$RELEASE_DRAFT_ID" \
-            --arg mode "$RELEASE_MODE" \
-            --arg draftBodySha256 "$RELEASE_BODY_SHA256" \
-            --arg baselineTag "$RELEASE_BASELINE_TAG" \
-            --arg sourceRunId "$SOURCE_RUN_ID" \
-            --arg nonce "$DISPATCH_NONCE" \
-            '{schemaVersion: 1, repository: $repository, repositoryId: $repositoryId, coordinatorRunId: $coordinatorRunId, coordinatorRunAttempt: $coordinatorRunAttempt, workflowRef: $workflowRef, workflowSha: $workflowSha, childWorkflowRef: $childWorkflowRef, tag: $tag, desktopVersion: $desktopVersion, commit: $commit, toolingCommit: $toolingCommit, draftId: $draftId, mode: $mode, draftBodySha256: $draftBodySha256, baselineTag: $baselineTag, sourceRunId: $sourceRunId, nonce: $nonce}')
-          test "$(printf '%s' "$BINDING" | sha256sum | awk '{print $1}')" = "$DISPATCH_BINDING_SHA256"
-          BINDING_ARTIFACT_NAME="desktop-dispatch-binding-$COORDINATOR_RUN_ID-$COORDINATOR_RUN_ATTEMPT-$DISPATCH_BINDING_SHA256"
-          COORDINATOR_ARTIFACTS=$(gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID/artifacts?per_page=100")
-          printf '%s' "$COORDINATOR_ARTIFACTS" | jq -e \
-            'type == "array" and length > 0 and ([.[].artifacts[]] | length) == .[0].total_count' >/dev/null
-          BINDING_ARTIFACT=$(printf '%s' "$COORDINATOR_ARTIFACTS" | jq -cer --arg name "$BINDING_ARTIFACT_NAME" \
-            '[.[].artifacts[] | select(.name == $name)] | select(length == 1) | .[0]')
-          printf '%s' "$BINDING_ARTIFACT" | jq -e \
-            --arg run "$COORDINATOR_RUN_ID" \
-            --arg repo "$REPOSITORY_ID" \
-            --arg branch "$WORKFLOW_REF_NAME" \
-            --arg sha "$WORKFLOW_COMMIT" '
-            (.id | type) == "number" and .id > 0 and
-            .expired == false and
-            (.size_in_bytes | type) == "number" and .size_in_bytes > 0 and
-            (.digest | type) == "string" and (.digest | test("^sha256:[0-9a-f]{64}$")) and
-            (.workflow_run.id | tostring) == $run and
-            (.workflow_run.repository_id | tostring) == $repo and
-            (.workflow_run.head_repository_id | tostring) == $repo and
-            .workflow_run.head_branch == $branch and
-            .workflow_run.head_sha == $sha
-          ' >/dev/null
-          CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")
-          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
-          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
-          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.prerelease')" = 'false'
-          if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.draft')" = 'false' ]; then
-            test "$SOURCE_RUN_ID" != 'none'
-            if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.body')" != 'Desktop update validation is in progress. This release is not yet generally available.' ]; then
-              CANDIDATE_BODY_SHA256=$(printf '%s' "$CANDIDATE_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
-              test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"
-              LATEST_RELEASE=$(gh api -H 'Cache-Control: no-cache' "repos/$GITHUB_REPOSITORY/releases/latest")
-              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
-              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
-            fi
-          fi
+          test "$CALLER_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/desktop-release-coordinator.yml@$WORKFLOW_REF"
+          test "$CALLER_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
+          test "$CALLED_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml@$WORKFLOW_REF"
+          test "$CALLED_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
+          test "$CALLED_WORKFLOW_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "$CALLED_WORKFLOW_FILE_PATH" = '.github/workflows/desktop-release.yml'
           if [ "$SOURCE_RUN_ID" = 'none' ]; then
             for output in source_run_id source_run_attempt artifact_name artifact_id artifact_digest baseline_artifact_name baseline_artifact_id baseline_artifact_digest; do
               echo "$output=none" >> "$GITHUB_OUTPUT"
@@ -204,17 +125,27 @@ jobs:
           fi
           printf '%s' "$SOURCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
           test "$SOURCE_RUN_ID" != "$GITHUB_RUN_ID"
-          test "$SOURCE_RUN_ID" != "$COORDINATOR_RUN_ID"
           test "$RELEASE_MODE" = 'steady'
           test "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT"
           test "$CURRENT_RECOVERY_REVISION" != 'none'
           SOURCE=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")
           test "$(printf '%s' "$SOURCE" | jq -r '.repository.full_name')" = "$GITHUB_REPOSITORY"
           test "$(printf '%s' "$SOURCE" | jq -r '.head_repository.full_name')" = "$GITHUB_REPOSITORY"
-          test "$(printf '%s' "$SOURCE" | jq -r '.path')" = '.github/workflows/desktop-release.yml'
+          SOURCE_WORKFLOW_PATH_RAW=$(printf '%s' "$SOURCE" | jq -er '.path')
+          SOURCE_WORKFLOW_PATH="${SOURCE_WORKFLOW_PATH_RAW%%@*}"
+          case "$SOURCE_WORKFLOW_PATH" in
+            .github/workflows/desktop-release.yml)
+              test "$(printf '%s' "$SOURCE" | jq -r '.actor.login')" = 'github-actions[bot]'
+              test "$(printf '%s' "$SOURCE" | jq -r '.triggering_actor.login')" = 'github-actions[bot]'
+              ;;
+            .github/workflows/desktop-release-coordinator.yml)
+              ;;
+            *)
+              echo '::error::Recovery source run used an untrusted workflow'
+              exit 1
+              ;;
+          esac
           test "$(printf '%s' "$SOURCE" | jq -r '.event')" = 'workflow_dispatch'
-          test "$(printf '%s' "$SOURCE" | jq -r '.actor.login')" = 'github-actions[bot]'
-          test "$(printf '%s' "$SOURCE" | jq -r '.triggering_actor.login')" = 'github-actions[bot]'
           test "$(printf '%s' "$SOURCE" | jq -r '.status')" = 'completed'
           test "$(printf '%s' "$SOURCE" | jq -r '.conclusion')" = 'failure'
           SOURCE_RUN_ATTEMPT=$(printf '%s' "$SOURCE" | jq -er '.run_attempt | tostring')
@@ -222,11 +153,22 @@ jobs:
           SOURCE_HEAD_BRANCH=$(printf '%s' "$SOURCE" | jq -er '.head_branch')
           SOURCE_HEAD_SHA=$(printf '%s' "$SOURCE" | jq -er '.head_sha')
           printf '%s' "$SOURCE_HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'
-          SOURCE_RECOVERY_REVISION="${SOURCE_HEAD_BRANCH#"${RELEASE_TAG}-recovery."}"
-          printf '%s' "$SOURCE_RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$'
-          test "$SOURCE_HEAD_BRANCH" = "${RELEASE_TAG}-recovery.${SOURCE_RECOVERY_REVISION}"
-          test "$SOURCE_RECOVERY_REVISION" != "$CURRENT_RECOVERY_REVISION"
-          test "$(printf '%s\n%s\n' "$SOURCE_RECOVERY_REVISION" "$CURRENT_RECOVERY_REVISION" | sort -n | head -1)" = "$SOURCE_RECOVERY_REVISION"
+          case "$SOURCE_WORKFLOW_PATH_RAW" in
+            "$SOURCE_WORKFLOW_PATH"|"$SOURCE_WORKFLOW_PATH@$SOURCE_HEAD_BRANCH"|"$SOURCE_WORKFLOW_PATH@refs/tags/$SOURCE_HEAD_BRANCH")
+              ;;
+            *)
+              echo '::error::Recovery source workflow path used an unexpected ref suffix'
+              exit 1
+              ;;
+          esac
+          if [ "$SOURCE_HEAD_BRANCH" = "$RELEASE_TAG" ]; then
+            test "$SOURCE_HEAD_SHA" = "$RELEASE_COMMIT"
+          else
+            SOURCE_RECOVERY_REVISION="${SOURCE_HEAD_BRANCH#"${RELEASE_TAG}-recovery."}"
+            printf '%s' "$SOURCE_RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$'
+            test "$SOURCE_HEAD_BRANCH" = "${RELEASE_TAG}-recovery.${SOURCE_RECOVERY_REVISION}"
+            test "$SOURCE_RECOVERY_REVISION" -lt "$CURRENT_RECOVERY_REVISION"
+          fi
           git fetch --force --no-tags origin \
             "refs/tags/$SOURCE_HEAD_BRANCH:refs/tags/$SOURCE_HEAD_BRANCH" \
             main:refs/remotes/origin/main
@@ -240,14 +182,14 @@ jobs:
             'type == "array" and length > 0 and ([.[].jobs[]] | length) == .[0].total_count' >/dev/null
           for job_name in sign-macos verify-macos-envelope stage-private-draft publish-assets; do
             printf '%s' "$SOURCE_JOBS" | jq -e --arg job "$job_name" '
-              [.[].jobs[] | select(.name == $job)] as $matches |
+              [.[].jobs[] | select((.name | split(" / ") | last) == $job)] as $matches |
               ($matches | length) == 1 and
               $matches[0].status == "completed" and
               $matches[0].conclusion == "success"
             ' >/dev/null
           done
           printf '%s' "$SOURCE_JOBS" | jq -e '
-            [.[].jobs[] | select(.name == "activate-release")] as $matches |
+            [.[].jobs[] | select((.name | split(" / ") | last) == "activate-release")] as $matches |
             ($matches | length) == 1 and
             $matches[0].status == "completed" and
             $matches[0].conclusion != "success"
@@ -1031,6 +973,29 @@ jobs:
           printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
           test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
+      - name: Revalidate recoverable candidate state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
+          RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")
+          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
+          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
+          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.prerelease')" = 'false'
+          if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.draft')" = 'false' ]; then
+            test "$SOURCE_RUN_ID" != 'none'
+            if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.body')" != 'Desktop update validation is in progress. This release is not yet generally available.' ]; then
+              CANDIDATE_BODY_SHA256=$(printf '%s' "$CANDIDATE_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
+              test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"
+              LATEST_RELEASE=$(gh api -H 'Cache-Control: no-cache' "repos/$GITHUB_REPOSITORY/releases/latest")
+              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
+              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
+            fi
+          fi
       - name: Upload updater envelope to the private draft
         env:
           GITHUB_TOKEN: ${{ github.token }}
