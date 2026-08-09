@@ -27,6 +27,7 @@ import { connectCdp, reservePort, waitForPage } from "../tests/helpers/desktop-f
 import {
   callAcceptanceCdp,
   runAcceptanceCommand,
+  terminateAcceptanceChild,
   withAcceptanceDeadline,
 } from "../tests/fixtures/packaged-telegram/acceptance-deadline.ts";
 import {
@@ -43,6 +44,9 @@ const maximumUpdateInfoBytes = 16_384;
 const downloadTimeoutMs = 10 * 60_000;
 const transitionTimeoutMs = 2 * 60_000;
 const shutdownTimeoutMs = 30_000;
+const cleanupTerminationGraceMs = 2_000;
+const cleanupKillGraceMs = 2_000;
+const cleanupSocketGraceMs = 1_000;
 const credentialDirectoryName = "credentials-v1";
 const persistenceCredentialSlot = "openrouter";
 const persistenceChatId = "desktop";
@@ -53,6 +57,27 @@ class MacosUpdaterRoundTripError extends Error {
     super(message);
     this.name = "MacosUpdaterRoundTripError";
   }
+}
+
+const failureDiagnostics = new WeakMap();
+
+function bindFailureDiagnostic(error, phase, cleanup) {
+  const failure =
+    error instanceof Error ? error : new MacosUpdaterRoundTripError("round-trip failed");
+  failureDiagnostics.set(failure, Object.freeze({ phase, cleanup }));
+  return failure;
+}
+
+function safeFailureDiagnostic(error) {
+  if (!(error instanceof Error)) {
+    return Object.freeze({ phase: "input-validation", cleanup: "not-started" });
+  }
+  const diagnostic =
+    failureDiagnostics.get(error) ??
+    Object.freeze({ phase: "input-validation", cleanup: "not-started" });
+  return error instanceof MacosUpdaterRoundTripError
+    ? Object.freeze({ ...diagnostic, reason: error.message })
+    : diagnostic;
 }
 
 function fail(message) {
@@ -1103,301 +1128,437 @@ export function createMacosUpdaterRoundTripEvidence(input) {
   });
 }
 
-export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
-  const input = requireMacosUpdaterRoundTripInput(rawInput, {
-    platform: overrides.platform,
-    arch: overrides.arch,
-    mode: overrides.mode,
-  });
-  const verifyArtifacts = overrides.verifyArtifacts ?? verifyArtifactsForVersion;
-  const inspectApplication = overrides.inspectApplication ?? inspectMacosReleaseApplication;
-  const createScratch = overrides.createScratch ?? createPrivateScratch;
-  const removeScratch = overrides.removeScratch ?? removePrivateScratch;
-  const observeProcesses = overrides.observeProcesses ?? observeApplicationProcesses;
-  const writeEvidenceFile = overrides.writeEvidence ?? writeEvidence;
-  const baselineArtifacts = await verifyArtifacts(input.baselineEnvelope, input.baselineVersion);
-  const candidateArtifacts = await verifyArtifacts(input.candidateEnvelope, input.candidateVersion);
-  if (
-    baselineArtifacts?.version !== input.baselineVersion ||
-    candidateArtifacts?.version !== input.candidateVersion
-  ) {
-    fail("verified release envelope version is invalid");
+function closeChildHandles(child) {
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    try {
+      stream?.destroy();
+    } catch {}
   }
-  const [baselineDigest, candidateDigest] = await Promise.all([
-    digestStableFile(baselineArtifacts.paths.zip, "baseline release ZIP"),
-    digestStableFile(candidateArtifacts.paths.zip, "candidate release ZIP"),
-  ]);
-  requireArtifactDigest(baselineArtifacts, baselineDigest, "baseline");
-  requireArtifactDigest(candidateArtifacts, candidateDigest, "candidate");
-
-  const scratch = await createScratch();
-  let initialChild;
-  let verificationChild;
-  let relaunchedPid;
-  let debuggerConnection;
-  let verificationConnection;
-  let installedApplication;
-  let completed = false;
   try {
-    const baselineApplication = await extractSingleApplication(
-      baselineArtifacts.paths.zip,
-      join(scratch.path, "baseline"),
-    );
-    const candidateApplication = await extractSingleApplication(
-      candidateArtifacts.paths.zip,
-      join(scratch.path, "candidate"),
-    );
-    const installRoot = join(scratch.path, "installed");
-    await mkdir(installRoot, { mode: 0o700 });
-    installedApplication = join(installRoot, `${productName}.app`);
-    await installApplication(baselineApplication, installedApplication);
-    const [baselineIdentity, candidateIdentity, installedBaselineIdentity] = await Promise.all([
-      inspectApplication(baselineApplication),
-      inspectApplication(candidateApplication),
-      inspectApplication(installedApplication),
-    ]);
-    const updaterCache = join(scratch.path, "home/Library/Caches", DESKTOP_UPDATER_CACHE_DIRECTORY);
-    await requireMissing(updaterCache, "round-trip updater cache");
-    const home = join(scratch.path, "home");
-    const athleteHome = join(scratch.path, "athlete");
-    const userData = join(scratch.path, "user-data");
-    await Promise.all([
-      mkdir(home, { recursive: true, mode: 0o700 }),
-      mkdir(athleteHome, { recursive: true, mode: 0o700 }),
-      mkdir(userData, { recursive: true, mode: 0o700 }),
-    ]);
-    const durableState = await seedSyntheticDurableState(athleteHome);
-    const credentialPlaintext = `enduragent-update-${randomBytes(32).toString("hex")}`;
-    const credentialPath = join(
-      userData,
-      credentialDirectoryName,
-      `${persistenceCredentialSlot}.bin`,
-    );
-    const debuggerPort = await reservePort();
-    const executable = join(installedApplication, `Contents/MacOS/${productName}`);
-    const environment = {
-      ...process.env,
-      HOME: home,
-      ENDURAGENT_HOME: athleteHome,
-      FORCE_COLOR: undefined,
-      NO_COLOR: undefined,
-      CLICOLOR_FORCE: undefined,
-    };
-    initialChild = spawn(
-      executable,
-      [`--user-data-dir=${userData}`, `--remote-debugging-port=${debuggerPort}`],
-      { env: environment, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    initialChild.stdout?.resume();
-    initialChild.stderr?.resume();
-    const childLifecycle = observeTelegramAcceptanceChild(initialChild);
-    const launch = await withAcceptanceDeadline(
-      "baseline application launch",
-      childLifecycle.launch,
-      {
-        timeoutMs: 30_000,
-      },
-    );
-    if (launch.state !== "spawned") fail("baseline application could not launch");
-    const initialPid = launch.pid;
-    const debuggerUrl = await waitForPage(debuggerPort, { timeoutMs: 60_000 });
-    if ((await debuggerListenerOwner(debuggerPort, environment)) !== initialPid) {
-      fail("baseline debugger listener is outside the installed application");
-    }
-    debuggerConnection = await connectCdp(debuggerUrl, () => undefined);
-    await callAcceptanceCdp(debuggerConnection, "Runtime.enable");
-    const persistenceInput = {
-      athleteHome,
-      credentialPath,
-      credentialPlaintext,
-      memoryPath: durableState.memoryPath,
-      sessionPath: durableState.sessionPath,
-    };
-    const beforePersistence = await seedApplicationState(debuggerConnection, persistenceInput);
-    await waitForDownloadedState(debuggerConnection, input.candidateVersion);
-    const initialProcesses = await observeProcesses(installedApplication);
-    if (initialProcesses.mainPids.length !== 1 || initialProcesses.mainPids[0] !== initialPid) {
-      fail("baseline application process identity is ambiguous");
-    }
-    const downloaded = await readDownloadedCandidate(
-      updaterCache,
-      candidateArtifacts,
-      candidateDigest,
-    );
-    await clickInstallUpdate(debuggerConnection, input.candidateVersion);
-    const terminal = await withAcceptanceDeadline(
-      "baseline application update exit",
-      childLifecycle.terminal,
-      { timeoutMs: transitionTimeoutMs },
-    );
-    debuggerConnection.socket.close();
-    debuggerConnection = undefined;
-    if (terminal.state !== "closed" || terminal.code !== 0 || terminal.signal !== null) {
-      fail("baseline application did not exit cleanly for update");
-    }
-    const initialPids = new Set(initialProcesses.bundlePids);
-    const relaunchedProcesses = await waitUntil(
-      "relaunched candidate application",
-      async () => {
-        const observation = await observeProcesses(installedApplication);
-        if (observation.bundlePids.some((pid) => initialPids.has(pid))) return false;
-        if (observation.mainPids.length !== 1 || observation.mainPids[0] === initialPid)
-          return false;
-        return observation;
-      },
-      transitionTimeoutMs,
-      250,
-    );
-    relaunchedPid = relaunchedProcesses.mainPids[0];
-    const relaunchedIdentity = await waitUntil(
-      "relaunched candidate identity",
-      async () => {
-        const identity = await inspectApplication(installedApplication);
-        return identity.version === input.candidateVersion ? identity : false;
-      },
-      transitionTimeoutMs,
-      250,
-    );
-    const identity = verifyMacosUpdaterRoundTripIdentities({
-      baselineVersion: input.baselineVersion,
-      candidateVersion: input.candidateVersion,
-      expectedFeedUrl: MACOS_UPDATER_ROUND_TRIP_FEED_URL,
-      baseline: baselineIdentity,
-      candidate: candidateIdentity,
-      installedBaseline: installedBaselineIdentity,
-      relaunched: relaunchedIdentity,
+    child.unref();
+  } catch {}
+}
+
+async function terminateRoundTripChild(child) {
+  if (child === undefined) return true;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    closeChildHandles(child);
+    return true;
+  }
+  let terminated = false;
+  try {
+    terminated = await terminateAcceptanceChild(child, {
+      terminationGraceMs: cleanupTerminationGraceMs,
+      killGraceMs: cleanupKillGraceMs,
     });
-    const beforeFinalShutdown = await observeProcesses(installedApplication);
-    if (
-      beforeFinalShutdown.mainPids.length !== 1 ||
-      beforeFinalShutdown.mainPids[0] !== relaunchedPid
-    ) {
-      fail("relaunched application process identity changed before shutdown");
-    }
-    process.kill(relaunchedPid, "SIGTERM");
-    await waitUntil(
-      "relaunched application graceful shutdown",
-      async () => {
-        const observation = await observeProcesses(installedApplication);
-        return observation.bundlePids.length === 0 ? true : false;
-      },
-      shutdownTimeoutMs,
-      100,
+  } catch {}
+  closeChildHandles(child);
+  return terminated;
+}
+
+function observeRoundTripChildExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+  }
+  return new Promise((resolveExit) => {
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+}
+
+async function closeRoundTripConnection(connection) {
+  if (connection === undefined) return true;
+  const socket = connection.socket;
+  if (socket.readyState === 3) return true;
+  let closed;
+  try {
+    closed = new Promise((resolveClose) =>
+      socket.addEventListener("close", () => resolveClose(true), { once: true }),
     );
-    const verificationPort = await reservePort();
-    verificationChild = spawn(
-      executable,
-      [`--user-data-dir=${userData}`, `--remote-debugging-port=${verificationPort}`],
-      { env: environment, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    verificationChild.stdout?.resume();
-    verificationChild.stderr?.resume();
-    const verificationLifecycle = observeTelegramAcceptanceChild(verificationChild);
-    const verificationLaunch = await withAcceptanceDeadline(
-      "candidate persistence verification launch",
-      verificationLifecycle.launch,
-      { timeoutMs: 30_000 },
-    );
-    if (verificationLaunch.state !== "spawned") {
-      fail("candidate persistence verification could not launch");
-    }
-    const verificationUrl = await waitForPage(verificationPort, { timeoutMs: 60_000 });
-    if ((await debuggerListenerOwner(verificationPort, environment)) !== verificationLaunch.pid) {
-      fail("candidate persistence debugger listener is outside the installed application");
-    }
-    verificationConnection = await connectCdp(verificationUrl, () => undefined);
-    await callAcceptanceCdp(verificationConnection, "Runtime.enable");
-    const afterPersistence = await readPersistenceView(verificationConnection, persistenceInput);
-    verificationChild.kill("SIGTERM");
-    const verificationTerminal = await withAcceptanceDeadline(
-      "candidate persistence verification shutdown",
-      verificationLifecycle.terminal,
-      { timeoutMs: shutdownTimeoutMs },
-    );
-    verificationConnection.socket.close();
-    verificationConnection = undefined;
-    if (
-      verificationTerminal.state !== "closed" ||
-      verificationTerminal.code !== 0 ||
-      verificationTerminal.signal !== null
-    ) {
-      fail("candidate persistence verification did not exit cleanly");
-    }
-    await waitUntil(
-      "candidate persistence verification process cleanup",
-      async () => {
-        const observation = await observeProcesses(installedApplication);
-        return observation.bundlePids.length === 0 ? true : false;
-      },
-      shutdownTimeoutMs,
-      100,
-    );
-    const plaintextCredentialAbsent = await requirePlaintextAbsent(
-      [home, userData, athleteHome],
-      credentialPlaintext,
-    );
-    const persistence = verifyMacosUpdaterRoundTripPersistence({
-      before: beforePersistence,
-      after: afterPersistence,
-      plaintextCredentialAbsent,
-    });
-    const evidence = createMacosUpdaterRoundTripEvidence({
-      baselineVersion: input.baselineVersion,
-      candidateVersion: input.candidateVersion,
-      initialPid,
-      relaunchedPid,
-      identity,
-      download: {
-        fileName: downloaded.info.fileName,
-        size: downloaded.digest.size,
-        sha256: downloaded.digest.sha256,
-        sha512: downloaded.digest.sha512,
-      },
-      persistence,
-    });
-    await removeScratch(scratch);
-    await writeEvidenceFile(input.evidencePath, evidence);
-    completed = true;
-    return evidence;
-  } finally {
+    socket.close();
+  } catch {
+    return false;
+  }
+  const graceful = await withAcceptanceDeadline("updater debugger cleanup", closed, {
+    timeoutMs: cleanupSocketGraceMs,
+  }).catch(() => false);
+  if (graceful) return true;
+  try {
+    socket.terminate?.();
+  } catch {}
+  return withAcceptanceDeadline("updater debugger termination", closed, {
+    timeoutMs: cleanupSocketGraceMs,
+  }).catch(() => false);
+}
+
+function signalObservedProcesses(observation, signal) {
+  for (const pid of observation.bundlePids) {
     try {
-      debuggerConnection?.socket.close();
-    } catch {}
+      process.kill(pid, signal);
+    } catch (error) {
+      if (error?.code !== "ESRCH") return false;
+    }
+  }
+  return true;
+}
+
+async function waitForObservedProcessExit(observeProcesses, application, timeoutMs) {
+  return waitUntil(
+    "updater application cleanup",
+    async () => {
+      const observation = await observeProcesses(application);
+      return observation.bundlePids.length === 0 ? true : false;
+    },
+    timeoutMs,
+    100,
+  ).catch(() => false);
+}
+
+async function terminateObservedApplication(observeProcesses, application) {
+  if (application === undefined) return true;
+  let observation;
+  try {
+    observation = await observeProcesses(application);
+  } catch {
+    return false;
+  }
+  if (observation.bundlePids.length === 0) return true;
+  const gracefulSignalSent = signalObservedProcesses(observation, "SIGTERM");
+  if (
+    gracefulSignalSent &&
+    (await waitForObservedProcessExit(observeProcesses, application, cleanupTerminationGraceMs))
+  ) {
+    return true;
+  }
+  try {
+    observation = await observeProcesses(application);
+  } catch {
+    return false;
+  }
+  if (!signalObservedProcesses(observation, "SIGKILL")) return false;
+  return waitForObservedProcessExit(observeProcesses, application, cleanupKillGraceMs);
+}
+
+async function cleanupRoundTripResources(input) {
+  const [connectionResults, childResults] = await Promise.all([
+    Promise.all([
+      closeRoundTripConnection(input.debuggerConnection),
+      closeRoundTripConnection(input.verificationConnection),
+    ]),
+    Promise.all([
+      terminateRoundTripChild(input.initialChild),
+      terminateRoundTripChild(input.verificationChild),
+    ]),
+  ]);
+  const applicationTerminated = input.terminateApplication
+    ? await terminateObservedApplication(input.observeProcesses, input.installedApplication)
+    : true;
+  return [...connectionResults, ...childResults, applicationTerminated].every(Boolean);
+}
+
+export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
+  let phase = "input-validation";
+  let failurePhase;
+  let cleanup = "not-started";
+  try {
+    const input = requireMacosUpdaterRoundTripInput(rawInput, {
+      platform: overrides.platform,
+      arch: overrides.arch,
+      mode: overrides.mode,
+    });
+    const verifyArtifacts = overrides.verifyArtifacts ?? verifyArtifactsForVersion;
+    const inspectApplication = overrides.inspectApplication ?? inspectMacosReleaseApplication;
+    const createScratch = overrides.createScratch ?? createPrivateScratch;
+    const removeScratch = overrides.removeScratch ?? removePrivateScratch;
+    const observeProcesses = overrides.observeProcesses ?? observeApplicationProcesses;
+    const writeEvidenceFile = overrides.writeEvidence ?? writeEvidence;
+    phase = "verify-release-envelopes";
+    const baselineArtifacts = await verifyArtifacts(input.baselineEnvelope, input.baselineVersion);
+    const candidateArtifacts = await verifyArtifacts(
+      input.candidateEnvelope,
+      input.candidateVersion,
+    );
+    if (
+      baselineArtifacts?.version !== input.baselineVersion ||
+      candidateArtifacts?.version !== input.candidateVersion
+    ) {
+      fail("verified release envelope version is invalid");
+    }
+    phase = "verify-release-digests";
+    const [baselineDigest, candidateDigest] = await Promise.all([
+      digestStableFile(baselineArtifacts.paths.zip, "baseline release ZIP"),
+      digestStableFile(candidateArtifacts.paths.zip, "candidate release ZIP"),
+    ]);
+    requireArtifactDigest(baselineArtifacts, baselineDigest, "baseline");
+    requireArtifactDigest(candidateArtifacts, candidateDigest, "candidate");
+
+    phase = "prepare-scratch";
+    const scratch = await createScratch();
+    let initialChild;
+    let verificationChild;
+    let relaunchedPid;
+    let debuggerConnection;
+    let verificationConnection;
+    let installedApplication;
+    let completed = false;
     try {
-      verificationConnection?.socket.close();
-    } catch {}
-    if (!completed) {
-      if (
-        initialChild !== undefined &&
-        initialChild.exitCode === null &&
-        initialChild.signalCode === null
-      ) {
-        try {
-          initialChild.kill("SIGTERM");
-        } catch {}
+      phase = "extract-release-applications";
+      const baselineApplication = await extractSingleApplication(
+        baselineArtifacts.paths.zip,
+        join(scratch.path, "baseline"),
+      );
+      const candidateApplication = await extractSingleApplication(
+        candidateArtifacts.paths.zip,
+        join(scratch.path, "candidate"),
+      );
+      phase = "install-baseline";
+      const installRoot = join(scratch.path, "installed");
+      await mkdir(installRoot, { mode: 0o700 });
+      installedApplication = join(installRoot, `${productName}.app`);
+      await installApplication(baselineApplication, installedApplication);
+      phase = "inspect-release-identities";
+      const [baselineIdentity, candidateIdentity, installedBaselineIdentity] = await Promise.all([
+        inspectApplication(baselineApplication),
+        inspectApplication(candidateApplication),
+        inspectApplication(installedApplication),
+      ]);
+      const updaterCache = join(
+        scratch.path,
+        "home/Library/Caches",
+        DESKTOP_UPDATER_CACHE_DIRECTORY,
+      );
+      await requireMissing(updaterCache, "round-trip updater cache");
+      const home = join(scratch.path, "home");
+      const athleteHome = join(scratch.path, "athlete");
+      const userData = join(scratch.path, "user-data");
+      await Promise.all([
+        mkdir(home, { recursive: true, mode: 0o700 }),
+        mkdir(athleteHome, { recursive: true, mode: 0o700 }),
+        mkdir(userData, { recursive: true, mode: 0o700 }),
+      ]);
+      phase = "prepare-persistence";
+      const durableState = await seedSyntheticDurableState(athleteHome);
+      const credentialPlaintext = `enduragent-update-${randomBytes(32).toString("hex")}`;
+      const credentialPath = join(
+        userData,
+        credentialDirectoryName,
+        `${persistenceCredentialSlot}.bin`,
+      );
+      const debuggerPort = await reservePort();
+      const executable = join(installedApplication, `Contents/MacOS/${productName}`);
+      const environment = {
+        ...process.env,
+        HOME: home,
+        ENDURAGENT_HOME: athleteHome,
+        FORCE_COLOR: undefined,
+        NO_COLOR: undefined,
+        CLICOLOR_FORCE: undefined,
+      };
+      phase = "launch-baseline";
+      initialChild = spawn(
+        executable,
+        [`--user-data-dir=${userData}`, `--remote-debugging-port=${debuggerPort}`],
+        { env: environment, stdio: ["ignore", "pipe", "pipe"] },
+      );
+      initialChild.stdout?.resume();
+      initialChild.stderr?.resume();
+      const childLifecycle = observeTelegramAcceptanceChild(initialChild);
+      const initialExit = observeRoundTripChildExit(initialChild);
+      const launch = await withAcceptanceDeadline(
+        "baseline application launch",
+        childLifecycle.launch,
+        {
+          timeoutMs: 30_000,
+        },
+      );
+      if (launch.state !== "spawned") fail("baseline application could not launch");
+      const initialPid = launch.pid;
+      const debuggerUrl = await waitForPage(debuggerPort, { timeoutMs: 60_000 });
+      if ((await debuggerListenerOwner(debuggerPort, environment)) !== initialPid) {
+        fail("baseline debugger listener is outside the installed application");
       }
-      if (
-        verificationChild !== undefined &&
-        verificationChild.exitCode === null &&
-        verificationChild.signalCode === null
-      ) {
-        try {
-          verificationChild.kill("SIGTERM");
-        } catch {}
+      debuggerConnection = await connectCdp(debuggerUrl, () => undefined);
+      await callAcceptanceCdp(debuggerConnection, "Runtime.enable");
+      const persistenceInput = {
+        athleteHome,
+        credentialPath,
+        credentialPlaintext,
+        memoryPath: durableState.memoryPath,
+        sessionPath: durableState.sessionPath,
+      };
+      phase = "seed-persistence";
+      const beforePersistence = await seedApplicationState(debuggerConnection, persistenceInput);
+      phase = "download-update";
+      await waitForDownloadedState(debuggerConnection, input.candidateVersion);
+      const initialProcesses = await observeProcesses(installedApplication);
+      if (initialProcesses.mainPids.length !== 1 || initialProcesses.mainPids[0] !== initialPid) {
+        fail("baseline application process identity is ambiguous");
       }
-      if (
-        installedApplication !== undefined &&
-        Number.isSafeInteger(relaunchedPid) &&
-        relaunchedPid > 0
-      ) {
-        try {
+      const downloaded = await readDownloadedCandidate(
+        updaterCache,
+        candidateArtifacts,
+        candidateDigest,
+      );
+      phase = "install-update";
+      await clickInstallUpdate(debuggerConnection, input.candidateVersion);
+      phase = "transition-update";
+      const terminal = await withAcceptanceDeadline(
+        "baseline application update exit",
+        initialExit,
+        { timeoutMs: transitionTimeoutMs },
+      );
+      debuggerConnection.socket.close();
+      if (terminal.code !== 0 || terminal.signal !== null) {
+        fail("baseline application did not exit cleanly for update");
+      }
+      const initialPids = new Set(initialProcesses.bundlePids);
+      phase = "observe-relaunch";
+      const relaunchedProcesses = await waitUntil(
+        "relaunched candidate application",
+        async () => {
           const observation = await observeProcesses(installedApplication);
-          if (observation.mainPids.includes(relaunchedPid)) {
-            process.kill(relaunchedPid, "SIGTERM");
-          }
-        } catch {}
+          if (observation.bundlePids.some((pid) => initialPids.has(pid))) return false;
+          if (observation.mainPids.length !== 1 || observation.mainPids[0] === initialPid)
+            return false;
+          return observation;
+        },
+        transitionTimeoutMs,
+        250,
+      );
+      relaunchedPid = relaunchedProcesses.mainPids[0];
+      phase = "verify-relaunch";
+      const relaunchedIdentity = await waitUntil(
+        "relaunched candidate identity",
+        async () => {
+          const identity = await inspectApplication(installedApplication);
+          return identity.version === input.candidateVersion ? identity : false;
+        },
+        transitionTimeoutMs,
+        250,
+      );
+      const identity = verifyMacosUpdaterRoundTripIdentities({
+        baselineVersion: input.baselineVersion,
+        candidateVersion: input.candidateVersion,
+        expectedFeedUrl: MACOS_UPDATER_ROUND_TRIP_FEED_URL,
+        baseline: baselineIdentity,
+        candidate: candidateIdentity,
+        installedBaseline: installedBaselineIdentity,
+        relaunched: relaunchedIdentity,
+      });
+      const beforeFinalShutdown = await observeProcesses(installedApplication);
+      if (
+        beforeFinalShutdown.mainPids.length !== 1 ||
+        beforeFinalShutdown.mainPids[0] !== relaunchedPid
+      ) {
+        fail("relaunched application process identity changed before shutdown");
+      }
+      phase = "shutdown-relaunch";
+      process.kill(relaunchedPid, "SIGTERM");
+      await waitUntil(
+        "relaunched application graceful shutdown",
+        async () => {
+          const observation = await observeProcesses(installedApplication);
+          return observation.bundlePids.length === 0 ? true : false;
+        },
+        shutdownTimeoutMs,
+        100,
+      );
+      phase = "launch-persistence-verification";
+      const verificationPort = await reservePort();
+      verificationChild = spawn(
+        executable,
+        [`--user-data-dir=${userData}`, `--remote-debugging-port=${verificationPort}`],
+        { env: environment, stdio: ["ignore", "pipe", "pipe"] },
+      );
+      verificationChild.stdout?.resume();
+      verificationChild.stderr?.resume();
+      const verificationLifecycle = observeTelegramAcceptanceChild(verificationChild);
+      const verificationExit = observeRoundTripChildExit(verificationChild);
+      const verificationLaunch = await withAcceptanceDeadline(
+        "candidate persistence verification launch",
+        verificationLifecycle.launch,
+        { timeoutMs: 30_000 },
+      );
+      if (verificationLaunch.state !== "spawned") {
+        fail("candidate persistence verification could not launch");
+      }
+      const verificationUrl = await waitForPage(verificationPort, { timeoutMs: 60_000 });
+      if ((await debuggerListenerOwner(verificationPort, environment)) !== verificationLaunch.pid) {
+        fail("candidate persistence debugger listener is outside the installed application");
+      }
+      verificationConnection = await connectCdp(verificationUrl, () => undefined);
+      await callAcceptanceCdp(verificationConnection, "Runtime.enable");
+      phase = "verify-persistence";
+      const afterPersistence = await readPersistenceView(verificationConnection, persistenceInput);
+      phase = "shutdown-persistence-verification";
+      verificationChild.kill("SIGTERM");
+      const verificationTerminal = await withAcceptanceDeadline(
+        "candidate persistence verification shutdown",
+        verificationExit,
+        { timeoutMs: shutdownTimeoutMs },
+      );
+      verificationConnection.socket.close();
+      if (verificationTerminal.code !== 0 || verificationTerminal.signal !== null) {
+        fail("candidate persistence verification did not exit cleanly");
+      }
+      await waitUntil(
+        "candidate persistence verification process cleanup",
+        async () => {
+          const observation = await observeProcesses(installedApplication);
+          return observation.bundlePids.length === 0 ? true : false;
+        },
+        shutdownTimeoutMs,
+        100,
+      );
+      phase = "validate-persistence";
+      const plaintextCredentialAbsent = await requirePlaintextAbsent(
+        [home, userData, athleteHome],
+        credentialPlaintext,
+      );
+      const persistence = verifyMacosUpdaterRoundTripPersistence({
+        before: beforePersistence,
+        after: afterPersistence,
+        plaintextCredentialAbsent,
+      });
+      const evidence = createMacosUpdaterRoundTripEvidence({
+        baselineVersion: input.baselineVersion,
+        candidateVersion: input.candidateVersion,
+        initialPid,
+        relaunchedPid,
+        identity,
+        download: {
+          fileName: downloaded.info.fileName,
+          size: downloaded.digest.size,
+          sha256: downloaded.digest.sha256,
+          sha512: downloaded.digest.sha512,
+        },
+        persistence,
+      });
+      phase = "write-evidence";
+      await removeScratch(scratch);
+      await writeEvidenceFile(input.evidencePath, evidence);
+      completed = true;
+      return evidence;
+    } catch (error) {
+      failurePhase = phase;
+      throw error;
+    } finally {
+      phase = "cleanup";
+      const cleaned = await cleanupRoundTripResources({
+        debuggerConnection,
+        verificationConnection,
+        initialChild,
+        verificationChild,
+        installedApplication,
+        observeProcesses,
+        terminateApplication: !completed,
+      }).catch(() => false);
+      cleanup = cleaned ? "complete" : "incomplete";
+      if (!cleaned && failurePhase === undefined) {
+        fail("round-trip cleanup failed");
       }
     }
+  } catch (error) {
+    throw bindFailureDiagnostic(error, failurePhase ?? phase, cleanup);
   }
 }
 
@@ -1418,8 +1579,12 @@ async function main() {
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     await main();
-  } catch {
-    process.stderr.write("macOS updater round trip failed\n");
+  } catch (error) {
+    const diagnostic = safeFailureDiagnostic(error);
+    const reason = diagnostic.reason === undefined ? "" : `; reason=${diagnostic.reason}`;
+    process.stderr.write(
+      `macOS updater round trip failed; phase=${diagnostic.phase}; cleanup=${diagnostic.cleanup}${reason}\n`,
+    );
     process.exitCode = 1;
   }
 }

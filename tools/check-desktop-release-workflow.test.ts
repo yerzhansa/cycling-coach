@@ -1131,6 +1131,18 @@ describe("desktop release workflow policy", () => {
 
   it("requires the native production-feed round trip and gated activation", () => {
     const source = sources();
+    const missingTimeout = replaceRequired(
+      source.desktop,
+      "  verify-production-update:\n    runs-on: macos-15\n    timeout-minutes: 30",
+      "  verify-production-update:\n    runs-on: macos-15",
+    );
+    expectIssue({ ...source, desktop: missingTimeout }, "production-feed N-to-N+1 round trip");
+    const wrongTimeout = replaceRequired(
+      source.desktop,
+      "  verify-production-update:\n    runs-on: macos-15\n    timeout-minutes: 30",
+      "  verify-production-update:\n    runs-on: macos-15\n    timeout-minutes: 31",
+    );
+    expectIssue({ ...source, desktop: wrongTimeout }, "production-feed N-to-N+1 round trip");
     const noRoundTrip = replaceRequired(
       source.desktop,
       "test:macos-update-roundtrip",
@@ -1300,7 +1312,7 @@ ${updaterCommandBlock}
     expectIssue({ ...source, desktop: movesCandidateHead }, "must overlay exactly");
   });
 
-  it("allows downstream recovery jobs to overlay only the transaction implementation", () => {
+  it("keeps non-updater downstream recovery jobs transaction-only", () => {
     const source = sources();
     const expandedOverlay = replaceRequired(
       source.desktop,
@@ -1321,6 +1333,48 @@ ${updaterCommandBlock}
       { ...source, desktop: missingTransaction },
       "verify-macos-envelope recovery must overlay exactly tools/desktop-release-transaction.ts",
     );
+  });
+
+  it("binds updater recovery to the exact ordered acceptance-tooling overlay", () => {
+    const source = sources();
+    const updaterOverlay = [
+      '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
+      "            apps/desktop/scripts/verify-updater-round-trip.mjs \\",
+      "            tools/desktop-release-transaction.ts",
+      "          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/verify-updater-round-trip.mjs\\ntools/desktop-release-transaction.ts'",
+      '          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"',
+    ].join("\n");
+    const mutations = [
+      [
+        '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
+        "            tools/desktop-release-transaction.ts",
+        "          test \"$(git diff --cached --name-only)\" = 'tools/desktop-release-transaction.ts'",
+      ].join("\n"),
+      [
+        '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
+        "            apps/desktop/scripts/verify-updater-round-trip.mjs",
+        "          test \"$(git diff --cached --name-only)\" = 'apps/desktop/scripts/verify-updater-round-trip.mjs'",
+      ].join("\n"),
+      [
+        '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
+        "            apps/desktop/scripts/verify-updater-round-trip.mjs \\",
+        "            apps/desktop/src/main/index.ts \\",
+        "            tools/desktop-release-transaction.ts",
+        "          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/verify-updater-round-trip.mjs\\napps/desktop/src/main/index.ts\\ntools/desktop-release-transaction.ts'",
+        '          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"',
+      ].join("\n"),
+      [
+        '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
+        "            tools/desktop-release-transaction.ts \\",
+        "            apps/desktop/scripts/verify-updater-round-trip.mjs",
+        "          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/verify-updater-round-trip.mjs\\ntools/desktop-release-transaction.ts'",
+        '          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"',
+      ].join("\n"),
+    ];
+    for (const replacement of mutations) {
+      const desktop = replaceRequired(source.desktop, updaterOverlay, replacement);
+      expectIssue({ ...source, desktop }, "verify-production-update recovery must overlay exactly");
+    }
   });
 
   it("uses a byte-deterministic npm alias packer", () => {
