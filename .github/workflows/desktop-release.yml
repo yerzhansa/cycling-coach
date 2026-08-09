@@ -1222,6 +1222,7 @@ jobs:
 
   verify-production-update:
     runs-on: macos-15
+    timeout-minutes: 30
     needs: [sign-macos, reconcile-latest]
     if: ${{ inputs.mode == 'steady' }}
     permissions:
@@ -1232,7 +1233,7 @@ jobs:
         with:
           ref: ${{ inputs.commit }}
           persist-credentials: false
-      - name: Bind recovery transaction tooling
+      - name: Bind recovery release tooling
         env:
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
@@ -1244,8 +1245,10 @@ jobs:
           fi
           git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
           git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
+            apps/desktop/scripts/verify-updater-round-trip.mjs \
             tools/desktop-release-transaction.ts
-          test "$(git diff --cached --name-only)" = 'tools/desktop-release-transaction.ts'
+          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/verify-updater-round-trip.mjs\ntools/desktop-release-transaction.ts'
+          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"
           test -z "$(git diff --name-only)"
           test -z "$(git ls-files --others --exclude-standard)"
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"

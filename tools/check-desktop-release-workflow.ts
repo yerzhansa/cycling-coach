@@ -90,6 +90,12 @@ function checkRecoveryOverlay(
       ? run.includes(`test "$(git diff --cached --name-only)" = '${expectedPaths[0]}'`)
       : run.includes(`EXPECTED_RECOVERY_DIFF=$'${expectedDiff}'`) &&
         run.includes('test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"');
+  const expectedRestore = [
+    'git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
+    ...expectedPaths.map(
+      (path, index) => `  ${path}${index === expectedPaths.length - 1 ? "" : " \\"}`,
+    ),
+  ].join("\n");
   if (
     checkoutIndex === -1 ||
     recoveryIndex <= checkoutIndex ||
@@ -106,6 +112,7 @@ function checkRecoveryOverlay(
       run,
       'git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
     ) !== 1 ||
+    !run.includes(expectedRestore) ||
     !exactDiff ||
     !run.includes('test -z "$(git diff --name-only)"') ||
     !run.includes('test -z "$(git ls-files --others --exclude-standard)"') ||
@@ -1303,6 +1310,7 @@ fi`;
     roundTripExerciseIndex === undefined ||
     dependencyBuildIndex <= roundTripInstallIndex ||
     dependencyBuildIndex >= roundTripExerciseIndex ||
+    roundTrip["timeout-minutes"] !== 30 ||
     roundTrip.if !== "${{ inputs.mode == 'steady' }}" ||
     !exactStringSet(roundTrip.needs, ["sign-macos", "reconcile-latest"]) ||
     !roundTripRun.includes("desktop-release:transaction public-envelope") ||
@@ -1416,7 +1424,6 @@ fi`;
     ["publish-assets", publish],
     ["request-latest", requestLatest],
     ["reconcile-latest", reconcileLatest],
-    ["verify-production-update", roundTrip],
     ["activate-release", activate],
     ["compensate-publication", compensate],
   ] as const) {
@@ -1428,6 +1435,13 @@ fi`;
       issues,
     );
   }
+  checkRecoveryOverlay(
+    roundTrip,
+    "verify-production-update recovery",
+    ["apps/desktop/scripts/verify-updater-round-trip.mjs", "tools/desktop-release-transaction.ts"],
+    false,
+    issues,
+  );
   const workspaceBuildStep = signingSteps.find((step) => step.run === "pnpm -r build");
   const baselineStep = namedStep(sign, "Resolve signed baseline");
   const signingEvidenceStep = namedStep(sign, "Bind candidate signing evidence");

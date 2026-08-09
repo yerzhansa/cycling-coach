@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   MACOS_UPDATER_ROUND_TRIP_FEED_URL,
@@ -10,6 +11,7 @@ import {
   type MacosUpdaterRoundTripInput,
 } from "../scripts/verify-updater-round-trip.mjs";
 import type { VerifiedMacosReleaseApplication } from "../scripts/verify-macos-release.mjs";
+import { runAcceptanceCommand } from "./fixtures/packaged-telegram/acceptance-deadline.js";
 
 const baselineVersion = "0.1.0";
 const candidateVersion = "0.1.1";
@@ -84,6 +86,76 @@ function persistenceView(overrides: Record<string, unknown> = {}) {
 }
 
 describe("macOS updater round-trip input", () => {
+  it("fails with phase-only diagnostics that do not expose CLI arguments", async () => {
+    const sensitiveArgument = "updater-cli-secret-must-not-appear";
+    const script = fileURLToPath(
+      new URL("../scripts/verify-updater-round-trip.mjs", import.meta.url),
+    );
+    const result = await runAcceptanceCommand(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        script,
+        "0.1.0",
+        "0.1.1",
+        sensitiveArgument,
+        "/private/tmp/candidate-envelope",
+        "/private/tmp/evidence.json",
+      ],
+      { allowFailure: true, timeoutMs: 5_000 },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).toHaveLength(0);
+    expect(result.stderr.toString("utf8")).toBe(
+      "macOS updater round trip failed; phase=input-validation; cleanup=not-started; reason=round-trip requires a steady macOS arm64 runner\n",
+    );
+    expect(result.stderr.includes(sensitiveArgument)).toBe(false);
+  });
+
+  it("omits unknown error text and CLI paths from failure diagnostics", async () => {
+    const sensitiveArgument = "updater-unknown-error-secret-must-not-appear";
+    const script = fileURLToPath(
+      new URL("../scripts/verify-updater-round-trip.mjs", import.meta.url),
+    );
+    const hostPreload = `data:text/javascript,${encodeURIComponent(
+      'Object.defineProperty(process,"platform",{value:"darwin"});Object.defineProperty(process,"arch",{value:"arm64"});',
+    )}`;
+    const result = await runAcceptanceCommand(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--import",
+        hostPreload,
+        script,
+        "0.1.0",
+        "0.1.1",
+        `/private/tmp/${sensitiveArgument}-baseline`,
+        "/private/tmp/nonexistent-candidate-envelope",
+        "/private/tmp/nonexistent-evidence.json",
+      ],
+      {
+        allowFailure: true,
+        timeoutMs: 5_000,
+        environment: {
+          ...process.env,
+          ENDURAGENT_MACOS_UPDATE_ROUNDTRIP_MODE: "steady",
+        },
+      },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).toHaveLength(0);
+    expect(result.stderr.toString("utf8")).toBe(
+      "macOS updater round trip failed; phase=verify-release-envelopes; cleanup=not-started\n",
+    );
+    expect(result.stderr.includes(sensitiveArgument)).toBe(false);
+  });
+
   it("accepts one strictly increasing stable pair on a steady arm64 macOS runner", () => {
     expect(
       requireMacosUpdaterRoundTripInput(input, {
