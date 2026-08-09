@@ -37,22 +37,30 @@ function fakeCancellationToken() {
 }
 
 function fakeDeadlines() {
+  interface TestTimerHandle {
+    unref(): void;
+  }
   interface ScheduledTimeout {
     readonly callback: () => void;
     readonly timeout: number;
   }
-  const scheduled = new Map<{ readonly unref: ReturnType<typeof vi.fn> }, ScheduledTimeout>();
+  const scheduled = new Map<TestTimerHandle, ScheduledTimeout>();
   const setTimeout = vi.fn((callback: () => void, timeout: number) => {
     const handle = { unref: vi.fn() };
     scheduled.set(handle, { callback, timeout });
     return handle;
   });
-  const clearTimeout = vi.fn((handle: { readonly unref: ReturnType<typeof vi.fn> }) => {
+  const clearTimeout = vi.fn((handle: TestTimerHandle) => {
     scheduled.delete(handle);
   });
-  const latest = (timeout: number) =>
-    [...scheduled.entries()].findLast(([, entry]) => entry.timeout === timeout)?.[0];
-  const fire = (handle: { readonly unref: ReturnType<typeof vi.fn> }): boolean => {
+  const latest = (timeout: number): TestTimerHandle | undefined => {
+    let match: TestTimerHandle | undefined;
+    for (const [handle, entry] of scheduled) {
+      if (entry.timeout === timeout) match = handle;
+    }
+    return match;
+  };
+  const fire = (handle: TestTimerHandle): boolean => {
     const entry = scheduled.get(handle);
     if (entry === undefined) return false;
     scheduled.delete(handle);
