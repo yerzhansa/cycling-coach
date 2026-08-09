@@ -72,7 +72,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-vi.mock("./helpers/desktop-fixture.ts", () => ({
+vi.mock("../scripts/support/desktop-cdp.ts", () => ({
   connectCdp: vi.fn(),
   reservePort: vi.fn(async () => 31_337),
   waitForPage: vi.fn(async () => {
@@ -83,7 +83,7 @@ vi.mock("./helpers/desktop-fixture.ts", () => ({
   }),
 }));
 
-vi.mock("./fixtures/packaged-telegram/disposable-keychain.ts", () => ({
+vi.mock("../scripts/support/packaged-telegram/disposable-keychain.ts", () => ({
   prepareDisposableKeychain: vi.fn(
     async (input: { readonly home: string; readonly path: string }) => {
       harness.keychainEvents.push("prepare");
@@ -112,9 +112,11 @@ vi.mock("./fixtures/packaged-telegram/disposable-keychain.ts", () => ({
   ),
 }));
 
-vi.mock("./fixtures/packaged-telegram/acceptance-deadline.ts", async (importOriginal) => {
+vi.mock("../scripts/support/packaged-telegram/acceptance-deadline.ts", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("./fixtures/packaged-telegram/acceptance-deadline.ts")>();
+    await importOriginal<
+      typeof import("../scripts/support/packaged-telegram/acceptance-deadline.ts")
+    >();
   return {
     ...actual,
     runAcceptanceCommand: vi.fn(async (command: string, args: readonly string[]) => {

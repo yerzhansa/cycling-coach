@@ -18,7 +18,7 @@ import {
   verifyTelegramAcceptanceNestedSignature,
   verifyTelegramAcceptanceSignature,
   verifyTelegramAcceptanceWorkspaceRuntime,
-} from "./fixtures/packaged-telegram/package-acceptance.mjs";
+} from "../scripts/support/packaged-telegram/package-acceptance.mjs";
 
 const version = "0.0.1";
 const cdHash = "0123456789abcdef0123456789abcdef01234567";

@@ -5,7 +5,7 @@ import {
   requireNodeFetchV2,
   type FetchRouteInit,
   type NodeFetchV2,
-} from "./fixtures/packaged-telegram/telegram-fetch-route.js";
+} from "../scripts/support/packaged-telegram/telegram-fetch-route.js";
 
 function constructor(): never {
   throw new Error("not called");

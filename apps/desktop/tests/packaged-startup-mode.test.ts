@@ -4,7 +4,7 @@ import {
   ACCEPTANCE_OS_LOGIN_MARKER_VALUE,
   consumeAcceptanceStartupMarker,
   type AcceptanceLoginLaunchPort,
-} from "./fixtures/packaged-telegram/startup-mode.js";
+} from "../scripts/support/packaged-telegram/startup-mode.js";
 
 function loginPort(wasOpenedAtLogin = false) {
   const getLoginItemSettings = vi.fn(() => ({

@@ -5,7 +5,7 @@ import {
   runAcceptanceCommand,
   terminateAcceptanceChild,
   withAcceptanceDeadline,
-} from "./fixtures/packaged-telegram/acceptance-deadline.js";
+} from "../scripts/support/packaged-telegram/acceptance-deadline.js";
 
 describe("packaged Telegram acceptance deadlines", () => {
   it("rejects a stalled operation and runs its abort hook", async () => {

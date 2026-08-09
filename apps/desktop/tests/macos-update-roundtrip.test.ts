@@ -12,7 +12,7 @@ import {
   type MacosUpdaterRoundTripInput,
 } from "../scripts/verify-updater-round-trip.mjs";
 import type { VerifiedMacosReleaseApplication } from "../scripts/verify-macos-release.mjs";
-import { runAcceptanceCommand } from "./fixtures/packaged-telegram/acceptance-deadline.js";
+import { runAcceptanceCommand } from "../scripts/support/packaged-telegram/acceptance-deadline.js";
 
 const baselineVersion = "0.1.0";
 const candidateVersion = "0.1.1";
