@@ -516,7 +516,7 @@ describe("GitHub desktop release transaction", () => {
             bodyReadStarted = true;
             return new Promise<never>(() => undefined);
           },
-        }) as Response,
+        }) as unknown as Response,
       {
         metadataRequestTimeoutMs: 17,
         scheduleTimeout: (callback, delayMs) => {
