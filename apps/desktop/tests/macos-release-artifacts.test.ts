@@ -52,6 +52,21 @@ const names = {
   metadata: "latest-mac.yml",
 };
 
+function dmgSigningIdentityResult(
+  teamIdentifier = "FA494ACVTF",
+  authorityTeamIdentifier = teamIdentifier,
+) {
+  return {
+    stdout: "",
+    stderr: [
+      `Authority=Developer ID Application: Enduragent Test (${authorityTeamIdentifier})`,
+      "Authority=Developer ID Certification Authority",
+      "Authority=Apple Root CA",
+      `TeamIdentifier=${teamIdentifier}`,
+    ].join("\n"),
+  };
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -2245,7 +2260,12 @@ describe("macOS release artifact envelope", () => {
 
   it("accepts the pinned blockmap and invokes mandatory DMG verification defaults", async () => {
     const fixture = await releaseFixture();
-    const executeFile = vi.fn(async () => {});
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
+        return dmgSigningIdentityResult();
+      }
+      return { stdout: "", stderr: "" };
+    });
     await expect(
       verifyMacosReleaseArtifacts(
         fixture.artifactDirectory,
@@ -2261,6 +2281,7 @@ describe("macOS release artifact envelope", () => {
     const dmgPath = join(fixture.artifactDirectory, names.dmg);
     expect(executeFile.mock.calls).toEqual([
       ["/usr/bin/codesign", ["--verify", "--verbose=2", dmgPath]],
+      ["/usr/bin/codesign", ["--display", "--verbose=4", dmgPath]],
       ["/usr/bin/xcrun", ["stapler", "validate", "-v", dmgPath]],
       [
         "/usr/sbin/spctl",
@@ -2303,10 +2324,14 @@ describe("macOS release artifact envelope", () => {
 
   it("fails final-envelope verification when the DMG staple is absent", async () => {
     const fixture = await releaseFixture();
-    const executeFile = vi.fn(async (executable: string) => {
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
+        return dmgSigningIdentityResult();
+      }
       if (executable === "/usr/bin/xcrun") {
         throw new Error("synthetic missing staple");
       }
+      return { stdout: "", stderr: "" };
     });
 
     await expect(
@@ -2321,8 +2346,74 @@ describe("macOS release artifact envelope", () => {
         "/usr/bin/codesign",
         ["--verify", "--verbose=2", join(fixture.artifactDirectory, names.dmg)],
       ],
+      [
+        "/usr/bin/codesign",
+        ["--display", "--verbose=4", join(fixture.artifactDirectory, names.dmg)],
+      ],
       ["/usr/bin/xcrun", ["stapler", "validate", "-v", join(fixture.artifactDirectory, names.dmg)]],
     ]);
+  });
+
+  it.each([
+    ["team identifier", "ABCDE12345", "FA494ACVTF"],
+    ["leaf authority", "FA494ACVTF", "ABCDE12345"],
+  ])(
+    "rejects a valid notarized DMG with an alternate Developer ID %s",
+    async (_label, teamIdentifier, authorityTeamIdentifier) => {
+      const fixture = await releaseFixture();
+      const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+        if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
+          return dmgSigningIdentityResult(teamIdentifier, authorityTeamIdentifier);
+        }
+        return { stdout: "", stderr: "" };
+      });
+
+      await expect(
+        verifyMacosReleaseArtifacts(
+          fixture.artifactDirectory,
+          { repositoryRoot: fixture.repositoryRoot },
+          { executeFile },
+        ),
+      ).rejects.toThrow("macOS DMG signing identity is invalid");
+      expect(executeFile.mock.calls).toEqual([
+        [
+          "/usr/bin/codesign",
+          ["--verify", "--verbose=2", join(fixture.artifactDirectory, names.dmg)],
+        ],
+        [
+          "/usr/bin/codesign",
+          ["--display", "--verbose=4", join(fixture.artifactDirectory, names.dmg)],
+        ],
+      ]);
+    },
+  );
+
+  it("redacts DMG signing identity inspection failures", async () => {
+    const fixture = await releaseFixture();
+    const sentinel = "private alternate signing certificate output";
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
+        throw new Error(sentinel);
+      }
+      return { stdout: "", stderr: "" };
+    });
+    let failure: unknown;
+
+    try {
+      await verifyMacosReleaseArtifacts(
+        fixture.artifactDirectory,
+        { repositoryRoot: fixture.repositoryRoot },
+        { executeFile },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(safeMacosReleaseVerificationMessage(failure)).toBe(
+      "macOS DMG signing identity inspection failed",
+    );
+    expect((failure as Error).message).not.toContain(sentinel);
+    expect(executeFile).toHaveBeenCalledTimes(2);
   });
 
   it("rejects an envelope when mandatory DMG verification fails", async () => {
