@@ -39,7 +39,7 @@ function inspect(source: WorkflowSources): string[] {
 
 function replaceRequired(source: string, search: string, replacement: string): string {
   if (!source.includes(search)) throw new TypeError(`Mutation target not found: ${search}`);
-  return source.replace(search, replacement);
+  return source.replace(search, () => replacement);
 }
 
 function expectIssue(source: WorkflowSources, fragment: string): void {
@@ -52,7 +52,7 @@ describe("desktop release workflow policy", () => {
     expect(inspect(source)).toEqual([]);
     expect(source.coordinator).toContain("^enduragent-desktop@");
     expect(source.coordinator).toContain('git show "$COMMIT:apps/desktop/package.json"');
-    expect(source.coordinator).toContain('--ref "$RELEASE_TAG"');
+    expect(source.coordinator).toContain('--ref "$RELEASE_WORKFLOW_REF"');
     expect(source.desktop).toContain(".github/workflows/desktop-release-coordinator.yml");
     expect(source.desktop).not.toMatch(/\bnpm_(?:version|integrity|attestation_url)\b/u);
     expect(source.version).toContain('DESKTOP_TAG="enduragent-desktop@$DESKTOP_VERSION"');
@@ -87,6 +87,62 @@ describe("desktop release workflow policy", () => {
     }
   });
 
+  it("requires an optional immutable recovery tooling tag", () => {
+    const source = sources();
+    const recoveryInput = [
+      "      recovery_tooling_tag:",
+      '        description: "Optional immutable enduragent-desktop@<version>-recovery.<revision> tooling tag"',
+      "        required: false",
+      '        default: ""',
+      "        type: string",
+    ].join("\n");
+    const coordinator = replaceRequired(
+      source.coordinator,
+      recoveryInput,
+      recoveryInput.replace("required: false", "required: true"),
+    );
+    expectIssue({ ...source, coordinator }, "recovery tooling tag must be an optional string");
+  });
+
+  it("binds recovery tooling to an exact steady-only tag on main", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.coordinator,
+        "printf '%s' \"$RECOVERY_REVISION\" | grep -Eq '^[1-9][0-9]*$'",
+        "printf '%s' \"$RECOVERY_REVISION\" | grep -Eq '^[0-9]+$'",
+      ),
+      replaceRequired(
+        source.coordinator,
+        "if [ \"$MODE\" != 'steady' ]; then",
+        "if [ \"$MODE\" != 'genesis' ]; then",
+      ),
+      replaceRequired(
+        source.coordinator,
+        'git merge-base --is-ancestor "$COMMIT" "$TOOLING_COMMIT"',
+        'git merge-base --is-ancestor "$TOOLING_COMMIT" "$COMMIT"',
+      ),
+      replaceRequired(
+        source.coordinator,
+        'git merge-base --is-ancestor "$TOOLING_COMMIT" refs/remotes/origin/main',
+        'git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main',
+      ),
+      replaceRequired(
+        source.coordinator,
+        'test "$WORKFLOW_SHA" = "$TOOLING_COMMIT"',
+        'test "$WORKFLOW_SHA" = "$COMMIT"',
+      ),
+    ];
+    for (const [index, coordinator] of mutations.entries()) {
+      expect(
+        inspect({ ...source, coordinator }).some((issue) =>
+          issue.includes("distinct immutable steady-only tag"),
+        ),
+        `recovery mutation ${index}`,
+      ).toBe(true);
+    }
+  });
+
   it("requires a desktop changelog draft with stable non-latest semantics", () => {
     const source = sources();
     const wrongChangelog = replaceRequired(
@@ -104,9 +160,18 @@ describe("desktop release workflow policy", () => {
     }
   });
 
-  it("requires one exact-tag, npm-independent child dispatch and awaits it", () => {
+  it("requires one bound-ref, npm-independent child dispatch and awaits it", () => {
     const source = sources();
-    const wrongRef = replaceRequired(source.coordinator, '--ref "$RELEASE_TAG"', "--ref main");
+    const wrongRef = replaceRequired(
+      source.coordinator,
+      '--ref "$RELEASE_WORKFLOW_REF"',
+      '--ref "$RELEASE_TAG"',
+    );
+    const wrongCandidateCommit = replaceRequired(
+      source.coordinator,
+      '-f commit="$RELEASE_COMMIT"',
+      '-f commit="$RELEASE_TOOLING_COMMIT"',
+    );
     const npmCoupled = replaceRequired(
       source.coordinator,
       '            -f desktop_version="$DESKTOP_VERSION" \\\n',
@@ -117,7 +182,7 @@ describe("desktop release workflow policy", () => {
       'gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status',
       'gh run view "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY"',
     );
-    for (const coordinator of [wrongRef, npmCoupled, notAwaited]) {
+    for (const coordinator of [wrongRef, wrongCandidateCommit, npmCoupled, notAwaited]) {
       expectIssue({ ...source, coordinator }, "npm-independent child tuple");
     }
   });
@@ -146,6 +211,31 @@ describe("desktop release workflow policy", () => {
       "true",
     );
     for (const desktop of [wrongPath, noAttempt]) {
+      expectIssue({ ...source, desktop }, "authorize only its active desktop coordinator");
+    }
+  });
+
+  it("binds child authorization to the normal or recovery workflow ref", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.desktop,
+        "          RELEASE_TAG: ${{ inputs.tag }}",
+        "          RELEASE_TAG: ${{ inputs.tooling_commit }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"',
+        'test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG-recovery.1"',
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${RECOVERY_REVISION}"',
+        'test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.1"',
+      ),
+      replaceRequired(source.desktop, "jq -r '.head_branch'", "jq -r '.head_sha'"),
+    ];
+    for (const desktop of mutations) {
       expectIssue({ ...source, desktop }, "authorize only its active desktop coordinator");
     }
   });
@@ -312,10 +402,45 @@ describe("desktop release workflow policy", () => {
     expectIssue({ ...source, desktop: unbound }, "active desktop coordinator");
     const productOverlay = replaceRequired(
       source.desktop,
-      "apps/desktop/scripts/macos-release-plan.d.mts\\n",
-      "apps/desktop/src/main/index.ts\\n",
+      "            apps/desktop/scripts/macos-release-cli.mjs \\\n",
+      "            apps/desktop/src/main/index.ts\n",
     );
     expectIssue({ ...source, desktop: productOverlay }, "overlay only audited release tooling");
+    const reversedAncestry = replaceRequired(
+      source.desktop,
+      'git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"',
+      'git merge-base --is-ancestor "$RELEASE_TOOLING_COMMIT" "$RELEASE_COMMIT"',
+    );
+    expectIssue({ ...source, desktop: reversedAncestry }, "overlay only audited release tooling");
+    const unstagedRestore = replaceRequired(source.desktop, "--staged --worktree", "--worktree");
+    expectIssue({ ...source, desktop: unstagedRestore }, "overlay only audited release tooling");
+    const unstagedOverlay = replaceRequired(
+      source.desktop,
+      "git diff --cached --name-only",
+      "git diff --name-only",
+    );
+    expectIssue({ ...source, desktop: unstagedOverlay }, "overlay only audited release tooling");
+    const allowsTrackedDrift = replaceRequired(
+      source.desktop,
+      'test -z "$(git diff --name-only)"',
+      "true",
+    );
+    expectIssue({ ...source, desktop: allowsTrackedDrift }, "overlay only audited release tooling");
+    const allowsUntrackedDrift = replaceRequired(
+      source.desktop,
+      'test -z "$(git ls-files --others --exclude-standard)"',
+      "true",
+    );
+    expectIssue(
+      { ...source, desktop: allowsUntrackedDrift },
+      "overlay only audited release tooling",
+    );
+    const movesCandidateHead = replaceRequired(
+      source.desktop,
+      '          test -z "$(git ls-files --others --exclude-standard)"\n          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"',
+      '          test -z "$(git ls-files --others --exclude-standard)"',
+    );
+    expectIssue({ ...source, desktop: movesCandidateHead }, "overlay only audited release tooling");
   });
 
   it("uses a byte-deterministic npm alias packer", () => {
