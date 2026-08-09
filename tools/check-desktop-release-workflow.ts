@@ -248,11 +248,16 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     "desktop coordinator.jobs.prepare-release-draft",
     issues,
   );
-  const dispatch = mapping(
-    jobs["dispatch-desktop-release"],
-    "desktop coordinator.jobs.dispatch-desktop-release",
+  const desktopRelease = mapping(
+    jobs["desktop-release"],
+    "desktop coordinator.jobs.desktop-release",
     issues,
   );
+  if (!exactKeys(jobs, ["bind-release", "prepare-release-draft", "desktop-release"])) {
+    issues.push(
+      "desktop coordinator must contain only binding, draft safeguard, and reusable call",
+    );
+  }
   exactPermissions(
     bind.permissions,
     { actions: "read", contents: "read" },
@@ -261,9 +266,9 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   );
   exactPermissions(draft.permissions, { contents: "write" }, "desktop draft preparation", issues);
   exactPermissions(
-    dispatch.permissions,
-    { actions: "write", contents: "read" },
-    "desktop child dispatcher",
+    desktopRelease.permissions,
+    { actions: "read", contents: "write" },
+    "desktop reusable release call",
     issues,
   );
 
@@ -272,7 +277,6 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     tag: "${{ steps.bind.outputs.tag }}",
     desktop_version: "${{ steps.bind.outputs.desktop_version }}",
     commit: "${{ steps.bind.outputs.commit }}",
-    workflow_ref: "${{ steps.bind.outputs.workflow_ref }}",
     tooling_commit: "${{ steps.bind.outputs.tooling_commit }}",
     mode: "${{ steps.bind.outputs.mode }}",
     baseline_tag: "${{ steps.bind.outputs.baseline_tag }}",
@@ -295,6 +299,7 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     bindEnvironment.DESKTOP_ENABLED !== "${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}" ||
     bindEnvironment.WORKFLOW_REF !== "${{ github.ref }}" ||
     bindEnvironment.WORKFLOW_SHA !== "${{ github.sha }}" ||
+    bindEnvironment.REPOSITORY_ID !== "${{ github.repository_id }}" ||
     (source.match(/vars\.ENABLE_DESKTOP_MACOS_RELEASE/gu) ?? []).length !== 1 ||
     !bindRun.includes("test \"$DESKTOP_ENABLED\" = 'true'") ||
     !bindRun.includes(
@@ -328,19 +333,57 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
       "desktop coordinator recovery source run must require a steady immutable recovery tag",
     );
   }
+  const coordinatorSourceWorkflowCase = `case "$SOURCE_WORKFLOW_PATH" in
+    .github/workflows/desktop-release.yml)
+      test "$(printf '%s' "$SOURCE_RUN" | jq -r '.actor.login')" = 'github-actions[bot]'
+      test "$(printf '%s' "$SOURCE_RUN" | jq -r '.triggering_actor.login')" = 'github-actions[bot]'
+      ;;
+    .github/workflows/desktop-release-coordinator.yml)
+      ;;
+    *)
+      echo '::error::Recovery source run used an untrusted workflow'
+      exit 1
+      ;;
+  esac`;
+  const coordinatorSourcePathRefCase = `case "$SOURCE_WORKFLOW_PATH_RAW" in
+    "$SOURCE_WORKFLOW_PATH"|"$SOURCE_WORKFLOW_PATH@$SOURCE_HEAD"|"$SOURCE_WORKFLOW_PATH@refs/tags/$SOURCE_HEAD")
+      ;;
+    *)
+      echo '::error::Recovery source workflow path used an unexpected ref suffix'
+      exit 1
+      ;;
+  esac`;
+  const coordinatorSourceHeadCase = `if [ "$SOURCE_HEAD" = "$TAG" ]; then
+    test "$SOURCE_SHA" = "$COMMIT"
+  else
+    SOURCE_REVISION="\${SOURCE_HEAD#"\${TAG}-recovery."}"
+    printf '%s' "$SOURCE_REVISION" | grep -Eq '^[1-9][0-9]*$'
+    test "$SOURCE_HEAD" = "\${TAG}-recovery.\${SOURCE_REVISION}"
+    test "$SOURCE_REVISION" -lt "$CURRENT_RECOVERY_REVISION"
+  fi`;
   if (
+    bindEnvironment.REPOSITORY_ID !== "${{ github.repository_id }}" ||
     !bindRun.includes(
       'SOURCE_RUN=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")',
     ) ||
-    !bindRun.includes(".github/workflows/desktop-release.yml") ||
+    !bindRun.includes("SOURCE_WORKFLOW_PATH_RAW=$(printf '%s' \"$SOURCE_RUN\" | jq -er '.path')") ||
+    !bindRun.includes('SOURCE_WORKFLOW_PATH="${SOURCE_WORKFLOW_PATH_RAW%%@*}"') ||
+    !bindRun.includes(coordinatorSourceWorkflowCase) ||
     !bindRun.includes(".event')\" = 'workflow_dispatch'") ||
     !bindRun.includes(".status')\" = 'completed'") ||
     !bindRun.includes(".conclusion')\" = 'failure'") ||
-    !bindRun.includes(".repository.full_name") ||
+    !bindRun.includes(
+      'test "$(printf \'%s\' "$SOURCE_RUN" | jq -r \'.repository.full_name\')" = "$GITHUB_REPOSITORY"',
+    ) ||
+    !bindRun.includes(
+      'test "$(printf \'%s\' "$SOURCE_RUN" | jq -r \'.head_repository.full_name\')" = "$GITHUB_REPOSITORY"',
+    ) ||
     !bindRun.includes("SOURCE_ATTEMPT=") ||
-    !bindRun.includes('SOURCE_REVISION="${SOURCE_HEAD#"${TAG}-recovery."}"') ||
-    !bindRun.includes('test "$SOURCE_HEAD" = "${TAG}-recovery.${SOURCE_REVISION}"') ||
-    !bindRun.includes('test "$SOURCE_HEAD" != "$RECOVERY_TOOLING_TAG_INPUT"') ||
+    !bindRun.includes(coordinatorSourcePathRefCase) ||
+    !bindRun.includes(
+      'CURRENT_RECOVERY_REVISION="${RECOVERY_TOOLING_TAG_INPUT#"${TAG}-recovery."}"',
+    ) ||
+    !bindRun.includes(coordinatorSourceHeadCase) ||
     !bindRun.includes(
       'test "$(git rev-parse "refs/tags/$SOURCE_HEAD^{commit}")" = "$SOURCE_SHA"',
     ) ||
@@ -348,12 +391,23 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     !bindRun.includes('git merge-base --is-ancestor "$SOURCE_SHA" "$TOOLING_COMMIT"') ||
     !bindRun.includes('git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main') ||
     !bindRun.includes(
-      'SOURCE_JOBS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100")',
+      "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/attempts/$SOURCE_ATTEMPT/jobs?per_page=100",
     ) ||
+    !bindRun.includes("gh api --paginate --slurp") ||
+    !bindRun.includes("([.[].jobs[]] | length) == .[0].total_count") ||
     !bindRun.includes(
       "for required_job in sign-macos verify-macos-envelope stage-private-draft publish-assets; do",
     ) ||
-    !bindRun.includes('.name == "activate-release" and .conclusion == "success"') ||
+    !bindRun.includes(
+      '[.[].jobs[] | select((.name | split(" / ") | last) == $name)] as $matches',
+    ) ||
+    (bindRun.match(/\(\$matches \| length\) == 1/gu) ?? []).length !== 2 ||
+    (bindRun.match(/\$matches\[0\]\.status == "completed"/gu) ?? []).length !== 2 ||
+    !bindRun.includes('$matches[0].conclusion == "success"') ||
+    !bindRun.includes(
+      '[.[].jobs[] | select((.name | split(" / ") | last) == "activate-release")] as $matches',
+    ) ||
+    !bindRun.includes('$matches[0].conclusion != "success"') ||
     !bindRun.includes(
       'SOURCE_ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100")',
     ) ||
@@ -364,6 +418,8 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     !bindRun.includes(".expired") ||
     !bindRun.includes("^sha256:[0-9a-f]{64}$") ||
     !bindRun.includes(".workflow_run.id") ||
+    !bindRun.includes(".workflow_run.repository_id") ||
+    !bindRun.includes(".workflow_run.head_repository_id") ||
     !bindRun.includes(".workflow_run.head_branch") ||
     !bindRun.includes(".workflow_run.head_sha")
   ) {
@@ -372,7 +428,6 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     );
   }
   if (
-    !bindRun.includes('CHILD_WORKFLOW_REF="$TAG"') ||
     !bindRun.includes('TOOLING_COMMIT="$COMMIT"') ||
     !bindRun.includes('if [ -n "$RECOVERY_TOOLING_TAG_INPUT" ]; then') ||
     !bindRun.includes("if [ \"$MODE\" != 'steady' ]; then") ||
@@ -386,8 +441,6 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     !bindRun.includes('test "$WORKFLOW_SHA" = "$TOOLING_COMMIT"') ||
     !bindRun.includes('git merge-base --is-ancestor "$COMMIT" "$TOOLING_COMMIT"') ||
     !bindRun.includes('git merge-base --is-ancestor "$TOOLING_COMMIT" refs/remotes/origin/main') ||
-    !bindRun.includes('CHILD_WORKFLOW_REF="$RECOVERY_TAG"') ||
-    !bindRun.includes('echo "workflow_ref=$CHILD_WORKFLOW_REF" >> "$GITHUB_OUTPUT"') ||
     !bindRun.includes('echo "tooling_commit=$TOOLING_COMMIT" >> "$GITHUB_OUTPUT"')
   ) {
     issues.push(
@@ -451,163 +504,40 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     issues.push("desktop coordinator recovery must never create a missing candidate release");
   }
 
-  const dispatchNeeds = scalar(dispatch.needs);
-  const dispatchBindingStep = namedStep(dispatch, "Seal exact child dispatch binding");
-  const dispatchBindingEnvironment = mapping(
-    dispatchBindingStep?.env,
-    "desktop dispatch binding environment",
-    issues,
-  );
-  const dispatchBindingRun =
-    typeof dispatchBindingStep?.run === "string" ? dispatchBindingStep.run : "";
-  const dispatchBindingUploads = actionSteps(dispatch, "actions/upload-artifact");
-  const dispatchStep = namedStep(
-    dispatch,
-    "Dispatch and await environment-bound desktop transaction",
-  );
-  const dispatchEnvironment = mapping(
-    dispatchStep?.env,
-    "desktop coordinator dispatch environment",
-    issues,
-  );
-  const dispatchRun = typeof dispatchStep?.run === "string" ? dispatchStep.run : "";
-  const expectedDispatchEnvironment: Mapping = {
-    RELEASE_TAG: "${{ needs.bind-release.outputs.tag }}",
-    DESKTOP_VERSION: "${{ needs.bind-release.outputs.desktop_version }}",
-    RELEASE_COMMIT: "${{ needs.bind-release.outputs.commit }}",
-    RELEASE_WORKFLOW_REF: "${{ needs.bind-release.outputs.workflow_ref }}",
-    RELEASE_TOOLING_COMMIT: "${{ needs.bind-release.outputs.tooling_commit }}",
-    RELEASE_DRAFT_ID: "${{ needs.prepare-release-draft.outputs.draft_id }}",
-    RELEASE_MODE: "${{ needs.bind-release.outputs.mode }}",
-    RELEASE_BODY_SHA256: "${{ needs.prepare-release-draft.outputs.body_sha256 }}",
-    RELEASE_BASELINE_TAG: "${{ needs.bind-release.outputs.baseline_tag }}",
-    RELEASE_SOURCE_RUN_ID: "${{ needs.bind-release.outputs.source_run_id }}",
-    COORDINATOR_RUN_ID: "${{ github.run_id }}",
-    COORDINATOR_RUN_ATTEMPT: "${{ github.run_attempt }}",
-    DISPATCH_NONCE: "${{ steps.dispatch-binding.outputs.nonce }}",
-    DISPATCH_BINDING_SHA256: "${{ steps.dispatch-binding.outputs.sha256 }}",
+  const callInputs = mapping(desktopRelease.with, "desktop reusable call inputs", issues);
+  const expectedCallInputs: Mapping = {
+    tag: "${{ needs.bind-release.outputs.tag }}",
+    desktop_version: "${{ needs.bind-release.outputs.desktop_version }}",
+    commit: "${{ needs.bind-release.outputs.commit }}",
+    tooling_commit: "${{ needs.bind-release.outputs.tooling_commit }}",
+    draft_id: "${{ needs.prepare-release-draft.outputs.draft_id }}",
+    mode: "${{ needs.bind-release.outputs.mode }}",
+    draft_body_sha256: "${{ needs.prepare-release-draft.outputs.body_sha256 }}",
+    baseline_tag: "${{ needs.bind-release.outputs.baseline_tag }}",
+    source_run_id: "${{ needs.bind-release.outputs.source_run_id }}",
   };
-  const dispatchedInputs = Array.from(
-    dispatchRun.matchAll(/(?:^|\s)-f ([a-z0-9_]+)=/gu),
-    (match) => match[1],
-  );
-  const expectedDispatchedInputs = [
-    "tag",
-    "desktop_version",
-    "commit",
-    "tooling_commit",
-    "draft_id",
-    "mode",
-    "draft_body_sha256",
-    "baseline_tag",
-    "source_run_id",
-    "coordinator_run_id",
-    "coordinator_run_attempt",
-    "dispatch_nonce",
-    "dispatch_binding_sha256",
-  ];
-  const expectedDispatchedAssignments: Mapping = {
-    tag: "RELEASE_TAG",
-    desktop_version: "DESKTOP_VERSION",
-    commit: "RELEASE_COMMIT",
-    tooling_commit: "RELEASE_TOOLING_COMMIT",
-    draft_id: "RELEASE_DRAFT_ID",
-    mode: "RELEASE_MODE",
-    draft_body_sha256: "RELEASE_BODY_SHA256",
-    baseline_tag: "RELEASE_BASELINE_TAG",
-    source_run_id: "RELEASE_SOURCE_RUN_ID",
-    coordinator_run_id: "COORDINATOR_RUN_ID",
-    coordinator_run_attempt: "COORDINATOR_RUN_ATTEMPT",
-    dispatch_nonce: "DISPATCH_NONCE",
-    dispatch_binding_sha256: "DISPATCH_BINDING_SHA256",
-  };
-  const expectedBindingObject =
-    "{schemaVersion: 1, repository: $repository, repositoryId: $repositoryId, coordinatorRunId: $coordinatorRunId, coordinatorRunAttempt: $coordinatorRunAttempt, workflowRef: $workflowRef, workflowSha: $workflowSha, childWorkflowRef: $childWorkflowRef, tag: $tag, desktopVersion: $desktopVersion, commit: $commit, toolingCommit: $toolingCommit, draftId: $draftId, mode: $mode, draftBodySha256: $draftBodySha256, baselineTag: $baselineTag, sourceRunId: $sourceRunId, nonce: $nonce}";
-  const expectedBindingEnvironment: Mapping = {
-    RELEASE_TAG: "${{ needs.bind-release.outputs.tag }}",
-    DESKTOP_VERSION: "${{ needs.bind-release.outputs.desktop_version }}",
-    RELEASE_COMMIT: "${{ needs.bind-release.outputs.commit }}",
-    RELEASE_WORKFLOW_REF: "${{ needs.bind-release.outputs.workflow_ref }}",
-    RELEASE_TOOLING_COMMIT: "${{ needs.bind-release.outputs.tooling_commit }}",
-    RELEASE_DRAFT_ID: "${{ needs.prepare-release-draft.outputs.draft_id }}",
-    RELEASE_MODE: "${{ needs.bind-release.outputs.mode }}",
-    RELEASE_BODY_SHA256: "${{ needs.prepare-release-draft.outputs.body_sha256 }}",
-    RELEASE_BASELINE_TAG: "${{ needs.bind-release.outputs.baseline_tag }}",
-    RELEASE_SOURCE_RUN_ID: "${{ needs.bind-release.outputs.source_run_id }}",
-    COORDINATOR_RUN_ID: "${{ github.run_id }}",
-    COORDINATOR_RUN_ATTEMPT: "${{ github.run_attempt }}",
-    REPOSITORY: "${{ github.repository }}",
-    REPOSITORY_ID: "${{ github.repository_id }}",
-    WORKFLOW_REF: "${{ github.ref }}",
-    WORKFLOW_SHA: "${{ github.sha }}",
-  };
-  const bindingUploadInputs = mapping(
-    dispatchBindingUploads[0]?.with,
-    "desktop dispatch binding upload inputs",
-    issues,
-  );
   if (
-    dispatchBindingStep?.id !== "dispatch-binding" ||
-    !exactKeys(dispatchBindingEnvironment, Object.keys(expectedBindingEnvironment)) ||
-    Object.entries(expectedBindingEnvironment).some(
-      ([key, value]) => dispatchBindingEnvironment[key] !== value,
+    !exactKeys(desktopRelease, ["needs", "concurrency", "permissions", "uses", "with"]) ||
+    !exactStringSet(desktopRelease.needs, ["bind-release", "prepare-release-draft"]) ||
+    desktopRelease.uses !== "./.github/workflows/desktop-release.yml" ||
+    !exactKeys(callInputs, Object.keys(expectedCallInputs)) ||
+    Object.entries(expectedCallInputs).some(([key, value]) => callInputs[key] !== value) ||
+    "secrets" in desktopRelease ||
+    /secrets:\s*inherit|gh workflow run desktop-release\.yml|desktop-dispatch-binding|DISPATCH_NONCE|dispatch_binding_sha256/u.test(
+      source,
     ) ||
-    !dispatchBindingRun.includes("DISPATCH_NONCE=$(openssl rand -hex 32)") ||
-    !dispatchBindingRun.includes("printf '%s' \"$DISPATCH_NONCE\" | grep -Eq '^[0-9a-f]{64}$'") ||
-    !dispatchBindingRun.includes(expectedBindingObject) ||
-    !dispatchBindingRun.includes(
-      "BINDING_SHA256=$(printf '%s' \"$BINDING\" | sha256sum | awk '{print $1}')",
-    ) ||
-    !dispatchBindingRun.includes(
-      'ARTIFACT_NAME="desktop-dispatch-binding-$COORDINATOR_RUN_ID-$COORDINATOR_RUN_ATTEMPT-$BINDING_SHA256"',
-    ) ||
-    !dispatchBindingRun.includes(
-      'printf \'%s\' "$BINDING" > "$RUNNER_TEMP/desktop-dispatch-binding.json"',
-    ) ||
-    dispatchBindingUploads.length !== 1 ||
-    !exactKeys(bindingUploadInputs, [
-      "name",
-      "path",
-      "if-no-files-found",
-      "compression-level",
-      "retention-days",
-    ]) ||
-    bindingUploadInputs.name !== "${{ steps.dispatch-binding.outputs.artifact_name }}" ||
-    bindingUploadInputs.path !== "${{ runner.temp }}/desktop-dispatch-binding.json" ||
-    bindingUploadInputs["if-no-files-found"] !== "error" ||
-    bindingUploadInputs["compression-level"] !== 0 ||
-    bindingUploadInputs["retention-days"] !== 1
+    /npm_version|npm_integrity|npm_attestation_url/u.test(scalar(desktopRelease))
   ) {
-    issues.push("desktop coordinator must seal exactly one nonce-bound full dispatch tuple");
+    issues.push(
+      "desktop coordinator must synchronously call one secretless npm-independent reusable workflow tuple",
+    );
   }
-  if (
-    !dispatchNeeds.includes("bind-release") ||
-    !dispatchNeeds.includes("prepare-release-draft") ||
-    Object.entries(expectedDispatchEnvironment).some(
-      ([key, value]) => dispatchEnvironment[key] !== value,
-    ) ||
-    !exactKeys(
-      Object.fromEntries(dispatchedInputs.map((input) => [input, true])),
-      expectedDispatchedInputs,
-    ) ||
-    dispatchedInputs.length !== expectedDispatchedInputs.length ||
-    Object.entries(expectedDispatchedAssignments).some(
-      ([input, variable]) => !dispatchRun.includes(`-f ${input}="$${variable}"`),
-    ) ||
-    !dispatchRun.includes("gh workflow run desktop-release.yml \\") ||
-    !dispatchRun.includes('--ref "$RELEASE_WORKFLOW_REF"') ||
-    (dispatchRun.match(/--repo "\$GITHUB_REPOSITORY"/gu) ?? []).length !== 3 ||
-    !dispatchRun.includes('--arg title "$EXPECTED_TITLE"') ||
-    !dispatchRun.includes(
-      'EXPECTED_TITLE="Desktop release $RELEASE_TAG via $COORDINATOR_RUN_ID.$COORDINATOR_RUN_ATTEMPT binding $DISPATCH_BINDING_SHA256"',
-    ) ||
-    !dispatchRun.includes(
-      'gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status',
-    ) ||
-    /npm_version|npm_integrity|npm_attestation_url/u.test(dispatchRun)
-  ) {
-    issues.push("desktop coordinator must dispatch and await one npm-independent child tuple");
-  }
+  requireQueue(
+    desktopRelease.concurrency,
+    "stable-desktop",
+    "desktop reusable release call",
+    issues,
+  );
 }
 
 function checkNpmRelease(source: string, release: Mapping, issues: string[]): void {
@@ -817,11 +747,11 @@ function checkNpmRelease(source: string, release: Mapping, issues: string[]): vo
 
 function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): void {
   const workflowOn = mapping(desktop.on, "desktop child.on", issues);
-  if (Object.keys(workflowOn).length !== 1 || !("workflow_dispatch" in workflowOn)) {
-    issues.push("desktop-release.yml must be workflow_dispatch-only");
+  if (Object.keys(workflowOn).length !== 1 || !("workflow_call" in workflowOn)) {
+    issues.push("desktop-release.yml must be workflow_call-only");
   }
-  const workflowDispatch = mapping(workflowOn.workflow_dispatch, "desktop child dispatch", issues);
-  const inputs = mapping(workflowDispatch.inputs, "desktop child inputs", issues);
+  const workflowCall = mapping(workflowOn.workflow_call, "desktop reusable call", issues);
+  const inputs = mapping(workflowCall.inputs, "desktop reusable inputs", issues);
   const expectedInputs = [
     "tag",
     "desktop_version",
@@ -832,10 +762,6 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     "draft_body_sha256",
     "baseline_tag",
     "source_run_id",
-    "coordinator_run_id",
-    "coordinator_run_attempt",
-    "dispatch_nonce",
-    "dispatch_binding_sha256",
   ];
   if (!exactKeys(inputs, expectedInputs)) {
     issues.push("desktop child must accept only the frozen desktop release tuple");
@@ -843,7 +769,7 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
   for (const input of expectedInputs) {
     const declaration = mapping(inputs[input], `desktop child input ${input}`, issues);
     if (declaration.required !== true || declaration.type !== "string") {
-      issues.push(`desktop workflow_dispatch must require string input ${input}`);
+      issues.push(`desktop workflow_call must require string input ${input}`);
     }
   }
   if (
@@ -853,11 +779,15 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
   ) {
     issues.push("desktop child must not consume npm release identity or provenance");
   }
+  if ("run-name" in desktop || "concurrency" in desktop) {
+    issues.push("desktop reusable workflow must inherit caller run identity and concurrency");
+  }
   if (
-    desktop["run-name"] !==
-    "Desktop release ${{ inputs.tag }} via ${{ inputs.coordinator_run_id }}.${{ inputs.coordinator_run_attempt }} binding ${{ inputs.dispatch_binding_sha256 }}"
+    /coordinator_run_id|coordinator_run_attempt|dispatch_nonce|dispatch_binding_sha256|COORDINATOR_RUN_ID|COORDINATOR_RUN_ATTEMPT|DISPATCH_NONCE|DISPATCH_BINDING_SHA256|desktop-dispatch-binding|COORDINATOR_ARTIFACTS|BINDING_ARTIFACT/u.test(
+      source,
+    )
   ) {
-    issues.push("desktop child run name must bind its coordinator invocation");
+    issues.push("desktop reusable workflow must not retain obsolete dispatch binding machinery");
   }
   exactPermissions(
     desktop.permissions,
@@ -865,7 +795,6 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     "desktop child",
     issues,
   );
-  requireQueue(desktop.concurrency, "stable-desktop", "desktop release", issues);
 
   const requiredSigningSecrets = [
     "CSC_LINK",
@@ -912,7 +841,7 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     "desktop coordinator authorization",
     issues,
   );
-  const authorizeStep = namedStep(authorize, "Bind dispatch to the active release coordinator");
+  const authorizeStep = namedStep(authorize, "Bind call to the active release coordinator");
   const authorizeEnvironment = mapping(
     authorizeStep?.env,
     "desktop coordinator authorization environment",
@@ -930,36 +859,41 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     baseline_artifact_id: "${{ steps.authorize.outputs.baseline_artifact_id }}",
     baseline_artifact_digest: "${{ steps.authorize.outputs.baseline_artifact_digest }}",
   };
+  const expectedAuthorizeEnvironment: Mapping = {
+    GH_TOKEN: "${{ github.token }}",
+    RELEASE_TAG: "${{ inputs.tag }}",
+    DESKTOP_VERSION: "${{ inputs.desktop_version }}",
+    RELEASE_COMMIT: "${{ inputs.commit }}",
+    RELEASE_TOOLING_COMMIT: "${{ inputs.tooling_commit }}",
+    RELEASE_DRAFT_ID: "${{ inputs.draft_id }}",
+    RELEASE_MODE: "${{ inputs.mode }}",
+    RELEASE_BODY_SHA256: "${{ inputs.draft_body_sha256 }}",
+    RELEASE_BASELINE_TAG: "${{ inputs.baseline_tag }}",
+    SOURCE_RUN_ID: "${{ inputs.source_run_id }}",
+    REPOSITORY_ID: "${{ github.repository_id }}",
+    WORKFLOW_REF: "${{ github.ref }}",
+    WORKFLOW_REF_NAME: "${{ github.ref_name }}",
+    WORKFLOW_COMMIT: "${{ github.sha }}",
+    CURRENT_RUN_ID: "${{ github.run_id }}",
+    CURRENT_RUN_ATTEMPT: "${{ github.run_attempt }}",
+    EVENT_NAME: "${{ github.event_name }}",
+    CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
+    CALLER_WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    CALLED_WORKFLOW_REF: "${{ job.workflow_ref }}",
+    CALLED_WORKFLOW_SHA: "${{ job.workflow_sha }}",
+    CALLED_WORKFLOW_REPOSITORY: "${{ job.workflow_repository }}",
+    CALLED_WORKFLOW_FILE_PATH: "${{ job.workflow_file_path }}",
+  };
   if (
     sign.needs !== "authorize-coordinator" ||
-    authorizeEnvironment.RELEASE_TAG !== "${{ inputs.tag }}" ||
-    authorizeEnvironment.DESKTOP_VERSION !== "${{ inputs.desktop_version }}" ||
-    authorizeEnvironment.RELEASE_DRAFT_ID !== "${{ inputs.draft_id }}" ||
-    authorizeEnvironment.RELEASE_BODY_SHA256 !== "${{ inputs.draft_body_sha256 }}" ||
-    authorizeEnvironment.RELEASE_BASELINE_TAG !== "${{ inputs.baseline_tag }}" ||
-    authorizeEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
-    authorizeEnvironment.SOURCE_RUN_ID !== "${{ inputs.source_run_id }}" ||
-    authorizeEnvironment.DISPATCH_NONCE !== "${{ inputs.dispatch_nonce }}" ||
-    authorizeEnvironment.DISPATCH_BINDING_SHA256 !== "${{ inputs.dispatch_binding_sha256 }}" ||
-    authorizeEnvironment.RUN_ACTOR !== "${{ github.actor }}" ||
-    authorizeEnvironment.RUN_TRIGGERING_ACTOR !== "${{ github.triggering_actor }}" ||
-    authorizeEnvironment.REPOSITORY_ID !== "${{ github.repository_id }}" ||
-    authorizeEnvironment.WORKFLOW_REF !== "${{ github.ref }}" ||
-    authorizeEnvironment.WORKFLOW_REF_NAME !== "${{ github.ref_name }}" ||
-    !authorizeRun.includes('gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID"') ||
-    !authorizeRun.includes(".github/workflows/desktop-release-coordinator.yml") ||
-    authorizeRun.includes(".github/workflows/release.yml") ||
-    !authorizeRun.includes(
-      'test "$(printf \'%s\' "$COORDINATOR" | jq -r \'.run_attempt\')" = "$COORDINATOR_RUN_ATTEMPT"',
+    !exactKeys(authorizeEnvironment, Object.keys(expectedAuthorizeEnvironment)) ||
+    Object.entries(expectedAuthorizeEnvironment).some(
+      ([key, value]) => authorizeEnvironment[key] !== value,
     ) ||
-    !authorizeRun.includes(".status") ||
-    !authorizeRun.includes("in_progress") ||
-    !authorizeRun.includes(".head_sha") ||
+    !authorizeRun.includes("printf '%s' \"$CURRENT_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'") ||
+    !authorizeRun.includes("printf '%s' \"$CURRENT_RUN_ATTEMPT\" | grep -Eq '^[1-9][0-9]*$'") ||
+    !authorizeRun.includes("test \"$EVENT_NAME\" = 'workflow_dispatch'") ||
     !authorizeRun.includes('test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"') ||
-    !authorizeRun.includes(".head_branch") ||
-    !authorizeRun.includes(
-      'test "$(printf \'%s\' "$COORDINATOR" | jq -r \'.head_branch\')" = "$WORKFLOW_REF_NAME"',
-    ) ||
     !authorizeRun.includes('if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then') ||
     !authorizeRun.includes('test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"') ||
     !authorizeRun.includes('test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"') ||
@@ -967,87 +901,93 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     !authorizeRun.includes(
       'CURRENT_RECOVERY_REVISION="${WORKFLOW_REF_NAME#"${RELEASE_TAG}-recovery."}"',
     ) ||
-    !authorizeRun.includes("grep -Eq '^[1-9][0-9]*$'") ||
     !authorizeRun.includes(
       'test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${CURRENT_RECOVERY_REVISION}"',
     ) ||
     !authorizeRun.includes('test "$WORKFLOW_REF" = "refs/tags/$WORKFLOW_REF_NAME"') ||
-    !authorizeRun.includes("workflow_dispatch") ||
-    authorizeRun.includes('.event == "push"') ||
+    !authorizeRun.includes(
+      'test "$CALLER_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/desktop-release-coordinator.yml@$WORKFLOW_REF"',
+    ) ||
+    !authorizeRun.includes('test "$CALLER_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"') ||
+    !authorizeRun.includes(
+      'test "$CALLED_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml@$WORKFLOW_REF"',
+    ) ||
+    !authorizeRun.includes('test "$CALLED_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"') ||
+    !authorizeRun.includes('test "$CALLED_WORKFLOW_REPOSITORY" = "$GITHUB_REPOSITORY"') ||
+    !authorizeRun.includes(
+      "test \"$CALLED_WORKFLOW_FILE_PATH\" = '.github/workflows/desktop-release.yml'",
+    ) ||
+    /repos\/\$GITHUB_REPOSITORY\/releases\/|gh release view|CANDIDATE_RELEASE|LATEST_RELEASE/u.test(
+      authorizeRun,
+    ) ||
     !exactKeys(authorizeOutputs, Object.keys(expectedAuthorizeOutputs)) ||
     Object.entries(expectedAuthorizeOutputs).some(([key, value]) => authorizeOutputs[key] !== value)
   ) {
-    issues.push("desktop signing must authorize only its active desktop coordinator");
+    issues.push(
+      "desktop signing must authorize only the same-run active coordinator and called workflow identities",
+    );
   }
-  const expectedChildBindingObject =
-    "{schemaVersion: 1, repository: $repository, repositoryId: $repositoryId, coordinatorRunId: $coordinatorRunId, coordinatorRunAttempt: $coordinatorRunAttempt, workflowRef: $workflowRef, workflowSha: $workflowSha, childWorkflowRef: $childWorkflowRef, tag: $tag, desktopVersion: $desktopVersion, commit: $commit, toolingCommit: $toolingCommit, draftId: $draftId, mode: $mode, draftBodySha256: $draftBodySha256, baselineTag: $baselineTag, sourceRunId: $sourceRunId, nonce: $nonce}";
   const sourceValidationStart = authorizeRun.indexOf(
     'SOURCE=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")',
   );
-  const bindingValidationRun = authorizeRun.slice(
-    authorizeRun.indexOf("BINDING_ARTIFACT_NAME="),
-    sourceValidationStart,
-  );
-  if (
-    !authorizeRun.includes("test \"$RUN_ACTOR\" = 'github-actions[bot]'") ||
-    !authorizeRun.includes("test \"$RUN_TRIGGERING_ACTOR\" = 'github-actions[bot]'") ||
-    !authorizeRun.includes("printf '%s' \"$DISPATCH_NONCE\" | grep -Eq '^[0-9a-f]{64}$'") ||
-    !authorizeRun.includes(
-      "printf '%s' \"$DISPATCH_BINDING_SHA256\" | grep -Eq '^[0-9a-f]{64}$'",
-    ) ||
-    !authorizeRun.includes(expectedChildBindingObject) ||
-    !authorizeRun.includes(
-      'test "$(printf \'%s\' "$BINDING" | sha256sum | awk \'{print $1}\')" = "$DISPATCH_BINDING_SHA256"',
-    ) ||
-    !authorizeRun.includes(
-      'BINDING_ARTIFACT_NAME="desktop-dispatch-binding-$COORDINATOR_RUN_ID-$COORDINATOR_RUN_ATTEMPT-$DISPATCH_BINDING_SHA256"',
-    ) ||
-    !bindingValidationRun.includes("actions/runs/$COORDINATOR_RUN_ID/artifacts?per_page=100") ||
-    !bindingValidationRun.includes("([.[].artifacts[]] | length) == .[0].total_count") ||
-    !bindingValidationRun.includes(
-      "'[.[].artifacts[] | select(.name == $name)] | select(length == 1) | .[0]'",
-    ) ||
-    !bindingValidationRun.includes(".size_in_bytes") ||
-    !bindingValidationRun.includes(".workflow_run.repository_id") ||
-    !bindingValidationRun.includes(".workflow_run.head_repository_id") ||
-    !bindingValidationRun.includes(".workflow_run.head_branch") ||
-    !bindingValidationRun.includes(".workflow_run.head_sha")
-  ) {
-    issues.push(
-      "desktop child must require bot actors and one coordinator-owned nonce-bound dispatch artifact",
-    );
-  }
   const sourceValidationRun = authorizeRun.slice(sourceValidationStart);
+  const childSourceWorkflowCase = `case "$SOURCE_WORKFLOW_PATH" in
+  .github/workflows/desktop-release.yml)
+    test "$(printf '%s' "$SOURCE" | jq -r '.actor.login')" = 'github-actions[bot]'
+    test "$(printf '%s' "$SOURCE" | jq -r '.triggering_actor.login')" = 'github-actions[bot]'
+    ;;
+  .github/workflows/desktop-release-coordinator.yml)
+    ;;
+  *)
+    echo '::error::Recovery source run used an untrusted workflow'
+    exit 1
+    ;;
+esac`;
+  const childSourcePathRefCase = `case "$SOURCE_WORKFLOW_PATH_RAW" in
+  "$SOURCE_WORKFLOW_PATH"|"$SOURCE_WORKFLOW_PATH@$SOURCE_HEAD_BRANCH"|"$SOURCE_WORKFLOW_PATH@refs/tags/$SOURCE_HEAD_BRANCH")
+    ;;
+  *)
+    echo '::error::Recovery source workflow path used an unexpected ref suffix'
+    exit 1
+    ;;
+esac`;
+  const childSourceHeadCase = `if [ "$SOURCE_HEAD_BRANCH" = "$RELEASE_TAG" ]; then
+  test "$SOURCE_HEAD_SHA" = "$RELEASE_COMMIT"
+else
+  SOURCE_RECOVERY_REVISION="\${SOURCE_HEAD_BRANCH#"\${RELEASE_TAG}-recovery."}"
+  printf '%s' "$SOURCE_RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$'
+  test "$SOURCE_HEAD_BRANCH" = "\${RELEASE_TAG}-recovery.\${SOURCE_RECOVERY_REVISION}"
+  test "$SOURCE_RECOVERY_REVISION" -lt "$CURRENT_RECOVERY_REVISION"
+fi`;
   if (
     !authorizeRun.includes("if [ \"$SOURCE_RUN_ID\" = 'none' ]; then") ||
     !authorizeRun.includes(
       "for output in source_run_id source_run_attempt artifact_name artifact_id artifact_digest baseline_artifact_name baseline_artifact_id baseline_artifact_digest; do",
     ) ||
     !authorizeRun.includes('test "$SOURCE_RUN_ID" != "$GITHUB_RUN_ID"') ||
-    !authorizeRun.includes('test "$SOURCE_RUN_ID" != "$COORDINATOR_RUN_ID"') ||
     !authorizeRun.includes("test \"$RELEASE_MODE\" = 'steady'") ||
     !authorizeRun.includes('test "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT"') ||
     !authorizeRun.includes("test \"$CURRENT_RECOVERY_REVISION\" != 'none'") ||
     !authorizeRun.includes(
       'SOURCE=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")',
     ) ||
-    !authorizeRun.includes(".repository.full_name") ||
-    !authorizeRun.includes(".head_repository.full_name") ||
-    !authorizeRun.includes(".github/workflows/desktop-release.yml") ||
+    !authorizeRun.includes(
+      'test "$(printf \'%s\' "$SOURCE" | jq -r \'.repository.full_name\')" = "$GITHUB_REPOSITORY"',
+    ) ||
+    !authorizeRun.includes(
+      'test "$(printf \'%s\' "$SOURCE" | jq -r \'.head_repository.full_name\')" = "$GITHUB_REPOSITORY"',
+    ) ||
+    !authorizeRun.includes(
+      "SOURCE_WORKFLOW_PATH_RAW=$(printf '%s' \"$SOURCE\" | jq -er '.path')",
+    ) ||
+    !authorizeRun.includes('SOURCE_WORKFLOW_PATH="${SOURCE_WORKFLOW_PATH_RAW%%@*}"') ||
+    !authorizeRun.includes(childSourceWorkflowCase) ||
     !authorizeRun.includes(".event')\" = 'workflow_dispatch'") ||
-    !authorizeRun.includes(".actor.login')\" = 'github-actions[bot]'") ||
-    !authorizeRun.includes(".triggering_actor.login')\" = 'github-actions[bot]'") ||
     !authorizeRun.includes(".status')\" = 'completed'") ||
     !authorizeRun.includes(".conclusion')\" = 'failure'") ||
     !authorizeRun.includes("SOURCE_RUN_ATTEMPT=") ||
-    !authorizeRun.includes(
-      'SOURCE_RECOVERY_REVISION="${SOURCE_HEAD_BRANCH#"${RELEASE_TAG}-recovery."}"',
-    ) ||
-    !authorizeRun.includes(
-      'test "$SOURCE_HEAD_BRANCH" = "${RELEASE_TAG}-recovery.${SOURCE_RECOVERY_REVISION}"',
-    ) ||
-    !authorizeRun.includes('test "$SOURCE_RECOVERY_REVISION" != "$CURRENT_RECOVERY_REVISION"') ||
-    !authorizeRun.includes("sort -n | head -1") ||
+    !authorizeRun.includes(childSourcePathRefCase) ||
+    !authorizeRun.includes(childSourceHeadCase) ||
     !authorizeRun.includes(
       'test "$(git rev-parse "refs/tags/$SOURCE_HEAD_BRANCH^{commit}")" = "$SOURCE_HEAD_SHA"',
     ) ||
@@ -1066,7 +1006,15 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     !authorizeRun.includes(
       "for job_name in sign-macos verify-macos-envelope stage-private-draft publish-assets; do",
     ) ||
+    !authorizeRun.includes(
+      '[.[].jobs[] | select((.name | split(" / ") | last) == $job)] as $matches',
+    ) ||
     !authorizeRun.includes('$matches[0].conclusion == "success"') ||
+    !authorizeRun.includes(
+      '[.[].jobs[] | select((.name | split(" / ") | last) == "activate-release")] as $matches',
+    ) ||
+    (authorizeRun.match(/\(\$matches \| length\) == 1/gu) ?? []).length !== 2 ||
+    (authorizeRun.match(/\$matches\[0\]\.status == "completed"/gu) ?? []).length !== 2 ||
     !authorizeRun.includes('$matches[0].conclusion != "success"') ||
     !authorizeRun.includes("actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100") ||
     !authorizeRun.includes("([.[].artifacts[]] | length) == .[0].total_count") ||
@@ -1090,51 +1038,6 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
       "desktop child must independently validate source run, job, and artifact provenance",
     );
   }
-  const candidateAdmissionStart = authorizeRun.indexOf(
-    'CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")',
-  );
-  const noSourceExitStart = authorizeRun.indexOf("if [ \"$SOURCE_RUN_ID\" = 'none' ]; then");
-  const candidateAdmissionRun =
-    candidateAdmissionStart >= 0 && noSourceExitStart > candidateAdmissionStart
-      ? authorizeRun.slice(candidateAdmissionStart, noSourceExitStart)
-      : "";
-  const childLatestLookup =
-    "LATEST_RELEASE=$(gh api -H 'Cache-Control: no-cache' \"repos/$GITHUB_REPOSITORY/releases/latest\")";
-  if (
-    authorizeEnvironment.GH_TOKEN !== "${{ github.token }}" ||
-    candidateAdmissionRun === "" ||
-    !candidateAdmissionRun.includes(
-      'test "$(printf \'%s\' "$CANDIDATE_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
-    ) ||
-    !candidateAdmissionRun.includes(
-      'test "$(printf \'%s\' "$CANDIDATE_RELEASE" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
-    ) ||
-    !candidateAdmissionRun.includes(
-      "test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.prerelease')\" = 'false'",
-    ) ||
-    !candidateAdmissionRun.includes(
-      "if [ \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.draft')\" = 'false' ]; then\n  test \"$SOURCE_RUN_ID\" != 'none'",
-    ) ||
-    !candidateAdmissionRun.includes(
-      `if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.body')" != '${PROVISIONAL_RELEASE_BODY}' ]; then`,
-    ) ||
-    !candidateAdmissionRun.includes(
-      "CANDIDATE_BODY_SHA256=$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -j '.body' | shasum -a 256 | awk '{print $1}')",
-    ) ||
-    !candidateAdmissionRun.includes('test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"') ||
-    countShellLine(candidateAdmissionRun, childLatestLookup) !== 1 ||
-    !candidateAdmissionRun.includes(
-      'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
-    ) ||
-    !candidateAdmissionRun.includes(
-      'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
-    )
-  ) {
-    issues.push(
-      "desktop child must independently admit public recovery only as provisional or live-latest exact-final",
-    );
-  }
-
   exactPermissions(
     sign.permissions,
     { actions: "read", contents: "read" },
@@ -1241,6 +1144,72 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
   const roundTripRun = runs(roundTrip).join("\n");
   const activateRun = runs(activate).join("\n");
   const compensateRun = runs(compensate).join("\n");
+  const stageSteps = steps(stage);
+  const candidateSafeguardStep = namedStep(stage, "Revalidate recoverable candidate state");
+  const stageTransactionStep = namedStep(stage, "Upload updater envelope to the private draft");
+  const candidateSafeguardEnvironment = mapping(
+    candidateSafeguardStep?.env,
+    "private draft safeguard environment",
+    issues,
+  );
+  const candidateSafeguardRun =
+    typeof candidateSafeguardStep?.run === "string" ? candidateSafeguardStep.run : "";
+  const expectedCandidateSafeguardEnvironment: Mapping = {
+    GH_TOKEN: "${{ github.token }}",
+    RELEASE_TAG: "${{ inputs.tag }}",
+    RELEASE_DRAFT_ID: "${{ inputs.draft_id }}",
+    RELEASE_BODY_SHA256: "${{ inputs.draft_body_sha256 }}",
+    SOURCE_RUN_ID: "${{ inputs.source_run_id }}",
+  };
+  const candidateLatestLookup =
+    "LATEST_RELEASE=$(gh api -H 'Cache-Control: no-cache' \"repos/$GITHUB_REPOSITORY/releases/latest\")";
+  if (
+    stage.environment !== "desktop-macos-publication" ||
+    mapping(stage.permissions, "private draft safeguard permissions", issues).contents !==
+      "write" ||
+    stageSteps.indexOf(candidateSafeguardStep ?? {}) + 1 !==
+      stageSteps.indexOf(stageTransactionStep ?? {}) ||
+    stageTransactionStep?.run !==
+      'pnpm desktop-release:transaction stage --directory "$RUNNER_TEMP/desktop-release"' ||
+    !exactKeys(candidateSafeguardEnvironment, Object.keys(expectedCandidateSafeguardEnvironment)) ||
+    Object.entries(expectedCandidateSafeguardEnvironment).some(
+      ([key, value]) => candidateSafeguardEnvironment[key] !== value,
+    ) ||
+    !candidateSafeguardRun.includes(
+      'CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")',
+    ) ||
+    !candidateSafeguardRun.includes(
+      'test "$(printf \'%s\' "$CANDIDATE_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
+    ) ||
+    !candidateSafeguardRun.includes(
+      'test "$(printf \'%s\' "$CANDIDATE_RELEASE" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
+    ) ||
+    !candidateSafeguardRun.includes(
+      "test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.prerelease')\" = 'false'",
+    ) ||
+    !candidateSafeguardRun.includes(
+      "if [ \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.draft')\" = 'false' ]; then\n  test \"$SOURCE_RUN_ID\" != 'none'",
+    ) ||
+    !candidateSafeguardRun.includes(
+      `if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.body')" != '${PROVISIONAL_RELEASE_BODY}' ]; then`,
+    ) ||
+    !candidateSafeguardRun.includes(
+      "CANDIDATE_BODY_SHA256=$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -j '.body' | shasum -a 256 | awk '{print $1}')",
+    ) ||
+    !candidateSafeguardRun.includes('test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"') ||
+    countShellLine(candidateSafeguardRun, candidateLatestLookup) !== 1 ||
+    !candidateSafeguardRun.includes(
+      'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
+    ) ||
+    !candidateSafeguardRun.includes(
+      'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
+    ) ||
+    (source.match(/repos\/\$GITHUB_REPOSITORY\/releases\/\$RELEASE_DRAFT_ID/gu) ?? []).length !== 1
+  ) {
+    issues.push(
+      "protected private-draft safeguard must revalidate candidate state immediately before staging",
+    );
+  }
   const publishOutputs = mapping(publish.outputs, "desktop publish outputs", issues);
   const expectedPublishOutputs: Mapping = {
     latest_id: "${{ steps.observe.outputs.latest_id }}",
