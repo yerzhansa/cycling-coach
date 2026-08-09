@@ -204,7 +204,7 @@ describe("desktop update controller", () => {
     expect(fake.updater.checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
-  it("bounds a hung check while retaining its coalesced updater request until settlement", async () => {
+  it("requires an app restart after a hung check and fences its late settlement", async () => {
     const fake = fakeUpdater();
     const first = deferred<never>();
     const lateToken = fakeCancellationToken();
@@ -218,18 +218,23 @@ describe("desktop update controller", () => {
     expect(subject.timer.unref).toHaveBeenCalledOnce();
     const concurrent = subject.controller.check();
     subject.deadlines.fireLatest(DESKTOP_UPDATE_CHECK_TIMEOUT_MS);
-    await expect(concurrent).resolves.toEqual({ status: "failed", stage: "check" });
+    await expect(concurrent).resolves.toEqual({ status: "restart-required", stage: "check" });
     await startup;
     await expect(subject.controller.check()).resolves.toEqual({
-      status: "failed",
+      status: "restart-required",
       stage: "check",
     });
+    expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
+    subject.tick();
     expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
 
     first.resolve(updateResult("0.1.0", false, lateToken));
     await vi.waitFor(() => expect(lateToken.cancel).toHaveBeenCalledOnce());
-    await expect(subject.controller.check()).resolves.toEqual({ status: "current" });
-    expect(fake.updater.checkForUpdates).toHaveBeenCalledTimes(2);
+    await expect(subject.controller.check()).resolves.toEqual({
+      status: "restart-required",
+      stage: "check",
+    });
+    expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
   });
 
   it("downloads only a strictly newer stable target and accepts only its exact event", async () => {
@@ -279,20 +284,29 @@ describe("desktop update controller", () => {
 
     subject.deadlines.fireLatest(DESKTOP_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS);
     await expect(startup).resolves.toBeUndefined();
-    expect(subject.controller.state()).toEqual({ status: "failed", stage: "download" });
+    expect(subject.controller.state()).toEqual({
+      status: "restart-required",
+      stage: "download",
+    });
     expect(token.cancel).toHaveBeenCalledOnce();
     await expect(subject.controller.check()).resolves.toEqual({
-      status: "failed",
+      status: "restart-required",
       stage: "download",
     });
     expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
     fake.emit("update-downloaded", { version: "0.1.1" });
-    expect(subject.controller.state()).toEqual({ status: "failed", stage: "download" });
+    expect(subject.controller.state()).toEqual({
+      status: "restart-required",
+      stage: "download",
+    });
 
     download.resolve([] as never);
     await download.promise;
-    await expect(subject.controller.check()).resolves.toEqual({ status: "current" });
-    expect(fake.updater.checkForUpdates).toHaveBeenCalledTimes(2);
+    await expect(subject.controller.check()).resolves.toEqual({
+      status: "restart-required",
+      stage: "download",
+    });
+    expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
   });
 
   it("enforces an absolute download cap even while progress continues", async () => {
@@ -309,7 +323,10 @@ describe("desktop update controller", () => {
     fake.emit("download-progress", { transferred: 2 });
     subject.deadlines.fireLatest(DESKTOP_UPDATE_DOWNLOAD_ABSOLUTE_TIMEOUT_MS);
     await expect(startup).resolves.toBeUndefined();
-    expect(subject.controller.state()).toEqual({ status: "failed", stage: "download" });
+    expect(subject.controller.state()).toEqual({
+      status: "restart-required",
+      stage: "download",
+    });
     expect(token.cancel).toHaveBeenCalledOnce();
   });
 

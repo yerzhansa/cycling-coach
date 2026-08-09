@@ -113,4 +113,24 @@ describe("desktop update IPC", () => {
     expect(state.ipcMain.removeHandler).toHaveBeenCalledTimes(3);
     expect(state.handlers.size).toBe(0);
   });
+
+  it("preserves restart-required recovery across request and push boundaries", async () => {
+    const state = setup();
+    vi.mocked(state.controller.check).mockResolvedValue({
+      status: "restart-required",
+      stage: "download",
+    });
+
+    await expect(state.handlers.get(DESKTOP_UPDATE_CHECK_CHANNEL)!(state.trusted)).resolves.toEqual(
+      {
+        status: "restart-required",
+        stage: "download",
+      },
+    );
+    state.publish({ status: "restart-required", stage: "check" });
+    expect(state.webContents.send).toHaveBeenLastCalledWith(DESKTOP_UPDATE_STATE_CHANNEL, {
+      status: "restart-required",
+      stage: "check",
+    });
+  });
 });

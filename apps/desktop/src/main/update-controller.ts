@@ -15,6 +15,7 @@ export type DesktopUpdateState =
   | { readonly status: "downloading"; readonly version: string }
   | { readonly status: "downloaded"; readonly version: string }
   | { readonly status: "installing"; readonly version: string }
+  | { readonly status: "restart-required"; readonly stage: "check" | "download" }
   | { readonly status: "failed"; readonly stage: "check" | "download" };
 
 export type DesktopAutoUpdater = Pick<
@@ -73,7 +74,9 @@ export const DESKTOP_UPDATE_DOWNLOAD_ABSOLUTE_TIMEOUT_MS = 60 * 60 * 1_000;
 
 export function copyDesktopUpdateState(state: DesktopUpdateState): DesktopUpdateState {
   if ("version" in state) return { status: state.status, version: state.version };
-  if (state.status === "failed") return { status: "failed", stage: state.stage };
+  if (state.status === "failed" || state.status === "restart-required") {
+    return { status: state.status, stage: state.stage };
+  }
   return { status: state.status };
 }
 
@@ -122,7 +125,9 @@ export function createDesktopUpdateController(input: {
   };
 
   const canCheck = (): boolean =>
-    !closed && active && !["downloading", "downloaded", "installing"].includes(state.status);
+    !closed &&
+    active &&
+    !["downloading", "downloaded", "installing", "restart-required"].includes(state.status);
   const isCurrent = (operation: UpdateOperation): boolean =>
     !closed && activeOperation === operation && operation.generation === generation;
   const currentState = (): DesktopUpdateState => copyDesktopUpdateState(state);
@@ -183,7 +188,11 @@ export function createDesktopUpdateController(input: {
     operation.settled = true;
     operation.resolve(currentState());
   };
-  const finishOperation = (operation: UpdateOperation, cancel: boolean): void => {
+  const finishOperation = (
+    operation: UpdateOperation,
+    cancel: boolean,
+    detachPending = false,
+  ): void => {
     clearOperationTimer(operation, "checkTimer");
     clearOperationTimer(operation, "downloadStallTimer");
     clearOperationTimer(operation, "downloadAbsoluteTimer");
@@ -195,12 +204,21 @@ export function createDesktopUpdateController(input: {
     }
     settleOperation(operation);
     if (isCurrent(operation)) generation += 1;
+    if (detachPending && activeOperation === operation) {
+      activeOperation = undefined;
+      return;
+    }
     releaseOperationIfIdle(operation);
   };
   const failOperation = (operation: UpdateOperation, stage: "check" | "download"): void => {
     if (!isCurrent(operation)) return;
     publish({ status: "failed", stage });
     finishOperation(operation, true);
+  };
+  const expireOperation = (operation: UpdateOperation, stage: "check" | "download"): void => {
+    if (!isCurrent(operation)) return;
+    publish({ status: "restart-required", stage });
+    finishOperation(operation, true, true);
   };
   const operationCallSettled = (operation: UpdateOperation): void => {
     operation.pendingCalls -= 1;
@@ -215,7 +233,7 @@ export function createDesktopUpdateController(input: {
     scheduleOperationTimer(
       operation,
       "downloadStallTimer",
-      () => failOperation(operation, "download"),
+      () => expireOperation(operation, "download"),
       DESKTOP_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS,
     );
   };
@@ -259,7 +277,7 @@ export function createDesktopUpdateController(input: {
     scheduleOperationTimer(
       operation,
       "downloadAbsoluteTimer",
-      () => failOperation(operation, "download"),
+      () => expireOperation(operation, "download"),
       DESKTOP_UPDATE_DOWNLOAD_ABSOLUTE_TIMEOUT_MS,
     );
     operation.pendingCalls += 1;
@@ -304,7 +322,7 @@ export function createDesktopUpdateController(input: {
     scheduleOperationTimer(
       operation,
       "checkTimer",
-      () => failOperation(operation, "check"),
+      () => expireOperation(operation, "check"),
       DESKTOP_UPDATE_CHECK_TIMEOUT_MS,
     );
     let pending: Promise<UpdateCheckResult | null>;
