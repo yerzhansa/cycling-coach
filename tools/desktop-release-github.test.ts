@@ -552,7 +552,7 @@ describe("GitHub desktop release transaction", () => {
         ok: true,
         status: 200,
         arrayBuffer: async () => new Promise<ArrayBuffer>(() => undefined),
-      } as Response;
+      } as unknown as Response;
       const client = new GithubClient("yerzhansa/enduragent", "token", async () => response, {
         metadataRequestTimeoutMs: 10,
         assetTransferTimeoutMs: 40,
