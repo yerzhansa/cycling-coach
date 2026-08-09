@@ -104,6 +104,75 @@ describe("desktop release workflow policy", () => {
     expectIssue({ ...source, coordinator }, "recovery tooling tag must be an optional string");
   });
 
+  it("requires an optional recovery source run guarded by steady recovery tooling", () => {
+    const source = sources();
+    const requiredSource = replaceRequired(
+      source.coordinator,
+      [
+        "      recovery_source_run_id:",
+        '        description: "Optional failed desktop release run whose immutable signed artifacts should be resumed"',
+        "        required: false",
+        '        default: ""',
+        "        type: string",
+      ].join("\n"),
+      [
+        "      recovery_source_run_id:",
+        '        description: "Optional failed desktop release run whose immutable signed artifacts should be resumed"',
+        "        required: true",
+        '        default: ""',
+        "        type: string",
+      ].join("\n"),
+    );
+    expectIssue({ ...source, coordinator: requiredSource }, "source run id must be an optional");
+
+    const unguardedSource = replaceRequired(
+      source.coordinator,
+      'if [ -z "$RECOVERY_TOOLING_TAG_INPUT" ] || [ "$MODE" != \'steady\' ]; then',
+      "if false; then",
+    );
+    expectIssue(
+      { ...source, coordinator: unguardedSource },
+      "source run must require a steady immutable recovery tag",
+    );
+  });
+
+  it("requires independent coordinator source run, job, and artifact provenance", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.coordinator,
+        "actions/runs/$SOURCE_RUN_ID/jobs?per_page=100",
+        "actions/runs/$SOURCE_RUN_ID/jobs?per_page=1",
+      ),
+      replaceRequired(
+        source.coordinator,
+        "for required_job in sign-macos verify-macos-envelope stage-private-draft publish-assets; do",
+        "for required_job in sign-macos verify-macos-envelope stage-private-draft; do",
+      ),
+      replaceRequired(
+        source.coordinator,
+        'test "$(printf \'%s\' "$ARTIFACT" | jq -r \'.workflow_run.head_sha\')" = "$SOURCE_SHA"',
+        "true",
+      ),
+    ];
+    for (const coordinator of mutations) {
+      expectIssue(
+        { ...source, coordinator },
+        "independently validate source run, job, and artifact provenance",
+      );
+    }
+  });
+
+  it("keeps source final-state authorization out of the frozen coordinator tuple", () => {
+    const source = sources();
+    const coordinator = replaceRequired(
+      source.coordinator,
+      "      source_run_id: ${{ steps.bind.outputs.source_run_id }}\n",
+      "      source_run_id: ${{ steps.bind.outputs.source_run_id }}\n      source_final_body_allowed: ${{ steps.bind.outputs.source_final_body_allowed }}\n",
+    );
+    expectIssue({ ...source, coordinator }, "freeze the candidate release tuple once");
+  });
+
   it("binds recovery tooling to an exact steady-only tag on main", () => {
     const source = sources();
     const mutations = [
@@ -143,21 +212,60 @@ describe("desktop release workflow policy", () => {
     }
   });
 
-  it("requires a desktop changelog draft with stable non-latest semantics", () => {
+  it("admits only an exact draft, recovery-provisional public, or live-latest final release", () => {
     const source = sources();
-    const wrongChangelog = replaceRequired(
-      source.coordinator,
-      "apps/desktop/CHANGELOG.md",
-      "packages/cycling-coach/CHANGELOG.md",
-    );
-    const latestDraft = replaceRequired(
-      source.coordinator,
-      "--draft --latest=false --target",
-      "--draft --target",
-    );
-    for (const coordinator of [wrongChangelog, latestDraft]) {
-      expectIssue({ ...source, coordinator }, "non-latest draft from the desktop changelog");
+    const mutations = [
+      replaceRequired(
+        source.coordinator,
+        "apps/desktop/CHANGELOG.md",
+        "packages/cycling-coach/CHANGELOG.md",
+      ),
+      replaceRequired(source.coordinator, "--draft --latest=false --target", "--draft --target"),
+      replaceRequired(
+        source.coordinator,
+        "Desktop update validation is in progress. This release is not yet generally available.",
+        "A public body that is not the exact provisional sentinel.",
+      ),
+      replaceRequired(source.coordinator, "test \"$RELEASE_SOURCE_RUN_ID\" != 'none'", "true"),
+      replaceRequired(
+        source.coordinator,
+        '                test "$EXISTING_BODY_SHA256" = "$BODY_SHA256"\n                LATEST_JSON=',
+        "                true\n                LATEST_JSON=",
+      ),
+      replaceRequired(
+        source.coordinator,
+        "          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        '          GH_TOKEN: ""',
+      ),
+      replaceRequired(
+        source.coordinator,
+        "gh api -H 'Cache-Control: no-cache' \"repos/$GITHUB_REPOSITORY/releases/latest\"",
+        'gh api "repos/$GITHUB_REPOSITORY/releases/latest"',
+      ),
+      replaceRequired(
+        source.coordinator,
+        "test \"$(printf '%s' \"$LATEST_JSON\" | jq -r '.id | tostring')\" = \"$(printf '%s' \"$RELEASE_JSON\" | jq -r '.databaseId | tostring')\"",
+        "true",
+      ),
+      replaceRequired(
+        source.coordinator,
+        'test "$(printf \'%s\' "$LATEST_JSON" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
+        "true",
+      ),
+    ];
+    for (const coordinator of mutations) {
+      expectIssue({ ...source, coordinator }, "live-latest exact-final release");
     }
+  });
+
+  it("never creates a missing candidate while recovering source artifacts", () => {
+    const source = sources();
+    const coordinator = replaceRequired(
+      source.coordinator,
+      "          else\n            test \"$RELEASE_SOURCE_RUN_ID\" = 'none'\n            gh release create",
+      "          else\n            true\n            gh release create",
+    );
+    expectIssue({ ...source, coordinator }, "never create a missing candidate release");
   });
 
   it("requires one bound-ref, npm-independent child dispatch and awaits it", () => {
@@ -187,6 +295,37 @@ describe("desktop release workflow policy", () => {
     }
   });
 
+  it("seals exactly one nonce-bearing full child dispatch tuple", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.coordinator,
+        "DISPATCH_NONCE=$(openssl rand -hex 32)",
+        "DISPATCH_NONCE=0000",
+      ),
+      replaceRequired(
+        source.coordinator,
+        "sourceRunId: $sourceRunId, nonce: $nonce",
+        "nonce: $nonce",
+      ),
+      replaceRequired(
+        source.coordinator,
+        "          retention-days: 1",
+        "          retention-days: 90",
+      ),
+    ];
+    for (const coordinator of mutations) {
+      expectIssue({ ...source, coordinator }, "seal exactly one nonce-bound full dispatch tuple");
+    }
+
+    const unboundDispatch = replaceRequired(
+      source.coordinator,
+      '-f dispatch_binding_sha256="$DISPATCH_BINDING_SHA256"',
+      '-f dispatch_binding_sha256="$RELEASE_BODY_SHA256"',
+    );
+    expectIssue({ ...source, coordinator: unboundDispatch }, "npm-independent child tuple");
+  });
+
   it("requires the child to accept only desktop release inputs", () => {
     const source = sources();
     const desktop = replaceRequired(
@@ -196,6 +335,45 @@ describe("desktop release workflow policy", () => {
     );
     expectIssue({ ...source, desktop }, "only the frozen desktop release tuple");
     expectIssue({ ...source, desktop }, "must not consume npm release identity");
+  });
+
+  it("requires the child source run id in the frozen dispatch tuple", () => {
+    const source = sources();
+    const desktop = replaceRequired(
+      source.desktop,
+      "      source_run_id:\n        description: Failed source run id or none\n        required: true\n        type: string\n",
+      "",
+    );
+    expectIssue({ ...source, desktop }, "only the frozen desktop release tuple");
+    expectIssue({ ...source, desktop }, "require string input source_run_id");
+  });
+
+  it("requires bot actors and one coordinator-owned dispatch binding artifact", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(source.desktop, "test \"$RUN_ACTOR\" = 'github-actions[bot]'", "true"),
+      replaceRequired(
+        source.desktop,
+        "test \"$RUN_TRIGGERING_ACTOR\" = 'github-actions[bot]'",
+        "true",
+      ),
+      replaceRequired(source.desktop, "sourceRunId: $sourceRunId, nonce: $nonce", "nonce: $nonce"),
+      replaceRequired(
+        source.desktop,
+        "[.[].artifacts[] | select(.name == $name)] | select(length == 1) | .[0]",
+        "[.[].artifacts[] | select(.name == $name)] | first",
+      ),
+    ];
+    for (const [index, desktop] of mutations.entries()) {
+      expect(
+        inspect({ ...source, desktop }).some((issue) =>
+          issue.includes(
+            "require bot actors and one coordinator-owned nonce-bound dispatch artifact",
+          ),
+        ),
+        `dispatch authorization mutation ${index}`,
+      ).toBe(true);
+    }
   });
 
   it("authorizes only the active desktop coordinator", () => {
@@ -230,13 +408,106 @@ describe("desktop release workflow policy", () => {
       ),
       replaceRequired(
         source.desktop,
-        'test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${RECOVERY_REVISION}"',
+        'test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${CURRENT_RECOVERY_REVISION}"',
         'test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.1"',
       ),
       replaceRequired(source.desktop, "jq -r '.head_branch'", "jq -r '.head_sha'"),
     ];
     for (const desktop of mutations) {
       expectIssue({ ...source, desktop }, "authorize only its active desktop coordinator");
+    }
+  });
+
+  it("independently revalidates source run, attempt jobs, and artifact provenance", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(source.desktop, ".head_repository.full_name", ".repository.full_name"),
+      replaceRequired(
+        source.desktop,
+        "test \"$(printf '%s' \"$SOURCE\" | jq -r '.actor.login')\" = 'github-actions[bot]'",
+        "true",
+      ),
+      replaceRequired(
+        source.desktop,
+        "actions/runs/$SOURCE_RUN_ID/attempts/$SOURCE_RUN_ATTEMPT/jobs?per_page=100",
+        "actions/runs/$SOURCE_RUN_ID/jobs?per_page=100",
+      ),
+      replaceRequired(
+        source.desktop,
+        "([.[].jobs[]] | length) == .[0].total_count",
+        "([.[].jobs[]] | length) > 0",
+      ),
+      source.desktop.replaceAll(".workflow_run.head_repository_id", ".workflow_run.repository_id"),
+    ];
+    for (const desktop of mutations) {
+      expectIssue(
+        { ...source, desktop },
+        "child must independently validate source run, job, and artifact provenance",
+      );
+    }
+  });
+
+  it("independently admits public recovery only when provisional or exact-final and live-latest", () => {
+    const source = sources();
+    const candidateFetch =
+      '          CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")\n';
+    const lateCandidateFetch = replaceRequired(
+      replaceRequired(source.desktop, candidateFetch, ""),
+      "          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+      `${candidateFetch}          printf '%s' "$SOURCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'`,
+    );
+    const mutations = [
+      lateCandidateFetch,
+      replaceRequired(
+        source.desktop,
+        "          GH_TOKEN: ${{ github.token }}",
+        '          GH_TOKEN: ""',
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$(printf \'%s\' "$CANDIDATE_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
+        "true",
+      ),
+      replaceRequired(
+        source.desktop,
+        "            test \"$SOURCE_RUN_ID\" != 'none'",
+        "            true",
+      ),
+      replaceRequired(
+        source.desktop,
+        "Desktop update validation is in progress. This release is not yet generally available.",
+        "A public body that is not the exact provisional sentinel.",
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"',
+        "true",
+      ),
+      replaceRequired(
+        source.desktop,
+        "gh api -H 'Cache-Control: no-cache' \"repos/$GITHUB_REPOSITORY/releases/latest\"",
+        'gh api "repos/$GITHUB_REPOSITORY/releases/latest"',
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
+        "true",
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
+        "true",
+      ),
+    ];
+    for (const [index, desktop] of mutations.entries()) {
+      expect(
+        inspect({ ...source, desktop }).some((issue) =>
+          issue.includes(
+            "independently admit public recovery only as provisional or live-latest exact-final",
+          ),
+        ),
+        `public recovery admission mutation ${index}`,
+      ).toBe(true);
     }
   });
 
@@ -312,8 +583,8 @@ describe("desktop release workflow policy", () => {
     const githubTokenBinding = ["GITHUB_TOKEN", "${{ github.token }}"].join(": ");
     const desktop = replaceRequired(
       source.desktop,
-      "contents: read\n    outputs:",
-      "contents: write\n    outputs:",
+      "  sign-macos:\n    runs-on: macos-15\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: read",
+      "  sign-macos:\n    runs-on: macos-15\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: write",
     ).replaceAll(githubTokenBinding, "CSC_LINK: ${{ secrets.CSC_LINK }}");
     expectIssue({ ...source, desktop }, "macOS signing permissions");
     expectIssue({ ...source, desktop }, "escaped the signing job");
@@ -321,7 +592,11 @@ describe("desktop release workflow policy", () => {
 
   it("requires workspace dependencies and signing environment secrets before packaging", () => {
     const source = sources();
-    const noBuild = replaceRequired(source.desktop, "      - run: pnpm -r build\n", "");
+    const noBuild = replaceRequired(
+      source.desktop,
+      "      - if: ${{ inputs.source_run_id == 'none' }}\n        run: pnpm -r build\n",
+      "",
+    );
     expectIssue({ ...source, desktop: noBuild }, "build workspace dependencies before packaging");
     const unchecked = replaceRequired(
       source.desktop,
@@ -329,6 +604,140 @@ describe("desktop release workflow policy", () => {
       "for secret_name in CSC_LINK; do",
     );
     expectIssue({ ...source, desktop: unchecked }, "fail closed when an environment secret");
+  });
+
+  it("makes every signing-production step fresh-only during resume", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.desktop,
+        "      - if: ${{ inputs.source_run_id == 'none' }}\n        run: pnpm -r build",
+        "      - run: pnpm -r build",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Resolve signed baseline\n        if: ${{ inputs.source_run_id == 'none' }}",
+        "      - name: Resolve signed baseline\n        if: ${{ always() }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Build signed and notarized macOS envelope\n        if: ${{ inputs.source_run_id == 'none' }}",
+        "      - name: Build signed and notarized macOS envelope\n        if: ${{ always() }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Bind candidate signing evidence\n        if: ${{ inputs.source_run_id == 'none' }}",
+        "      - name: Bind candidate signing evidence\n        if: ${{ always() }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Seal digest-bound release manifest\n        if: ${{ inputs.source_run_id == 'none' }}",
+        "      - name: Seal digest-bound release manifest\n        if: ${{ always() }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Upload sealed macOS transaction artifact\n        if: ${{ inputs.source_run_id == 'none' }}",
+        "      - name: Upload sealed macOS transaction artifact\n        if: ${{ always() }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Upload sealed baseline updater envelope\n        if: ${{ inputs.source_run_id == 'none' && inputs.mode == 'steady' }}",
+        "      - name: Upload sealed baseline updater envelope\n        if: ${{ inputs.mode == 'steady' }}",
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue(
+        { ...source, desktop },
+        "resume must skip build, signing, notarization, sealing, and signing-artifact upload",
+      );
+    }
+  });
+
+  it("reuses only the authorized source run's digest-bound artifacts", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.desktop,
+        "run-id: ${{ needs.authorize-coordinator.outputs.source_run_id }}",
+        "run-id: ${{ github.run_id }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        "artifact-ids: ${{ needs.authorize-coordinator.outputs.baseline_artifact_id }}",
+        "artifact-ids: ${{ needs.authorize-coordinator.outputs.artifact_id }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        "          digest-mismatch: error",
+        "          digest-mismatch: warn",
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$(jq -er \'.workflowRunId\' "$MANIFEST")" = "$SOURCE_RUN_ID"',
+        "true",
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue(
+        { ...source, desktop },
+        "resume must reuse exact digest-bound artifacts from the authorized run",
+      );
+    }
+  });
+
+  it("normalizes fresh and resumed signing evidence before downstream use", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.desktop,
+        "evidence_run_id: ${{ steps.normalized-evidence.outputs.evidence_run_id }}",
+        "evidence_run_id: ${{ github.run_id }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        'EVIDENCE_RUN_ID="$SOURCE_RUN_ID"',
+        'EVIDENCE_RUN_ID="$GITHUB_RUN_ID"',
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue({ ...source, desktop }, "normalize fresh and resumed immutable evidence");
+    }
+  });
+
+  it("uses normalized manifest baseline evidence for resumed consumers", () => {
+    const source = sources();
+    const rawBaseline = replaceRequired(
+      source.desktop,
+      "RELEASE_BASELINE_TAG: ${{ needs.sign-macos.outputs.baseline_tag }}",
+      "RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}",
+    );
+    expectIssue({ ...source, desktop: rawBaseline }, "normalized manifest evidence");
+
+    const uncheckedMetadata = replaceRequired(
+      source.desktop,
+      'test "$INDEPENDENT_METADATA_SHA256" = "$SIGNED_METADATA_SHA256"',
+      "true",
+    );
+    expectIssue({ ...source, desktop: uncheckedMetadata }, "normalized manifest evidence");
+  });
+
+  it("uses normalized evidence run ids and digest checks on every downstream download", () => {
+    const source = sources();
+    const wrongRun = source.desktop.replaceAll(
+      "run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}",
+      "run-id: ${{ github.run_id }}",
+    );
+    expectIssue({ ...source, desktop: wrongRun }, "normalized digest-bound cross-run evidence");
+
+    const missingDigest = replaceRequired(
+      source.desktop,
+      "          run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}\n          digest-mismatch: error",
+      "          run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}",
+    );
+    expectIssue(
+      { ...source, desktop: missingDigest },
+      "normalized digest-bound cross-run evidence",
+    );
   });
 
   it("requires protected publication, latest, and compensation environments", () => {
@@ -366,6 +775,33 @@ describe("desktop release workflow policy", () => {
     expectIssue({ ...source, desktop: noCas }, "compare-and-swap");
   });
 
+  it("separates latest mutation from read-only reconciliation", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.desktop,
+        "needs: [sign-macos, publish-assets, request-latest]",
+        "needs: [sign-macos, publish-assets]",
+      ),
+      replaceRequired(
+        source.desktop,
+        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    needs: [sign-macos, publish-assets, request-latest]\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: read",
+        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    needs: [sign-macos, publish-assets, request-latest]\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: write",
+      ),
+      replaceRequired(
+        source.desktop,
+        "desktop-release:transaction reconcile --directory",
+        "desktop-release:transaction promote --directory",
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue(
+        { ...source, desktop },
+        "latest request must compare-and-swap before read-only latest reconciliation",
+      );
+    }
+  });
+
   it("requires the native production-feed round trip and gated activation", () => {
     const source = sources();
     const noRoundTrip = replaceRequired(
@@ -380,6 +816,16 @@ describe("desktop release workflow policy", () => {
       "needs.verify-production-update.result != 'failure'",
     );
     expectIssue({ ...source, desktop: bypass }, "mode-specific acceptance");
+
+    const bypassReconciliation = replaceRequired(
+      source.desktop,
+      "needs: [sign-macos, reconcile-latest]",
+      "needs: [sign-macos, request-latest]",
+    );
+    expectIssue(
+      { ...source, desktop: bypassReconciliation },
+      "production-feed N-to-N+1 round trip",
+    );
   });
 
   it("requires compensation to restore prior latest and withdraw the candidate", () => {
@@ -389,7 +835,38 @@ describe("desktop release workflow policy", () => {
       "needs.activate-release.result != 'success'",
       "needs.activate-release.result == 'failure'",
     );
-    expectIssue({ ...source, desktop }, "restore prior latest");
+    expectIssue({ ...source, desktop }, "successful reconciliation");
+
+    const beforeReconciliation = replaceRequired(
+      source.desktop,
+      "needs.reconcile-latest.result == 'success' &&\n          needs.activate-release.result != 'success'",
+      "needs.request-latest.result == 'success' &&\n          needs.activate-release.result != 'success'",
+    );
+    expectIssue({ ...source, desktop: beforeReconciliation }, "successful reconciliation");
+  });
+
+  it("keeps compensation rollback bound to normalized manifest baseline evidence", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.desktop,
+        "BASELINE_METADATA_SHA256: ${{ needs.sign-macos.outputs.baseline_metadata_sha256 }}",
+        "BASELINE_METADATA_SHA256: ${{ steps.observe.outputs.latest_metadata_sha256 }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        "EXPECTED_LATEST_TAG: ${{ needs.publish-assets.outputs.rollback_latest_tag }}",
+        "EXPECTED_LATEST_TAG: ${{ needs.publish-assets.outputs.latest_tag }}",
+      ),
+      replaceRequired(
+        source.desktop,
+        "rollback_latest_metadata_sha256: ${{ steps.observe.outputs.rollback_latest_metadata_sha256 }}",
+        "rollback_latest_metadata_sha256: ${{ steps.observe.outputs.latest_metadata_sha256 }}",
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue({ ...source, desktop }, "normalized manifest baseline evidence");
+    }
   });
 
   it("binds recovery tooling to the coordinator and audited overlay", () => {
@@ -405,42 +882,62 @@ describe("desktop release workflow policy", () => {
       "            apps/desktop/scripts/macos-release-cli.mjs \\\n",
       "            apps/desktop/src/main/index.ts\n",
     );
-    expectIssue({ ...source, desktop: productOverlay }, "overlay only audited release tooling");
+    expectIssue({ ...source, desktop: productOverlay }, "manual signing recovery must overlay");
     const reversedAncestry = replaceRequired(
       source.desktop,
       'git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"',
       'git merge-base --is-ancestor "$RELEASE_TOOLING_COMMIT" "$RELEASE_COMMIT"',
     );
-    expectIssue({ ...source, desktop: reversedAncestry }, "overlay only audited release tooling");
+    expectIssue({ ...source, desktop: reversedAncestry }, "manual signing recovery must overlay");
     const unstagedRestore = replaceRequired(source.desktop, "--staged --worktree", "--worktree");
-    expectIssue({ ...source, desktop: unstagedRestore }, "overlay only audited release tooling");
+    expectIssue({ ...source, desktop: unstagedRestore }, "must overlay exactly");
     const unstagedOverlay = replaceRequired(
       source.desktop,
       "git diff --cached --name-only",
       "git diff --name-only",
     );
-    expectIssue({ ...source, desktop: unstagedOverlay }, "overlay only audited release tooling");
+    expectIssue({ ...source, desktop: unstagedOverlay }, "must overlay exactly");
     const allowsTrackedDrift = replaceRequired(
       source.desktop,
       'test -z "$(git diff --name-only)"',
       "true",
     );
-    expectIssue({ ...source, desktop: allowsTrackedDrift }, "overlay only audited release tooling");
+    expectIssue({ ...source, desktop: allowsTrackedDrift }, "must overlay exactly");
     const allowsUntrackedDrift = replaceRequired(
       source.desktop,
       'test -z "$(git ls-files --others --exclude-standard)"',
       "true",
     );
-    expectIssue(
-      { ...source, desktop: allowsUntrackedDrift },
-      "overlay only audited release tooling",
-    );
+    expectIssue({ ...source, desktop: allowsUntrackedDrift }, "must overlay exactly");
     const movesCandidateHead = replaceRequired(
       source.desktop,
       '          test -z "$(git ls-files --others --exclude-standard)"\n          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"',
       '          test -z "$(git ls-files --others --exclude-standard)"',
     );
-    expectIssue({ ...source, desktop: movesCandidateHead }, "overlay only audited release tooling");
+    expectIssue({ ...source, desktop: movesCandidateHead }, "must overlay exactly");
+  });
+
+  it("allows downstream recovery jobs to overlay only the transaction implementation", () => {
+    const source = sources();
+    const expandedOverlay = replaceRequired(
+      source.desktop,
+      "          test \"$(git diff --cached --name-only)\" = 'tools/desktop-release-transaction.ts'",
+      "          test \"$(git diff --cached --name-only)\" = $'apps/desktop/scripts/macos-release-cli.mjs\\ntools/desktop-release-transaction.ts'",
+    );
+    expectIssue(
+      { ...source, desktop: expandedOverlay },
+      "verify-macos-envelope recovery must overlay exactly tools/desktop-release-transaction.ts",
+    );
+
+    const missingTransaction = replaceRequired(
+      source.desktop,
+      "            tools/desktop-release-transaction.ts\n          test \"$(git diff --cached --name-only)\" = 'tools/desktop-release-transaction.ts'",
+      "            apps/desktop/scripts/macos-release-cli.mjs\n          test \"$(git diff --cached --name-only)\" = 'apps/desktop/scripts/macos-release-cli.mjs'",
+    );
+    expectIssue(
+      { ...source, desktop: missingTransaction },
+      "verify-macos-envelope recovery must overlay exactly tools/desktop-release-transaction.ts",
+    );
   });
 
   it("uses a byte-deterministic npm alias packer", () => {
@@ -472,14 +969,14 @@ describe("desktop release workflow policy", () => {
     }
   });
 
-  it("binds every consumer to the successful signing attempt", () => {
+  it("binds native verification to normalized signing evidence", () => {
     const source = sources();
     const desktop = replaceRequired(
       source.desktop,
-      "SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.workflow_run_attempt }}",
+      "SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.evidence_run_attempt }}",
       "SIGNING_RUN_ATTEMPT: ${{ github.run_attempt }}",
     );
-    expectIssue({ ...source, desktop }, "successful signing attempt");
+    expectIssue({ ...source, desktop }, "normalized immutable signing evidence");
   });
 
   it("keeps native verification on the exact-four public envelope", () => {
@@ -519,7 +1016,7 @@ describe("desktop release workflow policy", () => {
     expectIssue({ ...source, desktop: noUmask }, "created privately and always removed");
     const noCleanup = replaceRequired(
       source.desktop,
-      '      - name: Remove temporary notarization key\n        if: ${{ always() }}\n        run: rm -f "$RUNNER_TEMP/AuthKey.p8"\n',
+      "      - name: Remove temporary notarization key\n        if: ${{ always() && inputs.source_run_id == 'none' }}\n        run: rm -f \"$RUNNER_TEMP/AuthKey.p8\"\n",
       "",
     );
     expectIssue({ ...source, desktop: noCleanup }, "created privately and always removed");
@@ -529,8 +1026,8 @@ describe("desktop release workflow policy", () => {
     const source = sources();
     const desktop = replaceRequired(
       source.desktop,
-      'test "$ARTIFACT_NAME" = "desktop-release-$GITHUB_RUN_ID-$SIGNING_RUN_ATTEMPT"',
-      'test "$ARTIFACT_NAME" = "desktop-release-${{ github.run_id }}-$SIGNING_RUN_ATTEMPT"',
+      'test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"',
+      'test "$ARTIFACT_NAME" = "desktop-release-${{ github.run_id }}-$EVIDENCE_RUN_ATTEMPT"',
     );
     expectIssue({ ...source, desktop }, "run scripts must receive contexts through env");
   });
