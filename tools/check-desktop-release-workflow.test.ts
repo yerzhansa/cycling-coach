@@ -1137,6 +1137,62 @@ describe("desktop release workflow policy", () => {
       "test:disabled-roundtrip",
     );
     expectIssue({ ...source, desktop: noRoundTrip }, "production-feed N-to-N+1 round trip");
+    const missingDependencyBuild = replaceRequired(
+      source.desktop,
+      "pnpm --filter '@enduragent/desktop^...' build",
+      "pnpm --filter '@enduragent/desktop^...' check",
+    );
+    expectIssue(
+      { ...source, desktop: missingDependencyBuild },
+      "production-feed N-to-N+1 round trip",
+    );
+    const dependencyBuildBeforeInstall = replaceRequired(
+      source.desktop,
+      "      - run: pnpm install --frozen-lockfile\n      - name: Build updater acceptance dependencies\n        run: pnpm --filter '@enduragent/desktop^...' build",
+      "      - name: Build updater acceptance dependencies\n        run: pnpm --filter '@enduragent/desktop^...' build\n      - run: pnpm install --frozen-lockfile",
+    );
+    expectIssue(
+      { ...source, desktop: dependencyBuildBeforeInstall },
+      "production-feed N-to-N+1 round trip",
+    );
+    const freshOnlyDependencyBuild = replaceRequired(
+      source.desktop,
+      "      - name: Build updater acceptance dependencies\n        run: pnpm --filter '@enduragent/desktop^...' build",
+      "      - name: Build updater acceptance dependencies\n        if: ${{ inputs.source_run_id == 'none' }}\n        run: pnpm --filter '@enduragent/desktop^...' build",
+    );
+    expectIssue(
+      { ...source, desktop: freshOnlyDependencyBuild },
+      "production-feed N-to-N+1 round trip",
+    );
+    const duplicateDependencyBuild = replaceRequired(
+      source.desktop,
+      "      - name: Build updater acceptance dependencies\n        run: pnpm --filter '@enduragent/desktop^...' build",
+      "      - name: Build updater acceptance dependencies\n        run: pnpm --filter '@enduragent/desktop^...' build\n      - name: Duplicate updater acceptance dependency build\n        run: pnpm --filter '@enduragent/desktop^...' build",
+    );
+    expectIssue(
+      { ...source, desktop: duplicateDependencyBuild },
+      "production-feed N-to-N+1 round trip",
+    );
+    const updaterCommandBlock =
+      '          pnpm --filter @enduragent/desktop test:macos-update-roundtrip \\\n            "$BASELINE_VERSION" \\\n            "$CANDIDATE_VERSION" \\\n            "$RUNNER_TEMP/desktop-baseline" \\\n            "$CANDIDATE_ENVELOPE" \\\n            "$EVIDENCE"';
+    const updaterRemovedFromExercise = replaceRequired(
+      source.desktop,
+      updaterCommandBlock,
+      "          echo 'updater command moved before dependency build'",
+    );
+    const updaterBeforeDependencyBuild = replaceRequired(
+      updaterRemovedFromExercise,
+      "      - name: Build updater acceptance dependencies\n        run: pnpm --filter '@enduragent/desktop^...' build",
+      `      - name: Run updater command too early
+        run: |
+${updaterCommandBlock}
+      - name: Build updater acceptance dependencies
+        run: pnpm --filter '@enduragent/desktop^...' build`,
+    );
+    expectIssue(
+      { ...source, desktop: updaterBeforeDependencyBuild },
+      "production-feed N-to-N+1 round trip",
+    );
     const bypass = replaceRequired(
       source.desktop,
       "needs.verify-production-update.result == 'success'",
