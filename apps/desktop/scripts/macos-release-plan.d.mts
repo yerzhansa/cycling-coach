@@ -28,14 +28,6 @@ export interface MacosReleaseInput {
   readonly desktopRoot?: string;
 }
 
-export interface MacosGenesisReleaseInput {
-  readonly feedUrl: string | undefined;
-  readonly identity: string | undefined;
-  readonly genesisVersion: string | undefined;
-  readonly repositoryRoot?: string;
-  readonly desktopRoot?: string;
-}
-
 export interface MacosReleaseBuilderOptions {
   readonly projectDir: string;
   readonly publish: "never";
@@ -80,8 +72,6 @@ export interface MacosReleasePlan {
   readonly artifactNames: ReleaseArtifactNames;
   readonly builderOptions: MacosReleaseBuilderOptions;
 }
-
-export type MacosGenesisReleasePlan = Omit<MacosReleasePlan, "baselineApplication">;
 
 export type NotarizationCredentialSelection =
   | {
@@ -205,10 +195,6 @@ export function createMacosReleasePlan(
   input: MacosReleaseInput,
   dependencies?: Pick<MacosReleaseDependencies, "readFile">,
 ): Promise<MacosReleasePlan>;
-export function createMacosGenesisReleasePlan(
-  input: MacosGenesisReleaseInput,
-  dependencies?: Pick<MacosReleaseDependencies, "readFile">,
-): Promise<MacosGenesisReleasePlan>;
 export function sealMacosReleaseMetadata(plan: MacosReleasePlan): Promise<void>;
 export function macosReleaseEnvelopePath(plan: MacosReleasePlan): string;
 export function promoteMacosReleaseEnvelope(

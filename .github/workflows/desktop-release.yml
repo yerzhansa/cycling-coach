@@ -23,10 +23,6 @@ on:
         description: Bound unpublished GitHub Release id
         required: true
         type: string
-      mode:
-        description: Desktop continuity mode
-        required: true
-        type: string
       draft_body_sha256:
         description: Bound draft release-notes digest
         required: true
@@ -73,7 +69,6 @@ jobs:
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
-          RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
           RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
@@ -106,7 +101,6 @@ jobs:
             test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"
             test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"
           else
-            test "$RELEASE_MODE" = 'steady'
             CURRENT_RECOVERY_REVISION="${WORKFLOW_REF_NAME#"${RELEASE_TAG}-recovery."}"
             printf '%s' "$CURRENT_RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$'
             test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${CURRENT_RECOVERY_REVISION}"
@@ -126,7 +120,6 @@ jobs:
           fi
           printf '%s' "$SOURCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
           test "$SOURCE_RUN_ID" != "$GITHUB_RUN_ID"
-          test "$RELEASE_MODE" = 'steady'
           test "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT"
           test "$CURRENT_RECOVERY_REVISION" != 'none'
           SOURCE=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")
@@ -298,15 +291,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - if: ${{ inputs.source_run_id == 'none' }}
         run: pnpm -r build
-      - name: Refuse invalid release mode
-        if: ${{ inputs.mode != 'steady' && inputs.mode != 'genesis' }}
-        run: exit 1
       - name: Resolve signed baseline
         if: ${{ inputs.source_run_id == 'none' }}
         id: baseline
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_TAG: ${{ inputs.tag }}
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
@@ -315,39 +304,35 @@ jobs:
           mkdir -p "$RUNNER_TEMP/desktop-baseline"
           pnpm desktop-release:transaction baseline \
             --directory "$RUNNER_TEMP/desktop-baseline" \
-            --mode "$RELEASE_MODE" \
+            --mode steady \
             --candidate-tag "$RELEASE_TAG" \
             --candidate-version "$DESKTOP_VERSION" \
             --baseline-tag "$RELEASE_BASELINE_TAG" \
             --github-output "$GITHUB_OUTPUT"
-          if [ "$RELEASE_MODE" = 'steady' ]; then
-            BASELINE_ZIP=$(find "$RUNNER_TEMP/desktop-baseline" -maxdepth 1 -type f -name '*-arm64.zip' -print -quit)
-            test -n "$BASELINE_ZIP"
-            ditto -x -k "$BASELINE_ZIP" "$RUNNER_TEMP/desktop-baseline-unpacked"
-            BASELINE_APP=$(find "$RUNNER_TEMP/desktop-baseline-unpacked" -maxdepth 2 -type d -name Enduragent.app -print -quit)
-            if [ -z "$BASELINE_APP" ]; then
-              echo '::error::Signed baseline application is missing from the prior release ZIP'
-              exit 1
-            fi
-            echo "baseline_app=$BASELINE_APP" >> "$GITHUB_OUTPUT"
-            BASELINE_EVIDENCE=$(codesign --display --verbose=4 "$BASELINE_APP" 2>&1)
-            BASELINE_IDENTITY=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^Authority=//p' | head -1)
-            BASELINE_CDHASH=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^CDHash=//p' | head -1)
-            printf '%s' "$BASELINE_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
-            printf '%s' "$BASELINE_CDHASH" | grep -Eq '^[0-9a-f]{40}$'
-            echo "baseline_signing_identity=$BASELINE_IDENTITY" >> "$GITHUB_OUTPUT"
-            echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
+          BASELINE_ZIP=$(find "$RUNNER_TEMP/desktop-baseline" -maxdepth 1 -type f -name '*-arm64.zip' -print -quit)
+          test -n "$BASELINE_ZIP"
+          ditto -x -k "$BASELINE_ZIP" "$RUNNER_TEMP/desktop-baseline-unpacked"
+          BASELINE_APP=$(find "$RUNNER_TEMP/desktop-baseline-unpacked" -maxdepth 2 -type d -name Enduragent.app -print -quit)
+          if [ -z "$BASELINE_APP" ]; then
+            echo '::error::Signed baseline application is missing from the prior release ZIP'
+            exit 1
           fi
+          echo "baseline_app=$BASELINE_APP" >> "$GITHUB_OUTPUT"
+          BASELINE_EVIDENCE=$(codesign --display --verbose=4 "$BASELINE_APP" 2>&1)
+          BASELINE_IDENTITY=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^Authority=//p' | head -1)
+          BASELINE_CDHASH=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^CDHash=//p' | head -1)
+          printf '%s' "$BASELINE_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
+          printf '%s' "$BASELINE_CDHASH" | grep -Eq '^[0-9a-f]{40}$'
+          echo "baseline_signing_identity=$BASELINE_IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
       - name: Build signed and notarized macOS envelope
         if: ${{ inputs.source_run_id == 'none' }}
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          RELEASE_MODE: ${{ inputs.mode }}
           ENDURAGENT_DEVELOPER_ID_IDENTITY: ${{ vars.ENDURAGENT_DEVELOPER_ID_IDENTITY }}
           ENDURAGENT_DESKTOP_UPDATE_URL: https://github.com/yerzhansa/enduragent/releases/latest/download/
           ENDURAGENT_MACOS_BASELINE_APP: ${{ steps.baseline.outputs.baseline_app }}
-          ENDURAGENT_MACOS_GENESIS_VERSION: ${{ inputs.desktop_version }}
           APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -363,17 +348,7 @@ jobs:
           done
           printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"
           chmod 600 "$APPLE_API_KEY"
-          case "$RELEASE_MODE" in
-            genesis)
-              pnpm --filter @enduragent/desktop package:mac:genesis
-              ;;
-            steady)
-              pnpm --filter @enduragent/desktop package:mac
-              ;;
-            *)
-              exit 1
-              ;;
-          esac
+          pnpm --filter @enduragent/desktop package:mac
       - name: Bind candidate signing evidence
         if: ${{ inputs.source_run_id == 'none' }}
         id: signing-evidence
@@ -402,7 +377,6 @@ jobs:
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
-          RELEASE_MODE: ${{ inputs.mode }}
           WORKFLOW_RUN_ID: ${{ github.run_id }}
           WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
@@ -422,7 +396,7 @@ jobs:
             --desktop-version "$DESKTOP_VERSION" \
             --commit "$RELEASE_COMMIT" \
             --draft-id "$RELEASE_DRAFT_ID" \
-            --mode "$RELEASE_MODE" \
+            --mode steady \
             --workflow-run-id "$WORKFLOW_RUN_ID" \
             --workflow-run-attempt "$WORKFLOW_RUN_ATTEMPT" \
             --draft-body-sha256 "$RELEASE_BODY_SHA256" \
@@ -446,7 +420,7 @@ jobs:
           compression-level: 0
           retention-days: 90
       - name: Upload sealed baseline updater envelope
-        if: ${{ inputs.source_run_id == 'none' && inputs.mode == 'steady' }}
+        if: ${{ inputs.source_run_id == 'none' }}
         id: baseline-artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -483,7 +457,6 @@ jobs:
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
-          RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
           RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
           SOURCE_RUN_ID: ${{ needs.authorize-coordinator.outputs.source_run_id }}
@@ -496,7 +469,6 @@ jobs:
           BASELINE_ARTIFACT_DIGEST: ${{ needs.authorize-coordinator.outputs.baseline_artifact_digest }}
         run: |
           set -euo pipefail
-          test "$RELEASE_MODE" = 'steady'
           printf '%s' "$SOURCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$SOURCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
@@ -590,7 +562,6 @@ jobs:
       - name: Normalize immutable signing and artifact evidence
         id: normalized-evidence
         env:
-          RELEASE_MODE: ${{ inputs.mode }}
           SOURCE_RUN_ID: ${{ needs.authorize-coordinator.outputs.source_run_id }}
           SOURCE_RUN_ATTEMPT: ${{ needs.authorize-coordinator.outputs.source_run_attempt }}
           SOURCE_ARTIFACT_NAME: ${{ needs.authorize-coordinator.outputs.artifact_name }}
@@ -644,15 +615,9 @@ jobs:
             CDHASH="$FRESH_CDHASH"
             CODE_DIRECTORY_SHA256="$FRESH_CODE_DIRECTORY_SHA256"
             SIGNING_IDENTITY="$FRESH_SIGNING_IDENTITY"
-            if [ "$RELEASE_MODE" = 'steady' ]; then
-              BASELINE_ARTIFACT_NAME="desktop-baseline-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-              BASELINE_ARTIFACT_ID="$FRESH_BASELINE_ARTIFACT_ID"
-              BASELINE_ARTIFACT_DIGEST="${FRESH_BASELINE_ARTIFACT_DIGEST#sha256:}"
-            else
-              BASELINE_ARTIFACT_NAME=none
-              BASELINE_ARTIFACT_ID=none
-              BASELINE_ARTIFACT_DIGEST=none
-            fi
+            BASELINE_ARTIFACT_NAME="desktop-baseline-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
+            BASELINE_ARTIFACT_ID="$FRESH_BASELINE_ARTIFACT_ID"
+            BASELINE_ARTIFACT_DIGEST="${FRESH_BASELINE_ARTIFACT_DIGEST#sha256:}"
           else
             EVIDENCE_RUN_ID="$SOURCE_RUN_ID"
             EVIDENCE_RUN_ATTEMPT="$SOURCE_RUN_ATTEMPT"
@@ -682,21 +647,10 @@ jobs:
           printf '%s' "$CDHASH" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$CODE_DIRECTORY_SHA256" | grep -Eq '^[0-9a-f]{64}$'
           printf '%s' "$SIGNING_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
-          if [ "$RELEASE_MODE" = 'steady' ]; then
-            printf '%s' "$BASELINE_ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
-            printf '%s' "$BASELINE_ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-            test "$BASELINE_ARTIFACT_NAME" = "desktop-baseline-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-            printf '%s' "$BASELINE_METADATA_SHA256" | grep -Eq '^[0-9a-f]{64}$'
-          else
-            test "$BASELINE_TAG" = 'none'
-            test "$BASELINE_VERSION" = 'none'
-            test "$BASELINE_RELEASE_ID" = 'none'
-            test "$BASELINE_COMMIT" = 'none'
-            test "$BASELINE_ZIP_SHA256" = 'none'
-            test "$BASELINE_METADATA_SHA256" = 'none'
-            test "$BASELINE_SIGNING_IDENTITY" = 'none'
-            test "$BASELINE_CDHASH" = 'none'
-          fi
+          printf '%s' "$BASELINE_ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$BASELINE_ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          test "$BASELINE_ARTIFACT_NAME" = "desktop-baseline-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
+          printf '%s' "$BASELINE_METADATA_SHA256" | grep -Eq '^[0-9a-f]{64}$'
           echo "baseline_tag=$BASELINE_TAG" >> "$GITHUB_OUTPUT"
           echo "baseline_version=$BASELINE_VERSION" >> "$GITHUB_OUTPUT"
           echo "baseline_release_id=$BASELINE_RELEASE_ID" >> "$GITHUB_OUTPUT"
@@ -778,33 +732,30 @@ jobs:
         id: independent-baseline
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_TAG: ${{ inputs.tag }}
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_BASELINE_TAG: ${{ needs.sign-macos.outputs.baseline_tag }}
         run: |
           pnpm desktop-release:transaction baseline \
             --directory "$RUNNER_TEMP/independent-baseline" \
-            --mode "$RELEASE_MODE" \
+            --mode steady \
             --candidate-tag "$RELEASE_TAG" \
             --candidate-version "$DESKTOP_VERSION" \
             --baseline-tag "$RELEASE_BASELINE_TAG" \
             --github-output "$GITHUB_OUTPUT"
-          if [ "$RELEASE_MODE" = 'steady' ]; then
-            BASELINE_ZIP=$(find "$RUNNER_TEMP/independent-baseline" -maxdepth 1 -type f -name '*-arm64.zip' -print -quit)
-            test -n "$BASELINE_ZIP"
-            ditto -x -k "$BASELINE_ZIP" "$RUNNER_TEMP/independent-baseline/unpacked"
-            BASELINE_APP=$(find "$RUNNER_TEMP/independent-baseline/unpacked" -maxdepth 2 -type d -name Enduragent.app -print -quit)
-            test -n "$BASELINE_APP"
-            echo "baseline_app=$BASELINE_APP" >> "$GITHUB_OUTPUT"
-            BASELINE_EVIDENCE=$(codesign --display --verbose=4 "$BASELINE_APP" 2>&1)
-            BASELINE_IDENTITY=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^Authority=//p' | head -1)
-            BASELINE_CDHASH=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^CDHash=//p' | head -1)
-            printf '%s' "$BASELINE_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
-            printf '%s' "$BASELINE_CDHASH" | grep -Eq '^[0-9a-f]{40}$'
-            echo "baseline_signing_identity=$BASELINE_IDENTITY" >> "$GITHUB_OUTPUT"
-            echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
-          fi
+          BASELINE_ZIP=$(find "$RUNNER_TEMP/independent-baseline" -maxdepth 1 -type f -name '*-arm64.zip' -print -quit)
+          test -n "$BASELINE_ZIP"
+          ditto -x -k "$BASELINE_ZIP" "$RUNNER_TEMP/independent-baseline/unpacked"
+          BASELINE_APP=$(find "$RUNNER_TEMP/independent-baseline/unpacked" -maxdepth 2 -type d -name Enduragent.app -print -quit)
+          test -n "$BASELINE_APP"
+          echo "baseline_app=$BASELINE_APP" >> "$GITHUB_OUTPUT"
+          BASELINE_EVIDENCE=$(codesign --display --verbose=4 "$BASELINE_APP" 2>&1)
+          BASELINE_IDENTITY=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^Authority=//p' | head -1)
+          BASELINE_CDHASH=$(printf '%s\n' "$BASELINE_EVIDENCE" | sed -n 's/^CDHash=//p' | head -1)
+          printf '%s' "$BASELINE_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
+          printf '%s' "$BASELINE_CDHASH" | grep -Eq '^[0-9a-f]{40}$'
+          echo "baseline_signing_identity=$BASELINE_IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
       - name: Confirm independently resolved baseline evidence
         env:
           INDEPENDENT_TAG: ${{ steps.independent-baseline.outputs.baseline_tag }}
@@ -835,7 +786,6 @@ jobs:
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_COMMIT: ${{ inputs.commit }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
-          RELEASE_MODE: ${{ inputs.mode }}
           WORKFLOW_RUN_ID: ${{ needs.sign-macos.outputs.evidence_run_id }}
           SIGNING_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.evidence_run_attempt }}
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
@@ -857,7 +807,7 @@ jobs:
             --desktop-version "$DESKTOP_VERSION" \
             --commit "$RELEASE_COMMIT" \
             --draft-id "$RELEASE_DRAFT_ID" \
-            --mode "$RELEASE_MODE" \
+            --mode steady \
             --workflow-run-id "$WORKFLOW_RUN_ID" \
             --workflow-run-attempt "$SIGNING_RUN_ATTEMPT" \
             --draft-body-sha256 "$RELEASE_BODY_SHA256" \
@@ -893,22 +843,10 @@ jobs:
           pnpm desktop-release:transaction public-envelope \
             --directory "$RUNNER_TEMP/desktop-release" \
             --output "$PUBLIC_ENVELOPE"
-          case "$RELEASE_MODE" in
-            genesis)
-              pnpm --filter @enduragent/desktop verify:mac-genesis-release \
-                "$PUBLIC_ENVELOPE" \
-                "$CANDIDATE_APP"
-              ;;
-            steady)
-              pnpm --filter @enduragent/desktop verify:mac-release \
-                "$PUBLIC_ENVELOPE" \
-                "$INDEPENDENT_BASELINE_APP" \
-                "$CANDIDATE_APP"
-              ;;
-            *)
-              exit 1
-              ;;
-          esac
+          pnpm --filter @enduragent/desktop verify:mac-release \
+            "$PUBLIC_ENVELOPE" \
+            "$INDEPENDENT_BASELINE_APP" \
+            "$CANDIDATE_APP"
           mkdir "$RUNNER_TEMP/desktop-release-dmg"
           hdiutil attach -readonly -nobrowse \
             -mountpoint "$RUNNER_TEMP/desktop-release-dmg" \
@@ -1261,7 +1199,6 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     needs: [sign-macos, reconcile-latest]
-    if: ${{ inputs.mode == 'steady' }}
     permissions:
       actions: read
       contents: read
@@ -1367,8 +1304,7 @@ jobs:
     if: >-
       ${{ always() && needs.publish-assets.result == 'success' &&
           needs.reconcile-latest.result == 'success' &&
-          ((inputs.mode == 'genesis' && needs.verify-production-update.result == 'skipped') ||
-           (inputs.mode == 'steady' && needs.verify-production-update.result == 'success')) }}
+          needs.verify-production-update.result == 'success' }}
     environment: desktop-macos-latest
     permissions:
       actions: read

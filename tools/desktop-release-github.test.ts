@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DESKTOP_FEED_URL,
+  DESKTOP_MANIFEST,
   DESKTOP_PROVISIONAL_RELEASE_BODY,
   GithubClient,
   activateDesktopRelease,
@@ -21,8 +22,8 @@ import {
   sealDesktopRelease,
   stageDesktopRelease,
   type DesktopReleaseManifest,
-  type DesktopReleaseMode,
   type GithubClientTimingOptions,
+  verifyDesktopRelease,
 } from "./desktop-release-transaction.js";
 
 const candidateVersion = "0.1.7";
@@ -105,7 +106,6 @@ function writeEnvelope(directory: string, version: string): void {
 async function sealed(
   version: string,
   draftId: string,
-  mode: DesktopReleaseMode,
   baseline?: { release: FakeRelease; manifest: DesktopReleaseManifest },
 ): Promise<{ directory: string; manifest: DesktopReleaseManifest }> {
   const directory = mkdtempSync(join(tmpdir(), "desktop-release-github-"));
@@ -117,19 +117,20 @@ async function sealed(
     desktopVersion: version,
     commit: version === candidateVersion ? candidateCommit : "b".repeat(40),
     draftId,
-    mode,
+    mode: "steady",
     workflowRunId: "456",
     workflowRunAttempt: "1",
     draftBodySha256: digest(Buffer.from("release body"), "sha256", "hex"),
     signingIdentity: "Developer ID Application: Example (FA494ACVTF)",
     candidateCdHash: "d".repeat(40),
     candidateCodeDirectorySha256: "e".repeat(64),
-    baselineTag: baseline?.release.tag_name ?? "none",
-    baselineReleaseId: baseline ? String(baseline.release.id) : "none",
-    baselineCommit: baseline?.manifest.commit ?? "none",
-    baselineZipSha256: baselineZip?.sha256 ?? "none",
-    baselineSigningIdentity: baseline?.manifest.signingIdentity ?? "none",
-    baselineCdHash: baseline?.manifest.candidateCdHash ?? "none",
+    baselineTag: baseline?.release.tag_name ?? "cycling-coach@2026.8.8",
+    baselineReleaseId: baseline ? String(baseline.release.id) : "121",
+    baselineCommit: baseline?.manifest.commit ?? "c".repeat(40),
+    baselineZipSha256: baselineZip?.sha256 ?? "f".repeat(64),
+    baselineSigningIdentity:
+      baseline?.manifest.signingIdentity ?? "Developer ID Application: Example (FA494ACVTF)",
+    baselineCdHash: baseline?.manifest.candidateCdHash ?? "1".repeat(40),
   });
   return { directory, manifest };
 }
@@ -345,30 +346,78 @@ class FakeGithub {
   };
 }
 
-async function genesisCandidate(fake: FakeGithub) {
-  const result = await sealed(candidateVersion, "123", "genesis");
-  fake.pages = [[]];
-  return result;
-}
-
 async function steadyCandidate(fake: FakeGithub) {
-  const genesis = await sealed("0.1.6", "122", "genesis");
+  const baselineEnvelope = await sealed("0.1.6", "122");
   const baseline = fake.release(122, "enduragent-desktop@0.1.6", false);
-  fake.commits.set(baseline.tag_name, genesis.manifest.commit);
-  fake.addEnvelope(baseline, genesis.directory, "0.1.6");
+  fake.commits.set(baseline.tag_name, baselineEnvelope.manifest.commit);
+  fake.addEnvelope(baseline, baselineEnvelope.directory, "0.1.6");
   fake.latest = baseline;
   fake.pages = [[baseline]];
-  const candidate = await sealed(candidateVersion, "123", "steady", {
+  const candidate = await sealed(candidateVersion, "123", {
     release: baseline,
-    manifest: genesis.manifest,
+    manifest: baselineEnvelope.manifest,
   });
-  return { ...candidate, baseline, baselineDirectory: genesis.directory };
+  return { ...candidate, baseline, baselineDirectory: baselineEnvelope.directory };
+}
+
+async function retiredGenesisCandidate() {
+  const candidate = await sealed(candidateVersion, "123");
+  const path = join(candidate.directory, DESKTOP_MANIFEST);
+  const manifest = JSON.parse(readFileSync(path, "utf8")) as DesktopReleaseManifest;
+  const retired = {
+    ...manifest,
+    mode: "genesis" as const,
+    baselineTag: "none",
+    baselineReleaseId: "none",
+    baselineCommit: "none",
+    baselineZipSha256: "none",
+    baselineSigningIdentity: "none",
+    baselineCdHash: "none",
+  };
+  const { schemaVersion: _, transactionSha256: __, ...transaction } = retired;
+  retired.transactionSha256 = digest(Buffer.from(JSON.stringify(transaction)), "sha256", "hex");
+  writeFileSync(path, `${JSON.stringify(retired, null, 2)}\n`);
+  return candidate.directory;
 }
 
 describe("GitHub desktop release transaction", () => {
-  it("stages audit manifest, payload, then metadata and leaves genesis private", async () => {
+  it("reads retained genesis evidence but refuses every operational entry point", async () => {
     const fake = new FakeGithub();
-    const { directory } = await genesisCandidate(fake);
+    const directory = await retiredGenesisCandidate();
+    const observed = { id: null, tag: null, metadataSha256: null };
+
+    await expect(verifyDesktopRelease(directory)).resolves.toMatchObject({ mode: "genesis" });
+    const operations: ReadonlyArray<readonly [string, () => Promise<unknown>]> = [
+      ["observe", () => observeDesktopLatest(directory, fake.client())],
+      ["resolve rollback", () => resolveDesktopRollbackLatest(directory, fake.client(), "none")],
+      ["publish", () => publishDesktopRelease(directory, fake.client(), observed)],
+      ["stage", () => stageDesktopRelease(directory, fake.client())],
+      ["promote", () => promoteDesktopLatest(directory, fake.client(), observed)],
+      ["reconcile", () => reconcileDesktopLatest(directory, fake.client())],
+      [
+        "activate",
+        () => activateDesktopRelease(directory, "/synthetic/release-body.md", fake.client()),
+      ],
+      [
+        "compensate",
+        () =>
+          compensateDesktopRelease(
+            directory,
+            "/synthetic/release-body.md",
+            fake.client(),
+            observed,
+          ),
+      ],
+    ];
+    for (const [name, operation] of operations) {
+      await expect(operation(), name).rejects.toThrow("genesis release authority is retired");
+    }
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("stages audit manifest, payload, then metadata and leaves the candidate private", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
     await stageDesktopRelease(directory, fake.client());
     expect(
       fake.calls
@@ -381,7 +430,7 @@ describe("GitHub desktop release transaction", () => {
 
   it("resumes exact bytes, rejects conflicts, and performs no mutation on conflict", async () => {
     const fake = new FakeGithub();
-    const { directory } = await genesisCandidate(fake);
+    const { directory } = await steadyCandidate(fake);
     await stageDesktopRelease(directory, fake.client());
     const posts = fake.calls.filter((call) => call.method === "POST").length;
     fake.pages = [[fake.candidate]];
@@ -395,14 +444,14 @@ describe("GitHub desktop release transaction", () => {
 
   it("checks tag-to-commit binding before uploading", async () => {
     const fake = new FakeGithub(undefined, "f".repeat(40));
-    const { directory } = await genesisCandidate(fake);
+    const { directory } = await steadyCandidate(fake);
     await expect(stageDesktopRelease(directory, fake.client())).rejects.toThrow("commit binding");
     expect(fake.calls.some((call) => call.method === "POST")).toBe(false);
   });
 
   it("checks the draft body before any release mutation", async () => {
     const fake = new FakeGithub();
-    const { directory } = await genesisCandidate(fake);
+    const { directory } = await steadyCandidate(fake);
     fake.candidate.body = "operator changed the body";
     await expect(stageDesktopRelease(directory, fake.client())).rejects.toThrow("body binding");
     expect(fake.calls.some((call) => call.method === "POST" || call.method === "PATCH")).toBe(
@@ -412,7 +461,7 @@ describe("GitHub desktop release transaction", () => {
 
   it("rejects a prerelease draft before any release mutation", async () => {
     const fake = new FakeGithub();
-    const { directory } = await genesisCandidate(fake);
+    const { directory } = await steadyCandidate(fake);
     fake.candidate.prerelease = true;
     await expect(stageDesktopRelease(directory, fake.client())).rejects.toThrow(
       "candidate binding",
@@ -424,7 +473,7 @@ describe("GitHub desktop release transaction", () => {
 
   it("deletes only a same-name starter asset after a full preflight", async () => {
     const fake = new FakeGithub();
-    const { directory } = await genesisCandidate(fake);
+    const { directory } = await steadyCandidate(fake);
     const name = releaseFileNames(candidateVersion)[0];
     fake.addAsset(fake.candidate, name, Buffer.alloc(0), "starter");
     await stageDesktopRelease(directory, fake.client());
@@ -435,7 +484,7 @@ describe("GitHub desktop release transaction", () => {
 
   it("recovers a 502-created starter with bounded delete and retry", async () => {
     const fake = new FakeGithub();
-    const { directory } = await genesisCandidate(fake);
+    const { directory } = await steadyCandidate(fake);
     fake.failNextUploadWithStarter = true;
     await stageDesktopRelease(directory, fake.client());
     expect(fake.calls.filter((call) => call.method === "DELETE")).toHaveLength(1);
@@ -445,7 +494,7 @@ describe("GitHub desktop release transaction", () => {
 
   it("preflights every existing asset before deleting starters or uploading", async () => {
     const fake = new FakeGithub();
-    const { directory } = await genesisCandidate(fake);
+    const { directory } = await steadyCandidate(fake);
     const [starterName, conflictName] = releaseFileNames(candidateVersion);
     fake.addAsset(fake.candidate, starterName, Buffer.alloc(0), "starter");
     fake.addAsset(fake.candidate, conflictName, Buffer.from("conflict"));
@@ -457,13 +506,13 @@ describe("GitHub desktop release transaction", () => {
 
   it("never sends the bearer token to unbound asset or upload origins", async () => {
     const fake = new FakeGithub();
-    const { directory } = await genesisCandidate(fake);
+    const { directory } = await steadyCandidate(fake);
     fake.candidate.upload_url = "https://example.invalid/assets{?name,label}";
     await expect(stageDesktopRelease(directory, fake.client())).rejects.toThrow("upload URL");
     expect(fake.calls.some((call) => call.url.includes("example.invalid"))).toBe(false);
 
     const second = new FakeGithub();
-    const candidate = await genesisCandidate(second);
+    const candidate = await steadyCandidate(second);
     const asset = second.addAsset(
       second.candidate,
       releaseFileNames(candidateVersion)[0],
@@ -1090,7 +1139,6 @@ describe("GitHub desktop release transaction", () => {
         directory,
         fake.client(),
         baselineMetadata.digest.slice("sha256:".length),
-        resumedCurrent,
       );
       expect(rollback).toEqual({
         id: baseline.id,
@@ -1323,7 +1371,7 @@ describe("GitHub desktop release transaction", () => {
 
   it("accepts only the exact legacy first-signed desktop baseline", async () => {
     const fake = new FakeGithub();
-    const legacyEnvelope = await sealed("0.1.0", "121", "genesis");
+    const legacyEnvelope = await sealed("0.1.0", "121");
     const legacy = fake.release(121, "cycling-coach@2026.8.8", false);
     fake.commits.set(legacy.tag_name, legacyEnvelope.manifest.commit);
     fake.addEnvelope(legacy, legacyEnvelope.directory, "0.1.0");
@@ -1356,7 +1404,7 @@ describe("GitHub desktop release transaction", () => {
     ["enduragent-desktop@0.1.1", "0.1.0"],
   ])("rejects a noncanonical desktop baseline %s carrying %s assets", async (tag, version) => {
     const fake = new FakeGithub();
-    const envelope = await sealed(version, "121", "genesis");
+    const envelope = await sealed(version, "121");
     const release = fake.release(121, tag, false);
     fake.commits.set(release.tag_name, envelope.manifest.commit);
     fake.addEnvelope(release, envelope.directory, version);
@@ -1404,10 +1452,32 @@ describe("GitHub desktop release transaction", () => {
     expect(fake.calls).toEqual([]);
   });
 
+  it("refuses retired genesis baseline resolution before reading GitHub state", async () => {
+    const fake = new FakeGithub();
+    const outputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
+    const target = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
+    directories.push(outputDirectory, target);
+    const output = join(outputDirectory, "output");
+    writeFileSync(output, "");
+
+    await expect(
+      prepareDesktopBaseline(
+        target,
+        fake.client(),
+        "genesis",
+        candidateTag,
+        candidateVersion,
+        "none",
+        output,
+      ),
+    ).rejects.toThrow("genesis release authority is retired");
+    expect(fake.calls).toEqual([]);
+  });
+
   it("uses the requested retained baseline instead of a newer failed draft", async () => {
     const fake = new FakeGithub();
     const { baseline } = await steadyCandidate(fake);
-    const failed = await sealed("0.1.8", "124", "genesis");
+    const failed = await sealed("0.1.8", "124");
     const failedRelease = fake.release(124, "enduragent-desktop@0.1.8", true);
     fake.commits.set(failedRelease.tag_name, failed.manifest.commit);
     fake.addEnvelope(failedRelease, failed.directory, "0.1.8");
@@ -1435,7 +1505,7 @@ describe("GitHub desktop release transaction", () => {
   it("requires N+1 latest instead of reusing N as the N+2 baseline", async () => {
     const fake = new FakeGithub();
     const { baseline } = await steadyCandidate(fake);
-    const accepted = await sealed("0.1.7", "124", "genesis");
+    const accepted = await sealed("0.1.7", "124");
     const latest = fake.release(124, "enduragent-desktop@0.1.7", false);
     fake.commits.set(latest.tag_name, accepted.manifest.commit);
     fake.addEnvelope(latest, accepted.directory, "0.1.7");

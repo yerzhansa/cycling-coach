@@ -465,10 +465,6 @@ export async function createMacosReleasePlan(input, dependencies = {}) {
   return Object.freeze({ ...plan, baselineApplication });
 }
 
-export async function createMacosGenesisReleasePlan(input, dependencies = {}) {
-  return createMacosReleasePlanCore(input, dependencies);
-}
-
 export async function sealMacosReleaseMetadata(plan) {
   const artifactDirectory = join(plan.builderOptions.projectDir, "dist");
   const paths = {

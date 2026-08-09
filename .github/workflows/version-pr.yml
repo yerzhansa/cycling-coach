@@ -145,7 +145,7 @@ jobs:
           DISPATCHED=false
           for attempt in $(seq 1 6); do
             if gh workflow run desktop-release-coordinator.yml --ref "$DESKTOP_TAG" \
-              -f tag="$DESKTOP_TAG" -f desktop_mode=steady; then
+              -f tag="$DESKTOP_TAG"; then
               DISPATCHED=true
               break
             fi
