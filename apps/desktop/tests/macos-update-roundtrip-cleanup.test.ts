@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LATEST_SCHEMA_VERSION, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import type { VerifiedMacosReleaseArtifacts } from "../scripts/verify-macos-release.mjs";
 
 const harness = vi.hoisted(() => {
@@ -16,6 +17,9 @@ const harness = vi.hoisted(() => {
     children: [] as ChildProcess[],
     closePendingAfterExit: false,
     helperPid: undefined as number | undefined,
+    keychainEvents: [] as string[],
+    keychainHome: undefined as string | undefined,
+    keychainRestoredAfterProcessCleanup: false,
     parentClosed: false,
     parentExit,
     resolveParentExit,
@@ -51,6 +55,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         ["-e", parentCode, harness.termMarker, harness.sensitiveArgument],
         { ...options, stdio: ["ignore", "pipe", "pipe"] },
       );
+      harness.keychainEvents.push("spawn");
       let stdout = "";
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout += chunk.toString("utf8");
@@ -76,6 +81,35 @@ vi.mock("./helpers/desktop-fixture.ts", () => ({
     harness.closePendingAfterExit = !harness.parentClosed;
     throw new Error("synthetic updater product failure");
   }),
+}));
+
+vi.mock("./fixtures/packaged-telegram/disposable-keychain.ts", () => ({
+  prepareDisposableKeychain: vi.fn(
+    async (input: { readonly home: string; readonly path: string }) => {
+      harness.keychainEvents.push("prepare");
+      harness.keychainHome = input.home;
+      let restored = false;
+      return {
+        home: input.home,
+        recoveryPath: input.path,
+        activate: async () => {
+          harness.keychainEvents.push("activate");
+        },
+        restore: async () => {
+          harness.keychainEvents.push("restore");
+          const child = harness.children.at(-1);
+          const helperPid = harness.helperPid;
+          harness.keychainRestoredAfterProcessCleanup =
+            child?.stdout?.destroyed === true &&
+            child.stderr?.destroyed === true &&
+            helperPid !== undefined &&
+            !processIsReachable(helperPid);
+          restored = true;
+        },
+        restored: () => restored,
+      };
+    },
+  ),
 }));
 
 vi.mock("./fixtures/packaged-telegram/acceptance-deadline.ts", async (importOriginal) => {
@@ -143,6 +177,9 @@ afterEach(async () => {
   await Promise.all(harness.children.map(stopChild));
   await stopProcess(harness.helperPid);
   harness.children.length = 0;
+  harness.keychainEvents.length = 0;
+  harness.keychainHome = undefined;
+  harness.keychainRestoredAfterProcessCleanup = false;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -258,6 +295,29 @@ describe("macOS updater failure cleanup", () => {
     expect(helperPid).toBeDefined();
     expect(await readFile(harness.termMarker, "utf8")).toBe("SIGTERM");
     expect(processIsReachable(helperPid as number)).toBe(false);
+    expect(harness.keychainEvents).toEqual(["prepare", "activate", "spawn", "restore"]);
+    expect(harness.keychainHome).toBe(join(scratchPath, "home"));
+    expect(harness.keychainRestoredAfterProcessCleanup).toBe(true);
+    const latestPath = join(scratchPath, "athlete/data/latest.json");
+    const latestStat = await lstat(latestPath);
+    expect(latestStat.isFile()).toBe(true);
+    expect(latestStat.mode & 0o777).toBe(0o600);
+    const expectedLatest = {
+      metadata: {
+        schema_version: LATEST_SCHEMA_VERSION,
+        last_updated: "2000-01-01T00:00:00.000Z",
+        freshness: "fresh",
+      },
+      athlete_profile: null,
+      current_status: null,
+      derived_metrics: {},
+      recent_activities: [],
+      planned_workouts: [],
+      wellness_data: null,
+    } as const;
+    const latestBytes = await readFile(latestPath, "utf8");
+    expect(latestBytes).toBe(`${JSON.stringify(expectedLatest)}\n`);
+    expect(LatestJsonSchema.parse(JSON.parse(latestBytes))).toStrictEqual(expectedLatest);
     const elapsed = Date.now() - startedAt;
     expect(elapsed).toBeGreaterThanOrEqual(1_800);
     expect(elapsed).toBeLessThan(4_500);
@@ -281,5 +341,9 @@ describe("macOS updater failure cleanup", () => {
     expect(source).not.toMatch(
       /"(?:baseline application update exit|candidate persistence verification shutdown)",\s*\w+Lifecycle\.terminal/u,
     );
+    expect(source).toContain("const rendererRpcTimeoutMs = 30_000;");
+    expect(source).toContain("}, input.timeoutMs);");
+    expect(source).toContain("timeoutMs + rendererDebuggerTimeoutSlackMs");
+    expect(source).not.toContain("}, 10000);");
   });
 });
