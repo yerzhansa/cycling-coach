@@ -58,6 +58,23 @@ describe("desktop release workflow policy", () => {
     expect(source.version).toContain('DESKTOP_TAG="enduragent-desktop@$DESKTOP_VERSION"');
   });
 
+  it("requires explicit runtime bounds on every executable release job", () => {
+    const source = sources();
+    const coordinator = replaceRequired(
+      source.coordinator,
+      ["  bind-release:", "    runs-on: ubuntu-latest", "    timeout-minutes: 30"].join("\n"),
+      ["  bind-release:", "    runs-on: ubuntu-latest"].join("\n"),
+    );
+    expectIssue({ ...source, coordinator }, "coordinator executable jobs must have bounded");
+
+    const desktop = replaceRequired(
+      source.desktop,
+      ["  request-latest:", "    runs-on: ubuntu-latest", "    timeout-minutes: 45"].join("\n"),
+      ["  request-latest:", "    runs-on: ubuntu-latest"].join("\n"),
+    );
+    expectIssue({ ...source, desktop }, "release executable jobs must have bounded");
+  });
+
   it("requires the stable desktop tag namespace, manifest version, and exact tag ref", () => {
     const source = sources();
     const mutations = [
@@ -910,8 +927,8 @@ describe("desktop release workflow policy", () => {
     const githubTokenBinding = ["GITHUB_TOKEN", "${{ github.token }}"].join(": ");
     const desktop = replaceRequired(
       source.desktop,
-      "  sign-macos:\n    runs-on: macos-15\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: read",
-      "  sign-macos:\n    runs-on: macos-15\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: write",
+      "  sign-macos:\n    runs-on: macos-15\n    timeout-minutes: 120\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: read",
+      "  sign-macos:\n    runs-on: macos-15\n    timeout-minutes: 120\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: write",
     ).replaceAll(githubTokenBinding, "CSC_LINK: ${{ secrets.CSC_LINK }}");
     expectIssue({ ...source, desktop }, "macOS signing permissions");
     expectIssue({ ...source, desktop }, "escaped the signing job");
@@ -1112,8 +1129,8 @@ describe("desktop release workflow policy", () => {
       ),
       replaceRequired(
         source.desktop,
-        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    needs: [sign-macos, publish-assets, request-latest]\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: read",
-        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    needs: [sign-macos, publish-assets, request-latest]\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: write",
+        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    timeout-minutes: 45\n    needs: [sign-macos, publish-assets, request-latest]\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: read",
+        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    timeout-minutes: 45\n    needs: [sign-macos, publish-assets, request-latest]\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: write",
       ),
       replaceRequired(
         source.desktop,

@@ -127,9 +127,30 @@ const latestReleasePropagationAttempts = 240;
 const stableLatestObservationCount = 3;
 const releasePropagationDelayMs = 2_000;
 const latestReleasePropagationDelayMs = 5_000;
+const metadataRequestTimeoutMs = 30_000;
+const assetTransferTimeoutMs = 10 * 60_000;
+const releasePropagationTimeoutMs = 10 * 60_000;
+const latestReleasePropagationTimeoutMs = 20 * 60_000;
+
+type DesktopReleaseTimer = unknown;
+
+export interface GithubClientTiming {
+  readonly metadataRequestTimeoutMs: number;
+  readonly assetTransferTimeoutMs: number;
+  readonly releasePropagationTimeoutMs: number;
+  readonly latestReleasePropagationTimeoutMs: number;
+  readonly releasePropagationDelayMs: number;
+  readonly latestReleasePropagationDelayMs: number;
+  readonly now: () => number;
+  readonly scheduleTimeout: (callback: () => void, delayMs: number) => DesktopReleaseTimer;
+  readonly cancelTimeout: (timer: DesktopReleaseTimer) => void;
+}
+
+export type GithubClientTimingOptions = Partial<GithubClientTiming>;
 
 interface LatestPollBudget {
   remaining: number;
+  deadlineAt: number;
 }
 
 function exactObject(value: unknown): value is Record<string, unknown> {
@@ -772,22 +793,124 @@ export type DesktopReleaseFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+function positiveDuration(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError(`${label} is invalid`);
+  }
+  return value;
+}
+
+function githubClientTiming(options: GithubClientTimingOptions): GithubClientTiming {
+  return Object.freeze({
+    metadataRequestTimeoutMs: positiveDuration(
+      options.metadataRequestTimeoutMs ?? metadataRequestTimeoutMs,
+      "GitHub metadata timeout",
+    ),
+    assetTransferTimeoutMs: positiveDuration(
+      options.assetTransferTimeoutMs ?? assetTransferTimeoutMs,
+      "GitHub asset timeout",
+    ),
+    releasePropagationTimeoutMs: positiveDuration(
+      options.releasePropagationTimeoutMs ?? releasePropagationTimeoutMs,
+      "release propagation timeout",
+    ),
+    latestReleasePropagationTimeoutMs: positiveDuration(
+      options.latestReleasePropagationTimeoutMs ?? latestReleasePropagationTimeoutMs,
+      "latest propagation timeout",
+    ),
+    releasePropagationDelayMs: positiveDuration(
+      options.releasePropagationDelayMs ?? releasePropagationDelayMs,
+      "release propagation delay",
+    ),
+    latestReleasePropagationDelayMs: positiveDuration(
+      options.latestReleasePropagationDelayMs ?? latestReleasePropagationDelayMs,
+      "latest propagation delay",
+    ),
+    now: options.now ?? (() => Date.now()),
+    scheduleTimeout:
+      options.scheduleTimeout ?? ((callback, delayMs) => setTimeout(callback, delayMs)),
+    cancelTimeout:
+      options.cancelTimeout ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)),
+  });
+}
+
 export class GithubClient {
   readonly #repository: string;
   readonly #token: string;
   readonly #fetch: DesktopReleaseFetch;
+  readonly #timing: GithubClientTiming;
 
-  constructor(repository: string, token: string, fetchImplementation: DesktopReleaseFetch = fetch) {
+  constructor(
+    repository: string,
+    token: string,
+    fetchImplementation: DesktopReleaseFetch = fetch,
+    timingOptions: GithubClientTimingOptions = {},
+  ) {
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository))
       throw new TypeError("GitHub repository is invalid");
     if (token.length === 0) throw new TypeError("GitHub token is missing");
     this.#repository = repository;
     this.#token = token;
     this.#fetch = fetchImplementation;
+    this.#timing = githubClientTiming(timingOptions);
   }
 
-  async request<T>(url: string, init: RequestInit = {}): Promise<T> {
+  async #bounded<T>(
+    label: string,
+    configuredTimeoutMs: number,
+    operation: (signal: AbortSignal) => Promise<T>,
+    deadlineAt?: number,
+  ): Promise<T> {
+    const now = this.now();
+    const availableMs = deadlineAt === undefined ? configuredTimeoutMs : deadlineAt - now;
+    const timeoutMs = Math.min(configuredTimeoutMs, availableMs);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new TypeError(`${label} timed out`);
+    }
+    const controller = new AbortController();
+    let timer: DesktopReleaseTimer;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = this.#timing.scheduleTimeout(() => {
+        reject(new TypeError(`${label} timed out`));
+        controller.abort();
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([operation(controller.signal), timeout]);
+    } finally {
+      this.#timing.cancelTimeout(timer!);
+    }
+  }
+
+  now(): number {
+    const now = this.#timing.now();
+    if (!Number.isFinite(now)) throw new TypeError("release transaction clock is invalid");
+    return now;
+  }
+
+  propagationDeadline(kind: "release" | "latest"): number {
+    const duration =
+      kind === "release"
+        ? this.#timing.releasePropagationTimeoutMs
+        : this.#timing.latestReleasePropagationTimeoutMs;
+    return this.now() + duration;
+  }
+
+  async pauseForPropagation(kind: "release" | "latest", deadlineAt: number): Promise<void> {
+    const configuredDelay =
+      kind === "release"
+        ? this.#timing.releasePropagationDelayMs
+        : this.#timing.latestReleasePropagationDelayMs;
+    const delayMs = Math.min(configuredDelay, deadlineAt - this.now());
+    if (delayMs <= 0) return;
+    await new Promise<void>((resolvePause) => {
+      this.#timing.scheduleTimeout(resolvePause, delayMs);
+    });
+  }
+
+  async request<T>(url: string, init: RequestInit = {}, deadlineAt?: number): Promise<T> {
     if (!url.startsWith("/")) throw new TypeError("GitHub API URL must be repository-relative");
+    if (init.signal) throw new TypeError("GitHub API request signal is managed internally");
     const target = new URL(url, "https://api.github.com");
     const repositoryPrefix = `/repos/${this.#repository}/`;
     if (
@@ -798,21 +921,32 @@ export class GithubClient {
     ) {
       throw new TypeError("GitHub API URL is outside the bound repository");
     }
-    const response = await this.#fetch(target, {
-      ...init,
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${this.#token}`,
-        "X-GitHub-Api-Version": "2022-11-28",
-        ...init.headers,
+    return this.#bounded(
+      "GitHub metadata request",
+      this.#timing.metadataRequestTimeoutMs,
+      async (signal) => {
+        const response = await this.#fetch(target, {
+          ...init,
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${this.#token}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+            ...init.headers,
+          },
+          signal,
+        });
+        if (!response.ok) {
+          await response.arrayBuffer();
+          throw new TypeError(`GitHub API request failed (${response.status})`);
+        }
+        if (response.status === 204) return undefined as T;
+        return (await response.json()) as T;
       },
-    });
-    if (!response.ok) throw new TypeError(`GitHub API request failed (${response.status})`);
-    if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
+      deadlineAt,
+    );
   }
 
-  async bytes(url: string): Promise<Buffer> {
+  async bytes(url: string, deadlineAt?: number): Promise<Buffer> {
     const target = new URL(url);
     const assetPattern = new RegExp(
       `^/repos/${this.#repository.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}/releases/assets/[1-9]\\d*$`,
@@ -828,45 +962,58 @@ export class GithubClient {
     ) {
       throw new TypeError("GitHub asset API URL is outside the bound repository");
     }
-    let current = target;
-    for (let redirect = 0; redirect <= 5; redirect += 1) {
-      const authenticated = current.origin === "https://api.github.com";
-      const response = await this.#fetch(current, {
-        headers: authenticated
-          ? {
-              Accept: "application/octet-stream",
-              Authorization: `Bearer ${this.#token}`,
-              "X-GitHub-Api-Version": "2022-11-28",
+    return this.#bounded(
+      "GitHub asset transfer",
+      this.#timing.assetTransferTimeoutMs,
+      async (signal) => {
+        let current = target;
+        for (let redirect = 0; redirect <= 5; redirect += 1) {
+          const authenticated = current.origin === "https://api.github.com";
+          const response = await this.#fetch(current, {
+            headers: authenticated
+              ? {
+                  Accept: "application/octet-stream",
+                  Authorization: `Bearer ${this.#token}`,
+                  "X-GitHub-Api-Version": "2022-11-28",
+                }
+              : { Accept: "application/octet-stream" },
+            redirect: "manual",
+            signal,
+          });
+          if (response.status >= 300 && response.status < 400) {
+            const location = response.headers.get("location");
+            await response.body?.cancel();
+            if (!location || redirect === 5)
+              throw new TypeError("GitHub asset redirect is invalid");
+            const next = new URL(location, current);
+            if (
+              next.protocol !== "https:" ||
+              next.username !== "" ||
+              next.password !== "" ||
+              ![
+                "release-assets.githubusercontent.com",
+                "objects.githubusercontent.com",
+                "github-releases.githubusercontent.com",
+              ].includes(next.hostname)
+            ) {
+              throw new TypeError("GitHub asset redirect origin is invalid");
             }
-          : { Accept: "application/octet-stream" },
-        redirect: "manual",
-      });
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
-        if (!location || redirect === 5) throw new TypeError("GitHub asset redirect is invalid");
-        const next = new URL(location, current);
-        if (
-          next.protocol !== "https:" ||
-          next.username !== "" ||
-          next.password !== "" ||
-          ![
-            "release-assets.githubusercontent.com",
-            "objects.githubusercontent.com",
-            "github-releases.githubusercontent.com",
-          ].includes(next.hostname)
-        ) {
-          throw new TypeError("GitHub asset redirect origin is invalid");
+            current = next;
+            continue;
+          }
+          if (!response.ok) {
+            await response.arrayBuffer();
+            throw new TypeError(`GitHub asset download failed (${response.status})`);
+          }
+          return Buffer.from(await response.arrayBuffer());
         }
-        current = next;
-        continue;
-      }
-      if (!response.ok) throw new TypeError(`GitHub asset download failed (${response.status})`);
-      return Buffer.from(await response.arrayBuffer());
-    }
-    throw new TypeError("GitHub asset redirect bound exceeded");
+        throw new TypeError("GitHub asset redirect bound exceeded");
+      },
+      deadlineAt,
+    );
   }
 
-  async anonymousBytes(url: string): Promise<Buffer> {
+  async anonymousBytes(url: string, deadlineAt?: number): Promise<Buffer> {
     const target = new URL(url);
     const prefix = `/${this.#repository}/releases/`;
     const parts = target.pathname.split("/").map((part) => decodeURIComponent(part));
@@ -893,13 +1040,23 @@ export class GithubClient {
     ) {
       throw new TypeError("anonymous GitHub asset URL is outside the bound repository");
     }
-    const response = await this.#fetch(target, {
-      headers: { Accept: "application/octet-stream" },
-      redirect: "follow",
-    });
-    if (!response.ok)
-      throw new TypeError(`anonymous GitHub asset download failed (${response.status})`);
-    return Buffer.from(await response.arrayBuffer());
+    return this.#bounded(
+      "anonymous GitHub asset transfer",
+      this.#timing.assetTransferTimeoutMs,
+      async (signal) => {
+        const response = await this.#fetch(target, {
+          headers: { Accept: "application/octet-stream" },
+          redirect: "follow",
+          signal,
+        });
+        if (!response.ok) {
+          await response.arrayBuffer();
+          throw new TypeError(`anonymous GitHub asset download failed (${response.status})`);
+        }
+        return Buffer.from(await response.arrayBuffer());
+      },
+      deadlineAt,
+    );
   }
 
   release(id: string | number): Promise<GithubRelease> {
@@ -915,22 +1072,32 @@ export class GithubClient {
     if (release.upload_url !== expected) throw new TypeError("GitHub upload URL is invalid");
     const target = new URL(expected.slice(0, expected.indexOf("{")));
     target.searchParams.set("name", name);
-    const response = await this.#fetch(target, {
-      method: "POST",
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${this.#token}`,
-        "Content-Type": "application/octet-stream",
-        "X-GitHub-Api-Version": "2022-11-28",
+    return this.#bounded(
+      "GitHub asset upload",
+      this.#timing.assetTransferTimeoutMs,
+      async (signal) => {
+        const response = await this.#fetch(target, {
+          method: "POST",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${this.#token}`,
+            "Content-Type": "application/octet-stream",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+          body: bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+          ) as ArrayBuffer,
+          redirect: "error",
+          signal,
+        });
+        if (!response.ok) {
+          await response.arrayBuffer();
+          throw new TypeError(`GitHub asset upload failed (${response.status})`);
+        }
+        return (await response.json()) as GithubAsset;
       },
-      body: bytes.buffer.slice(
-        bytes.byteOffset,
-        bytes.byteOffset + bytes.byteLength,
-      ) as ArrayBuffer,
-      redirect: "error",
-    });
-    if (!response.ok) throw new TypeError(`GitHub asset upload failed (${response.status})`);
-    return (await response.json()) as GithubAsset;
+    );
   }
 
   deleteAsset(id: number): Promise<void> {
@@ -938,8 +1105,8 @@ export class GithubClient {
     return this.request(`/repos/${this.#repository}/releases/assets/${id}`, { method: "DELETE" });
   }
 
-  async latest(): Promise<LatestObservation> {
-    const release = await this.latestRelease();
+  async latest(deadlineAt?: number): Promise<LatestObservation> {
+    const release = await this.latestRelease(deadlineAt);
     if (!release) return { id: null, tag: null, metadataSha256: null };
     const metadata = release.assets.find((asset) => asset.name === "latest-mac.yml");
     let metadataSha256: string | null = null;
@@ -948,7 +1115,7 @@ export class GithubClient {
       if (metadata.state !== "uploaded" || !match || metadata.size <= 0) {
         throw new TypeError("repository latest metadata digest is invalid");
       }
-      const feedBytes = await this.anonymousBytes(`${DESKTOP_FEED_URL}latest-mac.yml`);
+      const feedBytes = await this.anonymousBytes(`${DESKTOP_FEED_URL}latest-mac.yml`, deadlineAt);
       metadataSha256 = sha256(feedBytes);
       if (feedBytes.length !== metadata.size || metadataSha256 !== match[1]) {
         throw new TypeError("repository latest and updater feed digest differ");
@@ -957,21 +1124,35 @@ export class GithubClient {
     return { id: release.id, tag: release.tag_name, metadataSha256 };
   }
 
-  async latestRelease(): Promise<GithubRelease | null> {
-    const response = await this.#fetch(
-      `https://api.github.com/repos/${this.#repository}/releases/latest`,
-      {
-        headers: {
-          Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${this.#token}`,
-          "Cache-Control": "no-cache",
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
+  async latestRelease(deadlineAt?: number): Promise<GithubRelease | null> {
+    return this.#bounded(
+      "GitHub latest metadata request",
+      this.#timing.metadataRequestTimeoutMs,
+      async (signal) => {
+        const response = await this.#fetch(
+          `https://api.github.com/repos/${this.#repository}/releases/latest`,
+          {
+            headers: {
+              Accept: "application/vnd.github+json",
+              Authorization: `Bearer ${this.#token}`,
+              "Cache-Control": "no-cache",
+              "X-GitHub-Api-Version": "2022-11-28",
+            },
+            signal,
+          },
+        );
+        if (response.status === 404) {
+          await response.arrayBuffer();
+          return null;
+        }
+        if (!response.ok) {
+          await response.arrayBuffer();
+          throw new TypeError(`GitHub latest request failed (${response.status})`);
+        }
+        return (await response.json()) as GithubRelease;
       },
+      deadlineAt,
     );
-    if (response.status === 404) return null;
-    if (!response.ok) throw new TypeError(`GitHub latest request failed (${response.status})`);
-    return (await response.json()) as GithubRelease;
   }
 
   async releases(): Promise<readonly GithubRelease[]> {
@@ -1292,6 +1473,7 @@ export async function publishDesktopRelease(
     throw new TypeError("desktop release did not enter a recoverable public state");
   }
   await assertCompleteReleaseAssets(client, published, manifest, "published release");
+  const releasePropagationDeadline = client.propagationDeadline("release");
   for (const file of manifest.files) {
     const asset = published.assets.find((candidate) => candidate.name === file.name);
     if (!asset) throw new TypeError(`published release asset is missing: ${file.name}`);
@@ -1300,7 +1482,12 @@ export async function publishDesktopRelease(
     if (!parts.includes(manifest.tag) || parts.at(-1) !== file.name) {
       throw new TypeError(`release asset is not tag-specific: ${file.name}`);
     }
-    await waitForAnonymousAsset(client, asset.browser_download_url, file);
+    await waitForAnonymousAsset(
+      client,
+      asset.browser_download_url,
+      file,
+      releasePropagationDeadline,
+    );
   }
   assertLatestCas(
     manifest.desktopVersion,
@@ -1421,11 +1608,17 @@ export async function promoteDesktopLatest(
   if (candidate.assets.length !== manifest.files.length) {
     throw new TypeError("promotion candidate asset set is incomplete");
   }
+  const releasePropagationDeadline = client.propagationDeadline("release");
   for (const file of manifest.files) {
     const asset = candidate.assets.find((candidateAsset) => candidateAsset.name === file.name);
     if (!asset || asset.state !== "uploaded")
       throw new TypeError(`promotion candidate asset is missing: ${file.name}`);
-    await waitForAnonymousAsset(client, asset.browser_download_url, file);
+    await waitForAnonymousAsset(
+      client,
+      asset.browser_download_url,
+      file,
+      releasePropagationDeadline,
+    );
   }
   assertLatestCas(
     manifest.desktopVersion,
@@ -1448,29 +1641,37 @@ export async function promoteDesktopLatest(
   for (const file of manifest.files) {
     const asset = rebound.assets.find((entry) => entry.name === file.name);
     if (!asset) throw new TypeError(`promotion candidate asset is missing: ${file.name}`);
-    await waitForAnonymousAsset(client, asset.browser_download_url, file);
+    await waitForAnonymousAsset(
+      client,
+      asset.browser_download_url,
+      file,
+      releasePropagationDeadline,
+    );
   }
   const finalLatest = await client.latest();
   assertLatestCas(manifest.desktopVersion, observed, finalLatest, previous?.version ?? null);
+  const metadata = manifest.files.find((file) => file.name === "latest-mac.yml");
+  if (!metadata) throw new TypeError("desktop latest metadata is missing");
+  const promotedLatest = {
+    id: rebound.id,
+    tag: manifest.tag,
+    metadataSha256: metadata.sha256,
+  };
   if (candidateWasFinal) {
-    const metadata = manifest.files.find((file) => file.name === "latest-mac.yml");
-    if (
-      !metadata ||
-      !sameLatest(finalLatest, {
-        id: rebound.id,
-        tag: manifest.tag,
-        metadataSha256: metadata.sha256,
-      })
-    ) {
+    if (!sameLatest(finalLatest, promotedLatest)) {
       throw new TypeError("final desktop release is not the stable latest release");
     }
     return;
   }
-  await client.request(`/repos/${client.repository()}/releases/${rebound.id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ make_latest: "true" }),
-  });
+  try {
+    await client.request(`/repos/${client.repository()}/releases/${rebound.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ make_latest: "true" }),
+    });
+  } catch {
+    await reconcilePromotionMutation(client, finalLatest, promotedLatest);
+  }
 }
 
 export async function reconcileDesktopLatest(
@@ -1522,30 +1723,81 @@ function sameLatest(left: LatestObservation, right: LatestObservation): boolean 
   );
 }
 
-function pauseForReleasePropagation(): Promise<void> {
-  return new Promise((resolvePause) => setTimeout(resolvePause, releasePropagationDelayMs));
+function sameLatestIdentity(left: LatestObservation, right: LatestObservation): boolean {
+  return left.id === right.id && left.tag === right.tag;
 }
 
-function pauseForLatestPropagation(): Promise<void> {
-  return new Promise((resolvePause) => setTimeout(resolvePause, latestReleasePropagationDelayMs));
+function latestPollBudget(client: GithubClient): LatestPollBudget {
+  return {
+    remaining: latestReleasePropagationAttempts,
+    deadlineAt: client.propagationDeadline("latest"),
+  };
+}
+
+async function reconcilePromotionMutation(
+  client: GithubClient,
+  before: LatestObservation,
+  after: LatestObservation,
+): Promise<void> {
+  const budget = latestPollBudget(client);
+  let lastObserved: LatestObservation | null = null;
+  let stableAfterCount = 0;
+  while (budget.remaining > 0 && client.now() < budget.deadlineAt) {
+    budget.remaining -= 1;
+    let current: LatestObservation;
+    try {
+      current = await client.latest(budget.deadlineAt);
+    } catch {
+      stableAfterCount = 0;
+      if (budget.remaining > 0 && client.now() < budget.deadlineAt) {
+        await client.pauseForPropagation("latest", budget.deadlineAt);
+      }
+      continue;
+    }
+    lastObserved = current;
+    if (sameLatest(current, after)) {
+      stableAfterCount += 1;
+      if (stableAfterCount >= stableLatestObservationCount) return;
+    } else if (sameLatest(current, before) || sameLatestIdentity(current, before)) {
+      stableAfterCount = 0;
+    } else if (sameLatestIdentity(current, after)) {
+      stableAfterCount = 0;
+    } else {
+      throw new TypeError("desktop latest promotion observed a foreign latest release");
+    }
+    if (budget.remaining > 0 && client.now() < budget.deadlineAt) {
+      await client.pauseForPropagation("latest", budget.deadlineAt);
+    }
+  }
+  if (lastObserved !== null && sameLatest(lastObserved, before)) {
+    throw new TypeError("desktop latest promotion was not applied");
+  }
+  throw new TypeError("desktop latest promotion outcome could not be reconciled");
 }
 
 async function waitForAnonymousAsset(
   client: GithubClient,
   url: string,
   file: DesktopReleaseFile,
+  deadlineAt: number = client.propagationDeadline("release"),
 ): Promise<void> {
   let lastError: unknown;
-  for (let attempt = 1; attempt <= releasePropagationAttempts; attempt += 1) {
+  for (
+    let attempt = 1;
+    attempt <= releasePropagationAttempts && client.now() < deadlineAt;
+    attempt += 1
+  ) {
     try {
-      assertRemoteAsset(file, await client.anonymousBytes(url));
+      assertRemoteAsset(file, await client.anonymousBytes(url, deadlineAt));
       return;
     } catch (error) {
       lastError = error;
       if (error instanceof TypeError && error.message.startsWith("conflicting release asset:")) {
         throw error;
       }
-      if (attempt < releasePropagationAttempts) await pauseForReleasePropagation();
+      if (attempt < releasePropagationAttempts && client.now() < deadlineAt) {
+        await client.pauseForPropagation("release", deadlineAt);
+      }
     }
   }
   throw new TypeError(`tag-specific release download did not converge: ${file.name}`, {
@@ -1557,16 +1809,16 @@ async function waitForLatest(
   client: GithubClient,
   expected: LatestObservation | readonly LatestObservation[],
   message: string,
-  budget: LatestPollBudget = { remaining: latestReleasePropagationAttempts },
+  budget: LatestPollBudget = latestPollBudget(client),
 ): Promise<LatestObservation> {
   const accepted = Array.isArray(expected) ? expected : [expected];
   let lastError: unknown;
   let stableObservation: LatestObservation | null = null;
   let stableCount = 0;
-  while (budget.remaining > 0) {
+  while (budget.remaining > 0 && client.now() < budget.deadlineAt) {
     budget.remaining -= 1;
     try {
-      const current = await client.latest();
+      const current = await client.latest(budget.deadlineAt);
       const matched = accepted.some((candidate) => sameLatest(candidate, current));
       if (matched) {
         if (stableObservation !== null && sameLatest(stableObservation, current)) {
@@ -1587,7 +1839,9 @@ async function waitForLatest(
       stableCount = 0;
       lastError = error;
     }
-    if (budget.remaining > 0) await pauseForLatestPropagation();
+    if (budget.remaining > 0 && client.now() < budget.deadlineAt) {
+      await client.pauseForPropagation("latest", budget.deadlineAt);
+    }
   }
   throw new TypeError(message, { cause: lastError });
 }
@@ -1640,7 +1894,7 @@ export async function activateDesktopRelease(
     tag: manifest.tag,
     metadataSha256: metadata.sha256,
   };
-  const pollBudget: LatestPollBudget = { remaining: latestReleasePropagationAttempts };
+  const pollBudget = latestPollBudget(client);
   const latest = await waitForLatest(
     client,
     expectedLatest,
@@ -1738,7 +1992,7 @@ export async function compensateDesktopRelease(
     tag: manifest.tag,
     metadataSha256: metadata.sha256,
   };
-  const pollBudget: LatestPollBudget = { remaining: latestReleasePropagationAttempts };
+  const pollBudget = latestPollBudget(client);
   await waitForLatest(
     client,
     candidateLatest,

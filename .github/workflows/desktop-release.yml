@@ -46,6 +46,7 @@ permissions:
 jobs:
   authorize-coordinator:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       actions: read
       contents: read
@@ -236,6 +237,7 @@ jobs:
 
   sign-macos:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: authorize-coordinator
     environment: desktop-macos-signing
     permissions:
@@ -717,6 +719,7 @@ jobs:
 
   verify-macos-envelope:
     runs-on: macos-15
+    timeout-minutes: 45
     needs: sign-macos
     permissions:
       actions: read
@@ -918,6 +921,7 @@ jobs:
 
   stage-private-draft:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, verify-macos-envelope]
     environment: desktop-macos-publication
     permissions:
@@ -1003,6 +1007,7 @@ jobs:
 
   publish-assets:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, stage-private-draft]
     environment: desktop-macos-publication
     permissions:
@@ -1090,6 +1095,7 @@ jobs:
 
   request-latest:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, publish-assets]
     environment: desktop-macos-latest
     permissions:
@@ -1160,6 +1166,7 @@ jobs:
 
   reconcile-latest:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, publish-assets, request-latest]
     environment: desktop-macos-latest
     permissions:
@@ -1325,6 +1332,7 @@ jobs:
 
   activate-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, publish-assets, request-latest, reconcile-latest, verify-production-update]
     if: >-
       ${{ always() && needs.publish-assets.result == 'success' &&
@@ -1398,6 +1406,7 @@ jobs:
 
   compensate-publication:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs:
       [
         sign-macos,

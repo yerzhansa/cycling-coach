@@ -61,6 +61,11 @@ function exactStringSet(value: unknown, expected: string[]): boolean {
   return actual.length === wanted.length && actual.every((item, index) => item === wanted[index]);
 }
 
+function boundedJobTimeout(job: Mapping, maximumMinutes: number): boolean {
+  const value = job["timeout-minutes"];
+  return Number.isInteger(value) && Number(value) > 0 && Number(value) <= maximumMinutes;
+}
+
 function checkRecoveryOverlay(
   job: Mapping,
   label: string,
@@ -264,6 +269,9 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     issues.push(
       "desktop coordinator must contain only binding, draft safeguard, and reusable call",
     );
+  }
+  if (!boundedJobTimeout(bind, 30) || !boundedJobTimeout(draft, 30)) {
+    issues.push("desktop coordinator executable jobs must have bounded runtimes");
   }
   exactPermissions(
     bind.permissions,
@@ -841,6 +849,22 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     "desktop.jobs.compensate-publication",
     issues,
   );
+  if (
+    ![
+      authorize,
+      sign,
+      verify,
+      stage,
+      publish,
+      requestLatest,
+      reconcileLatest,
+      roundTrip,
+      activate,
+      compensate,
+    ].every((job) => boundedJobTimeout(job, 120))
+  ) {
+    issues.push("desktop release executable jobs must have bounded runtimes");
+  }
 
   exactPermissions(
     authorize.permissions,

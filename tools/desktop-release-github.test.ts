@@ -22,6 +22,7 @@ import {
   stageDesktopRelease,
   type DesktopReleaseManifest,
   type DesktopReleaseMode,
+  type GithubClientTimingOptions,
 } from "./desktop-release-transaction.js";
 
 const candidateVersion = "0.1.7";
@@ -247,8 +248,8 @@ class FakeGithub {
     return this.latestBeforeTransition;
   }
 
-  client(): GithubClient {
-    return new GithubClient("yerzhansa/enduragent", "token", this.fetch);
+  client(timingOptions: GithubClientTimingOptions = {}): GithubClient {
+    return new GithubClient("yerzhansa/enduragent", "token", this.fetch, timingOptions);
   }
 
   fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
@@ -500,6 +501,78 @@ describe("GitHub desktop release transaction", () => {
     ).rejects.toThrow("outside the bound repository");
   });
 
+  it("uses injected deadlines for metadata requests without exposing secrets or URLs", async () => {
+    let fireTimeout: (() => void) | undefined;
+    let cancelled = false;
+    let bodyReadStarted = false;
+    const client = new GithubClient(
+      "yerzhansa/enduragent",
+      "sensitive-token",
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => {
+            bodyReadStarted = true;
+            return new Promise<never>(() => undefined);
+          },
+        }) as Response,
+      {
+        metadataRequestTimeoutMs: 17,
+        scheduleTimeout: (callback, delayMs) => {
+          expect(delayMs).toBe(17);
+          fireTimeout = callback;
+          return "metadata-timer";
+        },
+        cancelTimeout: (timer) => {
+          expect(timer).toBe("metadata-timer");
+          cancelled = true;
+        },
+      },
+    );
+
+    const request = client.release(123);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bodyReadStarted).toBe(true);
+    expect(fireTimeout).toBeTypeOf("function");
+    fireTimeout!();
+    const error = await request.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).message).toBe("GitHub metadata request timed out");
+    expect((error as Error).message).not.toContain("sensitive-token");
+    expect((error as Error).message).not.toContain("github.com");
+    expect(cancelled).toBe(true);
+  });
+
+  it("bounds asset response consumption with a separate transfer budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const response = {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Promise<ArrayBuffer>(() => undefined),
+      } as Response;
+      const client = new GithubClient("yerzhansa/enduragent", "token", async () => response, {
+        metadataRequestTimeoutMs: 10,
+        assetTransferTimeoutMs: 40,
+      });
+      let settled = false;
+      const transfer = client
+        .bytes("https://api.github.com/repos/yerzhansa/enduragent/releases/assets/123")
+        .finally(() => {
+          settled = true;
+        });
+      const assertion = expect(transfer).rejects.toThrow("GitHub asset transfer timed out");
+      await vi.advanceTimersByTimeAsync(10);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(30);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes steady assets provisionally and verifies tag downloads anonymously", async () => {
     const fake = new FakeGithub();
     const { directory } = await steadyCandidate(fake);
@@ -600,6 +673,93 @@ describe("GitHub desktop release transaction", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reconciles a promotion whose successful response was lost without retrying", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    let promotionRequests = 0;
+    const client = new GithubClient("yerzhansa/enduragent", "token", async (input, init) => {
+      const promotion =
+        (init?.method ?? "GET") === "PATCH" &&
+        JSON.parse(String(init?.body ?? "{}") || "{}").make_latest === "true";
+      if (!promotion) return fake.fetch(input, init);
+      promotionRequests += 1;
+      await fake.fetch(input, init);
+      throw new TypeError("connection closed after mutation");
+    });
+
+    vi.useFakeTimers();
+    try {
+      await settleFakeTimerOperation(promoteDesktopLatest(directory, client, observed));
+      expect(promotionRequests).toBe(1);
+      expect(fake.latest?.id).toBe(fake.candidate.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies an unapplied promotion without an unsafe blind retry", async () => {
+    const fake = new FakeGithub();
+    const { directory, baseline } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    let promotionRequests = 0;
+    const client = new GithubClient(
+      "yerzhansa/enduragent",
+      "token",
+      async (input, init) => {
+        const promotion =
+          (init?.method ?? "GET") === "PATCH" &&
+          JSON.parse(String(init?.body ?? "{}") || "{}").make_latest === "true";
+        if (!promotion) return fake.fetch(input, init);
+        promotionRequests += 1;
+        throw new TypeError("connection closed before mutation");
+      },
+      { latestReleasePropagationTimeoutMs: 25, latestReleasePropagationDelayMs: 5 },
+    );
+
+    vi.useFakeTimers();
+    try {
+      const startedAt = Date.now();
+      await expect(
+        settleFakeTimerOperation(promoteDesktopLatest(directory, client, observed)),
+      ).rejects.toThrow("desktop latest promotion was not applied");
+      expect(promotionRequests).toBe(1);
+      expect(fake.latest?.id).toBe(baseline.id);
+      expect(Date.now() - startedAt).toBeLessThanOrEqual(25);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies a foreign latest winner after an ambiguous promotion response", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    const unrelated = fake.release(999, "other@1.0.0", false);
+    let promotionRequests = 0;
+    const client = new GithubClient("yerzhansa/enduragent", "token", async (input, init) => {
+      const promotion =
+        (init?.method ?? "GET") === "PATCH" &&
+        JSON.parse(String(init?.body ?? "{}") || "{}").make_latest === "true";
+      if (!promotion) return fake.fetch(input, init);
+      promotionRequests += 1;
+      fake.transitionLatest(unrelated);
+      throw new TypeError("connection closed during concurrent mutation");
+    });
+
+    await expect(promoteDesktopLatest(directory, client, observed)).rejects.toThrow(
+      "desktop latest promotion observed a foreign latest release",
+    );
+    expect(promotionRequests).toBe(1);
+    expect(fake.latest?.id).toBe(unrelated.id);
   });
 
   it("reuses an exact public provisional release without replacing its assets", async () => {
