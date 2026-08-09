@@ -96,6 +96,7 @@ export function ApplicationSection(): ReactElement {
 
   const copy = updateCopy(update.state);
   const updateBusy =
+    mutating ||
     update.actionDisabled ||
     ["disabled", "checking", "downloading", "installing"].includes(update.state.status);
   const releaseUrl =
