@@ -7,6 +7,9 @@ import { parse } from "yaml";
 
 type Mapping = Record<string, unknown>;
 
+const PROVISIONAL_RELEASE_BODY =
+  "Desktop update validation is in progress. This release is not yet generally available.";
+
 function mapping(value: unknown, label: string, issues: string[]): Mapping {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     issues.push(`${label} must be a mapping`);
@@ -36,6 +39,12 @@ function namedStep(job: Mapping, name: string): Mapping | undefined {
   return steps(job).find((step) => step.name === name);
 }
 
+function actionSteps(job: Mapping, action: string): Mapping[] {
+  return steps(job).filter(
+    (step) => typeof step.uses === "string" && step.uses.startsWith(`${action}@`),
+  );
+}
+
 function countShellLine(script: string, expected: string): number {
   return script.split(/\r?\n/u).filter((line) => line.trim() === expected).length;
 }
@@ -44,6 +53,70 @@ function exactKeys(value: Mapping, expected: string[]): boolean {
   const actual = Object.keys(value).sort();
   const wanted = [...expected].sort();
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+function exactStringSet(value: unknown, expected: string[]): boolean {
+  const actual = (Array.isArray(value) ? value.map(String) : [scalar(value)]).sort();
+  const wanted = [...expected].sort();
+  return actual.length === wanted.length && actual.every((item, index) => item === wanted[index]);
+}
+
+function checkRecoveryOverlay(
+  job: Mapping,
+  label: string,
+  expectedPaths: string[],
+  requireAncestry: boolean,
+  issues: string[],
+): void {
+  const jobSteps = steps(job);
+  const checkoutIndex = jobSteps.findIndex(
+    (step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout@"),
+  );
+  const recoveryStep = namedStep(
+    job,
+    expectedPaths.length === 1
+      ? "Bind recovery transaction tooling"
+      : "Bind recovery release tooling",
+  );
+  const recoveryIndex = jobSteps.indexOf(recoveryStep ?? {});
+  const installIndex = jobSteps.findIndex((step) => step.run === "pnpm install --frozen-lockfile");
+  const environment = mapping(recoveryStep?.env, `${label} recovery environment`, issues);
+  const run = typeof recoveryStep?.run === "string" ? recoveryStep.run : "";
+  const observedPaths =
+    run.replaceAll("\\n", "\n").match(/\b(?:apps|packages|tools)\/[A-Za-z0-9_./@-]+/gu) ?? [];
+  const expectedDiff = expectedPaths.join("\\n");
+  const exactDiff =
+    expectedPaths.length === 1
+      ? run.includes(`test "$(git diff --cached --name-only)" = '${expectedPaths[0]}'`)
+      : run.includes(`EXPECTED_RECOVERY_DIFF=$'${expectedDiff}'`) &&
+        run.includes('test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"');
+  if (
+    checkoutIndex === -1 ||
+    recoveryIndex <= checkoutIndex ||
+    installIndex <= recoveryIndex ||
+    !exactKeys(environment, ["RELEASE_COMMIT", "RELEASE_TOOLING_COMMIT"]) ||
+    environment.RELEASE_COMMIT !== "${{ inputs.commit }}" ||
+    environment.RELEASE_TOOLING_COMMIT !== "${{ inputs.tooling_commit }}" ||
+    countShellLine(run, 'test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"') !== 2 ||
+    !run.includes('if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then') ||
+    !run.includes('git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"') ||
+    (requireAncestry &&
+      !run.includes('git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"')) ||
+    countShellLine(
+      run,
+      'git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
+    ) !== 1 ||
+    !exactDiff ||
+    !run.includes('test -z "$(git diff --name-only)"') ||
+    !run.includes('test -z "$(git ls-files --others --exclude-standard)"') ||
+    observedPaths.length !== expectedPaths.length * 2 ||
+    observedPaths.some((path) => !expectedPaths.includes(path)) ||
+    expectedPaths.some(
+      (path) => observedPaths.filter((observedPath) => observedPath === path).length !== 2,
+    )
+  ) {
+    issues.push(`${label} must overlay exactly ${expectedPaths.join(", ")}`);
+  }
 }
 
 function exactPermissions(
@@ -110,7 +183,15 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     "desktop coordinator.workflow_dispatch.inputs",
     issues,
   );
-  if (!exactKeys(inputs, ["tag", "desktop_mode", "desktop_baseline_tag", "recovery_tooling_tag"])) {
+  if (
+    !exactKeys(inputs, [
+      "tag",
+      "desktop_mode",
+      "desktop_baseline_tag",
+      "recovery_tooling_tag",
+      "recovery_source_run_id",
+    ])
+  ) {
     issues.push("desktop coordinator inputs must remain desktop-only");
   }
   const tagInput = mapping(inputs.tag, "desktop coordinator tag input", issues);
@@ -118,6 +199,11 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   const recoveryToolingTagInput = mapping(
     inputs.recovery_tooling_tag,
     "desktop coordinator recovery tooling tag input",
+    issues,
+  );
+  const recoverySourceRunInput = mapping(
+    inputs.recovery_source_run_id,
+    "desktop coordinator recovery source run input",
     issues,
   );
   if (tagInput.required !== true || tagInput.type !== "string") {
@@ -136,6 +222,13 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     recoveryToolingTagInput.default !== ""
   ) {
     issues.push("desktop coordinator recovery tooling tag must be an optional string");
+  }
+  if (
+    recoverySourceRunInput.type !== "string" ||
+    recoverySourceRunInput.required !== false ||
+    recoverySourceRunInput.default !== ""
+  ) {
+    issues.push("desktop coordinator recovery source run id must be an optional string");
   }
   if (coordinator["run-name"] !== "Desktop release coordinator ${{ inputs.tag }}") {
     issues.push("desktop coordinator run name must bind the candidate tag");
@@ -160,7 +253,12 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     "desktop coordinator.jobs.dispatch-desktop-release",
     issues,
   );
-  exactPermissions(bind.permissions, { contents: "read" }, "desktop candidate binding", issues);
+  exactPermissions(
+    bind.permissions,
+    { actions: "read", contents: "read" },
+    "desktop candidate binding",
+    issues,
+  );
   exactPermissions(draft.permissions, { contents: "write" }, "desktop draft preparation", issues);
   exactPermissions(
     dispatch.permissions,
@@ -178,6 +276,7 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     tooling_commit: "${{ steps.bind.outputs.tooling_commit }}",
     mode: "${{ steps.bind.outputs.mode }}",
     baseline_tag: "${{ steps.bind.outputs.baseline_tag }}",
+    source_run_id: "${{ steps.bind.outputs.source_run_id }}",
   };
   if (
     !exactKeys(bindOutputs, Object.keys(expectedBindOutputs)) ||
@@ -191,6 +290,8 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   if (
     bindEnvironment.RELEASE_TAG_INPUT !== "${{ inputs.tag }}" ||
     bindEnvironment.RECOVERY_TOOLING_TAG_INPUT !== "${{ inputs.recovery_tooling_tag }}" ||
+    bindEnvironment.RECOVERY_SOURCE_RUN_ID_INPUT !== "${{ inputs.recovery_source_run_id }}" ||
+    bindEnvironment.GH_TOKEN !== "${{ github.token }}" ||
     bindEnvironment.DESKTOP_ENABLED !== "${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}" ||
     bindEnvironment.WORKFLOW_REF !== "${{ github.ref }}" ||
     bindEnvironment.WORKFLOW_SHA !== "${{ github.sha }}" ||
@@ -211,6 +312,63 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   ) {
     issues.push(
       "desktop candidate tag must be stable enduragent-desktop SemVer bound to apps/desktop/package.json",
+    );
+  }
+  if (
+    !bindRun.includes("SOURCE_RUN_ID=none") ||
+    !bindRun.includes('if [ -n "$RECOVERY_SOURCE_RUN_ID_INPUT" ]; then') ||
+    !bindRun.includes(
+      'if [ -z "$RECOVERY_TOOLING_TAG_INPUT" ] || [ "$MODE" != \'steady\' ]; then',
+    ) ||
+    !bindRun.includes("printf '%s' \"$RECOVERY_SOURCE_RUN_ID_INPUT\" | grep -Eq '^[1-9][0-9]*$'") ||
+    !bindRun.includes('SOURCE_RUN_ID="$RECOVERY_SOURCE_RUN_ID_INPUT"') ||
+    !bindRun.includes('echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"')
+  ) {
+    issues.push(
+      "desktop coordinator recovery source run must require a steady immutable recovery tag",
+    );
+  }
+  if (
+    !bindRun.includes(
+      'SOURCE_RUN=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")',
+    ) ||
+    !bindRun.includes(".github/workflows/desktop-release.yml") ||
+    !bindRun.includes(".event')\" = 'workflow_dispatch'") ||
+    !bindRun.includes(".status')\" = 'completed'") ||
+    !bindRun.includes(".conclusion')\" = 'failure'") ||
+    !bindRun.includes(".repository.full_name") ||
+    !bindRun.includes("SOURCE_ATTEMPT=") ||
+    !bindRun.includes('SOURCE_REVISION="${SOURCE_HEAD#"${TAG}-recovery."}"') ||
+    !bindRun.includes('test "$SOURCE_HEAD" = "${TAG}-recovery.${SOURCE_REVISION}"') ||
+    !bindRun.includes('test "$SOURCE_HEAD" != "$RECOVERY_TOOLING_TAG_INPUT"') ||
+    !bindRun.includes(
+      'test "$(git rev-parse "refs/tags/$SOURCE_HEAD^{commit}")" = "$SOURCE_SHA"',
+    ) ||
+    !bindRun.includes('git merge-base --is-ancestor "$COMMIT" "$SOURCE_SHA"') ||
+    !bindRun.includes('git merge-base --is-ancestor "$SOURCE_SHA" "$TOOLING_COMMIT"') ||
+    !bindRun.includes('git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main') ||
+    !bindRun.includes(
+      'SOURCE_JOBS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100")',
+    ) ||
+    !bindRun.includes(
+      "for required_job in sign-macos verify-macos-envelope stage-private-draft publish-assets; do",
+    ) ||
+    !bindRun.includes('.name == "activate-release" and .conclusion == "success"') ||
+    !bindRun.includes(
+      'SOURCE_ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100")',
+    ) ||
+    !bindRun.includes(
+      'for artifact_name in "desktop-release-$SOURCE_RUN_ID-$SOURCE_ATTEMPT" "desktop-baseline-$SOURCE_RUN_ID-$SOURCE_ATTEMPT"; do',
+    ) ||
+    !bindRun.includes("artifact cardinality") ||
+    !bindRun.includes(".expired") ||
+    !bindRun.includes("^sha256:[0-9a-f]{64}$") ||
+    !bindRun.includes(".workflow_run.id") ||
+    !bindRun.includes(".workflow_run.head_branch") ||
+    !bindRun.includes(".workflow_run.head_sha")
+  ) {
+    issues.push(
+      "desktop coordinator must independently validate source run, job, and artifact provenance",
     );
   }
   if (
@@ -240,28 +398,69 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   const draftNeeds = scalar(draft.needs);
   const draftOutputs = mapping(draft.outputs, "desktop coordinator draft outputs", issues);
   const draftStep = namedStep(draft, "Create or validate bound desktop release draft");
+  const draftEnvironment = mapping(draftStep?.env, "desktop release draft environment", issues);
   const draftRun = typeof draftStep?.run === "string" ? draftStep.run : "";
+  const expectedDraftEnvironment: Mapping = {
+    GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
+    RELEASE_TAG: "${{ needs.bind-release.outputs.tag }}",
+    RELEASE_VERSION: "${{ needs.bind-release.outputs.desktop_version }}",
+    RELEASE_COMMIT: "${{ needs.bind-release.outputs.commit }}",
+    RELEASE_SOURCE_RUN_ID: "${{ needs.bind-release.outputs.source_run_id }}",
+  };
+  const coordinatorPublicAdmission = [
+    "  else",
+    "    test \"$RELEASE_SOURCE_RUN_ID\" != 'none'",
+    `    if [ "$(printf '%s' "$RELEASE_JSON" | jq -r '.body')" != '${PROVISIONAL_RELEASE_BODY}' ]; then`,
+  ].join("\n");
+  const coordinatorLatestLookup =
+    "LATEST_JSON=$(gh api -H 'Cache-Control: no-cache' \"repos/$GITHUB_REPOSITORY/releases/latest\")";
   if (
     !draftNeeds.includes("bind-release") ||
     draftOutputs.draft_id !== "${{ steps.release-draft.outputs.draft_id }}" ||
     draftOutputs.body_sha256 !== "${{ steps.release-draft.outputs.body_sha256 }}" ||
+    !exactKeys(draftEnvironment, Object.keys(expectedDraftEnvironment)) ||
+    Object.entries(expectedDraftEnvironment).some(
+      ([key, value]) => draftEnvironment[key] !== value,
+    ) ||
     !draftRun.includes("apps/desktop/CHANGELOG.md") ||
     draftRun.includes("packages/cycling-coach/CHANGELOG.md") ||
     !draftRun.includes('test "$FIRST_HEADING" = "## $RELEASE_VERSION"') ||
     !draftRun.includes("--json body,databaseId,isDraft,isPrerelease,tagName") ||
-    !draftRun.includes(".isDraft')\" = 'true'") ||
     !draftRun.includes(".isPrerelease')\" = 'false'") ||
-    !draftRun.includes('test "$EXISTING_BODY_SHA256" = "$BODY_SHA256"') ||
+    !draftRun.includes(
+      "if [ \"$(printf '%s' \"$RELEASE_JSON\" | jq -r '.isDraft')\" = 'true' ]; then",
+    ) ||
+    countShellLine(draftRun, 'test "$EXISTING_BODY_SHA256" = "$BODY_SHA256"') !== 2 ||
+    !draftRun.includes(coordinatorPublicAdmission) ||
+    countShellLine(draftRun, coordinatorLatestLookup) !== 1 ||
+    !draftRun.includes(
+      "test \"$(printf '%s' \"$LATEST_JSON\" | jq -r '.id | tostring')\" = \"$(printf '%s' \"$RELEASE_JSON\" | jq -r '.databaseId | tostring')\"",
+    ) ||
+    !draftRun.includes(
+      'test "$(printf \'%s\' "$LATEST_JSON" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
+    ) ||
     !draftRun.includes(
       'gh release create "$RELEASE_TAG" --draft --latest=false --target "$RELEASE_COMMIT"',
     )
   ) {
     issues.push(
-      "desktop coordinator must create a bound non-latest draft from the desktop changelog",
+      "desktop coordinator must admit only an exact draft, recovery-provisional public release, or live-latest exact-final release",
     );
+  }
+  if (!draftRun.includes("else\n  test \"$RELEASE_SOURCE_RUN_ID\" = 'none'\n  gh release create")) {
+    issues.push("desktop coordinator recovery must never create a missing candidate release");
   }
 
   const dispatchNeeds = scalar(dispatch.needs);
+  const dispatchBindingStep = namedStep(dispatch, "Seal exact child dispatch binding");
+  const dispatchBindingEnvironment = mapping(
+    dispatchBindingStep?.env,
+    "desktop dispatch binding environment",
+    issues,
+  );
+  const dispatchBindingRun =
+    typeof dispatchBindingStep?.run === "string" ? dispatchBindingStep.run : "";
+  const dispatchBindingUploads = actionSteps(dispatch, "actions/upload-artifact");
   const dispatchStep = namedStep(
     dispatch,
     "Dispatch and await environment-bound desktop transaction",
@@ -282,8 +481,11 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     RELEASE_MODE: "${{ needs.bind-release.outputs.mode }}",
     RELEASE_BODY_SHA256: "${{ needs.prepare-release-draft.outputs.body_sha256 }}",
     RELEASE_BASELINE_TAG: "${{ needs.bind-release.outputs.baseline_tag }}",
+    RELEASE_SOURCE_RUN_ID: "${{ needs.bind-release.outputs.source_run_id }}",
     COORDINATOR_RUN_ID: "${{ github.run_id }}",
     COORDINATOR_RUN_ATTEMPT: "${{ github.run_attempt }}",
+    DISPATCH_NONCE: "${{ steps.dispatch-binding.outputs.nonce }}",
+    DISPATCH_BINDING_SHA256: "${{ steps.dispatch-binding.outputs.sha256 }}",
   };
   const dispatchedInputs = Array.from(
     dispatchRun.matchAll(/(?:^|\s)-f ([a-z0-9_]+)=/gu),
@@ -298,8 +500,11 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     "mode",
     "draft_body_sha256",
     "baseline_tag",
+    "source_run_id",
     "coordinator_run_id",
     "coordinator_run_attempt",
+    "dispatch_nonce",
+    "dispatch_binding_sha256",
   ];
   const expectedDispatchedAssignments: Mapping = {
     tag: "RELEASE_TAG",
@@ -310,9 +515,71 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     mode: "RELEASE_MODE",
     draft_body_sha256: "RELEASE_BODY_SHA256",
     baseline_tag: "RELEASE_BASELINE_TAG",
+    source_run_id: "RELEASE_SOURCE_RUN_ID",
     coordinator_run_id: "COORDINATOR_RUN_ID",
     coordinator_run_attempt: "COORDINATOR_RUN_ATTEMPT",
+    dispatch_nonce: "DISPATCH_NONCE",
+    dispatch_binding_sha256: "DISPATCH_BINDING_SHA256",
   };
+  const expectedBindingObject =
+    "{schemaVersion: 1, repository: $repository, repositoryId: $repositoryId, coordinatorRunId: $coordinatorRunId, coordinatorRunAttempt: $coordinatorRunAttempt, workflowRef: $workflowRef, workflowSha: $workflowSha, childWorkflowRef: $childWorkflowRef, tag: $tag, desktopVersion: $desktopVersion, commit: $commit, toolingCommit: $toolingCommit, draftId: $draftId, mode: $mode, draftBodySha256: $draftBodySha256, baselineTag: $baselineTag, sourceRunId: $sourceRunId, nonce: $nonce}";
+  const expectedBindingEnvironment: Mapping = {
+    RELEASE_TAG: "${{ needs.bind-release.outputs.tag }}",
+    DESKTOP_VERSION: "${{ needs.bind-release.outputs.desktop_version }}",
+    RELEASE_COMMIT: "${{ needs.bind-release.outputs.commit }}",
+    RELEASE_WORKFLOW_REF: "${{ needs.bind-release.outputs.workflow_ref }}",
+    RELEASE_TOOLING_COMMIT: "${{ needs.bind-release.outputs.tooling_commit }}",
+    RELEASE_DRAFT_ID: "${{ needs.prepare-release-draft.outputs.draft_id }}",
+    RELEASE_MODE: "${{ needs.bind-release.outputs.mode }}",
+    RELEASE_BODY_SHA256: "${{ needs.prepare-release-draft.outputs.body_sha256 }}",
+    RELEASE_BASELINE_TAG: "${{ needs.bind-release.outputs.baseline_tag }}",
+    RELEASE_SOURCE_RUN_ID: "${{ needs.bind-release.outputs.source_run_id }}",
+    COORDINATOR_RUN_ID: "${{ github.run_id }}",
+    COORDINATOR_RUN_ATTEMPT: "${{ github.run_attempt }}",
+    REPOSITORY: "${{ github.repository }}",
+    REPOSITORY_ID: "${{ github.repository_id }}",
+    WORKFLOW_REF: "${{ github.ref }}",
+    WORKFLOW_SHA: "${{ github.sha }}",
+  };
+  const bindingUploadInputs = mapping(
+    dispatchBindingUploads[0]?.with,
+    "desktop dispatch binding upload inputs",
+    issues,
+  );
+  if (
+    dispatchBindingStep?.id !== "dispatch-binding" ||
+    !exactKeys(dispatchBindingEnvironment, Object.keys(expectedBindingEnvironment)) ||
+    Object.entries(expectedBindingEnvironment).some(
+      ([key, value]) => dispatchBindingEnvironment[key] !== value,
+    ) ||
+    !dispatchBindingRun.includes("DISPATCH_NONCE=$(openssl rand -hex 32)") ||
+    !dispatchBindingRun.includes("printf '%s' \"$DISPATCH_NONCE\" | grep -Eq '^[0-9a-f]{64}$'") ||
+    !dispatchBindingRun.includes(expectedBindingObject) ||
+    !dispatchBindingRun.includes(
+      "BINDING_SHA256=$(printf '%s' \"$BINDING\" | sha256sum | awk '{print $1}')",
+    ) ||
+    !dispatchBindingRun.includes(
+      'ARTIFACT_NAME="desktop-dispatch-binding-$COORDINATOR_RUN_ID-$COORDINATOR_RUN_ATTEMPT-$BINDING_SHA256"',
+    ) ||
+    !dispatchBindingRun.includes(
+      'printf \'%s\' "$BINDING" > "$RUNNER_TEMP/desktop-dispatch-binding.json"',
+    ) ||
+    dispatchBindingUploads.length !== 1 ||
+    !exactKeys(bindingUploadInputs, [
+      "name",
+      "path",
+      "if-no-files-found",
+      "compression-level",
+      "retention-days",
+    ]) ||
+    bindingUploadInputs.name !== "${{ steps.dispatch-binding.outputs.artifact_name }}" ||
+    bindingUploadInputs.path !== "${{ runner.temp }}/desktop-dispatch-binding.json" ||
+    bindingUploadInputs["if-no-files-found"] !== "error" ||
+    bindingUploadInputs["compression-level"] !== 0 ||
+    bindingUploadInputs["retention-days"] !== 1
+  ) {
+    issues.push("desktop coordinator must seal exactly one nonce-bound full dispatch tuple");
+  }
   if (
     !dispatchNeeds.includes("bind-release") ||
     !dispatchNeeds.includes("prepare-release-draft") ||
@@ -331,6 +598,9 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     !dispatchRun.includes('--ref "$RELEASE_WORKFLOW_REF"') ||
     (dispatchRun.match(/--repo "\$GITHUB_REPOSITORY"/gu) ?? []).length !== 3 ||
     !dispatchRun.includes('--arg title "$EXPECTED_TITLE"') ||
+    !dispatchRun.includes(
+      'EXPECTED_TITLE="Desktop release $RELEASE_TAG via $COORDINATOR_RUN_ID.$COORDINATOR_RUN_ATTEMPT binding $DISPATCH_BINDING_SHA256"',
+    ) ||
     !dispatchRun.includes(
       'gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status',
     ) ||
@@ -561,8 +831,11 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     "mode",
     "draft_body_sha256",
     "baseline_tag",
+    "source_run_id",
     "coordinator_run_id",
     "coordinator_run_attempt",
+    "dispatch_nonce",
+    "dispatch_binding_sha256",
   ];
   if (!exactKeys(inputs, expectedInputs)) {
     issues.push("desktop child must accept only the frozen desktop release tuple");
@@ -582,7 +855,7 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
   }
   if (
     desktop["run-name"] !==
-    "Desktop release ${{ inputs.tag }} via ${{ inputs.coordinator_run_id }}.${{ inputs.coordinator_run_attempt }}"
+    "Desktop release ${{ inputs.tag }} via ${{ inputs.coordinator_run_id }}.${{ inputs.coordinator_run_attempt }} binding ${{ inputs.dispatch_binding_sha256 }}"
   ) {
     issues.push("desktop child run name must bind its coordinator invocation");
   }
@@ -615,7 +888,12 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
   );
   const stage = mapping(jobs["stage-private-draft"], "desktop.jobs.stage-private-draft", issues);
   const publish = mapping(jobs["publish-assets"], "desktop.jobs.publish-assets", issues);
-  const promote = mapping(jobs["promote-latest"], "desktop.jobs.promote-latest", issues);
+  const requestLatest = mapping(jobs["request-latest"], "desktop.jobs.request-latest", issues);
+  const reconcileLatest = mapping(
+    jobs["reconcile-latest"],
+    "desktop.jobs.reconcile-latest",
+    issues,
+  );
   const roundTrip = mapping(
     jobs["verify-production-update"],
     "desktop.jobs.verify-production-update",
@@ -641,16 +919,39 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     issues,
   );
   const authorizeRun = typeof authorizeStep?.run === "string" ? authorizeStep.run : "";
+  const authorizeOutputs = mapping(authorize.outputs, "desktop authorization outputs", issues);
+  const expectedAuthorizeOutputs: Mapping = {
+    source_run_id: "${{ steps.authorize.outputs.source_run_id }}",
+    source_run_attempt: "${{ steps.authorize.outputs.source_run_attempt }}",
+    artifact_name: "${{ steps.authorize.outputs.artifact_name }}",
+    artifact_id: "${{ steps.authorize.outputs.artifact_id }}",
+    artifact_digest: "${{ steps.authorize.outputs.artifact_digest }}",
+    baseline_artifact_name: "${{ steps.authorize.outputs.baseline_artifact_name }}",
+    baseline_artifact_id: "${{ steps.authorize.outputs.baseline_artifact_id }}",
+    baseline_artifact_digest: "${{ steps.authorize.outputs.baseline_artifact_digest }}",
+  };
   if (
     sign.needs !== "authorize-coordinator" ||
     authorizeEnvironment.RELEASE_TAG !== "${{ inputs.tag }}" ||
+    authorizeEnvironment.DESKTOP_VERSION !== "${{ inputs.desktop_version }}" ||
+    authorizeEnvironment.RELEASE_DRAFT_ID !== "${{ inputs.draft_id }}" ||
+    authorizeEnvironment.RELEASE_BODY_SHA256 !== "${{ inputs.draft_body_sha256 }}" ||
+    authorizeEnvironment.RELEASE_BASELINE_TAG !== "${{ inputs.baseline_tag }}" ||
     authorizeEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
+    authorizeEnvironment.SOURCE_RUN_ID !== "${{ inputs.source_run_id }}" ||
+    authorizeEnvironment.DISPATCH_NONCE !== "${{ inputs.dispatch_nonce }}" ||
+    authorizeEnvironment.DISPATCH_BINDING_SHA256 !== "${{ inputs.dispatch_binding_sha256 }}" ||
+    authorizeEnvironment.RUN_ACTOR !== "${{ github.actor }}" ||
+    authorizeEnvironment.RUN_TRIGGERING_ACTOR !== "${{ github.triggering_actor }}" ||
+    authorizeEnvironment.REPOSITORY_ID !== "${{ github.repository_id }}" ||
     authorizeEnvironment.WORKFLOW_REF !== "${{ github.ref }}" ||
     authorizeEnvironment.WORKFLOW_REF_NAME !== "${{ github.ref_name }}" ||
     !authorizeRun.includes('gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COORDINATOR_RUN_ID"') ||
     !authorizeRun.includes(".github/workflows/desktop-release-coordinator.yml") ||
     authorizeRun.includes(".github/workflows/release.yml") ||
-    !authorizeRun.includes(".run_attempt") ||
+    !authorizeRun.includes(
+      'test "$(printf \'%s\' "$COORDINATOR" | jq -r \'.run_attempt\')" = "$COORDINATOR_RUN_ATTEMPT"',
+    ) ||
     !authorizeRun.includes(".status") ||
     !authorizeRun.includes("in_progress") ||
     !authorizeRun.includes(".head_sha") ||
@@ -663,19 +964,183 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     !authorizeRun.includes('test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"') ||
     !authorizeRun.includes('test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"') ||
     !authorizeRun.includes("test \"$RELEASE_MODE\" = 'steady'") ||
-    !authorizeRun.includes('RECOVERY_REVISION="${WORKFLOW_REF_NAME#"${RELEASE_TAG}-recovery."}"') ||
+    !authorizeRun.includes(
+      'CURRENT_RECOVERY_REVISION="${WORKFLOW_REF_NAME#"${RELEASE_TAG}-recovery."}"',
+    ) ||
     !authorizeRun.includes("grep -Eq '^[1-9][0-9]*$'") ||
     !authorizeRun.includes(
-      'test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${RECOVERY_REVISION}"',
+      'test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${CURRENT_RECOVERY_REVISION}"',
     ) ||
     !authorizeRun.includes('test "$WORKFLOW_REF" = "refs/tags/$WORKFLOW_REF_NAME"') ||
     !authorizeRun.includes("workflow_dispatch") ||
-    authorizeRun.includes('.event == "push"')
+    authorizeRun.includes('.event == "push"') ||
+    !exactKeys(authorizeOutputs, Object.keys(expectedAuthorizeOutputs)) ||
+    Object.entries(expectedAuthorizeOutputs).some(([key, value]) => authorizeOutputs[key] !== value)
   ) {
     issues.push("desktop signing must authorize only its active desktop coordinator");
   }
+  const expectedChildBindingObject =
+    "{schemaVersion: 1, repository: $repository, repositoryId: $repositoryId, coordinatorRunId: $coordinatorRunId, coordinatorRunAttempt: $coordinatorRunAttempt, workflowRef: $workflowRef, workflowSha: $workflowSha, childWorkflowRef: $childWorkflowRef, tag: $tag, desktopVersion: $desktopVersion, commit: $commit, toolingCommit: $toolingCommit, draftId: $draftId, mode: $mode, draftBodySha256: $draftBodySha256, baselineTag: $baselineTag, sourceRunId: $sourceRunId, nonce: $nonce}";
+  const sourceValidationStart = authorizeRun.indexOf(
+    'SOURCE=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")',
+  );
+  const bindingValidationRun = authorizeRun.slice(
+    authorizeRun.indexOf("BINDING_ARTIFACT_NAME="),
+    sourceValidationStart,
+  );
+  if (
+    !authorizeRun.includes("test \"$RUN_ACTOR\" = 'github-actions[bot]'") ||
+    !authorizeRun.includes("test \"$RUN_TRIGGERING_ACTOR\" = 'github-actions[bot]'") ||
+    !authorizeRun.includes("printf '%s' \"$DISPATCH_NONCE\" | grep -Eq '^[0-9a-f]{64}$'") ||
+    !authorizeRun.includes(
+      "printf '%s' \"$DISPATCH_BINDING_SHA256\" | grep -Eq '^[0-9a-f]{64}$'",
+    ) ||
+    !authorizeRun.includes(expectedChildBindingObject) ||
+    !authorizeRun.includes(
+      'test "$(printf \'%s\' "$BINDING" | sha256sum | awk \'{print $1}\')" = "$DISPATCH_BINDING_SHA256"',
+    ) ||
+    !authorizeRun.includes(
+      'BINDING_ARTIFACT_NAME="desktop-dispatch-binding-$COORDINATOR_RUN_ID-$COORDINATOR_RUN_ATTEMPT-$DISPATCH_BINDING_SHA256"',
+    ) ||
+    !bindingValidationRun.includes("actions/runs/$COORDINATOR_RUN_ID/artifacts?per_page=100") ||
+    !bindingValidationRun.includes("([.[].artifacts[]] | length) == .[0].total_count") ||
+    !bindingValidationRun.includes(
+      "'[.[].artifacts[] | select(.name == $name)] | select(length == 1) | .[0]'",
+    ) ||
+    !bindingValidationRun.includes(".size_in_bytes") ||
+    !bindingValidationRun.includes(".workflow_run.repository_id") ||
+    !bindingValidationRun.includes(".workflow_run.head_repository_id") ||
+    !bindingValidationRun.includes(".workflow_run.head_branch") ||
+    !bindingValidationRun.includes(".workflow_run.head_sha")
+  ) {
+    issues.push(
+      "desktop child must require bot actors and one coordinator-owned nonce-bound dispatch artifact",
+    );
+  }
+  const sourceValidationRun = authorizeRun.slice(sourceValidationStart);
+  if (
+    !authorizeRun.includes("if [ \"$SOURCE_RUN_ID\" = 'none' ]; then") ||
+    !authorizeRun.includes(
+      "for output in source_run_id source_run_attempt artifact_name artifact_id artifact_digest baseline_artifact_name baseline_artifact_id baseline_artifact_digest; do",
+    ) ||
+    !authorizeRun.includes('test "$SOURCE_RUN_ID" != "$GITHUB_RUN_ID"') ||
+    !authorizeRun.includes('test "$SOURCE_RUN_ID" != "$COORDINATOR_RUN_ID"') ||
+    !authorizeRun.includes("test \"$RELEASE_MODE\" = 'steady'") ||
+    !authorizeRun.includes('test "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT"') ||
+    !authorizeRun.includes("test \"$CURRENT_RECOVERY_REVISION\" != 'none'") ||
+    !authorizeRun.includes(
+      'SOURCE=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")',
+    ) ||
+    !authorizeRun.includes(".repository.full_name") ||
+    !authorizeRun.includes(".head_repository.full_name") ||
+    !authorizeRun.includes(".github/workflows/desktop-release.yml") ||
+    !authorizeRun.includes(".event')\" = 'workflow_dispatch'") ||
+    !authorizeRun.includes(".actor.login')\" = 'github-actions[bot]'") ||
+    !authorizeRun.includes(".triggering_actor.login')\" = 'github-actions[bot]'") ||
+    !authorizeRun.includes(".status')\" = 'completed'") ||
+    !authorizeRun.includes(".conclusion')\" = 'failure'") ||
+    !authorizeRun.includes("SOURCE_RUN_ATTEMPT=") ||
+    !authorizeRun.includes(
+      'SOURCE_RECOVERY_REVISION="${SOURCE_HEAD_BRANCH#"${RELEASE_TAG}-recovery."}"',
+    ) ||
+    !authorizeRun.includes(
+      'test "$SOURCE_HEAD_BRANCH" = "${RELEASE_TAG}-recovery.${SOURCE_RECOVERY_REVISION}"',
+    ) ||
+    !authorizeRun.includes('test "$SOURCE_RECOVERY_REVISION" != "$CURRENT_RECOVERY_REVISION"') ||
+    !authorizeRun.includes("sort -n | head -1") ||
+    !authorizeRun.includes(
+      'test "$(git rev-parse "refs/tags/$SOURCE_HEAD_BRANCH^{commit}")" = "$SOURCE_HEAD_SHA"',
+    ) ||
+    !authorizeRun.includes('git merge-base --is-ancestor "$RELEASE_COMMIT" "$SOURCE_HEAD_SHA"') ||
+    !authorizeRun.includes(
+      'git merge-base --is-ancestor "$SOURCE_HEAD_SHA" "$RELEASE_TOOLING_COMMIT"',
+    ) ||
+    !authorizeRun.includes(
+      'git merge-base --is-ancestor "$SOURCE_HEAD_SHA" refs/remotes/origin/main',
+    ) ||
+    !authorizeRun.includes("gh api --paginate --slurp") ||
+    !authorizeRun.includes(
+      "actions/runs/$SOURCE_RUN_ID/attempts/$SOURCE_RUN_ATTEMPT/jobs?per_page=100",
+    ) ||
+    !authorizeRun.includes("([.[].jobs[]] | length) == .[0].total_count") ||
+    !authorizeRun.includes(
+      "for job_name in sign-macos verify-macos-envelope stage-private-draft publish-assets; do",
+    ) ||
+    !authorizeRun.includes('$matches[0].conclusion == "success"') ||
+    !authorizeRun.includes('$matches[0].conclusion != "success"') ||
+    !authorizeRun.includes("actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100") ||
+    !authorizeRun.includes("([.[].artifacts[]] | length) == .[0].total_count") ||
+    !authorizeRun.includes('ARTIFACT_NAME="desktop-release-$SOURCE_RUN_ID-$SOURCE_RUN_ATTEMPT"') ||
+    !authorizeRun.includes(
+      'BASELINE_ARTIFACT_NAME="desktop-baseline-$SOURCE_RUN_ID-$SOURCE_RUN_ATTEMPT"',
+    ) ||
+    (sourceValidationRun.match(/select\(length == 1\)/gu) ?? []).length !== 2 ||
+    !authorizeRun.includes(".size_in_bytes") ||
+    !authorizeRun.includes(".workflow_run.repository_id") ||
+    !authorizeRun.includes(".workflow_run.head_repository_id") ||
+    !authorizeRun.includes(".workflow_run.head_branch") ||
+    !authorizeRun.includes(".workflow_run.head_sha") ||
+    (authorizeRun.match(/sub\("\^sha256:"; ""\)/gu) ?? []).length !== 2 ||
+    !authorizeRun.includes('echo "artifact_digest=$ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"') ||
+    !authorizeRun.includes(
+      'echo "baseline_artifact_digest=$BASELINE_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"',
+    )
+  ) {
+    issues.push(
+      "desktop child must independently validate source run, job, and artifact provenance",
+    );
+  }
+  const candidateAdmissionStart = authorizeRun.indexOf(
+    'CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")',
+  );
+  const noSourceExitStart = authorizeRun.indexOf("if [ \"$SOURCE_RUN_ID\" = 'none' ]; then");
+  const candidateAdmissionRun =
+    candidateAdmissionStart >= 0 && noSourceExitStart > candidateAdmissionStart
+      ? authorizeRun.slice(candidateAdmissionStart, noSourceExitStart)
+      : "";
+  const childLatestLookup =
+    "LATEST_RELEASE=$(gh api -H 'Cache-Control: no-cache' \"repos/$GITHUB_REPOSITORY/releases/latest\")";
+  if (
+    authorizeEnvironment.GH_TOKEN !== "${{ github.token }}" ||
+    candidateAdmissionRun === "" ||
+    !candidateAdmissionRun.includes(
+      'test "$(printf \'%s\' "$CANDIDATE_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
+    ) ||
+    !candidateAdmissionRun.includes(
+      'test "$(printf \'%s\' "$CANDIDATE_RELEASE" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
+    ) ||
+    !candidateAdmissionRun.includes(
+      "test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.prerelease')\" = 'false'",
+    ) ||
+    !candidateAdmissionRun.includes(
+      "if [ \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.draft')\" = 'false' ]; then\n  test \"$SOURCE_RUN_ID\" != 'none'",
+    ) ||
+    !candidateAdmissionRun.includes(
+      `if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.body')" != '${PROVISIONAL_RELEASE_BODY}' ]; then`,
+    ) ||
+    !candidateAdmissionRun.includes(
+      "CANDIDATE_BODY_SHA256=$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -j '.body' | shasum -a 256 | awk '{print $1}')",
+    ) ||
+    !candidateAdmissionRun.includes('test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"') ||
+    countShellLine(candidateAdmissionRun, childLatestLookup) !== 1 ||
+    !candidateAdmissionRun.includes(
+      'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
+    ) ||
+    !candidateAdmissionRun.includes(
+      'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
+    )
+  ) {
+    issues.push(
+      "desktop child must independently admit public recovery only as provisional or live-latest exact-final",
+    );
+  }
 
-  exactPermissions(sign.permissions, { contents: "read" }, "macOS signing", issues);
+  exactPermissions(
+    sign.permissions,
+    { actions: "read", contents: "read" },
+    "macOS signing",
+    issues,
+  );
   exactPermissions(
     verify.permissions,
     { actions: "read", contents: "read" },
@@ -695,9 +1160,15 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     issues,
   );
   exactPermissions(
-    promote.permissions,
+    requestLatest.permissions,
     { actions: "read", contents: "write" },
-    "latest promotion",
+    "latest request",
+    issues,
+  );
+  exactPermissions(
+    reconcileLatest.permissions,
+    { actions: "read", contents: "read" },
+    "latest reconciliation",
     issues,
   );
   exactPermissions(
@@ -752,7 +1223,8 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
   if (
     stage.environment !== "desktop-macos-publication" ||
     publish.environment !== "desktop-macos-publication" ||
-    promote.environment !== "desktop-macos-latest" ||
+    requestLatest.environment !== "desktop-macos-latest" ||
+    reconcileLatest.environment !== "desktop-macos-latest" ||
     activate.environment !== "desktop-macos-latest" ||
     compensate.environment !== "desktop-macos-latest"
   ) {
@@ -764,40 +1236,76 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
 
   const stageRun = runs(stage).join("\n");
   const publishRun = runs(publish).join("\n");
-  const promoteRun = runs(promote).join("\n");
+  const requestLatestRun = runs(requestLatest).join("\n");
+  const reconcileLatestRun = runs(reconcileLatest).join("\n");
   const roundTripRun = runs(roundTrip).join("\n");
   const activateRun = runs(activate).join("\n");
   const compensateRun = runs(compensate).join("\n");
+  const publishOutputs = mapping(publish.outputs, "desktop publish outputs", issues);
+  const expectedPublishOutputs: Mapping = {
+    latest_id: "${{ steps.observe.outputs.latest_id }}",
+    latest_tag: "${{ steps.observe.outputs.latest_tag }}",
+    latest_metadata_sha256: "${{ steps.observe.outputs.latest_metadata_sha256 }}",
+    rollback_latest_id: "${{ steps.observe.outputs.rollback_latest_id }}",
+    rollback_latest_tag: "${{ steps.observe.outputs.rollback_latest_tag }}",
+    rollback_latest_metadata_sha256: "${{ steps.observe.outputs.rollback_latest_metadata_sha256 }}",
+  };
+  const observeStep = namedStep(publish, "Bind latest before public mutation");
+  const observeEnvironment = mapping(observeStep?.env, "latest observation environment", issues);
   const observeIndex = publishRun.indexOf("desktop-release:transaction observe");
   const publicationIndex = publishRun.indexOf("desktop-release:transaction publish");
   if (
     !stageRun.includes("desktop-release:transaction stage") ||
-    !scalar(publish.needs).includes("stage-private-draft") ||
+    !exactStringSet(stage.needs, ["sign-macos", "verify-macos-envelope"]) ||
+    !exactStringSet(publish.needs, ["sign-macos", "stage-private-draft"]) ||
     observeIndex === -1 ||
     publicationIndex <= observeIndex ||
     !publishRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
     !publishRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
     !publishRun.includes('--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"') ||
-    scalar(mapping(publish.outputs, "desktop publish outputs", issues).latest_id) !==
-      "${{ steps.observe.outputs.latest_id }}"
+    observeEnvironment.BASELINE_METADATA_SHA256 !==
+      "${{ needs.sign-macos.outputs.baseline_metadata_sha256 }}" ||
+    !publishRun.includes('--baseline-metadata-sha256 "$BASELINE_METADATA_SHA256"') ||
+    !exactKeys(publishOutputs, Object.keys(expectedPublishOutputs)) ||
+    Object.entries(expectedPublishOutputs).some(([key, value]) => publishOutputs[key] !== value)
   ) {
     issues.push("desktop publication must stage exact assets and bind latest before metadata-last");
   }
   if (
-    !scalar(promote.needs).includes("publish-assets") ||
-    !promoteRun.includes("desktop-release:transaction promote") ||
-    !promoteRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
-    !promoteRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
-    !promoteRun.includes('--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"')
+    observeEnvironment.BASELINE_METADATA_SHA256 !==
+      "${{ needs.sign-macos.outputs.baseline_metadata_sha256 }}" ||
+    !publishRun.includes('--baseline-metadata-sha256 "$BASELINE_METADATA_SHA256"') ||
+    publishOutputs.rollback_latest_id !== "${{ steps.observe.outputs.rollback_latest_id }}" ||
+    publishOutputs.rollback_latest_tag !== "${{ steps.observe.outputs.rollback_latest_tag }}" ||
+    publishOutputs.rollback_latest_metadata_sha256 !==
+      "${{ steps.observe.outputs.rollback_latest_metadata_sha256 }}"
   ) {
-    issues.push("desktop latest promotion must compare-and-swap the observed release");
+    issues.push("desktop rollback must remain bound to normalized manifest baseline evidence");
+  }
+  if (
+    mapping(requestLatest.permissions, "latest request permissions", issues).contents !== "write" ||
+    !exactStringSet(requestLatest.needs, ["sign-macos", "publish-assets"]) ||
+    !requestLatestRun.includes("desktop-release:transaction promote") ||
+    !requestLatestRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
+    !requestLatestRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
+    !requestLatestRun.includes(
+      '--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"',
+    ) ||
+    !exactStringSet(reconcileLatest.needs, ["sign-macos", "publish-assets", "request-latest"]) ||
+    mapping(reconcileLatest.permissions, "latest reconciliation permissions", issues).contents !==
+      "read" ||
+    !reconcileLatestRun.includes("desktop-release:transaction reconcile") ||
+    reconcileLatestRun.includes("desktop-release:transaction promote") ||
+    reconcileLatestRun.includes("--expected-latest-")
+  ) {
+    issues.push(
+      "desktop latest request must compare-and-swap before read-only latest reconciliation",
+    );
   }
 
-  const roundTripNeeds = scalar(roundTrip.needs);
   if (
     roundTrip.if !== "${{ inputs.mode == 'steady' }}" ||
-    !roundTripNeeds.includes("sign-macos") ||
-    !roundTripNeeds.includes("promote-latest") ||
+    !exactStringSet(roundTrip.needs, ["sign-macos", "reconcile-latest"]) ||
     !roundTripRun.includes("desktop-release:transaction public-envelope") ||
     countShellLine(
       roundTripRun,
@@ -813,14 +1321,17 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
   }
 
   const activateCondition = scalar(activate.if).replace(/\s+/gu, " ");
-  const activateNeeds = scalar(activate.needs);
   if (
-    !activateNeeds.includes("publish-assets") ||
-    !activateNeeds.includes("promote-latest") ||
-    !activateNeeds.includes("verify-production-update") ||
+    !exactStringSet(activate.needs, [
+      "sign-macos",
+      "publish-assets",
+      "request-latest",
+      "reconcile-latest",
+      "verify-production-update",
+    ]) ||
     !activateCondition.includes("always()") ||
     !activateCondition.includes("needs.publish-assets.result == 'success'") ||
-    !activateCondition.includes("needs.promote-latest.result == 'success'") ||
+    !activateCondition.includes("needs.reconcile-latest.result == 'success'") ||
     !activateCondition.includes("inputs.mode == 'genesis'") ||
     !activateCondition.includes("needs.verify-production-update.result == 'skipped'") ||
     !activateCondition.includes("inputs.mode == 'steady'") ||
@@ -834,11 +1345,24 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     );
   }
   const compensateCondition = scalar(compensate.if).replace(/\s+/gu, " ");
-  const compensateNeeds = scalar(compensate.needs);
+  const compensateStep = namedStep(compensate, "Restore prior latest and withdraw candidate");
+  const compensateEnvironment = mapping(
+    compensateStep?.env,
+    "desktop compensation environment",
+    issues,
+  );
   if (
-    !compensateNeeds.includes("activate-release") ||
+    !exactStringSet(compensate.needs, [
+      "sign-macos",
+      "publish-assets",
+      "request-latest",
+      "reconcile-latest",
+      "verify-production-update",
+      "activate-release",
+    ]) ||
     !compensateCondition.includes("always()") ||
     !compensateCondition.includes("needs.publish-assets.outputs.latest_id != ''") ||
+    !compensateCondition.includes("needs.reconcile-latest.result == 'success'") ||
     !compensateCondition.includes("needs.activate-release.result != 'success'") ||
     !compensateRun.includes("desktop-release:transaction compensate") ||
     !compensateRun.includes("apps/desktop/CHANGELOG.md") ||
@@ -846,17 +1370,26 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     !compensateRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
     !compensateRun.includes('--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"')
   ) {
-    issues.push("failed desktop activation must restore prior latest and withdraw the candidate");
+    issues.push(
+      "desktop compensation must require successful reconciliation and later acceptance or activation failure",
+    );
+  }
+  if (
+    compensateEnvironment.EXPECTED_LATEST_ID !==
+      "${{ needs.publish-assets.outputs.rollback_latest_id }}" ||
+    compensateEnvironment.EXPECTED_LATEST_TAG !==
+      "${{ needs.publish-assets.outputs.rollback_latest_tag }}" ||
+    compensateEnvironment.EXPECTED_LATEST_METADATA_SHA256 !==
+      "${{ needs.publish-assets.outputs.rollback_latest_metadata_sha256 }}" ||
+    !compensateRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
+    !compensateRun.includes('--expected-latest-tag "$EXPECTED_LATEST_TAG"') ||
+    !compensateRun.includes('--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"')
+  ) {
+    issues.push("desktop rollback must remain bound to normalized manifest baseline evidence");
   }
 
   const signingSteps = steps(sign);
-  const recoveryStep = namedStep(sign, "Bind recovery release tooling");
-  const recoveryRun = typeof recoveryStep?.run === "string" ? recoveryStep.run : "";
   const signingStep = namedStep(sign, "Build signed and notarized macOS envelope");
-  const signingCheckoutIndex = signingSteps.findIndex(
-    (step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout@"),
-  );
-  const recoveryIndex = signingSteps.indexOf(recoveryStep ?? {});
   const installIndex = signingSteps.findIndex(
     (step) => step.run === "pnpm install --frozen-lockfile",
   );
@@ -870,37 +1403,169 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     'printf \'%s\' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY"',
   );
   const privateUmask = signingRun.indexOf("umask 077");
-  const recoveryFiles = [
-    "apps/desktop/scripts/macos-release-cli.mjs",
-    "apps/desktop/scripts/macos-release-plan.mjs",
-  ];
-  const expectedRecoveryDiff = recoveryFiles.join("\\n");
-  const observedRecoveryPaths =
-    recoveryRun.match(/apps\/desktop\/scripts\/[A-Za-z0-9_.-]+/gu) ?? [];
+  checkRecoveryOverlay(
+    sign,
+    "manual signing recovery",
+    [
+      "apps/desktop/scripts/macos-release-cli.mjs",
+      "apps/desktop/scripts/macos-release-plan.mjs",
+      "tools/desktop-release-transaction.ts",
+    ],
+    true,
+    issues,
+  );
+  for (const [jobName, job] of [
+    ["verify-macos-envelope", verify],
+    ["stage-private-draft", stage],
+    ["publish-assets", publish],
+    ["request-latest", requestLatest],
+    ["reconcile-latest", reconcileLatest],
+    ["verify-production-update", roundTrip],
+    ["activate-release", activate],
+    ["compensate-publication", compensate],
+  ] as const) {
+    checkRecoveryOverlay(
+      job,
+      `${jobName} recovery`,
+      ["tools/desktop-release-transaction.ts"],
+      false,
+      issues,
+    );
+  }
+  const workspaceBuildStep = signingSteps.find((step) => step.run === "pnpm -r build");
+  const baselineStep = namedStep(sign, "Resolve signed baseline");
+  const signingEvidenceStep = namedStep(sign, "Bind candidate signing evidence");
+  const sealStep = namedStep(sign, "Seal digest-bound release manifest");
+  const sealedUploadStep = namedStep(sign, "Upload sealed macOS transaction artifact");
+  const baselineUploadStep = namedStep(sign, "Upload sealed baseline updater envelope");
+  const resumedArtifactStep = namedStep(sign, "Download resumed sealed macOS transaction artifact");
+  const resumedBaselineStep = namedStep(sign, "Download resumed sealed baseline updater envelope");
+  const resumedEvidenceStep = namedStep(sign, "Verify resumed artifact and manifest bindings");
+  const resumedEvidenceRun =
+    typeof resumedEvidenceStep?.run === "string" ? resumedEvidenceStep.run : "";
+  const freshOnly = "${{ inputs.source_run_id == 'none' }}";
+  const resumedOnly = "${{ inputs.source_run_id != 'none' }}";
   if (
-    recoveryIndex <= signingCheckoutIndex ||
-    recoveryIndex >= installIndex ||
-    countShellLine(recoveryRun, 'test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"') !== 2 ||
-    !recoveryRun.includes(
-      'git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"',
-    ) ||
-    !recoveryRun.includes(
-      'git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree --',
-    ) ||
-    !recoveryRun.includes(`EXPECTED_RECOVERY_DIFF=$'${expectedRecoveryDiff}'`) ||
-    !recoveryRun.includes('test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"') ||
-    !recoveryRun.includes('test -z "$(git diff --name-only)"') ||
-    !recoveryRun.includes('test -z "$(git ls-files --others --exclude-standard)"') ||
-    observedRecoveryPaths.length !== recoveryFiles.length * 2 ||
-    observedRecoveryPaths.some((path) => !recoveryFiles.includes(path)) ||
-    recoveryFiles.some(
-      (path) =>
-        (recoveryRun.match(new RegExp(path.replaceAll(".", "\\."), "gu")) ?? []).length !== 2,
-    )
+    workspaceBuildStep?.if !== freshOnly ||
+    baselineStep?.if !== freshOnly ||
+    signingStep?.if !== freshOnly ||
+    signingEvidenceStep?.if !== freshOnly ||
+    cleanupStep?.if !== "${{ always() && inputs.source_run_id == 'none' }}" ||
+    sealStep?.if !== freshOnly ||
+    sealedUploadStep?.if !== freshOnly ||
+    baselineUploadStep?.if !== "${{ inputs.source_run_id == 'none' && inputs.mode == 'steady' }}" ||
+    resumedArtifactStep?.if !== resumedOnly ||
+    resumedBaselineStep?.if !== resumedOnly ||
+    resumedEvidenceStep?.if !== resumedOnly
   ) {
     issues.push(
-      "manual recovery must bind the coordinator and overlay only audited release tooling",
+      "desktop resume must skip build, signing, notarization, sealing, and signing-artifact upload",
     );
+  }
+  const resumedDownloadSpecifications = [
+    {
+      step: resumedArtifactStep,
+      artifactId: "${{ needs.authorize-coordinator.outputs.artifact_id }}",
+      path: "${{ runner.temp }}/desktop-release",
+    },
+    {
+      step: resumedBaselineStep,
+      artifactId: "${{ needs.authorize-coordinator.outputs.baseline_artifact_id }}",
+      path: "${{ runner.temp }}/desktop-baseline",
+    },
+  ];
+  if (
+    resumedDownloadSpecifications.some(({ step, artifactId, path }) => {
+      const withInputs = mapping(step?.with, "resumed artifact download inputs", issues);
+      return (
+        typeof step?.uses !== "string" ||
+        !step.uses.startsWith("actions/download-artifact@") ||
+        !exactKeys(withInputs, [
+          "artifact-ids",
+          "path",
+          "github-token",
+          "repository",
+          "run-id",
+          "digest-mismatch",
+        ]) ||
+        withInputs["artifact-ids"] !== artifactId ||
+        withInputs.path !== path ||
+        withInputs["github-token"] !== "${{ github.token }}" ||
+        withInputs.repository !== "${{ github.repository }}" ||
+        withInputs["run-id"] !== "${{ needs.authorize-coordinator.outputs.source_run_id }}" ||
+        withInputs["digest-mismatch"] !== "error"
+      );
+    }) ||
+    !resumedEvidenceRun.includes(
+      'test "$ARTIFACT_NAME" = "desktop-release-$SOURCE_RUN_ID-$SOURCE_RUN_ATTEMPT"',
+    ) ||
+    !resumedEvidenceRun.includes(
+      'test "$BASELINE_ARTIFACT_NAME" = "desktop-baseline-$SOURCE_RUN_ID-$SOURCE_RUN_ATTEMPT"',
+    ) ||
+    !resumedEvidenceRun.includes(
+      'test "$(jq -er \'.workflowRunId\' "$MANIFEST")" = "$SOURCE_RUN_ID"',
+    ) ||
+    !resumedEvidenceRun.includes(
+      'test "$(jq -er \'.workflowRunAttempt\' "$MANIFEST")" = "$SOURCE_RUN_ATTEMPT"',
+    ) ||
+    !resumedEvidenceRun.includes('--workflow-run-id "$SOURCE_RUN_ID"') ||
+    !resumedEvidenceRun.includes('--workflow-run-attempt "$SOURCE_RUN_ATTEMPT"')
+  ) {
+    issues.push("desktop resume must reuse exact digest-bound artifacts from the authorized run");
+  }
+
+  const normalizedStep = namedStep(sign, "Normalize immutable signing and artifact evidence");
+  const normalizedRun = typeof normalizedStep?.run === "string" ? normalizedStep.run : "";
+  const signOutputs = mapping(sign.outputs, "macOS signing outputs", issues);
+  const expectedSignOutputs: Mapping = {
+    baseline_tag: "${{ steps.normalized-evidence.outputs.baseline_tag }}",
+    baseline_version: "${{ steps.normalized-evidence.outputs.baseline_version }}",
+    baseline_release_id: "${{ steps.normalized-evidence.outputs.baseline_release_id }}",
+    baseline_commit: "${{ steps.normalized-evidence.outputs.baseline_commit }}",
+    baseline_zip_sha256: "${{ steps.normalized-evidence.outputs.baseline_zip_sha256 }}",
+    baseline_metadata_sha256: "${{ steps.normalized-evidence.outputs.baseline_metadata_sha256 }}",
+    baseline_signing_identity: "${{ steps.normalized-evidence.outputs.baseline_signing_identity }}",
+    baseline_cdhash: "${{ steps.normalized-evidence.outputs.baseline_cdhash }}",
+    baseline_artifact_name: "${{ steps.normalized-evidence.outputs.baseline_artifact_name }}",
+    baseline_artifact_id: "${{ steps.normalized-evidence.outputs.baseline_artifact_id }}",
+    baseline_artifact_digest: "${{ steps.normalized-evidence.outputs.baseline_artifact_digest }}",
+    cdhash: "${{ steps.normalized-evidence.outputs.cdhash }}",
+    code_directory_sha256: "${{ steps.normalized-evidence.outputs.code_directory_sha256 }}",
+    signing_identity: "${{ steps.normalized-evidence.outputs.signing_identity }}",
+    evidence_run_id: "${{ steps.normalized-evidence.outputs.evidence_run_id }}",
+    evidence_run_attempt: "${{ steps.normalized-evidence.outputs.evidence_run_attempt }}",
+    artifact_name: "${{ steps.normalized-evidence.outputs.artifact_name }}",
+    artifact_id: "${{ steps.normalized-evidence.outputs.artifact_id }}",
+    artifact_digest: "${{ steps.normalized-evidence.outputs.artifact_digest }}",
+  };
+  if (
+    normalizedStep?.id !== "normalized-evidence" ||
+    !exactKeys(signOutputs, Object.keys(expectedSignOutputs)) ||
+    Object.entries(expectedSignOutputs).some(([key, value]) => signOutputs[key] !== value) ||
+    !normalizedRun.includes("if [ \"$SOURCE_RUN_ID\" = 'none' ]; then") ||
+    !normalizedRun.includes('EVIDENCE_RUN_ID="$GITHUB_RUN_ID"') ||
+    !normalizedRun.includes('EVIDENCE_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT"') ||
+    !normalizedRun.includes('EVIDENCE_RUN_ID="$SOURCE_RUN_ID"') ||
+    !normalizedRun.includes('EVIDENCE_RUN_ATTEMPT="$SOURCE_RUN_ATTEMPT"') ||
+    !normalizedRun.includes('ARTIFACT_ID="$FRESH_ARTIFACT_ID"') ||
+    !normalizedRun.includes('ARTIFACT_ID="$SOURCE_ARTIFACT_ID"') ||
+    !normalizedRun.includes('ARTIFACT_DIGEST="${FRESH_ARTIFACT_DIGEST#sha256:}"') ||
+    !normalizedRun.includes('ARTIFACT_DIGEST="$SOURCE_ARTIFACT_DIGEST"') ||
+    !normalizedRun.includes('BASELINE_METADATA_SHA256="$FRESH_BASELINE_METADATA_SHA256"') ||
+    !normalizedRun.includes('BASELINE_METADATA_SHA256="$RESUMED_BASELINE_METADATA_SHA256"') ||
+    !normalizedRun.includes(
+      'test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"',
+    ) ||
+    !normalizedRun.includes(
+      'test "$BASELINE_ARTIFACT_NAME" = "desktop-baseline-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"',
+    ) ||
+    !normalizedRun.includes('echo "evidence_run_id=$EVIDENCE_RUN_ID" >> "$GITHUB_OUTPUT"') ||
+    !normalizedRun.includes(
+      'echo "baseline_metadata_sha256=$BASELINE_METADATA_SHA256" >> "$GITHUB_OUTPUT"',
+    ) ||
+    !normalizedRun.includes('echo "evidence_run_attempt=$EVIDENCE_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"')
+  ) {
+    issues.push("desktop signing must normalize fresh and resumed immutable evidence");
   }
   if (
     installIndex === -1 ||
@@ -937,13 +1602,27 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     privateUmask === -1 ||
     privateUmask > keyCreation ||
     signingEnvironment.APPLE_API_KEY !== "${{ runner.temp }}/AuthKey.p8" ||
-    cleanupStep?.if !== "${{ always() }}" ||
+    cleanupStep?.if !== "${{ always() && inputs.source_run_id == 'none' }}" ||
     signingSteps.indexOf(cleanupStep ?? {}) <= signingSteps.indexOf(signingStep ?? {}) ||
     countShellLine(cleanupRun, 'rm -f "$RUNNER_TEMP/AuthKey.p8"') !== 1
   ) {
     issues.push("temporary notarization key must be created privately and always removed");
   }
 
+  const independentBaselineStep = namedStep(verify, "Resolve independent baseline");
+  const independentBaselineEnvironment = mapping(
+    independentBaselineStep?.env,
+    "independent baseline environment",
+    issues,
+  );
+  const confirmBaselineStep = namedStep(verify, "Confirm independently resolved baseline evidence");
+  const confirmBaselineEnvironment = mapping(
+    confirmBaselineStep?.env,
+    "independent baseline confirmation environment",
+    issues,
+  );
+  const confirmBaselineRun =
+    typeof confirmBaselineStep?.run === "string" ? confirmBaselineStep.run : "";
   const independentStep = namedStep(verify, "Independently verify signed updater envelope");
   const independentEnvironment = mapping(
     independentStep?.env,
@@ -967,6 +1646,17 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     independentRun.indexOf(";;", independentRun.indexOf("steady)", publicEnvelope)),
   );
   if (
+    independentBaselineEnvironment.RELEASE_BASELINE_TAG !==
+      "${{ needs.sign-macos.outputs.baseline_tag }}" ||
+    confirmBaselineEnvironment.INDEPENDENT_METADATA_SHA256 !==
+      "${{ steps.independent-baseline.outputs.baseline_metadata_sha256 }}" ||
+    confirmBaselineEnvironment.SIGNED_METADATA_SHA256 !==
+      "${{ needs.sign-macos.outputs.baseline_metadata_sha256 }}" ||
+    !confirmBaselineRun.includes('test "$INDEPENDENT_METADATA_SHA256" = "$SIGNED_METADATA_SHA256"')
+  ) {
+    issues.push("desktop baseline consumers must use normalized manifest evidence");
+  }
+  if (
     transactionVerification === -1 ||
     publicEnvelope <= transactionVerification ||
     genesisVerification <= publicEnvelope ||
@@ -986,7 +1676,7 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     !steadyCase.includes('"$PUBLIC_ENVELOPE"') ||
     !steadyCase.includes('"$INDEPENDENT_BASELINE_APP"') ||
     !steadyCase.includes('"$CANDIDATE_APP"') ||
-    source.split("\\(FA494ACVTF\\)$").length - 1 !== 3 ||
+    source.split("\\(FA494ACVTF\\)$").length - 1 !== 6 ||
     countShellLine(independentRun, 'test "$INDEPENDENT_CDHASH" = "$CANDIDATE_CDHASH"') !== 1 ||
     countShellLine(
       independentRun,
@@ -998,27 +1688,99 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     issues.push("native verification must consume the signed exact-four public envelope");
   }
   if (
-    (
-      source.match(
-        /SIGNING_RUN_ATTEMPT: \$\{\{ needs\.sign-macos\.outputs\.workflow_run_attempt \}\}/gu,
-      ) ?? []
-    ).length !== 8 ||
-    source.includes("SIGNING_RUN_ATTEMPT: ${{ github.run_attempt }}") ||
-    !independentRun.includes('--workflow-run-attempt "$SIGNING_RUN_ATTEMPT"')
+    independentEnvironment.WORKFLOW_RUN_ID !== "${{ needs.sign-macos.outputs.evidence_run_id }}" ||
+    independentEnvironment.SIGNING_RUN_ATTEMPT !==
+      "${{ needs.sign-macos.outputs.evidence_run_attempt }}" ||
+    !independentRun.includes('--workflow-run-id "$WORKFLOW_RUN_ID"') ||
+    !independentRun.includes('--workflow-run-attempt "$SIGNING_RUN_ATTEMPT"') ||
+    source.includes("SIGNING_RUN_ATTEMPT: ${{ github.run_attempt }}")
   ) {
-    issues.push("desktop verification must bind the successful signing attempt on reruns");
+    issues.push("desktop verification must bind normalized immutable signing evidence");
+  }
+
+  const candidateConsumers = [
+    ["verify-macos-envelope", verify],
+    ["stage-private-draft", stage],
+    ["publish-assets", publish],
+    ["request-latest", requestLatest],
+    ["reconcile-latest", reconcileLatest],
+    ["verify-production-update", roundTrip],
+    ["activate-release", activate],
+    ["compensate-publication", compensate],
+  ] as const;
+  let invalidNormalizedDownload = false;
+  for (const [jobName, job] of candidateConsumers) {
+    const downloads = actionSteps(job, "actions/download-artifact");
+    const candidateDownloads = downloads.filter(
+      (step) =>
+        mapping(step.with, `${jobName} download inputs`, issues).path ===
+        "${{ runner.temp }}/desktop-release",
+    );
+    if (candidateDownloads.length !== 1) {
+      invalidNormalizedDownload = true;
+      continue;
+    }
+    const withInputs = mapping(
+      candidateDownloads[0].with,
+      `${jobName} candidate download inputs`,
+      issues,
+    );
+    if (
+      !exactKeys(withInputs, [
+        "artifact-ids",
+        "path",
+        "github-token",
+        "repository",
+        "run-id",
+        "digest-mismatch",
+      ]) ||
+      withInputs["artifact-ids"] !== "${{ needs.sign-macos.outputs.artifact_id }}" ||
+      withInputs["github-token"] !== "${{ github.token }}" ||
+      withInputs.repository !== "${{ github.repository }}" ||
+      withInputs["run-id"] !== "${{ needs.sign-macos.outputs.evidence_run_id }}" ||
+      withInputs["digest-mismatch"] !== "error"
+    ) {
+      invalidNormalizedDownload = true;
+    }
+  }
+  const baselineDownloads = actionSteps(roundTrip, "actions/download-artifact").filter(
+    (step) =>
+      mapping(step.with, "production baseline download inputs", issues).path ===
+      "${{ runner.temp }}/desktop-baseline",
+  );
+  if (baselineDownloads.length !== 1) {
+    invalidNormalizedDownload = true;
+  } else {
+    const withInputs = mapping(
+      baselineDownloads[0].with,
+      "production baseline download inputs",
+      issues,
+    );
+    if (
+      !exactKeys(withInputs, [
+        "artifact-ids",
+        "path",
+        "github-token",
+        "repository",
+        "run-id",
+        "digest-mismatch",
+      ]) ||
+      withInputs["artifact-ids"] !== "${{ needs.sign-macos.outputs.baseline_artifact_id }}" ||
+      withInputs["github-token"] !== "${{ github.token }}" ||
+      withInputs.repository !== "${{ github.repository }}" ||
+      withInputs["run-id"] !== "${{ needs.sign-macos.outputs.evidence_run_id }}" ||
+      withInputs["digest-mismatch"] !== "error"
+    ) {
+      invalidNormalizedDownload = true;
+    }
   }
   if (
-    (source.match(/actions\/download-artifact@[^\n]+# v8/gu) ?? []).length !== 8 ||
-    (source.match(/digest-mismatch: error/gu) ?? []).length !== 8 ||
-    !source.includes("artifact_id: ${{ steps.sealed-artifact.outputs.artifact-id }}") ||
-    !source.includes("artifact_digest: ${{ steps.sealed-artifact.outputs.artifact-digest }}") ||
-    !source.includes("baseline_artifact_id: ${{ steps.baseline-artifact.outputs.artifact-id }}") ||
-    !source.includes(
-      "baseline_artifact_digest: ${{ steps.baseline-artifact.outputs.artifact-digest }}",
-    )
+    invalidNormalizedDownload ||
+    actionSteps(sign, "actions/download-artifact").length !== 2 ||
+    (source.match(/actions\/download-artifact@[^\n]+# v8/gu) ?? []).length !== 11 ||
+    (source.match(/digest-mismatch: error/gu) ?? []).length !== 11
   ) {
-    issues.push("desktop consumers must bind the exact digest-checked signing artifact");
+    issues.push("desktop artifact downloads must use normalized digest-bound cross-run evidence");
   }
 }
 

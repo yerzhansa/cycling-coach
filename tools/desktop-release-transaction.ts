@@ -59,6 +59,7 @@ interface GithubAsset {
   readonly id: number;
   readonly name: string;
   readonly size: number;
+  readonly digest: string | null;
   readonly state: "starter" | "uploaded";
   readonly url: string;
   readonly browser_download_url: string;
@@ -122,7 +123,14 @@ const legacyDesktopBaselineVersion = "0.1.0";
 const commitPattern = /^[0-9a-f]{40}$/u;
 const signingIdentityPattern = /^Developer ID Application: .+ \(FA494ACVTF\)$/u;
 const releasePropagationAttempts = 30;
+const latestReleasePropagationAttempts = 240;
+const stableLatestObservationCount = 3;
 const releasePropagationDelayMs = 2_000;
+const latestReleasePropagationDelayMs = 5_000;
+
+interface LatestPollBudget {
+  remaining: number;
+}
 
 function exactObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -936,13 +944,15 @@ export class GithubClient {
     const metadata = release.assets.find((asset) => asset.name === "latest-mac.yml");
     let metadataSha256: string | null = null;
     if (metadata) {
-      const [assetBytes, feedBytes] = await Promise.all([
-        this.bytes(metadata.url),
-        this.anonymousBytes(`${DESKTOP_FEED_URL}latest-mac.yml`),
-      ]);
-      if (!assetBytes.equals(feedBytes))
-        throw new TypeError("repository latest and updater feed bytes differ");
+      const match = /^sha256:([0-9a-f]{64})$/u.exec(metadata.digest ?? "");
+      if (metadata.state !== "uploaded" || !match || metadata.size <= 0) {
+        throw new TypeError("repository latest metadata digest is invalid");
+      }
+      const feedBytes = await this.anonymousBytes(`${DESKTOP_FEED_URL}latest-mac.yml`);
       metadataSha256 = sha256(feedBytes);
+      if (feedBytes.length !== metadata.size || metadataSha256 !== match[1]) {
+        throw new TypeError("repository latest and updater feed digest differ");
+      }
     }
     return { id: release.id, tag: release.tag_name, metadataSha256 };
   }
@@ -954,6 +964,7 @@ export class GithubClient {
         headers: {
           Accept: "application/vnd.github+json",
           Authorization: `Bearer ${this.#token}`,
+          "Cache-Control": "no-cache",
           "X-GitHub-Api-Version": "2022-11-28",
         },
       },
@@ -1073,7 +1084,56 @@ async function resolvedBaselineForManifest(
 ): Promise<Awaited<ReturnType<typeof newestDesktopRelease>>> {
   const releases = await client.releases();
   if (manifest.mode === "genesis") return newestDesktopRelease(releases, client, manifest.tag);
+  const latest = await client.latestRelease();
+  if (latest?.tag_name === manifest.tag) {
+    return exactDesktopRelease(
+      releases.find((release) => release.tag_name === manifest.baselineTag),
+      client,
+      manifest.baselineTag,
+    );
+  }
   return steadyDesktopBaseline(releases, client, manifest.baselineTag);
+}
+
+function hasFinalReleaseBody(
+  release: Pick<GithubRelease, "body">,
+  manifest: DesktopReleaseManifest,
+): boolean {
+  return sha256(Buffer.from(release.body, "utf8")) === manifest.draftBodySha256;
+}
+
+function hasRecoverablePublicBody(
+  release: Pick<GithubRelease, "body">,
+  manifest: DesktopReleaseManifest,
+): boolean {
+  return (
+    release.body === DESKTOP_PROVISIONAL_RELEASE_BODY || hasFinalReleaseBody(release, manifest)
+  );
+}
+
+async function verifyRecoverableReleaseBinding(
+  client: GithubClient,
+  manifest: DesktopReleaseManifest,
+): Promise<GithubRelease> {
+  const release = await client.release(manifest.draftId);
+  if (
+    String(release.id) !== manifest.draftId ||
+    release.prerelease ||
+    release.tag_name !== manifest.tag
+  ) {
+    throw new TypeError("GitHub recoverable candidate binding mismatch");
+  }
+  if ((await client.tagCommit(manifest.tag)) !== manifest.commit) {
+    throw new TypeError("Git tag commit binding mismatch");
+  }
+  if (release.draft) {
+    if (sha256(Buffer.from(release.body, "utf8")) !== manifest.draftBodySha256) {
+      throw new TypeError("GitHub recoverable draft body binding mismatch");
+    }
+  } else if (!hasRecoverablePublicBody(release, manifest)) {
+    throw new TypeError("GitHub recoverable public body binding mismatch");
+  }
+  return release;
 }
 
 async function verifyReleaseBinding(
@@ -1176,13 +1236,32 @@ async function stageExactAssets(
   return staged;
 }
 
+async function assertCompleteReleaseAssets(
+  client: GithubClient,
+  release: GithubRelease,
+  manifest: DesktopReleaseManifest,
+  label: string,
+): Promise<void> {
+  assertPublishableAssets(release.assets, manifest);
+  if (release.assets.length !== manifest.files.length) {
+    throw new TypeError(`${label} asset set is incomplete`);
+  }
+  for (const file of manifest.files) {
+    const asset = release.assets.find((candidate) => candidate.name === file.name);
+    if (!asset || asset.state !== "uploaded") {
+      throw new TypeError(`${label} asset is incomplete: ${file.name}`);
+    }
+    assertRemoteAsset(file, await client.bytes(asset.url));
+  }
+}
+
 export async function publishDesktopRelease(
   directory: string,
   client: GithubClient,
   observedLatest?: LatestObservation,
 ): Promise<void> {
   const manifest = await verifyDesktopRelease(directory);
-  const release = await verifyReleaseBinding(client, manifest);
+  const release = await verifyRecoverableReleaseBinding(client, manifest);
   assertPublishableAssets(release.assets, manifest);
   const baseline = await resolvedBaselineForManifest(manifest, client);
   await assertResolvedBaseline(manifest, baseline, client);
@@ -1195,20 +1274,24 @@ export async function publishDesktopRelease(
     await client.latest(),
     baseline?.version ?? null,
   );
-  await stageExactAssets(client, release, directory, manifest);
-  await client.request(`/repos/${client.repository()}/releases/${release.id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      draft: false,
-      make_latest: "false",
-      body: DESKTOP_PROVISIONAL_RELEASE_BODY,
-    }),
-  });
-  const published = await client.release(release.id);
-  if (published.draft || published.body !== DESKTOP_PROVISIONAL_RELEASE_BODY) {
-    throw new TypeError("desktop release did not enter provisional publication");
+  let published = release;
+  if (release.draft) {
+    await stageExactAssets(client, release, directory, manifest);
+    await client.request(`/repos/${client.repository()}/releases/${release.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        draft: false,
+        make_latest: "false",
+        body: DESKTOP_PROVISIONAL_RELEASE_BODY,
+      }),
+    });
+    published = await client.release(release.id);
   }
+  if (published.draft || !hasRecoverablePublicBody(published, manifest)) {
+    throw new TypeError("desktop release did not enter a recoverable public state");
+  }
+  await assertCompleteReleaseAssets(client, published, manifest, "published release");
   for (const file of manifest.files) {
     const asset = published.assets.find((candidate) => candidate.name === file.name);
     if (!asset) throw new TypeError(`published release asset is missing: ${file.name}`);
@@ -1232,30 +1315,89 @@ export async function observeDesktopLatest(
   client: GithubClient,
 ): Promise<LatestObservation> {
   const manifest = await verifyDesktopRelease(directory);
-  const release = await verifyReleaseBinding(client, manifest);
-  assertPublishableAssets(release.assets, manifest);
+  const release = await verifyRecoverableReleaseBinding(client, manifest);
   const baseline = await resolvedBaselineForManifest(manifest, client);
   await assertResolvedBaseline(manifest, baseline, client);
-  if (release.assets.length !== manifest.files.length) {
-    throw new TypeError("observed desktop draft asset set is incomplete");
-  }
-  for (const file of manifest.files) {
-    const asset = release.assets.find((candidate) => candidate.name === file.name);
-    if (!asset || asset.state !== "uploaded") {
-      throw new TypeError(`observed desktop draft asset is incomplete: ${file.name}`);
-    }
-    assertRemoteAsset(file, await client.bytes(asset.url));
-  }
+  await assertCompleteReleaseAssets(client, release, manifest, "observed desktop release");
   return client.latest();
+}
+
+export async function resolveDesktopRollbackLatest(
+  directory: string,
+  client: GithubClient,
+  baselineMetadataSha256: string,
+  currentLatest?: LatestObservation,
+): Promise<LatestObservation> {
+  const manifest = await verifyDesktopRelease(directory);
+  const baseline = await resolvedBaselineForManifest(manifest, client);
+  await assertResolvedBaseline(manifest, baseline, client);
+  if (manifest.mode === "genesis") {
+    if (baselineMetadataSha256 !== "none") {
+      throw new TypeError("genesis rollback metadata must be none");
+    }
+    return requireObservedLatest(currentLatest ?? (await client.latest()));
+  }
+  if (!baseline || !sha256HexSchema.safeParse(baselineMetadataSha256).success) {
+    throw new TypeError("steady rollback metadata binding is invalid");
+  }
+  const metadata = baseline.release.assets.find((asset) => asset.name === "latest-mac.yml");
+  if (
+    !metadata ||
+    metadata.state !== "uploaded" ||
+    metadata.digest !== `sha256:${baselineMetadataSha256}` ||
+    metadata.size <= 0
+  ) {
+    throw new TypeError("steady rollback metadata asset binding mismatch");
+  }
+  const bytes = await client.bytes(metadata.url);
+  if (bytes.length !== metadata.size || sha256(bytes) !== baselineMetadataSha256) {
+    throw new TypeError("steady rollback metadata bytes binding mismatch");
+  }
+  return {
+    id: baseline.release.id,
+    tag: baseline.release.tag_name,
+    metadataSha256: baselineMetadataSha256,
+  };
+}
+
+async function verifyRestorableLatestObservation(
+  client: GithubClient,
+  rawObserved: LatestObservation,
+): Promise<LatestObservation> {
+  const observed = requireObservedLatest(rawObserved);
+  if (observed.id === null) return observed;
+  const release = await client.release(observed.id);
+  if (release.draft || release.prerelease || release.tag_name !== observed.tag) {
+    throw new TypeError("restorable latest release binding mismatch");
+  }
+  const metadata = release.assets.find((asset) => asset.name === "latest-mac.yml");
+  if (observed.metadataSha256 === null) {
+    if (metadata) throw new TypeError("restorable latest metadata appeared after observation");
+    return observed;
+  }
+  if (
+    !metadata ||
+    metadata.state !== "uploaded" ||
+    metadata.digest !== `sha256:${observed.metadataSha256}` ||
+    metadata.size <= 0
+  ) {
+    throw new TypeError("restorable latest metadata binding mismatch");
+  }
+  const bytes = await client.bytes(metadata.url);
+  if (bytes.length !== metadata.size || sha256(bytes) !== observed.metadataSha256) {
+    throw new TypeError("restorable latest metadata bytes mismatch");
+  }
+  return observed;
 }
 
 export async function stageDesktopRelease(directory: string, client: GithubClient): Promise<void> {
   const manifest = await verifyDesktopRelease(directory);
-  const release = await verifyReleaseBinding(client, manifest);
+  const release = await verifyRecoverableReleaseBinding(client, manifest);
   assertPublishableAssets(release.assets, manifest);
   const baseline = await resolvedBaselineForManifest(manifest, client);
   await assertResolvedBaseline(manifest, baseline, client);
-  await stageExactAssets(client, release, directory, manifest);
+  if (release.draft) await stageExactAssets(client, release, directory, manifest);
+  else await assertCompleteReleaseAssets(client, release, manifest, "resumed public release");
 }
 
 export async function promoteDesktopLatest(
@@ -1267,13 +1409,18 @@ export async function promoteDesktopLatest(
   const candidate = await client.release(manifest.draftId);
   if (candidate.draft || candidate.prerelease || candidate.tag_name !== manifest.tag)
     throw new TypeError("published candidate binding mismatch");
-  if (candidate.body !== DESKTOP_PROVISIONAL_RELEASE_BODY)
-    throw new TypeError("published release is not provisional");
+  if (!hasRecoverablePublicBody(candidate, manifest))
+    throw new TypeError("published release body is not recoverable");
+  const candidateWasFinal = hasFinalReleaseBody(candidate, manifest);
   if ((await client.tagCommit(manifest.tag)) !== manifest.commit)
     throw new TypeError("published tag commit binding mismatch");
   const current = await client.latest();
   const previous = await newestDesktopRelease(await client.releases(), client, manifest.tag);
   assertLatestCas(manifest.desktopVersion, observed, current, previous?.version ?? null);
+  assertPublishableAssets(candidate.assets, manifest);
+  if (candidate.assets.length !== manifest.files.length) {
+    throw new TypeError("promotion candidate asset set is incomplete");
+  }
   for (const file of manifest.files) {
     const asset = candidate.assets.find((candidateAsset) => candidateAsset.name === file.name);
     if (!asset || asset.state !== "uploaded")
@@ -1286,17 +1433,71 @@ export async function promoteDesktopLatest(
     await client.latest(),
     previous?.version ?? null,
   );
-  await client.request(`/repos/${client.repository()}/releases/${candidate.id}`, {
+  const rebound = await client.release(candidate.id);
+  if (
+    rebound.draft ||
+    rebound.prerelease ||
+    rebound.tag_name !== manifest.tag ||
+    !hasRecoverablePublicBody(rebound, manifest) ||
+    hasFinalReleaseBody(rebound, manifest) !== candidateWasFinal ||
+    (await client.tagCommit(manifest.tag)) !== manifest.commit
+  ) {
+    throw new TypeError("promotion candidate changed during final preflight");
+  }
+  await assertCompleteReleaseAssets(client, rebound, manifest, "promotion candidate");
+  for (const file of manifest.files) {
+    const asset = rebound.assets.find((entry) => entry.name === file.name);
+    if (!asset) throw new TypeError(`promotion candidate asset is missing: ${file.name}`);
+    await waitForAnonymousAsset(client, asset.browser_download_url, file);
+  }
+  const finalLatest = await client.latest();
+  assertLatestCas(manifest.desktopVersion, observed, finalLatest, previous?.version ?? null);
+  if (candidateWasFinal) {
+    const metadata = manifest.files.find((file) => file.name === "latest-mac.yml");
+    if (
+      !metadata ||
+      !sameLatest(finalLatest, {
+        id: rebound.id,
+        tag: manifest.tag,
+        metadataSha256: metadata.sha256,
+      })
+    ) {
+      throw new TypeError("final desktop release is not the stable latest release");
+    }
+    return;
+  }
+  await client.request(`/repos/${client.repository()}/releases/${rebound.id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ make_latest: "true" }),
   });
+}
+
+export async function reconcileDesktopLatest(
+  directory: string,
+  client: GithubClient,
+): Promise<void> {
+  const manifest = await verifyDesktopRelease(directory);
+  const candidate = await client.release(manifest.draftId);
+  if (
+    candidate.draft ||
+    candidate.prerelease ||
+    candidate.tag_name !== manifest.tag ||
+    !hasRecoverablePublicBody(candidate, manifest) ||
+    (await client.tagCommit(manifest.tag)) !== manifest.commit
+  ) {
+    throw new TypeError("desktop latest reconciliation candidate binding mismatch");
+  }
+  assertPublishableAssets(candidate.assets, manifest);
+  if (candidate.assets.length !== manifest.files.length) {
+    throw new TypeError("desktop latest reconciliation asset set is incomplete");
+  }
   const metadata = manifest.files.find((file) => file.name === "latest-mac.yml");
   if (!metadata) throw new TypeError("desktop latest metadata is missing");
   await waitForLatest(
     client,
     { id: candidate.id, tag: manifest.tag, metadataSha256: metadata.sha256 },
-    "desktop latest promotion did not converge",
+    "desktop latest reconciliation did not converge",
   );
 }
 
@@ -1323,6 +1524,10 @@ function sameLatest(left: LatestObservation, right: LatestObservation): boolean 
 
 function pauseForReleasePropagation(): Promise<void> {
   return new Promise((resolvePause) => setTimeout(resolvePause, releasePropagationDelayMs));
+}
+
+function pauseForLatestPropagation(): Promise<void> {
+  return new Promise((resolvePause) => setTimeout(resolvePause, latestReleasePropagationDelayMs));
 }
 
 async function waitForAnonymousAsset(
@@ -1352,18 +1557,37 @@ async function waitForLatest(
   client: GithubClient,
   expected: LatestObservation | readonly LatestObservation[],
   message: string,
+  budget: LatestPollBudget = { remaining: latestReleasePropagationAttempts },
 ): Promise<LatestObservation> {
   const accepted = Array.isArray(expected) ? expected : [expected];
   let lastError: unknown;
-  for (let attempt = 1; attempt <= releasePropagationAttempts; attempt += 1) {
+  let stableObservation: LatestObservation | null = null;
+  let stableCount = 0;
+  while (budget.remaining > 0) {
+    budget.remaining -= 1;
     try {
       const current = await client.latest();
-      if (accepted.some((candidate) => sameLatest(candidate, current))) return current;
-      lastError = new TypeError("repository latest does not match the expected release");
+      const matched = accepted.some((candidate) => sameLatest(candidate, current));
+      if (matched) {
+        if (stableObservation !== null && sameLatest(stableObservation, current)) {
+          stableCount += 1;
+        } else {
+          stableObservation = current;
+          stableCount = 1;
+        }
+        if (stableCount >= stableLatestObservationCount) return current;
+        lastError = new TypeError("repository latest has not remained stable long enough");
+      } else {
+        stableObservation = null;
+        stableCount = 0;
+        lastError = new TypeError("repository latest does not match the expected release");
+      }
     } catch (error) {
+      stableObservation = null;
+      stableCount = 0;
       lastError = error;
     }
-    if (attempt < releasePropagationAttempts) await pauseForReleasePropagation();
+    if (budget.remaining > 0) await pauseForLatestPropagation();
   }
   throw new TypeError(message, { cause: lastError });
 }
@@ -1393,7 +1617,7 @@ export async function activateDesktopRelease(
     candidate.draft ||
     candidate.prerelease ||
     candidate.tag_name !== manifest.tag ||
-    candidate.body !== DESKTOP_PROVISIONAL_RELEASE_BODY ||
+    !hasRecoverablePublicBody(candidate, manifest) ||
     (await client.tagCommit(manifest.tag)) !== manifest.commit
   ) {
     throw new TypeError("desktop activation candidate binding mismatch");
@@ -1416,10 +1640,12 @@ export async function activateDesktopRelease(
     tag: manifest.tag,
     metadataSha256: metadata.sha256,
   };
+  const pollBudget: LatestPollBudget = { remaining: latestReleasePropagationAttempts };
   const latest = await waitForLatest(
     client,
     expectedLatest,
     "desktop activation latest state did not converge",
+    pollBudget,
   );
   if (
     latest.id !== candidate.id ||
@@ -1428,11 +1654,31 @@ export async function activateDesktopRelease(
   ) {
     throw new TypeError("desktop activation latest binding mismatch");
   }
-  await client.request(`/repos/${client.repository()}/releases/${candidate.id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ body: finalBody }),
-  });
+  const mutationCandidate = await client.release(candidate.id);
+  if (
+    mutationCandidate.draft ||
+    mutationCandidate.prerelease ||
+    mutationCandidate.tag_name !== manifest.tag ||
+    mutationCandidate.body !== candidate.body ||
+    !hasRecoverablePublicBody(mutationCandidate, manifest) ||
+    (await client.tagCommit(manifest.tag)) !== manifest.commit
+  ) {
+    throw new TypeError("desktop activation candidate changed at the mutation boundary");
+  }
+  assertPublishableAssets(mutationCandidate.assets, manifest);
+  if (
+    mutationCandidate.assets.length !== manifest.files.length ||
+    !sameLatest(expectedLatest, await client.latest())
+  ) {
+    throw new TypeError("desktop activation candidate changed at the mutation boundary");
+  }
+  if (!hasFinalReleaseBody(mutationCandidate, manifest)) {
+    await client.request(`/repos/${client.repository()}/releases/${candidate.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: finalBody }),
+    });
+  }
   const activated = await client.release(candidate.id);
   if (
     activated.draft ||
@@ -1446,6 +1692,7 @@ export async function activateDesktopRelease(
         client,
         expectedLatest,
         "desktop activation latest state changed during body activation",
+        pollBudget,
       ),
     )
   ) {
@@ -1463,7 +1710,11 @@ export async function compensateDesktopRelease(
   const finalBody = await readFinalReleaseBody(bodyPath, manifest);
   const observed = requireObservedLatest(rawObserved);
   let candidate = await client.release(manifest.draftId);
-  if (candidate.prerelease || candidate.tag_name !== manifest.tag) {
+  if (
+    candidate.prerelease ||
+    candidate.tag_name !== manifest.tag ||
+    (!candidate.draft && !hasRecoverablePublicBody(candidate, manifest))
+  ) {
     throw new TypeError("desktop compensation candidate binding mismatch");
   }
   if (candidate.draft) {
@@ -1482,26 +1733,91 @@ export async function compensateDesktopRelease(
   }
   const metadata = manifest.files.find((file) => file.name === "latest-mac.yml");
   if (!metadata) throw new TypeError("desktop compensation latest metadata is missing");
-  const current = await waitForLatest(
+  const candidateLatest = {
+    id: candidate.id,
+    tag: manifest.tag,
+    metadataSha256: metadata.sha256,
+  };
+  const pollBudget: LatestPollBudget = { remaining: latestReleasePropagationAttempts };
+  await waitForLatest(
     client,
-    [observed, { id: candidate.id, tag: manifest.tag, metadataSha256: metadata.sha256 }],
-    "desktop compensation could not resolve the public latest state",
+    candidateLatest,
+    "desktop compensation requires a reconciled candidate latest state",
+    pollBudget,
   );
-  if (current.id === candidate.id && current.tag === manifest.tag) {
-    if (observed.id !== null) {
-      const previous = await client.release(observed.id);
-      if (previous.draft || previous.prerelease || previous.tag_name !== observed.tag) {
-        throw new TypeError("desktop compensation previous latest binding mismatch");
-      }
-      await client.request(`/repos/${client.repository()}/releases/${previous.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ make_latest: "true" }),
-      });
-      await waitForLatest(client, observed, "desktop compensation latest restoration failed");
+  const resolveRollback = async (): Promise<LatestObservation> => {
+    const rebound =
+      manifest.mode === "steady"
+        ? await resolveDesktopRollbackLatest(
+            directory,
+            client,
+            observed.metadataSha256 ?? "none",
+            observed,
+          )
+        : await verifyRestorableLatestObservation(client, observed);
+    if (!sameLatest(rebound, observed)) {
+      throw new TypeError("desktop compensation rollback target binding mismatch");
     }
-  } else if (!sameLatest(observed, current)) {
-    throw new TypeError("desktop compensation refused unexpected latest state");
+    return rebound;
+  };
+  await resolveRollback();
+  await waitForLatest(
+    client,
+    candidateLatest,
+    "desktop compensation candidate changed during rollback preflight",
+    pollBudget,
+  );
+  await resolveRollback();
+  let previous: GithubRelease | null = null;
+  if (observed.id !== null) {
+    previous = await client.release(observed.id);
+    if (previous.draft || previous.prerelease || previous.tag_name !== observed.tag) {
+      throw new TypeError("desktop compensation previous latest binding mismatch");
+    }
+  }
+  candidate = await client.release(candidate.id);
+  if (
+    candidate.draft ||
+    candidate.prerelease ||
+    candidate.tag_name !== manifest.tag ||
+    !hasRecoverablePublicBody(candidate, manifest) ||
+    (await client.tagCommit(manifest.tag)) !== manifest.commit
+  ) {
+    throw new TypeError("desktop compensation candidate changed at the mutation boundary");
+  }
+  assertPublishableAssets(candidate.assets, manifest);
+  if (candidate.assets.length !== manifest.files.length) {
+    throw new TypeError("desktop compensation candidate changed at the mutation boundary");
+  }
+  if (!sameLatest(candidateLatest, await client.latest())) {
+    throw new TypeError("desktop compensation latest changed at the mutation boundary");
+  }
+  if (previous !== null) {
+    await client.request(`/repos/${client.repository()}/releases/${previous.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ make_latest: "true" }),
+    });
+    await waitForLatest(
+      client,
+      observed,
+      "desktop compensation latest restoration failed",
+      pollBudget,
+    );
+  }
+  candidate = await client.release(candidate.id);
+  if (
+    candidate.draft ||
+    candidate.prerelease ||
+    candidate.tag_name !== manifest.tag ||
+    !hasRecoverablePublicBody(candidate, manifest) ||
+    (await client.tagCommit(manifest.tag)) !== manifest.commit
+  ) {
+    throw new TypeError("desktop compensation candidate changed before withdrawal");
+  }
+  assertPublishableAssets(candidate.assets, manifest);
+  if (candidate.assets.length !== manifest.files.length) {
+    throw new TypeError("desktop compensation candidate changed before withdrawal");
   }
   await client.request(`/repos/${client.repository()}/releases/${candidate.id}`, {
     method: "PATCH",
@@ -1513,6 +1829,7 @@ export async function compensateDesktopRelease(
     client,
     observed,
     "desktop compensation latest state did not converge",
+    pollBudget,
   );
   if (!candidate.draft || candidate.body !== finalBody || !sameLatest(observed, restored)) {
     throw new TypeError("desktop compensation did not round-trip");
@@ -1539,7 +1856,7 @@ export async function prepareDesktopBaseline(
       throw new TypeError("genesis release refused after a desktop baseline exists");
     await writeFile(
       output,
-      "baseline_tag=none\nbaseline_version=none\nbaseline_release_id=none\nbaseline_commit=none\nbaseline_zip_sha256=none\nbaseline_signing_identity=none\nbaseline_cdhash=none\nbaseline_zip=none\n",
+      "baseline_tag=none\nbaseline_version=none\nbaseline_release_id=none\nbaseline_commit=none\nbaseline_zip_sha256=none\nbaseline_metadata_sha256=none\nbaseline_signing_identity=none\nbaseline_cdhash=none\nbaseline_zip=none\n",
       { flag: "a" },
     );
     return;
@@ -1552,6 +1869,7 @@ export async function prepareDesktopBaseline(
   const names = releaseFileNames(baseline.version);
   let zipSha256 = "";
   let zipPath = "";
+  let metadataSha256 = "";
   for (const name of names) {
     const asset = baseline.release.assets.find((candidate) => candidate.name === name);
     if (!asset) throw new TypeError(`desktop baseline asset is missing: ${name}`);
@@ -1565,10 +1883,11 @@ export async function prepareDesktopBaseline(
       zipSha256 = sha256(bytes);
       zipPath = path;
     }
+    if (name === "latest-mac.yml") metadataSha256 = sha256(bytes);
   }
   await writeFile(
     output,
-    `baseline_tag=${baseline.release.tag_name}\nbaseline_version=${baseline.version}\nbaseline_release_id=${baseline.release.id}\nbaseline_commit=${baseline.commit}\nbaseline_zip_sha256=${zipSha256}\nbaseline_zip=${zipPath}\n`,
+    `baseline_tag=${baseline.release.tag_name}\nbaseline_version=${baseline.version}\nbaseline_release_id=${baseline.release.id}\nbaseline_commit=${baseline.commit}\nbaseline_zip_sha256=${zipSha256}\nbaseline_metadata_sha256=${metadataSha256}\nbaseline_zip=${zipPath}\n`,
     { flag: "a" },
   );
 }
@@ -1628,10 +1947,14 @@ function latestArguments(): LatestObservation {
   };
 }
 
-async function writeLatestOutput(output: string, observed: LatestObservation): Promise<void> {
+async function writeLatestOutput(
+  output: string,
+  observed: LatestObservation,
+  rollback: LatestObservation,
+): Promise<void> {
   await writeFile(
     output,
-    `latest_id=${observed.id ?? "none"}\nlatest_tag=${observed.tag ?? "none"}\nlatest_metadata_sha256=${observed.metadataSha256 ?? "none"}\n`,
+    `latest_id=${observed.id ?? "none"}\nlatest_tag=${observed.tag ?? "none"}\nlatest_metadata_sha256=${observed.metadataSha256 ?? "none"}\nrollback_latest_id=${rollback.id ?? "none"}\nrollback_latest_tag=${rollback.tag ?? "none"}\nrollback_latest_metadata_sha256=${rollback.metadataSha256 ?? "none"}\n`,
     { flag: "a" },
   );
 }
@@ -1697,10 +2020,14 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "observe") {
-    await writeLatestOutput(
-      argument("github-output"),
-      await observeDesktopLatest(directory, client),
+    const observed = await observeDesktopLatest(directory, client);
+    const rollback = await resolveDesktopRollbackLatest(
+      directory,
+      client,
+      argument("baseline-metadata-sha256"),
+      observed,
     );
+    await writeLatestOutput(argument("github-output"), observed, rollback);
     return;
   }
   if (command === "publish") {
@@ -1713,6 +2040,10 @@ async function main(): Promise<void> {
   }
   if (command === "promote") {
     await promoteDesktopLatest(directory, client, latestArguments());
+    return;
+  }
+  if (command === "reconcile") {
+    await reconcileDesktopLatest(directory, client);
     return;
   }
   if (command === "activate") {
@@ -1729,7 +2060,7 @@ async function main(): Promise<void> {
     return;
   }
   throw new TypeError(
-    "desktop release command must be verify-npm-provenance, seal, verify, public-envelope, baseline, stage, observe, publish, promote, activate, or compensate",
+    "desktop release command must be verify-npm-provenance, seal, verify, public-envelope, baseline, stage, observe, publish, promote, reconcile, activate, or compensate",
   );
 }
 
