@@ -1172,6 +1172,26 @@ fi`;
   const publishRun = runs(publish).join("\n");
   const requestLatestRun = runs(requestLatest).join("\n");
   const reconcileLatestRun = runs(reconcileLatest).join("\n");
+  const requestLatestSteps = steps(requestLatest);
+  const latestDeadlineStep = namedStep(
+    requestLatest,
+    "Reserve latest mutation reconciliation window",
+  );
+  const latestDeadlineRun =
+    typeof latestDeadlineStep?.run === "string" ? latestDeadlineStep.run : "";
+  const expectedLatestDeadlineRun = [
+    "set -euo pipefail",
+    "DEADLINE_SECONDS=$(( $(date -u +%s) + 42 * 60 ))",
+    'printf \'deadline_ms=%s000\\n\' "$DEADLINE_SECONDS" >> "$GITHUB_OUTPUT"',
+    "",
+  ].join("\n");
+  const latestMutationStep = namedStep(requestLatest, "Compare-and-swap repository latest");
+  const latestMutationEnvironment = mapping(
+    latestMutationStep?.env,
+    "latest mutation environment",
+    issues,
+  );
+  const reconcileLatestCondition = scalar(reconcileLatest.if).replace(/\s+/gu, " ");
   const roundTripRun = runs(roundTrip).join("\n");
   const activateRun = runs(activate).join("\n");
   const compensateRun = runs(compensate).join("\n");
@@ -1283,6 +1303,17 @@ fi`;
     issues.push("desktop rollback must remain bound to normalized manifest baseline evidence");
   }
   if (
+    requestLatest["timeout-minutes"] !== 45 ||
+    requestLatestSteps[0] !== latestDeadlineStep ||
+    latestDeadlineStep?.id !== "latest-deadline" ||
+    latestDeadlineRun !== expectedLatestDeadlineRun ||
+    latestMutationEnvironment.TRANSACTION_DEADLINE_MS !==
+      "${{ steps.latest-deadline.outputs.deadline_ms }}" ||
+    !requestLatestRun.includes('--transaction-deadline-ms "$TRANSACTION_DEADLINE_MS"')
+  ) {
+    issues.push("desktop latest mutation must reserve reconciliation before compare-and-swap");
+  }
+  if (
     mapping(requestLatest.permissions, "latest request permissions", issues).contents !== "write" ||
     !exactStringSet(requestLatest.needs, ["sign-macos", "publish-assets"]) ||
     !requestLatestRun.includes("desktop-release:transaction promote") ||
@@ -1292,6 +1323,8 @@ fi`;
       '--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"',
     ) ||
     !exactStringSet(reconcileLatest.needs, ["sign-macos", "publish-assets", "request-latest"]) ||
+    reconcileLatestCondition !==
+      "${{ always() && needs.sign-macos.result == 'success' && needs.publish-assets.result == 'success' }}" ||
     mapping(reconcileLatest.permissions, "latest reconciliation permissions", issues).contents !==
       "read" ||
     !reconcileLatestRun.includes("desktop-release:transaction reconcile") ||
@@ -1364,6 +1397,7 @@ fi`;
     !activateCondition.includes("needs.verify-production-update.result == 'skipped'") ||
     !activateCondition.includes("inputs.mode == 'steady'") ||
     !activateCondition.includes("needs.verify-production-update.result == 'success'") ||
+    activateCondition.includes("needs.request-latest.result") ||
     !activateRun.includes("desktop-release:transaction activate") ||
     !activateRun.includes("apps/desktop/CHANGELOG.md") ||
     activateRun.includes("packages/cycling-coach/CHANGELOG.md")
@@ -1392,6 +1426,7 @@ fi`;
     !compensateCondition.includes("needs.publish-assets.outputs.latest_id != ''") ||
     !compensateCondition.includes("needs.reconcile-latest.result == 'success'") ||
     !compensateCondition.includes("needs.activate-release.result != 'success'") ||
+    compensateCondition.includes("needs.request-latest.result") ||
     !compensateRun.includes("desktop-release:transaction compensate") ||
     !compensateRun.includes("apps/desktop/CHANGELOG.md") ||
     !compensateRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||

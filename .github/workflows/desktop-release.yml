@@ -1102,6 +1102,12 @@ jobs:
       actions: read
       contents: write
     steps:
+      - name: Reserve latest mutation reconciliation window
+        id: latest-deadline
+        run: |
+          set -euo pipefail
+          DEADLINE_SECONDS=$(( $(date -u +%s) + 42 * 60 ))
+          printf 'deadline_ms=%s000\n' "$DEADLINE_SECONDS" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.commit }}
@@ -1154,12 +1160,14 @@ jobs:
       - name: Compare-and-swap repository latest
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          TRANSACTION_DEADLINE_MS: ${{ steps.latest-deadline.outputs.deadline_ms }}
           EXPECTED_LATEST_ID: ${{ needs.publish-assets.outputs.latest_id }}
           EXPECTED_LATEST_TAG: ${{ needs.publish-assets.outputs.latest_tag }}
           EXPECTED_LATEST_METADATA_SHA256: ${{ needs.publish-assets.outputs.latest_metadata_sha256 }}
         run: |
           pnpm desktop-release:transaction promote \
             --directory "$RUNNER_TEMP/desktop-release" \
+            --transaction-deadline-ms "$TRANSACTION_DEADLINE_MS" \
             --expected-latest-id "$EXPECTED_LATEST_ID" \
             --expected-latest-tag "$EXPECTED_LATEST_TAG" \
             --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"
@@ -1168,6 +1176,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [sign-macos, publish-assets, request-latest]
+    if: >-
+      ${{ always() && needs.sign-macos.result == 'success' &&
+          needs.publish-assets.result == 'success' }}
     environment: desktop-macos-latest
     permissions:
       actions: read

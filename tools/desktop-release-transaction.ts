@@ -153,6 +153,12 @@ interface LatestPollBudget {
   deadlineAt: number;
 }
 
+interface LatestMutationDeadlines {
+  readonly preflightDeadlineAt: number;
+  readonly requestDeadlineAt: number;
+  readonly reconciliationDeadlineAt: number;
+}
+
 function exactObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -896,6 +902,30 @@ export class GithubClient {
     return this.now() + duration;
   }
 
+  latestMutationDeadlines(transactionDeadlineAt?: number): LatestMutationDeadlines {
+    const now = this.now();
+    const reconciliationDeadlineAt =
+      transactionDeadlineAt ??
+      now +
+        this.#timing.releasePropagationTimeoutMs +
+        this.#timing.metadataRequestTimeoutMs +
+        this.#timing.latestReleasePropagationTimeoutMs;
+    if (!Number.isFinite(reconciliationDeadlineAt) || reconciliationDeadlineAt <= now) {
+      throw new TypeError("desktop latest transaction deadline is invalid");
+    }
+    const requestDeadlineAt =
+      reconciliationDeadlineAt - this.#timing.latestReleasePropagationTimeoutMs;
+    const preflightDeadlineAt = requestDeadlineAt - this.#timing.metadataRequestTimeoutMs;
+    if (preflightDeadlineAt <= now) {
+      throw new TypeError("desktop latest promotion reconciliation budget is unavailable");
+    }
+    return Object.freeze({
+      preflightDeadlineAt,
+      requestDeadlineAt,
+      reconciliationDeadlineAt,
+    });
+  }
+
   async pauseForPropagation(kind: "release" | "latest", deadlineAt: number): Promise<void> {
     const configuredDelay =
       kind === "release"
@@ -1059,8 +1089,8 @@ export class GithubClient {
     );
   }
 
-  release(id: string | number): Promise<GithubRelease> {
-    return this.request(`/repos/${this.#repository}/releases/${id}`);
+  release(id: string | number, deadlineAt?: number): Promise<GithubRelease> {
+    return this.request(`/repos/${this.#repository}/releases/${id}`, {}, deadlineAt);
   }
 
   async uploadAsset(
@@ -1155,11 +1185,13 @@ export class GithubClient {
     );
   }
 
-  async releases(): Promise<readonly GithubRelease[]> {
+  async releases(deadlineAt?: number): Promise<readonly GithubRelease[]> {
     const releases: GithubRelease[] = [];
     for (let page = 1; ; page += 1) {
       const batch = await this.request<readonly GithubRelease[]>(
         `/repos/${this.#repository}/releases?per_page=100&page=${page}`,
+        {},
+        deadlineAt,
       );
       releases.push(...batch);
       if (batch.length < 100) return releases;
@@ -1168,15 +1200,22 @@ export class GithubClient {
     }
   }
 
-  async tagCommit(tag: string): Promise<string> {
+  async tagCommit(tag: string, deadlineAt?: number): Promise<string> {
     let object = (
       await this.request<GithubReference>(
         `/repos/${this.#repository}/git/ref/tags/${encodeURIComponent(tag)}`,
+        {},
+        deadlineAt,
       )
     ).object;
     for (let depth = 0; object.type === "tag" && depth < 8; depth += 1) {
-      object = (await this.request<GithubTag>(`/repos/${this.#repository}/git/tags/${object.sha}`))
-        .object;
+      object = (
+        await this.request<GithubTag>(
+          `/repos/${this.#repository}/git/tags/${object.sha}`,
+          {},
+          deadlineAt,
+        )
+      ).object;
     }
     if (object.type !== "commit" || !commitPattern.test(object.sha)) {
       throw new TypeError("release tag does not resolve to a commit");
@@ -1214,12 +1253,13 @@ async function newestDesktopRelease(
   releases: readonly GithubRelease[],
   client: GithubClient,
   excludingTag?: string,
+  deadlineAt?: number,
 ): Promise<{ release: GithubRelease; version: string; commit: string } | null> {
   let selected: { release: GithubRelease; version: string; commit: string } | null = null;
   for (const release of releases) {
     const version = desktopReleaseVersion(release, excludingTag);
     if (!version) continue;
-    const commit = await client.tagCommit(release.tag_name);
+    const commit = await client.tagCommit(release.tag_name, deadlineAt);
     if (!selected || compareVersions(version, selected.version) > 0) {
       selected = { release, version, commit };
     }
@@ -1422,6 +1462,7 @@ async function assertCompleteReleaseAssets(
   release: GithubRelease,
   manifest: DesktopReleaseManifest,
   label: string,
+  deadlineAt?: number,
 ): Promise<void> {
   assertPublishableAssets(release.assets, manifest);
   if (release.assets.length !== manifest.files.length) {
@@ -1432,7 +1473,7 @@ async function assertCompleteReleaseAssets(
     if (!asset || asset.state !== "uploaded") {
       throw new TypeError(`${label} asset is incomplete: ${file.name}`);
     }
-    assertRemoteAsset(file, await client.bytes(asset.url));
+    assertRemoteAsset(file, await client.bytes(asset.url, deadlineAt));
   }
 }
 
@@ -1591,24 +1632,35 @@ export async function promoteDesktopLatest(
   directory: string,
   client: GithubClient,
   observed: LatestObservation,
+  transactionDeadlineAt?: number,
 ): Promise<void> {
+  const mutationDeadlines = client.latestMutationDeadlines(transactionDeadlineAt);
+  const preflightDeadlineAt = Math.min(
+    mutationDeadlines.preflightDeadlineAt,
+    client.propagationDeadline("release"),
+  );
   const manifest = await verifyDesktopRelease(directory);
-  const candidate = await client.release(manifest.draftId);
+  const candidate = await client.release(manifest.draftId, preflightDeadlineAt);
   if (candidate.draft || candidate.prerelease || candidate.tag_name !== manifest.tag)
     throw new TypeError("published candidate binding mismatch");
   if (!hasRecoverablePublicBody(candidate, manifest))
     throw new TypeError("published release body is not recoverable");
   const candidateWasFinal = hasFinalReleaseBody(candidate, manifest);
-  if ((await client.tagCommit(manifest.tag)) !== manifest.commit)
+  if ((await client.tagCommit(manifest.tag, preflightDeadlineAt)) !== manifest.commit)
     throw new TypeError("published tag commit binding mismatch");
-  const current = await client.latest();
-  const previous = await newestDesktopRelease(await client.releases(), client, manifest.tag);
+  const current = await client.latest(preflightDeadlineAt);
+  const previous = await newestDesktopRelease(
+    await client.releases(preflightDeadlineAt),
+    client,
+    manifest.tag,
+    preflightDeadlineAt,
+  );
   assertLatestCas(manifest.desktopVersion, observed, current, previous?.version ?? null);
   assertPublishableAssets(candidate.assets, manifest);
   if (candidate.assets.length !== manifest.files.length) {
     throw new TypeError("promotion candidate asset set is incomplete");
   }
-  const releasePropagationDeadline = client.propagationDeadline("release");
+  const releasePropagationDeadline = preflightDeadlineAt;
   for (const file of manifest.files) {
     const asset = candidate.assets.find((candidateAsset) => candidateAsset.name === file.name);
     if (!asset || asset.state !== "uploaded")
@@ -1623,21 +1675,27 @@ export async function promoteDesktopLatest(
   assertLatestCas(
     manifest.desktopVersion,
     observed,
-    await client.latest(),
+    await client.latest(preflightDeadlineAt),
     previous?.version ?? null,
   );
-  const rebound = await client.release(candidate.id);
+  const rebound = await client.release(candidate.id, preflightDeadlineAt);
   if (
     rebound.draft ||
     rebound.prerelease ||
     rebound.tag_name !== manifest.tag ||
     !hasRecoverablePublicBody(rebound, manifest) ||
     hasFinalReleaseBody(rebound, manifest) !== candidateWasFinal ||
-    (await client.tagCommit(manifest.tag)) !== manifest.commit
+    (await client.tagCommit(manifest.tag, preflightDeadlineAt)) !== manifest.commit
   ) {
     throw new TypeError("promotion candidate changed during final preflight");
   }
-  await assertCompleteReleaseAssets(client, rebound, manifest, "promotion candidate");
+  await assertCompleteReleaseAssets(
+    client,
+    rebound,
+    manifest,
+    "promotion candidate",
+    preflightDeadlineAt,
+  );
   for (const file of manifest.files) {
     const asset = rebound.assets.find((entry) => entry.name === file.name);
     if (!asset) throw new TypeError(`promotion candidate asset is missing: ${file.name}`);
@@ -1648,7 +1706,7 @@ export async function promoteDesktopLatest(
       releasePropagationDeadline,
     );
   }
-  const finalLatest = await client.latest();
+  const finalLatest = await client.latest(preflightDeadlineAt);
   assertLatestCas(manifest.desktopVersion, observed, finalLatest, previous?.version ?? null);
   const metadata = manifest.files.find((file) => file.name === "latest-mac.yml");
   if (!metadata) throw new TypeError("desktop latest metadata is missing");
@@ -1664,13 +1722,22 @@ export async function promoteDesktopLatest(
     return;
   }
   try {
-    await client.request(`/repos/${client.repository()}/releases/${rebound.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ make_latest: "true" }),
-    });
+    await client.request(
+      `/repos/${client.repository()}/releases/${rebound.id}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ make_latest: "true" }),
+      },
+      mutationDeadlines.requestDeadlineAt,
+    );
   } catch {
-    await reconcilePromotionMutation(client, finalLatest, promotedLatest);
+    await reconcilePromotionMutation(
+      client,
+      finalLatest,
+      promotedLatest,
+      mutationDeadlines.reconciliationDeadlineAt,
+    );
   }
 }
 
@@ -1727,10 +1794,13 @@ function sameLatestIdentity(left: LatestObservation, right: LatestObservation): 
   return left.id === right.id && left.tag === right.tag;
 }
 
-function latestPollBudget(client: GithubClient): LatestPollBudget {
+function latestPollBudget(client: GithubClient, deadlineAt?: number): LatestPollBudget {
   return {
     remaining: latestReleasePropagationAttempts,
-    deadlineAt: client.propagationDeadline("latest"),
+    deadlineAt: Math.min(
+      deadlineAt ?? Number.POSITIVE_INFINITY,
+      client.propagationDeadline("latest"),
+    ),
   };
 }
 
@@ -1738,8 +1808,9 @@ async function reconcilePromotionMutation(
   client: GithubClient,
   before: LatestObservation,
   after: LatestObservation,
+  deadlineAt?: number,
 ): Promise<void> {
-  const budget = latestPollBudget(client);
+  const budget = latestPollBudget(client, deadlineAt);
   let lastObserved: LatestObservation | null = null;
   let stableAfterCount = 0;
   while (budget.remaining > 0 && client.now() < budget.deadlineAt) {
@@ -2201,6 +2272,18 @@ function latestArguments(): LatestObservation {
   };
 }
 
+function transactionDeadlineArgument(): number {
+  const value = argument("transaction-deadline-ms");
+  if (!/^[1-9]\d*$/u.test(value)) {
+    throw new TypeError("desktop latest transaction deadline is invalid");
+  }
+  const deadlineAt = Number(value);
+  if (!Number.isSafeInteger(deadlineAt)) {
+    throw new TypeError("desktop latest transaction deadline is invalid");
+  }
+  return deadlineAt;
+}
+
 async function writeLatestOutput(
   output: string,
   observed: LatestObservation,
@@ -2293,7 +2376,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "promote") {
-    await promoteDesktopLatest(directory, client, latestArguments());
+    await promoteDesktopLatest(directory, client, latestArguments(), transactionDeadlineArgument());
     return;
   }
   if (command === "reconcile") {

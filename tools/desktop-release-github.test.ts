@@ -549,6 +549,29 @@ describe("GitHub desktop release transaction", () => {
     expect(cancelled).toBe(true);
   });
 
+  it("derives a fixed preflight, request, and reconciliation budget", () => {
+    const client = new GithubClient(
+      "yerzhansa/enduragent",
+      "token",
+      async () => Response.json({}),
+      {
+        metadataRequestTimeoutMs: 30,
+        releasePropagationTimeoutMs: 600,
+        latestReleasePropagationTimeoutMs: 1_200,
+        now: () => 1_000,
+      },
+    );
+
+    expect(client.latestMutationDeadlines(4_000)).toEqual({
+      preflightDeadlineAt: 2_770,
+      requestDeadlineAt: 2_800,
+      reconciliationDeadlineAt: 4_000,
+    });
+    expect(() => client.latestMutationDeadlines(2_230)).toThrow(
+      "desktop latest promotion reconciliation budget is unavailable",
+    );
+  });
+
   it("bounds asset response consumption with a separate transfer budget", async () => {
     vi.useFakeTimers();
     try {
@@ -701,6 +724,78 @@ describe("GitHub desktop release transaction", () => {
       await settleFakeTimerOperation(promoteDesktopLatest(directory, client, observed));
       expect(promotionRequests).toBe(1);
       expect(fake.latest?.id).toBe(fake.candidate.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops aggregate promotion preflight before consuming the reconciliation reserve", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    let now = 10_000;
+    let promotionRequests = 0;
+    const client = new GithubClient(
+      "yerzhansa/enduragent",
+      "token",
+      async (input, init) => {
+        now += 5;
+        if (
+          (init?.method ?? "GET") === "PATCH" &&
+          JSON.parse(String(init?.body ?? "{}") || "{}").make_latest === "true"
+        ) {
+          promotionRequests += 1;
+        }
+        return fake.fetch(input, init);
+      },
+      {
+        metadataRequestTimeoutMs: 10,
+        assetTransferTimeoutMs: 10,
+        releasePropagationTimeoutMs: 100,
+        latestReleasePropagationTimeoutMs: 50,
+        now: () => now,
+      },
+    );
+    const transactionDeadlineAt = now + 80;
+
+    await expect(
+      promoteDesktopLatest(directory, client, observed, transactionDeadlineAt),
+    ).rejects.toThrow("GitHub metadata request timed out");
+    expect(now).toBeLessThanOrEqual(transactionDeadlineAt - 60);
+    expect(promotionRequests).toBe(0);
+    expect(fake.latest?.id).toBe(observed.id);
+  });
+
+  it("read-only reconciliation classifies applied, unapplied, and foreign hard-stop outcomes", async () => {
+    const fake = new FakeGithub();
+    const { directory, baseline } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    const patchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+    const client = fake.client({
+      latestReleasePropagationTimeoutMs: 25,
+      latestReleasePropagationDelayMs: 5,
+    });
+
+    vi.useFakeTimers();
+    try {
+      fake.transitionLatest(fake.candidate);
+      await settleFakeTimerOperation(reconcileDesktopLatest(directory, client));
+
+      fake.transitionLatest(baseline);
+      await expect(
+        settleFakeTimerOperation(reconcileDesktopLatest(directory, client)),
+      ).rejects.toThrow("desktop latest reconciliation did not converge");
+
+      fake.transitionLatest(fake.release(999, "other@1.0.0", false));
+      await expect(
+        settleFakeTimerOperation(reconcileDesktopLatest(directory, client)),
+      ).rejects.toThrow("desktop latest reconciliation did not converge");
+
+      expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(patchCount);
     } finally {
       vi.useRealTimers();
     }
