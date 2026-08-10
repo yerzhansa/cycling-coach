@@ -16,7 +16,7 @@ import {
   telegramAcceptanceLaunchDiagnostic,
   telegramAcceptanceProcessTableIsClear,
   telegramAcceptanceShutdownIsProven,
-} from "./fixtures/packaged-telegram/process-safety.js";
+} from "../scripts/support/packaged-telegram/process-safety.js";
 
 function processTable(source: string, overrides: { code?: number; stderr?: string } = {}) {
   return {

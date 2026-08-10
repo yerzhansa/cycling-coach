@@ -24,18 +24,18 @@ import {
   inspectMacosReleaseApplication,
   verifyMacosReleaseArtifacts,
 } from "./verify-macos-release.mjs";
-import { connectCdp, reservePort, waitForPage } from "../tests/helpers/desktop-fixture.ts";
+import { connectCdp, reservePort, waitForPage } from "./support/desktop-cdp.ts";
 import {
   callAcceptanceCdp,
   runAcceptanceCommand,
   terminateAcceptanceChild,
   withAcceptanceDeadline,
-} from "../tests/fixtures/packaged-telegram/acceptance-deadline.ts";
-import { prepareDisposableKeychain } from "../tests/fixtures/packaged-telegram/disposable-keychain.ts";
+} from "./support/packaged-telegram/acceptance-deadline.ts";
+import { prepareDisposableKeychain } from "./support/packaged-telegram/disposable-keychain.ts";
 import {
   observeTelegramAcceptanceChild,
   telegramAcceptanceDebuggerListenerOwner,
-} from "../tests/fixtures/packaged-telegram/process-safety.ts";
+} from "./support/packaged-telegram/process-safety.ts";
 
 export const MACOS_UPDATER_ROUND_TRIP_MODE = "steady";
 export const MACOS_UPDATER_ROUND_TRIP_FEED_URL =

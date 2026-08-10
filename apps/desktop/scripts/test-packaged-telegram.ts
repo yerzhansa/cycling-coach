@@ -7,11 +7,11 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { connectCdp, reservePort, waitForPage } from "../tests/helpers/desktop-fixture.js";
+import { connectCdp, reservePort, waitForPage } from "./support/desktop-cdp.js";
 import {
   prepareDisposableKeychain,
   type DisposableKeychain,
-} from "../tests/fixtures/packaged-telegram/disposable-keychain.js";
+} from "./support/packaged-telegram/disposable-keychain.js";
 import {
   observeTelegramAcceptanceChild,
   releaseAcceptanceStorage,
@@ -25,18 +25,17 @@ import {
   telegramAcceptanceShutdownIsProven,
   type TelegramAcceptanceApplicationLaunch,
   type TelegramAcceptanceApplicationTerminal,
-} from "../tests/fixtures/packaged-telegram/process-safety.js";
+} from "./support/packaged-telegram/process-safety.js";
 import {
   ACCEPTANCE_OS_LOGIN_MARKER_ENV,
   ACCEPTANCE_OS_LOGIN_MARKER_VALUE,
-} from "../tests/fixtures/packaged-telegram/startup-mode.js";
+} from "./support/packaged-telegram/startup-mode.js";
 import {
   callAcceptanceCdp as callCdpWithin,
   runAcceptanceCommand as runCommand,
   terminateAcceptanceChild,
   withAcceptanceDeadline,
-  type AcceptanceCommandResult as CommandResult,
-} from "../tests/fixtures/packaged-telegram/acceptance-deadline.js";
+} from "./support/packaged-telegram/acceptance-deadline.js";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const application = join(
