@@ -39,8 +39,8 @@ function fakeCancellationToken() {
 
 function readyVersionFloor(version?: string): DesktopUpdateVersionFloor {
   return {
-    recordRunningVersion: vi.fn(async (runningVersion) => ({
-      status: "ready",
+    recordRunningVersion: vi.fn(async (runningVersion: string) => ({
+      status: "ready" as const,
       version: version ?? runningVersion,
     })),
   };
