@@ -194,4 +194,24 @@ describe("desktop quit coordinator", () => {
     expect(exit).toHaveBeenCalledWith(1);
     expect(deadline.clearTimeout).toHaveBeenCalledWith(deadline.handle);
   });
+
+  it("never permits install when drain throws synchronously", async () => {
+    const install = vi.fn(() => "started" as const);
+    const exit = vi.fn();
+    const deadline = deadlineHarness();
+    await completeDesktopShutdown({
+      drain: () => {
+        throw new Error("synthetic synchronous drain failure");
+      },
+      updateController: { completeInstallAfterDrain: install },
+      allowFinalQuit: vi.fn(),
+      exit,
+      ...deadline,
+    });
+
+    expect(install).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(deadline.clearTimeout).toHaveBeenCalledWith(deadline.handle);
+  });
 });
