@@ -15,7 +15,9 @@ import {
   prepareDesktopBaseline,
   promoteDesktopLatest,
   publishDesktopRelease,
+  reconcileDesktopLatest,
   releaseFileNames,
+  resolveDesktopRollbackLatest,
   sealDesktopRelease,
   stageDesktopRelease,
   type DesktopReleaseManifest,
@@ -23,14 +25,41 @@ import {
 } from "./desktop-release-transaction.js";
 
 const candidateVersion = "0.1.7";
-const candidateNpmVersion = "2026.8.7";
+const candidateTag = `enduragent-desktop@${candidateVersion}`;
 const candidateCommit = "a".repeat(40);
 const realSetImmediate = setImmediate;
+
+async function waitForPendingFakeTimer(): Promise<void> {
+  for (let turn = 0; turn < 10_000; turn += 1) {
+    if (vi.getTimerCount() > 0) return;
+    await new Promise<void>((resolveTurn) => realSetImmediate(resolveTurn));
+  }
+  throw new TypeError("release operation did not schedule its reconciliation timer");
+}
+
+async function settleFakeTimerOperation<T>(operation: Promise<T>): Promise<T> {
+  let settled = false;
+  void operation.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  for (let turn = 0; turn < 20_000 && !settled; turn += 1) {
+    await new Promise<void>((resolveTurn) => realSetImmediate(resolveTurn));
+    if (vi.getTimerCount() > 0) await vi.runOnlyPendingTimersAsync();
+  }
+  if (!settled) throw new TypeError("release operation exceeded the fake-timer settlement bound");
+  return operation;
+}
 
 interface FakeAsset {
   id: number;
   name: string;
   size: number;
+  digest: string;
   state: "starter" | "uploaded";
   url: string;
   browser_download_url: string;
@@ -82,10 +111,8 @@ async function sealed(
   directories.push(directory);
   writeEnvelope(directory, version);
   const baselineZip = baseline?.manifest.files.find((file) => file.name.endsWith("-arm64.zip"));
-  const npmVersion = `2026.8.${version.split(".")[2]}`;
   const manifest = await sealDesktopRelease(directory, {
-    tag: `cycling-coach@${npmVersion}`,
-    npmVersion,
+    tag: `enduragent-desktop@${version}`,
     desktopVersion: version,
     commit: version === candidateVersion ? candidateCommit : "b".repeat(40),
     draftId,
@@ -93,8 +120,6 @@ async function sealed(
     workflowRunId: "456",
     workflowRunAttempt: "1",
     draftBodySha256: digest(Buffer.from("release body"), "sha256", "hex"),
-    npmIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
-    npmAttestationUrl: `https://registry.npmjs.org/-/npm/v1/attestations/cycling-coach@${npmVersion}`,
     signingIdentity: "Developer ID Application: Example (FA494ACVTF)",
     candidateCdHash: "d".repeat(40),
     candidateCodeDirectorySha256: "e".repeat(64),
@@ -115,7 +140,12 @@ afterEach(() => {
 });
 
 class FakeGithub {
-  readonly calls: Array<{ method: string; url: string; authorization: string | null }> = [];
+  readonly calls: Array<{
+    method: string;
+    url: string;
+    authorization: string | null;
+    cacheControl: string | null;
+  }> = [];
   readonly bytes = new Map<string, Buffer>();
   readonly commits = new Map<string, string>();
   pages: FakeRelease[][] = [[]];
@@ -124,12 +154,27 @@ class FakeGithub {
   nextAssetId = 1000;
   failNextUploadWithStarter = false;
   anonymousDownloadFailures = 0;
+  nextLatestApiLagReads = 0;
+  nextLatestFeedLagReads = 0;
+  latestApiLaggedReads = 0;
+  latestFeedLaggedReads = 0;
+  private latestBeforeTransition: FakeRelease | null = null;
+  private latestApiLagReads = 0;
+  private latestFeedLagReads = 0;
   private resolveAnonymousDownloadFailure!: () => void;
+  private resolveLatestApiLagObserved!: () => void;
+  private resolveLatestFeedLagObserved!: () => void;
   readonly anonymousDownloadFailureObserved = new Promise<void>((resolveFailure) => {
     this.resolveAnonymousDownloadFailure = resolveFailure;
   });
+  readonly latestApiLagObserved = new Promise<void>((resolveLag) => {
+    this.resolveLatestApiLagObserved = resolveLag;
+  });
+  readonly latestFeedLagObserved = new Promise<void>((resolveLag) => {
+    this.resolveLatestFeedLagObserved = resolveLag;
+  });
 
-  constructor(tag = `cycling-coach@${candidateNpmVersion}`, commit = candidateCommit) {
+  constructor(tag = candidateTag, commit = candidateCommit) {
     this.candidate = this.release(123, tag, true);
     this.commits.set(tag, commit);
   }
@@ -162,6 +207,7 @@ class FakeGithub {
       id: this.nextAssetId++,
       name,
       size: bytes.length,
+      digest: `sha256:${digest(bytes, "sha256", "hex")}`,
       state,
       url: `https://api.github.com/repos/yerzhansa/enduragent/releases/assets/${this.nextAssetId - 1}`,
       browser_download_url: `https://github.com/yerzhansa/enduragent/releases/download/${release.tag_name}/${name}`,
@@ -176,6 +222,31 @@ class FakeGithub {
     return [this.candidate, ...this.pages.flat()].find((release) => release.id === id);
   }
 
+  transitionLatest(release: FakeRelease): void {
+    this.latestBeforeTransition = this.latest;
+    this.latest = release;
+    this.latestApiLagReads = this.nextLatestApiLagReads;
+    this.latestFeedLagReads = this.nextLatestFeedLagReads;
+    this.nextLatestApiLagReads = 0;
+    this.nextLatestFeedLagReads = 0;
+  }
+
+  apiLatest(): FakeRelease | null {
+    if (this.latestApiLagReads === 0) return this.latest;
+    this.latestApiLagReads -= 1;
+    this.latestApiLaggedReads += 1;
+    this.resolveLatestApiLagObserved();
+    return this.latestBeforeTransition;
+  }
+
+  feedLatest(): FakeRelease | null {
+    if (this.latestFeedLagReads === 0) return this.latest;
+    this.latestFeedLagReads -= 1;
+    this.latestFeedLaggedReads += 1;
+    this.resolveLatestFeedLagObserved();
+    return this.latestBeforeTransition;
+  }
+
   client(): GithubClient {
     return new GithubClient("yerzhansa/enduragent", "token", this.fetch);
   }
@@ -184,7 +255,12 @@ class FakeGithub {
     const url = String(input);
     const method = init.method ?? "GET";
     const headers = new Headers(init.headers);
-    this.calls.push({ method, url, authorization: headers.get("Authorization") });
+    this.calls.push({
+      method,
+      url,
+      authorization: headers.get("Authorization"),
+      cacheControl: headers.get("Cache-Control"),
+    });
     const json = (value: unknown, status = 200) => Response.json(value, { status });
     const binary = (bytes: Buffer | undefined, status = 200) =>
       new Response(
@@ -210,7 +286,10 @@ class FakeGithub {
       const page = Number(new URL(url).searchParams.get("page"));
       return json(this.pages[page - 1] ?? []);
     }
-    if (url.endsWith("/releases/latest")) return this.latest ? json(this.latest) : json({}, 404);
+    if (url.endsWith("/releases/latest")) {
+      const latest = this.apiLatest();
+      return latest ? json(latest) : json({}, 404);
+    }
     if (url.startsWith("https://uploads.github.com/") && method === "POST") {
       const name = new URL(url).searchParams.get("name")!;
       const bytes = Buffer.from((init.body as ArrayBuffer) ?? new ArrayBuffer(0));
@@ -240,12 +319,14 @@ class FakeGithub {
       };
       if (update.body !== undefined) release.body = update.body;
       if (update.draft !== undefined) release.draft = update.draft;
-      if (update.make_latest === "true") this.latest = release;
+      if (update.make_latest === "true") this.transitionLatest(release);
       if (release.draft && this.latest?.id === release.id) this.latest = null;
       return json(release);
     }
     if (url === `${DESKTOP_FEED_URL}latest-mac.yml`) {
-      const asset = this.latest?.assets.find((candidate) => candidate.name === "latest-mac.yml");
+      const asset = this.feedLatest()?.assets.find(
+        (candidate) => candidate.name === "latest-mac.yml",
+      );
       return asset ? binary(this.bytes.get(asset.url)) : binary(undefined, 404);
     }
     if (url.includes("/releases/download/") && this.anonymousDownloadFailures > 0) {
@@ -271,7 +352,7 @@ async function genesisCandidate(fake: FakeGithub) {
 
 async function steadyCandidate(fake: FakeGithub) {
   const genesis = await sealed("0.1.6", "122", "genesis");
-  const baseline = fake.release(122, "cycling-coach@2026.8.6", false);
+  const baseline = fake.release(122, "enduragent-desktop@0.1.6", false);
   fake.commits.set(baseline.tag_name, genesis.manifest.commit);
   fake.addEnvelope(baseline, genesis.directory, "0.1.6");
   fake.latest = baseline;
@@ -332,7 +413,9 @@ describe("GitHub desktop release transaction", () => {
     const fake = new FakeGithub();
     const { directory } = await genesisCandidate(fake);
     fake.candidate.prerelease = true;
-    await expect(stageDesktopRelease(directory, fake.client())).rejects.toThrow("draft binding");
+    await expect(stageDesktopRelease(directory, fake.client())).rejects.toThrow(
+      "candidate binding",
+    );
     expect(fake.calls.some((call) => call.method === "POST" || call.method === "PATCH")).toBe(
       false,
     );
@@ -458,6 +541,159 @@ describe("GitHub desktop release transaction", () => {
     }
   });
 
+  it("allows latest API pointer convergence beyond the tag-download retry window", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+
+    vi.useFakeTimers();
+    try {
+      fake.nextLatestApiLagReads = 35;
+      await promoteDesktopLatest(directory, fake.client(), observed);
+      expect(fake.latestApiLaggedReads).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      const authenticatedAssetReadsBefore = fake.calls.filter(
+        (call) =>
+          call.method === "GET" &&
+          call.authorization !== null &&
+          call.url.includes("/releases/assets/"),
+      ).length;
+      const reconciliation = reconcileDesktopLatest(directory, fake.client());
+      await fake.latestApiLagObserved;
+      await new Promise<void>((resolveTurn) => realSetImmediate(resolveTurn));
+      expect(vi.getTimerCount()).toBe(1);
+      let reconciled = false;
+      void reconciliation.then(() => {
+        reconciled = true;
+      });
+      await vi.advanceTimersByTimeAsync(175_000);
+      expect(reconciled).toBe(false);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await reconciliation;
+
+      expect(fake.latestApiLaggedReads).toBe(35);
+      expect(fake.latestFeedLaggedReads).toBe(0);
+      expect(fake.latest?.id).toBe(fake.candidate.id);
+      expect(
+        fake.calls.filter(
+          (call) =>
+            call.method === "GET" &&
+            call.authorization !== null &&
+            call.url.includes("/releases/assets/"),
+        ),
+      ).toHaveLength(authenticatedAssetReadsBefore);
+      const latestApiCalls = fake.calls.filter((call) => call.url.endsWith("/releases/latest"));
+      expect(latestApiCalls.length).toBeGreaterThan(35);
+      expect(latestApiCalls.every((call) => call.cacheControl === "no-cache")).toBe(true);
+      expect(
+        fake.calls
+          .filter((call) => call.cacheControl !== null)
+          .every((call) => call.url.endsWith("/releases/latest")),
+      ).toBe(true);
+      expect(
+        fake.calls
+          .filter((call) => call.url === `${DESKTOP_FEED_URL}latest-mac.yml`)
+          .every((call) => call.cacheControl === null),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses an exact public provisional release without replacing its assets", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    const uploadCount = fake.calls.filter(
+      (call) => call.method === "POST" && call.url.startsWith("https://uploads.github.com/"),
+    ).length;
+    const publicationPatchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+
+    const resumedObserved = await observeDesktopLatest(directory, fake.client());
+    await stageDesktopRelease(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), resumedObserved);
+    expect(
+      fake.calls.filter(
+        (call) => call.method === "POST" && call.url.startsWith("https://uploads.github.com/"),
+      ),
+    ).toHaveLength(uploadCount);
+    expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(
+      publicationPatchCount,
+    );
+
+    await promoteDesktopLatest(directory, fake.client(), resumedObserved);
+    const promotionPatchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+    const promotedObservation = await observeDesktopLatest(directory, fake.client());
+    await stageDesktopRelease(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), promotedObservation);
+    expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(promotionPatchCount);
+    expect(fake.candidate.body).toBe(DESKTOP_PROVISIONAL_RELEASE_BODY);
+  });
+
+  it("rejects a public recovery candidate with an unexpected body", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    fake.candidate.body = "unexpected public body";
+    const patchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+
+    await expect(stageDesktopRelease(directory, fake.client())).rejects.toThrow(
+      "public body binding mismatch",
+    );
+    expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(patchCount);
+  });
+
+  it("refuses promotion when the public candidate gained an extra asset", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    fake.addAsset(fake.candidate, "unexpected.txt", Buffer.from("unexpected"));
+    const patchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+
+    await expect(promoteDesktopLatest(directory, fake.client(), observed)).rejects.toThrow(
+      "stale release asset",
+    );
+    expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(patchCount);
+    expect(fake.latest?.id).not.toBe(fake.candidate.id);
+  });
+
+  it("allows anonymous latest-feed convergence beyond 30 polls during compensation", async () => {
+    const fake = new FakeGithub();
+    const { directory, baseline } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    await promoteDesktopLatest(directory, fake.client(), observed);
+    const bodyDirectory = mkdtempSync(join(tmpdir(), "desktop-release-body-"));
+    directories.push(bodyDirectory);
+    const bodyPath = join(bodyDirectory, "body.md");
+    writeFileSync(bodyPath, "release body");
+
+    vi.useFakeTimers();
+    try {
+      await settleFakeTimerOperation(reconcileDesktopLatest(directory, fake.client()));
+      fake.nextLatestFeedLagReads = 35;
+      const compensation = compensateDesktopRelease(directory, bodyPath, fake.client(), observed);
+      await settleFakeTimerOperation(compensation);
+
+      expect(fake.latestApiLaggedReads).toBe(0);
+      expect(fake.latestFeedLaggedReads).toBe(35);
+      expect(fake.latest?.id).toBe(baseline.id);
+      expect(fake.candidate.draft).toBe(true);
+      expect(fake.candidate.body).toBe("release body");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("activates only after promotion and restores the observed latest on compensation", async () => {
     const successful = new FakeGithub();
     const accepted = await steadyCandidate(successful);
@@ -471,22 +707,264 @@ describe("GitHub desktop release transaction", () => {
     directories.push(bodyDirectory);
     const bodyPath = join(bodyDirectory, "body.md");
     writeFileSync(bodyPath, "release body");
-    await activateDesktopRelease(accepted.directory, bodyPath, successful.client());
-    expect(successful.latest?.id).toBe(successful.candidate.id);
-    expect(successful.candidate.body).toBe("release body");
+    vi.useFakeTimers();
+    try {
+      await settleFakeTimerOperation(
+        reconcileDesktopLatest(accepted.directory, successful.client()),
+      );
+      const activation = activateDesktopRelease(accepted.directory, bodyPath, successful.client());
+      await settleFakeTimerOperation(activation);
+      expect(successful.latest?.id).toBe(successful.candidate.id);
+      expect(successful.candidate.body).toBe("release body");
 
-    const failed = new FakeGithub();
-    const compensating = await steadyCandidate(failed);
-    compensating.baseline.draft = false;
-    failed.latest = compensating.baseline;
-    await stageDesktopRelease(compensating.directory, failed.client());
-    const prior = await observeDesktopLatest(compensating.directory, failed.client());
-    await publishDesktopRelease(compensating.directory, failed.client(), prior);
-    await promoteDesktopLatest(compensating.directory, failed.client(), prior);
-    await compensateDesktopRelease(compensating.directory, bodyPath, failed.client(), prior);
-    expect(failed.latest?.id).toBe(compensating.baseline.id);
-    expect(failed.candidate.draft).toBe(true);
-    expect(failed.candidate.body).toBe("release body");
+      const failed = new FakeGithub();
+      const compensating = await steadyCandidate(failed);
+      compensating.baseline.draft = false;
+      failed.latest = compensating.baseline;
+      await stageDesktopRelease(compensating.directory, failed.client());
+      const prior = await observeDesktopLatest(compensating.directory, failed.client());
+      await publishDesktopRelease(compensating.directory, failed.client(), prior);
+      await promoteDesktopLatest(compensating.directory, failed.client(), prior);
+      await settleFakeTimerOperation(
+        reconcileDesktopLatest(compensating.directory, failed.client()),
+      );
+      const compensation = compensateDesktopRelease(
+        compensating.directory,
+        bodyPath,
+        failed.client(),
+        prior,
+      );
+      await settleFakeTimerOperation(compensation);
+      expect(failed.latest?.id).toBe(compensating.baseline.id);
+      expect(failed.candidate.draft).toBe(true);
+      expect(failed.candidate.body).toBe("release body");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores the manifest baseline when a resumed candidate is already latest", async () => {
+    const fake = new FakeGithub();
+    const { directory, baseline } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    await promoteDesktopLatest(directory, fake.client(), observed);
+    const bodyDirectory = mkdtempSync(join(tmpdir(), "desktop-release-body-"));
+    directories.push(bodyDirectory);
+    const bodyPath = join(bodyDirectory, "body.md");
+    writeFileSync(bodyPath, "release body");
+    const baselineMetadata = baseline.assets.find((asset) => asset.name === "latest-mac.yml")!;
+
+    vi.useFakeTimers();
+    try {
+      await settleFakeTimerOperation(reconcileDesktopLatest(directory, fake.client()));
+      const resumedCurrent = await observeDesktopLatest(directory, fake.client());
+      expect(resumedCurrent.id).toBe(fake.candidate.id);
+      const rollback = await resolveDesktopRollbackLatest(
+        directory,
+        fake.client(),
+        baselineMetadata.digest.slice("sha256:".length),
+        resumedCurrent,
+      );
+      expect(rollback).toEqual({
+        id: baseline.id,
+        tag: baseline.tag_name,
+        metadataSha256: baselineMetadata.digest.slice("sha256:".length),
+      });
+      const compensation = compensateDesktopRelease(directory, bodyPath, fake.client(), rollback);
+      await settleFakeTimerOperation(compensation);
+      expect(fake.latest?.id).toBe(baseline.id);
+      expect(fake.candidate.draft).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats an exact public final latest release as an idempotent terminal state", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    await promoteDesktopLatest(directory, fake.client(), observed);
+    const bodyDirectory = mkdtempSync(join(tmpdir(), "desktop-release-body-"));
+    directories.push(bodyDirectory);
+    const bodyPath = join(bodyDirectory, "body.md");
+    writeFileSync(bodyPath, "release body");
+
+    vi.useFakeTimers();
+    try {
+      await settleFakeTimerOperation(reconcileDesktopLatest(directory, fake.client()));
+      await settleFakeTimerOperation(activateDesktopRelease(directory, bodyPath, fake.client()));
+      const patchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+      const resumedObserved = await observeDesktopLatest(directory, fake.client());
+      await stageDesktopRelease(directory, fake.client());
+      await publishDesktopRelease(directory, fake.client(), resumedObserved);
+      await promoteDesktopLatest(directory, fake.client(), resumedObserved);
+      await settleFakeTimerOperation(reconcileDesktopLatest(directory, fake.client()));
+      await settleFakeTimerOperation(activateDesktopRelease(directory, bodyPath, fake.client()));
+
+      expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(patchCount);
+      expect(fake.candidate.draft).toBe(false);
+      expect(fake.candidate.body).toBe("release body");
+      expect(fake.latest?.id).toBe(fake.candidate.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses to overwrite a concurrent body edit at the activation boundary", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    await promoteDesktopLatest(directory, fake.client(), observed);
+    const bodyDirectory = mkdtempSync(join(tmpdir(), "desktop-release-body-"));
+    directories.push(bodyDirectory);
+    const bodyPath = join(bodyDirectory, "body.md");
+    writeFileSync(bodyPath, "release body");
+    let candidateReads = 0;
+    const client = new GithubClient("yerzhansa/enduragent", "token", async (input, init) => {
+      const url = String(input);
+      if (
+        (init?.method ?? "GET") === "GET" &&
+        url.endsWith(`/releases/${fake.candidate.id}`) &&
+        ++candidateReads === 2
+      ) {
+        fake.candidate.body = "concurrent operator body";
+      }
+      return fake.fetch(input, init);
+    });
+    const patchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+
+    vi.useFakeTimers();
+    try {
+      await settleFakeTimerOperation(reconcileDesktopLatest(directory, fake.client()));
+      await expect(
+        settleFakeTimerOperation(activateDesktopRelease(directory, bodyPath, client)),
+      ).rejects.toThrow("candidate changed at the mutation boundary");
+      expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(patchCount);
+      expect(fake.candidate.body).toBe("concurrent operator body");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses rollback when the candidate body changes at the mutation boundary", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    await promoteDesktopLatest(directory, fake.client(), observed);
+    const bodyDirectory = mkdtempSync(join(tmpdir(), "desktop-release-body-"));
+    directories.push(bodyDirectory);
+    const bodyPath = join(bodyDirectory, "body.md");
+    writeFileSync(bodyPath, "release body");
+    let candidateReads = 0;
+    const client = new GithubClient("yerzhansa/enduragent", "token", async (input, init) => {
+      const url = String(input);
+      if (
+        (init?.method ?? "GET") === "GET" &&
+        url.endsWith(`/releases/${fake.candidate.id}`) &&
+        ++candidateReads === 2
+      ) {
+        fake.candidate.body = "concurrent operator body";
+      }
+      return fake.fetch(input, init);
+    });
+    const patchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+
+    vi.useFakeTimers();
+    try {
+      await settleFakeTimerOperation(reconcileDesktopLatest(directory, fake.client()));
+      await expect(
+        settleFakeTimerOperation(compensateDesktopRelease(directory, bodyPath, client, observed)),
+      ).rejects.toThrow("candidate changed at the mutation boundary");
+      expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(patchCount);
+      expect(fake.candidate.body).toBe("concurrent operator body");
+      expect(fake.candidate.draft).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses to overwrite a concurrent latest release at the compensation boundary", async () => {
+    const fake = new FakeGithub();
+    const { directory, baseline } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const rollback = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), rollback);
+    await promoteDesktopLatest(directory, fake.client(), rollback);
+    const bodyDirectory = mkdtempSync(join(tmpdir(), "desktop-release-body-"));
+    directories.push(bodyDirectory);
+    const bodyPath = join(bodyDirectory, "body.md");
+    writeFileSync(bodyPath, "release body");
+    const unrelated = fake.release(999, "other@1.0.0", false);
+    let raced = false;
+    const client = new GithubClient("yerzhansa/enduragent", "token", async (input, init) => {
+      const response = await fake.fetch(input, init);
+      if (
+        !raced &&
+        (init?.method ?? "GET") === "GET" &&
+        String(input).endsWith(`/releases/${baseline.id}`)
+      ) {
+        raced = true;
+        fake.transitionLatest(unrelated);
+      }
+      return response;
+    });
+    const patchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+
+    vi.useFakeTimers();
+    try {
+      await expect(
+        settleFakeTimerOperation(compensateDesktopRelease(directory, bodyPath, client, rollback)),
+      ).rejects.toThrow("latest changed at the mutation boundary");
+      expect(raced).toBe(true);
+      expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(patchCount);
+      expect(fake.latest?.id).toBe(unrelated.id);
+      expect(fake.candidate.draft).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses compensation before candidate latest reconciliation without mutating releases", async () => {
+    const fake = new FakeGithub();
+    const { directory } = await steadyCandidate(fake);
+    await stageDesktopRelease(directory, fake.client());
+    const observed = await observeDesktopLatest(directory, fake.client());
+    await publishDesktopRelease(directory, fake.client(), observed);
+    const bodyDirectory = mkdtempSync(join(tmpdir(), "desktop-release-body-"));
+    directories.push(bodyDirectory);
+    const bodyPath = join(bodyDirectory, "body.md");
+    writeFileSync(bodyPath, "release body");
+    const patchCount = fake.calls.filter((call) => call.method === "PATCH").length;
+    const latestCallsBefore = fake.calls.filter((call) =>
+      call.url.endsWith("/releases/latest"),
+    ).length;
+
+    vi.useFakeTimers();
+    try {
+      const compensation = compensateDesktopRelease(directory, bodyPath, fake.client(), observed);
+      const refused = expect(compensation).rejects.toThrow(
+        "desktop compensation requires a reconciled candidate latest state",
+      );
+      await waitForPendingFakeTimer();
+      await vi.runAllTimersAsync();
+      await refused;
+      expect(
+        fake.calls.filter((call) => call.url.endsWith("/releases/latest")).length -
+          latestCallsBefore,
+      ).toBeLessThanOrEqual(240);
+      expect(fake.calls.filter((call) => call.method === "PATCH")).toHaveLength(patchCount);
+      expect(fake.candidate.draft).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("discovers a complete retained baseline on a later page", async () => {
@@ -507,7 +985,7 @@ describe("GitHub desktop release transaction", () => {
       target,
       fake.client(),
       "steady",
-      `cycling-coach@${candidateNpmVersion}`,
+      candidateTag,
       candidateVersion,
       baseline.tag_name,
       output,
@@ -518,11 +996,94 @@ describe("GitHub desktop release transaction", () => {
     expect(fake.calls.some((call) => call.url.includes("page=2"))).toBe(true);
   });
 
+  it("accepts only the exact legacy first-signed desktop baseline", async () => {
+    const fake = new FakeGithub();
+    const legacyEnvelope = await sealed("0.1.0", "121", "genesis");
+    const legacy = fake.release(121, "cycling-coach@2026.8.8", false);
+    fake.commits.set(legacy.tag_name, legacyEnvelope.manifest.commit);
+    fake.addEnvelope(legacy, legacyEnvelope.directory, "0.1.0");
+    fake.latest = legacy;
+    fake.pages = [[legacy]];
+    const outputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
+    const target = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
+    directories.push(outputDirectory, target);
+    const output = join(outputDirectory, "output");
+    writeFileSync(output, "");
+
+    await prepareDesktopBaseline(
+      target,
+      fake.client(),
+      "steady",
+      "enduragent-desktop@0.1.1",
+      "0.1.1",
+      legacy.tag_name,
+      output,
+    );
+
+    expect(readFileSync(output, "utf8")).toContain("baseline_tag=cycling-coach@2026.8.8");
+    expect(readFileSync(output, "utf8")).toContain("baseline_version=0.1.0");
+    expect(readdirSync(target).sort()).toEqual([...releaseFileNames("0.1.0")].sort());
+  });
+
+  it.each([
+    ["cycling-coach@2026.8.9", "0.1.0"],
+    ["cycling-coach@2026.8.8", "0.1.1"],
+    ["enduragent-desktop@0.1.1", "0.1.0"],
+  ])("rejects a noncanonical desktop baseline %s carrying %s assets", async (tag, version) => {
+    const fake = new FakeGithub();
+    const envelope = await sealed(version, "121", "genesis");
+    const release = fake.release(121, tag, false);
+    fake.commits.set(release.tag_name, envelope.manifest.commit);
+    fake.addEnvelope(release, envelope.directory, version);
+    fake.latest = release;
+    fake.pages = [[release]];
+    const outputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
+    const target = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
+    directories.push(outputDirectory, target);
+    const output = join(outputDirectory, "output");
+    writeFileSync(output, "");
+
+    await expect(
+      prepareDesktopBaseline(
+        target,
+        fake.client(),
+        "steady",
+        candidateTag,
+        candidateVersion,
+        tag,
+        output,
+      ),
+    ).rejects.toThrow("desktop baseline");
+    expect(readdirSync(target)).toEqual([]);
+  });
+
+  it("requires the candidate desktop tag to equal the candidate app version", async () => {
+    const fake = new FakeGithub();
+    const outputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
+    const target = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
+    directories.push(outputDirectory, target);
+    const output = join(outputDirectory, "output");
+    writeFileSync(output, "");
+
+    await expect(
+      prepareDesktopBaseline(
+        target,
+        fake.client(),
+        "genesis",
+        "enduragent-desktop@0.1.8",
+        candidateVersion,
+        "none",
+        output,
+      ),
+    ).rejects.toThrow("tag and version do not match");
+    expect(fake.calls).toEqual([]);
+  });
+
   it("uses the requested retained baseline instead of a newer failed draft", async () => {
     const fake = new FakeGithub();
     const { baseline } = await steadyCandidate(fake);
     const failed = await sealed("0.1.8", "124", "genesis");
-    const failedRelease = fake.release(124, "cycling-coach@2026.8.8", true);
+    const failedRelease = fake.release(124, "enduragent-desktop@0.1.8", true);
     fake.commits.set(failedRelease.tag_name, failed.manifest.commit);
     fake.addEnvelope(failedRelease, failed.directory, "0.1.8");
     fake.pages = [[failedRelease, baseline]];
@@ -536,7 +1097,7 @@ describe("GitHub desktop release transaction", () => {
       target,
       fake.client(),
       "steady",
-      "cycling-coach@2026.8.9",
+      "enduragent-desktop@0.1.9",
       "0.1.9",
       baseline.tag_name,
       output,
@@ -550,7 +1111,7 @@ describe("GitHub desktop release transaction", () => {
     const fake = new FakeGithub();
     const { baseline } = await steadyCandidate(fake);
     const accepted = await sealed("0.1.7", "124", "genesis");
-    const latest = fake.release(124, "cycling-coach@2026.8.7", false);
+    const latest = fake.release(124, "enduragent-desktop@0.1.7", false);
     fake.commits.set(latest.tag_name, accepted.manifest.commit);
     fake.addEnvelope(latest, accepted.directory, "0.1.7");
     fake.latest = latest;
@@ -565,7 +1126,7 @@ describe("GitHub desktop release transaction", () => {
         target,
         fake.client(),
         "steady",
-        "cycling-coach@2026.8.8",
+        "enduragent-desktop@0.1.8",
         "0.1.8",
         baseline.tag_name,
         output,

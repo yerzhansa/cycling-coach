@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write   # for `gh workflow run release.yml` after a Version-PR merge
+      actions: write   # dispatch package or desktop release coordinators after a Version-PR merge
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -54,12 +54,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push tags and dispatch release for publishable packages on Version-PR merge
+      - name: Dispatch changed package and desktop releases on Version-PR merge
         # Closes the manual gap between "Version PR merged" and "release fires".
         # When the operator merges the changesets-bot PR, package.json versions
-        # bump on main but no tag is created — release.yml never sees it. This
-        # step ensures <name>@<version> for every non-private packages/*/package.json
-        # resolves to this commit, then dispatches release.yml for it.
+        # bump on main but no tag is created. This step tags and dispatches only
+        # public packages whose versions changed, then independently tags and
+        # dispatches the desktop app when its private SemVer changed.
         #
         # Why dispatch instead of relying on the `push: tags:` trigger in
         # release.yml: GitHub blocks workflow runs from events triggered by
@@ -78,6 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_COMMIT=$(git rev-parse HEAD)
+          PREVIOUS_COMMIT=$(git rev-parse HEAD^)
           for pkg_json in packages/*/package.json; do
             PRIVATE=$(node -p "require('./$pkg_json').private === true")
             if [ "$PRIVATE" = "true" ]; then
@@ -85,6 +86,11 @@ jobs:
             fi
             NAME=$(node -p "require('./$pkg_json').name")
             VERSION=$(node -p "require('./$pkg_json').version")
+            PREVIOUS_VERSION=$(git show "$PREVIOUS_COMMIT:$pkg_json" | jq -er '.version')
+            if [ "$VERSION" = "$PREVIOUS_VERSION" ]; then
+              echo "::notice::$NAME remains at $VERSION — skipping npm release"
+              continue
+            fi
             TAG="$NAME@$VERSION"
             if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
               git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
@@ -115,3 +121,40 @@ jobs:
             fi
             echo "::notice::Dispatched release.yml on exact tag $TAG"
           done
+
+          DESKTOP_PACKAGE_JSON=apps/desktop/package.json
+          DESKTOP_VERSION=$(jq -er '.version' "$DESKTOP_PACKAGE_JSON")
+          PREVIOUS_DESKTOP_VERSION=$(git show "$PREVIOUS_COMMIT:$DESKTOP_PACKAGE_JSON" | jq -er '.version')
+          if [ "$DESKTOP_VERSION" = "$PREVIOUS_DESKTOP_VERSION" ]; then
+            echo "::notice::Desktop remains at $DESKTOP_VERSION — skipping desktop release"
+            exit 0
+          fi
+          DESKTOP_TAG="enduragent-desktop@$DESKTOP_VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$DESKTOP_TAG" >/dev/null 2>&1; then
+            git fetch --force --no-tags origin "refs/tags/$DESKTOP_TAG:refs/tags/$DESKTOP_TAG"
+            DESKTOP_TAG_COMMIT=$(git rev-parse "refs/tags/$DESKTOP_TAG^{commit}")
+            if [ "$DESKTOP_TAG_COMMIT" != "$RELEASE_COMMIT" ]; then
+              echo "::error::Existing tag $DESKTOP_TAG resolves to $DESKTOP_TAG_COMMIT, expected $RELEASE_COMMIT"
+              exit 1
+            fi
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$DESKTOP_TAG" -f sha="$RELEASE_COMMIT" >/dev/null
+            echo "::notice::Created tag $DESKTOP_TAG at $RELEASE_COMMIT"
+          fi
+          DISPATCHED=false
+          for attempt in $(seq 1 6); do
+            if gh workflow run desktop-release-coordinator.yml --ref "$DESKTOP_TAG" \
+              -f tag="$DESKTOP_TAG" -f desktop_mode=steady; then
+              DISPATCHED=true
+              break
+            fi
+            if [ "$attempt" -lt 6 ]; then
+              sleep $((attempt * 2))
+            fi
+          done
+          if [ "$DISPATCHED" != "true" ]; then
+            echo "::error::Unable to dispatch desktop release for $DESKTOP_TAG after bounded retries"
+            exit 1
+          fi
+          echo "::notice::Dispatched desktop release for $DESKTOP_TAG"

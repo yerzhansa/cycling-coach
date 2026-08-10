@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -31,7 +32,28 @@ const notarizationCredentialSets = [
     required: ["APPLE_KEYCHAIN_PROFILE"],
   },
 ];
+const safeReleaseArtifactMessagePattern =
+  /^(?:missing|invalid|unreadable|unstable) (?:(?:promoted|verified) )?(?:DMG artifact|ZIP artifact|ZIP blockmap|latest-mac\.yml)$/u;
+const safeReleasePlanMessages = new Set([
+  "release envelope verifier is required",
+  "release envelope cleanup failed",
+  "release envelope cleanup target changed",
+  "release envelope destination is inaccessible",
+  "release envelope destination already exists",
+  "promoted release artifact differs from builder output",
+  "promoted release artifact envelope differs",
+  "release artifact changed during promotion",
+  "release envelope changed during verification",
+]);
 export const DESKTOP_UPDATER_CACHE_DIRECTORY = "@enduragentdesktop-updater";
+
+export function safeMacosReleasePlanMessage(error) {
+  return error instanceof TypeError &&
+    (safeReleasePlanMessages.has(error.message) ||
+      safeReleaseArtifactMessagePattern.test(error.message))
+    ? error.message
+    : undefined;
+}
 
 function exactObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -62,6 +84,15 @@ function sameReleaseFileIdentity(left, right) {
     left.size === right.size &&
     left.mtimeMs === right.mtimeMs &&
     left.ctimeMs === right.ctimeMs
+  );
+}
+
+function sameVerifiedReleaseFileIdentity(left, right) {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.size === right.size
   );
 }
 
@@ -640,7 +671,7 @@ export async function promoteMacosReleaseEnvelope(plan, verifyEnvelope, override
     if (
       verifiedSnapshots.some(
         (verified, index) =>
-          !sameReleaseFileIdentity(verified.identity, promotedSnapshots[index].identity) ||
+          !sameVerifiedReleaseFileIdentity(verified.identity, promotedSnapshots[index].identity) ||
           !verified.bytes.equals(promotedSnapshots[index].bytes),
       )
     ) {
@@ -776,32 +807,19 @@ export async function runMacosRelease(input, dependencies = {}) {
   return { plan, artifacts, envelopePath };
 }
 
-let activeStage = "initialization";
-
-async function main() {
-  if (process.argv.length !== 2) throw new TypeError("arguments are not supported");
-  const result = await runMacosRelease(
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const result = spawnSync(
+    process.execPath,
+    [join(scriptDirectory, "macos-release-cli.mjs"), ...process.argv.slice(2)],
     {
-      feedUrl: process.env.ENDURAGENT_DESKTOP_UPDATE_URL,
-      identity: process.env.ENDURAGENT_DEVELOPER_ID_IDENTITY,
-      baselineApplication: process.env.ENDURAGENT_MACOS_BASELINE_APP,
-    },
-    {
-      reportStage(stage) {
-        activeStage = stage;
-      },
+      env: process.env,
+      stdio: "inherit",
     },
   );
-  process.stdout.write(`macOS release envelope: ${result.envelopePath}\n`);
-}
-
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    await main();
-  } catch (error) {
-    const verification = await import("./verify-macos-release.mjs");
-    const detail = verification.safeMacosReleaseVerificationMessage(error);
-    const suffix = detail === undefined ? "" : `: ${detail}`;
-    throw new TypeError(`macOS release build failed at ${activeStage}${suffix}`);
+  if (result.error !== undefined || result.signal !== null || result.status === null) {
+    process.stderr.write("macOS release build failed at initialization\n");
+    process.exitCode = 1;
+  } else {
+    process.exitCode = result.status;
   }
 }

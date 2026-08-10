@@ -151,6 +151,7 @@ type DesktopUpdateState =
       readonly status: "downloading" | "downloaded" | "installing";
       readonly version: string;
     }
+  | { readonly status: "restart-required"; readonly stage: "check" | "download" }
   | { readonly status: "failed"; readonly stage: "check" | "download" };
 
 type DesktopTelegramControlErrorCode =

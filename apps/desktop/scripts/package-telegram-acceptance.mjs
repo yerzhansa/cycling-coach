@@ -22,7 +22,7 @@ import {
   verifyTelegramAcceptanceNestedSignature,
   verifyTelegramAcceptanceSignature,
   verifyTelegramAcceptanceWorkspaceRuntime,
-} from "../tests/fixtures/packaged-telegram/package-acceptance.mjs";
+} from "./support/packaged-telegram/package-acceptance.mjs";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputDirectory = "dist/telegram-acceptance-package";

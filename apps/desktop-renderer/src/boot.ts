@@ -27,7 +27,6 @@ import { createTelegramSettingsAdapter } from "./state/adapters/telegram.js";
 import { createManualSyncViewAdapter } from "./state/adapters/sync.js";
 import { createTrainingViewAdapter } from "./state/adapters/training.js";
 import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
-import { observeConnectionLifecycle } from "./state/connection-slice.js";
 import { credentialDrafts } from "./state/credential-drafts.js";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
 import { useEnduragentStore, type EnduragentState } from "./state/store.js";
@@ -75,10 +74,11 @@ export function onboardingCredentialMutationsBlocked(
 export function bootRenderer(): Disposer {
   const store = useEnduragentStore;
   store.getState().setOnboardingStartupSettled(false);
+  const onLifecycle = (event: WindowEventMap["enduragent-lifecycle"]): void => {
+    document.documentElement.dataset.rpc = event.detail.status;
+  };
+  window.addEventListener("enduragent-lifecycle", onLifecycle);
 
-  const disposeLifecycle = observeConnectionLifecycle((status) => {
-    store.getState().setConnection(status);
-  });
   const releaseNotesAdapter = createReleaseNotesSettingsAdapter({
     publish: (patch) => store.getState().patchSettings(patch),
   });
@@ -422,8 +422,12 @@ export function bootRenderer(): Disposer {
   void chatController.start();
   void onboarding.open().finally(() => store.getState().setOnboardingStartupSettled(true));
   void clients.getClient().then(
-    () => store.getState().setConnection("connected"),
-    () => store.getState().setConnection("failed"),
+    () => {
+      document.documentElement.dataset.rpc = "connected";
+    },
+    () => {
+      document.documentElement.dataset.rpc = "failed";
+    },
   );
 
   let disposed = false;
@@ -438,9 +442,9 @@ export function bootRenderer(): Disposer {
     store.getState().bindRideAnalysisActions(null);
     store.getState().bindTrainingExportActions(null);
     store.getState().bindOnboardingActions(null);
-    disposeLifecycle();
     disposeRideAnalysisSelection();
     disposeSetupReadiness();
+    window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();
     desktopUpdateController.dispose();

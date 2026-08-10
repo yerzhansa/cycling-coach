@@ -12,7 +12,9 @@ pnpm exec changeset
 
 The CLI will ask which packages changed and how (patch/minor/major), and write a markdown file to `.changeset/`. Commit that file with your PR.
 
-When the PR merges to main, a "Version PR" will be opened (or updated) by the changesets GitHub Action, aggregating pending changesets into version bumps + CHANGELOG entries. Merging the Version PR triggers the publish workflow.
+When the PR merges to main, a "Version PR" will be opened (or updated) by the changesets GitHub Action, aggregating pending changesets into version bumps + CHANGELOG entries. Merging it dispatches only the release paths whose package versions changed.
+
+Desktop changes select `@enduragent/desktop` (and the renderer when applicable), not `cycling-coach`. The desktop app uses independent SemVer and an `enduragent-desktop@<version>` release; it never requires an npm publication.
 
 ## Why `commit: false`?
 
@@ -34,11 +36,11 @@ Engineering details (anything you want — code refs, hash, rationale). Ignored 
 
 Rules:
 
-- One sentence per `User-facing:` line, written in plain English in the bot's voice.
+- One sentence per `User-facing:` line, written in plain product language.
 - Multiple user-visible changes in one changeset → multiple `User-facing:` lines, each becomes a bullet.
 - Pure-infra changes (CI, publishing, build tooling, internal refactors) omit the line — they stay in `CHANGELOG.md` for git history but don't reach athletes.
 - The token must start the line after optional indentation. Generated changelog lines may prefix it with a Markdown bullet and an optional commit hash of 7 or more hexadecimal characters followed by a colon (for example, `- abc1234: User-facing: ...`). Mid-line prose that merely mentions `User-facing:` is ignored.
-- The convention propagates from `.changeset/*.md` → `CHANGELOG.md` → GitHub Release body automatically; `/whatsnew` reads the GitHub Release body.
+- The convention propagates from `.changeset/*.md` → `CHANGELOG.md` → the matching GitHub Release body. `/whatsnew` reads npm-binary release notes; desktop notes stay with the desktop release.
 
 ## Binary packages and CalVer
 

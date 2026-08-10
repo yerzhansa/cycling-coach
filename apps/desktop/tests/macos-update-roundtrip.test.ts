@@ -1,8 +1,10 @@
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   MACOS_UPDATER_ROUND_TRIP_FEED_URL,
   createMacosUpdaterRoundTripEvidence,
   parseMacosApplicationProcessObservation,
+  parseMacosProcessTableObservation,
   parseMacosDownloadedUpdateInfo,
   requireMacosUpdaterRoundTripInput,
   verifyMacosUpdaterRoundTripIdentities,
@@ -10,6 +12,7 @@ import {
   type MacosUpdaterRoundTripInput,
 } from "../scripts/verify-updater-round-trip.mjs";
 import type { VerifiedMacosReleaseApplication } from "../scripts/verify-macos-release.mjs";
+import { runAcceptanceCommand } from "../scripts/support/packaged-telegram/acceptance-deadline.js";
 
 const baselineVersion = "0.1.0";
 const candidateVersion = "0.1.1";
@@ -74,6 +77,7 @@ function persistenceView(overrides: Record<string, unknown> = {}) {
       { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
     ],
     credentialCiphertext: digest,
+    latest: { ...digest, sha256: "d".repeat(64) },
     memory: { ...digest, sha256: "b".repeat(64) },
     session: { ...digest, sha256: "c".repeat(64) },
     runtimeConfig: { session: { timezone: "UTC", idleMinutes: 23 } },
@@ -84,6 +88,76 @@ function persistenceView(overrides: Record<string, unknown> = {}) {
 }
 
 describe("macOS updater round-trip input", () => {
+  it("fails with phase-only diagnostics that do not expose CLI arguments", async () => {
+    const sensitiveArgument = "updater-cli-secret-must-not-appear";
+    const script = fileURLToPath(
+      new URL("../scripts/verify-updater-round-trip.mjs", import.meta.url),
+    );
+    const result = await runAcceptanceCommand(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        script,
+        "0.1.0",
+        "0.1.1",
+        sensitiveArgument,
+        "/private/tmp/candidate-envelope",
+        "/private/tmp/evidence.json",
+      ],
+      { allowFailure: true, timeoutMs: 5_000 },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).toHaveLength(0);
+    expect(result.stderr.toString("utf8")).toBe(
+      "macOS updater round trip failed; phase=input-validation; cleanup=not-started; reason=round-trip requires a steady macOS arm64 runner\n",
+    );
+    expect(result.stderr.includes(sensitiveArgument)).toBe(false);
+  });
+
+  it("omits unknown error text and CLI paths from failure diagnostics", async () => {
+    const sensitiveArgument = "updater-unknown-error-secret-must-not-appear";
+    const script = fileURLToPath(
+      new URL("../scripts/verify-updater-round-trip.mjs", import.meta.url),
+    );
+    const hostPreload = `data:text/javascript,${encodeURIComponent(
+      'Object.defineProperty(process,"platform",{value:"darwin"});Object.defineProperty(process,"arch",{value:"arm64"});',
+    )}`;
+    const result = await runAcceptanceCommand(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--import",
+        hostPreload,
+        script,
+        "0.1.0",
+        "0.1.1",
+        `/private/tmp/${sensitiveArgument}-baseline`,
+        "/private/tmp/nonexistent-candidate-envelope",
+        "/private/tmp/nonexistent-evidence.json",
+      ],
+      {
+        allowFailure: true,
+        timeoutMs: 5_000,
+        environment: {
+          ...process.env,
+          ENDURAGENT_MACOS_UPDATE_ROUNDTRIP_MODE: "steady",
+        },
+      },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.signal).toBeNull();
+    expect(result.stdout).toHaveLength(0);
+    expect(result.stderr.toString("utf8")).toBe(
+      "macOS updater round trip failed; phase=verify-release-envelopes; cleanup=not-started\n",
+    );
+    expect(result.stderr.includes(sensitiveArgument)).toBe(false);
+  });
+
   it("accepts one strictly increasing stable pair on a steady arm64 macOS runner", () => {
     expect(
       requireMacosUpdaterRoundTripInput(input, {
@@ -234,6 +308,7 @@ describe("macOS updater persisted state continuity", () => {
         credentialCiphertext: { size: 123, sha256: "d".repeat(64), sha512: "ciphertext-sha512" },
       }),
     },
+    { after: persistenceView({ latest: { size: 1, sha256: "g", sha512: "g" } }) },
     { after: persistenceView({ memory: { size: 1, sha256: "e", sha512: "e" } }) },
     { after: persistenceView({ session: { size: 1, sha256: "f", sha512: "f" } }) },
     { after: persistenceView({ runtimeConfig: { session: { timezone: "Asia/Almaty" } } }) },
@@ -290,6 +365,19 @@ describe("macOS application process authority", () => {
     Buffer.from(["p0", "ftxt", `n${executable}`, ""].join("\0")),
   ])("rejects malformed or out-of-authority process observations", (bytes) => {
     expect(() => parseMacosApplicationProcessObservation(bytes, application)).toThrow();
+  });
+});
+
+describe("macOS launched process-tree authority", () => {
+  it("records parentage and process birth identity without command-line data", () => {
+    const bytes = Buffer.from(
+      [" 101 1 Sun Aug  9 16:56:31 2026", " 102 101 Sun Aug  9 16:56:32 2026", ""].join("\n"),
+    );
+
+    expect(parseMacosProcessTableObservation(bytes)).toEqual([
+      { pid: 101, parentPid: 1, startedAt: "Sun Aug 9 16:56:31 2026" },
+      { pid: 102, parentPid: 101, startedAt: "Sun Aug 9 16:56:32 2026" },
+    ]);
   });
 });
 

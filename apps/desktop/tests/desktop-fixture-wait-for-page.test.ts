@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { waitForPage } from "./helpers/desktop-fixture.js";
+import { waitForPage } from "../scripts/support/desktop-cdp.js";
 
 describe("Desktop renderer discovery", () => {
   const servers: ReturnType<typeof createServer>[] = [];

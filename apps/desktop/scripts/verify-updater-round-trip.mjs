@@ -14,6 +14,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "@enduragent/coach-contract";
+import { LATEST_SCHEMA_VERSION, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import {
   DESKTOP_UPDATER_CACHE_DIRECTORY,
   requireGenericFeedUrl,
@@ -23,16 +24,18 @@ import {
   inspectMacosReleaseApplication,
   verifyMacosReleaseArtifacts,
 } from "./verify-macos-release.mjs";
-import { connectCdp, reservePort, waitForPage } from "../tests/helpers/desktop-fixture.ts";
+import { connectCdp, reservePort, waitForPage } from "./support/desktop-cdp.ts";
 import {
   callAcceptanceCdp,
   runAcceptanceCommand,
+  terminateAcceptanceChild,
   withAcceptanceDeadline,
-} from "../tests/fixtures/packaged-telegram/acceptance-deadline.ts";
+} from "./support/packaged-telegram/acceptance-deadline.ts";
+import { prepareDisposableKeychain } from "./support/packaged-telegram/disposable-keychain.ts";
 import {
   observeTelegramAcceptanceChild,
   telegramAcceptanceDebuggerListenerOwner,
-} from "../tests/fixtures/packaged-telegram/process-safety.ts";
+} from "./support/packaged-telegram/process-safety.ts";
 
 export const MACOS_UPDATER_ROUND_TRIP_MODE = "steady";
 export const MACOS_UPDATER_ROUND_TRIP_FEED_URL =
@@ -43,6 +46,13 @@ const maximumUpdateInfoBytes = 16_384;
 const downloadTimeoutMs = 10 * 60_000;
 const transitionTimeoutMs = 2 * 60_000;
 const shutdownTimeoutMs = 30_000;
+const cleanupTerminationGraceMs = 2_000;
+const cleanupKillGraceMs = 2_000;
+const cleanupSocketGraceMs = 1_000;
+const processTrackingIntervalMs = 250;
+const maximumProcessTableBytes = 4 * 1024 * 1024;
+const rendererRpcTimeoutMs = 30_000;
+const rendererDebuggerTimeoutSlackMs = 5_000;
 const credentialDirectoryName = "credentials-v1";
 const persistenceCredentialSlot = "openrouter";
 const persistenceChatId = "desktop";
@@ -53,6 +63,27 @@ class MacosUpdaterRoundTripError extends Error {
     super(message);
     this.name = "MacosUpdaterRoundTripError";
   }
+}
+
+const failureDiagnostics = new WeakMap();
+
+function bindFailureDiagnostic(error, phase, cleanup) {
+  const failure =
+    error instanceof Error ? error : new MacosUpdaterRoundTripError("round-trip failed");
+  failureDiagnostics.set(failure, Object.freeze({ phase, cleanup }));
+  return failure;
+}
+
+function safeFailureDiagnostic(error) {
+  if (!(error instanceof Error)) {
+    return Object.freeze({ phase: "input-validation", cleanup: "not-started" });
+  }
+  const diagnostic =
+    failureDiagnostics.get(error) ??
+    Object.freeze({ phase: "input-validation", cleanup: "not-started" });
+  return error instanceof MacosUpdaterRoundTripError
+    ? Object.freeze({ ...diagnostic, reason: error.message })
+    : diagnostic;
 }
 
 function fail(message) {
@@ -484,6 +515,319 @@ async function observeApplicationProcesses(application) {
   return parseMacosApplicationProcessObservation(result.stdout, application);
 }
 
+const processStartPattern =
+  /^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u;
+
+export function parseMacosProcessTableObservation(bytes) {
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.length === 0 ||
+    bytes.length > maximumProcessTableBytes
+  ) {
+    fail("process table observation is invalid");
+  }
+  const processes = [];
+  const seen = new Set();
+  for (const rawLine of Buffer.from(bytes).toString("utf8").split(/\r?\n/u)) {
+    if (rawLine.trim() === "") continue;
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/u.exec(rawLine);
+    if (match === null) fail("process table observation is malformed");
+    const pid = Number(match[1]);
+    const parentPid = Number(match[2]);
+    const startedAt = match[3].replace(/\s+/gu, " ");
+    if (
+      !Number.isSafeInteger(pid) ||
+      pid < 1 ||
+      !Number.isSafeInteger(parentPid) ||
+      parentPid < 0 ||
+      !processStartPattern.test(startedAt) ||
+      seen.has(pid)
+    ) {
+      fail("process table observation is ambiguous");
+    }
+    seen.add(pid);
+    processes.push(Object.freeze({ pid, parentPid, startedAt }));
+  }
+  if (processes.length === 0) fail("process table observation is empty");
+  processes.sort((left, right) => left.pid - right.pid);
+  return Object.freeze(processes);
+}
+
+async function observeProcessTable() {
+  const result = await runAcceptanceCommand("/bin/ps", ["-ww", "-axo", "pid=,ppid=,lstart="], {
+    allowFailure: true,
+    environment: { ...process.env, LANG: "C", LC_ALL: "C" },
+    timeoutMs: 5_000,
+  });
+  if (
+    result.code !== 0 ||
+    result.signal !== null ||
+    result.stderr.length !== 0 ||
+    result.stdout.length === 0
+  ) {
+    fail("process table observation failed");
+  }
+  return parseMacosProcessTableObservation(result.stdout);
+}
+
+function processIdentityKey(identity) {
+  return `${identity.pid}:${identity.startedAt}`;
+}
+
+function sameProcessIdentity(left, right) {
+  return left.pid === right.pid && left.startedAt === right.startedAt;
+}
+
+function requireProcessTableObservation(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    fail("process table observation is invalid");
+  }
+  const seen = new Set();
+  const processes = value.map((candidate) => {
+    if (
+      !exactKeys(candidate, ["parentPid", "pid", "startedAt"]) ||
+      !Number.isSafeInteger(candidate.pid) ||
+      candidate.pid < 1 ||
+      !Number.isSafeInteger(candidate.parentPid) ||
+      candidate.parentPid < 0 ||
+      typeof candidate.startedAt !== "string" ||
+      !processStartPattern.test(candidate.startedAt) ||
+      seen.has(candidate.pid)
+    ) {
+      fail("process table observation is ambiguous");
+    }
+    seen.add(candidate.pid);
+    return Object.freeze({
+      pid: candidate.pid,
+      parentPid: candidate.parentPid,
+      startedAt: candidate.startedAt,
+    });
+  });
+  processes.sort((left, right) => left.pid - right.pid);
+  return Object.freeze(processes);
+}
+
+export function createMacosApplicationProcessObserver(application, context = {}) {
+  if (!isAbsolute(application) || !application.endsWith(".app")) {
+    fail("application process observer is invalid");
+  }
+  const observeBundleProcesses =
+    context.observeBundleProcesses ?? (() => observeApplicationProcesses(application));
+  const readProcessTable = context.readProcessTable ?? observeProcessTable;
+  const signalProcess = context.signalProcess ?? ((pid, signal) => process.kill(pid, signal));
+  const trackingIntervalMs = context.trackingIntervalMs ?? processTrackingIntervalMs;
+  if (!Number.isSafeInteger(trackingIntervalMs) || trackingIntervalMs < 10) {
+    fail("application process observer interval is invalid");
+  }
+
+  const roots = new Map();
+  let closed = false;
+  let monitor;
+  let refreshInFlight;
+  let trackingFailed = false;
+
+  const requireOpen = () => {
+    if (closed) fail("application process observer is closed");
+    if (trackingFailed) fail("application process tracking failed");
+  };
+
+  const updateRoot = (root, table) => {
+    if (root.frozen) return;
+    const currentByPid = new Map(table.map((identity) => [identity.pid, identity]));
+    const liveOwnedPids = new Set();
+    for (const identity of root.tracked.values()) {
+      const current = currentByPid.get(identity.pid);
+      if (current !== undefined && sameProcessIdentity(identity, current)) {
+        liveOwnedPids.add(identity.pid);
+      }
+    }
+    let added = true;
+    while (added) {
+      added = false;
+      for (const identity of table) {
+        const key = processIdentityKey(identity);
+        if (root.tracked.has(key) || !liveOwnedPids.has(identity.parentPid)) continue;
+        root.tracked.set(key, identity);
+        liveOwnedPids.add(identity.pid);
+        added = true;
+      }
+    }
+  };
+
+  const readAndTrack = async () => {
+    requireOpen();
+    let observed;
+    try {
+      observed = requireProcessTableObservation(await readProcessTable());
+    } catch (error) {
+      trackingFailed = true;
+      if (error instanceof MacosUpdaterRoundTripError) throw error;
+      fail("process table observation failed");
+    }
+    for (const root of roots.values()) updateRoot(root, observed);
+    return observed;
+  };
+
+  const refresh = async () => {
+    if (refreshInFlight !== undefined) return refreshInFlight;
+    const pending = readAndTrack();
+    refreshInFlight = pending;
+    try {
+      return await pending;
+    } finally {
+      if (refreshInFlight === pending) refreshInFlight = undefined;
+    }
+  };
+
+  const ensureMonitor = () => {
+    if (monitor !== undefined) return;
+    monitor = setInterval(() => {
+      void refresh().catch(() => {
+        trackingFailed = true;
+      });
+    }, trackingIntervalMs);
+    monitor.unref?.();
+  };
+
+  const liveTrackedProcesses = (table) => {
+    const currentByPid = new Map(table.map((identity) => [identity.pid, identity]));
+    const live = new Map();
+    for (const root of roots.values()) {
+      for (const identity of root.tracked.values()) {
+        const current = currentByPid.get(identity.pid);
+        if (current !== undefined && sameProcessIdentity(identity, current)) {
+          live.set(processIdentityKey(identity), current);
+        }
+      }
+    }
+    return live;
+  };
+
+  const trackRoot = async (pid) => {
+    if (!Number.isSafeInteger(pid) || pid < 1) fail("application process root is invalid");
+    const table = await refresh();
+    const identity = table.find((candidate) => candidate.pid === pid);
+    if (identity === undefined) fail("application process root is missing");
+    const key = processIdentityKey(identity);
+    let root = roots.get(key);
+    if (root === undefined) {
+      root = { frozen: false, identity, tracked: new Map([[key, identity]]) };
+      roots.set(key, root);
+      updateRoot(root, table);
+    }
+    ensureMonitor();
+    return identity;
+  };
+
+  const freezeRoot = async (identity) => {
+    const key = processIdentityKey(identity);
+    const root = roots.get(key);
+    if (root === undefined || !sameProcessIdentity(root.identity, identity)) {
+      fail("application process root is unknown");
+    }
+    const table = await refresh();
+    updateRoot(root, table);
+    root.frozen = true;
+    return Object.freeze([...root.tracked.values()]);
+  };
+
+  const freezeAll = async () => {
+    const table = await refresh();
+    for (const root of roots.values()) {
+      updateRoot(root, table);
+      root.frozen = true;
+    }
+  };
+
+  const observe = async () => {
+    requireOpen();
+    const before = await refresh();
+    const bundle = await observeBundleProcesses();
+    if (
+      !exactKeys(bundle, ["bundlePids", "mainPids"]) ||
+      !Array.isArray(bundle.bundlePids) ||
+      !Array.isArray(bundle.mainPids) ||
+      [...bundle.bundlePids, ...bundle.mainPids].some(
+        (pid) => !Number.isSafeInteger(pid) || pid < 1,
+      ) ||
+      new Set(bundle.bundlePids).size !== bundle.bundlePids.length ||
+      new Set(bundle.mainPids).size !== bundle.mainPids.length ||
+      bundle.mainPids.some((pid) => !bundle.bundlePids.includes(pid))
+    ) {
+      fail("application process observation is invalid");
+    }
+    const after = await refresh();
+    const beforeByPid = new Map(before.map((identity) => [identity.pid, identity]));
+    const afterByPid = new Map(after.map((identity) => [identity.pid, identity]));
+    const owned = liveTrackedProcesses(after);
+    for (const pid of bundle.bundlePids) {
+      const beforeIdentity = beforeByPid.get(pid);
+      const afterIdentity = afterByPid.get(pid);
+      if (
+        beforeIdentity === undefined ||
+        afterIdentity === undefined ||
+        !sameProcessIdentity(beforeIdentity, afterIdentity)
+      ) {
+        fail("application process observation changed while reading");
+      }
+      owned.set(processIdentityKey(afterIdentity), afterIdentity);
+    }
+    const ownedProcesses = [...owned.values()].sort((left, right) => left.pid - right.pid);
+    return Object.freeze({
+      bundlePids: Object.freeze([...bundle.bundlePids]),
+      mainPids: Object.freeze([...bundle.mainPids]),
+      ownedPids: Object.freeze(ownedProcesses.map((identity) => identity.pid)),
+      ownedProcesses: Object.freeze(ownedProcesses),
+    });
+  };
+
+  const signalIdentity = async (identity, signal) => {
+    // A PID can be reused after observation, so authority must survive this final birth check.
+    const table = await refresh();
+    const current = table.find((candidate) => candidate.pid === identity.pid);
+    if (current === undefined || !sameProcessIdentity(identity, current)) return true;
+    try {
+      signalProcess(identity.pid, signal);
+      return true;
+    } catch (error) {
+      return error?.code === "ESRCH";
+    }
+  };
+
+  const signalAll = async (signal) => {
+    const observation = await observe();
+    const rootKeys = new Set([...roots.values()].map((root) => processIdentityKey(root.identity)));
+    const ordered = [...observation.ownedProcesses].sort((left, right) => {
+      const leftRoot = rootKeys.has(processIdentityKey(left));
+      const rightRoot = rootKeys.has(processIdentityKey(right));
+      if (leftRoot !== rightRoot) return leftRoot ? -1 : 1;
+      return left.pid - right.pid;
+    });
+    let signaledAll = true;
+    for (const identity of ordered) {
+      if (!(await signalIdentity(identity, signal))) signaledAll = false;
+    }
+    return signaledAll;
+  };
+
+  const close = async () => {
+    if (closed) return;
+    if (monitor !== undefined) clearInterval(monitor);
+    if (refreshInFlight !== undefined) await refreshInFlight.catch(() => undefined);
+    closed = true;
+  };
+
+  return Object.freeze({
+    close,
+    freezeAll,
+    freezeRoot,
+    observe,
+    signalAll,
+    signalIdentity,
+    trackRoot,
+  });
+}
+
 async function debuggerListenerOwner(port, environment) {
   const result = await runAcceptanceCommand(
     "/usr/sbin/lsof",
@@ -509,12 +853,17 @@ async function waitUntil(description, probe, timeoutMs, intervalMs = 100) {
   fail(`${description} timed out`);
 }
 
-async function evaluateRenderer(connection, expression) {
-  const response = await callAcceptanceCdp(connection, "Runtime.evaluate", {
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
+async function evaluateRenderer(connection, expression, timeoutMs = 5_000) {
+  const response = await callAcceptanceCdp(
+    connection,
+    "Runtime.evaluate",
+    {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    },
+    timeoutMs,
+  );
   if (response.exceptionDetails !== undefined || !exactObject(response.result)) {
     fail("renderer evaluation failed");
   }
@@ -548,11 +897,13 @@ async function callAuthBridge(connection, method, args = []) {
 }
 
 async function callRendererRpc(connection, expectedAthleteHome, method, params) {
+  const timeoutMs = rendererRpcTimeoutMs;
   const input = JSON.stringify({
     expectedAthleteHome,
     method,
     params,
     protocolVersion: PROTOCOL_VERSION,
+    timeoutMs,
   });
   const response = await evaluateRenderer(
     connection,
@@ -565,7 +916,7 @@ async function callRendererRpc(connection, expectedAthleteHome, method, params) 
         const timer = setTimeout(() => {
           socket.close();
           reject(new Error("RPC timeout"));
-        }, 10000);
+        }, input.timeoutMs);
         const finish = (callback, value) => {
           clearTimeout(timer);
           socket.close();
@@ -618,6 +969,7 @@ async function callRendererRpc(connection, expectedAthleteHome, method, params) 
         });
       });
     })()`,
+    timeoutMs + rendererDebuggerTimeoutSlackMs,
   );
   if (
     !exactObject(response) ||
@@ -668,6 +1020,7 @@ export function verifyMacosUpdaterRoundTripPersistence(input) {
       "athleteState",
       "credentialCiphertext",
       "credentialStatuses",
+      "latest",
       "memory",
       "owner",
       "runtimeConfig",
@@ -679,6 +1032,7 @@ export function verifyMacosUpdaterRoundTripPersistence(input) {
       "athleteState",
       "credentialCiphertext",
       "credentialStatuses",
+      "latest",
       "memory",
       "owner",
       "runtimeConfig",
@@ -693,6 +1047,7 @@ export function verifyMacosUpdaterRoundTripPersistence(input) {
     !configuredCredential(before.credentialStatuses) ||
     !configuredCredential(after.credentialStatuses) ||
     !sameDigest(before.credentialCiphertext, after.credentialCiphertext) ||
+    !sameDigest(before.latest, after.latest) ||
     !sameDigest(before.memory, after.memory) ||
     !sameDigest(before.session, after.session) ||
     canonicalJson(before.runtimeConfig) !== canonicalJson(after.runtimeConfig) ||
@@ -714,15 +1069,32 @@ export function verifyMacosUpdaterRoundTripPersistence(input) {
 }
 
 async function seedSyntheticDurableState(athleteHome) {
+  const dataDirectory = join(athleteHome, "data");
   const memoryDirectory = join(athleteHome, "memory");
   const sessionsDirectory = join(athleteHome, "sessions");
   await Promise.all([
+    mkdir(dataDirectory, { recursive: true, mode: 0o700 }),
     mkdir(memoryDirectory, { recursive: true, mode: 0o700 }),
     mkdir(sessionsDirectory, { recursive: true, mode: 0o700 }),
   ]);
+  const latestPath = join(dataDirectory, "latest.json");
   const memoryPath = join(memoryDirectory, "MEMORY.md");
   const sessionPath = join(sessionsDirectory, `${persistenceChatId}.jsonl`);
+  const latest = LatestJsonSchema.parse({
+    metadata: {
+      schema_version: LATEST_SCHEMA_VERSION,
+      last_updated: "2000-01-01T00:00:00.000Z",
+      freshness: "fresh",
+    },
+    athlete_profile: null,
+    current_status: null,
+    derived_metrics: {},
+    recent_activities: [],
+    planned_workouts: [],
+    wellness_data: null,
+  });
   await Promise.all([
+    writeFile(latestPath, `${JSON.stringify(latest)}\n`, { flag: "wx", mode: 0o600 }),
     writeFile(
       memoryPath,
       "## Athlete\n_updated: 2000-01-01\nSynthetic update continuity marker.\n",
@@ -741,7 +1113,7 @@ async function seedSyntheticDurableState(athleteHome) {
       { flag: "wx", mode: 0o600 },
     ),
   ]);
-  return Object.freeze({ memoryPath, sessionPath });
+  return Object.freeze({ latestPath, memoryPath, sessionPath });
 }
 
 async function requirePrivateDigest(path, label) {
@@ -772,6 +1144,7 @@ async function readPersistenceView(connection, input) {
     athleteHome: runtimeConfig.athleteHome,
     credentialStatuses,
     credentialCiphertext: await requirePrivateDigest(input.credentialPath, "encrypted credential"),
+    latest: await requirePrivateDigest(input.latestPath, "athlete state"),
     memory: await requirePrivateDigest(input.memoryPath, "memory state"),
     session: await requirePrivateDigest(input.sessionPath, "session state"),
     runtimeConfig: runtimeConfig.result,
@@ -816,18 +1189,22 @@ async function seedApplicationState(connection, input) {
   ) {
     fail("synthetic unit settings were not stored by the application");
   }
-  const intakeWrite = await callRendererRpc(connection, input.athleteHome, "saveIntake", {
-    swim_skill_floor: null,
-    continuous_distance_capable: null,
-    open_water_comfort: null,
-    prior_bsi: false,
-    clinician_cleared: null,
-    injury_status: "none",
-  });
-  if (canonicalJson(intakeWrite.result) !== canonicalJson({ schemaVersion: 1, saved: true })) {
-    fail("synthetic athlete state was not stored by the application");
+  const persistence = await readPersistenceView(connection, input);
+  const athleteState = persistence.athleteState;
+  if (
+    !exactObject(athleteState) ||
+    athleteState.schemaVersion !== LATEST_SCHEMA_VERSION ||
+    athleteState.lastUpdated !== "2000-01-01T00:00:00.000Z" ||
+    athleteState.athleteProfile !== null ||
+    athleteState.currentStatus !== null ||
+    canonicalJson(athleteState.derivedMetrics) !== "{}" ||
+    canonicalJson(athleteState.recentActivities) !== "[]" ||
+    canonicalJson(athleteState.plannedWorkouts) !== "[]" ||
+    athleteState.wellness !== null
+  ) {
+    fail("synthetic athlete state was not loaded by the application");
   }
-  return readPersistenceView(connection, input);
+  return persistence;
 }
 
 async function fileContains(path, needle) {
@@ -1103,301 +1480,499 @@ export function createMacosUpdaterRoundTripEvidence(input) {
   });
 }
 
-export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
-  const input = requireMacosUpdaterRoundTripInput(rawInput, {
-    platform: overrides.platform,
-    arch: overrides.arch,
-    mode: overrides.mode,
-  });
-  const verifyArtifacts = overrides.verifyArtifacts ?? verifyArtifactsForVersion;
-  const inspectApplication = overrides.inspectApplication ?? inspectMacosReleaseApplication;
-  const createScratch = overrides.createScratch ?? createPrivateScratch;
-  const removeScratch = overrides.removeScratch ?? removePrivateScratch;
-  const observeProcesses = overrides.observeProcesses ?? observeApplicationProcesses;
-  const writeEvidenceFile = overrides.writeEvidence ?? writeEvidence;
-  const baselineArtifacts = await verifyArtifacts(input.baselineEnvelope, input.baselineVersion);
-  const candidateArtifacts = await verifyArtifacts(input.candidateEnvelope, input.candidateVersion);
-  if (
-    baselineArtifacts?.version !== input.baselineVersion ||
-    candidateArtifacts?.version !== input.candidateVersion
-  ) {
-    fail("verified release envelope version is invalid");
+function closeChildHandles(child) {
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    try {
+      stream?.destroy();
+    } catch {}
   }
-  const [baselineDigest, candidateDigest] = await Promise.all([
-    digestStableFile(baselineArtifacts.paths.zip, "baseline release ZIP"),
-    digestStableFile(candidateArtifacts.paths.zip, "candidate release ZIP"),
-  ]);
-  requireArtifactDigest(baselineArtifacts, baselineDigest, "baseline");
-  requireArtifactDigest(candidateArtifacts, candidateDigest, "candidate");
-
-  const scratch = await createScratch();
-  let initialChild;
-  let verificationChild;
-  let relaunchedPid;
-  let debuggerConnection;
-  let verificationConnection;
-  let installedApplication;
-  let completed = false;
   try {
-    const baselineApplication = await extractSingleApplication(
-      baselineArtifacts.paths.zip,
-      join(scratch.path, "baseline"),
-    );
-    const candidateApplication = await extractSingleApplication(
-      candidateArtifacts.paths.zip,
-      join(scratch.path, "candidate"),
-    );
-    const installRoot = join(scratch.path, "installed");
-    await mkdir(installRoot, { mode: 0o700 });
-    installedApplication = join(installRoot, `${productName}.app`);
-    await installApplication(baselineApplication, installedApplication);
-    const [baselineIdentity, candidateIdentity, installedBaselineIdentity] = await Promise.all([
-      inspectApplication(baselineApplication),
-      inspectApplication(candidateApplication),
-      inspectApplication(installedApplication),
-    ]);
-    const updaterCache = join(scratch.path, "home/Library/Caches", DESKTOP_UPDATER_CACHE_DIRECTORY);
-    await requireMissing(updaterCache, "round-trip updater cache");
-    const home = join(scratch.path, "home");
-    const athleteHome = join(scratch.path, "athlete");
-    const userData = join(scratch.path, "user-data");
-    await Promise.all([
-      mkdir(home, { recursive: true, mode: 0o700 }),
-      mkdir(athleteHome, { recursive: true, mode: 0o700 }),
-      mkdir(userData, { recursive: true, mode: 0o700 }),
-    ]);
-    const durableState = await seedSyntheticDurableState(athleteHome);
-    const credentialPlaintext = `enduragent-update-${randomBytes(32).toString("hex")}`;
-    const credentialPath = join(
-      userData,
-      credentialDirectoryName,
-      `${persistenceCredentialSlot}.bin`,
-    );
-    const debuggerPort = await reservePort();
-    const executable = join(installedApplication, `Contents/MacOS/${productName}`);
-    const environment = {
-      ...process.env,
-      HOME: home,
-      ENDURAGENT_HOME: athleteHome,
-      FORCE_COLOR: undefined,
-      NO_COLOR: undefined,
-      CLICOLOR_FORCE: undefined,
-    };
-    initialChild = spawn(
-      executable,
-      [`--user-data-dir=${userData}`, `--remote-debugging-port=${debuggerPort}`],
-      { env: environment, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    initialChild.stdout?.resume();
-    initialChild.stderr?.resume();
-    const childLifecycle = observeTelegramAcceptanceChild(initialChild);
-    const launch = await withAcceptanceDeadline(
-      "baseline application launch",
-      childLifecycle.launch,
-      {
-        timeoutMs: 30_000,
-      },
-    );
-    if (launch.state !== "spawned") fail("baseline application could not launch");
-    const initialPid = launch.pid;
-    const debuggerUrl = await waitForPage(debuggerPort, { timeoutMs: 60_000 });
-    if ((await debuggerListenerOwner(debuggerPort, environment)) !== initialPid) {
-      fail("baseline debugger listener is outside the installed application");
-    }
-    debuggerConnection = await connectCdp(debuggerUrl, () => undefined);
-    await callAcceptanceCdp(debuggerConnection, "Runtime.enable");
-    const persistenceInput = {
-      athleteHome,
-      credentialPath,
-      credentialPlaintext,
-      memoryPath: durableState.memoryPath,
-      sessionPath: durableState.sessionPath,
-    };
-    const beforePersistence = await seedApplicationState(debuggerConnection, persistenceInput);
-    await waitForDownloadedState(debuggerConnection, input.candidateVersion);
-    const initialProcesses = await observeProcesses(installedApplication);
-    if (initialProcesses.mainPids.length !== 1 || initialProcesses.mainPids[0] !== initialPid) {
-      fail("baseline application process identity is ambiguous");
-    }
-    const downloaded = await readDownloadedCandidate(
-      updaterCache,
-      candidateArtifacts,
-      candidateDigest,
-    );
-    await clickInstallUpdate(debuggerConnection, input.candidateVersion);
-    const terminal = await withAcceptanceDeadline(
-      "baseline application update exit",
-      childLifecycle.terminal,
-      { timeoutMs: transitionTimeoutMs },
-    );
-    debuggerConnection.socket.close();
-    debuggerConnection = undefined;
-    if (terminal.state !== "closed" || terminal.code !== 0 || terminal.signal !== null) {
-      fail("baseline application did not exit cleanly for update");
-    }
-    const initialPids = new Set(initialProcesses.bundlePids);
-    const relaunchedProcesses = await waitUntil(
-      "relaunched candidate application",
-      async () => {
-        const observation = await observeProcesses(installedApplication);
-        if (observation.bundlePids.some((pid) => initialPids.has(pid))) return false;
-        if (observation.mainPids.length !== 1 || observation.mainPids[0] === initialPid)
-          return false;
-        return observation;
-      },
-      transitionTimeoutMs,
-      250,
-    );
-    relaunchedPid = relaunchedProcesses.mainPids[0];
-    const relaunchedIdentity = await waitUntil(
-      "relaunched candidate identity",
-      async () => {
-        const identity = await inspectApplication(installedApplication);
-        return identity.version === input.candidateVersion ? identity : false;
-      },
-      transitionTimeoutMs,
-      250,
-    );
-    const identity = verifyMacosUpdaterRoundTripIdentities({
-      baselineVersion: input.baselineVersion,
-      candidateVersion: input.candidateVersion,
-      expectedFeedUrl: MACOS_UPDATER_ROUND_TRIP_FEED_URL,
-      baseline: baselineIdentity,
-      candidate: candidateIdentity,
-      installedBaseline: installedBaselineIdentity,
-      relaunched: relaunchedIdentity,
+    child.unref();
+  } catch {}
+}
+
+async function terminateRoundTripChild(child) {
+  if (child === undefined) return true;
+  if (child.exitCode !== null || child.signalCode !== null) {
+    closeChildHandles(child);
+    return true;
+  }
+  let terminated = false;
+  try {
+    terminated = await terminateAcceptanceChild(child, {
+      terminationGraceMs: cleanupTerminationGraceMs,
+      killGraceMs: cleanupKillGraceMs,
     });
-    const beforeFinalShutdown = await observeProcesses(installedApplication);
+  } catch {}
+  closeChildHandles(child);
+  return terminated;
+}
+
+function observeRoundTripChildExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+  }
+  return new Promise((resolveExit) => {
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+}
+
+async function closeRoundTripConnection(connection) {
+  if (connection === undefined) return true;
+  const socket = connection.socket;
+  if (socket.readyState === 3) return true;
+  let closed;
+  try {
+    closed = new Promise((resolveClose) =>
+      socket.addEventListener("close", () => resolveClose(true), { once: true }),
+    );
+    socket.close();
+  } catch {
+    return false;
+  }
+  const graceful = await withAcceptanceDeadline("updater debugger cleanup", closed, {
+    timeoutMs: cleanupSocketGraceMs,
+  }).catch(() => false);
+  if (graceful) return true;
+  try {
+    socket.terminate?.();
+  } catch {}
+  return withAcceptanceDeadline("updater debugger termination", closed, {
+    timeoutMs: cleanupSocketGraceMs,
+  }).catch(() => false);
+}
+
+async function waitForObservedProcessExit(processObserver, timeoutMs) {
+  return waitUntil(
+    "updater application cleanup",
+    async () => {
+      const observation = await processObserver.observe();
+      return observation.ownedPids.length === 0 ? true : false;
+    },
+    timeoutMs,
+    100,
+  ).catch(() => false);
+}
+
+async function terminateObservedApplication(processObserver) {
+  if (processObserver === undefined) return true;
+  let observation;
+  try {
+    observation = await processObserver.observe();
+  } catch {
+    return false;
+  }
+  if (observation.ownedPids.length === 0) return true;
+  const gracefulSignalSent = await processObserver.signalAll("SIGTERM");
+  if (
+    gracefulSignalSent &&
+    (await waitForObservedProcessExit(processObserver, cleanupTerminationGraceMs))
+  ) {
+    return true;
+  }
+  if (!(await processObserver.signalAll("SIGKILL"))) return false;
+  return waitForObservedProcessExit(processObserver, cleanupKillGraceMs);
+}
+
+async function cleanupRoundTripResources(input) {
+  const observerFrozen =
+    input.processObserver === undefined
+      ? true
+      : await input.processObserver
+          .freezeAll()
+          .then(() => true)
+          .catch(() => false);
+  const [connectionResults, childResults] = await Promise.all([
+    Promise.all([
+      closeRoundTripConnection(input.debuggerConnection),
+      closeRoundTripConnection(input.verificationConnection),
+    ]),
+    Promise.all([
+      terminateRoundTripChild(input.initialChild),
+      terminateRoundTripChild(input.verificationChild),
+    ]),
+  ]);
+  const applicationTerminated = input.terminateApplication
+    ? observerFrozen && (await terminateObservedApplication(input.processObserver))
+    : true;
+  const observerClosed = await input.processObserver
+    ?.close()
+    .then(() => true)
+    .catch(() => false);
+  return [
+    ...connectionResults,
+    ...childResults,
+    observerFrozen,
+    applicationTerminated,
+    observerClosed ?? true,
+  ].every(Boolean);
+}
+
+async function restoreRoundTripKeychain(keychain) {
+  if (keychain === undefined) return true;
+  try {
+    await keychain.restore();
+    return keychain.restored();
+  } catch {
+    return false;
+  }
+}
+
+export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
+  let phase = "input-validation";
+  let failurePhase;
+  let cleanup = "not-started";
+  try {
+    const input = requireMacosUpdaterRoundTripInput(rawInput, {
+      platform: overrides.platform,
+      arch: overrides.arch,
+      mode: overrides.mode,
+    });
+    const verifyArtifacts = overrides.verifyArtifacts ?? verifyArtifactsForVersion;
+    const inspectApplication = overrides.inspectApplication ?? inspectMacosReleaseApplication;
+    const createScratch = overrides.createScratch ?? createPrivateScratch;
+    const removeScratch = overrides.removeScratch ?? removePrivateScratch;
+    const writeEvidenceFile = overrides.writeEvidence ?? writeEvidence;
+    phase = "verify-release-envelopes";
+    const baselineArtifacts = await verifyArtifacts(input.baselineEnvelope, input.baselineVersion);
+    const candidateArtifacts = await verifyArtifacts(
+      input.candidateEnvelope,
+      input.candidateVersion,
+    );
     if (
-      beforeFinalShutdown.mainPids.length !== 1 ||
-      beforeFinalShutdown.mainPids[0] !== relaunchedPid
+      baselineArtifacts?.version !== input.baselineVersion ||
+      candidateArtifacts?.version !== input.candidateVersion
     ) {
-      fail("relaunched application process identity changed before shutdown");
+      fail("verified release envelope version is invalid");
     }
-    process.kill(relaunchedPid, "SIGTERM");
-    await waitUntil(
-      "relaunched application graceful shutdown",
-      async () => {
-        const observation = await observeProcesses(installedApplication);
-        return observation.bundlePids.length === 0 ? true : false;
-      },
-      shutdownTimeoutMs,
-      100,
-    );
-    const verificationPort = await reservePort();
-    verificationChild = spawn(
-      executable,
-      [`--user-data-dir=${userData}`, `--remote-debugging-port=${verificationPort}`],
-      { env: environment, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    verificationChild.stdout?.resume();
-    verificationChild.stderr?.resume();
-    const verificationLifecycle = observeTelegramAcceptanceChild(verificationChild);
-    const verificationLaunch = await withAcceptanceDeadline(
-      "candidate persistence verification launch",
-      verificationLifecycle.launch,
-      { timeoutMs: 30_000 },
-    );
-    if (verificationLaunch.state !== "spawned") {
-      fail("candidate persistence verification could not launch");
-    }
-    const verificationUrl = await waitForPage(verificationPort, { timeoutMs: 60_000 });
-    if ((await debuggerListenerOwner(verificationPort, environment)) !== verificationLaunch.pid) {
-      fail("candidate persistence debugger listener is outside the installed application");
-    }
-    verificationConnection = await connectCdp(verificationUrl, () => undefined);
-    await callAcceptanceCdp(verificationConnection, "Runtime.enable");
-    const afterPersistence = await readPersistenceView(verificationConnection, persistenceInput);
-    verificationChild.kill("SIGTERM");
-    const verificationTerminal = await withAcceptanceDeadline(
-      "candidate persistence verification shutdown",
-      verificationLifecycle.terminal,
-      { timeoutMs: shutdownTimeoutMs },
-    );
-    verificationConnection.socket.close();
-    verificationConnection = undefined;
-    if (
-      verificationTerminal.state !== "closed" ||
-      verificationTerminal.code !== 0 ||
-      verificationTerminal.signal !== null
-    ) {
-      fail("candidate persistence verification did not exit cleanly");
-    }
-    await waitUntil(
-      "candidate persistence verification process cleanup",
-      async () => {
-        const observation = await observeProcesses(installedApplication);
-        return observation.bundlePids.length === 0 ? true : false;
-      },
-      shutdownTimeoutMs,
-      100,
-    );
-    const plaintextCredentialAbsent = await requirePlaintextAbsent(
-      [home, userData, athleteHome],
-      credentialPlaintext,
-    );
-    const persistence = verifyMacosUpdaterRoundTripPersistence({
-      before: beforePersistence,
-      after: afterPersistence,
-      plaintextCredentialAbsent,
-    });
-    const evidence = createMacosUpdaterRoundTripEvidence({
-      baselineVersion: input.baselineVersion,
-      candidateVersion: input.candidateVersion,
-      initialPid,
-      relaunchedPid,
-      identity,
-      download: {
-        fileName: downloaded.info.fileName,
-        size: downloaded.digest.size,
-        sha256: downloaded.digest.sha256,
-        sha512: downloaded.digest.sha512,
-      },
-      persistence,
-    });
-    await removeScratch(scratch);
-    await writeEvidenceFile(input.evidencePath, evidence);
-    completed = true;
-    return evidence;
-  } finally {
+    phase = "verify-release-digests";
+    const [baselineDigest, candidateDigest] = await Promise.all([
+      digestStableFile(baselineArtifacts.paths.zip, "baseline release ZIP"),
+      digestStableFile(candidateArtifacts.paths.zip, "candidate release ZIP"),
+    ]);
+    requireArtifactDigest(baselineArtifacts, baselineDigest, "baseline");
+    requireArtifactDigest(candidateArtifacts, candidateDigest, "candidate");
+
+    phase = "prepare-scratch";
+    const scratch = await createScratch();
+    let initialChild;
+    let verificationChild;
+    let relaunchedPid;
+    let debuggerConnection;
+    let verificationConnection;
+    let installedApplication;
+    let processObserver;
+    let keychain;
+    let completed = false;
     try {
-      debuggerConnection?.socket.close();
-    } catch {}
-    try {
-      verificationConnection?.socket.close();
-    } catch {}
-    if (!completed) {
-      if (
-        initialChild !== undefined &&
-        initialChild.exitCode === null &&
-        initialChild.signalCode === null
-      ) {
-        try {
-          initialChild.kill("SIGTERM");
-        } catch {}
+      phase = "extract-release-applications";
+      const baselineApplication = await extractSingleApplication(
+        baselineArtifacts.paths.zip,
+        join(scratch.path, "baseline"),
+      );
+      const candidateApplication = await extractSingleApplication(
+        candidateArtifacts.paths.zip,
+        join(scratch.path, "candidate"),
+      );
+      phase = "install-baseline";
+      const installRoot = join(scratch.path, "installed");
+      await mkdir(installRoot, { mode: 0o700 });
+      installedApplication = join(installRoot, `${productName}.app`);
+      await installApplication(baselineApplication, installedApplication);
+      processObserver = createMacosApplicationProcessObserver(installedApplication, {
+        observeBundleProcesses:
+          overrides.observeProcesses === undefined
+            ? undefined
+            : () => overrides.observeProcesses(installedApplication),
+        readProcessTable: overrides.readProcessTable,
+      });
+      phase = "inspect-release-identities";
+      const [baselineIdentity, candidateIdentity, installedBaselineIdentity] = await Promise.all([
+        inspectApplication(baselineApplication),
+        inspectApplication(candidateApplication),
+        inspectApplication(installedApplication),
+      ]);
+      const updaterCache = join(
+        scratch.path,
+        "home/Library/Caches",
+        DESKTOP_UPDATER_CACHE_DIRECTORY,
+      );
+      await requireMissing(updaterCache, "round-trip updater cache");
+      const home = join(scratch.path, "home");
+      const athleteHome = join(scratch.path, "athlete");
+      const userData = join(scratch.path, "user-data");
+      const keychainDirectory = join(home, "Library/Keychains");
+      const preferencesDirectory = join(home, "Library/Preferences");
+      const keychainPath = join(keychainDirectory, "acceptance.keychain-db");
+      await Promise.all([
+        mkdir(home, { recursive: true, mode: 0o700 }),
+        mkdir(athleteHome, { recursive: true, mode: 0o700 }),
+        mkdir(userData, { recursive: true, mode: 0o700 }),
+        mkdir(keychainDirectory, { recursive: true, mode: 0o700 }),
+        mkdir(preferencesDirectory, { recursive: true, mode: 0o700 }),
+      ]);
+      phase = "prepare-keychain";
+      keychain = await prepareDisposableKeychain({
+        home,
+        path: keychainPath,
+        password: randomBytes(32).toString("base64url"),
+        environment: process.env,
+        run: async (args, options) => {
+          return runAcceptanceCommand("/usr/bin/security", args, {
+            allowFailure: true,
+            environment: options.environment,
+          });
+        },
+      });
+      await keychain.activate();
+      phase = "prepare-persistence";
+      const durableState = await seedSyntheticDurableState(athleteHome);
+      const credentialPlaintext = `enduragent-update-${randomBytes(32).toString("hex")}`;
+      const credentialPath = join(
+        userData,
+        credentialDirectoryName,
+        `${persistenceCredentialSlot}.bin`,
+      );
+      const debuggerPort = await reservePort();
+      const executable = join(installedApplication, `Contents/MacOS/${productName}`);
+      const environment = {
+        ...process.env,
+        HOME: home,
+        ENDURAGENT_HOME: athleteHome,
+        FORCE_COLOR: undefined,
+        NO_COLOR: undefined,
+        CLICOLOR_FORCE: undefined,
+      };
+      phase = "launch-baseline";
+      initialChild = spawn(
+        executable,
+        [`--user-data-dir=${userData}`, `--remote-debugging-port=${debuggerPort}`],
+        { env: environment, stdio: ["ignore", "pipe", "pipe"] },
+      );
+      initialChild.stdout?.resume();
+      initialChild.stderr?.resume();
+      const childLifecycle = observeTelegramAcceptanceChild(initialChild);
+      const initialExit = observeRoundTripChildExit(initialChild);
+      const launch = await withAcceptanceDeadline(
+        "baseline application launch",
+        childLifecycle.launch,
+        {
+          timeoutMs: 30_000,
+        },
+      );
+      if (launch.state !== "spawned") fail("baseline application could not launch");
+      const initialPid = launch.pid;
+      const initialRootIdentity = await processObserver.trackRoot(initialPid);
+      const debuggerUrl = await waitForPage(debuggerPort, { timeoutMs: 60_000 });
+      if ((await debuggerListenerOwner(debuggerPort, environment)) !== initialPid) {
+        fail("baseline debugger listener is outside the installed application");
       }
-      if (
-        verificationChild !== undefined &&
-        verificationChild.exitCode === null &&
-        verificationChild.signalCode === null
-      ) {
-        try {
-          verificationChild.kill("SIGTERM");
-        } catch {}
+      debuggerConnection = await connectCdp(debuggerUrl, () => undefined);
+      await callAcceptanceCdp(debuggerConnection, "Runtime.enable");
+      const persistenceInput = {
+        athleteHome,
+        credentialPath,
+        credentialPlaintext,
+        latestPath: durableState.latestPath,
+        memoryPath: durableState.memoryPath,
+        sessionPath: durableState.sessionPath,
+      };
+      phase = "seed-persistence";
+      const beforePersistence = await seedApplicationState(debuggerConnection, persistenceInput);
+      phase = "download-update";
+      await waitForDownloadedState(debuggerConnection, input.candidateVersion);
+      const initialProcesses = await processObserver.observe();
+      if (initialProcesses.mainPids.length !== 1 || initialProcesses.mainPids[0] !== initialPid) {
+        fail("baseline application process identity is ambiguous");
       }
-      if (
-        installedApplication !== undefined &&
-        Number.isSafeInteger(relaunchedPid) &&
-        relaunchedPid > 0
-      ) {
-        try {
-          const observation = await observeProcesses(installedApplication);
-          if (observation.mainPids.includes(relaunchedPid)) {
-            process.kill(relaunchedPid, "SIGTERM");
+      const downloaded = await readDownloadedCandidate(
+        updaterCache,
+        candidateArtifacts,
+        candidateDigest,
+      );
+      // Freeze N before installation so an updater-spawned N+1 cannot inherit N's cleanup authority.
+      const trackedInitialProcesses = await processObserver.freezeRoot(initialRootIdentity);
+      const initialProcessIdentities = new Set(
+        [...trackedInitialProcesses, ...initialProcesses.ownedProcesses].map(processIdentityKey),
+      );
+      phase = "install-update";
+      await clickInstallUpdate(debuggerConnection, input.candidateVersion);
+      phase = "transition-update";
+      const terminal = await withAcceptanceDeadline(
+        "baseline application update exit",
+        initialExit,
+        { timeoutMs: transitionTimeoutMs },
+      );
+      debuggerConnection.socket.close();
+      if (terminal.code !== 0 || terminal.signal !== null) {
+        fail("baseline application did not exit cleanly for update");
+      }
+      phase = "observe-relaunch";
+      const relaunchedProcesses = await waitUntil(
+        "relaunched candidate application",
+        async () => {
+          const observation = await processObserver.observe();
+          if (
+            observation.ownedProcesses.some((identity) =>
+              initialProcessIdentities.has(processIdentityKey(identity)),
+            )
+          ) {
+            return false;
           }
-        } catch {}
+          if (observation.mainPids.length !== 1 || observation.mainPids[0] === initialPid)
+            return false;
+          return observation;
+        },
+        transitionTimeoutMs,
+        250,
+      );
+      relaunchedPid = relaunchedProcesses.mainPids[0];
+      const relaunchedRootIdentity = await processObserver.trackRoot(relaunchedPid);
+      phase = "verify-relaunch";
+      const relaunchedIdentity = await waitUntil(
+        "relaunched candidate identity",
+        async () => {
+          const identity = await inspectApplication(installedApplication);
+          return identity.version === input.candidateVersion ? identity : false;
+        },
+        transitionTimeoutMs,
+        250,
+      );
+      const identity = verifyMacosUpdaterRoundTripIdentities({
+        baselineVersion: input.baselineVersion,
+        candidateVersion: input.candidateVersion,
+        expectedFeedUrl: MACOS_UPDATER_ROUND_TRIP_FEED_URL,
+        baseline: baselineIdentity,
+        candidate: candidateIdentity,
+        installedBaseline: installedBaselineIdentity,
+        relaunched: relaunchedIdentity,
+      });
+      const beforeFinalShutdown = await processObserver.observe();
+      if (
+        beforeFinalShutdown.mainPids.length !== 1 ||
+        beforeFinalShutdown.mainPids[0] !== relaunchedPid
+      ) {
+        fail("relaunched application process identity changed before shutdown");
+      }
+      await processObserver.freezeRoot(relaunchedRootIdentity);
+      phase = "shutdown-relaunch";
+      if (!(await processObserver.signalIdentity(relaunchedRootIdentity, "SIGTERM"))) {
+        fail("relaunched application graceful shutdown signal failed");
+      }
+      await waitUntil(
+        "relaunched application graceful shutdown",
+        async () => {
+          const observation = await processObserver.observe();
+          return observation.ownedPids.length === 0 ? true : false;
+        },
+        shutdownTimeoutMs,
+        100,
+      );
+      phase = "launch-persistence-verification";
+      const verificationPort = await reservePort();
+      verificationChild = spawn(
+        executable,
+        [`--user-data-dir=${userData}`, `--remote-debugging-port=${verificationPort}`],
+        { env: environment, stdio: ["ignore", "pipe", "pipe"] },
+      );
+      verificationChild.stdout?.resume();
+      verificationChild.stderr?.resume();
+      const verificationLifecycle = observeTelegramAcceptanceChild(verificationChild);
+      const verificationExit = observeRoundTripChildExit(verificationChild);
+      const verificationLaunch = await withAcceptanceDeadline(
+        "candidate persistence verification launch",
+        verificationLifecycle.launch,
+        { timeoutMs: 30_000 },
+      );
+      if (verificationLaunch.state !== "spawned") {
+        fail("candidate persistence verification could not launch");
+      }
+      const verificationRootIdentity = await processObserver.trackRoot(verificationLaunch.pid);
+      const verificationUrl = await waitForPage(verificationPort, { timeoutMs: 60_000 });
+      if ((await debuggerListenerOwner(verificationPort, environment)) !== verificationLaunch.pid) {
+        fail("candidate persistence debugger listener is outside the installed application");
+      }
+      verificationConnection = await connectCdp(verificationUrl, () => undefined);
+      await callAcceptanceCdp(verificationConnection, "Runtime.enable");
+      phase = "verify-persistence";
+      const afterPersistence = await readPersistenceView(verificationConnection, persistenceInput);
+      await processObserver.freezeRoot(verificationRootIdentity);
+      phase = "shutdown-persistence-verification";
+      if (!(await processObserver.signalIdentity(verificationRootIdentity, "SIGTERM"))) {
+        fail("candidate persistence verification shutdown signal failed");
+      }
+      const verificationTerminal = await withAcceptanceDeadline(
+        "candidate persistence verification shutdown",
+        verificationExit,
+        { timeoutMs: shutdownTimeoutMs },
+      );
+      verificationConnection.socket.close();
+      if (verificationTerminal.code !== 0 || verificationTerminal.signal !== null) {
+        fail("candidate persistence verification did not exit cleanly");
+      }
+      await waitUntil(
+        "candidate persistence verification process cleanup",
+        async () => {
+          const observation = await processObserver.observe();
+          return observation.ownedPids.length === 0 ? true : false;
+        },
+        shutdownTimeoutMs,
+        100,
+      );
+      phase = "validate-persistence";
+      const plaintextCredentialAbsent = await requirePlaintextAbsent(
+        [home, userData, athleteHome],
+        credentialPlaintext,
+      );
+      const persistence = verifyMacosUpdaterRoundTripPersistence({
+        before: beforePersistence,
+        after: afterPersistence,
+        plaintextCredentialAbsent,
+      });
+      const evidence = createMacosUpdaterRoundTripEvidence({
+        baselineVersion: input.baselineVersion,
+        candidateVersion: input.candidateVersion,
+        initialPid,
+        relaunchedPid,
+        identity,
+        download: {
+          fileName: downloaded.info.fileName,
+          size: downloaded.digest.size,
+          sha256: downloaded.digest.sha256,
+          sha512: downloaded.digest.sha512,
+        },
+        persistence,
+      });
+      phase = "restore-keychain";
+      if (!(await restoreRoundTripKeychain(keychain))) {
+        fail("updater acceptance keychain restoration failed");
+      }
+      phase = "write-evidence";
+      await removeScratch(scratch);
+      await writeEvidenceFile(input.evidencePath, evidence);
+      completed = true;
+      return evidence;
+    } catch (error) {
+      failurePhase = phase;
+      throw error;
+    } finally {
+      phase = "cleanup";
+      const cleaned = await cleanupRoundTripResources({
+        debuggerConnection,
+        verificationConnection,
+        initialChild,
+        verificationChild,
+        processObserver,
+        terminateApplication: !completed,
+      }).catch(() => false);
+      const keychainRestored = cleaned ? await restoreRoundTripKeychain(keychain) : false;
+      cleanup = cleaned && keychainRestored ? "complete" : "incomplete";
+      if ((!cleaned || !keychainRestored) && failurePhase === undefined) {
+        fail("round-trip cleanup failed");
       }
     }
+  } catch (error) {
+    throw bindFailureDiagnostic(error, failurePhase ?? phase, cleanup);
   }
 }
 
@@ -1418,8 +1993,12 @@ async function main() {
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     await main();
-  } catch {
-    process.stderr.write("macOS updater round trip failed\n");
+  } catch (error) {
+    const diagnostic = safeFailureDiagnostic(error);
+    const reason = diagnostic.reason === undefined ? "" : `; reason=${diagnostic.reason}`;
+    process.stderr.write(
+      `macOS updater round trip failed; phase=${diagnostic.phase}; cleanup=${diagnostic.cleanup}${reason}\n`,
+    );
     process.exitCode = 1;
   }
 }

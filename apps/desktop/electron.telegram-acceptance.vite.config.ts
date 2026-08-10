@@ -6,7 +6,7 @@ const desktopRoot = import.meta.dirname;
 
 const base = createDesktopViteConfig({
   outputRoot: resolve(desktopRoot, "dist/telegram-acceptance-build/out"),
-  daemonUtilityEntry: resolve(desktopRoot, "tests/fixtures/packaged-telegram/daemon-utility.ts"),
+  daemonUtilityEntry: resolve(desktopRoot, "scripts/support/packaged-telegram/daemon-utility.ts"),
 });
 
 export default defineConfig(
@@ -15,7 +15,7 @@ export default defineConfig(
       build: {
         rollupOptions: {
           input: {
-            index: resolve(desktopRoot, "tests/fixtures/packaged-telegram/main-entry.ts"),
+            index: resolve(desktopRoot, "scripts/support/packaged-telegram/main-entry.ts"),
           },
           output: {
             chunkFileNames: "[name]-[hash].js",

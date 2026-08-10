@@ -146,18 +146,18 @@ Calendar-based for npm-published binaries: stable, SemVer-compatible UTC calenda
 
 ## Releasing
 
-Changesets-driven and CI-automated. Contributors do **not** create tags or GitHub Releases by hand — those steps are wrong, and the tag namespace is `<package>@<version>` (e.g., `cycling-coach@2026.5.4`), not a `v`-prefixed CalVer tag.
+Changesets-driven and CI-automated. Contributors do **not** create tags or GitHub Releases by hand. npm packages use `<package>@<version>` tags; the independent desktop app uses `enduragent-desktop@<SemVer>`.
 
 1. **Add a changeset to your PR.** Run `pnpm exec changeset`, pick the affected publishable package(s), describe the change in athlete-readable language. Commit the resulting `.changeset/<slug>.md`. A PR with a user-visible change but no changeset will skip release — this is intentional, not a bug. The required patch/minor/major choice is overridden by the CalVer policy for binary packages.
 
    For user-visible changes, add a `User-facing: <one-sentence description>` line at the top of the changeset body — see `.changeset/README.md` for the convention. The bot's `/whatsnew` command surfaces only those lines to athletes; engineering details, hashes, and infra-only changesets stay in `CHANGELOG.md` for git history but never reach users.
 
 2. **Merge your PR to `main`.** `version-pr.yml` opens (or updates) a bot-managed "Version Packages" PR aggregating all pending changesets.
-3. **Merge the "Version Packages" PR when ready to ship.** It bumps `package.json` + CHANGELOG.md for the listed packages plus their internal dependents (per `updateInternalDependencies: "patch"` in `.changeset/config.json`). On merge, `version-pr.yml` then auto-pushes `<package>@<version>` tags for every **non-private** bumped package.
-4. **`release.yml` fires on the tag.** It builds, runs tests, packs the binary and smoke-installs the tarball, publishes to npm via OIDC trusted publisher (no `NPM_TOKEN`), and auto-creates the GitHub Release with notes extracted from `CHANGELOG.md`.
+3. **Merge the "Version Packages" PR when ready to ship.** It bumps only the packages listed by pending changesets. On merge, `version-pr.yml` tags and dispatches only public package versions that changed; if `apps/desktop/package.json` changed, it separately creates `enduragent-desktop@<SemVer>` and dispatches the desktop coordinator.
+4. **The matching release path runs.** `release.yml` publishes changed npm packages via OIDC and keeps their GitHub Releases non-latest. `desktop-release-coordinator.yml` publishes no npm package; it dispatches the protected macOS signing, notarization, exact-asset, updater-roundtrip, and metadata-last transaction.
 
 Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is tagged. When a stub binary (`running-coach`, `duathlon-coach`) graduates by flipping `private: false`, it auto-tags on the next Version-PR merge.
 
-**If a release fails partway** (e.g., a flaky smoke test), re-run `release.yml` via Actions → "Run workflow" with the existing tag as input. `workflow_dispatch` is a fallback for re-running on a tag that already exists — it does **not** create the tag, so don't use it before the version-PR-merge has pushed one.
+**If a release fails partway**, re-run the matching coordinator with its existing tag: `release.yml` for npm or `desktop-release-coordinator.yml` for desktop. A rerun never creates or moves a tag.
 
 `tools/bump-binaries-to-calver.ts` runs after `changeset version`. It reads the committed pre-Changesets version and all occupied npm versions, then overrides binary versions with the next stable release number for the current UTC month. It rewrites only the new matching changelog header; historical entries are immutable.

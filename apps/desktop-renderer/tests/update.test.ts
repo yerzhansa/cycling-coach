@@ -70,6 +70,20 @@ describe("desktop update renderer controller", () => {
     expect(subject.bridge.checkForUpdates).not.toHaveBeenCalled();
   });
 
+  it("does not offer an inert retry when the updater requires an app restart", async () => {
+    const subject = setupController({ status: "restart-required", stage: "check" });
+    await subject.controller.start();
+
+    subject.action();
+
+    expect(subject.bridge.checkForUpdates).not.toHaveBeenCalled();
+    expect(subject.bridge.restartToUpdate).not.toHaveBeenCalled();
+    expect(subject.view.render).toHaveBeenLastCalledWith({
+      status: "restart-required",
+      stage: "check",
+    });
+  });
+
   it("preserves a downloaded update and retries when restart fails", async () => {
     const downloaded = { status: "downloaded", version: "2026.7.23" } as const;
     const subject = setupController(downloaded);

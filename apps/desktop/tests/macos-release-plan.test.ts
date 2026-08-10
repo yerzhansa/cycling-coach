@@ -5,10 +5,12 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   readdir,
   rename,
   rm,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -28,6 +30,7 @@ import {
   requireMacosBaselineApplication,
   requireNotarizationCredentials,
   runMacosRelease,
+  safeMacosReleasePlanMessage,
   sealMacosReleaseMetadata,
 } from "../scripts/macos-release-plan.mjs";
 import { runMacosGenesisRelease } from "../scripts/macos-genesis-release.mjs";
@@ -87,6 +90,18 @@ afterEach(async () => {
 
 function versionReader(version = "2026.7.2") {
   return vi.fn(async () => JSON.stringify({ version }));
+}
+
+function canonicalDmgSigningIdentityResult() {
+  return {
+    stdout: "",
+    stderr: [
+      "Authority=Developer ID Application: Enduragent Test (FA494ACVTF)",
+      "Authority=Developer ID Certification Authority",
+      "Authority=Apple Root CA",
+      "TeamIdentifier=FA494ACVTF",
+    ].join("\n"),
+  };
 }
 
 function baselineVerifier() {
@@ -167,6 +182,18 @@ async function metadataSealFixture() {
 }
 
 describe("macOS release plan", () => {
+  it("exposes only controlled release-plan failures to the release log", () => {
+    expect(
+      safeMacosReleasePlanMessage(new TypeError("release envelope changed during verification")),
+    ).toBe("release envelope changed during verification");
+    expect(safeMacosReleasePlanMessage(new TypeError("unstable verified DMG artifact"))).toBe(
+      "unstable verified DMG artifact",
+    );
+    expect(
+      safeMacosReleasePlanMessage(new TypeError("must-not-reach-release-logs")),
+    ).toBeUndefined();
+  });
+
   it("uses only the desktop package version and creates the exact sealed overlay", async () => {
     const readVersion = versionReader();
     const plan = await createMacosReleasePlan(
@@ -466,6 +493,64 @@ describe("macOS release plan", () => {
     expect(result.stderr).not.toContain(secretSentinel);
   });
 
+  it("fails the steady CLI with a safe actionable stage", () => {
+    const secretSentinel = "must-not-reach-stderr";
+    const result = spawnSync(
+      process.execPath,
+      [join(desktopRoot, "scripts/macos-release-plan.mjs")],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: {
+          ENDURAGENT_DESKTOP_UPDATE_URL: feedUrl,
+          ENDURAGENT_DEVELOPER_ID_IDENTITY: identity,
+          ENDURAGENT_MACOS_BASELINE_APP: "/synthetic/missing/Enduragent.app",
+          APPLE_API_KEY: `/synthetic/${secretSentinel}.p8`,
+          APPLE_API_KEY_ID: "SYNTHETICKEY",
+          APPLE_API_ISSUER: "00000000-0000-0000-0000-000000000000",
+          NODE_OPTIONS: "--unhandled-rejections=none",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "macOS release build failed at baseline-verification: baseline application bundle is invalid",
+    );
+    expect(result.stderr).not.toContain("unsettled top-level await");
+    expect(result.stderr).not.toContain(secretSentinel);
+  });
+
+  it("fails closed when the steady release command never settles", async () => {
+    const root = await mkdtemp(join(tmpdir(), "desktop-release-cli-unsettled-"));
+    temporaryRoots.push(root);
+    const scripts = join(await realpath(root), "scripts");
+    await mkdir(scripts);
+    const releaseCli = await readFile(join(desktopRoot, "scripts/macos-release-cli.mjs"), "utf8");
+    await Promise.all([
+      writeFile(join(scripts, "macos-release-cli.mjs"), releaseCli),
+      writeFile(
+        join(scripts, "macos-release-plan.mjs"),
+        [
+          "export function safeMacosReleasePlanMessage() { return undefined; }",
+          "export async function runMacosRelease() { await new Promise(() => {}); }",
+          "",
+        ].join("\n"),
+      ),
+      writeFile(
+        join(scripts, "verify-macos-release.mjs"),
+        "export function safeMacosReleaseVerificationMessage() { return undefined; }\n",
+      ),
+    ]);
+
+    const result = spawnSync(process.execPath, [join(scripts, "macos-release-cli.mjs")], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(13);
+    expect(result.signal).toBeNull();
+  });
+
   it("rejects a missing absolute baseline before invoking electron-builder", async () => {
     const build = vi.fn(async (_options: MacosReleaseBuilderOptions) => []);
 
@@ -572,7 +657,12 @@ describe("macOS release plan", () => {
     ]);
     const sealReleaseMetadata = vi.fn(async () => {});
     const verifyPackageLayout = vi.fn(async () => {});
-    const executeFile = vi.fn(async () => {});
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
+        return canonicalDmgSigningIdentityResult();
+      }
+      return { stdout: "", stderr: "" };
+    });
     const notarize = vi.fn(async () => {});
     const verifyBaselineApplication = baselineVerifier();
     const verifyIdentityContinuity = vi.fn(async () => verifiedLooseIdentity);
@@ -656,6 +746,7 @@ describe("macOS release plan", () => {
     expect(verifyIdentityContinuity).toHaveBeenCalledTimes(2);
     expect(executeFile.mock.calls).toEqual([
       ["/usr/bin/codesign", ["--verify", "--verbose=2", dmg]],
+      ["/usr/bin/codesign", ["--display", "--verbose=4", dmg]],
       ["/usr/bin/xcrun", ["stapler", "validate", "-v", dmg]],
       [
         "/usr/sbin/spctl",
@@ -772,7 +863,12 @@ describe("macOS release plan", () => {
       throw failure;
     });
     const verifyPackageLayout = vi.fn(async () => {});
-    const executeFile = vi.fn(async () => {});
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
+        return canonicalDmgSigningIdentityResult();
+      }
+      return { stdout: "", stderr: "" };
+    });
     const notarize = vi.fn(async () => {});
     const verifyIdentityContinuity = vi.fn(async () => verifiedLooseIdentity);
     const promoteReleaseEnvelope = vi.fn(async () => "/synthetic/envelope");
@@ -803,7 +899,7 @@ describe("macOS release plan", () => {
     expect(verifyPackageLayout).toHaveBeenCalledOnce();
     expect(notarize).toHaveBeenCalledOnce();
     expect(verifyIdentityContinuity).toHaveBeenCalledOnce();
-    expect(executeFile).toHaveBeenCalledTimes(3);
+    expect(executeFile).toHaveBeenCalledTimes(4);
     expect(sealReleaseMetadata).toHaveBeenCalledOnce();
     expect(promoteReleaseEnvelope).not.toHaveBeenCalled();
   });
@@ -1258,6 +1354,32 @@ describe("macOS release plan", () => {
     }
     expect((await lstat(builderApplication)).isDirectory()).toBe(true);
     expect((await lstat(builderScratch)).isDirectory()).toBe(true);
+  });
+
+  it("accepts verification-only timestamp changes when file identity and bytes are stable", async () => {
+    const fixture = await metadataSealFixture();
+    await sealMacosReleaseMetadata(fixture.plan);
+    const sourceBytes = new Map(
+      await Promise.all(
+        Object.values(fixture.plan.artifactNames).map(
+          async (name) => [name, await readFile(join(fixture.artifactDirectory, name))] as const,
+        ),
+      ),
+    );
+    const verificationTimestamp = new Date("2000-01-01T00:00:00.000Z");
+
+    const envelopePath = await promoteMacosReleaseEnvelope(fixture.plan, async (candidatePath) => {
+      await Promise.all(
+        Object.values(fixture.plan.artifactNames).map((name) =>
+          utimes(join(candidatePath, name), verificationTimestamp, verificationTimestamp),
+        ),
+      );
+    });
+
+    for (const [name, bytes] of sourceBytes) {
+      expect(await readFile(join(envelopePath, name))).toEqual(bytes);
+      expect(await readFile(join(fixture.artifactDirectory, name))).toEqual(bytes);
+    }
   });
 
   it("never overwrites a stale release envelope", async () => {

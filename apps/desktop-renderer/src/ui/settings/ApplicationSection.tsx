@@ -7,7 +7,7 @@ import { RELEASE_NOTES_UNAVAILABLE_COPY } from "./copy.js";
 import styles from "./SettingsView.module.css";
 
 interface UpdateCopy {
-  readonly action: string;
+  readonly action: string | null;
   readonly label: string;
   readonly announcement: string;
 }
@@ -59,6 +59,15 @@ function updateCopy(state: DesktopUpdateState): UpdateCopy {
             ? "Update download failed. Try again"
             : "Update check failed. Try again",
       };
+    case "restart-required":
+      return {
+        action: null,
+        label: "Restart Enduragent to resume updates",
+        announcement:
+          state.stage === "download"
+            ? "Update download timed out. Quit and reopen Enduragent to try again."
+            : "Updates could not start. Quit and reopen Enduragent to try again.",
+      };
     default:
       return {
         action: "Check for updates",
@@ -96,6 +105,7 @@ export function ApplicationSection(): ReactElement {
 
   const copy = updateCopy(update.state);
   const updateBusy =
+    mutating ||
     update.actionDisabled ||
     ["disabled", "checking", "downloading", "installing"].includes(update.state.status);
   const releaseUrl =
@@ -115,7 +125,7 @@ export function ApplicationSection(): ReactElement {
               {copy.announcement}
             </span>
           </div>
-          {update.state.status === "disabled" ? null : (
+          {update.state.status === "disabled" || copy.action === null ? null : (
             <button
               type="button"
               className={styles.button}

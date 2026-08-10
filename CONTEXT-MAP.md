@@ -36,9 +36,11 @@ Current state of the Core/Sport seam:
 
 ## Release flow
 
-Changesets-driven, tag-triggered, two-workflow split:
+Changesets-driven, tag-triggered release split:
 
-1. **`version-pr.yml`** runs on every push to `main`. It (a) opens or updates the bot-managed "Version Packages" PR whenever unconsumed `.changeset/*.md` files exist, and (b) when that PR is merged, auto-pushes `<package>@<version>` tags for every non-private bumped package. The tag push is what fires the next workflow.
-2. **`release.yml`** runs on tag push (`cycling-coach@*`, `running-coach@*`, `duathlon-coach@*`). It gates on build + test + smoke-install of the packed tarball, then publishes to npm via OIDC trusted publisher (no `NPM_TOKEN`), and auto-creates the GitHub Release with notes pulled from `CHANGELOG.md`.
+1. **`version-pr.yml`** opens or updates the bot-managed "Version Packages" PR. When that PR is merged, it tags and dispatches only public packages whose versions changed; a changed desktop app is independently tagged as `enduragent-desktop@<SemVer>`.
+2. **`release.yml`** handles npm packages only. It gates on build + test + smoke-install, publishes via OIDC trusted publisher, and creates a non-latest GitHub Release so package releases cannot replace the desktop updater feed.
+3. **`desktop-release-coordinator.yml`** validates the desktop tag against `apps/desktop/package.json`, binds a draft to the exact commit and desktop changelog, then dispatches the protected macOS transaction without publishing npm.
+4. **`desktop-release.yml`** signs and notarizes on macOS, verifies the exact four updater assets, exercises the production `N → N+1` updater round trip, promotes metadata last, and activates the tested release as repository latest.
 
-Currently only `cycling-coach` is publishable (per ADR-0009); the other six packages are `private: true` and skipped by both the changesets bump path and the tag-push step. `tools/bump-binaries-to-calver.ts` overrides changesets' SemVer bumps with today's UTC `YYYY.M.D` for the publishable binaries and queries npm to refuse occupied or non-monotonic dates. See `CONTRIBUTING.md` for the contributor-side steps.
+Currently only `cycling-coach` is npm-publishable (per ADR-0009). The private desktop app follows its own SemVer and release transaction; changing it never changes or publishes `cycling-coach`. See `CONTRIBUTING.md` for the contributor-side steps.

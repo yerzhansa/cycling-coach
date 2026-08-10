@@ -262,6 +262,7 @@ async function runDesktop(): Promise<void> {
     installDesktopTerminationSignalHandler({
       signalSource: process,
       requestQuit: () => app.quit(),
+      forceQuit: () => quitCoordinator.forceQuit(),
     });
   }
   try {

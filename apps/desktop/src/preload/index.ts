@@ -682,6 +682,7 @@ function parseReleaseNotes(value: unknown): unknown {
 type PreloadUpdateState =
   | { readonly status: "disabled" | "idle" | "checking" | "current" }
   | { readonly status: "downloading" | "downloaded" | "installing"; readonly version: string }
+  | { readonly status: "restart-required"; readonly stage: "check" | "download" }
   | { readonly status: "failed"; readonly stage: "check" | "download" };
 
 function parseUpdateState(value: unknown): PreloadUpdateState {
@@ -704,13 +705,13 @@ function parseUpdateState(value: unknown): PreloadUpdateState {
     };
   }
   if (
-    value.status !== "failed" ||
+    (value.status !== "failed" && value.status !== "restart-required") ||
     !exactKeys(value, ["status", "stage"]) ||
     (value.stage !== "check" && value.stage !== "download")
   ) {
     throw new TypeError();
   }
-  return { status: "failed", stage: value.stage };
+  return { status: value.status, stage: value.stage };
 }
 
 function parseStatuses(value: unknown): unknown {

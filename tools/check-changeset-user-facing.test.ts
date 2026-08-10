@@ -9,6 +9,7 @@ import { join } from "node:path";
 import {
   findChangesetHits,
   discoverPublishedBinaries,
+  discoverUserFacingReleaseTargets,
   main,
   type ChangesetHit,
 } from "./check-changeset-user-facing.js";
@@ -41,13 +42,14 @@ function writeRealisticPackages(): string {
     "packages/cycling-coach/package.json",
     JSON.stringify({ name: "cycling-coach", bin: { "cycling-coach": "dist/index.js" } }),
   );
-  write(
-    "packages/core/package.json",
-    JSON.stringify({ name: "@enduragent/core", private: true }),
-  );
+  write("packages/core/package.json", JSON.stringify({ name: "@enduragent/core", private: true }));
   write(
     "packages/running-coach/package.json",
-    JSON.stringify({ name: "running-coach", bin: { "running-coach": "dist/index.js" }, private: true }),
+    JSON.stringify({
+      name: "running-coach",
+      bin: { "running-coach": "dist/index.js" },
+      private: true,
+    }),
   );
   write(
     "packages/sport-cycling/package.json",
@@ -78,7 +80,11 @@ describe("discoverPublishedBinaries", () => {
     const pkgsDir = writeRealisticPackages();
     write(
       "packages/cycling-coach/package.json",
-      JSON.stringify({ name: "cycling-coach", bin: { "cycling-coach": "dist/index.js" }, private: true }),
+      JSON.stringify({
+        name: "cycling-coach",
+        bin: { "cycling-coach": "dist/index.js" },
+        private: true,
+      }),
     );
     const set = discoverPublishedBinaries(pkgsDir);
     expect([...set]).toEqual([]);
@@ -86,10 +92,7 @@ describe("discoverPublishedBinaries", () => {
 
   it("treats a missing private field as public and an empty bin object as no bin", () => {
     const pkgsDir = writeRealisticPackages();
-    write(
-      "packages/empty-bin/package.json",
-      JSON.stringify({ name: "empty-bin", bin: {} }),
-    );
+    write("packages/empty-bin/package.json", JSON.stringify({ name: "empty-bin", bin: {} }));
     write(
       "packages/string-bin/package.json",
       JSON.stringify({ name: "string-bin", bin: "dist/cli.js" }),
@@ -113,12 +116,31 @@ describe("discoverPublishedBinaries", () => {
   });
 });
 
+describe("discoverUserFacingReleaseTargets", () => {
+  it("includes the independently released private desktop app", () => {
+    const pkgsDir = writeRealisticPackages();
+    expect([...discoverUserFacingReleaseTargets(pkgsDir)].sort()).toEqual([
+      "@enduragent/desktop",
+      "cycling-coach",
+    ]);
+  });
+});
+
 describe("findChangesetHits — User-facing routing", () => {
   it("PASS: a User-facing changeset that names the published binary", () => {
     const pkgsDir = writeRealisticPackages();
     const file = write(
       ".changeset/good.md",
       `---\n"cycling-coach": patch\n---\n\nUser-facing: Added /review command.\n`,
+    );
+    expect(findChangesetHits([file], pkgsDir)).toEqual([]);
+  });
+
+  it("PASS: a User-facing changeset that names only the desktop release", () => {
+    const pkgsDir = writeRealisticPackages();
+    const file = write(
+      ".changeset/desktop.md",
+      `---\n"@enduragent/desktop": patch\n---\n\nUser-facing: Desktop updates are clearer.\n`,
     );
     expect(findChangesetHits([file], pkgsDir)).toEqual([]);
   });

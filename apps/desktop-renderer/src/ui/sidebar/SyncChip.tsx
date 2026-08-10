@@ -44,7 +44,7 @@ export function SyncChip(): ReactElement {
       className={`${styles.sync} sync-chip`}
       data-status={status}
       disabled={sync.disabled || actions === null}
-      aria-label={`${sync.label} · ${HEADLINE[status]}`}
+      aria-label={[sync.label, HEADLINE[status], detail].filter(Boolean).join(" · ")}
       onClick={(event) => {
         const keyboard = event.detail === 0;
         setManualSyncFocusTarget(keyboard ? chip.current : null);

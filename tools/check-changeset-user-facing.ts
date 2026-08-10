@@ -6,13 +6,11 @@
 /**
  * Changeset user-facing routing lint — `pnpm check:changeset-userfacing`.
  *
- * The Telegram bot's `/whatsnew` parses `User-facing:` lines out of the
- * published release body. A release body is built by changesets ONLY for
- * packages that actually publish — the private `@enduragent/core` package has
- * no npm release, so a `User-facing:` line filed against `@enduragent/core`
- * alone never reaches an athlete. This gate blocks that misfiling on PR: every
- * changeset whose body carries a `User-facing:` line MUST name at least one
- * PUBLISHED BINARY package in its frontmatter package list.
+ * `User-facing:` lines flow into the release notes for the named product. npm
+ * binary notes feed Telegram's `/whatsnew`; desktop notes feed the independent
+ * signed desktop GitHub Release. A line filed only against an internal package
+ * has no user-facing release destination. This gate blocks that misfiling on
+ * PR: every marked changeset MUST name at least one user-facing release target.
  *
  * "Published binary" is computed DYNAMICALLY from the on-disk package manifests
  * (`packages/<dir>/package.json`), never hardcoded:
@@ -23,6 +21,9 @@
  * and the scoped npm name can diverge. This auto-extends: the moment a sibling
  * binary drops `private` (or sets it false) it joins the set with zero code
  * change; marking the one published binary private auto-removes it.
+ *
+ * The private `@enduragent/desktop` package is an explicit release target: it
+ * ships through the independent signed desktop workflow rather than npm.
  *
  * A changeset with NO `User-facing:` line is unaffected (pure-infra changesets
  * legitimately target only the private packages). `.changeset/README.md` and
@@ -52,6 +53,7 @@ const MD_EXTS = new Set([".md", ".mdx"]);
 const NON_CHANGESET_BASENAMES: ReadonlySet<string> = new Set(["README.md", "config.json"]);
 
 const SKIP_DIRECTIVE = "changeset-userfacing-lint:skip-file";
+const INDEPENDENT_RELEASE_TARGETS: ReadonlySet<string> = new Set(["@enduragent/desktop"]);
 
 const isSkippedFile = makeSkipCheck(SKIP_DIRECTIVE);
 
@@ -158,9 +160,13 @@ export function discoverPublishedBinaries(packagesDir: string): Set<string> {
   return published;
 }
 
+export function discoverUserFacingReleaseTargets(packagesDir: string): Set<string> {
+  return new Set([...discoverPublishedBinaries(packagesDir), ...INDEPENDENT_RELEASE_TARGETS]);
+}
+
 /**
  * Lint a single changeset file. Returns a hit when the body carries a
- * `User-facing:` line but no named frontmatter package is a published binary.
+ * `User-facing:` line but no named frontmatter package is a user-facing release target.
  * Returns `[]` when there is no `User-facing:` line, when the file is skipped,
  * when it is a non-changeset (README/config), or when the routing is correct.
  *
@@ -210,11 +216,11 @@ export function findChangesetHits(
   files: readonly string[],
   packagesDir = "packages",
 ): ChangesetHit[] {
-  const published = discoverPublishedBinaries(packagesDir);
+  const releaseTargets = discoverUserFacingReleaseTargets(packagesDir);
   const out: ChangesetHit[] = [];
   for (const file of files) {
     if (MD_EXTS.has(ext(file))) {
-      out.push(...findHitsInChangesetFile(file, published));
+      out.push(...findHitsInChangesetFile(file, releaseTargets));
     }
   }
   return out;
@@ -229,8 +235,8 @@ function formatHit(hit: ChangesetHit): string {
       ? hit.namedPackages.map((n) => `"${n}"`).join(", ")
       : "(no packages named)";
   return (
-    `${hit.file}:${hit.line}:${hit.column}  has a User-facing line but names no published binary ` +
-    `— named ${named}; add a published binary (e.g. "cycling-coach") to the frontmatter package list`
+    `${hit.file}:${hit.line}:${hit.column}  has a User-facing line but names no release target ` +
+    `— named ${named}; add the affected npm binary or @enduragent/desktop to the frontmatter package list`
   );
 }
 
@@ -247,21 +253,23 @@ export function main(argv: readonly string[]): number {
     return 0;
   }
 
-  const published = discoverPublishedBinaries(DEFAULT_PACKAGES_DIR);
+  const releaseTargets = discoverUserFacingReleaseTargets(DEFAULT_PACKAGES_DIR);
   const hits = findChangesetHits(changesetFiles, DEFAULT_PACKAGES_DIR);
   if (hits.length === 0) {
     console.log(
       `check-changeset-userfacing: ${changesetFiles.length} changeset(s) clean ` +
-        `(published binaries: ${[...published].sort().join(", ") || "none"}).`,
+        `(release targets: ${[...releaseTargets].sort().join(", ") || "none"}).`,
     );
     return 0;
   }
-  console.error(`check-changeset-userfacing: ${hits.length} misfiled User-facing changeset(s) found:`);
+  console.error(
+    `check-changeset-userfacing: ${hits.length} misfiled User-facing changeset(s) found:`,
+  );
   for (const hit of hits) console.error("  " + formatHit(hit));
   console.error(
-    "\nA `User-facing:` line only reaches athletes via /whatsnew if the changeset " +
-      "names a PUBLISHED BINARY package (one with a `bin` field and not `private`). " +
-      `Currently: ${[...published].sort().join(", ") || "none"}. ` +
+    "\nA `User-facing:` line must name a user-facing release target: an npm binary " +
+      "or the independently released @enduragent/desktop app. " +
+      `Currently: ${[...releaseTargets].sort().join(", ") || "none"}. ` +
       "Add it to the changeset frontmatter, or drop the User-facing line if the change " +
       "is pure infra. See .changeset/README.md / CLAUDE.local.md (Changesets).",
   );

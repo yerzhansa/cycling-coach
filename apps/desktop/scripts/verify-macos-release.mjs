@@ -91,6 +91,21 @@ function exactLine(text, pattern) {
   return values.length === 1 ? values[0] : undefined;
 }
 
+function hasCanonicalDeveloperIdApplicationIdentity(teamIdentifier, authorities) {
+  const authorityPrefix = "Developer ID Application: ";
+  const authoritySuffix = ` (${canonicalTeamIdentifier})`;
+  const leafAuthority = authorities[0];
+  return (
+    teamIdentifier === canonicalTeamIdentifier &&
+    authorities.length === 3 &&
+    typeof leafAuthority === "string" &&
+    leafAuthority.startsWith(authorityPrefix) &&
+    leafAuthority.endsWith(authoritySuffix) &&
+    authorities[1] === "Developer ID Certification Authority" &&
+    authorities[2] === "Apple Root CA"
+  );
+}
+
 function normalizeJson(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -230,11 +245,7 @@ function parseSignatureMetadata(result) {
       .split(",")
       .map((flag) => flag.trim())
       .includes("runtime") ||
-    authorities.length !== 3 ||
-    !authorities[0].startsWith("Developer ID Application: ") ||
-    !authorities[0].endsWith(` (${canonicalTeamIdentifier})`) ||
-    authorities[1] !== "Developer ID Certification Authority" ||
-    authorities[2] !== "Apple Root CA"
+    !hasCanonicalDeveloperIdApplicationIdentity(teamIdentifier, authorities)
   ) {
     fail("macOS signed identity is invalid");
   }
@@ -1506,6 +1517,18 @@ async function verifyMacosDmgSignature(dmgPath, executeFile) {
     ["--verify", "--verbose=2", dmgPath],
     "macOS DMG signature verification failed",
   );
+  let signatureResult;
+  try {
+    signatureResult = await executeFile("/usr/bin/codesign", ["--display", "--verbose=4", dmgPath]);
+  } catch {
+    fail("macOS DMG signing identity inspection failed");
+  }
+  const output = allCommandOutput(signatureResult);
+  const teamIdentifier = exactLine(output, /^TeamIdentifier=([^\r\n]+)$/gmu);
+  const authorities = Array.from(output.matchAll(/^Authority=([^\r\n]+)$/gmu), (match) => match[1]);
+  if (!hasCanonicalDeveloperIdApplicationIdentity(teamIdentifier, authorities)) {
+    fail("macOS DMG signing identity is invalid");
+  }
 }
 
 async function verifyMacosDmgNotarization(dmgPath, executeFile) {

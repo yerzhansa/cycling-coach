@@ -4,7 +4,7 @@ import {
   type KeychainCommandEnvironment,
   type KeychainCommandResult,
   type RunKeychainCommand,
-} from "./fixtures/packaged-telegram/disposable-keychain.js";
+} from "../scripts/support/packaged-telegram/disposable-keychain.js";
 
 const operatorHome = "/tmp/acceptance-home";
 const disposable = `${operatorHome}/Library/Keychains/acceptance.keychain-db`;
