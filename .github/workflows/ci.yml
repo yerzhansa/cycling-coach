@@ -69,6 +69,7 @@ jobs:
         # artifact, not in `pnpm test` — is caught before merge, not at release.
         # cycling-coach is the only publishable binary (ADR-0009); extend when
         # running-coach / duathlon-coach graduate.
+        # --ignore-scripts skips the full dependency tree, so this smoke no longer proves postinstall behavior.
         run: |
           set -euo pipefail
           PACKAGE=cycling-coach
@@ -80,7 +81,7 @@ jobs:
           mkdir -p "/tmp/smoke-consumer-$PACKAGE"
           cd "/tmp/smoke-consumer-$PACKAGE"
           npm init -y > /dev/null
-          npm install "$TARBALL"
+          npm install "$TARBALL" --ignore-scripts
           timeout 30 node "node_modules/$PACKAGE/dist/index.js" --help
 
   secrets-macos:
