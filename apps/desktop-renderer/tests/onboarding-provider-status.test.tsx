@@ -22,7 +22,7 @@ function expectOnePoweringRow(subtitle: string): void {
   expect(rowState("ai")).toBe("ready");
   expect(rowSubtitle("ai")).toBe(subtitle);
   const claiming = Array.from(setupCard().querySelectorAll("[data-setup-row]")).filter((row) =>
-    (row.textContent ?? "").includes("Powers your coach"),
+    (row.textContent ?? "").toLowerCase().includes("powers your coach"),
   );
   expect(claiming).toHaveLength(1);
 }
@@ -76,7 +76,7 @@ describe("onboarding provider status", () => {
     const bridge = twoProviderBridge({ credentialStatuses, chatGptStatus, chatGptLogin });
     const wizard = mountWizard({ bridge });
     await wizard.open();
-    expectOnePoweringRow("Powers your coach");
+    expectOnePoweringRow("Connected · powers your coach");
 
     await chooseLane(user, "openai-codex");
     expect(rowState("ai")).toBe("pending");
@@ -86,7 +86,7 @@ describe("onboarding provider status", () => {
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
     });
-    expectOnePoweringRow("Powers your coach");
+    expectOnePoweringRow("Connected · powers your coach");
     expect(panel("chatgpt")).toBeNull();
     expect(document.body.textContent).not.toContain("Retry saved keys");
     expect(chatGptStatus).toHaveBeenCalledTimes(1);
@@ -135,7 +135,7 @@ describe("onboarding provider status", () => {
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
     });
-    expectOnePoweringRow("Powers your coach");
+    expectOnePoweringRow("Connected · powers your coach");
     expect(writeCredential).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
@@ -174,7 +174,7 @@ describe("onboarding provider status", () => {
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
     });
-    expectOnePoweringRow("Powers your coach");
+    expectOnePoweringRow("Connected · powers your coach");
     wizard.controller.dispose();
   });
 

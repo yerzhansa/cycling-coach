@@ -6,7 +6,10 @@ import {
   credentialChangesBlocked,
   repairRequiredCredential,
 } from "../../settings/credential-controller.js";
-import { settingsMutationActive } from "../../state/settings-slice.js";
+import {
+  nonTelegramSettingsMutationActive,
+  settingsMutationActive,
+} from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import {
   IMPORT_FILES_LABEL,
@@ -44,7 +47,11 @@ export function TrainingRow(props: {
   const wizard = surface.wizard;
   const busy = wizard.busy;
   const credentialSettings = useEnduragentStore((state) => state.settings.credentials);
-  const settingsMutating = useEnduragentStore((state) => settingsMutationActive(state.settings));
+  const settingsMutating = useEnduragentStore((state) =>
+    props.placement === "settings"
+      ? settingsMutationActive(state.settings)
+      : nonTelegramSettingsMutationActive(state.settings),
+  );
   const repairRequired = repairRequiredCredential(credentialSettings) !== null;
   const controlsDisabled =
     busy ||
@@ -114,9 +121,7 @@ export function TrainingRow(props: {
               ref={triggerRef}
               type="button"
               data-setup-trigger="training"
-              className={
-                connected && props.placement === "chat" ? BUTTON_QUIET_SM : BUTTON_OUTLINE_SM
-              }
+              className={connected ? BUTTON_QUIET_SM : BUTTON_OUTLINE_SM}
               disabled={controlsDisabled}
               aria-expanded={open}
               aria-label={

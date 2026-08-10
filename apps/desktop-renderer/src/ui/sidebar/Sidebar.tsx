@@ -5,8 +5,6 @@ import { registerNewConversationOpener } from "../../state/new-conversation-open
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { setupReady } from "../../state/onboarding-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
-import { ConnectionStatus } from "./ConnectionStatus.js";
-import { HistoryList } from "./HistoryList.js";
 import styles from "./Sidebar.module.css";
 import { SyncChip } from "./SyncChip.js";
 import { UpdateAvailableButton } from "./UpdateAvailableButton.js";
@@ -75,12 +73,9 @@ export function Sidebar(): ReactElement {
           );
         })}
       </nav>
-      <div className={styles.sec}>Conversations</div>
-      <HistoryList locked={navigationLocked} />
       <div className={styles.railFoot}>
         <UpdateAvailableButton locked={navigationLocked} />
         <SyncChip />
-        <ConnectionStatus />
       </div>
     </aside>
   );

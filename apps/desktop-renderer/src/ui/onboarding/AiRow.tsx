@@ -23,7 +23,10 @@ import {
   credentialChangesBlocked,
   repairRequiredCredential,
 } from "../../settings/credential-controller.js";
-import { settingsMutationActive } from "../../state/settings-slice.js";
+import {
+  nonTelegramSettingsMutationActive,
+  settingsMutationActive,
+} from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import {
   AI_CANCEL_LABEL,
@@ -88,7 +91,11 @@ export function AiRow(props: {
   const draft = surface.draft;
   const busy = wizard.busy;
   const credentialSettings = useEnduragentStore((state) => state.settings.credentials);
-  const settingsMutating = useEnduragentStore((state) => settingsMutationActive(state.settings));
+  const settingsMutating = useEnduragentStore((state) =>
+    props.placement === "settings"
+      ? settingsMutationActive(state.settings)
+      : nonTelegramSettingsMutationActive(state.settings),
+  );
   const repairRequired = repairRequiredCredential(credentialSettings) !== null;
   const controlsDisabled =
     busy ||
@@ -204,7 +211,7 @@ export function AiRow(props: {
   const copy = showsActiveProviderOutsideCatalogue
     ? {
         title: ONBOARDING_LLM_PROVIDER_LABELS[configuration.active!.provider],
-        subtitle: "Powers your coach",
+        subtitle: "Connected · powers your coach",
       }
     : aiRowCopy(lane, wizard, ready);
   const hasDisplayedProvider = lane !== null || showsActiveProviderOutsideCatalogue;
@@ -331,11 +338,7 @@ export function AiRow(props: {
                 data-setup-trigger="ai"
                 disabled={controlsDisabled || chatGptActivating}
                 aria-label={hasDisplayedProvider ? AI_TRIGGER_LABELS.set : AI_TRIGGER_LABELS.unset}
-                className={
-                  !hasDisplayedProvider || props.placement === "settings"
-                    ? BUTTON_OUTLINE_SM
-                    : BUTTON_QUIET_SM
-                }
+                className={!hasDisplayedProvider ? BUTTON_OUTLINE_SM : BUTTON_QUIET_SM}
               >
                 {hasDisplayedProvider ? "Change" : "Choose"}
               </Menu.Trigger>

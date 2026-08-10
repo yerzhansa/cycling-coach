@@ -3,7 +3,12 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
-import { API_KEY_PANEL_HINT, FOOTER_NOTE, SETUP_MENU_LABEL } from "../src/ui/onboarding/copy.js";
+import {
+  API_KEY_PANEL_HINT,
+  FOOTER_NOTE,
+  RETRY_INTAKE_SAVE_LABEL,
+  SETUP_MENU_LABEL,
+} from "../src/ui/onboarding/copy.js";
 import {
   chooseLane,
   claudeCliNoteText,
@@ -112,6 +117,7 @@ describe("setup card", () => {
     expect(card.className).not.toContain("overflow-hidden");
     expect(setupRow("ai").parentElement).toBe(card);
     expect(setupRow("training").parentElement).toBe(card);
+    expect(setupRow("telegram").parentElement).toBe(card);
     expect(setupRow("injury-status").parentElement).toBe(card);
     wizard.controller.dispose();
   });
@@ -167,7 +173,7 @@ describe("setup card", () => {
 
     expect(rowState("ai")).toBe("ready");
     expect(setupRow("ai").textContent).toContain("Codex agent (experimental)");
-    expect(rowSubtitle("ai")).toBe("Powers your coach");
+    expect(rowSubtitle("ai")).toBe("Connected · powers your coach");
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeEnabled();
 
     await openLaneMenu(user);
@@ -185,6 +191,55 @@ describe("setup card", () => {
         (option) => option.value,
       ),
     ).not.toContain("codex-agent");
+    wizard.controller.dispose();
+  });
+
+  it("keeps the completion footer in Chat and omits it from Settings", async () => {
+    const chat = mountWizard({ bridge: readyEverythingBridge() });
+    await chat.open();
+
+    expect(screen.getByRole("button", { name: "Start coaching" })).toBeInTheDocument();
+    expect(screen.getByText("Everything stays on this Mac.")).toBeInTheDocument();
+
+    chat.controller.dispose();
+    chat.rendered.unmount();
+    resetOnboardingStore();
+
+    const settings = mountWizard({ bridge: readyEverythingBridge(), placement: "settings" });
+    await settings.open();
+
+    expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
+    expect(screen.queryByText("Everything stays on this Mac.")).toBeNull();
+    settings.controller.dispose();
+  });
+
+  it("autosaves Settings intake and offers a retry only after a save error", async () => {
+    const user = userEvent.setup();
+    const bridge = readyEverythingBridge();
+    bridge.saveIntake
+      .mockRejectedValueOnce(new Error("private storage detail"))
+      .mockResolvedValueOnce();
+    const wizard = mountWizard({ bridge, placement: "settings" });
+    await wizard.open();
+
+    expect(screen.queryByRole("button", { name: RETRY_INTAKE_SAVE_LABEL })).toBeNull();
+    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
+
+    const retry = await screen.findByRole("button", { name: RETRY_INTAKE_SAVE_LABEL });
+    expect(retry.className).toContain("underline");
+    expect(retry.className).toContain("text-ink-2");
+    expect(retry.className).not.toContain("text-danger");
+    expect(document.querySelector("#onboarding-error")?.textContent).toBe(
+      "Your answers could not be saved. Please try again.",
+    );
+    expect(bridge.saveIntake).toHaveBeenCalledOnce();
+
+    await user.click(retry);
+    await waitFor(() => {
+      expect(bridge.saveIntake).toHaveBeenCalledTimes(2);
+      expect(wizard.controller.state().fixedError).toBeNull();
+    });
+    expect(screen.queryByRole("button", { name: RETRY_INTAKE_SAVE_LABEL })).toBeNull();
     wizard.controller.dispose();
   });
 
@@ -520,12 +575,20 @@ describe("setup card", () => {
     });
     expect(rowState("training")).toBe("ready");
     expect(primaryButton()).toBeDisabled();
+    expect(document.querySelector("[data-setup-readiness]")).toHaveTextContent(
+      "2 of 3 required ready",
+    );
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
 
     await waitFor(() => {
+      expect(rowState("injury-status")).toBe("ready");
       expect(primaryButton()).toBeEnabled();
+      expect(document.querySelector("[data-setup-readiness]")).toHaveTextContent(
+        "3 of 3 required ready",
+      );
     });
+    expect(bridge.saveIntake).not.toHaveBeenCalled();
     await user.click(primaryButton());
 
     await waitFor(() => {
@@ -548,7 +611,7 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("keeps the screen monochrome", async () => {
+  it("uses status color for completion and a quiet brand tint for the optional badge", async () => {
     const wizard = mountWizard({ bridge: readyEverythingBridge() });
     await wizard.open();
     await waitFor(() => {
@@ -559,8 +622,10 @@ describe("setup card", () => {
     const tick = setupRow("ai").querySelector<HTMLElement>('[data-setup-disc="ready"]');
     expect(tick?.className).toContain("text-ok");
     const pending = setupRow("injury-status").querySelector('[data-setup-disc="pending"]');
-    expect(pending).toBeNull();
-    expect(document.querySelector(".setup-panel")?.outerHTML).not.toMatch(/brand/u);
+    expect(pending).not.toBeNull();
+    expect(setupRow("telegram").querySelector("[data-telegram-optional]")?.className).toContain(
+      "text-brand",
+    );
     wizard.controller.dispose();
   });
 
@@ -569,17 +634,17 @@ describe("setup card", () => {
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
 
-    expect(rowIds()).toEqual(["ai", "training", "injury-status"]);
+    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
 
-    expect(rowIds()).toEqual(["ai", "training", "injury-status", "clinician-cleared"]);
+    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status", "clinician-cleared"]);
     expect(setupRow("clinician-cleared").parentElement).toBe(setupCard());
     expect(setupRow("injury-status").nextElementSibling).toBe(setupRow("clinician-cleared"));
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
 
-    expect(rowIds()).toEqual(["ai", "training", "injury-status"]);
+    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
     wizard.controller.dispose();
   });
 
@@ -798,7 +863,7 @@ describe("setup card", () => {
     });
 
     expect(rowState("ai")).toBe("ready");
-    expect(rowSubtitle("ai")).toBe("Powers your coach");
+    expect(rowSubtitle("ai")).toBe("Connected · powers your coach");
     wizard.controller.dispose();
   });
 
@@ -931,7 +996,7 @@ describe("setup card", () => {
 
     expect(primaryButton()).toBeDisabled();
     expect(outstanding()?.getAttribute("data-setup-outstanding")).toBe("intake");
-    expect(outstanding()?.textContent).toBe("Answer the injury question above to finish.");
+    expect(outstanding()?.textContent).toBe("Answer the injury question to finish.");
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
 
@@ -963,7 +1028,7 @@ describe("setup card", () => {
     await waitFor(() => {
       expect(rowState("training")).toBe("ready");
     });
-    expect(rowSubtitle("training")).toBe("Connected — where your rides come from");
+    expect(rowSubtitle("training")).toBe("Connected · where your rides come from");
     expect(trigger("training").textContent).toBe("Change");
     connected.controller.dispose();
   });

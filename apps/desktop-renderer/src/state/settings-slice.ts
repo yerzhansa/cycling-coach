@@ -190,6 +190,12 @@ export function settingsMutationActive(state: SettingsSurfaceState): boolean {
   return state.savingOwners.length > 0;
 }
 
+export function nonTelegramSettingsMutationActive(
+  state: Pick<SettingsSurfaceState, "savingOwners">,
+): boolean {
+  return state.savingOwners.some((owner) => owner !== "telegram");
+}
+
 export const createSettingsSlice: StateCreator<EnduragentState, [], [], SettingsSlice> = (
   set,
   get,
@@ -229,7 +235,6 @@ export const createSettingsSlice: StateCreator<EnduragentState, [], [], Settings
           repairCredential === null ? CLOSED_PANE : { status: "closed", repairCredential },
         athlete: CLOSED_PANE,
         conversation: CLOSED_PANE,
-        telegram: CLOSED_PANE,
       },
     });
   },

@@ -3,7 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupReady } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
-import { control, mountWizard, resetOnboardingStore, testBridge } from "./onboarding-harness.js";
+import { SetupPanel } from "../src/ui/onboarding/OnboardingWizard.js";
+import {
+  control,
+  mountWizard,
+  readyTelegramSettings,
+  resetOnboardingStore,
+  setTelegramSettings,
+  testBridge,
+} from "./onboarding-harness.js";
 
 const savedIntake = {
   swim_skill_floor: null,
@@ -70,6 +78,55 @@ describe("authoritative setup readiness", () => {
     resolve({ schemaVersion: 1, intake: savedIntake, durableTrainingData: true });
     await act(async () => opening);
     expect(setupReady(useEnduragentStore.getState())).toBe(true);
+    wizard.controller.dispose();
+  });
+
+  it("never counts or gates on Telegram in Chat but preserves other and Settings locks", async () => {
+    setTelegramSettings(
+      readyTelegramSettings({
+        channel: { desiredState: "disabled", state: "disabled" },
+        bot: { state: "unconfigured" },
+        pairing: { state: "unpaired" },
+        credentialConfigured: false,
+        gapWarning: { state: "clear" },
+      }),
+    );
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.getSetupStatus = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      intake: savedIntake,
+      durableTrainingData: true,
+    }));
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: { ...useEnduragentStore.getState().settings, savingOwners: ["telegram"] },
+      });
+    });
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+    expect(screen.getByRole("button", { name: "Start coaching" })).toBeEnabled();
+    expect(document.querySelector("[data-setup-readiness]")).toHaveTextContent(
+      "3 of 3 required ready",
+    );
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: { ...useEnduragentStore.getState().settings, savingOwners: ["credential"] },
+      });
+    });
+    expect(screen.getByRole("button", { name: "Start coaching" })).toBeDisabled();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: { ...useEnduragentStore.getState().settings, savingOwners: ["telegram"] },
+      });
+    });
+    wizard.rendered.rerender(<SetupPanel placement="settings" />);
+    expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
+    expect(screen.queryByText("Everything stays on this Mac.")).toBeNull();
+    expect(document.querySelector("[data-setup-readiness]")).toBeNull();
     wizard.controller.dispose();
   });
 

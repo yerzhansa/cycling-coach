@@ -191,6 +191,35 @@ describe("Telegram settings controller", () => {
     expect(runtime.controller.state()).toEqual({ status: "closed" });
   });
 
+  it("clears stale load-error feedback when background polling recovers", async () => {
+    const runtime = setup();
+    runtime.bridge.status.mockRejectedValueOnce(new TypeError());
+
+    await runtime.controller.activate();
+
+    expect(runtime.controller.state()).toMatchObject({
+      status: "error",
+      kind: "load",
+      announcement: "Telegram settings aren’t available. Keep the app open and try again.",
+      feedback: {
+        tone: "error",
+        message: "Telegram settings aren’t available. Keep the app open and try again.",
+      },
+    });
+
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
+    runtime.poll?.();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        status: "ready",
+        telegram: PAIRED,
+        announcement: "",
+        feedback: null,
+      }),
+    );
+  });
+
   it("shows a sender load failure when a malformed allowed-sender response is rejected", async () => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);

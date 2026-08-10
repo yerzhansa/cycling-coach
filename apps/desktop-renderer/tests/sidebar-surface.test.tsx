@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConnectionStatus } from "../src/state/connection-slice.js";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
 import {
   restoreManualSyncFocus,
@@ -206,6 +205,17 @@ describe("sidebar update action", () => {
   });
 });
 
+describe("sidebar information hierarchy", () => {
+  it("omits redundant conversation and process-status surfaces", () => {
+    render(<Sidebar />);
+
+    expect(screen.queryByText("Conversations")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Current conversation/u })).not.toBeInTheDocument();
+    expect(screen.queryByText("Connected")).not.toBeInTheDocument();
+    expect(document.querySelector(".connection-status")).not.toBeInTheDocument();
+  });
+});
+
 describe("sidebar sync chip", () => {
   it("walks the loading, synced, syncing and attention states", () => {
     render(<Sidebar />);
@@ -226,6 +236,7 @@ describe("sidebar sync chip", () => {
       },
     });
     expect(chip()).toHaveAttribute("data-status", "synced");
+    expect(chip()).toHaveTextContent("Training data synced");
     expect(chip()).toHaveTextContent("1998-07-19 07:55:00 UTC");
 
     update({ sync: toManualSyncViewState({ status: "running", operation: 1 }) });
@@ -280,45 +291,6 @@ describe("sidebar sync chip", () => {
     render(<Sidebar />);
 
     expect(chip()).toBeDisabled();
-  });
-});
-
-describe("sidebar conversations", () => {
-  it("lists the single live conversation and says so", async () => {
-    const user = userEvent.setup();
-    useEnduragentStore.setState({ activeView: "settings" });
-    render(<Sidebar />);
-
-    const entry = screen.getByRole("button", { name: /Current conversation/u });
-    expect(entry).not.toHaveAttribute("aria-current");
-    expect(screen.getByText("Enduragent keeps one conversation on this Mac.")).toBeInTheDocument();
-
-    await user.click(entry);
-    expect(useEnduragentStore.getState().activeView).toBe("chat");
-  });
-});
-
-describe("sidebar connection status", () => {
-  it("names each connection state at the sidebar foot", () => {
-    render(<Sidebar />);
-
-    const status = document.querySelector(".connection-status");
-    expect(status).toHaveAttribute("role", "status");
-    expect(status).toHaveTextContent("Connecting…");
-
-    const expected: readonly [ConnectionStatus, string, string][] = [
-      ["ready", "Connected", "connected"],
-      ["connected", "Connected", "connected"],
-      ["recovering", "Reconnecting…", "recovering"],
-      ["terminal", "Connection unavailable", "unavailable"],
-      ["failed", "Connection unavailable", "unavailable"],
-      ["closing", "Closing…", "pending"],
-    ];
-    for (const [connection, copy, tone] of expected) {
-      update({ connection });
-      expect(status).toHaveTextContent(copy);
-      expect(status).toHaveAttribute("data-tone", tone);
-    }
   });
 });
 

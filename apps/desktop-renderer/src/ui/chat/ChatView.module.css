@@ -6,7 +6,7 @@
 }
 
 .thread {
-  width: min(820px, calc(100% - 48px));
+  width: min(840px, calc(100% - 48px));
   margin: 0 auto;
 }
 
@@ -17,10 +17,12 @@
   grid-column: 1;
   grid-row: 2;
   align-self: end;
-  padding: 12px max(24px, calc((100% - 48px - 820px) / 2)) 18px;
+  padding: 12px max(24px, calc((100% - 48px - 840px) / 2)) 18px;
   background-image: var(--grain), linear-gradient(transparent, var(--bg) 28%);
   background-repeat: repeat, no-repeat;
-  background-size: 256px 256px, auto;
+  background-size:
+    256px 256px,
+    auto;
 }
 
 .noticeHost:empty {

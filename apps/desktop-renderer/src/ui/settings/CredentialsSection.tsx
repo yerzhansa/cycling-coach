@@ -14,6 +14,7 @@ import {
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { SetupRow, SetupSubPanel } from "../onboarding/SetupRow.js";
+import { BUTTON_QUIET_SM } from "../onboarding/SetupCard.js";
 import { credentialRuntimeLabel } from "./copy.js";
 import styles from "./SettingsView.module.css";
 
@@ -97,7 +98,7 @@ export function CredentialDeleteButton(props: {
       type="button"
       ref={button}
       data-setup-delete={entry.credential}
-      className={styles.button}
+      className={styles.danger}
       disabled={
         mutating || setupLoading || onboardingMutating || confirmation !== null || repairRequired
       }
@@ -208,7 +209,7 @@ export function AdditionalCredentialRows(props: {
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
-                  className={styles.button}
+                  className={BUTTON_QUIET_SM}
                   disabled={setupLoading || onboardingMutating || changesBlocked}
                   aria-label={`Change the ${entry.provider} credential`}
                   onClick={() => openCredentialEditor(entry.credential)}

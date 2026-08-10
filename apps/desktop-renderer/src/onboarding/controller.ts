@@ -105,6 +105,7 @@ export interface OnboardingActions {
   finish(): void;
   dismiss(): void;
   retrySavedKeys(): void;
+  retryIntakeSave(): void;
   startChatGptLogin(): void;
   cancelChatGptLogin(): void;
   retryChatGptActivation(): void;
@@ -115,7 +116,11 @@ export interface OnboardingActions {
   setCustomModel(model: string): void;
   setEndpointMode(mode: string): void;
   setCustomEndpoint(endpoint: string): void;
-  setIntake<Key extends keyof DesktopIntakeDraft>(key: Key, value: DesktopIntakeDraft[Key]): void;
+  setIntake<Key extends keyof DesktopIntakeDraft>(
+    key: Key,
+    value: DesktopIntakeDraft[Key],
+    intent?: { readonly persistWhenComplete?: boolean },
+  ): void;
 }
 
 export interface OnboardingController extends OnboardingActions {
@@ -200,6 +205,33 @@ type CredentialWriteFailureReason = Extract<
   { readonly status: "refused" | "uncertain" }
 >["reason"];
 
+type IntakePersistenceResult = "saved" | "failed" | "stale";
+
+interface IntakeSaveRequest {
+  readonly revision: number;
+  readonly visit: number;
+  readonly generation: number;
+  readonly intake: ReturnType<typeof toDesktopIntakeFlags>;
+  readonly waiters: Array<(result: IntakePersistenceResult) => void>;
+  focusOnFailure: boolean;
+}
+
+function persistedIntakeMatchesDraft(
+  persisted: ReturnType<typeof toDesktopIntakeFlags> | null,
+  draft: DesktopIntakeDraft,
+): boolean {
+  if (persisted === null || !intakeComplete(draft)) return false;
+  const expected = toDesktopIntakeFlags(draft);
+  return (
+    persisted.swim_skill_floor === expected.swim_skill_floor &&
+    persisted.continuous_distance_capable === expected.continuous_distance_capable &&
+    persisted.open_water_comfort === expected.open_water_comfort &&
+    persisted.prior_bsi === expected.prior_bsi &&
+    persisted.clinician_cleared === expected.clinician_cleared &&
+    persisted.injury_status === expected.injury_status
+  );
+}
+
 const CREDENTIAL_WRITE_REFUSAL_ERRORS = {
   "invalid-input": "invalid-input",
   "encryption-unavailable": "encryption-unavailable",
@@ -267,6 +299,12 @@ export function createOnboardingController(
   let progressDetailTimer: ReturnType<typeof setTimeout> | undefined;
   let cancelScheduledActivation: (() => void) | undefined;
   let cancellingOperationId: string | undefined;
+  let intakeRevision = 0;
+  let savedIntakeRevision: number | null = null;
+  let intakePersistenceGeneration = 0;
+  let activeIntakeSave: IntakeSaveRequest | null = null;
+  let queuedIntakeSave: IntakeSaveRequest | null = null;
+  let autoPersistIntakeDraft = false;
 
   const createOperationId = options.createOperationId ?? (() => crypto.randomUUID());
   const scheduleAfterPaint = options.afterPaint ?? afterNextPaint;
@@ -334,6 +372,121 @@ export function createOnboardingController(
     focusSeq += 1;
   };
 
+  const settleIntakeWaiters = (
+    request: IntakeSaveRequest,
+    result: IntakePersistenceResult,
+  ): void => {
+    const waiters = request.waiters.splice(0);
+    for (const resolve of waiters) resolve(result);
+  };
+
+  const discardQueuedIntakeSave = (): void => {
+    if (queuedIntakeSave === null) return;
+    settleIntakeWaiters(queuedIntakeSave, "stale");
+    queuedIntakeSave = null;
+  };
+
+  const invalidateIntakePersistence = (): void => {
+    intakePersistenceGeneration += 1;
+    discardQueuedIntakeSave();
+    if (activeIntakeSave !== null) settleIntakeWaiters(activeIntakeSave, "stale");
+  };
+
+  const startIntakeSave = (request: IntakeSaveRequest): void => {
+    activeIntakeSave = request;
+    let save: Promise<void>;
+    try {
+      save = options.bridge.saveIntake(request.intake);
+    } catch {
+      save = Promise.reject();
+    }
+    void save
+      .then(
+        () => {
+          const current =
+            !disposed &&
+            presenting &&
+            visit === request.visit &&
+            intakePersistenceGeneration === request.generation &&
+            intakeRevision === request.revision;
+          if (current) {
+            intakeSaved = true;
+            savedIntakeRevision = request.revision;
+            if (state.fixedError === "intake-save-failed") {
+              state = { ...state, fixedError: null };
+            }
+            publish();
+          }
+          settleIntakeWaiters(request, current ? "saved" : "stale");
+        },
+        () => {
+          const current =
+            !disposed &&
+            presenting &&
+            visit === request.visit &&
+            intakePersistenceGeneration === request.generation &&
+            intakeRevision === request.revision;
+          if (current) {
+            intakeSaved = false;
+            savedIntakeRevision = null;
+            state = request.focusOnFailure
+              ? withError(state, "intake-save-failed")
+              : { ...state, fixedError: "intake-save-failed" };
+            if (request.focusOnFailure) focusTitle();
+            publish();
+          }
+          settleIntakeWaiters(request, current ? "failed" : "stale");
+        },
+      )
+      .finally(() => {
+        if (activeIntakeSave === request) activeIntakeSave = null;
+        const next = queuedIntakeSave;
+        queuedIntakeSave = null;
+        if (next !== null) startIntakeSave(next);
+      });
+  };
+
+  const persistIntake = (
+    revision: number,
+    intake: ReturnType<typeof toDesktopIntakeFlags>,
+    focusOnFailure = false,
+  ): Promise<IntakePersistenceResult> => {
+    if (intakeSaved && savedIntakeRevision === revision) {
+      return Promise.resolve("saved");
+    }
+
+    const matching = [activeIntakeSave, queuedIntakeSave].find(
+      (request) =>
+        request !== null &&
+        request.revision === revision &&
+        request.visit === visit &&
+        request.generation === intakePersistenceGeneration,
+    );
+    if (matching !== undefined && matching !== null) {
+      matching.focusOnFailure ||= focusOnFailure;
+      return new Promise((resolve) => matching.waiters.push(resolve));
+    }
+
+    const request: IntakeSaveRequest = {
+      revision,
+      visit,
+      generation: intakePersistenceGeneration,
+      intake,
+      waiters: [],
+      focusOnFailure,
+    };
+    const result = new Promise<IntakePersistenceResult>((resolve) => {
+      request.waiters.push(resolve);
+    });
+    if (activeIntakeSave === null) {
+      startIntakeSave(request);
+    } else {
+      discardQueuedIntakeSave();
+      queuedIntakeSave = request;
+    }
+    return result;
+  };
+
   const setLlmDraft = (next: LlmSelectionDraft | undefined): void => {
     llmDraft = next;
     if (next !== undefined) llmDrafts[next.provider.provider] = next;
@@ -364,6 +517,7 @@ export function createOnboardingController(
     clearScheduledActivation();
     authGeneration += 1;
     statusRefreshGeneration += 1;
+    invalidateIntakePersistence();
     actionStatus = null;
     visit += 1;
     options.credentials.clear();
@@ -655,17 +809,16 @@ export function createOnboardingController(
       publish();
       return;
     }
-    try {
-      await options.bridge.saveIntake(intake);
-      if (visit !== finishVisit || !presenting) return;
-    } catch {
-      if (visit !== finishVisit || !presenting) return;
-      state = withError(state, "intake-save-failed");
-      focusTitle();
-      publish();
+    const finishRevision = intakeRevision;
+    const saved = await persistIntake(finishRevision, intake, true);
+    if (
+      saved !== "saved" ||
+      visit !== finishVisit ||
+      !presenting ||
+      intakeRevision !== finishRevision
+    ) {
       return;
     }
-    intakeSaved = true;
     state = withBusy(state, false);
     if (completed) {
       publish();
@@ -772,13 +925,16 @@ export function createOnboardingController(
   const load = async (hydrateIntake: boolean): Promise<void> => {
     if (disposed || opening) return;
     const currentIntake = state.intake;
+    const currentAutoPersistIntakeDraft = autoPersistIntakeDraft;
     const currentDraft = llmDraft;
     const currentDrafts = llmDrafts;
+    const hadActiveIntakeSave = activeIntakeSave !== null;
     const hydrateAuthoritativeState = hydrateIntake || !hasSuccessfulLoad;
     opening = true;
     presenting = true;
     loading = true;
     publish();
+    invalidateIntakePersistence();
     const openVisit = ++visit;
     authGeneration += 1;
     statusRefreshGeneration += 1;
@@ -846,10 +1002,25 @@ export function createOnboardingController(
     if (hydrateAuthoritativeState) {
       state = withPersistedIntake(state, setupResult.value.intake);
       intakeSaved = setupResult.value.intake !== null;
+      autoPersistIntakeDraft = false;
     } else {
       state = withIntake(state, currentIntake);
-      intakeSaved = intakeSaved && setupResult.value.intake !== null;
+      intakeSaved = persistedIntakeMatchesDraft(setupResult.value.intake, currentIntake);
+      autoPersistIntakeDraft = currentAutoPersistIntakeDraft;
     }
+    const invalidatedSaveNeedsReplacement =
+      !hydrateAuthoritativeState &&
+      hadActiveIntakeSave &&
+      autoPersistIntakeDraft &&
+      intakeComplete(state.intake);
+    if (invalidatedSaveNeedsReplacement) intakeSaved = false;
+    intakeRevision += 1;
+    savedIntakeRevision = intakeSaved ? intakeRevision : null;
+    const shouldResumeIntakePersistence =
+      !hydrateAuthoritativeState &&
+      autoPersistIntakeDraft &&
+      intakeComplete(state.intake) &&
+      !intakeSaved;
     durableTrainingData = setupResult.value.durableTrainingData;
     const restoredPhase = chatGptUiPhase(state);
     if (restoredPhase === "signed-in" || restoredPhase === "ready") {
@@ -865,6 +1036,9 @@ export function createOnboardingController(
     focusTitle();
     publish();
     opening = false;
+    if (shouldResumeIntakePersistence) {
+      void persistIntake(intakeRevision, toDesktopIntakeFlags(state.intake));
+    }
     loadClaudeCliStatus(openVisit);
   };
 
@@ -885,6 +1059,7 @@ export function createOnboardingController(
       disposed = true;
       authGeneration += 1;
       statusRefreshGeneration += 1;
+      invalidateIntakePersistence();
       visit += 1;
       actionStatus = null;
       options.credentials.clear();
@@ -964,6 +1139,21 @@ export function createOnboardingController(
           publish();
         }
       })();
+    },
+    retryIntakeSave(): void {
+      if (
+        disposed ||
+        !presenting ||
+        setupStatusBlocksMutations() ||
+        state.busy ||
+        state.fixedError !== "intake-save-failed" ||
+        !intakeComplete(state.intake)
+      ) {
+        return;
+      }
+      const retryRevision = intakeRevision;
+      const intake = toDesktopIntakeFlags(state.intake);
+      void persistIntake(retryRevision, intake);
     },
     startChatGptLogin(): void {
       if (
@@ -1177,11 +1367,18 @@ export function createOnboardingController(
       setLlmDraft({ ...llmDraft, customEndpoint: endpoint });
       setFixedError(null);
     },
-    setIntake(key, value): void {
-      if (setupStatusBlocksMutations()) return;
+    setIntake(key, value, intent): void {
+      if (disposed || !presenting || setupStatusBlocksMutations() || state.busy) return;
+      intakeRevision += 1;
       intakeSaved = false;
+      savedIntakeRevision = null;
+      autoPersistIntakeDraft = intent?.persistWhenComplete === true;
+      discardQueuedIntakeSave();
       state = withIntake(state, { [key]: value });
       publish();
+      if (autoPersistIntakeDraft && intakeComplete(state.intake)) {
+        void persistIntake(intakeRevision, toDesktopIntakeFlags(state.intake));
+      }
     },
   };
 }

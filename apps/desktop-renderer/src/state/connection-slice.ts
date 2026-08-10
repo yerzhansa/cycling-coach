@@ -10,36 +10,6 @@ export type ConnectionStatus =
   | "failed"
   | "closing";
 
-type ConnectionTone = "pending" | "connected" | "recovering" | "unavailable";
-
-const TONES: Readonly<Record<ConnectionStatus, ConnectionTone>> = {
-  connecting: "pending",
-  ready: "connected",
-  connected: "connected",
-  recovering: "recovering",
-  terminal: "unavailable",
-  failed: "unavailable",
-  closing: "pending",
-};
-
-const COPY: Readonly<Record<ConnectionStatus, string>> = {
-  connecting: "Connecting…",
-  ready: "Connected",
-  connected: "Connected",
-  recovering: "Reconnecting…",
-  terminal: "Connection unavailable",
-  failed: "Connection unavailable",
-  closing: "Closing…",
-};
-
-export function connectionTone(status: ConnectionStatus): ConnectionTone {
-  return TONES[status];
-}
-
-export function connectionCopy(status: ConnectionStatus): string {
-  return COPY[status];
-}
-
 export interface ConnectionSlice {
   readonly connection: ConnectionStatus;
   setConnection: (status: ConnectionStatus) => void;

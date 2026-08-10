@@ -27,10 +27,10 @@ export function SettingsView(): ReactElement {
   return (
     <Page title="Settings" subtitle={busy ? "Saving…" : undefined} busy={busy}>
       <SetupPanel placement="settings" />
+      <TelegramSection />
       <CoachSection />
       <TrainingAccountSection />
       <ConversationSection />
-      <TelegramSection />
       <SpendSection />
       <PreferencesSection />
       <ApplicationSection />

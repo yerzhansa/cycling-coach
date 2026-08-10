@@ -30,9 +30,9 @@ import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
 import { observeConnectionLifecycle } from "./state/connection-slice.js";
 import { credentialDrafts } from "./state/credential-drafts.js";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
-import { useEnduragentStore } from "./state/store.js";
+import { useEnduragentStore, type EnduragentState } from "./state/store.js";
 import { setupReady, setupRequired } from "./state/onboarding-slice.js";
-import { settingsMutationActive } from "./state/settings-slice.js";
+import { nonTelegramSettingsMutationActive } from "./state/settings-slice.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { createOnboardingCompletionController } from "./onboarding/completion.js";
 import {
@@ -61,6 +61,15 @@ export type Disposer = () => void;
 function focusComposer(): void {
   const composer = document.querySelector("#message");
   if (composer instanceof HTMLTextAreaElement) composer.focus();
+}
+
+export function onboardingCredentialMutationsBlocked(
+  state: Pick<EnduragentState, "settings">,
+): boolean {
+  return credentialChangesBlocked(
+    state.settings.credentials,
+    nonTelegramSettingsMutationActive(state.settings),
+  );
 }
 
 export function bootRenderer(): Disposer {
@@ -292,13 +301,7 @@ export function bootRenderer(): Disposer {
         state.activeView === "settings" || (state.activeView === "chat" && setupRequired(state))
       );
     },
-    credentialMutationsBlocked: () => {
-      const state = store.getState();
-      return credentialChangesBlocked(
-        state.settings.credentials,
-        settingsMutationActive(state.settings),
-      );
-    },
+    credentialMutationsBlocked: () => onboardingCredentialMutationsBlocked(store.getState()),
   });
   store.getState().bindOnboardingActions(onboarding);
   const closePanes = (): void => {
@@ -306,7 +309,6 @@ export function bootRenderer(): Disposer {
     credentialSettingsController.close();
     athleteSettingsController.close();
     sessionSettingsController.close();
-    telegramSettingsController.close();
   };
   const openSetupFromSettings = (): void => {
     const heading = document.querySelector<HTMLElement>("#setup-panel-title");
@@ -390,7 +392,6 @@ export function bootRenderer(): Disposer {
         void credentialSettingsController.activate();
         void athleteSettingsController.activate();
         void sessionSettingsController.activate();
-        void telegramSettingsController.activate();
       },
       close: closePanes,
     },
@@ -417,6 +418,7 @@ export function bootRenderer(): Disposer {
 
   void trainingContextController.start();
   spendController.start();
+  void telegramSettingsController.activate();
   void chatController.start();
   void onboarding.open().finally(() => store.getState().setOnboardingStartupSettled(true));
   void clients.getClient().then(

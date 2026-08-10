@@ -555,6 +555,8 @@ export function createTelegramSettingsController(input: {
             currentState.status !== "closed" &&
             currentState.status !== "working"
           ) {
+            const recoveredLoadFailure =
+              currentState.status === "error" && currentState.kind === "load";
             const previous = readCurrentContent();
             const healthAnnouncement =
               previous.telegram === null
@@ -565,13 +567,14 @@ export function createTelegramSettingsController(input: {
               feedbackProvenance,
               content.telegram,
             );
-            if (feedbackSuperseded) feedbackProvenance = null;
+            const clearFeedback = recoveredLoadFailure || feedbackSuperseded;
+            if (clearFeedback) feedbackProvenance = null;
             render({
               status: "ready",
               ...content,
-              announcement: feedbackSuperseded ? "" : previous.announcement,
+              announcement: clearFeedback ? "" : previous.announcement,
               healthAnnouncement,
-              feedback: feedbackSuperseded ? null : previous.feedback,
+              feedback: clearFeedback ? null : previous.feedback,
             });
           }
         },

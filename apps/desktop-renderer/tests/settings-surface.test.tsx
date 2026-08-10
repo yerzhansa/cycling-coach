@@ -300,6 +300,7 @@ function createHarness(options: HarnessOptions = {}) {
   });
   const appliedTelegram = (current: TelegramControlStatus) =>
     ({ outcome: "applied", current }) as const;
+  const loadTelegramStatus = vi.fn(async () => options.telegram ?? telegramStatus());
   const pasteTelegramToken = vi.fn(async () =>
     appliedTelegram(
       telegramStatus({
@@ -308,9 +309,11 @@ function createHarness(options: HarnessOptions = {}) {
       }),
     ),
   );
+  const scheduleTelegramPoll = vi.fn(() => 1);
+  const cancelTelegramPoll = vi.fn();
   const telegramController = createTelegramSettingsController({
     bridge: {
-      status: async () => options.telegram ?? telegramStatus(),
+      status: loadTelegramStatus,
       pasteTokenFromClipboard: pasteTelegramToken,
       enable: async () =>
         appliedTelegram(
@@ -334,8 +337,8 @@ function createHarness(options: HarnessOptions = {}) {
     },
     beginMutation: () => store.getState().beginSettingsMutation("telegram"),
     view: telegramAdapter.view,
-    setInterval: (() => 0) as unknown as typeof globalThis.setInterval,
-    clearInterval: (() => {}) as unknown as typeof globalThis.clearInterval,
+    setInterval: scheduleTelegramPoll as unknown as typeof globalThis.setInterval,
+    clearInterval: cancelTelegramPoll as unknown as typeof globalThis.clearInterval,
   });
   const spendController = createSpendMeterController({
     clients,
@@ -371,14 +374,12 @@ function createHarness(options: HarnessOptions = {}) {
         void credentialController.activate();
         void athleteController.activate();
         void conversationController.activate();
-        void telegramController.activate();
       },
       close() {
         coachController.close();
         credentialController.close();
         athleteController.close();
         conversationController.close();
-        telegramController.close();
       },
     },
     coach: coachAdapter.port,
@@ -392,6 +393,7 @@ function createHarness(options: HarnessOptions = {}) {
     units: { set: vi.fn() },
     openSetup,
   });
+  void telegramController.activate();
 
   return {
     calls,
@@ -402,6 +404,10 @@ function createHarness(options: HarnessOptions = {}) {
     openSetup,
     onReconciled,
     pasteTelegramToken,
+    loadTelegramStatus,
+    scheduleTelegramPoll,
+    cancelTelegramPoll,
+    telegramController,
     spendController,
     startUpdate: () => updateController.start(),
     dispose() {
@@ -503,7 +509,10 @@ describe("settings setup inventory", () => {
     const settings = screen.getByRole("region", { name: "Settings" });
     const setup = settings.querySelector('[data-setup-host="settings"]');
     expect(setup).not.toBeNull();
-    expect(setup?.nextElementSibling?.textContent).toBe("Coach");
+    expect(within(setup as HTMLElement).getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Setup",
+    );
+    expect(setup?.nextElementSibling?.textContent).toBe("Channels");
     const aiRow = setup?.querySelector<HTMLElement>('[data-setup-row="ai"]');
     const trainingRow = setup?.querySelector<HTMLElement>('[data-setup-row="training"]');
     expect(aiRow).not.toBeNull();
@@ -511,17 +520,22 @@ describe("settings setup inventory", () => {
     expect(
       within(aiRow as HTMLElement).getByRole("button", { name: "Change what powers your coach" })
         .className,
-    ).toContain("border-ink-2");
+    ).toContain("border-transparent");
+    expect(
+      within(trainingRow as HTMLElement).getByRole("button", {
+        name: "Change Intervals.icu",
+      }).className,
+    ).toContain("border-transparent");
     expect(
       within(aiRow as HTMLElement).getByRole("button", {
         name: "Delete the Anthropic credential",
-      }),
-    ).toBeInTheDocument();
+      }).className,
+    ).toMatch(/danger/u);
     expect(
       within(trainingRow as HTMLElement).getByRole("button", {
         name: "Delete the intervals.icu credential",
-      }),
-    ).toBeInTheDocument();
+      }).className,
+    ).toMatch(/danger/u);
     expect(setup?.querySelector('[data-setup-row="saved-anthropic"]')).toBeNull();
     expect(setup?.querySelector('[data-setup-row="saved-openrouter"]')).not.toBeNull();
     expect(screen.queryByRole("region", { name: "Credentials" })).toBeNull();
@@ -537,6 +551,12 @@ describe("settings setup inventory", () => {
     await renderSettings();
     const inactive = document.querySelector<HTMLElement>('[data-setup-row="saved-openrouter"]');
     expect(inactive).not.toBeNull();
+
+    expect(
+      within(inactive as HTMLElement).getByRole("button", {
+        name: "Change the OpenRouter credential",
+      }).className,
+    ).toContain("border-transparent");
 
     await user.click(
       within(inactive as HTMLElement).getByRole("button", {
@@ -686,7 +706,7 @@ describe("conversation settings", () => {
 });
 
 describe("settings lifecycle", () => {
-  it("closes every pane and its controller when the athlete leaves settings", async () => {
+  it("keeps the resident Telegram controller active when Settings unmounts and remounts", async () => {
     harness = createHarness();
     const view = render(<SettingsView />);
     await screen.findByRole("button", { name: "Save coach route" });
@@ -695,9 +715,13 @@ describe("settings lifecycle", () => {
       expect(useEnduragentStore.getState().settings.coach.status).toBe("ready");
       expect(useEnduragentStore.getState().settings.athlete.status).toBe("ready");
       expect(useEnduragentStore.getState().settings.credentials.status).toBe("ready");
+      expect(useEnduragentStore.getState().settings.telegram.status).toBe("ready");
     });
     const loads = harness.calls.filter((call) => call.method === "getRuntimeConfig").length;
+    const telegram = useEnduragentStore.getState().settings.telegram;
     expect(loads).toBeGreaterThan(0);
+    expect(harness.loadTelegramStatus).toHaveBeenCalledOnce();
+    expect(harness.scheduleTelegramPoll).toHaveBeenCalledOnce();
 
     view.unmount();
 
@@ -706,6 +730,9 @@ describe("settings lifecycle", () => {
     expect(settings.credentials).toEqual(CLOSED_PANE);
     expect(settings.athlete).toEqual(CLOSED_PANE);
     expect(settings.conversation).toEqual(CLOSED_PANE);
+    expect(settings.telegram).toBe(telegram);
+    expect(harness.telegramController.state()).toBe(telegram);
+    expect(harness.cancelTelegramPoll).not.toHaveBeenCalled();
 
     render(<SettingsView />);
     await waitFor(() => {
@@ -714,6 +741,14 @@ describe("settings lifecycle", () => {
     expect(
       harness.calls.filter((call) => call.method === "getRuntimeConfig").length,
     ).toBeGreaterThan(loads);
+    expect(useEnduragentStore.getState().settings.telegram).toBe(telegram);
+    expect(harness.loadTelegramStatus).toHaveBeenCalledOnce();
+    expect(harness.scheduleTelegramPoll).toHaveBeenCalledOnce();
+    expect(harness.cancelTelegramPoll).not.toHaveBeenCalled();
+
+    harness.dispose();
+    expect(harness.cancelTelegramPoll).toHaveBeenCalledWith(1);
+    harness = undefined;
   });
 });
 

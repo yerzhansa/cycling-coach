@@ -62,7 +62,9 @@ export function SetupRow(props: {
       <StatusDisc status={props.status} />
       <div className="min-w-0 flex-1">
         {title}
-        <span className="mt-px block text-xs text-ink-2">{props.subtitle}</span>
+        <span className="mt-px block text-xs text-ink-2" data-setup-row-subtitle="">
+          {props.subtitle}
+        </span>
         <span className="sr-only" role="status" aria-live="polite" data-setup-announce={props.id}>
           {props.announce ?? ""}
         </span>
