@@ -110,6 +110,48 @@ jobs:
             return 1
           }
 
+          fetch_main_tip() {
+            local attempt response remaining_seconds request_timeout retry_delay
+
+            for ((attempt = 1; attempt <= api_max_attempts; attempt++)); do
+              remaining_seconds=$((deadline - SECONDS))
+              if ((remaining_seconds <= 0)); then
+                return 124
+              fi
+
+              request_timeout=30
+              if ((request_timeout > remaining_seconds)); then
+                request_timeout=$remaining_seconds
+              fi
+
+              if response=$(timeout "${request_timeout}s" gh api --method GET \
+                "repos/${REPOSITORY}/commits/heads/main" | jq -er '.sha'); then
+                printf '%s\n' "$response"
+                return 0
+              fi
+
+              if ((attempt >= api_max_attempts)); then
+                echo "::warning::GitHub commits API request failed (attempt ${attempt}/${api_max_attempts})." >&2
+                break
+              fi
+
+              remaining_seconds=$((deadline - SECONDS))
+              if ((remaining_seconds <= 0)); then
+                echo "::warning::GitHub commits API request failed (attempt ${attempt}/${api_max_attempts}); the wait deadline was reached." >&2
+                break
+              fi
+
+              retry_delay=$api_retry_interval_seconds
+              if ((retry_delay > remaining_seconds)); then
+                retry_delay=$remaining_seconds
+              fi
+              echo "::warning::GitHub commits API request failed (attempt ${attempt}/${api_max_attempts}); retrying in ${retry_delay}s." >&2
+              sleep "$retry_delay"
+            done
+
+            return 1
+          }
+
           while true; do
             if runs_json=$(fetch_runs); then
               :
@@ -157,6 +199,21 @@ jobs:
                   echo "publish-image.yml run #${run_number} (${run_id}) succeeded."
                   echo "ready=true" >> "$GITHUB_OUTPUT"
                   exit 0
+                fi
+
+                if [[ "$conclusion" == "cancelled" ]]; then
+                  if tip_sha=$(fetch_main_tip); then
+                    :
+                  else
+                    echo "::error::Could not determine the current main branch tip after publish-image.yml run #${run_number} (${run_id}) was cancelled; stable was not promoted."
+                    exit 1
+                  fi
+
+                  if [[ "$HEAD_SHA" != "$tip_sha" ]]; then
+                    echo "::notice::publish-image.yml run #${run_number} (${run_id}) for ${HEAD_SHA} was cancelled after main advanced to ${tip_sha}; a newer commit's promotion will set stable."
+                    echo "ready=false" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
                 fi
 
                 echo "::error::publish-image.yml run #${run_number} (${run_id}) concluded '${conclusion:-unknown}'; stable was not promoted."
