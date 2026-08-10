@@ -1739,6 +1739,7 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         ...process.env,
         HOME: home,
         ENDURAGENT_HOME: athleteHome,
+        ENDURAGENT_ACCEPTANCE_HIDDEN: "1",
         FORCE_COLOR: undefined,
         NO_COLOR: undefined,
         CLICOLOR_FORCE: undefined,
@@ -1991,6 +1992,14 @@ async function main() {
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (!process.env.CI && process.env.ENDURAGENT_WINDOWED_ACK !== "1") {
+    process.stderr.write(
+      "test:macos-update-roundtrip includes an updater-relaunched app instance that opens a real window on this display. " +
+        "Announce the run to the operator first, then re-run with ENDURAGENT_WINDOWED_ACK=1.\n",
+    );
+    process.exit(2);
+  }
+
   try {
     await main();
   } catch (error) {

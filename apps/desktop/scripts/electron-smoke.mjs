@@ -115,6 +115,7 @@ async function runtime() {
         ...process.env,
         FORCE_COLOR: undefined,
         CLICOLOR_FORCE: undefined,
+        ENDURAGENT_ACCEPTANCE_HIDDEN: "1",
       },
       [`--user-data-dir=${userDataDirectory}`],
     );
@@ -239,6 +240,7 @@ async function security() {
     const launchEnvironment = {
       ...createSecuritySmokeLaunchEnvironment(process.env, environment, process.platform),
       ...(mode === "packaged" ? { ELECTRON_RENDERER_URL: ":///synthetic-malformed-renderer" } : {}),
+      ENDURAGENT_ACCEPTANCE_HIDDEN: "1",
     };
     running = await startElectron(
       "--desktop-security-smoke",

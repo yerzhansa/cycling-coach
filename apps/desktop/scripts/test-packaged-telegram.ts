@@ -1125,6 +1125,7 @@ async function main(): Promise<void> {
       HOME: operatorHome,
       ENDURAGENT_HOME: athleteHome,
       ENDURAGENT_ACCEPTANCE_TELEGRAM_BOT_API_ORIGIN: telegram.origin,
+      ENDURAGENT_ACCEPTANCE_HIDDEN: "1",
       FORCE_COLOR: undefined,
       CLICOLOR_FORCE: undefined,
     });

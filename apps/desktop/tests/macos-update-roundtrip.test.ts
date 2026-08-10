@@ -105,7 +105,14 @@ describe("macOS updater round-trip input", () => {
         "/private/tmp/candidate-envelope",
         "/private/tmp/evidence.json",
       ],
-      { allowFailure: true, timeoutMs: 5_000 },
+      {
+        allowFailure: true,
+        timeoutMs: 5_000,
+        environment: {
+          ...process.env,
+          ENDURAGENT_WINDOWED_ACK: "1",
+        },
+      },
     );
 
     expect(result.code).toBe(1);
@@ -145,6 +152,7 @@ describe("macOS updater round-trip input", () => {
         environment: {
           ...process.env,
           ENDURAGENT_MACOS_UPDATE_ROUNDTRIP_MODE: "steady",
+          ENDURAGENT_WINDOWED_ACK: "1",
         },
       },
     );

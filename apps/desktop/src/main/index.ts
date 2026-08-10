@@ -122,6 +122,7 @@ function disableChromiumMediaSessionIntegration(): void {
 
 let desktopIsClosing = false;
 let desktopStartedInBackground = false;
+const desktopAcceptanceHidden = process.env.ENDURAGENT_ACCEPTANCE_HIDDEN === "1";
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const utilityEntry = resolve(mainDirectory, "daemon-utility.js");
@@ -129,6 +130,7 @@ const preloadEntry = resolve(mainDirectory, "../preload/index.cjs");
 
 async function runRuntimeSmoke(): Promise<void> {
   await app.whenReady();
+  if (desktopAcceptanceHidden) app.dock?.hide();
   const child = utilityProcess.fork(utilityEntry, ["--desktop-runtime-smoke"], {
     serviceName: "enduragent desktop runtime",
     stdio: "pipe",
@@ -156,6 +158,7 @@ async function runDesktop(): Promise<void> {
   });
   app.on("window-all-closed", () => {});
   await app.whenReady();
+  if (desktopAcceptanceHidden) app.dock?.hide();
   const backgroundAtLoginPreference = createBackgroundAtLoginPreferenceStore({
     root: join(app.getPath("userData"), BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME),
   });
@@ -270,7 +273,7 @@ async function runDesktop(): Promise<void> {
     if (resolution.status === "refused") {
       if (!controller.signal.aborted && resolution.cause !== "cancelled") {
         const copy = startupRefusalCopy(resolution.cause);
-        if (desktopStartedInBackground) {
+        if (desktopStartedInBackground || desktopAcceptanceHidden) {
           process.stderr.write(`desktop-startup-refusal ${resolution.cause}\n`);
         } else {
           dialog.showErrorBox(copy.title, copy.content);
@@ -398,7 +401,7 @@ async function runDesktop(): Promise<void> {
       const copy =
         controller.signal.aborted || desktopIsClosing ? undefined : lifecycleErrorCopy(state);
       if (copy !== undefined) {
-        if (desktopStartedInBackground && currentWindow() === null) {
+        if (desktopAcceptanceHidden || (desktopStartedInBackground && currentWindow() === null)) {
           process.stderr.write(`desktop-daemon-background-failure ${state.status}\n`);
         } else {
           dialog.showErrorBox(copy.title, copy.content);
@@ -722,13 +725,22 @@ async function runDesktop(): Promise<void> {
         if (windowCreation !== undefined) return windowCreation;
         const current = mainWindow.current();
         if (current !== null) {
-          if (current.isMinimized()) current.restore();
-          current.show();
-          current.focus();
+          if (!desktopAcceptanceHidden) {
+            if (current.isMinimized()) current.restore();
+            current.show();
+            current.focus();
+          }
           return Promise.resolve(current);
         }
         windowCreation = (async () => {
-          const created = new BrowserWindow(desktopWindowOptions(preloadEntry));
+          const windowOptions = desktopWindowOptions(preloadEntry);
+          if (desktopAcceptanceHidden) {
+            windowOptions.webPreferences = {
+              ...windowOptions.webPreferences,
+              backgroundThrottling: false,
+            };
+          }
+          const created = new BrowserWindow(windowOptions);
           window = created;
           rendererConsoleCapture.attach(created.webContents);
           hardenDesktopWindow(created);
@@ -791,9 +803,11 @@ async function runDesktop(): Promise<void> {
             }
           });
           await created.loadURL(DESKTOP_RENDERER_URL);
-          if (created.isMinimized()) created.restore();
-          created.show();
-          created.focus();
+          if (!desktopAcceptanceHidden) {
+            if (created.isMinimized()) created.restore();
+            created.show();
+            created.focus();
+          }
           return created;
         })().finally(() => {
           windowCreation = undefined;
@@ -967,7 +981,7 @@ if (!primaryInstance) {
     : runDesktop;
   void runPrimaryDesktop().catch((error: unknown) => {
     console.error("desktop startup failed", error);
-    if (!desktopIsClosing && !desktopStartedInBackground) {
+    if (!desktopIsClosing && !desktopStartedInBackground && !desktopAcceptanceHidden) {
       dialog.showErrorBox(unexpectedStartupCopy.title, unexpectedStartupCopy.content);
     }
     app.exit(1);

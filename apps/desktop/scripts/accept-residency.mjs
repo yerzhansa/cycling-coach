@@ -5,6 +5,14 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
+if (process.env.ENDURAGENT_WINDOWED_ACK !== "1") {
+  process.stderr.write(
+    "accept:residency launches a real focused window on this display. " +
+      "Announce the run to the operator first, then re-run with ENDURAGENT_WINDOWED_ACK=1.\n",
+  );
+  process.exit(2);
+}
+
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureRoot = join(desktopRoot, "tests", "fixtures", "residency");
 const processDeadlineMs = 20_000;
