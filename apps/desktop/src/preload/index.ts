@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   DESKTOP_CONNECTION_CHANNEL,
+  DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_RELEASE_NOTES_CHANNEL,
@@ -165,6 +166,23 @@ const TELEGRAM_MUTATION_REFUSAL_REASONS = new Set([
   "polling-conflict",
   "control-unavailable",
   "invalid-state",
+]);
+const INTERVALS_CREDENTIAL_REFUSAL_REASONS = new Set([
+  "clipboard-unavailable",
+  "clipboard-clear-failed",
+  "invalid-key-format",
+  "credential-rejected",
+  "malformed-athlete-response",
+  "validation-timeout",
+  "validation-aborted",
+  "validation-unavailable",
+  "training-account-mismatch",
+  "owner-unresolved",
+  "store-unavailable",
+  "encryption-unavailable",
+  "unsafe-backend",
+  "storage-failed",
+  "runtime-unavailable",
 ]);
 const RELEASES_URL = "https://github.com/yerzhansa/enduragent/releases";
 const RELEASE_NOTES_MAX_TOTAL_BYTES = 64 * 1024;
@@ -1179,6 +1197,59 @@ function parseTelegramMutationResult(value: unknown): unknown {
   throw new TypeError();
 }
 
+function parseIntervalsCredentialCurrent(value: unknown): unknown {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["runtimeState", "slot", "state"]) ||
+    value.slot !== "intervals-icu" ||
+    (value.state !== "missing" && value.state !== "configured" && value.state !== "re-prompt") ||
+    (value.state === "configured"
+      ? !RUNTIME_STATES.has(value.runtimeState as string)
+      : value.runtimeState !== null)
+  ) {
+    throw new TypeError();
+  }
+  return {
+    slot: "intervals-icu",
+    state: value.state,
+    runtimeState: value.runtimeState,
+  };
+}
+
+function parseIntervalsCredentialMutationResult(value: unknown): unknown {
+  if (!record(value) || typeof value.outcome !== "string") throw new TypeError();
+  if (value.outcome === "applied" && exactKeys(value, ["current", "outcome"])) {
+    return {
+      outcome: "applied",
+      current: parseIntervalsCredentialCurrent(value.current),
+    };
+  }
+  if (
+    value.outcome === "refused" &&
+    typeof value.reason === "string" &&
+    INTERVALS_CREDENTIAL_REFUSAL_REASONS.has(value.reason) &&
+    exactKeys(value, ["current", "outcome", "reason"])
+  ) {
+    return {
+      outcome: "refused",
+      reason: value.reason,
+      current: parseIntervalsCredentialCurrent(value.current),
+    };
+  }
+  if (
+    value.outcome === "uncertain" &&
+    (value.reason === "storage-uncertain" || value.reason === "runtime-uncertain") &&
+    exactKeys(value, ["current", "outcome", "reason"])
+  ) {
+    return {
+      outcome: "uncertain",
+      reason: value.reason,
+      current: parseIntervalsCredentialCurrent(value.current),
+    };
+  }
+  throw new TypeError();
+}
+
 function parseTelegramSenderInput(value: unknown): { readonly senderId: number } {
   if (
     !record(value) ||
@@ -1254,6 +1325,16 @@ function requireZeroArguments(args: readonly unknown[]): void {
 async function invokeTelegramMutation(channel: string): Promise<unknown> {
   try {
     return parseTelegramMutationResult(await ipcRenderer.invoke(channel));
+  } catch {
+    throw new TypeError();
+  }
+}
+
+async function invokeIntervalsCredentialMutation(): Promise<unknown> {
+  try {
+    return parseIntervalsCredentialMutationResult(
+      await ipcRenderer.invoke(DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL),
+    );
   } catch {
     throw new TypeError();
   }
@@ -1424,6 +1505,10 @@ contextBridge.exposeInMainWorld(
     telegramStatus: async (...args: unknown[]) => {
       requireZeroArguments(args);
       return invokeTelegramStatus();
+    },
+    pasteIntervalsApiKeyFromClipboard: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return invokeIntervalsCredentialMutation();
     },
     pasteTelegramTokenFromClipboard: async (...args: unknown[]) => {
       requireZeroArguments(args);

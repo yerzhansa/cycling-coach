@@ -6,7 +6,11 @@ import {
   type RuntimeConfigSnapshot,
 } from "@enduragent/coach-contract";
 import { CHATGPT_PROFILE_NAME } from "./chatgpt-auth.js";
-import type { CredentialRuntimeState, DesktopCredentialSlot } from "./credential-vault.js";
+import {
+  CredentialRuntimeRefusal,
+  type CredentialRuntimeState,
+  type DesktopCredentialSlot,
+} from "./credential-vault.js";
 import { runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 
 export type DesktopManagedCredential = DesktopCredentialSlot | typeof CHATGPT_PROFILE_NAME;
@@ -51,7 +55,7 @@ export interface RuntimeConfigurationAuthority {
   clearCredential(
     credential: DesktopManagedCredential,
   ): Promise<"cleared" | "not-active" | "managed-by-environment">;
-  getRuntimeConfig(): Promise<RuntimeConfigSnapshot>;
+  getRuntimeConfig(signal?: AbortSignal): Promise<RuntimeConfigSnapshot>;
 }
 
 export function runtimeConfigurationForCredentialDeletion(
@@ -113,6 +117,9 @@ export function createConnectionRuntimeAuthority(
             : client.call("configureRuntime", request, { signal }),
         signal,
       );
+      if ("status" in result && result.status === "refused") {
+        throw new CredentialRuntimeRefusal(result.reason);
+      }
       if (
         !("status" in result) ||
         result.status !== "applied" ||
@@ -142,8 +149,14 @@ export function createConnectionRuntimeAuthority(
       }
       return "cleared";
     },
-    getRuntimeConfig() {
-      return call((client) => client.call("getRuntimeConfig", {}));
+    getRuntimeConfig(signal) {
+      return call(
+        (client) =>
+          signal === undefined
+            ? client.call("getRuntimeConfig", {})
+            : client.call("getRuntimeConfig", {}, { signal }),
+        signal,
+      );
     },
   };
 }

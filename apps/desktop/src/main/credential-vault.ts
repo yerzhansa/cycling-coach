@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { isKeylessProvider } from "@enduragent/coach-contract";
+import {
+  isKeylessProvider,
+  type ConfigureRuntimeRpcRefusalReason,
+} from "@enduragent/coach-contract";
 import {
   parseOnboardingLlmSelection,
   type OnboardingLlmSelection,
@@ -47,7 +50,8 @@ export type CredentialWriteResult =
         | "encryption-unavailable"
         | "unsafe-backend"
         | "storage-failed"
-        | "runtime-unavailable";
+        | "runtime-unavailable"
+        | "training-account-mismatch";
     }
   | {
       readonly slot: DesktopCredentialSlot;
@@ -77,6 +81,31 @@ export type CredentialDeleteResult =
       readonly reason: "storage-uncertain";
     };
 
+export interface CredentialWriteInput {
+  readonly slot: DesktopCredentialSlot;
+  readonly value: string;
+  readonly selection?: OnboardingLlmSelection;
+}
+
+export interface CredentialWriteBehavior {
+  readonly activate?: boolean;
+  readonly rollbackOnRuntimeRefusal?: boolean;
+}
+
+export interface CredentialVaultMutation {
+  writeCredential(
+    input: CredentialWriteInput,
+    behavior?: CredentialWriteBehavior,
+  ): Promise<CredentialWriteResult>;
+  credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
+}
+
+export class CredentialRuntimeRefusal extends Error {
+  constructor(readonly reason: ConfigureRuntimeRpcRefusalReason) {
+    super();
+  }
+}
+
 export const CREDENTIAL_DIRECTORY_NAME = "credentials-v1" as const;
 export const CREDENTIAL_DIRECTORY_MODE = 0o700;
 export const CREDENTIAL_FILE_MODE = 0o600;
@@ -91,15 +120,10 @@ export interface CredentialEncryptionPort {
 
 export interface CredentialVault {
   writeCredential(
-    input: {
-      readonly slot: DesktopCredentialSlot;
-      readonly value: string;
-      readonly selection?: OnboardingLlmSelection;
-    },
-    behavior?: {
-      readonly activate?: boolean;
-    },
+    input: CredentialWriteInput,
+    behavior?: CredentialWriteBehavior,
   ): Promise<CredentialWriteResult>;
+  runExclusiveMutation<T>(operation: (mutation: CredentialVaultMutation) => Promise<T>): Promise<T>;
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   deleteCredential(slot: DesktopCredentialSlot): Promise<CredentialDeleteResult>;
@@ -471,117 +495,203 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     }
   };
 
-  return {
-    writeCredential(input, behavior): Promise<CredentialWriteResult> {
-      return exclusive(async () => {
-        if (!isCredentialSlot(input?.slot) || typeof input.value !== "string") {
-          return {
-            slot: isCredentialSlot(input?.slot) ? input.slot : "anthropic",
-            status: "refused",
-            reason: "invalid-input",
-          };
+  const writeCredential = async (
+    input: CredentialWriteInput,
+    behavior?: CredentialWriteBehavior,
+  ): Promise<CredentialWriteResult> => {
+    if (!isCredentialSlot(input?.slot) || typeof input.value !== "string") {
+      return {
+        slot: isCredentialSlot(input?.slot) ? input.slot : "anthropic",
+        status: "refused",
+        reason: "invalid-input",
+      };
+    }
+    let selection: OnboardingLlmSelection | undefined;
+    try {
+      if (input.selection !== undefined) {
+        selection = parseOnboardingLlmSelection(input.selection);
+        if (input.slot === "intervals-icu" || selection.provider !== input.slot) {
+          throw new TypeError();
         }
-        let selection: OnboardingLlmSelection | undefined;
-        try {
-          if (input.selection !== undefined) {
-            selection = parseOnboardingLlmSelection(input.selection);
-            if (input.slot === "intervals-icu" || selection.provider !== input.slot) {
-              throw new TypeError();
+      }
+    } catch {
+      return { slot: input.slot, status: "refused", reason: "invalid-input" };
+    }
+    const value = input.value.trim();
+    if (value.length === 0) {
+      return { slot: input.slot, status: "refused", reason: "invalid-input" };
+    }
+    try {
+      if (!options.encryption.isEncryptionAvailable()) {
+        return { slot: input.slot, status: "refused", reason: "encryption-unavailable" };
+      }
+      if (options.encryption.getSelectedStorageBackend?.() === UNSAFE_STORAGE_BACKEND) {
+        return { slot: input.slot, status: "refused", reason: "unsafe-backend" };
+      }
+    } catch {
+      return { slot: input.slot, status: "refused", reason: "encryption-unavailable" };
+    }
+    const durability = await reconcileDurability();
+    if (durability === "uncertain") {
+      return { slot: input.slot, status: "uncertain", reason: "storage-uncertain" };
+    }
+    if (durability !== "verified") {
+      return { slot: input.slot, status: "refused", reason: "storage-failed" };
+    }
+    if (!(await secureDirectory(options.root))) {
+      return { slot: input.slot, status: "refused", reason: "storage-failed" };
+    }
+    if (!parentDirectoryVerified) {
+      try {
+        await syncCredentialParentDirectory(dirname(options.root));
+        parentDirectoryVerified = true;
+      } catch {
+        return { slot: input.slot, status: "refused", reason: "storage-failed" };
+      }
+    }
+    const target = join(options.root, `${input.slot}.bin`);
+    if (!(await validTarget(target))) {
+      return { slot: input.slot, status: "refused", reason: "storage-failed" };
+    }
+    const previousRuntimeState = runtimeState.get(input.slot);
+    let encrypted: Buffer | undefined;
+    let previous: Buffer | undefined;
+    try {
+      try {
+        previous = await readCredentialFile(target);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      encrypted = options.encryption.encryptString(value);
+      if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new TypeError();
+      const stored = await durablyReplaceReversible({
+        root: options.root,
+        fileName: `${input.slot}.bin`,
+        contents: encrypted,
+        previousContents: previous,
+        mode: CREDENTIAL_FILE_MODE,
+        createId,
+        renameFile: renameCredentialFile,
+        removeFile: removeCredentialFile,
+        syncDirectory: syncCredentialDirectory,
+      });
+      if (stored.state === "refused") {
+        uncertainSlots.delete(input.slot);
+        return { slot: input.slot, status: "refused", reason: "storage-failed" };
+      }
+      if (stored.state === "uncertain") {
+        uncertainSlots.add(input.slot);
+        return { slot: input.slot, status: "uncertain", reason: "storage-uncertain" };
+      }
+      uncertainSlots.delete(input.slot);
+      setRuntimeState(input.slot, "failed");
+      if (behavior?.activate === false) {
+        setRuntimeState(input.slot, "stored-inactive");
+        return { slot: input.slot, status: "configured", runtimeReady: false };
+      }
+      try {
+        const canPublish = options.createRuntimePublicationGuard?.(input.slot);
+        if (selection === undefined) {
+          await options.applyCredential(input.slot, value);
+        } else {
+          await options.applyCredential(input.slot, value, selection);
+        }
+        if (canPublish !== undefined && !canPublish()) throw new TypeError();
+        setRuntimeState(input.slot, "active");
+        return { slot: input.slot, status: "configured", runtimeReady: true };
+      } catch (error) {
+        if (
+          behavior?.rollbackOnRuntimeRefusal === true &&
+          error instanceof CredentialRuntimeRefusal
+        ) {
+          let storageRestored = false;
+          try {
+            if (previous === undefined) {
+              const removed = await removeStoredCredential(input.slot);
+              storageRestored = removed === "deleted" || removed === "cleanup-pending";
+            } else {
+              const restored = await durablyReplaceReversible({
+                root: options.root,
+                fileName: `${input.slot}.bin`,
+                contents: previous,
+                previousContents: encrypted,
+                mode: CREDENTIAL_FILE_MODE,
+                createId,
+                renameFile: renameCredentialFile,
+                removeFile: removeCredentialFile,
+                syncDirectory: syncCredentialDirectory,
+              });
+              storageRestored = restored.state === "applied";
             }
-          }
-        } catch {
-          return { slot: input.slot, status: "refused", reason: "invalid-input" };
-        }
-        const value = input.value.trim();
-        if (value.length === 0) {
-          return { slot: input.slot, status: "refused", reason: "invalid-input" };
-        }
-        try {
-          if (!options.encryption.isEncryptionAvailable()) {
-            return { slot: input.slot, status: "refused", reason: "encryption-unavailable" };
-          }
-          if (options.encryption.getSelectedStorageBackend?.() === UNSAFE_STORAGE_BACKEND) {
-            return { slot: input.slot, status: "refused", reason: "unsafe-backend" };
-          }
-        } catch {
-          return { slot: input.slot, status: "refused", reason: "encryption-unavailable" };
-        }
-        const durability = await reconcileDurability();
-        if (durability === "uncertain") {
-          return { slot: input.slot, status: "uncertain", reason: "storage-uncertain" };
-        }
-        if (durability !== "verified") {
-          return { slot: input.slot, status: "refused", reason: "storage-failed" };
-        }
-        if (!(await secureDirectory(options.root))) {
-          return { slot: input.slot, status: "refused", reason: "storage-failed" };
-        }
-        if (!parentDirectoryVerified) {
-          try {
-            await syncCredentialParentDirectory(dirname(options.root));
-            parentDirectoryVerified = true;
-          } catch {
-            return { slot: input.slot, status: "refused", reason: "storage-failed" };
-          }
-        }
-        const target = join(options.root, `${input.slot}.bin`);
-        if (!(await validTarget(target))) {
-          return { slot: input.slot, status: "refused", reason: "storage-failed" };
-        }
-        let encrypted: Buffer | undefined;
-        let previous: Buffer | undefined;
-        try {
-          try {
-            previous = await readCredentialFile(target);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          }
-          encrypted = options.encryption.encryptString(value);
-          if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new TypeError();
-          const stored = await durablyReplaceReversible({
-            root: options.root,
-            fileName: `${input.slot}.bin`,
-            contents: encrypted,
-            previousContents: previous,
-            mode: CREDENTIAL_FILE_MODE,
-            createId,
-            renameFile: renameCredentialFile,
-            removeFile: removeCredentialFile,
-            syncDirectory: syncCredentialDirectory,
-          });
-          if (stored.state === "refused") {
-            uncertainSlots.delete(input.slot);
-            return { slot: input.slot, status: "refused", reason: "storage-failed" };
-          }
-          if (stored.state === "uncertain") {
+          } catch {}
+          if (!storageRestored) {
             uncertainSlots.add(input.slot);
+            setRuntimeState(input.slot, "failed");
             return { slot: input.slot, status: "uncertain", reason: "storage-uncertain" };
           }
           uncertainSlots.delete(input.slot);
-          setRuntimeState(input.slot, "failed");
-        } catch {
-          return { slot: input.slot, status: "refused", reason: "storage-failed" };
-        } finally {
-          previous?.fill(0);
-          encrypted?.fill(0);
-        }
-        if (behavior?.activate === false) {
-          setRuntimeState(input.slot, "stored-inactive");
-          return { slot: input.slot, status: "configured", runtimeReady: false };
-        }
-        try {
-          const canPublish = options.createRuntimePublicationGuard?.(input.slot);
-          if (selection === undefined) {
-            await options.applyCredential(input.slot, value);
+          if (previous === undefined) {
+            clearRuntimeState(input.slot);
           } else {
-            await options.applyCredential(input.slot, value, selection);
+            setRuntimeState(input.slot, previousRuntimeState ?? "stored-inactive");
           }
-          if (canPublish !== undefined && !canPublish()) throw new TypeError();
-          setRuntimeState(input.slot, "active");
-          return { slot: input.slot, status: "configured", runtimeReady: true };
-        } catch {
-          setRuntimeState(input.slot, "failed");
-          return { slot: input.slot, status: "configured", runtimeReady: false };
+          return {
+            slot: input.slot,
+            status: "refused",
+            reason:
+              error.reason === "training-account-mismatch"
+                ? "training-account-mismatch"
+                : "runtime-unavailable",
+          };
+        }
+        setRuntimeState(input.slot, "failed");
+        return { slot: input.slot, status: "configured", runtimeReady: false };
+      }
+    } catch {
+      return { slot: input.slot, status: "refused", reason: "storage-failed" };
+    } finally {
+      previous?.fill(0);
+      encrypted?.fill(0);
+    }
+  };
+
+  const credentialStatuses = async (): Promise<readonly CredentialSlotStatus[]> => {
+    const entries = await readAll();
+    return entries.map((entry) => ({
+      slot: entry.slot,
+      state: entry.state,
+      runtimeState:
+        entry.state === "configured" ? (runtimeState.get(entry.slot) ?? "stored-inactive") : null,
+    }));
+  };
+
+  return {
+    writeCredential(input, behavior): Promise<CredentialWriteResult> {
+      return exclusive(() => writeCredential(input, behavior));
+    },
+
+    runExclusiveMutation<T>(
+      operation: (current: CredentialVaultMutation) => Promise<T>,
+    ): Promise<T> {
+      return exclusive(async () => {
+        let active = true;
+        const mutation = Object.freeze({
+          writeCredential(
+            input: CredentialWriteInput,
+            behavior?: CredentialWriteBehavior,
+          ): Promise<CredentialWriteResult> {
+            if (!active) throw new TypeError();
+            return writeCredential(input, behavior);
+          },
+          credentialStatuses(): Promise<readonly CredentialSlotStatus[]> {
+            if (!active) throw new TypeError();
+            return credentialStatuses();
+          },
+        }) satisfies CredentialVaultMutation;
+        try {
+          return await operation(mutation);
+        } finally {
+          active = false;
         }
       });
     },
@@ -617,17 +727,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     },
 
     credentialStatuses(): Promise<readonly CredentialSlotStatus[]> {
-      return exclusive(async () => {
-        const entries = await readAll();
-        return entries.map((entry) => ({
-          slot: entry.slot,
-          state: entry.state,
-          runtimeState:
-            entry.state === "configured"
-              ? (runtimeState.get(entry.slot) ?? "stored-inactive")
-              : null,
-        }));
-      });
+      return exclusive(credentialStatuses);
     },
 
     deleteCredential(slot): Promise<CredentialDeleteResult> {

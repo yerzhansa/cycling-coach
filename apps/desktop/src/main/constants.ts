@@ -14,6 +14,8 @@ export const DESKTOP_UPDATE_GET_CHANNEL = "desktop:update:get" as const;
 export const DESKTOP_UPDATE_CHECK_CHANNEL = "desktop:update:check" as const;
 export const DESKTOP_UPDATE_RESTART_CHANNEL = "desktop:update:restart" as const;
 export const DESKTOP_UPDATE_STATE_CHANNEL = "desktop:update:state" as const;
+export const DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL =
+  "desktop:intervals:paste-credential" as const;
 export const DESKTOP_TELEGRAM_STATUS_CHANNEL = "desktop:telegram:status" as const;
 export const DESKTOP_TELEGRAM_PASTE_CREDENTIAL_CHANNEL =
   "desktop:telegram:paste-credential" as const;

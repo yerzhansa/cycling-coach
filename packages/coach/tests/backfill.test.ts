@@ -497,26 +497,20 @@ describe("incremental backfill pages", () => {
     expect(mismatchFetch).toHaveBeenCalledOnce();
   });
 
-  it("claims an ownerless store from the current account before resolving the candidate", async () => {
+  it("defers an ownerless current-account claim until the matching candidate is accepted", async () => {
     const value = await fresh();
     const fingerprint = "a".repeat(64);
     const resolveFingerprint = vi.fn(
       async (options: { readonly apiKey: string; readonly athleteId: string }) => {
-        if (options.apiKey === "current-key") {
-          expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
-            count: 0,
-          });
-        } else {
-          expect(options.apiKey).toBe("candidate-key");
-          expect(await value.store.get("SELECT account_fingerprint FROM store_owner")).toEqual({
-            account_fingerprint: fingerprint,
-          });
-        }
+        if (options.apiKey !== "current-key") expect(options.apiKey).toBe("candidate-key");
+        expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+          count: 0,
+        });
         return fingerprint;
       },
     );
     try {
-      await assertRuntimeAthleteOwner(
+      const pendingClaim = await assertRuntimeAthleteOwner(
         value.store,
         {
           current: {
@@ -540,6 +534,13 @@ describe("incremental backfill pages", () => {
         "current-athlete",
         "candidate-athlete",
       ]);
+      expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+        count: 0,
+      });
+      await pendingClaim?.claim();
+      expect(await value.store.get("SELECT account_fingerprint FROM store_owner")).toEqual({
+        account_fingerprint: fingerprint,
+      });
     } finally {
       await value.store.close();
     }
@@ -804,10 +805,8 @@ describe("incremental backfill pages", () => {
           resolveFingerprint,
         ),
       ).rejects.toMatchObject({ reason: "candidate-unresolved" });
-      expect(
-        await candidateUnresolved.store.get("SELECT account_fingerprint FROM store_owner"),
-      ).toEqual({
-        account_fingerprint: fingerprint,
+      expect(await candidateUnresolved.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+        count: 0,
       });
     } finally {
       await candidateUnresolved.store.close();
@@ -844,8 +843,8 @@ describe("incremental backfill pages", () => {
           resolveFingerprint,
         ),
       ).rejects.toMatchObject({ reason: "mismatch" });
-      expect(await value.store.get("SELECT account_fingerprint FROM store_owner")).toEqual({
-        account_fingerprint: currentFingerprint,
+      expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+        count: 0,
       });
     } finally {
       await value.store.close();

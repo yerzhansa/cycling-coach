@@ -25,7 +25,11 @@ import {
   type OnboardingLlmSelection,
   type OnboardingLlmSelectionResult,
 } from "../src/main/llm-selection.js";
-import type { CredentialVault } from "../src/main/credential-vault.js";
+import type {
+  CredentialVault,
+  CredentialWriteBehavior,
+  CredentialWriteInput,
+} from "../src/main/credential-vault.js";
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 type OwnershipCheck = (
@@ -80,6 +84,13 @@ function harness(
       status: "configured" as const,
       runtimeReady: behavior?.activate !== false,
     })),
+    runExclusiveMutation: vi.fn(async (operation) =>
+      operation({
+        writeCredential: (input: CredentialWriteInput, behavior?: CredentialWriteBehavior) =>
+          vault.writeCredential(input, behavior),
+        credentialStatuses: () => vault.credentialStatuses(),
+      }),
+    ),
     applyLlmSelection: vi.fn(async () => ({
       status: "configured" as const,
       runtimeReady: true as const,
@@ -401,6 +412,25 @@ describe("desktop onboarding IPC", () => {
       cleanupPending: false,
     });
     expect(subject.chatGptAuth.deleteCredential).toHaveBeenCalledOnce();
+  });
+
+  it("deletes a locally stored Intervals.icu credential through the existing channel", async () => {
+    const subject = harness();
+    vi.mocked(subject.vault.credentialStatuses).mockResolvedValueOnce([
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ]);
+
+    await expect(
+      subject.invoke(DESKTOP_CREDENTIAL_DELETE_CHANNEL, subject.trustedEvent, {
+        credential: "intervals-icu",
+      }),
+    ).resolves.toEqual({
+      credential: "intervals-icu",
+      status: "deleted",
+      cleanupPending: false,
+    });
+    expect(subject.vault.deleteCredential).toHaveBeenCalledWith("intervals-icu");
+    expect(subject.getRuntimeConfig).not.toHaveBeenCalled();
   });
 
   it("projects credential deletion uncertainty as its exact slot envelope", async () => {
