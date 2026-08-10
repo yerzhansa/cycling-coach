@@ -4,7 +4,11 @@ import { pathToFileURL } from "node:url";
 import type { ImportReport } from "@enduragent/kernel/ingest";
 import { runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
-import { prepareAthleteHome, resolveAthleteHome } from "../home/index.js";
+import {
+  ensureWindowsPrivateDirectory,
+  prepareAthleteHome,
+  resolveAthleteHome,
+} from "../home/index.js";
 import type { AthleteHome } from "../home/index.js";
 import { importFilesWithReport } from "../ingest/index.js";
 import {
@@ -25,6 +29,7 @@ type CliResult = {
 const defaultWriterDeps = {
   resolveAthleteHome,
   prepareAthleteHome,
+  ensureWindowsPrivateDirectory,
   acquireWriteLock,
   mkdir,
   chmod,
@@ -62,6 +67,7 @@ export interface CoachDevWriterContext {
 export interface RunCoachDevWriterOptions<T> {
   readonly env: Record<string, string | undefined>;
   readonly writerVersion: string;
+  readonly platform?: NodeJS.Platform;
   readonly beforeStoreOpen?: (home: AthleteHome) => Promise<void>;
   readonly operation: (context: CoachDevWriterContext) => Promise<T>;
 }
@@ -137,9 +143,14 @@ export async function runCoachDevWriter<T>(
   options: RunCoachDevWriterOptions<T>,
   deps: CoachDevWriterDependencies = defaultWriterDeps,
 ): Promise<CoachDevWriterResult<T>> {
+  const platform = options.platform ?? process.platform;
   let home: AthleteHome;
   try {
-    home = await deps.prepareAthleteHome(deps.resolveAthleteHome(options.env));
+    const unresolved = deps.resolveAthleteHome(options.env);
+    home =
+      options.platform === undefined
+        ? await deps.prepareAthleteHome(unresolved)
+        : await deps.prepareAthleteHome(unresolved, { platform });
   } catch (error) {
     return failedWriterResult("resolve home", error);
   }
@@ -150,6 +161,7 @@ export async function runCoachDevWriter<T>(
       configDir: home.configDir,
       athleteHome: home.root,
       version: options.writerVersion,
+      ...(options.platform === undefined ? {} : { platform }),
     });
   } catch (error) {
     if (error instanceof WriteLockContentionError) {
@@ -204,7 +216,11 @@ export async function runCoachDevWriter<T>(
 
       if (failureStage === undefined) {
         try {
-          await deps.chmod(home.storeDir, 0o700);
+          if (platform === "win32") {
+            await deps.ensureWindowsPrivateDirectory(home.storeDir);
+          } else {
+            await deps.chmod(home.storeDir, 0o700);
+          }
         } catch (error) {
           failureStage = "secure store directory";
           failureCause = error;

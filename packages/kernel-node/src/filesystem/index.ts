@@ -2,6 +2,7 @@ import { randomBytes as nodeRandomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { chmod, mkdir, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
 import type { FileSystemPort } from "@enduragent/kernel/ports";
+import { ensureWindowsPrivateDirectory } from "../home/windows-home-policy.js";
 import { createFitDecoder } from "../ingest/fit-decoder.js";
 import { parseXmlBytes } from "../ingest/xml-file.js";
 
@@ -68,7 +69,14 @@ export function nodeFileSystem(): FileSystemPort {
   };
 }
 
-export async function ensurePrivateDirectory(path: string): Promise<void> {
+export async function ensurePrivateDirectory(
+  path: string,
+  options: { readonly platform?: NodeJS.Platform } = {},
+): Promise<void> {
+  if ((options.platform ?? process.platform) === "win32") {
+    await ensureWindowsPrivateDirectory(path);
+    return;
+  }
   await mkdir(path, { recursive: true, mode: 0o700 });
   await chmod(path, 0o700);
 }

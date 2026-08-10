@@ -4,12 +4,14 @@
 // four-case matrix against a real daemon /healthz responder arms at W8.
 
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -143,6 +145,29 @@ afterEach(async () => {
 });
 
 describe.skipIf(!hasLoopback)("acquireWriteLock", () => {
+  it.runIf(process.platform !== "win32")(
+    "uses Windows structural checks without rewriting POSIX config mode bits",
+    async () => {
+      const athleteHome = freshDir();
+      const configDir = join(athleteHome, "config");
+      mkdirSync(configDir, { mode: 0o755 });
+      const before = statSync(configDir).mode & 0o777;
+
+      const result = trackHandle(
+        await acquireWriteLock({
+          configDir,
+          athleteHome,
+          version: "1.0.0",
+          platform: "win32",
+        }),
+      );
+
+      expect(statSync(configDir).mode & 0o777).toBe(before);
+      await result.release();
+      heldHandles.length = 0;
+    },
+  );
+
   it("(bind) port-bind singleton is authoritative", async () => {
     const configDir = freshDir();
     const result = trackHandle(

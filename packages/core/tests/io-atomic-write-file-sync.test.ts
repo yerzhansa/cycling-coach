@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../src/io/atomic-write-file-sync.js";
+import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-policy.js";
 
 let tempDir: string;
 
@@ -30,22 +31,28 @@ describe("atomicWriteFileSync", () => {
     expect(readFileSync(target, "utf-8")).toBe("## profile\nFTP 247W, 72kg\n");
   });
 
-  it("creates the target with owner-only 0o600 permissions", () => {
-    const target = join(tempDir, "private.md");
-    atomicWriteFileSync(target, "resting HR 44\n");
+  it.runIf(process.platform !== "win32")(
+    "creates the target with owner-only 0o600 permissions",
+    () => {
+      const target = join(tempDir, "private.md");
+      atomicWriteFileSync(target, "resting HR 44\n");
 
-    expect(statSync(target).mode & 0o777).toBe(0o600);
-  });
+      expect(statSync(target).mode & 0o777).toBe(0o600);
+    },
+  );
 
-  it("tightens a pre-existing world-readable target to 0o600 on overwrite", () => {
-    const target = join(tempDir, "was-readable.md");
-    writeFileSync(target, "old\n", { encoding: "utf-8", mode: 0o644 });
+  it.runIf(process.platform !== "win32")(
+    "tightens a pre-existing world-readable target to 0o600 on overwrite",
+    () => {
+      const target = join(tempDir, "was-readable.md");
+      writeFileSync(target, "old\n", { encoding: "utf-8", mode: 0o644 });
 
-    atomicWriteFileSync(target, "new\n");
+      atomicWriteFileSync(target, "new\n");
 
-    expect(readFileSync(target, "utf-8")).toBe("new\n");
-    expect(statSync(target).mode & 0o777).toBe(0o600);
-  });
+      expect(readFileSync(target, "utf-8")).toBe("new\n");
+      expect(statSync(target).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("leaves no dangling temp siblings after repeated writes", () => {
     const target = join(tempDir, "repeated.md");
@@ -56,5 +63,20 @@ describe("atomicWriteFileSync", () => {
     const entries = readdirSync(tempDir);
     expect(entries).toContain("repeated.md");
     expect(entries.filter((e) => e.startsWith("repeated.md.tmp"))).toEqual([]);
+  });
+
+  it("keeps Windows write failures path-free and stage-coded", () => {
+    const target = join(tempDir, "missing", "private-athlete.md");
+    let failure: unknown;
+    try {
+      atomicWriteFileSync(target, "private\n", { platform: "win32" });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "content-write", category: "io-failure" });
+    expect(String(failure)).not.toContain(target);
+    expect(JSON.stringify(failure)).not.toContain(target);
   });
 });

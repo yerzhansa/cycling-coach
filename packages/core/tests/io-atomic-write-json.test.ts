@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { atomicWriteJson } from "../src/io/atomic-write-json.js";
+import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-policy.js";
 
 let tempDir: string;
 
@@ -54,21 +55,27 @@ describe("atomicWriteJson — happy path", () => {
     expect(onDisk).toEqual({ fresh: 42 });
   });
 
-  it("creates the target with owner-only 0o600 permissions", async () => {
-    const target = join(tempDir, "private.json");
-    await atomicWriteJson(target, { hrv: 62 });
+  it.runIf(process.platform !== "win32")(
+    "creates the target with owner-only 0o600 permissions",
+    async () => {
+      const target = join(tempDir, "private.json");
+      await atomicWriteJson(target, { hrv: 62 });
 
-    expect(statSync(target).mode & 0o777).toBe(0o600);
-  });
+      expect(statSync(target).mode & 0o777).toBe(0o600);
+    },
+  );
 
-  it("tightens a pre-existing world-readable target to 0o600 on overwrite", async () => {
-    const target = join(tempDir, "was-readable.json");
-    writeFileSync(target, JSON.stringify({ old: true }), { encoding: "utf-8", mode: 0o644 });
+  it.runIf(process.platform !== "win32")(
+    "tightens a pre-existing world-readable target to 0o600 on overwrite",
+    async () => {
+      const target = join(tempDir, "was-readable.json");
+      writeFileSync(target, JSON.stringify({ old: true }), { encoding: "utf-8", mode: 0o644 });
 
-    await atomicWriteJson(target, { fresh: true });
+      await atomicWriteJson(target, { fresh: true });
 
-    expect(statSync(target).mode & 0o777).toBe(0o600);
-  });
+      expect(statSync(target).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("handles repeated writes without leaving dangling temp files", async () => {
     const target = join(tempDir, "repeated.json");
@@ -80,6 +87,18 @@ describe("atomicWriteJson — happy path", () => {
     // No `repeated.json.tmp.*` siblings should linger on a clean run.
     const orphans = entries.filter((e) => e.startsWith("repeated.json.tmp"));
     expect(orphans).toEqual([]);
+  });
+
+  it("keeps Windows write failures path-free and stage-coded", async () => {
+    const target = join(tempDir, "missing", "private-athlete.json");
+    const failure = await atomicWriteJson(target, { private: true }, { platform: "win32" }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "content-write", category: "io-failure" });
+    expect(String(failure)).not.toContain(target);
+    expect(JSON.stringify(failure)).not.toContain(target);
   });
 });
 

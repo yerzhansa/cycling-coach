@@ -7,6 +7,10 @@ import {
   writeSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
+import {
+  classifyWindowsPrivatePathFailure,
+  type WindowsPrivatePathPolicyStage,
+} from "./windows-private-path-policy.js";
 
 /**
  * Synchronous atomic-write of UTF-8 text content. Writes to a temp sibling,
@@ -17,15 +21,22 @@ import { randomBytes } from "node:crypto";
  * renameSection, appendDailyNote). The Reference module uses the async
  * `atomicWriteJson` helper for its persisted state.
  */
-export function atomicWriteFileSync(path: string, content: string): void {
+export function atomicWriteFileSync(
+  path: string,
+  content: string,
+  options: { readonly platform?: NodeJS.Platform } = {},
+): void {
   const tempPath = `${path}.tmp.${randomBytes(4).toString("hex")}`;
   let fd: number | null = null;
+  let stage: WindowsPrivatePathPolicyStage = "content-write";
   try {
     fd = openSync(tempPath, "w", 0o600);
     writeSync(fd, content, null, "utf-8");
+    stage = "file-flush";
     fdatasyncSync(fd);
     closeSync(fd);
     fd = null;
+    stage = "rename";
     renameSync(tempPath, path);
   } catch (err) {
     if (fd !== null) {
@@ -40,6 +51,8 @@ export function atomicWriteFileSync(path: string, content: string): void {
     } catch {
       // Temp may not exist (open failed) or rename succeeded already.
     }
-    throw err;
+    throw (options.platform ?? process.platform) === "win32"
+      ? classifyWindowsPrivatePathFailure(stage, err)
+      : err;
   }
 }
