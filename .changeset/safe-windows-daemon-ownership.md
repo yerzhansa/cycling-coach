@@ -1,0 +1,4 @@
+---
+"@enduragent/desktop": patch
+---
+

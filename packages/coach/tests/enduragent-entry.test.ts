@@ -545,6 +545,64 @@ describe("enduragent executable composition", () => {
     },
   );
 
+  it("returns a Windows app-supervised writer race to Electron without launching a successor", async () => {
+    const io = terminal();
+    const contention = new CoachStoreWriterError("writer-lock-held", null, undefined, {
+      kind: "holder",
+      pid: 42,
+      port: 43_101,
+    });
+    const resolveSecondStarter = vi.fn(
+      async () =>
+        ({
+          status: "refuse",
+          exitCode: 3,
+          stdout: "",
+          stderr: "",
+        }) as const,
+    );
+    const createLaunchdServiceIdentity = vi.fn(() => {
+      throw new Error("launchd identity must not be constructed");
+    });
+    const readServiceStatus = vi.fn(async () => {
+      throw new Error("launchd status must not be observed");
+    });
+    const serviceRegistrationState = vi.fn(async () => "present" as const);
+    const startEphemeralSuccessor = vi.fn(async () => {});
+
+    await expect(
+      runAppSupervisedEnduragent(
+        {
+          env,
+          terminal: io.value,
+          signal: new AbortController().signal,
+          appVersion: "2026.8.0",
+        },
+        {
+          resolveAthleteHome: () => home,
+          prepareAthleteHome: async (selectedHome) => selectedHome,
+          withLocalCoach: async () => {
+            throw contention;
+          },
+          readPackageVersion: async () => "unused",
+          platform: "win32",
+          resolveSecondStarter,
+          createLaunchdServiceIdentity,
+          readServiceStatus,
+          serviceRegistrationState,
+          startEphemeralSuccessor,
+        },
+      ),
+    ).resolves.toEqual({ exitCode: EXIT_SUCCESS });
+    expect(resolveSecondStarter).not.toHaveBeenCalled();
+    expect(createLaunchdServiceIdentity).not.toHaveBeenCalled();
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(serviceRegistrationState).not.toHaveBeenCalled();
+    expect(startEphemeralSuccessor).not.toHaveBeenCalled();
+    expect(io.stdout.read()).toBe("");
+    expect(io.stderr.read()).toBe("");
+  });
+
   it("preserves FIFO and lifecycle close ordering after physical EOF", async () => {
     const trace: string[] = [];
     const first = deferred<{ text: string }>();

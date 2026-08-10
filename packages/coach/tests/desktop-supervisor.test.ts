@@ -63,8 +63,10 @@ function status(kind: "absent" | "registered"): LaunchdServiceStatus {
 
 function healthy(
   owner: "service-managed" | "unmanaged-foreground" | "app-supervised",
+  pid = 12,
+  port = 45_001,
 ): DaemonStateObservation {
-  const peer = { status: "peer-healthy", pid: 12, port: 45_001, peerVersion: "0.1.0" } as const;
+  const peer = { status: "peer-healthy", pid, port, peerVersion: "0.1.0" } as const;
   const handshake = createAcceptedServerHandshakeFrame(owner, PROTOCOL_VERSION, acceptedBinding());
   return {
     kind: "compatible-healthy",
@@ -77,8 +79,10 @@ function healthy(
 function mismatch(
   owner: "service-managed" | "ephemeral-client-started" | "unmanaged-foreground" | "app-supervised",
   direction: "client-older" | "client-newer",
+  pid = 12,
+  port = 45_001,
 ): DaemonStateObservation {
-  const peer = { status: "peer-healthy", pid: 12, port: 45_001, peerVersion: "0.1.0" } as const;
+  const peer = { status: "peer-healthy", pid, port, peerVersion: "0.1.0" } as const;
   const handshake =
     direction === "client-newer"
       ? createVersionMismatchServerHandshakeFrame(owner, PROTOCOL_VERSION, PROTOCOL_VERSION - 1)
@@ -97,8 +101,14 @@ function dependencies(input: {
   const queue = [...input.observations];
   let now = 0;
   return {
+    platform: "darwin",
     resolveAthleteHome: () => home,
     prepareAthleteHome: async (selectedHome) => selectedHome,
+    createLaunchdServiceIdentity: ({ home: selectedHome, executablePath }) => ({
+      label: "icu.enduragent.synthetic",
+      home: selectedHome,
+      executablePath,
+    }),
     readServiceStatus: async () => status(input.registration),
     resumeService: async () => "resumed",
     observeDaemonState: async () => queue.shift() ?? input.observations.at(-1)!,
@@ -110,7 +120,7 @@ function dependencies(input: {
   };
 }
 
-function child(): AppSupervisedChildHandle & { readonly stop: ReturnType<typeof vi.fn> } {
+function child(pid = 90): AppSupervisedChildHandle & { readonly stop: ReturnType<typeof vi.fn> } {
   let alive = true;
   let resolveExit!: (value: { readonly exitCode: number | null }) => void;
   const exited = new Promise<{ readonly exitCode: number | null }>((resolve) => {
@@ -121,7 +131,18 @@ function child(): AppSupervisedChildHandle & { readonly stop: ReturnType<typeof 
     alive = false;
     resolveExit({ exitCode: 0 });
   });
-  return { pid: 90, exited, isAlive: () => alive, stop };
+  return { pid, exited, isAlive: () => alive, stop };
+}
+
+function exitedChild(
+  pid: number,
+): AppSupervisedChildHandle & { readonly stop: ReturnType<typeof vi.fn> } {
+  return {
+    pid,
+    exited: Promise.resolve({ exitCode: 0 }),
+    isAlive: () => false,
+    stop: vi.fn(async () => {}),
+  };
 }
 
 describe("desktop daemon arbitration", () => {
@@ -231,6 +252,253 @@ describe("desktop daemon arbitration", () => {
     expect(start).toHaveBeenCalledTimes(1);
     if (result.status === "connected") await result.close();
     expect(owned.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the Windows app-supervised path only for the matching live child", async () => {
+    const owned = child(90);
+    const start = vi.fn(async () => owned);
+    const base = dependencies({
+      registration: "registered",
+      observations: [{ kind: "absent" }, healthy("app-supervised", 90)],
+    });
+    const readServiceStatus = vi.fn(base.readServiceStatus);
+    const createLaunchdServiceIdentity = vi.fn(base.createLaunchdServiceIdentity);
+
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        platform: "win32",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+      },
+      { ...base, platform: "win32", readServiceStatus, createLaunchdServiceIdentity },
+    );
+
+    expect(result).toMatchObject({
+      status: "connected",
+      owner: "app-supervised",
+      supervision: "app-supervised",
+    });
+    expect(start).toHaveBeenCalledOnce();
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(createLaunchdServiceIdentity).not.toHaveBeenCalled();
+    if (result.status === "connected") await result.close();
+    expect(owned.stop).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a healthy Windows daemon that predates the current desktop main", async () => {
+    const start = vi.fn();
+    const base = dependencies({
+      registration: "registered",
+      observations: [healthy("app-supervised", 90)],
+    });
+    const readServiceStatus = vi.fn(base.readServiceStatus);
+    const createLaunchdServiceIdentity = vi.fn(base.createLaunchdServiceIdentity);
+
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        platform: "win32",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+      },
+      { ...base, platform: "win32", readServiceStatus, createLaunchdServiceIdentity },
+    );
+
+    expect(result).toEqual({
+      status: "refused",
+      exitCode: 3,
+      classification: "contention-family",
+      cause: "contention",
+      retryable: false,
+    });
+    expect(start).not.toHaveBeenCalled();
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(createLaunchdServiceIdentity).not.toHaveBeenCalled();
+  });
+
+  it("refuses a raced Windows daemon and stops only its mismatched child handle", async () => {
+    const owned = child(90);
+    const base = dependencies({
+      registration: "registered",
+      observations: [{ kind: "absent" }, healthy("app-supervised", 91)],
+    });
+    const readServiceStatus = vi.fn(base.readServiceStatus);
+    const createLaunchdServiceIdentity = vi.fn(base.createLaunchdServiceIdentity);
+
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        platform: "win32",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: vi.fn(async () => owned),
+      },
+      { ...base, platform: "win32", readServiceStatus, createLaunchdServiceIdentity },
+    );
+
+    expect(result).toMatchObject({
+      status: "refused",
+      classification: "contention-family",
+      cause: "contention",
+      retryable: false,
+    });
+    expect(owned.stop).toHaveBeenCalledOnce();
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(createLaunchdServiceIdentity).not.toHaveBeenCalled();
+  });
+
+  it("keeps Windows recovery on the app-supervised path without launchd observation", async () => {
+    const budget = { remainingAttempts: 3, deadline: 60_000 };
+    const owned = child(92);
+    const base = dependencies({
+      registration: "registered",
+      observations: [{ kind: "absent" }, healthy("app-supervised", 92)],
+    });
+    const readServiceStatus = vi.fn(base.readServiceStatus);
+    const createLaunchdServiceIdentity = vi.fn(base.createLaunchdServiceIdentity);
+
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        platform: "win32",
+        signal: new AbortController().signal,
+        startBudget: budget,
+        startAppSupervisedDaemon: vi.fn(async () => owned),
+      },
+      { ...base, platform: "win32", readServiceStatus, createLaunchdServiceIdentity },
+    );
+
+    expect(result).toMatchObject({ status: "connected", supervision: "app-supervised" });
+    expect(budget.remainingAttempts).toBe(2);
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(createLaunchdServiceIdentity).not.toHaveBeenCalled();
+    if (result.status === "connected") await result.close();
+  });
+
+  it("routes a Windows second-starter restart to a verified app child without launchd", async () => {
+    const successor = child(93);
+    const start = vi.fn(async () => successor);
+    const base = dependencies({
+      registration: "registered",
+      observations: [
+        mismatch("service-managed", "client-newer"),
+        healthy("app-supervised", 93, 45_002),
+      ],
+    });
+    const readServiceStatus = vi.fn(base.readServiceStatus);
+    const createLaunchdServiceIdentity = vi.fn(base.createLaunchdServiceIdentity);
+    const resolveSecondStarter = vi.fn(async (_input, binding) => {
+      expect(await binding.serviceUpgrade.isInstalled(home)).toBe(false);
+      await binding.serviceUpgrade.restartInstalledService({
+        home,
+        targetProtocolVersion: PROTOCOL_VERSION,
+        handoffCapability: "h".repeat(43),
+      });
+      return {
+        status: "attach" as const,
+        port: 45_002,
+        handshake: createAcceptedServerHandshakeFrame(
+          "app-supervised",
+          PROTOCOL_VERSION,
+          acceptedBinding(),
+        ),
+      };
+    });
+
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        platform: "win32",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+      },
+      {
+        ...base,
+        platform: "win32",
+        readServiceStatus,
+        createLaunchdServiceIdentity,
+        resolveSecondStarter,
+      },
+    );
+
+    expect(result).toMatchObject({ status: "connected", supervision: "app-supervised" });
+    expect(resolveSecondStarter).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(createLaunchdServiceIdentity).not.toHaveBeenCalled();
+    if (result.status === "connected") await result.close();
+  });
+
+  it("returns a Windows utility writer race to Electron for owned second-starter arbitration", async () => {
+    const raced = exitedChild(94);
+    const successor = child(95);
+    const start = vi
+      .fn<() => Promise<AppSupervisedChildHandle>>()
+      .mockResolvedValueOnce(raced)
+      .mockResolvedValueOnce(successor);
+    const base = dependencies({
+      registration: "registered",
+      observations: [
+        { kind: "absent" },
+        mismatch("app-supervised", "client-newer", 93, 45_002),
+        mismatch("app-supervised", "client-newer", 93, 45_002),
+        healthy("app-supervised", 95, 45_003),
+      ],
+    });
+    const readServiceStatus = vi.fn(base.readServiceStatus);
+    const createLaunchdServiceIdentity = vi.fn(base.createLaunchdServiceIdentity);
+    const resolveSecondStarter = vi.fn(async (_input, binding) => {
+      await binding.serviceUpgrade.startEphemeralSuccessor({
+        home,
+        targetProtocolVersion: PROTOCOL_VERSION,
+        handoffCapability: "h".repeat(43),
+      });
+      return {
+        status: "attach" as const,
+        port: 45_003,
+        handshake: createAcceptedServerHandshakeFrame(
+          "app-supervised",
+          PROTOCOL_VERSION,
+          acceptedBinding(),
+        ),
+      };
+    });
+
+    const result = await resolveDesktopDaemon(
+      {
+        env: {},
+        executablePath: "/Applications/Enduragent",
+        appVersion: "0.1.0",
+        platform: "win32",
+        signal: new AbortController().signal,
+        startAppSupervisedDaemon: start,
+      },
+      {
+        ...base,
+        platform: "win32",
+        readServiceStatus,
+        createLaunchdServiceIdentity,
+        resolveSecondStarter,
+      },
+    );
+
+    expect(result).toMatchObject({ status: "connected", supervision: "app-supervised" });
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(raced.stop).toHaveBeenCalledOnce();
+    expect(resolveSecondStarter).toHaveBeenCalledOnce();
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(createLaunchdServiceIdentity).not.toHaveBeenCalled();
+    if (result.status === "connected") await result.close();
   });
 
   it("refuses a daemon that never publishes after three starts", async () => {

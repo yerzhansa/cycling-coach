@@ -184,6 +184,7 @@ async function runDesktop(): Promise<void> {
       env: environment,
       executablePath: process.execPath,
       appVersion: app.getVersion(),
+      platform: process.platform,
       signal: controller.signal,
     },
     utilityEntry,
@@ -275,8 +276,17 @@ async function runDesktop(): Promise<void> {
     if (resolution.status === "refused") {
       if (!controller.signal.aborted && resolution.cause !== "cancelled") {
         const copy = startupRefusalCopy(resolution.cause);
+        const unownedDaemon =
+          process.platform === "win32" &&
+          resolution.cause === "contention" &&
+          !resolution.retryable;
+        if (unownedDaemon) {
+          process.stderr.write("desktop-daemon-ownership-refusal unowned\n");
+        }
         if (desktopStartedInBackground || desktopAcceptanceHidden) {
-          process.stderr.write(`desktop-startup-refusal ${resolution.cause}\n`);
+          if (!unownedDaemon) {
+            process.stderr.write(`desktop-startup-refusal ${resolution.cause}\n`);
+          }
         } else {
           dialog.showErrorBox(copy.title, copy.content);
         }
@@ -403,8 +413,17 @@ async function runDesktop(): Promise<void> {
       const copy =
         controller.signal.aborted || desktopIsClosing ? undefined : lifecycleErrorCopy(state);
       if (copy !== undefined) {
+        const unownedDaemon =
+          process.platform === "win32" &&
+          state.status === "terminal" &&
+          state.cause === "contention";
+        if (unownedDaemon) {
+          process.stderr.write("desktop-daemon-ownership-refusal unowned\n");
+        }
         if (desktopAcceptanceHidden || (desktopStartedInBackground && currentWindow() === null)) {
-          process.stderr.write(`desktop-daemon-background-failure ${state.status}\n`);
+          if (!unownedDaemon) {
+            process.stderr.write(`desktop-daemon-background-failure ${state.status}\n`);
+          }
         } else {
           dialog.showErrorBox(copy.title, copy.content);
         }
