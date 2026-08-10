@@ -18,6 +18,7 @@
     "apps/*/tests/**/*.ts",
     "packages/sport-cycling/src/markdown.d.ts",
     "packages/kernel/src/store/migrations/sql-assets.d.ts",
+    "packages/coach/src/daemon/ws-server-options.d.ts",
     "vitest.config.ts"
   ]
 }
