@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createDesktopUpdateController,
+  DESKTOP_UPDATE_CHECK_TIMEOUT_MS,
+  DESKTOP_UPDATE_DOWNLOAD_ABSOLUTE_TIMEOUT_MS,
+  DESKTOP_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS,
   DESKTOP_UPDATE_INTERVAL_MS,
   type DesktopAutoUpdater,
 } from "../src/main/update-controller.js";
@@ -21,8 +24,61 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-function updateResult(version: string, isUpdateAvailable = true) {
-  return { isUpdateAvailable, updateInfo: { version } } as never;
+function updateResult(
+  version: string,
+  isUpdateAvailable = true,
+  cancellationToken?: { readonly cancel: () => void },
+) {
+  return { cancellationToken, isUpdateAvailable, updateInfo: { version } } as never;
+}
+
+function fakeCancellationToken() {
+  return { cancel: vi.fn() };
+}
+
+function fakeDeadlines() {
+  interface TestTimerHandle {
+    unref(): void;
+  }
+  interface ScheduledTimeout {
+    readonly callback: () => void;
+    readonly timeout: number;
+  }
+  const scheduled = new Map<TestTimerHandle, ScheduledTimeout>();
+  const setTimeout = vi.fn((callback: () => void, timeout: number) => {
+    const handle = { unref: vi.fn() };
+    scheduled.set(handle, { callback, timeout });
+    return handle;
+  });
+  const clearTimeout = vi.fn((handle: TestTimerHandle) => {
+    scheduled.delete(handle);
+  });
+  const latest = (timeout: number): TestTimerHandle | undefined => {
+    let match: TestTimerHandle | undefined;
+    for (const [handle, entry] of scheduled) {
+      if (entry.timeout === timeout) match = handle;
+    }
+    return match;
+  };
+  const fire = (handle: TestTimerHandle): boolean => {
+    const entry = scheduled.get(handle);
+    if (entry === undefined) return false;
+    scheduled.delete(handle);
+    entry.callback();
+    return true;
+  };
+  return {
+    clearTimeout,
+    fire,
+    fireLatest(timeout: number) {
+      const handle = latest(timeout);
+      if (handle === undefined) throw new Error(`no deadline scheduled for ${timeout}`);
+      fire(handle);
+    },
+    latest,
+    pending: () => scheduled.size,
+    setTimeout,
+  };
 }
 
 function fakeUpdater() {
@@ -63,6 +119,7 @@ function activeController(
 ) {
   const quit = vi.fn();
   const timer = { unref: vi.fn() };
+  const deadlines = fakeDeadlines();
   let tick: (() => void) | undefined;
   const clearInterval = vi.fn();
   const controller = createDesktopUpdateController({
@@ -76,9 +133,11 @@ function activeController(
       return timer;
     }),
     clearInterval,
+    setTimeout: deadlines.setTimeout,
+    clearTimeout: deadlines.clearTimeout,
     ...overrides,
   });
-  return { clearInterval, controller, quit, timer, tick: () => tick?.() };
+  return { clearInterval, controller, deadlines, quit, timer, tick: () => tick?.() };
 }
 
 describe("desktop update controller", () => {
@@ -118,7 +177,7 @@ describe("desktop update controller", () => {
     });
     expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
     expect(subject.timer.unref).toHaveBeenCalledOnce();
-    expect(fake.listenerCount()).toBe(2);
+    expect(fake.listenerCount()).toBe(0);
     subject.tick();
     await vi.waitFor(() => expect(fake.updater.checkForUpdates).toHaveBeenCalledTimes(2));
     subject.controller.close();
@@ -145,13 +204,43 @@ describe("desktop update controller", () => {
     expect(fake.updater.checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
+  it("bounds a hung check while retaining its coalesced updater request until settlement", async () => {
+    const fake = fakeUpdater();
+    const first = deferred<never>();
+    const lateToken = fakeCancellationToken();
+    vi.mocked(fake.updater.checkForUpdates)
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(updateResult("0.1.0"));
+    const subject = activeController(fake.updater);
+    const startup = subject.controller.start();
+    await vi.waitFor(() => expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce());
+
+    expect(subject.timer.unref).toHaveBeenCalledOnce();
+    const concurrent = subject.controller.check();
+    subject.deadlines.fireLatest(DESKTOP_UPDATE_CHECK_TIMEOUT_MS);
+    await expect(concurrent).resolves.toEqual({ status: "failed", stage: "check" });
+    await startup;
+    await expect(subject.controller.check()).resolves.toEqual({
+      status: "failed",
+      stage: "check",
+    });
+    expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
+
+    first.resolve(updateResult("0.1.0", false, lateToken));
+    await vi.waitFor(() => expect(lateToken.cancel).toHaveBeenCalledOnce());
+    await expect(subject.controller.check()).resolves.toEqual({ status: "current" });
+    expect(fake.updater.checkForUpdates).toHaveBeenCalledTimes(2);
+  });
+
   it("downloads only a strictly newer stable target and accepts only its exact event", async () => {
     const fake = fakeUpdater();
-    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.1"));
+    const token = fakeCancellationToken();
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.1", true, token));
     const subject = activeController(fake.updater);
-    await subject.controller.start();
+    const startup = subject.controller.start();
+    await vi.waitFor(() => expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce());
 
-    expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce();
+    expect(fake.updater.downloadUpdate).toHaveBeenCalledWith(token);
     expect(subject.controller.state()).toEqual({
       status: "downloading",
       version: "0.1.1",
@@ -162,7 +251,66 @@ describe("desktop update controller", () => {
       status: "downloaded",
       version: "0.1.1",
     });
+    await startup;
     expect(JSON.stringify(subject.controller.state())).not.toContain("raw.zip");
+  });
+
+  it("resets the no-progress deadline only when transferred bytes advance", async () => {
+    const fake = fakeUpdater();
+    const download = deferred<never>();
+    const token = fakeCancellationToken();
+    vi.mocked(fake.updater.checkForUpdates)
+      .mockResolvedValueOnce(updateResult("0.1.1", true, token))
+      .mockResolvedValueOnce(updateResult("0.1.0"));
+    vi.mocked(fake.updater.downloadUpdate).mockReturnValue(download.promise);
+    const subject = activeController(fake.updater);
+    const startup = subject.controller.start();
+    await vi.waitFor(() => expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce());
+    const initialStall = subject.deadlines.latest(DESKTOP_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS);
+    expect(initialStall).toBeDefined();
+
+    fake.emit("download-progress", { transferred: 1 });
+    const advancedStall = subject.deadlines.latest(DESKTOP_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS);
+    expect(advancedStall).toBeDefined();
+    expect(advancedStall).not.toBe(initialStall);
+    expect(subject.deadlines.fire(initialStall!)).toBe(false);
+    fake.emit("download-progress", { transferred: 1 });
+    expect(subject.deadlines.latest(DESKTOP_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS)).toBe(advancedStall);
+
+    subject.deadlines.fireLatest(DESKTOP_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS);
+    await expect(startup).resolves.toBeUndefined();
+    expect(subject.controller.state()).toEqual({ status: "failed", stage: "download" });
+    expect(token.cancel).toHaveBeenCalledOnce();
+    await expect(subject.controller.check()).resolves.toEqual({
+      status: "failed",
+      stage: "download",
+    });
+    expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
+    fake.emit("update-downloaded", { version: "0.1.1" });
+    expect(subject.controller.state()).toEqual({ status: "failed", stage: "download" });
+
+    download.resolve([] as never);
+    await download.promise;
+    await expect(subject.controller.check()).resolves.toEqual({ status: "current" });
+    expect(fake.updater.checkForUpdates).toHaveBeenCalledTimes(2);
+  });
+
+  it("enforces an absolute download cap even while progress continues", async () => {
+    const fake = fakeUpdater();
+    const download = deferred<never>();
+    const token = fakeCancellationToken();
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.1", true, token));
+    vi.mocked(fake.updater.downloadUpdate).mockReturnValue(download.promise);
+    const subject = activeController(fake.updater);
+    const startup = subject.controller.start();
+    await vi.waitFor(() => expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce());
+
+    fake.emit("download-progress", { transferred: 1 });
+    fake.emit("download-progress", { transferred: 2 });
+    subject.deadlines.fireLatest(DESKTOP_UPDATE_DOWNLOAD_ABSOLUTE_TIMEOUT_MS);
+    await expect(startup).resolves.toBeUndefined();
+    expect(subject.controller.state()).toEqual({ status: "failed", stage: "download" });
+    expect(token.cancel).toHaveBeenCalledOnce();
   });
 
   it.each(["0.1.0", "0.0.9", "0.1.1-beta.1", "0.01.1", "0.1.9007199254740992", "not-a-version"])(
@@ -203,12 +351,14 @@ describe("desktop update controller", () => {
     const states: unknown[] = [];
     const subject = activeController(fake.updater);
     subject.controller.subscribe((state) => states.push(state));
-    await subject.controller.start();
+    const startup = subject.controller.start();
+    await vi.waitFor(() => expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce());
     fake.emit("update-downloaded", {
       version: "0.1.2",
       downloadedFile: "/Users/athlete/private/update.zip",
     });
     fake.emit("error", new Error("Authorization: secret"));
+    await startup;
 
     expect(subject.controller.state()).toEqual({ status: "failed", stage: "download" });
     expect(JSON.stringify(states)).not.toContain("private/update");
@@ -219,13 +369,15 @@ describe("desktop update controller", () => {
     const fake = fakeUpdater();
     vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.1"));
     const subject = activeController(fake.updater);
-    await subject.controller.start();
+    const startup = subject.controller.start();
+    await vi.waitFor(() => expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce());
 
     expect(subject.controller.restart()).toEqual({
       status: "downloading",
       version: "0.1.1",
     });
     fake.emit("update-downloaded", { version: "0.1.1" });
+    await startup;
     expect(subject.controller.restart()).toEqual({
       status: "installing",
       version: "0.1.1",
@@ -244,6 +396,27 @@ describe("desktop update controller", () => {
     expect(allowFinalQuit.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(fake.updater.quitAndInstall).mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("cancels deadlines and the active download token when closed", async () => {
+    const fake = fakeUpdater();
+    const download = deferred<never>();
+    const token = fakeCancellationToken();
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.1", true, token));
+    vi.mocked(fake.updater.downloadUpdate).mockReturnValue(download.promise);
+    const subject = activeController(fake.updater);
+    const startup = subject.controller.start();
+    await vi.waitFor(() => expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce());
+    expect(subject.deadlines.pending()).toBe(2);
+
+    subject.controller.close();
+    await startup;
+    expect(token.cancel).toHaveBeenCalledOnce();
+    expect(subject.clearInterval).toHaveBeenCalledOnce();
+    expect(subject.deadlines.pending()).toBe(0);
+    expect(fake.listenerCount()).toBe(0);
+    fake.emit("update-downloaded", { version: "0.1.1" });
+    expect(subject.controller.state()).toEqual({ status: "downloading", version: "0.1.1" });
   });
 
   it("does not install on ordinary quit or failed download", async () => {
