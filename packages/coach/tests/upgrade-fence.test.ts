@@ -21,6 +21,10 @@ import {
   type MonotonicTimer,
   type ScheduledMonotonicTimer,
 } from "../src/daemon/upgrade-fence.js";
+import {
+  WINDOWS_UPGRADE_FENCE_CLAIM_NAME,
+  acquireWindowsUpgradeFence,
+} from "../src/daemon/windows-upgrade-fence.js";
 
 const roots: string[] = [];
 
@@ -115,6 +119,50 @@ async function unixSocketAvailable(): Promise<boolean> {
 }
 
 const hasUnixSockets = await unixSocketAvailable();
+
+describe("upgrade fence platform dispatch", () => {
+  it("routes acquisition to the Windows claim-file transport", async () => {
+    const dir = await configDir();
+    const acquired = await acquireUpgradeFence({ configDir: dir, platform: "win32" });
+    expect(acquired.status).toBe("acquired");
+    if (acquired.status !== "acquired") return;
+    try {
+      const claimPath = join(dir, WINDOWS_UPGRADE_FENCE_CLAIM_NAME);
+      expect(acquired.handle.socketPath).toBe(claimPath);
+      expect((await lstat(claimPath)).isFile()).toBe(true);
+      await expect(lstat(join(dir, UPGRADE_FENCE_SOCKET_NAME))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await acquired.handle.release();
+    }
+  });
+
+  it("routes admission to the Windows claim-file transport", async () => {
+    const dir = await configDir();
+    const acquired = await acquireWindowsUpgradeFence({ configDir: dir });
+    expect(acquired.status).toBe("acquired");
+    if (acquired.status !== "acquired") return;
+    try {
+      expect((await lstat(join(dir, WINDOWS_UPGRADE_FENCE_CLAIM_NAME))).isFile()).toBe(true);
+      await expect(
+        admitStartupThroughUpgradeFence({
+          configDir: dir,
+          platform: "win32",
+        }),
+      ).resolves.toEqual({
+        status: "reserved",
+        exitCode: 3,
+        message: HANDOFF_RESERVED_MESSAGE,
+      });
+      await expect(lstat(join(dir, UPGRADE_FENCE_SOCKET_NAME))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await acquired.handle.release();
+    }
+  });
+});
 
 describe.skipIf(!hasUnixSockets)("upgrade fence", () => {
   it.skipIf(process.platform !== "darwin")("reports an unusably long socket path", async () => {
