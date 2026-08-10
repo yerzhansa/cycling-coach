@@ -1109,7 +1109,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       },
       syncChip: {
         status: "synced",
-        text: "Synced2026-07-19 07:55:00 UTCSync now",
+        text: "Training data synced2026-07-19 07:55:00 UTCSync now",
       },
       documentOverflow: false,
     });
