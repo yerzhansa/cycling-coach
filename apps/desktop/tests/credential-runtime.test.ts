@@ -17,6 +17,7 @@ import {
   type CredentialRuntimeApplication,
 } from "../src/main/credential-runtime.js";
 import {
+  CredentialRuntimeRefusal,
   createCredentialVault,
   type CredentialEncryptionPort,
   type CredentialVault,
@@ -118,6 +119,12 @@ function fakeVault(initialRuntime: CredentialRuntimeApplication) {
         runtimeConfigurationForCredential(input.slot, randomUUID(), input.selection),
       );
       return { slot: input.slot, status: "configured", runtimeReady: true };
+    },
+    async runExclusiveMutation(operation) {
+      return operation({
+        writeCredential: (input, behavior) => port.writeCredential(input, behavior),
+        credentialStatuses: () => port.credentialStatuses(),
+      });
     },
     async applyLlmSelection() {
       return { status: "configured", runtimeReady: true };
@@ -785,19 +792,27 @@ describe("desktop credential runtime precedence", () => {
 
   it("binds successor reads and credential replay to the supplied connection", async () => {
     const calls: string[] = [];
-    const connect = vi.fn(async (_options: { readonly url: string; readonly token: string }) => ({
-      handshake: {} as never,
-      async call(method: string) {
-        calls.push(method);
-        if (method === "getRuntimeConfig") return runtimeSnapshot("anthropic");
-        return {
-          schemaVersion: 3,
-          status: "applied",
-          applied: { llm: true, intervals: false, session: false },
-        };
-      },
-      async close() {},
-    }));
+    const callSignals: (AbortSignal | undefined)[] = [];
+    const connect = vi.fn(
+      async (_options: {
+        readonly url: string;
+        readonly token: string;
+        readonly signal?: AbortSignal;
+      }) => ({
+        handshake: {} as never,
+        async call(method: string, _params: unknown, options?: { readonly signal?: AbortSignal }) {
+          calls.push(method);
+          callSignals.push(options?.signal);
+          if (method === "getRuntimeConfig") return runtimeSnapshot("anthropic");
+          return {
+            schemaVersion: 3,
+            status: "applied",
+            applied: { llm: true, intervals: false, session: false },
+          };
+        },
+        async close() {},
+      }),
+    );
     const successor = createConnectionRuntimeAuthority(
       {
         url: "ws://127.0.0.1:45002/rpc",
@@ -807,7 +822,10 @@ describe("desktop credential runtime precedence", () => {
       connect as never,
     );
 
-    await expect(successor.getRuntimeConfig()).resolves.toEqual(runtimeSnapshot("anthropic"));
+    const controller = new AbortController();
+    await expect(successor.getRuntimeConfig(controller.signal)).resolves.toEqual(
+      runtimeSnapshot("anthropic"),
+    );
     await successor.configureRuntime({
       llm: { provider: "anthropic", api_key: "obviously-fake-successor-key" },
     });
@@ -817,6 +835,7 @@ describe("desktop credential runtime precedence", () => {
       url: "ws://127.0.0.1:45002/rpc",
       token: "obviously-fake-successor-token",
       expectedAthleteHome: "/synthetic/athlete",
+      signal: controller.signal,
     });
     expect(connect).toHaveBeenNthCalledWith(2, {
       url: "ws://127.0.0.1:45002/rpc",
@@ -824,6 +843,7 @@ describe("desktop credential runtime precedence", () => {
       expectedAthleteHome: "/synthetic/athlete",
     });
     expect(calls).toEqual(["getRuntimeConfig", "configureRuntime"]);
+    expect(callSignals).toEqual([controller.signal, undefined]);
   });
 
   it.each([
@@ -851,14 +871,6 @@ describe("desktop credential runtime precedence", () => {
         applied: { llm: false, intervals: false, session: false },
       },
     ],
-    [
-      { intervals: { athlete_id: "candidate-athlete" } },
-      {
-        schemaVersion: 3,
-        status: "refused",
-        reason: "training-account-mismatch",
-      },
-    ],
   ] as const)(
     "accepts only an applied result for every requested runtime slot",
     async (request, result) => {
@@ -879,6 +891,33 @@ describe("desktop credential runtime precedence", () => {
       await expect(authority.configureRuntime(request)).rejects.toBeInstanceOf(TypeError);
     },
   );
+
+  it("preserves a structured runtime refusal", async () => {
+    const connect = vi.fn(async () => ({
+      handshake: {} as never,
+      call: vi.fn(async () => ({
+        schemaVersion: 3,
+        status: "refused" as const,
+        reason: "training-account-mismatch" as const,
+      })),
+      close: vi.fn(async () => {}),
+    }));
+    const authority = createConnectionRuntimeAuthority(
+      {
+        url: "ws://127.0.0.1:45004/rpc",
+        token: "obviously-fake-successor-token",
+        athleteHome: "/synthetic/athlete",
+      },
+      connect as never,
+    );
+
+    const failure = await authority
+      .configureRuntime({ intervals: { athlete_id: "candidate-athlete" } })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CredentialRuntimeRefusal);
+    expect((failure as CredentialRuntimeRefusal).reason).toBe("training-account-mismatch");
+  });
 
   it.each([
     ["externally configured provider", runtimeSnapshot("google", "external-model", true)],

@@ -312,6 +312,7 @@ async function security() {
             "onChatgptLoginProgress",
             "onDroppedImportFiles",
             "onUpdateState",
+            "pasteIntervalsApiKeyFromClipboard",
             "pasteTelegramTokenFromClipboard",
             "reconcileTelegram",
             "releaseNotes",

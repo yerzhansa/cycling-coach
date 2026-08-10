@@ -59,6 +59,7 @@ interface AuthBridge {
   claudeCliStatus(): Promise<unknown>;
   claudeCliRecheck(): Promise<unknown>;
   telegramStatus(): Promise<unknown>;
+  pasteIntervalsApiKeyFromClipboard(): Promise<unknown>;
   pasteTelegramTokenFromClipboard(): Promise<unknown>;
   enableTelegram(): Promise<unknown>;
   disableTelegram(): Promise<unknown>;
@@ -254,6 +255,7 @@ describe("desktop preload ChatGPT auth", () => {
         "onDroppedImportFiles",
         "onChatgptLoginProgress",
         "onUpdateState",
+        "pasteIntervalsApiKeyFromClipboard",
         "pasteTelegramTokenFromClipboard",
         "reconcileTelegram",
         "releaseNotes",
@@ -384,6 +386,126 @@ describe("desktop preload ChatGPT auth", () => {
       });
       await expect(bridge.telegramStatus()).rejects.toBeInstanceOf(TypeError);
     }
+  });
+
+  it("exposes a zero-argument Intervals.icu clipboard lane with a copied result", async () => {
+    const current = {
+      slot: "intervals-icu",
+      state: "configured",
+      runtimeState: "active",
+    };
+    const result = { outcome: "applied", current };
+    mocks.invoke.mockResolvedValueOnce(result);
+
+    const copied = (await bridge.pasteIntervalsApiKeyFromClipboard()) as typeof result;
+
+    expect(copied).toEqual(result);
+    expect(copied).not.toBe(result);
+    expect(copied.current).not.toBe(current);
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:intervals:paste-credential");
+
+    mocks.invoke.mockClear();
+    await expect(
+      (
+        bridge.pasteIntervalsApiKeyFromClipboard as unknown as (
+          ...args: unknown[]
+        ) => Promise<unknown>
+      )("must-not-cross"),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "clipboard-unavailable",
+    "clipboard-clear-failed",
+    "invalid-key-format",
+    "credential-rejected",
+    "malformed-athlete-response",
+    "validation-timeout",
+    "validation-aborted",
+    "validation-unavailable",
+    "training-account-mismatch",
+    "owner-unresolved",
+    "store-unavailable",
+    "encryption-unavailable",
+    "unsafe-backend",
+    "storage-failed",
+    "runtime-unavailable",
+  ] as const)("accepts the closed Intervals.icu refusal reason %s", async (reason) => {
+    const result = {
+      outcome: "refused",
+      reason,
+      current: { slot: "intervals-icu", state: "missing", runtimeState: null },
+    };
+    mocks.invoke.mockResolvedValueOnce(result);
+
+    const copied = (await bridge.pasteIntervalsApiKeyFromClipboard()) as typeof result;
+
+    expect(copied).toEqual(result);
+    expect(copied).not.toBe(result);
+    expect(copied.current).not.toBe(result.current);
+  });
+
+  it("accepts only exact secret-safe Intervals.icu clipboard envelopes", async () => {
+    const current = { slot: "intervals-icu", state: "re-prompt", runtimeState: null };
+    const uncertain = { outcome: "uncertain", reason: "storage-uncertain", current };
+    mocks.invoke.mockResolvedValueOnce(uncertain);
+
+    const copied = (await bridge.pasteIntervalsApiKeyFromClipboard()) as typeof uncertain;
+
+    expect(copied).toEqual(uncertain);
+    expect(copied).not.toBe(uncertain);
+    expect(copied.current).not.toBe(current);
+
+    const runtimeUncertain = { ...uncertain, reason: "runtime-uncertain" };
+    mocks.invoke.mockResolvedValueOnce(runtimeUncertain);
+    const copiedRuntimeUncertain =
+      (await bridge.pasteIntervalsApiKeyFromClipboard()) as typeof runtimeUncertain;
+    expect(copiedRuntimeUncertain).toEqual(runtimeUncertain);
+    expect(copiedRuntimeUncertain).not.toBe(runtimeUncertain);
+    expect(copiedRuntimeUncertain.current).not.toBe(current);
+
+    for (const malformed of [
+      { ...uncertain, apiKey: "must-not-cross" },
+      { ...uncertain, reason: "storage-failed" },
+      { ...uncertain, current: { ...current, owner: "private" } },
+      {
+        outcome: "applied",
+        current: { slot: "intervals-icu", state: "configured", runtimeState: null },
+      },
+      {
+        outcome: "refused",
+        reason: "private-network-detail",
+        current,
+      },
+      {
+        outcome: "refused",
+        reason: "credential-rejected",
+        current: { slot: "other", state: "missing", runtimeState: null },
+      },
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(malformed);
+      const failure = await bridge
+        .pasteIntervalsApiKeyFromClipboard()
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(TypeError);
+      expect((failure as TypeError).message).toBe("");
+    }
+  });
+
+  it("redacts Intervals.icu clipboard invocation failures", async () => {
+    const privateDetail =
+      "private-api-key at /Users/private/intervals-key and athlete-response-body";
+    mocks.invoke.mockRejectedValueOnce(new Error(privateDetail));
+
+    const failure = await bridge
+      .pasteIntervalsApiKeyFromClipboard()
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(TypeError);
+    expect((failure as TypeError).message).toBe("");
+    expect(String(failure)).not.toContain(privateDetail);
+    expect(String(failure)).not.toContain("/Users/private/intervals-key");
   });
 
   it("accepts only closed secret-safe Telegram mutation envelopes", async () => {
@@ -1168,6 +1290,23 @@ describe("desktop preload ChatGPT auth", () => {
     await expect(bridge.deleteCredential({ credential: "anthropic" })).rejects.toBeInstanceOf(
       TypeError,
     );
+  });
+
+  it("accepts a successful Intervals.icu credential deletion result", async () => {
+    const result = {
+      credential: "intervals-icu",
+      status: "deleted",
+      cleanupPending: false,
+    };
+    mocks.invoke.mockResolvedValueOnce(result);
+
+    const copied = await bridge.deleteCredential({ credential: "intervals-icu" });
+
+    expect(copied).toEqual(result);
+    expect(copied).not.toBe(result);
+    expect(mocks.invoke).toHaveBeenCalledWith("enduragent:settings:credential-delete", {
+      credential: "intervals-icu",
+    });
   });
 
   it("accepts only the exact credential deletion uncertainty envelope", async () => {

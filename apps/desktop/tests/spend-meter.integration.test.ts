@@ -418,6 +418,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "onChatgptLoginProgress",
       "onDroppedImportFiles",
       "onUpdateState",
+      "pasteIntervalsApiKeyFromClipboard",
       "pasteTelegramTokenFromClipboard",
       "reconcileTelegram",
       "releaseNotes",

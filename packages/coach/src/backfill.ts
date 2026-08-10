@@ -19,7 +19,9 @@ import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { openReadonlySqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   createIntervalsIcuSource,
+  IntervalsHttpError,
   REQUEST_ATTEMPTS,
+  SyncBudgetExceededError,
   type IntervalsIcuArtifact,
   type IntervalsIcuSource,
   type IntervalsLandingAcl,
@@ -88,6 +90,29 @@ export type StoreOwnerCheckResult =
   | "unresolved"
   | "store-unavailable";
 
+export type IntervalsCredentialVerificationRefusalReason =
+  | "credential-rejected"
+  | "malformed-athlete-response"
+  | "validation-timeout"
+  | "validation-aborted"
+  | "validation-unavailable"
+  | "training-account-mismatch"
+  | "owner-unresolved"
+  | "store-unavailable";
+
+export type IntervalsCredentialVerificationResult =
+  | Readonly<{ status: "verified" }>
+  | Readonly<{
+      status: "refused";
+      reason: IntervalsCredentialVerificationRefusalReason;
+    }>;
+
+export type IntervalsStoreOwnerComparison =
+  | "unowned"
+  | "matched"
+  | "mismatch"
+  | "store-unavailable";
+
 const lookupArchiveResult: ArchiveWriteResult = Object.freeze({
   address: "0".repeat(64),
   relPath: "1970/01/lookup.json.gz",
@@ -108,6 +133,14 @@ const CLAIM_STORE_OWNER_SQL =
 const STORE_OWNER_CHECK_BUSY_TIMEOUT_MS = 5_000;
 const RUNTIME_ATHLETE_OWNER_TIMEOUT_MS = 20_000;
 const RUNTIME_ATHLETE_OWNER_REQUEST_TIMEOUT_MS = 8_000;
+export const INTERVALS_CREDENTIAL_VERIFICATION_TIMEOUT_MS = 20_000;
+export const INTERVALS_CREDENTIAL_REQUEST_TIMEOUT_MS = 8_000;
+
+class IntervalsCredentialTransportError extends Error {
+  constructor(readonly status?: number) {
+    super();
+  }
+}
 
 async function readStoreOwnerFingerprint(
   store: Pick<SqlStore, "get">,
@@ -168,9 +201,9 @@ export async function resolveIntervalsStoreOwnerFingerprint(
   )) {
     if (artifact.kind !== "snapshot" || artifact.lane !== "settings") continue;
     const payload = artifact.payload;
-    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return null;
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new TypeError();
     const value = (payload as Record<string, unknown>).athlete_id;
-    if (typeof value !== "string" || value.length === 0) return null;
+    if (typeof value !== "string" || value.length === 0) throw new TypeError();
     resolved.add(value);
   }
   if (resolved.size !== 1) return null;
@@ -223,6 +256,23 @@ export async function assertRuntimeAthleteOwner(
     if (fingerprint === null) throw new RuntimeAthleteOwnerRefusal(reason);
     return fingerprint;
   };
+  const pendingClaim = (
+    fingerprint: string,
+    reason: Extract<
+      RuntimeAthleteOwnerRefusalReason,
+      "current-unresolved" | "candidate-unresolved"
+    >,
+  ): RuntimeAthleteOwnerClaim =>
+    Object.freeze({
+      async claim() {
+        try {
+          signal.throwIfAborted();
+        } catch {
+          throw new RuntimeAthleteOwnerRefusal(reason);
+        }
+        await store.run(CLAIM_STORE_OWNER_SQL, [fingerprint]);
+      },
+    });
 
   try {
     if ((await readStoreOwnerFingerprint(store)) === undefined) {
@@ -231,16 +281,7 @@ export async function assertRuntimeAthleteOwner(
           options.candidate,
           "candidate-unresolved",
         );
-        return Object.freeze({
-          async claim() {
-            try {
-              signal.throwIfAborted();
-            } catch {
-              throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
-            }
-            await store.run(CLAIM_STORE_OWNER_SQL, [candidateFingerprint]);
-          },
-        });
+        return pendingClaim(candidateFingerprint, "candidate-unresolved");
       }
       if (options.current.apiKey.length === 0) {
         throw new RuntimeAthleteOwnerRefusal("current-credential-missing");
@@ -249,23 +290,20 @@ export async function assertRuntimeAthleteOwner(
         options.current,
         "current-unresolved",
       );
-      try {
-        signal.throwIfAborted();
-      } catch {
-        throw new RuntimeAthleteOwnerRefusal("current-unresolved");
-      }
-      await store.run(CLAIM_STORE_OWNER_SQL, [currentFingerprint]);
-      try {
-        signal.throwIfAborted();
-      } catch {
-        throw new RuntimeAthleteOwnerRefusal("current-unresolved");
-      }
       if (
         options.current.apiKey === options.candidate.apiKey &&
         options.current.athleteId === options.candidate.athleteId
       ) {
-        return;
+        return pendingClaim(currentFingerprint, "current-unresolved");
       }
+      const candidateFingerprint = await resolveRequiredFingerprint(
+        options.candidate,
+        "candidate-unresolved",
+      );
+      if (candidateFingerprint !== currentFingerprint) {
+        throw new RuntimeAthleteOwnerRefusal("mismatch");
+      }
+      return pendingClaim(candidateFingerprint, "candidate-unresolved");
     }
 
     const candidateFingerprint = await resolveRequiredFingerprint(
@@ -344,6 +382,208 @@ export async function checkIntervalsStoreOwnerAtPath(
   } catch {
     await store?.close().catch(() => undefined);
     return "store-unavailable";
+  }
+}
+
+export async function compareIntervalsStoreOwnerFingerprintAtPath(
+  storePath: string,
+  fingerprint: string,
+): Promise<IntervalsStoreOwnerComparison> {
+  let store: ReturnType<typeof openReadonlySqliteStorage> | undefined;
+  let comparison: Exclude<IntervalsStoreOwnerComparison, "store-unavailable">;
+  try {
+    store = openReadonlySqliteStorage(storePath);
+    const timeout = await store.get(`PRAGMA busy_timeout = ${STORE_OWNER_CHECK_BUSY_TIMEOUT_MS}`);
+    if (timeout?.timeout !== STORE_OWNER_CHECK_BUSY_TIMEOUT_MS) throw new TypeError();
+    comparison = await compareStoreOwner(store, fingerprint);
+  } catch {
+    await store?.close().catch(() => undefined);
+    return "store-unavailable";
+  }
+  try {
+    await store.close();
+    return comparison;
+  } catch {
+    return "store-unavailable";
+  }
+}
+
+function abortableIntervalsCredentialFetch(
+  baseFetch: typeof globalThis.fetch,
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const signal = init?.signal;
+    try {
+      signal?.throwIfAborted();
+      const response =
+        signal == null
+          ? await baseFetch(input, init)
+          : await withIntervalsCredentialAbort(baseFetch(input, init), signal);
+      return new Proxy(response, {
+        get(target, property) {
+          if (property === "arrayBuffer") {
+            return async (): Promise<ArrayBuffer> => {
+              try {
+                const body = target.arrayBuffer();
+                return signal == null
+                  ? await body
+                  : await withIntervalsCredentialAbort(body, signal);
+              } catch {
+                if (signal?.aborted) throw signal.reason;
+                throw new IntervalsCredentialTransportError(target.status);
+              }
+            };
+          }
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    } catch {
+      if (signal?.aborted) throw signal.reason;
+      throw new IntervalsCredentialTransportError();
+    }
+  };
+}
+
+async function withIntervalsCredentialAbort<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function timeoutFailure(error: unknown): boolean {
+  return (
+    error instanceof SyncBudgetExceededError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      error.name === "TimeoutError")
+  );
+}
+
+export async function verifyIntervalsCredentialAtPath(
+  storePath: string,
+  options: Omit<StoreOwnerCheckOptions, "signal" | "budget"> & {
+    readonly signal: AbortSignal;
+    readonly overallTimeoutMs?: number;
+    readonly perRequestTimeoutMs?: number;
+    readonly compareOwner?: (
+      storePath: string,
+      fingerprint: string,
+    ) => Promise<IntervalsStoreOwnerComparison>;
+  },
+): Promise<IntervalsCredentialVerificationResult> {
+  const overallTimeoutMs = options.overallTimeoutMs ?? INTERVALS_CREDENTIAL_VERIFICATION_TIMEOUT_MS;
+  const perRequestTimeoutMs =
+    options.perRequestTimeoutMs ?? INTERVALS_CREDENTIAL_REQUEST_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(overallTimeoutMs) ||
+    overallTimeoutMs <= 0 ||
+    !Number.isSafeInteger(perRequestTimeoutMs) ||
+    perRequestTimeoutMs <= 0
+  ) {
+    throw new TypeError();
+  }
+  if (options.signal.aborted) {
+    return { status: "refused", reason: "validation-aborted" };
+  }
+  const overallController = new AbortController();
+  const timeout = setTimeout(
+    () => overallController.abort(new DOMException("", "TimeoutError")),
+    overallTimeoutMs,
+  );
+  timeout.unref();
+  const shutdownSignal = options.signal;
+  const signal = AbortSignal.any([shutdownSignal, overallController.signal]);
+  const budget: SyncBudget = {
+    signal,
+    clock: { monotonicNow: () => options.clock.monotonicNow() },
+    deadlineMonotonicMs: options.clock.monotonicNow() + overallTimeoutMs,
+    perRequestTimeoutMs,
+    maxRequests: REQUEST_ATTEMPTS,
+    maxArtifacts: 1_000,
+  };
+  try {
+    let fingerprint: string | null;
+    try {
+      fingerprint = await resolveIntervalsStoreOwnerFingerprint({
+        ...options,
+        signal,
+        budget,
+        baseFetch: abortableIntervalsCredentialFetch(options.baseFetch ?? globalThis.fetch),
+      });
+      signal.throwIfAborted();
+    } catch (error) {
+      if (shutdownSignal.aborted) {
+        return { status: "refused", reason: "validation-aborted" };
+      }
+      if (overallController.signal.aborted || timeoutFailure(error)) {
+        return { status: "refused", reason: "validation-timeout" };
+      }
+      if (error instanceof IntervalsHttpError) {
+        return {
+          status: "refused",
+          reason:
+            error.status === 401 || error.status === 403
+              ? "credential-rejected"
+              : "validation-unavailable",
+        };
+      }
+      return {
+        status: "refused",
+        reason:
+          error instanceof IntervalsCredentialTransportError
+            ? error.status === 401 || error.status === 403
+              ? "credential-rejected"
+              : "validation-unavailable"
+            : "malformed-athlete-response",
+      };
+    }
+    if (fingerprint === null) return { status: "refused", reason: "owner-unresolved" };
+    let comparison: IntervalsStoreOwnerComparison;
+    try {
+      comparison = await withIntervalsCredentialAbort(
+        (options.compareOwner ?? compareIntervalsStoreOwnerFingerprintAtPath)(
+          storePath,
+          fingerprint,
+        ),
+        signal,
+      );
+      signal.throwIfAborted();
+    } catch {
+      if (shutdownSignal.aborted) {
+        return { status: "refused", reason: "validation-aborted" };
+      }
+      if (overallController.signal.aborted) {
+        return { status: "refused", reason: "validation-timeout" };
+      }
+      comparison = "store-unavailable";
+    }
+    if (comparison === "matched" || comparison === "unowned") return { status: "verified" };
+    if (comparison === "mismatch") {
+      return { status: "refused", reason: "training-account-mismatch" };
+    }
+    return { status: "refused", reason: "store-unavailable" };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

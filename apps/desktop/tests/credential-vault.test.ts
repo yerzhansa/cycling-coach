@@ -18,10 +18,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CREDENTIAL_DIRECTORY_MODE,
   CREDENTIAL_FILE_MODE,
+  CredentialRuntimeRefusal,
   createCredentialVault,
   markUnselectedModelCredentialsInactive,
   replaceCredentialRuntimeStates,
   type CredentialEncryptionPort,
+  type CredentialVaultMutation,
 } from "../src/main/credential-vault.js";
 
 const roots: string[] = [];
@@ -456,6 +458,26 @@ describe("desktop credential vault", () => {
     });
     await replay;
     expect(applySuccessorCredential).toHaveBeenCalledWith("anthropic", "synthetic-old");
+  });
+
+  it("rejects an exclusive mutation handle after its section completes", async () => {
+    const root = await temporaryRoot();
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential: vi.fn(async () => undefined),
+    });
+    let escaped: CredentialVaultMutation | undefined;
+
+    await vault.runExclusiveMutation(async (mutation) => {
+      escaped = mutation;
+    });
+
+    expect(() => escaped!.credentialStatuses()).toThrow(TypeError);
+    expect(() =>
+      escaped!.writeCredential({ slot: "anthropic", value: "synthetic-secret" }),
+    ).toThrow(TypeError);
+    await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reopens a visible old credential only after cleaning owned transients and syncing", async () => {
@@ -963,6 +985,34 @@ describe("desktop credential vault", () => {
       runtimeState: "active",
     });
     expect(applied).toContain("google");
+  });
+
+  it("keeps a legacy write stored when runtime returns a structured refusal", async () => {
+    const root = await temporaryRoot();
+    const encryptionPort = encryption();
+    const vault = createCredentialVault({
+      root,
+      encryption: encryptionPort,
+      applyCredential: vi.fn(async () => {
+        throw new CredentialRuntimeRefusal("ownership-unavailable");
+      }),
+    });
+
+    await expect(
+      vault.writeCredential({ slot: "intervals-icu", value: "synthetic-intervals-key" }),
+    ).resolves.toEqual({
+      slot: "intervals-icu",
+      status: "configured",
+      runtimeReady: false,
+    });
+    expect(encryptionPort.decryptString(await readFile(join(root, "intervals-icu.bin")))).toBe(
+      "synthetic-intervals-key",
+    );
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "intervals-icu",
+      state: "configured",
+      runtimeState: "failed",
+    });
   });
 
   it("routes passive replay separately from an explicit credential selection", async () => {

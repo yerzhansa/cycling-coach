@@ -24,6 +24,10 @@ import { installDesktopConnectionIpc } from "./connection-ipc.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import {
+  createDesktopIntervalsCredentialVerifier,
+  installDesktopIntervalsIpc,
+} from "./intervals-ipc.js";
+import {
   createConnectionRuntimeAuthority,
   createCredentialRuntimeApplication,
   intervalsAthleteIdForOwnership,
@@ -197,6 +201,7 @@ async function runDesktop(): Promise<void> {
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
+  let disposeIntervalsIpc: (() => Promise<void>) | undefined;
   let disposeTelegramIpc: (() => Promise<void>) | undefined;
   let disposeOnboarding: (() => void) | undefined;
   let telegramPower: DesktopTelegramPowerLifecycle | undefined;
@@ -222,10 +227,12 @@ async function runDesktop(): Promise<void> {
     shutdownPromise ??= (async () => {
       const residencyClose = residency?.close();
       residency = undefined;
+      const intervalsIpcClose = disposeIntervalsIpc?.();
+      disposeIntervalsIpc = undefined;
       const telegramIpcClose = disposeTelegramIpc?.();
       disposeTelegramIpc = undefined;
       await residencyClose;
-      await telegramIpcClose;
+      await Promise.all([intervalsIpcClose, telegramIpcClose]);
       controller.abort();
       disposeConnectionIpc?.();
       disposeConnectionIpc = undefined;
@@ -298,6 +305,7 @@ async function runDesktop(): Promise<void> {
     const selectedAthleteHome = AthleteHomeIdentitySchema.parse(
       await realpath(resolveDesktopAthleteHome(environment)),
     );
+    const intervalsStorePath = join(selectedAthleteHome, "store", "store.db");
     requireDesktopDaemonHome(selectedAthleteHome, resolution.athleteHome);
     const telegramSecureStorageDiagnostics = createTelegramSecureStorageDiagnostics();
     const telegramVault = createTelegramCredentialVault({
@@ -479,11 +487,11 @@ async function runDesktop(): Promise<void> {
       token: resolution.token,
       athleteHome: resolution.athleteHome,
     });
-    const readActiveRuntimeConfig = async () => {
+    const readActiveRuntimeConfig = async (signal?: AbortSignal) => {
       const binding = activeRuntimeBinding;
       const lifecycleState = daemonLifecycle?.snapshot();
       if (binding === undefined || lifecycleState?.status !== "ready") throw new TypeError();
-      const snapshot = await binding.authority.getRuntimeConfig();
+      const snapshot = await binding.authority.getRuntimeConfig(signal);
       const currentLifecycleState = daemonLifecycle?.snapshot();
       if (
         activeRuntimeBinding !== binding ||
@@ -802,16 +810,13 @@ async function runDesktop(): Promise<void> {
             },
             checkIntervalsCredentialOwner: async (value) => {
               const snapshot = await activeRuntimeBinding!.authority.getRuntimeConfig();
-              return checkIntervalsStoreOwnerAtPath(
-                join(selectedAthleteHome, "store", "store.db"),
-                {
-                  apiKey: value,
-                  athleteId: intervalsAthleteIdForOwnership(snapshot),
-                  historyNewestDate: "1970-01-01",
-                  clock: { now: () => Date.now(), monotonicNow: () => performance.now() },
-                  signal: controller.signal,
-                },
-              );
+              return checkIntervalsStoreOwnerAtPath(intervalsStorePath, {
+                apiKey: value,
+                athleteId: intervalsAthleteIdForOwnership(snapshot),
+                historyNewestDate: "1970-01-01",
+                clock: { now: () => Date.now(), monotonicNow: () => performance.now() },
+                signal: controller.signal,
+              });
             },
             isTrusted: (event) =>
               isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
@@ -877,6 +882,17 @@ async function runDesktop(): Promise<void> {
       currentWindow: () => mainWindow.current() ?? undefined,
       isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
       controller: updateController,
+    });
+    disposeIntervalsIpc = installDesktopIntervalsIpc({
+      ipcMain,
+      clipboard,
+      vault,
+      signal: controller.signal,
+      isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
+      verifyCredential: createDesktopIntervalsCredentialVerifier({
+        storePath: intervalsStorePath,
+        readRuntimeConfig: readActiveRuntimeConfig,
+      }),
     });
     disposeTelegramIpc = installDesktopTelegramIpc({
       ipcMain,
