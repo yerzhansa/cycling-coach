@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DESKTOP_SHUTDOWN_DEADLINE_MS,
   completeDesktopShutdown,
   createDesktopQuitCoordinator,
   installDesktopTerminationSignalHandler,
@@ -16,31 +17,92 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
+function deadlineHarness() {
+  let callback: (() => void) | undefined;
+  const handle = { unref: vi.fn() };
+  const clearTimeout = vi.fn();
+  const setTimeout = vi.fn((scheduled: () => void, _delayMs: number) => {
+    callback = scheduled;
+    return handle;
+  });
+  return {
+    clearTimeout,
+    fire: () => callback?.(),
+    handle,
+    setTimeout,
+  };
+}
+
 describe("desktop quit coordinator", () => {
-  it("routes repeated termination signals through one coordinated quit", async () => {
+  it("coordinates the first termination signal and forces exactly once on repeats", async () => {
     const signalSource = new EventEmitter();
-    const drain = vi.fn(async () => undefined);
+    const gate = deferred<void>();
+    const drain = vi.fn(() => gate.promise);
     const exit = vi.fn();
+    const install = vi.fn(() => "not-requested" as const);
+    const deadline = deadlineHarness();
     const beforeQuitEvent = { preventDefault: vi.fn() };
     const coordinator = createDesktopQuitCoordinator({
       drain,
-      updateController: {
-        completeInstallAfterDrain: () => "not-requested",
-      },
+      updateController: { completeInstallAfterDrain: install },
       exit,
+      ...deadline,
     });
     const application = new EventEmitter();
     application.on("before-quit", (event) => coordinator.beforeQuit(event));
     const requestQuit = vi.fn(() => application.emit("before-quit", beforeQuitEvent));
-    installDesktopTerminationSignalHandler({ signalSource, requestQuit });
+    const forceQuit = vi.fn(() => coordinator.forceQuit());
+    installDesktopTerminationSignalHandler({ signalSource, requestQuit, forceQuit });
 
     signalSource.emit("SIGTERM");
     signalSource.emit("SIGTERM");
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
+    signalSource.emit("SIGTERM");
 
     expect(requestQuit).toHaveBeenCalledOnce();
+    expect(forceQuit).toHaveBeenCalledOnce();
     expect(beforeQuitEvent.preventDefault).toHaveBeenCalledOnce();
     expect(drain).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(deadline.handle.unref).toHaveBeenCalledOnce();
+    expect(deadline.clearTimeout).toHaveBeenCalledWith(deadline.handle);
+
+    gate.resolve();
+    await gate.promise;
+    await Promise.resolve();
+    expect(install).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed at the shutdown deadline and ignores late drain settlement", async () => {
+    const gate = deferred<void>();
+    const deadline = deadlineHarness();
+    const install = vi.fn(() => "started" as const);
+    const exit = vi.fn();
+    const coordinator = createDesktopQuitCoordinator({
+      drain: () => gate.promise,
+      updateController: { completeInstallAfterDrain: install },
+      exit,
+      ...deadline,
+    });
+
+    expect(coordinator.beforeQuit({ preventDefault: vi.fn() })).toBe("draining");
+    expect(deadline.setTimeout).toHaveBeenCalledWith(
+      expect.any(Function),
+      DESKTOP_SHUTDOWN_DEADLINE_MS,
+    );
+    expect(deadline.handle.unref).toHaveBeenCalledOnce();
+
+    deadline.fire();
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+    expect(deadline.clearTimeout).toHaveBeenCalledWith(deadline.handle);
+    expect(install).not.toHaveBeenCalled();
+
+    gate.resolve();
+    await gate.promise;
+    await Promise.resolve();
+    expect(install).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledOnce();
   });
 
   it("blocks repeated pre-drain quits and permits only the updater-generated post-drain quit", async () => {
@@ -50,6 +112,7 @@ describe("desktop quit coordinator", () => {
     const first = { preventDefault: vi.fn() };
     const second = { preventDefault: vi.fn() };
     const updaterQuit = { preventDefault: vi.fn() };
+    const deadline = deadlineHarness();
     let coordinator!: ReturnType<typeof createDesktopQuitCoordinator>;
     const completeInstallAfterDrain = vi.fn((allowFinalQuit: () => void) => {
       allowFinalQuit();
@@ -60,6 +123,7 @@ describe("desktop quit coordinator", () => {
       drain,
       updateController: { completeInstallAfterDrain },
       exit,
+      ...deadline,
     });
 
     expect(coordinator.beforeQuit(first)).toBe("draining");
@@ -75,10 +139,13 @@ describe("desktop quit coordinator", () => {
     expect(updaterQuit.preventDefault).not.toHaveBeenCalled();
     expect(drain).toHaveBeenCalledOnce();
     expect(exit).not.toHaveBeenCalled();
+    expect(deadline.handle.unref).toHaveBeenCalledOnce();
+    expect(deadline.clearTimeout).toHaveBeenCalledWith(deadline.handle);
   });
 
   it("permits a normal final exit only after a successful drain", async () => {
     const order: string[] = [];
+    const deadline = deadlineHarness();
     const exitEvent = { preventDefault: vi.fn() };
     let coordinator!: ReturnType<typeof createDesktopQuitCoordinator>;
     const exit = vi.fn((code: number) => {
@@ -96,6 +163,7 @@ describe("desktop quit coordinator", () => {
         },
       },
       exit,
+      ...deadline,
     });
 
     coordinator.beforeQuit({ preventDefault: vi.fn() });
@@ -103,11 +171,14 @@ describe("desktop quit coordinator", () => {
 
     expect(order).toEqual(["drain", "no-install", "exit:0"]);
     expect(exitEvent.preventDefault).not.toHaveBeenCalled();
+    expect(deadline.handle.unref).toHaveBeenCalledOnce();
+    expect(deadline.clearTimeout).toHaveBeenCalledWith(deadline.handle);
   });
 
   it("never permits install after drain rejection", async () => {
     const install = vi.fn(() => "started" as const);
     const exit = vi.fn();
+    const deadline = deadlineHarness();
     await completeDesktopShutdown({
       drain: async () => {
         throw new Error("synthetic drain failure");
@@ -115,10 +186,32 @@ describe("desktop quit coordinator", () => {
       updateController: { completeInstallAfterDrain: install },
       allowFinalQuit: vi.fn(),
       exit,
+      ...deadline,
     });
 
     expect(install).not.toHaveBeenCalled();
     expect(exit).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenCalledWith(1);
+    expect(deadline.clearTimeout).toHaveBeenCalledWith(deadline.handle);
+  });
+
+  it("never permits install when drain throws synchronously", async () => {
+    const install = vi.fn(() => "started" as const);
+    const exit = vi.fn();
+    const deadline = deadlineHarness();
+    await completeDesktopShutdown({
+      drain: () => {
+        throw new Error("synthetic synchronous drain failure");
+      },
+      updateController: { completeInstallAfterDrain: install },
+      allowFinalQuit: vi.fn(),
+      exit,
+      ...deadline,
+    });
+
+    expect(install).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(deadline.clearTimeout).toHaveBeenCalledWith(deadline.handle);
   });
 });
