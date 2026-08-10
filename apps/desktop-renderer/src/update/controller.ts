@@ -1,6 +1,7 @@
 export type DesktopUpdateState =
   | { readonly status: "disabled" | "idle" | "checking" | "current" }
   | { readonly status: "downloading" | "downloaded" | "installing"; readonly version: string }
+  | { readonly status: "restart-required"; readonly stage: "check" | "download" }
   | { readonly status: "failed"; readonly stage: "check" | "download" };
 
 export interface DesktopUpdateBridge {
@@ -42,7 +43,9 @@ export function createDesktopUpdateController(input: {
     if (
       disposed ||
       active !== undefined ||
-      ["disabled", "checking", "downloading", "installing"].includes(state.status)
+      ["disabled", "checking", "downloading", "installing", "restart-required"].includes(
+        state.status,
+      )
     ) {
       return;
     }

@@ -845,6 +845,27 @@ describe("application section", () => {
     expect(subject.checkForUpdates).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["download", "Update download timed out. Quit and reopen Enduragent to try again."],
+    ["check", "Updates could not start. Quit and reopen Enduragent to try again."],
+  ] as const)(
+    "explains %s recovery without offering an inert update retry",
+    async (stage, announcement) => {
+      const subject = await renderSettings({
+        updateState: { status: "restart-required", stage },
+      });
+      await act(async () => {
+        await subject.startUpdate();
+      });
+
+      const application = within(screen.getByRole("region", { name: "Application" }));
+      expect(application.getByRole("status")).toHaveTextContent(announcement);
+      expect(application.queryByRole("button", { name: /update/u })).toBeNull();
+      expect(subject.checkForUpdates).not.toHaveBeenCalled();
+      expect(subject.restartToUpdate).not.toHaveBeenCalled();
+    },
+  );
+
   it("opens release notes and offers a retry when they are unavailable", async () => {
     const user = userEvent.setup();
     let attempts = 0;

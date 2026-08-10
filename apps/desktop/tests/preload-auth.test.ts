@@ -830,7 +830,8 @@ describe("desktop preload ChatGPT auth", () => {
     mocks.invoke
       .mockResolvedValueOnce({ status: "idle" })
       .mockResolvedValueOnce(downloaded)
-      .mockResolvedValueOnce({ status: "installing", version: "2026.7.23" });
+      .mockResolvedValueOnce({ status: "installing", version: "2026.7.23" })
+      .mockResolvedValueOnce({ status: "restart-required", stage: "check" });
 
     await expect(bridge.getUpdateState()).resolves.toEqual({ status: "idle" });
     const copy = await bridge.checkForUpdates();
@@ -840,10 +841,15 @@ describe("desktop preload ChatGPT auth", () => {
       status: "installing",
       version: "2026.7.23",
     });
+    await expect(bridge.getUpdateState()).resolves.toEqual({
+      status: "restart-required",
+      stage: "check",
+    });
     expect(mocks.invoke.mock.calls).toEqual([
       ["desktop:update:get"],
       ["desktop:update:check"],
       ["desktop:update:restart"],
+      ["desktop:update:get"],
     ]);
   });
 
@@ -879,6 +885,8 @@ describe("desktop preload ChatGPT auth", () => {
       { status: "downloaded", version: " 2026.7.23" },
       { status: "failed", stage: "install" },
       { status: "failed", stage: "check", error: "Authorization: secret" },
+      { status: "restart-required", stage: "install" },
+      { status: "restart-required", stage: "check", extra: true },
     ]) {
       mocks.invoke.mockResolvedValueOnce(value);
       await expect(bridge.getUpdateState()).rejects.toBeInstanceOf(TypeError);
