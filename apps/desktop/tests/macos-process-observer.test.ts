@@ -119,6 +119,55 @@ describe("macOS application process observer", () => {
     await observer.close();
   });
 
+  it("fails closed after a background process-table observation gap", async () => {
+    let reads = 0;
+    const observer = createMacosApplicationProcessObserver(
+      "/private/tmp/process-observer/Enduragent.app",
+      {
+        observeBundleProcesses: async () => ({ bundlePids: [], mainPids: [] }),
+        readProcessTable: async () => {
+          reads += 1;
+          if (reads > 1) throw new Error("synthetic process-table failure");
+          return [{ pid: 101, parentPid: 1, startedAt: "Sun Aug 9 16:00:00 2026" }];
+        },
+        trackingIntervalMs: 10,
+      },
+    );
+
+    await observer.trackRoot(101);
+    await waitUntil(() => reads > 1);
+    await expect(observer.observe()).rejects.toThrow("application process tracking failed");
+    await observer.close();
+  });
+
+  it("attempts every owned process when one signal fails", async () => {
+    const table: readonly MacosProcessIdentity[] = [
+      { pid: 101, parentPid: 1, startedAt: "Sun Aug 9 16:00:00 2026" },
+      { pid: 102, parentPid: 101, startedAt: "Sun Aug 9 16:00:01 2026" },
+    ];
+    const signaled: number[] = [];
+    const observer = createMacosApplicationProcessObserver(
+      "/private/tmp/process-observer/Enduragent.app",
+      {
+        observeBundleProcesses: async () => ({ bundlePids: [], mainPids: [] }),
+        readProcessTable: async () => table,
+        signalProcess: (pid) => {
+          signaled.push(pid);
+          if (pid === 101) {
+            throw Object.assign(new Error("synthetic signal failure"), { code: "EPERM" });
+          }
+        },
+        trackingIntervalMs: 60_000,
+      },
+    );
+
+    await observer.trackRoot(101);
+    await observer.freezeAll();
+    expect(await observer.signalAll("SIGTERM")).toBe(false);
+    expect(signaled).toEqual([101, 102]);
+    await observer.close();
+  });
+
   it.skipIf(process.platform !== "darwin")(
     "finds and terminates a real out-of-bundle grandchild after its parent exits",
     async () => {

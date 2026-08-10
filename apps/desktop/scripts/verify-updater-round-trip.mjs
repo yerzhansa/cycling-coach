@@ -624,9 +624,11 @@ export function createMacosApplicationProcessObserver(application, context = {})
   let closed = false;
   let monitor;
   let refreshInFlight;
+  let trackingFailed = false;
 
   const requireOpen = () => {
     if (closed) fail("application process observer is closed");
+    if (trackingFailed) fail("application process tracking failed");
   };
 
   const updateRoot = (root, table) => {
@@ -658,6 +660,7 @@ export function createMacosApplicationProcessObserver(application, context = {})
     try {
       observed = requireProcessTableObservation(await readProcessTable());
     } catch (error) {
+      trackingFailed = true;
       if (error instanceof MacosUpdaterRoundTripError) throw error;
       fail("process table observation failed");
     }
@@ -798,10 +801,11 @@ export function createMacosApplicationProcessObserver(application, context = {})
       if (leftRoot !== rightRoot) return leftRoot ? -1 : 1;
       return left.pid - right.pid;
     });
+    let signaledAll = true;
     for (const identity of ordered) {
-      if (!(await signalIdentity(identity, signal))) return false;
+      if (!(await signalIdentity(identity, signal))) signaledAll = false;
     }
-    return true;
+    return signaledAll;
   };
 
   const close = async () => {
