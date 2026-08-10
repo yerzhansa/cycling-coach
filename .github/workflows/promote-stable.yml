@@ -1,0 +1,255 @@
+name: Promote stable images
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  packages: write
+  contents: read
+
+# Stable is a single release lane even when CI runs complete close together.
+concurrency:
+  group: promote-stable
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/yerzhansa/cycling-coach
+  ALIAS_IMAGE_NAME: ghcr.io/yerzhansa/enduragent
+
+jobs:
+  promote:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: source
+        name: Derive immutable source tag
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          short_sha="${HEAD_SHA::12}"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+
+      # CI and image publication run concurrently, so tag absence alone cannot identify a path-filter skip.
+      - id: publish
+        name: Wait for matching image publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readonly max_wait_seconds=$((35 * 60))
+          readonly poll_interval_seconds=25
+          readonly api_retry_interval_seconds=10
+          readonly api_max_attempts=3
+          deadline=$((SECONDS + max_wait_seconds))
+          seen_run=false
+
+          fetch_runs() {
+            local attempt response remaining_seconds request_timeout retry_delay
+
+            for ((attempt = 1; attempt <= api_max_attempts; attempt++)); do
+              remaining_seconds=$((deadline - SECONDS))
+              if ((remaining_seconds <= 0)); then
+                return 124
+              fi
+
+              request_timeout=30
+              if ((request_timeout > remaining_seconds)); then
+                request_timeout=$remaining_seconds
+              fi
+
+              if response=$(timeout "${request_timeout}s" gh api --method GET \
+                "repos/${REPOSITORY}/actions/workflows/publish-image.yml/runs" \
+                -f "head_sha=${HEAD_SHA}" \
+                -f "per_page=100" | \
+                jq -ce '.workflow_runs | if type == "array" then . else error("missing workflow_runs array") end'); then
+                printf '%s\n' "$response"
+                return 0
+              fi
+
+              if ((attempt < api_max_attempts)); then
+                remaining_seconds=$((deadline - SECONDS))
+                if ((remaining_seconds <= 0)); then
+                  break
+                fi
+
+                retry_delay=$api_retry_interval_seconds
+                if ((retry_delay > remaining_seconds)); then
+                  retry_delay=$remaining_seconds
+                fi
+                echo "::warning::GitHub Actions API request failed (attempt ${attempt}/${api_max_attempts}); retrying in ${retry_delay}s." >&2
+                sleep "$retry_delay"
+              fi
+            done
+
+            if ((SECONDS >= deadline)); then
+              return 124
+            fi
+
+            echo "::error::GitHub Actions API request or response validation failed after ${api_max_attempts} attempts." >&2
+            return 1
+          }
+
+          while true; do
+            if runs_json=$(fetch_runs); then
+              :
+            else
+              fetch_status=$?
+              if ((fetch_status == 124)); then
+                echo "::error::Timed out after ${max_wait_seconds}s waiting for publish-image.yml; stable was not promoted."
+              fi
+              exit 1
+            fi
+
+            if ! run_count=$(jq -er 'arrays | length' <<< "$runs_json"); then
+              echo "::error::GitHub Actions API returned an invalid workflow-runs response."
+              exit 1
+            fi
+
+            if ((run_count == 0)); then
+              if [[ "$seen_run" == "true" ]]; then
+                echo "::error::The matching publish-image.yml run disappeared from the API response."
+                exit 1
+              fi
+
+              echo "::notice::No publish-image.yml run exists for ${HEAD_SHA}; the push was skipped by its path filters, so stable remains unchanged."
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            seen_run=true
+
+            if ! latest_run=$(jq -cer 'max_by([.run_number, .created_at])' <<< "$runs_json"); then
+              echo "::error::Could not select the latest matching publish-image.yml run."
+              exit 1
+            fi
+
+            if ! run_id=$(jq -er '.id' <<< "$latest_run") ||
+              ! run_number=$(jq -er '.run_number' <<< "$latest_run") ||
+              ! status=$(jq -er '.status' <<< "$latest_run") ||
+              ! conclusion=$(jq -r '.conclusion // ""' <<< "$latest_run"); then
+              echo "::error::The latest publish-image.yml run is missing required state fields."
+              exit 1
+            fi
+
+            case "$status" in
+              completed)
+                if [[ "$conclusion" == "success" ]]; then
+                  echo "publish-image.yml run #${run_number} (${run_id}) succeeded."
+                  echo "ready=true" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+
+                echo "::error::publish-image.yml run #${run_number} (${run_id}) concluded '${conclusion:-unknown}'; stable was not promoted."
+                exit 1
+                ;;
+              queued | in_progress | requested | waiting | pending)
+                if [[ -n "$conclusion" ]]; then
+                  echo "::error::publish-image.yml run #${run_number} (${run_id}) has non-terminal status '${status}' with conclusion '${conclusion}'."
+                  exit 1
+                fi
+
+                remaining_seconds=$((deadline - SECONDS))
+                if ((remaining_seconds <= 0)); then
+                  echo "::error::Timed out after ${max_wait_seconds}s waiting for publish-image.yml run #${run_number} (${run_id}); stable was not promoted."
+                  exit 1
+                fi
+
+                sleep_seconds=$poll_interval_seconds
+                if ((sleep_seconds > remaining_seconds)); then
+                  sleep_seconds=$remaining_seconds
+                fi
+                echo "publish-image.yml run #${run_number} (${run_id}) is ${status}; checking again in ${sleep_seconds}s."
+                sleep "$sleep_seconds"
+                ;;
+              *)
+                echo "::error::publish-image.yml run #${run_number} (${run_id}) returned unexpected status '${status}' and conclusion '${conclusion:-none}'."
+                exit 1
+                ;;
+            esac
+          done
+
+      - id: images
+        name: Check immutable images
+        if: steps.publish.outputs.ready == 'true'
+        env:
+          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected_digest=""
+          for image in "$IMAGE_NAME" "$ALIAS_IMAGE_NAME"; do
+            source="${image}:main-${SHORT_SHA}"
+            if ! source_digest=$(docker buildx imagetools inspect "$source" --format '{{json .Manifest}}' | jq -er '.digest'); then
+              echo "::error::publish-image.yml succeeded, but immutable image $source does not exist."
+              exit 1
+            fi
+
+            if [[ -n "$expected_digest" && "$source_digest" != "$expected_digest" ]]; then
+              echo "::error::Immutable image names do not resolve to the same digest"
+              exit 1
+            fi
+            expected_digest="$source_digest"
+          done
+
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Promote immutable images
+        if: steps.images.outputs.available == 'true'
+        env:
+          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker buildx imagetools create -t "${IMAGE_NAME}:stable" "${IMAGE_NAME}:main-${SHORT_SHA}"
+          docker buildx imagetools create -t "${ALIAS_IMAGE_NAME}:stable" "${ALIAS_IMAGE_NAME}:main-${SHORT_SHA}"
+
+      - name: Verify stable image digests
+        if: steps.images.outputs.available == 'true'
+        env:
+          SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected_digest=""
+          for image in "$IMAGE_NAME" "$ALIAS_IMAGE_NAME"; do
+            source="${image}:main-${SHORT_SHA}"
+            stable="${image}:stable"
+            source_digest=$(docker buildx imagetools inspect "$source" --format '{{json .Manifest}}' | jq -er '.digest')
+            stable_digest=$(docker buildx imagetools inspect "$stable" --format '{{json .Manifest}}' | jq -er '.digest')
+
+            if [[ "$stable_digest" != "$source_digest" ]]; then
+              echo "::error::Digest mismatch for $stable: expected $source_digest, got $stable_digest"
+              exit 1
+            fi
+
+            if [[ -n "$expected_digest" && "$stable_digest" != "$expected_digest" ]]; then
+              echo "::error::Stable image names do not resolve to the same digest"
+              exit 1
+            fi
+            expected_digest="$stable_digest"
+          done
+
+          echo "Promoted both stable image names at digest $expected_digest"
