@@ -67,7 +67,7 @@ interface UpdateOperation {
   downloadedListener?: (event: UpdateDownloadedEvent) => void;
 }
 
-export const DESKTOP_UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1_000;
+export const DESKTOP_UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 export const DESKTOP_UPDATE_CHECK_TIMEOUT_MS = 2 * 60 * 1_000;
 export const DESKTOP_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS = 2 * 60 * 1_000;
 export const DESKTOP_UPDATE_DOWNLOAD_ABSOLUTE_TIMEOUT_MS = 60 * 60 * 1_000;
