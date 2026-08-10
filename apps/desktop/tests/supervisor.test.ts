@@ -9,7 +9,11 @@ import type {
   DesktopDaemonResolution,
   ResolveDesktopDaemonInput,
 } from "@enduragent/coach/enduragent";
-import { UTILITY_EXIT_TIMEOUT_MS, UTILITY_FORCE_EXIT_TIMEOUT_MS } from "../src/main/constants.js";
+import {
+  UTILITY_EXIT_TIMEOUT_MS,
+  UTILITY_FORCE_EXIT_TIMEOUT_MS,
+  UTILITY_SPAWN_TIMEOUT_MS,
+} from "../src/main/constants.js";
 import { DesktopDaemonLifecycle } from "../src/main/daemon-lifecycle.js";
 import {
   DesktopDaemonSupervisor,
@@ -164,15 +168,17 @@ describe("desktop main supervisor", () => {
 
   it("refuses a Windows daemon without a current app child handle", async () => {
     const close = vi.fn(async () => {});
-    const attached: DesktopDaemonResolution = {
-      status: "connected",
-      url: "ws://127.0.0.1:45001/rpc",
+    const attached = {
+      status: "connected" as const,
+      url: "ws://127.0.0.1:45001/rpc" as const,
       token: "s".repeat(43),
       athleteHome: "C:\\synthetic\\athlete",
       rendererCapability: capability("r"),
-      owner: "app-supervised",
-      supervision: "attached",
+      owner: "app-supervised" as const,
+      supervision: "attached" as const,
       close,
+      kill: vi.fn(),
+      hardStop: vi.fn(),
     };
     const supervisor = new DesktopDaemonSupervisor(
       {
@@ -194,21 +200,26 @@ describe("desktop main supervisor", () => {
       retryable: false,
     });
     expect(close).toHaveBeenCalledOnce();
+    expect(attached.kill).not.toHaveBeenCalled();
+    expect(attached.hardStop).not.toHaveBeenCalled();
   });
 
   it("refuses a dead Windows app child instead of claiming ownership", async () => {
-    const close = vi.fn(async () => {});
-    const resolution: DesktopDaemonResolution = {
-      status: "connected",
-      url: "ws://127.0.0.1:45001/rpc",
+    const stopOwnedChild = vi.fn();
+    const close = vi.fn(async () => stopOwnedChild());
+    const resolution = {
+      status: "connected" as const,
+      url: "ws://127.0.0.1:45001/rpc" as const,
       token: "s".repeat(43),
       athleteHome: "C:\\synthetic\\athlete",
       rendererCapability: capability("r"),
-      owner: "app-supervised",
-      supervision: "app-supervised",
+      owner: "app-supervised" as const,
+      supervision: "app-supervised" as const,
       exited: Promise.resolve({ exitCode: 1 }),
       isAlive: () => false,
       close,
+      kill: vi.fn(),
+      hardStop: vi.fn(),
     };
     const supervisor = new DesktopDaemonSupervisor(
       {
@@ -228,6 +239,9 @@ describe("desktop main supervisor", () => {
       retryable: false,
     });
     expect(close).toHaveBeenCalledOnce();
+    expect(stopOwnedChild).toHaveBeenCalledOnce();
+    expect(resolution.kill).not.toHaveBeenCalled();
+    expect(resolution.hardStop).not.toHaveBeenCalled();
   });
 
   it("uses one closed path-free stage for Windows ownership refusal at startup and recovery", async () => {
@@ -459,22 +473,35 @@ describe("desktop main supervisor", () => {
     await expect(handle.exited).resolves.toEqual({ exitCode: 1 });
   });
 
-  it("uses one bounded kill fallback and still waits for observed exit", async () => {
+  it("uses one bounded kill fallback and only succeeds after observed exit", async () => {
     vi.useFakeTimers();
-    const child = new FakeUtilityProcess();
-    const fork = vi.mocked((await import("electron")).utilityProcess.fork);
-    fork.mockReturnValue(child as never);
-    const started = forkAppSupervisedDaemon({
-      utilityEntry: "/synthetic/daemon-utility.js",
-      homeRoot: "/synthetic/athlete",
-      appVersion: "2026.8.0",
+    const exit = deferred<{ readonly exitCode: number | null }>();
+    let exited = false;
+    const child = { postMessage: vi.fn(), kill: vi.fn(() => false) };
+    const hardStop = vi.fn();
+    const stopping = terminateOwnedUtilityProcess({
+      child,
+      pid: 91,
+      exited: exit.promise,
+      hasExited: () => exited,
+      hardStop,
     });
-    child.emit("spawn");
-    const handle = await started;
-    const stopping = handle.stop();
-    await vi.advanceTimersByTimeAsync(5_000);
-    await stopping;
+    const settled = vi.fn();
+    void stopping.then(settled);
+
+    await vi.advanceTimersByTimeAsync(UTILITY_EXIT_TIMEOUT_MS - 1);
+    expect(child.kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(hardStop).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+
+    exited = true;
+    exit.resolve({ exitCode: 0 });
+    await stopping;
+    expect(settled).toHaveBeenCalledOnce();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(hardStop).not.toHaveBeenCalled();
   });
 
   it("bounds startup when a utility child emits neither spawn nor exit", async () => {
@@ -496,6 +523,121 @@ describe("desktop main supervisor", () => {
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
 
+  it("skips an owned hard stop when exit is observed in the force-wait reap gap", async () => {
+    vi.useFakeTimers();
+    const exit = deferred<{ readonly exitCode: number | null }>();
+    let exited = false;
+    const child = { postMessage: vi.fn(), kill: vi.fn(() => false) };
+    const hardStop = vi.fn();
+    const stopping = terminateOwnedUtilityProcess({
+      child,
+      get pid() {
+        exited = true;
+        return 91;
+      },
+      exited: exit.promise,
+      hasExited: () => exited,
+      hardStop,
+    });
+    const settled = vi.fn();
+    void stopping.then(settled);
+
+    await vi.advanceTimersByTimeAsync(UTILITY_EXIT_TIMEOUT_MS + UTILITY_FORCE_EXIT_TIMEOUT_MS);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(hardStop).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+
+    exit.resolve({ exitCode: 0 });
+    await stopping;
+    expect(settled).toHaveBeenCalledOnce();
+    expect(hardStop).not.toHaveBeenCalled();
+  });
+
+  it("skips an unacknowledged hard stop when exit is observed in the force-wait reap gap", async () => {
+    vi.useFakeTimers();
+    const child = Object.assign(new EventEmitter(), {
+      postMessage: vi.fn(),
+      kill: vi.fn(() => false),
+    });
+    Object.defineProperty(child, "pid", {
+      get: vi.fn(() => {
+        child.emit("exit", 0);
+        return 91;
+      }),
+    });
+    const fork = vi.mocked((await import("electron")).utilityProcess.fork);
+    fork.mockReturnValue(child as never);
+    const hardStop = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const started = forkAppSupervisedDaemon({
+        utilityEntry: "/synthetic/daemon-utility.js",
+        homeRoot: "/synthetic/athlete",
+        appVersion: "2026.8.0",
+      });
+      const rejected = expect(started).rejects.toMatchObject({
+        name: "AppSupervisedDaemonStartError",
+        cause: "spawn-failed",
+      });
+
+      await vi.advanceTimersByTimeAsync(UTILITY_SPAWN_TIMEOUT_MS);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(UTILITY_FORCE_EXIT_TIMEOUT_MS);
+      await rejected;
+      expect(hardStop).not.toHaveBeenCalled();
+    } finally {
+      hardStop.mockRestore();
+    }
+  });
+
+  it("keeps the Darwin default hard-stop ladder and stage-coded deadline unchanged", async () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    const child = {
+      postMessage: vi.fn(() => order.push("shutdown")),
+      kill: vi.fn(() => {
+        order.push("kill");
+        return false;
+      }),
+    };
+    const hardStop = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      order.push(`hard-stop:${pid}:${String(signal)}`);
+      return true;
+    });
+    try {
+      const stopping = terminateOwnedUtilityProcess({
+        child,
+        pid: 91,
+        exited: new Promise(() => {}),
+        hasExited: () => false,
+      });
+      const settled = vi.fn();
+      void stopping.then(settled, settled);
+      const rejected = expect(stopping).rejects.toThrowError(
+        /^utility process termination deadline exceeded$/,
+      );
+
+      expect(UTILITY_EXIT_TIMEOUT_MS).toBe(5_000);
+      expect(UTILITY_FORCE_EXIT_TIMEOUT_MS).toBe(2_000);
+      expect(order).toEqual(["shutdown"]);
+      await vi.advanceTimersByTimeAsync(UTILITY_EXIT_TIMEOUT_MS - 1);
+      expect(order).toEqual(["shutdown"]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(order).toEqual(["shutdown", "kill"]);
+      await vi.advanceTimersByTimeAsync(UTILITY_FORCE_EXIT_TIMEOUT_MS - 1);
+      expect(order).toEqual(["shutdown", "kill"]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(order).toEqual(["shutdown", "kill", "hard-stop:91:SIGKILL"]);
+      expect(hardStop.mock.calls).toEqual([[91, "SIGKILL"]]);
+      await vi.advanceTimersByTimeAsync(UTILITY_FORCE_EXIT_TIMEOUT_MS - 1);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await rejected;
+      expect(settled).toHaveBeenCalledOnce();
+    } finally {
+      hardStop.mockRestore();
+    }
+  });
+
   it("bounds a refused utility kill and uses only the validated owned pid for hard stop", async () => {
     vi.useFakeTimers();
     let resolveExit!: (value: { readonly exitCode: number | null }) => void;
@@ -506,7 +648,7 @@ describe("desktop main supervisor", () => {
         resolve(value);
       };
     });
-    const child = { postMessage: vi.fn(), kill: vi.fn(() => false) };
+    const child = { pid: 777, postMessage: vi.fn(), kill: vi.fn(() => false) };
     const hardStop = vi.fn((pid: number) => resolveExit({ exitCode: pid === 91 ? 137 : 1 }));
     const stopping = terminateOwnedUtilityProcess({
       child,
@@ -519,7 +661,8 @@ describe("desktop main supervisor", () => {
     await stopping;
     expect(child.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
     expect(child.kill).toHaveBeenCalledTimes(1);
-    expect(hardStop).toHaveBeenCalledWith(91);
+    expect(hardStop).toHaveBeenCalledTimes(1);
+    expect(hardStop.mock.calls).toEqual([[91]]);
   });
 
   it("restarts after an unexpected child exit and publishes the new live coordinates", async () => {

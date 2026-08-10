@@ -211,6 +211,10 @@ export async function terminateOwnedUtilityProcess(input: {
   if (!Number.isSafeInteger(input.pid) || input.pid <= 0) {
     throw new Error("utility process owned pid is invalid");
   }
+  if (input.hasExited()) {
+    await input.exited;
+    return;
+  }
   try {
     (input.hardStop ?? ((pid) => process.kill(pid, "SIGKILL")))(input.pid);
   } catch (error) {
@@ -225,12 +229,17 @@ export async function terminateOwnedUtilityProcess(input: {
 async function terminateUnacknowledgedUtility(
   child: UtilityProcess,
   exited: Promise<{ readonly exitCode: number | null }>,
+  hasExited: () => boolean,
 ): Promise<void> {
   child.kill();
   if ((await waitWithTimeout(exited, UTILITY_FORCE_EXIT_TIMEOUT_MS)) !== undefined) return;
   const pid = child.pid;
   if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 0) {
     throw new Error("unacknowledged utility process could not be reaped");
+  }
+  if (hasExited()) {
+    await exited;
+    return;
   }
   try {
     process.kill(pid, "SIGKILL");
@@ -305,7 +314,7 @@ export async function forkAppSupervisedDaemon(input: {
     startPosted = true;
   } catch {
     try {
-      await terminateUnacknowledgedUtility(child, exitedPromise);
+      await terminateUnacknowledgedUtility(child, exitedPromise, () => exited);
     } catch {
       throw new AppSupervisedDaemonStartError("termination-failed");
     }
@@ -314,7 +323,7 @@ export async function forkAppSupervisedDaemon(input: {
   const pid = child.pid;
   if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 0) {
     try {
-      await terminateUnacknowledgedUtility(child, exitedPromise);
+      await terminateUnacknowledgedUtility(child, exitedPromise, () => exited);
     } catch {
       throw new AppSupervisedDaemonStartError("termination-failed");
     }
