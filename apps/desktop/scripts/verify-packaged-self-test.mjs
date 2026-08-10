@@ -88,6 +88,7 @@ function applicationEnvironment(athleteHome) {
     if (process.env[name] !== undefined) environment[name] = process.env[name];
   }
   environment.ENDURAGENT_HOME = athleteHome;
+  environment.ENDURAGENT_ACCEPTANCE_HIDDEN = "1";
   return environment;
 }
 

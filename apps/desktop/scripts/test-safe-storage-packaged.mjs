@@ -228,6 +228,7 @@ try {
     HOME: operatorHome,
     ENDURAGENT_HOME: athleteHome,
     W9_SAFE_STORAGE_COMMAND: commandPath,
+    ENDURAGENT_ACCEPTANCE_HIDDEN: "1",
     FORCE_COLOR: undefined,
     CLICOLOR_FORCE: undefined,
   };
