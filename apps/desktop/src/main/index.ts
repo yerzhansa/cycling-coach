@@ -1,3 +1,4 @@
+import { bindWindowsUserData } from "./windows-user-data.js";
 import { realpath, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,6 +109,7 @@ import {
   type DesktopTrainingExporter,
 } from "./training-export-ipc.js";
 
+bindWindowsUserData(app);
 registerDesktopScheme();
 
 function disableChromiumMediaSessionIntegration(): void {
@@ -868,7 +870,12 @@ async function runDesktop(): Promise<void> {
     residency = createDesktopResidency({
       app,
       mainWindow,
-      trayIconPath: resolve(mainDirectory, "../../resources/trayTemplate.png"),
+      trayIconPath: resolve(
+        mainDirectory,
+        process.platform === "win32"
+          ? "../../resources/tray.ico"
+          : "../../resources/trayTemplate.png",
+      ),
       trayPopoverUrl: rendererSource.trayPopoverUrl,
       trayPreloadPath: resolve(mainDirectory, "../preload/tray.cjs"),
       persistLoginPreference: (enabled) => backgroundAtLoginPreference.set(enabled),

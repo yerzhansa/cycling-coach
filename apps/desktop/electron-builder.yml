@@ -33,3 +33,11 @@ mac:
   target:
     - target: dir
       arch: [arm64]
+win:
+  icon: resources/app-icon.ico
+  signExecutable: false
+  files:
+    - resources/tray.ico
+  target:
+    - target: dir
+      arch: [x64]

@@ -9,6 +9,7 @@
     "build": "electron-vite build",
     "check": "tsc --noEmit",
     "package:dir": "pnpm build:self-test-resources && electron-vite build && node scripts/development-package-plan.mjs",
+    "package:win-dir": "pnpm build:self-test-resources && electron-vite build && node scripts/windows-development-package-plan.mjs",
     "package:mac": "pnpm build:self-test-resources && electron-vite build && node scripts/macos-release-plan.mjs",
     "package:telegram-acceptance": "pnpm --filter '@enduragent/desktop^...' build && pnpm build:self-test-resources && electron-vite build --config electron.telegram-acceptance.vite.config.ts && node scripts/package-telegram-acceptance.mjs",
     "build:self-test-resources": "tsx scripts/build-self-test-resources.ts",

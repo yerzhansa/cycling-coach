@@ -606,8 +606,8 @@ describe("desktop residency", () => {
 
   it("anchors the tray icon to the build output instead of the launch-dependent app path", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
-    expect(source).toContain(
-      'trayIconPath: resolve(mainDirectory, "../../resources/trayTemplate.png")',
+    expect(source.replace(/\s+/g, " ")).toContain(
+      'trayIconPath: resolve( mainDirectory, process.platform === "win32" ? "../../resources/tray.ico" : "../../resources/trayTemplate.png"',
     );
     expect(source).not.toContain('join(app.getAppPath(), "resources"');
   });
