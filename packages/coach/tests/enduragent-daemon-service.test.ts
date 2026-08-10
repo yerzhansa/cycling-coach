@@ -10,6 +10,7 @@ import {
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import type { LaunchdServiceStatus } from "@enduragent/kernel-node/service";
 import {
+  createSecondStarterDependencies,
   createServiceUpgradePort,
   decideServiceAwareAutoStart,
   observeDaemonState,
@@ -52,27 +53,6 @@ const home: AthleteHome = {
   configDir: "/tmp/synthetic-athlete/config",
 };
 const rendererCapability = Buffer.alloc(32, 2).toString("base64url");
-
-const paths = {
-  launchAgentsDir: "/tmp/LaunchAgents",
-  plistPath: "/tmp/LaunchAgents/ai.enduragent.coach.synthetic.plist",
-  stateDir: "/tmp/synthetic-athlete/config/service",
-  envPath: "/tmp/synthetic-athlete/config/service/service.env",
-  wrapperPath: "/tmp/synthetic-athlete/config/service/service.sh",
-  handoffPath: "/tmp/synthetic-athlete/config/service/service.handoff",
-};
-
-const registeredStatus: LaunchdServiceStatus = {
-  kind: "registered",
-  registered: true,
-  installed: true,
-  loaded: true,
-  running: false,
-  label: "ai.enduragent.coach.synthetic",
-  pid: null,
-  lastExitStatus: 0,
-  paths,
-};
 
 describe("service-aware arbitration", () => {
   it("implements every registration and peer decision row", () => {
@@ -244,7 +224,7 @@ describe("launchd composition", () => {
     const resumeAfterEphemeral = vi.fn(async () => {});
     const startEphemeral = vi.fn(async () => {});
     const service = createServiceUpgradePort(home, {
-      readStatus: async () => registeredStatus,
+      readRegistration: async () => "registered",
       restartInstalled,
       resumeAfterEphemeral,
       startEphemeral,
@@ -258,22 +238,81 @@ describe("launchd composition", () => {
     expect(startEphemeral).toHaveBeenCalledWith(input);
     await expect(
       createServiceUpgradePort(home, {
-        readStatus: async () => ({
-          ...registeredStatus,
-          kind: "unknown",
-          registered: null,
-          installed: null,
-          loaded: null,
-          running: null,
-          pid: null,
-          lastExitStatus: null,
-          detail: "launchd status unavailable",
-        }),
+        readRegistration: async () => "unknown",
         restartInstalled,
         resumeAfterEphemeral,
         startEphemeral,
       }).isInstalled(home),
     ).rejects.toThrow("service status unavailable");
+  });
+
+  it("keeps Darwin second-starter registration on the launchd observer", async () => {
+    const readServiceStatus = vi.fn(async () => ({ kind: "registered" }) as LaunchdServiceStatus);
+    const serviceRegistrationState = vi.fn(async () => "absent" as const);
+    const createIdentity = vi.fn(({ home: selectedHome, executablePath }) => ({
+      label: "icu.enduragent.synthetic",
+      home: selectedHome,
+      executablePath,
+    }));
+    const binding = createSecondStarterDependencies({
+      home,
+      executablePath: "/tmp/enduragent",
+      dependencies: {
+        resolveAthleteHome: () => home,
+        withLocalCoach: vi.fn(),
+        readPackageVersion: async () => "unused",
+        platform: "darwin",
+        monotonicNow: () => 0,
+        readServiceStatus,
+        serviceRegistrationState,
+        createLaunchdServiceIdentity: createIdentity,
+        startEphemeralSuccessor: vi.fn(async () => {}),
+      },
+    });
+
+    await expect(binding.serviceUpgrade.isInstalled(home)).resolves.toBe(true);
+    expect(createIdentity).toHaveBeenCalledOnce();
+    expect(readServiceStatus).toHaveBeenCalledOnce();
+    expect(serviceRegistrationState).not.toHaveBeenCalled();
+  });
+
+  it("keeps Windows second-starter restart free of every launchd-shaped dependency", async () => {
+    const createIdentity = vi.fn(() => {
+      throw new Error("launchd identity must not be constructed");
+    });
+    const readServiceStatus = vi.fn(async () => {
+      throw new Error("launchd status must not be observed");
+    });
+    const serviceRegistrationState = vi.fn(async () => "present" as const);
+    const startEphemeralSuccessor = vi.fn(async () => {});
+    const binding = createSecondStarterDependencies({
+      home,
+      executablePath: "C:\\Enduragent\\enduragent.exe",
+      dependencies: {
+        resolveAthleteHome: () => home,
+        withLocalCoach: vi.fn(),
+        readPackageVersion: async () => "unused",
+        platform: "win32",
+        monotonicNow: () => 0,
+        readServiceStatus,
+        serviceRegistrationState,
+        createLaunchdServiceIdentity: createIdentity,
+        startEphemeralSuccessor,
+      },
+    });
+    const successor = {
+      home,
+      targetProtocolVersion: PROTOCOL_VERSION,
+      handoffCapability: "h".repeat(43),
+    };
+
+    await expect(binding.serviceUpgrade.isInstalled(home)).resolves.toBe(false);
+    await binding.serviceUpgrade.restartInstalledService(successor);
+    await binding.serviceUpgrade.kickstartInstalledServiceAfterEphemeral(successor);
+    expect(createIdentity).not.toHaveBeenCalled();
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(serviceRegistrationState).not.toHaveBeenCalled();
+    expect(startEphemeralSuccessor).toHaveBeenCalledTimes(2);
   });
 
   it("short-circuits unsupported daemon verbs before resolving home or executable", async () => {
@@ -412,6 +451,62 @@ describe("launchd composition", () => {
     ).resolves.toBe(EXIT_SUCCESS);
     expect(resumeService).toHaveBeenCalledTimes(1);
     expect(startEphemeralDaemon).not.toHaveBeenCalled();
+    expect(io.stdout.read()).toBe("ok\n");
+  });
+
+  it("starts a Windows CLI daemon without observing launchd registration", async () => {
+    const io = terminal();
+    const transport: CoachVerbTransport = {
+      kind: "remote",
+      async request(request) {
+        const envelope = { jsonrpc: "2.0" as const, id: 1, result: { text: "ok" } };
+        request.onTerminalEnvelope(envelope);
+        return envelope;
+      },
+      close: async () => {},
+    };
+    const connect = vi
+      .fn()
+      .mockRejectedValueOnce(new CoachRemoteError({ kind: "unavailable" }))
+      .mockResolvedValueOnce(transport);
+    const readServiceStatus = vi.fn(async () => {
+      throw new Error("launchd must not be observed");
+    });
+    const serviceRegistrationState = vi.fn(async () => "present" as const);
+    const detachAfterHealthy = vi.fn();
+    const startEphemeralDaemon = vi.fn(async () => ({
+      disposeAfterFailedStart: vi.fn(async () => {}),
+      detachAfterHealthy,
+    }));
+
+    await expect(
+      runEnduragent(
+        {
+          argv: ["ask", "hello"],
+          env: {},
+          terminal: io.value,
+          signal: new AbortController().signal,
+        },
+        {
+          resolveAthleteHome: () => home,
+          withLocalCoach: vi.fn(),
+          readPackageVersion: async () => "unused",
+          connectRemoteTransport: connect,
+          serviceRegistrationState,
+          readServiceStatus,
+          observeDaemonState: async () => ({ kind: "absent" }),
+          resolveExecutablePath: async () => "/tmp/real-enduragent",
+          startEphemeralDaemon,
+          delay: async () => {},
+          monotonicNow: () => 0,
+          platform: "win32",
+        },
+      ),
+    ).resolves.toBe(EXIT_SUCCESS);
+    expect(readServiceStatus).not.toHaveBeenCalled();
+    expect(serviceRegistrationState).not.toHaveBeenCalled();
+    expect(startEphemeralDaemon).toHaveBeenCalledOnce();
+    expect(detachAfterHealthy).toHaveBeenCalledOnce();
     expect(io.stdout.read()).toBe("ok\n");
   });
 });

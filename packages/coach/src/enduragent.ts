@@ -53,7 +53,6 @@ import {
 } from "@enduragent/kernel-node/home";
 import { PORT_FILE_NAME, type PeerHealthyOutcome } from "@enduragent/kernel-node/lock";
 import {
-  canonicalizeAthleteHome,
   createLaunchdServiceIdentity,
   installLaunchdService,
   readLaunchdServiceStatus,
@@ -92,6 +91,7 @@ import {
 import type { ReadinessFailureStatus } from "./readiness.js";
 export type { ReadinessFailureStatus } from "./readiness.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
+import { readDesktopRegistration, type DesktopRegistrationResult } from "./desktop-registration.js";
 import { CoachStoreWriterError } from "./runtime.js";
 import { runCoachServe } from "./serve.js";
 
@@ -143,6 +143,7 @@ export interface EnduragentDependencies {
     readonly home: AthleteHome;
     readonly executablePath: string;
   }) => Promise<LaunchdServiceStatus>;
+  readonly createLaunchdServiceIdentity?: typeof createLaunchdServiceIdentity;
   readonly resumeService?: (input: {
     readonly home: AthleteHome;
     readonly executablePath: string;
@@ -159,6 +160,10 @@ export interface EnduragentDependencies {
 }
 
 export type ServiceRegistrationClass = "absent" | "registered" | "unknown";
+
+function desktopRegistrationClass(result: DesktopRegistrationResult): ServiceRegistrationClass {
+  return result.registration === "present" ? "registered" : result.registration;
+}
 
 export interface AppSupervisedChildHandle {
   readonly pid: number;
@@ -456,6 +461,7 @@ const defaultDependencies: EnduragentDependencies = Object.freeze({
   monotonicNow: () => performance.now(),
   resolveExecutablePath,
   createDaemonController,
+  createLaunchdServiceIdentity,
   readServiceStatus: defaultReadServiceStatus,
   resumeService: defaultResumeService,
   observeDaemonState,
@@ -822,7 +828,20 @@ function sameAthleteHome(left: AthleteHome, right: AthleteHome): boolean {
 }
 
 function canonicalHome(home: AthleteHome): AthleteHome {
-  const canonical = canonicalizeAthleteHome(home);
+  const root = resolve(home.root);
+  const canonical = Object.freeze({
+    root,
+    storeDir: resolve(home.storeDir),
+    archiveDir: resolve(home.archiveDir),
+    configDir: resolve(home.configDir),
+  });
+  if (
+    canonical.storeDir !== join(root, "store") ||
+    canonical.archiveDir !== join(root, "archive") ||
+    canonical.configDir !== join(root, "config")
+  ) {
+    throw new TypeError("athlete home paths are inconsistent");
+  }
   return sameAthleteHome(home, canonical) ? home : canonical;
 }
 
@@ -844,7 +863,7 @@ function validateSuccessorInput(home: AthleteHome, input: DesignatedSuccessorInp
 }
 
 export interface ServiceUpgradeBindingDependencies {
-  readonly readStatus: () => Promise<LaunchdServiceStatus>;
+  readonly readRegistration: () => Promise<ServiceRegistrationClass>;
   readonly restartInstalled: (input: DesignatedSuccessorInput) => Promise<void>;
   readonly resumeAfterEphemeral: (input: DesignatedSuccessorInput) => Promise<void>;
   readonly startEphemeral: (input: DesignatedSuccessorInput) => Promise<void>;
@@ -857,9 +876,9 @@ export function createServiceUpgradePort(
   return {
     async isInstalled(inputHome) {
       if (home.root !== inputHome.root) throw new TypeError("athlete home changed");
-      const status = await dependencies.readStatus();
-      if (status.kind === "registered") return true;
-      if (status.kind === "absent") return false;
+      const registration = await dependencies.readRegistration();
+      if (registration === "registered") return true;
+      if (registration === "absent") return false;
       throw new Error("service status unavailable");
     },
     async restartInstalledService(input) {
@@ -1023,28 +1042,49 @@ function createSecondStarterCoreDependencies(input: {
   };
 }
 
-function createSecondStarterDependencies(input: {
+export function createSecondStarterDependencies(input: {
   readonly home: AthleteHome;
   readonly executablePath: string;
   readonly dependencies: EnduragentDependencies;
 }): ResolveSecondStarterDependencies {
-  const identity = createLaunchdServiceIdentity({
-    home: input.home,
-    executablePath: input.executablePath,
-  });
+  const platform = input.dependencies.platform!;
+  const identity =
+    platform === "win32"
+      ? undefined
+      : input.dependencies.createLaunchdServiceIdentity!({
+          home: input.home,
+          executablePath: input.executablePath,
+        });
+  const startEphemeral = input.dependencies.startEphemeralSuccessor!;
   const serviceUpgrade = createServiceUpgradePort(input.home, {
-    readStatus: () =>
-      input.dependencies.readServiceStatus!({
-        home: input.home,
-        executablePath: input.executablePath,
-      }),
+    readRegistration: async () =>
+      desktopRegistrationClass(
+        await readDesktopRegistration(
+          {
+            platform,
+            home: input.home,
+            executablePath: input.executablePath,
+          },
+          {
+            readServiceStatus: input.dependencies.readServiceStatus!,
+          },
+        ),
+      ),
     restartInstalled: async (successor) => {
+      if (identity === undefined) {
+        await startEphemeral(successor);
+        return;
+      }
       await restartLaunchdServiceForUpgrade(identity, successor);
     },
     resumeAfterEphemeral: async (successor) => {
+      if (identity === undefined) {
+        await startEphemeral(successor);
+        return;
+      }
       await resumeLaunchdServiceAfterEphemeral(identity, successor);
     },
-    startEphemeral: input.dependencies.startEphemeralSuccessor!,
+    startEphemeral,
   });
   return createSecondStarterCoreDependencies({
     dependencies: input.dependencies,
@@ -1052,10 +1092,19 @@ function createSecondStarterDependencies(input: {
   });
 }
 
+function customServiceRegistrationState(
+  dependencies: EnduragentDependencies,
+): (() => Promise<ServiceRegistrationState>) | undefined {
+  return dependencies.serviceRegistrationState === defaultDependencies.serviceRegistrationState
+    ? undefined
+    : dependencies.serviceRegistrationState;
+}
+
 export interface ResolveDesktopDaemonInput {
   readonly env: Record<string, string | undefined>;
   readonly executablePath: string;
   readonly appVersion: string;
+  readonly platform?: NodeJS.Platform;
   readonly signal: AbortSignal;
   readonly startAppSupervisedDaemon: (
     input: StartAppSupervisedDaemonInput,
@@ -1069,6 +1118,8 @@ export type DesktopDaemonDependencies = Required<
     EnduragentDependencies,
     | "resolveAthleteHome"
     | "prepareAthleteHome"
+    | "platform"
+    | "createLaunchdServiceIdentity"
     | "readServiceStatus"
     | "resumeService"
     | "observeDaemonState"
@@ -1128,6 +1179,8 @@ const DESKTOP_EPHEMERAL_START_DEADLINE_MS = 90_000;
 const desktopDaemonDependencies: DesktopDaemonDependencies = {
   resolveAthleteHome: defaultDependencies.resolveAthleteHome,
   prepareAthleteHome: defaultDependencies.prepareAthleteHome!,
+  platform: defaultDependencies.platform!,
+  createLaunchdServiceIdentity: defaultDependencies.createLaunchdServiceIdentity!,
   readServiceStatus: defaultDependencies.readServiceStatus!,
   resumeService: defaultDependencies.resumeService!,
   observeDaemonState: defaultDependencies.observeDaemonState!,
@@ -1172,6 +1225,16 @@ function refusedDesktop(
       cause !== "malformed" &&
       cause !== "version-mismatch" &&
       cause !== "termination-failed",
+  };
+}
+
+function refusedUnownedDesktop(): DesktopDaemonResolution {
+  return {
+    status: "refused",
+    exitCode: EXIT_DAEMON_UNAVAILABLE,
+    classification: "contention-family",
+    cause: "contention",
+    retryable: false,
   };
 }
 
@@ -1248,6 +1311,38 @@ function connectedDesktop(
         isAlive: child.isAlive,
         close,
       };
+}
+
+async function refuseUnownedWindowsDesktop(
+  child: AppSupervisedChildHandle | undefined,
+): Promise<DesktopDaemonResolution> {
+  if (!(await stopAppChild(child))) {
+    return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "termination-failed");
+  }
+  return refusedUnownedDesktop();
+}
+
+async function connectOwnedWindowsDesktop(
+  observation: Extract<DaemonStateObservation, { readonly kind: "compatible-healthy" }>,
+  child: AppSupervisedChildHandle | undefined,
+): Promise<DesktopDaemonResolution> {
+  let owned = false;
+  try {
+    owned =
+      child !== undefined &&
+      child.isAlive() &&
+      observation.peer.pid === child.pid &&
+      observation.authenticated.handshake.owner === "app-supervised";
+  } catch {}
+  if (!owned) {
+    return refuseUnownedWindowsDesktop(child);
+  }
+  return connectedDesktop(
+    observation.authenticated.coordinates.port,
+    observation.authenticated.coordinates.token,
+    observation.authenticated.handshake,
+    child,
+  );
 }
 
 type DesktopPublicationOutcome =
@@ -1343,7 +1438,7 @@ async function waitForDesktopDaemon(input: {
 function createDesktopSecondStarterBinding(input: {
   readonly home: AthleteHome;
   readonly executablePath: string;
-  readonly serviceStatus: LaunchdServiceStatus;
+  readonly registration: DesktopRegistrationResult;
   readonly previousChild?: AppSupervisedChildHandle;
   readonly dependencies: DesktopDaemonDependencies;
   readonly startAppSupervisedDaemon: ResolveDesktopDaemonInput["startAppSupervisedDaemon"];
@@ -1351,10 +1446,13 @@ function createDesktopSecondStarterBinding(input: {
   readonly dependencies: ResolveSecondStarterDependencies;
   takeStartedAppChild(): AppSupervisedChildHandle | undefined;
 } {
-  const identity = createLaunchdServiceIdentity({
-    home: input.home,
-    executablePath: input.executablePath,
-  });
+  const identity =
+    input.registration.source === "launchd"
+      ? input.dependencies.createLaunchdServiceIdentity({
+          home: input.home,
+          executablePath: input.executablePath,
+        })
+      : undefined;
   let startedChild: AppSupervisedChildHandle | undefined;
   let taken = false;
   let retirePromise: Promise<void> | undefined;
@@ -1362,24 +1460,33 @@ function createDesktopSecondStarterBinding(input: {
     retirePromise ??= requireStoppedAppChild(input.previousChild);
     return retirePromise;
   };
+  const startAppSuccessor = async (successor: DesignatedSuccessorInput): Promise<void> => {
+    if (startedChild !== undefined || taken) throw new Error("app child already started");
+    await retirePreviousChild();
+    startedChild = await input.startAppSupervisedDaemon({
+      home: successor.home,
+      handoffCapability: successor.handoffCapability,
+    });
+  };
   const serviceUpgrade = createServiceUpgradePort(input.home, {
-    readStatus: async () => input.serviceStatus,
+    readRegistration: async () => desktopRegistrationClass(input.registration),
     restartInstalled: async (successor) => {
+      if (identity === undefined) {
+        await startAppSuccessor(successor);
+        return;
+      }
       await retirePreviousChild();
       await restartLaunchdServiceForUpgrade(identity, successor);
     },
     resumeAfterEphemeral: async (successor) => {
+      if (identity === undefined) {
+        await startAppSuccessor(successor);
+        return;
+      }
       await retirePreviousChild();
       await resumeLaunchdServiceAfterEphemeral(identity, successor);
     },
-    startEphemeral: async (successor) => {
-      if (startedChild !== undefined || taken) throw new Error("app child already started");
-      await retirePreviousChild();
-      startedChild = await input.startAppSupervisedDaemon({
-        home: successor.home,
-        handoffCapability: successor.handoffCapability,
-      });
-    },
+    startEphemeral: startAppSuccessor,
   });
   return {
     dependencies: createSecondStarterCoreDependencies({
@@ -1406,6 +1513,7 @@ export async function resolveDesktopDaemon(
   if (!isAbsolute(input.executablePath) || input.appVersion.length === 0) {
     throw new TypeError("invalid desktop daemon input");
   }
+  const platform = input.platform ?? dependencies.platform;
   let home: AthleteHome;
   try {
     home = await prepareDesktopAthleteHome(input.env, dependencies);
@@ -1415,14 +1523,14 @@ export async function resolveDesktopDaemon(
       input.signal.aborted ? "cancelled" : "unavailable",
     );
   }
-  let serviceStatus: LaunchdServiceStatus;
+  let registrationResult: DesktopRegistrationResult;
   let registration: ServiceRegistrationClass;
   try {
-    serviceStatus = await dependencies.readServiceStatus({
-      home,
-      executablePath: input.executablePath,
-    });
-    registration = serviceStatus.kind;
+    registrationResult = await readDesktopRegistration(
+      { platform, home, executablePath: input.executablePath },
+      { readServiceStatus: dependencies.readServiceStatus },
+    );
+    registration = desktopRegistrationClass(registrationResult);
   } catch {
     return refusedDesktop(
       EXIT_DAEMON_UNAVAILABLE,
@@ -1440,6 +1548,9 @@ export async function resolveDesktopDaemon(
   }
   if (input.observationOnly) {
     if (observation.kind === "compatible-healthy") {
+      if (platform === "win32") {
+        return connectOwnedWindowsDesktop(observation, undefined);
+      }
       return connectedDesktop(
         observation.authenticated.coordinates.port,
         observation.authenticated.coordinates.token,
@@ -1464,6 +1575,9 @@ export async function resolveDesktopDaemon(
 
   while (!input.signal.aborted) {
     if (observation.kind === "compatible-healthy") {
+      if (platform === "win32") {
+        return connectOwnedWindowsDesktop(observation, ownedChild);
+      }
       return connectedDesktop(
         observation.authenticated.coordinates.port,
         observation.authenticated.coordinates.token,
@@ -1481,7 +1595,7 @@ export async function resolveDesktopDaemon(
       const binding = createDesktopSecondStarterBinding({
         home,
         executablePath: input.executablePath,
-        serviceStatus,
+        registration: registrationResult,
         ...(ownedChild === undefined ? {} : { previousChild: ownedChild }),
         dependencies,
         startAppSupervisedDaemon: input.startAppSupervisedDaemon,
@@ -1534,6 +1648,18 @@ export async function resolveDesktopDaemon(
         ownedChild = undefined;
       }
       if (starter.status === "attach") {
+        if (platform === "win32") {
+          let attached: DaemonStateObservation;
+          try {
+            attached = await dependencies.observeDaemonState({ home });
+          } catch {
+            return refuseUnownedWindowsDesktop(ownedChild);
+          }
+          if (attached.kind !== "compatible-healthy" || attached.peer.port !== starter.port) {
+            return refuseUnownedWindowsDesktop(ownedChild);
+          }
+          return connectOwnedWindowsDesktop(attached, ownedChild);
+        }
         return connectedDesktop(
           starter.port,
           observation.authenticated.coordinates.token,
@@ -1660,6 +1786,14 @@ export async function resolveDesktopDaemon(
       if (published.kind === "cancelled") {
         return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "cancelled");
       }
+      if (platform === "win32" && published.kind === "child-exited") {
+        try {
+          observation = await dependencies.observeDaemonState({ home });
+        } catch {
+          return refusedDesktop(EXIT_DAEMON_UNAVAILABLE, "unavailable");
+        }
+        continue;
+      }
       observation = published.kind === "deadline" ? published.observation : { kind: "absent" };
       continue;
     }
@@ -1709,18 +1843,19 @@ async function serviceRegistrationClass(input: {
   readonly executablePath: string;
   readonly dependencies: EnduragentDependencies;
 }): Promise<ServiceRegistrationClass> {
-  if (
-    input.dependencies.serviceRegistrationState !== defaultDependencies.serviceRegistrationState
-  ) {
-    const state = await input.dependencies.serviceRegistrationState!();
-    return state === "present" ? "registered" : state;
-  }
-  return (
-    await input.dependencies.readServiceStatus!({
-      home: input.home,
-      executablePath: input.executablePath,
-    })
-  ).kind;
+  return desktopRegistrationClass(
+    await readDesktopRegistration(
+      {
+        platform: input.dependencies.platform!,
+        home: input.home,
+        executablePath: input.executablePath,
+      },
+      {
+        readServiceStatus: input.dependencies.readServiceStatus!,
+        serviceRegistrationState: customServiceRegistrationState(input.dependencies),
+      },
+    ),
+  );
 }
 
 async function connectAfterEphemeralStart(input: {
@@ -2063,6 +2198,9 @@ async function runServeInvocation(input: {
       if (!(error instanceof CoachStoreWriterError) || error.code !== "writer-lock-held") {
         if (successor !== undefined) await successor.fence.release().catch(() => {});
         throw error;
+      }
+      if (input.invocationOwner === "app-supervised" && input.dependencies.platform === "win32") {
+        return EXIT_SUCCESS;
       }
       let classified: ReadOnlyPeerClassification;
       try {

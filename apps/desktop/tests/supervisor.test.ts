@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ utilityProcess: { fork: vi.fn() } }));
@@ -136,6 +138,103 @@ describe("desktop main supervisor", () => {
     expect(close).toHaveBeenCalledTimes(1);
     await supervisor.resolve();
     expect(resolveDaemon).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts a live app-supervised Windows resolution", async () => {
+    const exit = deferred<{ readonly exitCode: number | null }>();
+    const resolution = connected(45_001, exit);
+    const supervisor = new DesktopDaemonSupervisor(
+      {
+        env: {},
+        executablePath: "C:\\Program Files\\Enduragent\\Enduragent.exe",
+        appVersion: "0.1.0",
+        platform: "win32",
+        signal: new AbortController().signal,
+      },
+      "C:\\Program Files\\Enduragent\\daemon-utility.js",
+      vi.fn(async () => resolution),
+    );
+
+    await expect(supervisor.resolve()).resolves.toMatchObject({
+      status: "connected",
+      supervision: "app-supervised",
+    });
+    expect(resolution.close).not.toHaveBeenCalled();
+  });
+
+  it("refuses a Windows daemon without a current app child handle", async () => {
+    const close = vi.fn(async () => {});
+    const attached: DesktopDaemonResolution = {
+      status: "connected",
+      url: "ws://127.0.0.1:45001/rpc",
+      token: "s".repeat(43),
+      athleteHome: "C:\\synthetic\\athlete",
+      rendererCapability: capability("r"),
+      owner: "app-supervised",
+      supervision: "attached",
+      close,
+    };
+    const supervisor = new DesktopDaemonSupervisor(
+      {
+        env: {},
+        executablePath: "C:\\Program Files\\Enduragent\\Enduragent.exe",
+        appVersion: "0.1.0",
+        platform: "win32",
+        signal: new AbortController().signal,
+      },
+      "C:\\Program Files\\Enduragent\\daemon-utility.js",
+      vi.fn(async () => attached),
+    );
+
+    await expect(supervisor.resolve()).resolves.toEqual({
+      status: "refused",
+      exitCode: 3,
+      classification: "contention-family",
+      cause: "contention",
+      retryable: false,
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a dead Windows app child instead of claiming ownership", async () => {
+    const close = vi.fn(async () => {});
+    const resolution: DesktopDaemonResolution = {
+      status: "connected",
+      url: "ws://127.0.0.1:45001/rpc",
+      token: "s".repeat(43),
+      athleteHome: "C:\\synthetic\\athlete",
+      rendererCapability: capability("r"),
+      owner: "app-supervised",
+      supervision: "app-supervised",
+      exited: Promise.resolve({ exitCode: 1 }),
+      isAlive: () => false,
+      close,
+    };
+    const supervisor = new DesktopDaemonSupervisor(
+      {
+        env: {},
+        executablePath: "C:\\Program Files\\Enduragent\\Enduragent.exe",
+        appVersion: "0.1.0",
+        platform: "win32",
+        signal: new AbortController().signal,
+      },
+      "C:\\Program Files\\Enduragent\\daemon-utility.js",
+      vi.fn(async () => resolution),
+    );
+
+    await expect(supervisor.resolve()).resolves.toMatchObject({
+      status: "refused",
+      cause: "contention",
+      retryable: false,
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("uses one closed path-free stage for Windows ownership refusal at startup and recovery", async () => {
+    const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
+
+    expect(source.match(/desktop-daemon-ownership-refusal unowned\\n/g)).toHaveLength(2);
+    expect(source).not.toContain("desktop-daemon-ownership-refusal ${");
   });
 
   it("propagates an active resolution close rejection", async () => {

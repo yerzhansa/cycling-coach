@@ -342,7 +342,9 @@ export class DesktopDaemonSupervisor {
   private closing = false;
 
   constructor(
-    private readonly input: Omit<ResolveDesktopDaemonInput, "startAppSupervisedDaemon">,
+    private readonly input: Omit<ResolveDesktopDaemonInput, "startAppSupervisedDaemon"> & {
+      readonly platform?: NodeJS.Platform;
+    },
     private readonly utilityEntry: string,
     private readonly resolveDaemon: typeof resolveDesktopDaemon = resolveDesktopDaemon,
   ) {}
@@ -383,6 +385,37 @@ export class DesktopDaemonSupervisor {
         if (resolution.status === "refused") {
           if (this.active === generation) this.active = undefined;
           return resolution;
+        }
+        if ((this.input.platform ?? process.platform) === "win32") {
+          let owned = false;
+          try {
+            owned =
+              resolution.supervision === "app-supervised" &&
+              resolution.owner === "app-supervised" &&
+              resolution.isAlive();
+          } catch {}
+          if (!owned) {
+            try {
+              await resolution.close();
+            } catch {
+              if (this.active === generation) this.active = undefined;
+              return {
+                status: "refused" as const,
+                exitCode: 3 as const,
+                classification: "contention-family" as const,
+                cause: "termination-failed" as const,
+                retryable: false,
+              };
+            }
+            if (this.active === generation) this.active = undefined;
+            return {
+              status: "refused" as const,
+              exitCode: 3 as const,
+              classification: "contention-family" as const,
+              cause: "contention" as const,
+              retryable: false,
+            };
+          }
         }
         let closePromise: Promise<void> | undefined;
         const wrapped = {
