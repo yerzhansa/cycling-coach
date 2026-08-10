@@ -22,6 +22,10 @@ function scalar(value: unknown): string {
   return typeof value === "string" ? value : (JSON.stringify(value) ?? "");
 }
 
+function continuesAfterError(value: unknown): boolean {
+  return value !== undefined && value !== false;
+}
+
 function steps(job: Mapping): Mapping[] {
   return Array.isArray(job.steps)
     ? job.steps.filter(
@@ -1191,6 +1195,34 @@ fi`;
     "latest mutation environment",
     issues,
   );
+  const latestMutationRun =
+    typeof latestMutationStep?.run === "string" ? latestMutationStep.run : "";
+  const requestLatestOutputs = mapping(requestLatest.outputs, "latest request outputs", issues);
+  const reconcileLatestStep = namedStep(reconcileLatest, "Reconcile repository latest read-only");
+  const reconcileLatestEnvironment = mapping(
+    reconcileLatestStep?.env,
+    "latest reconciliation environment",
+    issues,
+  );
+  const reconcileLatestStepRun =
+    typeof reconcileLatestStep?.run === "string" ? reconcileLatestStep.run : "";
+  const expectedReconcileLatestRun = [
+    "set -euo pipefail",
+    'case "$PROMOTION_OUTCOME" in',
+    "  ''|applied|unknown)",
+    "    ;;",
+    "  foreign|unapplied)",
+    '    echo "::error::Latest promotion reached a terminal $PROMOTION_OUTCOME outcome"',
+    "    exit 1",
+    "    ;;",
+    "  *)",
+    '    echo "::error::Latest promotion outcome is invalid"',
+    "    exit 1",
+    "    ;;",
+    "esac",
+    'pnpm desktop-release:transaction reconcile --directory "$RUNNER_TEMP/desktop-release"',
+    "",
+  ].join("\n");
   const reconcileLatestCondition = scalar(reconcileLatest.if).replace(/\s+/gu, " ");
   const roundTripRun = runs(roundTrip).join("\n");
   const activateRun = runs(activate).join("\n");
@@ -1309,9 +1341,28 @@ fi`;
     latestDeadlineRun !== expectedLatestDeadlineRun ||
     latestMutationEnvironment.TRANSACTION_DEADLINE_MS !==
       "${{ steps.latest-deadline.outputs.deadline_ms }}" ||
-    !requestLatestRun.includes('--transaction-deadline-ms "$TRANSACTION_DEADLINE_MS"')
+    !latestMutationRun.includes('--transaction-deadline-ms "$TRANSACTION_DEADLINE_MS"')
   ) {
     issues.push("desktop latest mutation must reserve reconciliation before compare-and-swap");
+  }
+  if (
+    latestMutationStep?.id !== "promote" ||
+    continuesAfterError(requestLatest["continue-on-error"]) ||
+    continuesAfterError(latestMutationStep?.["continue-on-error"]) ||
+    !exactKeys(requestLatestOutputs, ["promotion_outcome"]) ||
+    requestLatestOutputs.promotion_outcome !== "${{ steps.promote.outputs.promotion_outcome }}" ||
+    !latestMutationRun.includes('--github-output "$GITHUB_OUTPUT"') ||
+    !exactKeys(reconcileLatestEnvironment, ["GITHUB_TOKEN", "PROMOTION_OUTCOME"]) ||
+    reconcileLatestEnvironment.GITHUB_TOKEN !== "${{ github.token }}" ||
+    reconcileLatestEnvironment.PROMOTION_OUTCOME !==
+      "${{ needs.request-latest.outputs.promotion_outcome }}" ||
+    continuesAfterError(reconcileLatest["continue-on-error"]) ||
+    continuesAfterError(reconcileLatestStep?.["continue-on-error"]) ||
+    reconcileLatestStepRun !== expectedReconcileLatestRun
+  ) {
+    issues.push(
+      "desktop latest terminal outcomes must remain sticky across read-only reconciliation",
+    );
   }
   if (
     mapping(requestLatest.permissions, "latest request permissions", issues).contents !== "write" ||
@@ -1327,7 +1378,6 @@ fi`;
       "${{ always() && needs.sign-macos.result == 'success' && needs.publish-assets.result == 'success' }}" ||
     mapping(reconcileLatest.permissions, "latest reconciliation permissions", issues).contents !==
       "read" ||
-    !reconcileLatestRun.includes("desktop-release:transaction reconcile") ||
     reconcileLatestRun.includes("desktop-release:transaction promote") ||
     reconcileLatestRun.includes("--expected-latest-")
   ) {

@@ -89,6 +89,22 @@ export interface LatestObservation {
   readonly metadataSha256: string | null;
 }
 
+export type DesktopLatestPromotionOutcome = "applied" | "unknown" | "unapplied" | "foreign";
+
+export class DesktopLatestPromotionOutcomeError extends TypeError {
+  readonly outcome: Exclude<DesktopLatestPromotionOutcome, "applied">;
+
+  constructor(
+    outcome: Exclude<DesktopLatestPromotionOutcome, "applied">,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "DesktopLatestPromotionOutcomeError";
+    this.outcome = outcome;
+  }
+}
+
 export interface NpmAttestationExpectation {
   readonly name: string;
   readonly version: string;
@@ -1633,110 +1649,127 @@ export async function promoteDesktopLatest(
   client: GithubClient,
   observed: LatestObservation,
   transactionDeadlineAt?: number,
-): Promise<void> {
-  const mutationDeadlines = client.latestMutationDeadlines(transactionDeadlineAt);
-  const preflightDeadlineAt = Math.min(
-    mutationDeadlines.preflightDeadlineAt,
-    client.propagationDeadline("release"),
-  );
-  const manifest = await verifyDesktopRelease(directory);
-  const candidate = await client.release(manifest.draftId, preflightDeadlineAt);
-  if (candidate.draft || candidate.prerelease || candidate.tag_name !== manifest.tag)
-    throw new TypeError("published candidate binding mismatch");
-  if (!hasRecoverablePublicBody(candidate, manifest))
-    throw new TypeError("published release body is not recoverable");
-  const candidateWasFinal = hasFinalReleaseBody(candidate, manifest);
-  if ((await client.tagCommit(manifest.tag, preflightDeadlineAt)) !== manifest.commit)
-    throw new TypeError("published tag commit binding mismatch");
-  const current = await client.latest(preflightDeadlineAt);
-  const previous = await newestDesktopRelease(
-    await client.releases(preflightDeadlineAt),
-    client,
-    manifest.tag,
-    preflightDeadlineAt,
-  );
-  assertLatestCas(manifest.desktopVersion, observed, current, previous?.version ?? null);
-  assertPublishableAssets(candidate.assets, manifest);
-  if (candidate.assets.length !== manifest.files.length) {
-    throw new TypeError("promotion candidate asset set is incomplete");
-  }
-  const releasePropagationDeadline = preflightDeadlineAt;
-  for (const file of manifest.files) {
-    const asset = candidate.assets.find((candidateAsset) => candidateAsset.name === file.name);
-    if (!asset || asset.state !== "uploaded")
-      throw new TypeError(`promotion candidate asset is missing: ${file.name}`);
-    await waitForAnonymousAsset(
-      client,
-      asset.browser_download_url,
-      file,
-      releasePropagationDeadline,
-    );
-  }
-  assertLatestCas(
-    manifest.desktopVersion,
-    observed,
-    await client.latest(preflightDeadlineAt),
-    previous?.version ?? null,
-  );
-  const rebound = await client.release(candidate.id, preflightDeadlineAt);
-  if (
-    rebound.draft ||
-    rebound.prerelease ||
-    rebound.tag_name !== manifest.tag ||
-    !hasRecoverablePublicBody(rebound, manifest) ||
-    hasFinalReleaseBody(rebound, manifest) !== candidateWasFinal ||
-    (await client.tagCommit(manifest.tag, preflightDeadlineAt)) !== manifest.commit
-  ) {
-    throw new TypeError("promotion candidate changed during final preflight");
-  }
-  await assertCompleteReleaseAssets(
-    client,
-    rebound,
-    manifest,
-    "promotion candidate",
-    preflightDeadlineAt,
-  );
-  for (const file of manifest.files) {
-    const asset = rebound.assets.find((entry) => entry.name === file.name);
-    if (!asset) throw new TypeError(`promotion candidate asset is missing: ${file.name}`);
-    await waitForAnonymousAsset(
-      client,
-      asset.browser_download_url,
-      file,
-      releasePropagationDeadline,
-    );
-  }
-  const finalLatest = await client.latest(preflightDeadlineAt);
-  assertLatestCas(manifest.desktopVersion, observed, finalLatest, previous?.version ?? null);
-  const metadata = manifest.files.find((file) => file.name === "latest-mac.yml");
-  if (!metadata) throw new TypeError("desktop latest metadata is missing");
-  const promotedLatest = {
-    id: rebound.id,
-    tag: manifest.tag,
-    metadataSha256: metadata.sha256,
-  };
-  if (candidateWasFinal) {
-    if (!sameLatest(finalLatest, promotedLatest)) {
-      throw new TypeError("final desktop release is not the stable latest release");
-    }
-    return;
-  }
+): Promise<"applied"> {
+  let mutationAttempted = false;
   try {
-    await client.request(
-      `/repos/${client.repository()}/releases/${rebound.id}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ make_latest: "true" }),
-      },
-      mutationDeadlines.requestDeadlineAt,
+    const mutationDeadlines = client.latestMutationDeadlines(transactionDeadlineAt);
+    const preflightDeadlineAt = Math.min(
+      mutationDeadlines.preflightDeadlineAt,
+      client.propagationDeadline("release"),
     );
-  } catch {
-    await reconcilePromotionMutation(
+    const manifest = await verifyDesktopRelease(directory);
+    const candidate = await client.release(manifest.draftId, preflightDeadlineAt);
+    if (candidate.draft || candidate.prerelease || candidate.tag_name !== manifest.tag)
+      throw new TypeError("published candidate binding mismatch");
+    if (!hasRecoverablePublicBody(candidate, manifest))
+      throw new TypeError("published release body is not recoverable");
+    const candidateWasFinal = hasFinalReleaseBody(candidate, manifest);
+    if ((await client.tagCommit(manifest.tag, preflightDeadlineAt)) !== manifest.commit)
+      throw new TypeError("published tag commit binding mismatch");
+    const current = await client.latest(preflightDeadlineAt);
+    const previous = await newestDesktopRelease(
+      await client.releases(preflightDeadlineAt),
       client,
+      manifest.tag,
+      preflightDeadlineAt,
+    );
+    assertPromotionLatestCas(manifest.desktopVersion, observed, current, previous?.version ?? null);
+    assertPublishableAssets(candidate.assets, manifest);
+    if (candidate.assets.length !== manifest.files.length) {
+      throw new TypeError("promotion candidate asset set is incomplete");
+    }
+    const releasePropagationDeadline = preflightDeadlineAt;
+    for (const file of manifest.files) {
+      const asset = candidate.assets.find((candidateAsset) => candidateAsset.name === file.name);
+      if (!asset || asset.state !== "uploaded")
+        throw new TypeError(`promotion candidate asset is missing: ${file.name}`);
+      await waitForAnonymousAsset(
+        client,
+        asset.browser_download_url,
+        file,
+        releasePropagationDeadline,
+      );
+    }
+    assertPromotionLatestCas(
+      manifest.desktopVersion,
+      observed,
+      await client.latest(preflightDeadlineAt),
+      previous?.version ?? null,
+    );
+    const rebound = await client.release(candidate.id, preflightDeadlineAt);
+    if (
+      rebound.draft ||
+      rebound.prerelease ||
+      rebound.tag_name !== manifest.tag ||
+      !hasRecoverablePublicBody(rebound, manifest) ||
+      hasFinalReleaseBody(rebound, manifest) !== candidateWasFinal ||
+      (await client.tagCommit(manifest.tag, preflightDeadlineAt)) !== manifest.commit
+    ) {
+      throw new TypeError("promotion candidate changed during final preflight");
+    }
+    await assertCompleteReleaseAssets(
+      client,
+      rebound,
+      manifest,
+      "promotion candidate",
+      preflightDeadlineAt,
+    );
+    for (const file of manifest.files) {
+      const asset = rebound.assets.find((entry) => entry.name === file.name);
+      if (!asset) throw new TypeError(`promotion candidate asset is missing: ${file.name}`);
+      await waitForAnonymousAsset(
+        client,
+        asset.browser_download_url,
+        file,
+        releasePropagationDeadline,
+      );
+    }
+    const finalLatest = await client.latest(preflightDeadlineAt);
+    assertPromotionLatestCas(
+      manifest.desktopVersion,
+      observed,
       finalLatest,
-      promotedLatest,
-      mutationDeadlines.reconciliationDeadlineAt,
+      previous?.version ?? null,
+    );
+    const metadata = manifest.files.find((file) => file.name === "latest-mac.yml");
+    if (!metadata) throw new TypeError("desktop latest metadata is missing");
+    const promotedLatest = {
+      id: rebound.id,
+      tag: manifest.tag,
+      metadataSha256: metadata.sha256,
+    };
+    if (candidateWasFinal) {
+      if (!sameLatest(finalLatest, promotedLatest)) {
+        throw new TypeError("final desktop release is not the stable latest release");
+      }
+      return "applied";
+    }
+    mutationAttempted = true;
+    try {
+      await client.request(
+        `/repos/${client.repository()}/releases/${rebound.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ make_latest: "true" }),
+        },
+        mutationDeadlines.requestDeadlineAt,
+      );
+    } catch {
+      await reconcilePromotionMutation(
+        client,
+        finalLatest,
+        promotedLatest,
+        mutationDeadlines.reconciliationDeadlineAt,
+      );
+    }
+    return "applied";
+  } catch (error) {
+    if (error instanceof DesktopLatestPromotionOutcomeError) throw error;
+    throw new DesktopLatestPromotionOutcomeError(
+      mutationAttempted ? "unknown" : "unapplied",
+      error instanceof Error ? error.message : "desktop latest promotion failed",
+      { cause: error },
     );
   }
 }
@@ -1794,6 +1827,23 @@ function sameLatestIdentity(left: LatestObservation, right: LatestObservation): 
   return left.id === right.id && left.tag === right.tag;
 }
 
+function assertPromotionLatestCas(
+  candidateVersion: string,
+  observed: LatestObservation,
+  current: LatestObservation,
+  previousDesktopVersion: string | null,
+): void {
+  try {
+    assertLatestCas(candidateVersion, observed, current, previousDesktopVersion);
+  } catch (error) {
+    throw new DesktopLatestPromotionOutcomeError(
+      "foreign",
+      error instanceof Error ? error.message : "desktop latest compare-and-swap failed",
+      { cause: error },
+    );
+  }
+}
+
 function latestPollBudget(client: GithubClient, deadlineAt?: number): LatestPollBudget {
   return {
     remaining: latestReleasePropagationAttempts,
@@ -1809,41 +1859,66 @@ async function reconcilePromotionMutation(
   before: LatestObservation,
   after: LatestObservation,
   deadlineAt?: number,
-): Promise<void> {
+): Promise<"applied"> {
   const budget = latestPollBudget(client, deadlineAt);
   let lastObserved: LatestObservation | null = null;
   let stableAfterCount = 0;
+  let stableBeforeCount = 0;
+  let lastPollSucceeded = false;
   while (budget.remaining > 0 && client.now() < budget.deadlineAt) {
     budget.remaining -= 1;
     let current: LatestObservation;
     try {
       current = await client.latest(budget.deadlineAt);
     } catch {
+      lastPollSucceeded = false;
       stableAfterCount = 0;
+      stableBeforeCount = 0;
       if (budget.remaining > 0 && client.now() < budget.deadlineAt) {
         await client.pauseForPropagation("latest", budget.deadlineAt);
       }
       continue;
     }
+    lastPollSucceeded = true;
     lastObserved = current;
     if (sameLatest(current, after)) {
       stableAfterCount += 1;
-      if (stableAfterCount >= stableLatestObservationCount) return;
-    } else if (sameLatest(current, before) || sameLatestIdentity(current, before)) {
+      stableBeforeCount = 0;
+      if (stableAfterCount >= stableLatestObservationCount) return "applied";
+    } else if (sameLatest(current, before)) {
       stableAfterCount = 0;
+      stableBeforeCount += 1;
+    } else if (sameLatestIdentity(current, before)) {
+      stableAfterCount = 0;
+      stableBeforeCount = 0;
     } else if (sameLatestIdentity(current, after)) {
       stableAfterCount = 0;
+      stableBeforeCount = 0;
     } else {
-      throw new TypeError("desktop latest promotion observed a foreign latest release");
+      throw new DesktopLatestPromotionOutcomeError(
+        "foreign",
+        "desktop latest promotion observed a foreign latest release",
+      );
     }
     if (budget.remaining > 0 && client.now() < budget.deadlineAt) {
       await client.pauseForPropagation("latest", budget.deadlineAt);
     }
   }
-  if (lastObserved !== null && sameLatest(lastObserved, before)) {
-    throw new TypeError("desktop latest promotion was not applied");
+  if (
+    lastPollSucceeded &&
+    lastObserved !== null &&
+    sameLatest(lastObserved, before) &&
+    stableBeforeCount >= stableLatestObservationCount
+  ) {
+    throw new DesktopLatestPromotionOutcomeError(
+      "unapplied",
+      "desktop latest promotion was not applied",
+    );
   }
-  throw new TypeError("desktop latest promotion outcome could not be reconciled");
+  throw new DesktopLatestPromotionOutcomeError(
+    "unknown",
+    "desktop latest promotion outcome could not be reconciled",
+  );
 }
 
 async function waitForAnonymousAsset(
@@ -2296,6 +2371,29 @@ async function writeLatestOutput(
   );
 }
 
+async function writePromotionOutcome(
+  output: string,
+  outcome: DesktopLatestPromotionOutcome,
+): Promise<void> {
+  await writeFile(output, `promotion_outcome=${outcome}\n`, { flag: "a" });
+}
+
+export async function runDesktopLatestPromotionWithOutput(
+  output: string,
+  promote: () => Promise<"applied">,
+): Promise<"applied"> {
+  let outcome: DesktopLatestPromotionOutcome = "unknown";
+  try {
+    outcome = await promote();
+  } catch (error) {
+    if (error instanceof DesktopLatestPromotionOutcomeError) outcome = error.outcome;
+    await writePromotionOutcome(output, outcome);
+    throw error;
+  }
+  await writePromotionOutcome(output, outcome);
+  return outcome;
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   if (command === "verify-npm-provenance") {
@@ -2376,7 +2474,9 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "promote") {
-    await promoteDesktopLatest(directory, client, latestArguments(), transactionDeadlineArgument());
+    await runDesktopLatestPromotionWithOutput(argument("github-output"), () =>
+      promoteDesktopLatest(directory, client, latestArguments(), transactionDeadlineArgument()),
+    );
     return;
   }
   if (command === "reconcile") {

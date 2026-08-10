@@ -1193,6 +1193,60 @@ describe("desktop release workflow policy", () => {
     }
   });
 
+  it("persists terminal latest outcomes across the request and reconciliation jobs", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.desktop,
+        "promotion_outcome: ${{ steps.promote.outputs.promotion_outcome }}",
+        "promotion_outcome: ${{ github.run_id }}",
+      ),
+      replaceRequired(source.desktop, "        id: promote", "        id: request"),
+      replaceRequired(
+        source.desktop,
+        '--directory "$RUNNER_TEMP/desktop-release" \\\n            --github-output "$GITHUB_OUTPUT" \\\n            --transaction-deadline-ms',
+        '--directory "$RUNNER_TEMP/desktop-release" \\\n            --github-output "$RUNNER_TEMP/outcome" \\\n            --transaction-deadline-ms',
+      ),
+      replaceRequired(
+        source.desktop,
+        "PROMOTION_OUTCOME: ${{ needs.request-latest.outputs.promotion_outcome }}",
+        "PROMOTION_OUTCOME: unknown",
+      ),
+      replaceRequired(source.desktop, "            foreign|unapplied)", "            foreign)"),
+      replaceRequired(
+        source.desktop,
+        "            ''|applied|unknown)",
+        "            ''|applied|unknown|foreign)",
+      ),
+      replaceRequired(
+        source.desktop,
+        "  request-latest:\n    runs-on: ubuntu-latest",
+        "  request-latest:\n    continue-on-error: true\n    runs-on: ubuntu-latest",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Compare-and-swap repository latest\n        id: promote",
+        "      - name: Compare-and-swap repository latest\n        continue-on-error: true\n        id: promote",
+      ),
+      replaceRequired(
+        source.desktop,
+        "  reconcile-latest:\n    runs-on: ubuntu-latest",
+        "  reconcile-latest:\n    continue-on-error: true\n    runs-on: ubuntu-latest",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Reconcile repository latest read-only\n        env:",
+        "      - name: Reconcile repository latest read-only\n        continue-on-error: true\n        env:",
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue(
+        { ...source, desktop },
+        "terminal outcomes must remain sticky across read-only reconciliation",
+      );
+    }
+  });
+
   it("runs read-only reconciliation after request timeout without weakening later gates", () => {
     const source = sources();
     const reconciliationMutations = [

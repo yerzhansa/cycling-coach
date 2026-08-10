@@ -1097,6 +1097,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [sign-macos, publish-assets]
+    outputs:
+      promotion_outcome: ${{ steps.promote.outputs.promotion_outcome }}
     environment: desktop-macos-latest
     permissions:
       actions: read
@@ -1158,6 +1160,7 @@ jobs:
           printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
           test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
       - name: Compare-and-swap repository latest
+        id: promote
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TRANSACTION_DEADLINE_MS: ${{ steps.latest-deadline.outputs.deadline_ms }}
@@ -1167,6 +1170,7 @@ jobs:
         run: |
           pnpm desktop-release:transaction promote \
             --directory "$RUNNER_TEMP/desktop-release" \
+            --github-output "$GITHUB_OUTPUT" \
             --transaction-deadline-ms "$TRANSACTION_DEADLINE_MS" \
             --expected-latest-id "$EXPECTED_LATEST_ID" \
             --expected-latest-tag "$EXPECTED_LATEST_TAG" \
@@ -1236,7 +1240,22 @@ jobs:
       - name: Reconcile repository latest read-only
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm desktop-release:transaction reconcile --directory "$RUNNER_TEMP/desktop-release"
+          PROMOTION_OUTCOME: ${{ needs.request-latest.outputs.promotion_outcome }}
+        run: |
+          set -euo pipefail
+          case "$PROMOTION_OUTCOME" in
+            ''|applied|unknown)
+              ;;
+            foreign|unapplied)
+              echo "::error::Latest promotion reached a terminal $PROMOTION_OUTCOME outcome"
+              exit 1
+              ;;
+            *)
+              echo "::error::Latest promotion outcome is invalid"
+              exit 1
+              ;;
+          esac
+          pnpm desktop-release:transaction reconcile --directory "$RUNNER_TEMP/desktop-release"
 
   verify-production-update:
     runs-on: macos-15
