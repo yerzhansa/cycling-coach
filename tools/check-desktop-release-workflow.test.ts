@@ -1238,6 +1238,11 @@ describe("desktop release workflow policy", () => {
         "      - name: Reconcile repository latest read-only\n        env:",
         "      - name: Reconcile repository latest read-only\n        continue-on-error: true\n        env:",
       ),
+      replaceRequired(
+        source.desktop,
+        '            --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"\n\n  reconcile-latest:',
+        '            --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"\n          echo \'promotion_outcome=unknown\' >> "$GITHUB_OUTPUT"\n\n  reconcile-latest:',
+      ),
     ];
     for (const desktop of mutations) {
       expectIssue(

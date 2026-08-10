@@ -1197,6 +1197,16 @@ fi`;
   );
   const latestMutationRun =
     typeof latestMutationStep?.run === "string" ? latestMutationStep.run : "";
+  const expectedLatestMutationRun = [
+    "pnpm desktop-release:transaction promote \\",
+    '  --directory "$RUNNER_TEMP/desktop-release" \\',
+    '  --github-output "$GITHUB_OUTPUT" \\',
+    '  --transaction-deadline-ms "$TRANSACTION_DEADLINE_MS" \\',
+    '  --expected-latest-id "$EXPECTED_LATEST_ID" \\',
+    '  --expected-latest-tag "$EXPECTED_LATEST_TAG" \\',
+    '  --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"',
+    "",
+  ].join("\n");
   const requestLatestOutputs = mapping(requestLatest.outputs, "latest request outputs", issues);
   const reconcileLatestStep = namedStep(reconcileLatest, "Reconcile repository latest read-only");
   const reconcileLatestEnvironment = mapping(
@@ -1351,7 +1361,7 @@ fi`;
     continuesAfterError(latestMutationStep?.["continue-on-error"]) ||
     !exactKeys(requestLatestOutputs, ["promotion_outcome"]) ||
     requestLatestOutputs.promotion_outcome !== "${{ steps.promote.outputs.promotion_outcome }}" ||
-    !latestMutationRun.includes('--github-output "$GITHUB_OUTPUT"') ||
+    latestMutationRun !== expectedLatestMutationRun ||
     !exactKeys(reconcileLatestEnvironment, ["GITHUB_TOKEN", "PROMOTION_OUTCOME"]) ||
     reconcileLatestEnvironment.GITHUB_TOKEN !== "${{ github.token }}" ||
     reconcileLatestEnvironment.PROMOTION_OUTCOME !==
