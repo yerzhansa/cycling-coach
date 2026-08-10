@@ -17,10 +17,10 @@ export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "runtime-unavailable":
     "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
   "credential-status-unavailable":
-    "That key was saved, but its status could not be refreshed. Close and reopen Setup to check again.",
+    "That key was saved, but its status could not be refreshed. Check the setup area again.",
   "credential-reenter-required": "That saved key could not be used. Enter it again to continue.",
   "configuration-unavailable":
-    "Coach choices are unavailable right now. Close and reopen Setup to try again.",
+    "Coach choices are unavailable right now. Check the setup area again.",
   "model-selection-required": "Choose a model or enter a custom model name.",
   "endpoint-invalid": "Enter a valid HTTPS endpoint, or a loopback HTTP endpoint.",
   "model-runtime-unavailable":
@@ -48,7 +48,16 @@ export const CHATGPT_REFUSAL_COPY: Readonly<Record<ChatGptLoginRefusalReason, st
   "runtime-unavailable": "ChatGPT sign-in was saved, but the coach could not be configured.",
 };
 
-export const SETUP_HEADING = "Get your coach running";
+export const SETUP_HEADING = "Get your coach running before you can chat";
+export const SETUP_SETTINGS_HEADING = "Setup";
+
+export const SETUP_CHAT_SUBTITLE =
+  "Connect what your coach needs. Telegram is optional and never blocks Chat.";
+
+export const SETUP_STATUS_UNAVAILABLE_COPY =
+  "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.";
+
+export const RETRY_SETUP_STATUS_LABEL = "Retry setup status";
 
 export const SETUP_MENU_LABEL = "AI that powers your coach";
 
@@ -127,7 +136,7 @@ export const API_KEY_PANEL_HINT =
 export const TRAINING_ROW_TITLE = "Intervals.icu";
 
 export const TRAINING_ROW_SUBTITLES = {
-  connected: "Connected — where your rides come from",
+  connected: "Connected · where your rides come from",
   imported: "Ride files imported to this Mac",
   missing: "Required — where your rides come from",
 } as const;
@@ -154,14 +163,40 @@ export const INTERVALS_PANEL_HINT =
 
 export const IMPORT_FILES_LABEL = "or import ride files instead";
 
+export const TELEGRAM_ROW_TITLE = "Telegram";
+
+export const TELEGRAM_OPTIONAL_LABEL = "Optional";
+
+export const TELEGRAM_AVAILABILITY_COPY =
+  "Telegram works while Enduragent is running and this Mac is awake and online.";
+
+export const TELEGRAM_VERIFIED_PREFIX = "Bot verified";
+
+export const TELEGRAM_CREATE_TITLE = "Create a bot with BotFather";
+
+export const TELEGRAM_CREATE_COPY_AFTER_BOTFATHER =
+  "for a bot, copy its token, then return here. Enduragent reads and verifies the token directly from the clipboard; the token is never shown.";
+
+export const TELEGRAM_CREATE_COPY = `Ask @BotFather ${TELEGRAM_CREATE_COPY_AFTER_BOTFATHER}`;
+
+export const TELEGRAM_REPLACEMENT_COPY =
+  "The same bot keeps its pairing and on/off choice. A different bot resets allowed users, turns Telegram off, and must be paired again. An invalid token leaves the current bot unchanged.";
+
+export const TELEGRAM_REMOVE_TITLE = "Remove this Telegram bot from this Mac?";
+
+export const TELEGRAM_REMOVE_COPY =
+  "This turns Telegram off and removes the encrypted token and allowed-user access locally. The Telegram bot and chat still exist in Telegram.";
+
 export const RETRY_SAVED_KEYS_LABEL = "Retry saved keys";
+
+export const RETRY_INTAKE_SAVE_LABEL = "Retry saving answers";
 
 export const FOOTER_NOTE = "Everything stays on this Mac.";
 
 export const OUTSTANDING_NOTE = {
   coach: "Choose what powers your coach to finish.",
   training: "Connect intervals.icu to finish.",
-  intake: "Answer the injury question above to finish.",
+  intake: "Answer the injury question to finish.",
   clearance: "Confirm clinician clearance above to finish.",
 } as const;
 

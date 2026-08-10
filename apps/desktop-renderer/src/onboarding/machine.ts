@@ -322,6 +322,7 @@ export function selectedProviderReady(
     return chatGptReady(state);
   }
   if (selected.provider === CLAUDE_CLI_PROVIDER) return claudeCliReady(state);
+  if (selected.provider === "codex-agent") return true;
   if (selected.provider === "intervals-icu" || isKeylessProvider(selected.provider)) return false;
   const slot = DESKTOP_CREDENTIAL_SLOTS.find((candidate) => candidate === selected.provider);
   if (slot === undefined) return false;
@@ -401,6 +402,18 @@ export function withIntake(
     intake: needsClearance ? intake : { ...intake, clinicianCleared: null },
     fixedError: null,
   };
+}
+
+export function withPersistedIntake(
+  state: OnboardingState,
+  intake: SaveIntakeRpcParams | null,
+): OnboardingState {
+  if (intake === null) return state;
+  const parsed = SaveIntakeRpcParamsSchema.parse(intake);
+  return withIntake(state, {
+    injuryStatus: parsed.injury_status,
+    clinicianCleared: parsed.clinician_cleared,
+  });
 }
 
 export function withBusy(state: OnboardingState, busy: boolean): OnboardingState {

@@ -1,9 +1,4 @@
-import type {
-  KeyboardEventHandler,
-  ReactElement,
-  ReactNode,
-  Ref,
-} from "react";
+import type { KeyboardEventHandler, ReactElement, ReactNode, Ref } from "react";
 import styles from "./Page.module.css";
 
 export function Page(props: {
@@ -20,9 +15,7 @@ export function Page(props: {
   return (
     <section
       ref={props.ref}
-      className={
-        props.className === undefined ? styles.page : `${styles.page} ${props.className}`
-      }
+      className={props.className === undefined ? styles.page : `${styles.page} ${props.className}`}
       aria-label={props.title}
       aria-busy={props.busy === true ? "true" : undefined}
       onKeyDown={props.onKeyDown}
@@ -40,7 +33,7 @@ export function Page(props: {
         )}
         {props.action === undefined ? null : <div className={styles.action}>{props.action}</div>}
       </div>
-      <div className={styles.scroll}>
+      <div className={styles.scroll} data-page-scroll>
         <div className={styles.column}>{props.children}</div>
       </div>
     </section>

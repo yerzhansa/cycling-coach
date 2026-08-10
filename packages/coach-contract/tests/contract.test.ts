@@ -111,8 +111,8 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 16", () => {
-    expect(PROTOCOL_VERSION).toBe(16);
+  it("is 17", () => {
+    expect(PROTOCOL_VERSION).toBe(17);
   });
 });
 

@@ -1,11 +1,13 @@
 import type { ReactElement } from "react";
 import { useEnduragentStore } from "../../state/store.js";
+import { setupReady } from "../../state/onboarding-slice.js";
 import styles from "./QueuedMessages.module.css";
 
 export function QueuedMessages(): ReactElement | null {
   const queued = useEnduragentStore((state) => state.chat.queued);
   const workBlocked = useEnduragentStore((state) => state.chat.workBlocked);
   const actions = useEnduragentStore((state) => state.chatActions);
+  const canChat = useEnduragentStore(setupReady);
 
   if (queued.length === 0) return null;
 
@@ -28,7 +30,7 @@ export function QueuedMessages(): ReactElement | null {
               type="button"
               className={`${styles.remove} chat-queue__remove`}
               aria-label={`Remove queued message ${index + 1}`}
-              disabled={workBlocked || actions === null}
+              disabled={!canChat || workBlocked || actions === null}
               onClick={() => {
                 actions?.removeQueued(message.id);
               }}

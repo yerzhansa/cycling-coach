@@ -158,6 +158,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "exportTrainingFile",
   "importFiles",
   "sync",
+  "getSetupStatus",
   "saveIntake",
   "configureRuntime",
   "getRuntimeConfig",
@@ -516,6 +517,18 @@ export const SaveIntakeRpcParamsSchema = z
   });
 export type SaveIntakeRpcParams = z.infer<typeof SaveIntakeRpcParamsSchema>;
 
+export const GetSetupStatusRpcParamsSchema = EmptyRpcParamsSchema;
+export type GetSetupStatusRpcParams = z.infer<typeof GetSetupStatusRpcParamsSchema>;
+
+export const GetSetupStatusRpcResultSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    intake: SaveIntakeRpcParamsSchema.nullable(),
+    durableTrainingData: z.boolean(),
+  })
+  .strict();
+export type GetSetupStatusRpcResult = z.infer<typeof GetSetupStatusRpcResultSchema>;
+
 export const SaveIntakeRpcResultSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -840,6 +853,9 @@ export interface CoachOperations {
     request: SyncRpcParams,
     onEvent?: (event: OperationProgressEvent) => void,
   ): Promise<SyncRpcResult>;
+  getSetupStatus?(
+    request: GetSetupStatusRpcParams,
+  ): Promise<GetSetupStatusRpcResult>;
   saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult>;
   getTranscriptPage(request: GetTranscriptPageRpcParams): Promise<GetTranscriptPageRpcResult>;
   listArchivedConversations(
@@ -983,6 +999,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("sync"),
       params: SyncRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getSetupStatus"),
+      params: GetSetupStatusRpcParamsSchema,
     })
     .strict(),
   z
@@ -1343,6 +1367,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     requestSchema: SyncRpcParamsSchema,
     responseSchema: SyncRpcResultSchema,
     eventSchema: OperationProgressEventSchema,
+  },
+  getSetupStatus: {
+    wireName: "getSetupStatus",
+    requestSchema: GetSetupStatusRpcParamsSchema,
+    responseSchema: GetSetupStatusRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
   },
   saveIntake: {
     wireName: "saveIntake",

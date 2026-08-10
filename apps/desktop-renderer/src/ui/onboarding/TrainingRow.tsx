@@ -3,6 +3,15 @@ import type { OnboardingActions, OnboardingSurfaceState } from "../../onboarding
 import { credentialPresentation } from "../../onboarding/credential-presentation.js";
 import { errorSection } from "../../onboarding/lanes.js";
 import {
+  credentialChangesBlocked,
+  repairRequiredCredential,
+} from "../../settings/credential-controller.js";
+import {
+  nonTelegramSettingsMutationActive,
+  settingsMutationActive,
+} from "../../state/settings-slice.js";
+import { useEnduragentStore } from "../../state/store.js";
+import {
   IMPORT_FILES_LABEL,
   INTERVALS_PANEL_HINT,
   RETRY_SAVED_KEYS_LABEL,
@@ -17,6 +26,10 @@ import {
 import { CredentialField } from "./CredentialField.js";
 import { InfoTip } from "./InfoTip.js";
 import {
+  CredentialDeleteButton,
+  CredentialDeleteConfirmation,
+} from "../settings/CredentialsSection.js";
+import {
   BUTTON_OUTLINE_SM,
   BUTTON_QUIET_SM,
   BUTTON_SOLID_SM,
@@ -28,10 +41,23 @@ import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
 export function TrainingRow(props: {
   readonly surface: OnboardingSurfaceState;
   readonly actions: OnboardingActions | null;
+  readonly placement: "chat" | "settings";
 }): ReactElement {
   const { surface, actions } = props;
   const wizard = surface.wizard;
   const busy = wizard.busy;
+  const credentialSettings = useEnduragentStore((state) => state.settings.credentials);
+  const settingsMutating = useEnduragentStore((state) =>
+    props.placement === "settings"
+      ? settingsMutationActive(state.settings)
+      : nonTelegramSettingsMutationActive(state.settings),
+  );
+  const repairRequired = repairRequiredCredential(credentialSettings) !== null;
+  const controlsDisabled =
+    busy ||
+    surface.loading ||
+    surface.loadUnavailable ||
+    credentialChangesBlocked(credentialSettings, settingsMutating);
   const importing = surface.rideImport.status === "running";
   const connected = wizard.credentialStatus["intervals-icu"] === "configured";
   const ready = surface.readiness.trainingData;
@@ -57,6 +83,12 @@ export function TrainingRow(props: {
     setSavePhase("idle");
   }, [busy, ready, retryable, savePhase, surface.lastCommit, wizard.fixedError]);
 
+  useEffect(() => {
+    if (!repairRequired) return;
+    setOpen(false);
+    setSavePhase("idle");
+  }, [repairRequired]);
+
   const subtitle = connected
     ? TRAINING_ROW_SUBTITLES.connected
     : ready
@@ -64,7 +96,7 @@ export function TrainingRow(props: {
       : TRAINING_ROW_SUBTITLES.missing;
 
   const save = (): void => {
-    if (actions === null || busy || importing) return;
+    if (actions === null || controlsDisabled || importing) return;
     setSavePhase("requested");
     actions.saveTrainingKey();
   };
@@ -84,31 +116,39 @@ export function TrainingRow(props: {
           />
         }
         trailing={
-          <button
-            ref={triggerRef}
-            type="button"
-            data-setup-trigger="training"
-            className={connected ? BUTTON_QUIET_SM : BUTTON_OUTLINE_SM}
-            disabled={busy}
-            aria-expanded={open}
-            aria-label={
-              connected ? TRAINING_TRIGGER_LABELS.connected : TRAINING_TRIGGER_LABELS.disconnected
-            }
-            {...(open ? { "aria-controls": panelId } : {})}
-            onClick={() => {
-              setOpen((current) => !current);
-            }}
-          >
-            {connected ? "Change" : "Connect"}
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              ref={triggerRef}
+              type="button"
+              data-setup-trigger="training"
+              className={connected ? BUTTON_QUIET_SM : BUTTON_OUTLINE_SM}
+              disabled={controlsDisabled}
+              aria-expanded={open}
+              aria-label={
+                connected ? TRAINING_TRIGGER_LABELS.connected : TRAINING_TRIGGER_LABELS.disconnected
+              }
+              {...(open ? { "aria-controls": panelId } : {})}
+              onClick={() => {
+                setOpen((current) => !current);
+              }}
+            >
+              {connected ? "Change" : "Connect"}
+            </button>
+            {props.placement === "settings" ? (
+              <CredentialDeleteButton credential="intervals-icu" />
+            ) : null}
+          </div>
         }
       />
-      {open ? (
+      {props.placement === "settings" ? (
+        <CredentialDeleteConfirmation credential="intervals-icu" />
+      ) : null}
+      {open && !repairRequired ? (
         <SetupSubPanel name="training" id={panelId}>
           <CredentialField
             slot="intervals-icu"
             label={TRAINING_KEY_LABEL}
-            disabled={busy}
+            disabled={controlsDisabled}
             {...(ownsError ? { describedBy: "onboarding-error" } : {})}
             onEnter={save}
           />
@@ -116,7 +156,7 @@ export function TrainingRow(props: {
             <button
               type="button"
               className={BUTTON_SOLID_SM}
-              disabled={busy || importing}
+              disabled={controlsDisabled || importing}
               aria-label={TRAINING_SAVE_LABEL}
               onClick={save}
             >
@@ -125,7 +165,7 @@ export function TrainingRow(props: {
             <button
               type="button"
               className={BUTTON_QUIET_SM}
-              disabled={busy}
+              disabled={controlsDisabled}
               aria-label={TRAINING_CANCEL_LABEL}
               onClick={() => {
                 setOpen(false);
@@ -140,7 +180,7 @@ export function TrainingRow(props: {
             <button
               type="button"
               className={SETUP_LINK_BUTTON}
-              disabled={busy || importing}
+              disabled={controlsDisabled || importing}
               onClick={() => {
                 if (actions === null) return;
                 setSavePhase("requested");
@@ -153,7 +193,7 @@ export function TrainingRow(props: {
           <button
             type="button"
             className={SETUP_LINK_BUTTON}
-            disabled={busy || importing}
+            disabled={controlsDisabled || importing}
             onClick={() => {
               actions?.chooseImportFiles();
             }}

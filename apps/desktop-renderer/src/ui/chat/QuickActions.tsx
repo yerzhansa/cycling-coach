@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
 import { useEnduragentStore } from "../../state/store.js";
+import { setupReady } from "../../state/onboarding-slice.js";
 import styles from "./QuickActions.module.css";
 
 const COACHING_SHORTCUTS = Object.freeze([
@@ -31,6 +32,7 @@ export function QuickActions(): ReactElement {
   const resetPhase = useEnduragentStore((state) => state.chat.resetPhase);
   const resetCount = useEnduragentStore((state) => state.chat.resetCount);
   const actions = useEnduragentStore((state) => state.chatActions);
+  const canChat = useEnduragentStore(setupReady);
   const pending = useRef<PendingFocus | undefined>(undefined);
   const renderedResetCount = useRef(resetCount);
 
@@ -77,9 +79,9 @@ export function QuickActions(): ReactElement {
           type="button"
           className={`${styles.shortcut} coaching-shortcut`}
           aria-label={`${shortcut.label}, ${shortcut.command} command`}
-          disabled={disabled}
+          disabled={disabled || !canChat}
           onClick={(event) => {
-            if (disabled || actions === null) return;
+            if (disabled || !canChat || actions === null) return;
             const button = event.currentTarget;
             pending.current =
               event.detail === 0 && document.activeElement === button

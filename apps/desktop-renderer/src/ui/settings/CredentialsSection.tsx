@@ -1,11 +1,28 @@
-import { useEffect, useRef, type ReactElement } from "react";
+import { Fragment, useEffect, useRef, type ReactElement } from "react";
 import type { DesktopCredentialId } from "../../onboarding/bridge.js";
+import { DESKTOP_CREDENTIAL_SLOTS } from "../../onboarding/constants.js";
+import { onboardingCredentialMutationActive } from "../../onboarding/controller.js";
 import { claudeCliPresentation } from "../../onboarding/credential-presentation.js";
-import type { CredentialSettingsState } from "../../settings/credential-controller.js";
+import type {
+  CredentialSettingsEntry,
+  CredentialSettingsState,
+} from "../../settings/credential-controller.js";
+import {
+  credentialChangesBlocked,
+  repairRequiredCredential,
+} from "../../settings/credential-controller.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
+import { SetupRow, SetupSubPanel } from "../onboarding/SetupRow.js";
+import { BUTTON_QUIET_SM } from "../onboarding/SetupCard.js";
 import { credentialRuntimeLabel } from "./copy.js";
 import styles from "./SettingsView.module.css";
+
+export const SETUP_CREDENTIAL_EDIT_EVENT = "enduragent:edit-credential";
+
+export interface SetupCredentialEditDetail {
+  readonly credential: DesktopCredentialId;
+}
 
 function content(state: CredentialSettingsState) {
   if (
@@ -20,182 +37,273 @@ function content(state: CredentialSettingsState) {
   return null;
 }
 
-export function CredentialsSection(): ReactElement {
+export function desktopCredentialId(
+  provider: string | null | undefined,
+): DesktopCredentialId | null {
+  if (provider === "openai-codex") return provider;
+  return DESKTOP_CREDENTIAL_SLOTS.find((credential) => credential === provider) ?? null;
+}
+
+function entryFor(
+  state: CredentialSettingsState,
+  credential: DesktopCredentialId,
+): CredentialSettingsEntry | null {
+  return content(state)?.entries.find((entry) => entry.credential === credential) ?? null;
+}
+
+function openCredentialEditor(credential: DesktopCredentialId): void {
+  const selector =
+    credential === "intervals-icu"
+      ? '[data-setup-trigger="training"]'
+      : '[data-setup-trigger="ai"]';
+  const trigger = document.querySelector<HTMLButtonElement>(selector);
+  trigger?.focus();
+  if (credential === "intervals-icu") {
+    trigger?.click();
+    return;
+  }
+  trigger?.dispatchEvent(
+    new CustomEvent<SetupCredentialEditDetail>(SETUP_CREDENTIAL_EDIT_EVENT, {
+      bubbles: true,
+      detail: { credential },
+    }),
+  );
+}
+
+export function CredentialDeleteButton(props: {
+  readonly credential: DesktopCredentialId;
+}): ReactElement | null {
+  const state = useEnduragentStore((store) => store.settings.credentials);
+  const mutating = useEnduragentStore((store) => settingsMutationActive(store.settings));
+  const setupLoading = useEnduragentStore((store) => store.onboarding.loading);
+  const onboardingMutating = useEnduragentStore((store) =>
+    onboardingCredentialMutationActive(store.onboarding),
+  );
+  const port = useEnduragentStore((store) => store.settingsPorts?.credentials ?? null);
+  const button = useRef<HTMLButtonElement>(null);
+  const entry = entryFor(state, props.credential);
+  const target = "focus" in state ? state.focus : null;
+  const confirmation = content(state)?.confirmation ?? null;
+  const repairRequired = repairRequiredCredential(state) !== null;
+
+  useEffect(() => {
+    if (target?.target === "delete" && target.credential === props.credential) {
+      button.current?.focus();
+    }
+  }, [props.credential, target]);
+
+  if (entry === null) return null;
+  return (
+    <button
+      type="button"
+      ref={button}
+      data-setup-delete={entry.credential}
+      className={styles.danger}
+      disabled={
+        mutating || setupLoading || onboardingMutating || confirmation !== null || repairRequired
+      }
+      aria-label={`Delete the ${entry.provider} credential`}
+      onClick={() => port?.requestDelete(entry.credential)}
+    >
+      Delete
+    </button>
+  );
+}
+
+export function CredentialDeleteConfirmation(props: {
+  readonly credential: DesktopCredentialId;
+}): ReactElement | null {
+  const state = useEnduragentStore((store) => store.settings.credentials);
+  const mutating = useEnduragentStore((store) => settingsMutationActive(store.settings));
+  const onboardingMutating = useEnduragentStore((store) =>
+    onboardingCredentialMutationActive(store.onboarding),
+  );
+  const port = useEnduragentStore((store) => store.settingsPorts?.credentials ?? null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const confirm = useRef<HTMLButtonElement>(null);
+  const entry = entryFor(state, props.credential);
+  const target = "focus" in state ? state.focus : null;
+  const confirmation = content(state)?.confirmation ?? null;
+  const deleting = state.status === "deleting";
+
+  useEffect(() => {
+    if (confirmation !== props.credential) return;
+    if (target?.target === "confirmation-cancel") cancel.current?.focus();
+    else if (target?.target === "confirmation-delete") confirm.current?.focus();
+  }, [confirmation, props.credential, target]);
+
+  if (entry === null || confirmation !== props.credential) return null;
+  return (
+    <SetupSubPanel name={`delete-${entry.credential}`}>
+      <div
+        className={styles.confirmation}
+        role="group"
+        aria-labelledby={`credential-confirm-${entry.credential}`}
+      >
+        <p className={styles.confirmationTitle} id={`credential-confirm-${entry.credential}`}>
+          Delete the {entry.provider} credential?
+        </p>
+        <p className={styles.confirmationCopy}>
+          This removes it from this Mac only. Enduragent will stop using it if it is active. Your
+          provider account is unchanged.
+        </p>
+        <div className={styles.confirmationActions}>
+          <button
+            type="button"
+            ref={cancel}
+            className={styles.button}
+            disabled={mutating}
+            onClick={() => port?.cancelDelete()}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            ref={confirm}
+            className={styles.danger}
+            disabled={deleting ? false : mutating || onboardingMutating}
+            aria-disabled={deleting ? "true" : undefined}
+            aria-label={`Confirm deletion of the ${entry.provider} credential`}
+            onClick={() => {
+              if (!deleting) port?.confirmDelete();
+            }}
+          >
+            Delete credential
+          </button>
+        </div>
+      </div>
+    </SetupSubPanel>
+  );
+}
+
+export function AdditionalCredentialRows(props: {
+  readonly primaryAiCredential: DesktopCredentialId | null;
+  readonly primaryAiProvider: string | null;
+}): ReactElement | null {
+  const state = useEnduragentStore((store) => store.settings.credentials);
+  const mutating = useEnduragentStore((store) => settingsMutationActive(store.settings));
+  const setupLoading = useEnduragentStore((store) => store.onboarding.loading);
+  const onboardingMutating = useEnduragentStore((store) =>
+    onboardingCredentialMutationActive(store.onboarding),
+  );
+  const entries = (content(state)?.entries ?? []).filter(
+    (entry) =>
+      entry.credential !== "intervals-icu" && entry.credential !== props.primaryAiCredential,
+  );
+  const changesBlocked = credentialChangesBlocked(state, mutating);
+  const providerStatuses = (content(state)?.providerStatuses ?? []).filter(
+    (entry) => entry.provider !== props.primaryAiProvider,
+  );
+
+  if (entries.length === 0 && providerStatuses.length === 0) return null;
+  return (
+    <>
+      {entries.map((entry) => (
+        <Fragment key={entry.credential}>
+          <SetupRow
+            id={`saved-${entry.credential}`}
+            status="none"
+            title={entry.provider}
+            subtitle={`${entry.kind} · ${credentialRuntimeLabel(entry.runtimeState)}`}
+            trailing={
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  className={BUTTON_QUIET_SM}
+                  disabled={setupLoading || onboardingMutating || changesBlocked}
+                  aria-label={`Change the ${entry.provider} credential`}
+                  onClick={() => openCredentialEditor(entry.credential)}
+                >
+                  Change
+                </button>
+                <CredentialDeleteButton credential={entry.credential} />
+              </div>
+            }
+          />
+          <CredentialDeleteConfirmation credential={entry.credential} />
+        </Fragment>
+      ))}
+      {providerStatuses.map((entry) => {
+        const presentation = claudeCliPresentation(entry.state);
+        return (
+          <SetupRow
+            key={entry.provider}
+            id={`provider-${entry.provider}`}
+            dataProvider={entry.provider}
+            status="none"
+            title={entry.label}
+            subtitle={
+              <>
+                {entry.kind} · {presentation.badge}
+                {entry.identity === null ? null : (
+                  <>
+                    {" "}
+                    · <span data-provider-identity="">{entry.identity}</span>
+                  </>
+                )}
+              </>
+            }
+          />
+        );
+      })}
+    </>
+  );
+}
+
+export function CredentialSettingsFeedback(): ReactElement | null {
   const state = useEnduragentStore((store) => store.settings.credentials);
   const mutating = useEnduragentStore((store) => settingsMutationActive(store.settings));
   const port = useEnduragentStore((store) => store.settingsPorts?.credentials ?? null);
-  const deleteButtons = useRef(new Map<DesktopCredentialId, HTMLButtonElement>());
-  const confirmationCancel = useRef<HTMLButtonElement>(null);
-  const confirmationDelete = useRef<HTMLButtonElement>(null);
-  const openSetup = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const target = "focus" in state ? state.focus : null;
-    if (target === null || target === undefined) return;
-    if (target.target === "confirmation-cancel") confirmationCancel.current?.focus();
-    else if (target.target === "confirmation-delete") confirmationDelete.current?.focus();
-    else if (target.target === "setup") openSetup.current?.focus();
-    else if (target.target === "delete") deleteButtons.current.get(target.credential)?.focus();
-  }, [state]);
-
-  const entries = content(state)?.entries ?? [];
-  const providerStatuses = content(state)?.providerStatuses ?? [];
-  const confirmation = content(state)?.confirmation ?? null;
-  const deleting = state.status === "deleting";
+  const feedback = useRef<HTMLDivElement>(null);
+  const target = "focus" in state ? state.focus : null;
   const loading = state.status === "closed" || state.status === "loading";
   const loadError = state.status === "error" && state.kind === "load";
-  const recoveryAvailable = "recoveryAvailable" in state && state.recoveryAvailable;
-  const announcement = loading
-    ? "Loading saved credentials…"
-    : "announcement" in state
+  const repairRequired = repairRequiredCredential(state);
+  const announcement =
+    "announcement" in state && state.announcement.length > 0
       ? state.announcement
-      : "";
+      : loading
+        ? "Loading saved credentials…"
+        : "";
 
+  useEffect(() => {
+    if (target?.target === "feedback") {
+      feedback.current?.focus();
+      return;
+    }
+    if (target?.target !== "setup") return;
+    const selector =
+      target.credential === "intervals-icu"
+        ? '[data-setup-trigger="training"]'
+        : '[data-setup-trigger="ai"]';
+    const action = document.querySelector<HTMLButtonElement>(selector);
+    if (action !== null && !action.disabled) action.focus();
+    else document.querySelector<HTMLElement>("#setup-panel-title")?.focus();
+  }, [target]);
+
+  if (announcement.length === 0 && !loadError && repairRequired === null) return null;
   return (
-    <>
-      <h2 className={styles.heading}>Credentials</h2>
-      <section className={styles.group} aria-label="Credentials">
-        <p className={styles.note}>
-          Review credentials saved on this Mac. Credential values are never shown.
+    <div
+      ref={feedback}
+      tabIndex={-1}
+      className="w-full bg-sunk px-[15px] py-3 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ink"
+      data-credential-feedback=""
+    >
+      {announcement.length === 0 ? null : (
+        <p className="m-0 text-xs text-ink-2" role="status" aria-live="polite" aria-atomic="true">
+          {announcement}
         </p>
-        {entries.length === 0 ? (
-          <p className={styles.empty}>
-            {loading || loadError ? "" : "No local credentials are stored."}
-          </p>
-        ) : (
-          <ul className={styles.list}>
-            {entries.map((entry) => (
-              <li key={entry.credential} className={styles.item} data-credential={entry.credential}>
-                <div className={styles.itemIdentity}>
-                  <div className={styles.rowTitle}>{entry.provider}</div>
-                  <div className={styles.itemKind}>{entry.kind}</div>
-                </div>
-                <span className={styles.runtime} data-state={entry.runtimeState}>
-                  {credentialRuntimeLabel(entry.runtimeState)}
-                </span>
-                {confirmation === entry.credential ? (
-                  <div
-                    className={styles.confirmation}
-                    role="group"
-                    aria-labelledby={`credential-confirm-${entry.credential}`}
-                  >
-                    <p
-                      className={styles.confirmationTitle}
-                      id={`credential-confirm-${entry.credential}`}
-                    >
-                      Delete the {entry.provider} credential?
-                    </p>
-                    <p className={styles.confirmationCopy}>
-                      This removes it from this Mac only. Enduragent will stop using it if it is
-                      active. Your provider account is unchanged.
-                    </p>
-                    <div className={styles.confirmationActions}>
-                      <button
-                        type="button"
-                        ref={confirmationCancel}
-                        className={styles.button}
-                        disabled={mutating}
-                        onClick={() => {
-                          port?.cancelDelete();
-                        }}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        ref={confirmationDelete}
-                        className={styles.danger}
-                        disabled={deleting ? false : mutating}
-                        aria-disabled={deleting ? "true" : undefined}
-                        aria-label={`Confirm deletion of the ${entry.provider} credential`}
-                        onClick={() => {
-                          if (deleting) return;
-                          port?.confirmDelete();
-                        }}
-                      >
-                        Delete credential
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    ref={(element) => {
-                      if (element === null) deleteButtons.current.delete(entry.credential);
-                      else deleteButtons.current.set(entry.credential, element);
-                    }}
-                    className={styles.button}
-                    disabled={mutating}
-                    aria-label={`Delete the ${entry.provider} credential`}
-                    onClick={() => {
-                      port?.requestDelete(entry.credential);
-                    }}
-                  >
-                    Delete
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {providerStatuses.length === 0 ? null : (
-          <ul className={styles.list} aria-label="Keyless providers">
-            {providerStatuses.map((entry) => {
-              const presentation = claudeCliPresentation(entry.state);
-              return (
-                <li key={entry.provider} className={styles.item} data-provider={entry.provider}>
-                  <div className={styles.itemIdentity}>
-                    <div className={styles.rowTitle}>{entry.label}</div>
-                    <div className={styles.itemKind}>{entry.kind}</div>
-                    {entry.identity === null ? null : (
-                      <div className={styles.itemKind} data-provider-identity="">
-                        {entry.identity}
-                      </div>
-                    )}
-                  </div>
-                  <span className={styles.runtime} data-state={presentation.runtimeState}>
-                    {presentation.badge}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        {announcement.length === 0 ? null : (
-          <p className={styles.feedback} role="status" aria-live="polite" aria-atomic="true">
-            {announcement}
-          </p>
-        )}
-        {loadError || recoveryAvailable ? (
-          <div className={styles.actions}>
-            {loadError ? (
-              <button
-                type="button"
-                className={styles.button}
-                disabled={mutating}
-                onClick={() => {
-                  port?.retry();
-                }}
-              >
-                Reconnect &amp; reload
-              </button>
-            ) : null}
-            {recoveryAvailable ? (
-              <button
-                type="button"
-                ref={openSetup}
-                className={styles.button}
-                disabled={mutating}
-                onClick={() => {
-                  port?.openSetup();
-                }}
-              >
-                Open setup
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
-    </>
+      )}
+      {loadError || repairRequired !== null ? (
+        <button
+          type="button"
+          className={`${styles.button} mt-2`}
+          disabled={mutating || loading}
+          onClick={() => port?.retry()}
+        >
+          {repairRequired === null ? "Reconnect & reload" : "Reload credential status"}
+        </button>
+      ) : null}
+    </div>
   );
 }

@@ -121,8 +121,8 @@ describe("setup lanes", () => {
     },
     { lane: "openai-codex", ready: false, subtitle: "Powers your coach · sign in to finish" },
     { lane: "api-key", ready: false, subtitle: "Powers your coach · add a key to finish" },
-    { lane: "openai-codex", ready: true, subtitle: "Powers your coach" },
-    { lane: "api-key", ready: true, subtitle: "Powers your coach" },
+    { lane: "openai-codex", ready: true, subtitle: "Connected · powers your coach" },
+    { lane: "api-key", ready: true, subtitle: "Connected · powers your coach" },
   ] as const)("describes the $lane row when ready is $ready", ({ lane, ready, subtitle }) => {
     const titles: Readonly<Record<SetupLane, string>> = {
       "claude-cli": "Claude Code",

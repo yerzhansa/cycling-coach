@@ -222,7 +222,7 @@ export function CoachSection(): ReactElement {
                 port?.openSetup();
               }}
             >
-              Open setup
+              Review setup
             </button>
           ) : null}
           <button

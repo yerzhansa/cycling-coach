@@ -12,7 +12,7 @@ import {
   type ChatSurfaceState,
 } from "../src/state/chat-slice.js";
 import { resetChatStream } from "../src/state/chat-stream.js";
-import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { SLASH_COMMANDS } from "../src/chat/commands.js";
 import { ChatView } from "../src/ui/chat/ChatView.js";
@@ -61,7 +61,7 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       chatActions: actions,
-      onboarding: CLOSED_ONBOARDING,
+      onboarding: READY_ONBOARDING,
     });
   });
 
@@ -154,6 +154,20 @@ describe("chat surface", () => {
   });
 
   describe("composer", () => {
+    it("focuses the enabled composer after required setup completes in Chat", () => {
+      useEnduragentStore.setState({ onboarding: CLOSED_ONBOARDING });
+      render(<Harness />);
+
+      expect(composer()).toBeDisabled();
+
+      act(() => {
+        useEnduragentStore.setState({ onboarding: READY_ONBOARDING });
+      });
+
+      expect(composer()).toBeEnabled();
+      expect(composer()).toHaveFocus();
+    });
+
     it("never submits while an IME composition is in flight", async () => {
       render(<Harness />);
       const textarea = composer();

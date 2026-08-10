@@ -84,6 +84,7 @@ export interface ChatScrollAnchor {
   attach(element: HTMLElement | null): void;
   capture(): void;
   apply(input: ChatScrollApply): void;
+  setStartPinned(pinned: boolean): void;
   reanchor(): void;
 }
 
@@ -99,12 +100,14 @@ export function createChatScrollAnchor(): ChatScrollAnchor {
   let host: HTMLElement | null = null;
   let captured: ScrollMetrics | null = null;
   let initialPending = false;
+  let startPinned = false;
 
   return {
     attach(element) {
       host = element;
       captured = null;
       initialPending = false;
+      startPinned = false;
     },
     capture() {
       if (host === null) {
@@ -124,7 +127,15 @@ export function createChatScrollAnchor(): ChatScrollAnchor {
     apply(input) {
       const metrics = captured;
       captured = null;
-      if (host === null || metrics === null) return;
+      if (host === null) return;
+      if (startPinned) {
+        if (input.hydrationChanged && input.hydrationChange === "initial") {
+          initialPending = true;
+        }
+        host.scrollTop = 0;
+        return;
+      }
+      if (metrics === null) return;
       if (input.hydrationChanged && input.hydrationChange === "initial") {
         host.scrollTop = host.scrollHeight;
         initialPending = host.clientHeight === 0 && host.scrollHeight === 0;
@@ -143,7 +154,22 @@ export function createChatScrollAnchor(): ChatScrollAnchor {
         CHAT_FOLLOW_LATEST_THRESHOLD;
       if (followsLatest) host.scrollTop = host.scrollHeight;
     },
+    setStartPinned(pinned) {
+      if (startPinned === pinned) {
+        if (pinned && host !== null) host.scrollTop = 0;
+        return;
+      }
+      const wasPinned = startPinned;
+      startPinned = pinned;
+      captured = null;
+      if (wasPinned && !pinned) initialPending = true;
+      if (pinned && host !== null) host.scrollTop = 0;
+    },
     reanchor() {
+      if (host !== null && startPinned) {
+        host.scrollTop = 0;
+        return;
+      }
       if (host === null || !initialPending || host.scrollHeight === 0) return;
       host.scrollTop = host.scrollHeight;
       initialPending = false;

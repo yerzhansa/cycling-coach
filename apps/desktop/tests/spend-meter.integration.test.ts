@@ -21,6 +21,19 @@ const token = "s".repeat(43);
 const fixtures: RunningDesktopFixture[] = [];
 const scratch: string[] = [];
 
+const readySetupStatus = {
+  schemaVersion: 1,
+  intake: {
+    swim_skill_floor: null,
+    continuous_distance_capable: null,
+    open_water_comfort: null,
+    prior_bsi: false,
+    clinician_cleared: null,
+    injury_status: "none",
+  },
+  durableTrainingData: true,
+} as const;
+
 interface ScriptRequest {
   readonly jsonrpc: "2.0";
   readonly method: string;
@@ -129,6 +142,9 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
           wellness: {},
         });
       }
+      if (request.method === "getSetupStatus") {
+        return response(readySetupStatus);
+      }
       if (request.method === "getUnitsPreference") {
         return response({ value: "metric", source: "default" });
       }
@@ -171,6 +187,35 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
           schemaVersion: 3,
           status: "applied",
           applied: { llm: true, intervals: true, session: false },
+        });
+      }
+      if (request.method === "getRuntimeConfig") {
+        return response({
+          schemaVersion: 3,
+          llm: {
+            provider: "codex-agent",
+            model: "synthetic-codex",
+            credential_configured: true,
+          },
+          intervals: {
+            athlete_id: "0",
+            credential_configured: false,
+            managedByEnvironment: { athleteId: false },
+          },
+          session: {
+            historyTokenBudgetRatio: 0.3,
+            idleMinutes: 0,
+            dailyResetHour: 4,
+            resetArchiveRetentionDays: 0,
+            timezone: "UTC",
+            managedByEnvironment: {
+              historyTokenBudgetRatio: false,
+              idleMinutes: false,
+              dailyResetHour: false,
+              resetArchiveRetentionDays: false,
+              timezone: false,
+            },
+          },
         });
       }
       throw new TypeError(`unexpected fixture method ${request.method}`);
@@ -234,34 +279,18 @@ async function launch(initial: "reached" | "complete" = "reached") {
     const onboardingDeadline = Date.now() + 10000;
     const onboardingState = () =>
       document.querySelector("[data-onboarding]")?.getAttribute("data-onboarding") ?? null;
-    while (
-      (onboardingState() === null || onboardingState() === "pending") &&
-      Date.now() < onboardingDeadline
-    ) {
+    while (onboardingState() !== "settled" && Date.now() < onboardingDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    if (onboardingState() === null || onboardingState() === "pending") {
+    if (onboardingState() !== "settled") {
       throw new Error("onboarding startup decision did not settle");
     }
-    if (onboardingState() === "open") {
-      const dismissDeadline = Date.now() + 10000;
-      while (
-        document.querySelector(".onboarding-dismiss") === null &&
-        onboardingState() === "open" &&
-        Date.now() < dismissDeadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      if (onboardingState() === "open") {
-        const dismiss = document.querySelector(".onboarding-dismiss");
-        if (!(dismiss instanceof HTMLButtonElement)) throw new Error("setup dismiss did not mount");
-        dismiss.click();
-      }
-      const closedDeadline = Date.now() + 10000;
-      while (onboardingState() !== "closed" && Date.now() < closedDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      if (onboardingState() !== "closed") throw new Error("setup dismiss did not close onboarding");
+    if (document.querySelector("[data-setup-host]") !== null) {
+      throw new Error("ready fixture unexpectedly requires setup");
+    }
+    const composer = document.querySelector("textarea#message");
+    if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) {
+      throw new Error("ready fixture did not enable chat");
     }
   `);
   return { fixture, calls, failSpend: scripted.failSpend };

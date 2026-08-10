@@ -62,6 +62,7 @@ export interface ChatView {
 
 export interface ChatController {
   start(): Promise<void>;
+  resume(): Promise<void>;
   submit(message: string): Promise<void>;
   removeQueued(id: string): void;
   retryInterrupted(): Promise<void>;
@@ -93,6 +94,7 @@ export function createChatController(input: {
     readonly cursor: string | null;
     readonly limit: number;
   }) => Promise<TranscriptPage>;
+  readonly canChat?: () => boolean;
 }): ChatController {
   let state = EMPTY_CHAT_STATE;
   let hydration = emptyTranscriptHydration();
@@ -106,11 +108,13 @@ export function createChatController(input: {
   let probeTask: Promise<void> | undefined;
   let resetTask: Promise<void> | undefined;
   let epoch = 0;
+  const canChat = input.canChat ?? (() => true);
 
   const nextId = (prefix: "request" | "message" | "queued"): string => `${prefix}-${++sequence}`;
   const resetBlocksWork = (): boolean =>
     state.session.resetPhase === "confirming" || state.session.resetPhase === "resetting";
   const canOpenNewConversation = (): boolean =>
+    canChat() &&
     !disposed &&
     (hasClearableConversation(state) || hydration.turns.length > 0) &&
     state.session.resetPhase === "idle" &&
@@ -379,7 +383,9 @@ export function createChatController(input: {
   };
 
   const drain = (): Promise<void> => {
-    if (disposed || resetBlocksWork() || state.status === "streaming") return Promise.resolve();
+    if (!canChat() || disposed || resetBlocksWork() || state.status === "streaming") {
+      return Promise.resolve();
+    }
     const group = nextDrainGroup(state);
     if (group === null) return Promise.resolve();
     reduce({ type: "dequeue-group" });
@@ -403,8 +409,11 @@ export function createChatController(input: {
       probeTask = task;
       return task;
     },
+    resume() {
+      return drain();
+    },
     submit(message) {
-      if (!/\S/u.test(message) || disposed || resetBlocksWork()) {
+      if (!canChat() || !/\S/u.test(message) || disposed || resetBlocksWork()) {
         return activeTask ?? Promise.resolve();
       }
       if (state.status === "streaming") {
@@ -423,6 +432,7 @@ export function createChatController(input: {
     },
     retryInterrupted() {
       if (
+        !canChat() ||
         disposed ||
         state.status !== "interrupted" ||
         state.activeTurn === null ||
@@ -438,6 +448,7 @@ export function createChatController(input: {
       const pending = currentTask
         .then(() => {
           if (
+            !canChat() ||
             disposed ||
             state.status !== "interrupted" ||
             state.activeTurn?.requestKey !== requestKey
@@ -463,6 +474,7 @@ export function createChatController(input: {
       return hydrator.retry();
     },
     openNewConversation() {
+      if (!canChat()) return false;
       if (!canOpenNewConversation()) return false;
       epoch += 1;
       state = reduceChatState(state, {
@@ -473,12 +485,14 @@ export function createChatController(input: {
       return true;
     },
     cancelNewConversation() {
-      if (disposed || state.session.resetPhase !== "confirming") return;
+      if (!canChat() || disposed || state.session.resetPhase !== "confirming") return;
       reduce({ type: "cancel-new-conversation" });
     },
     confirmNewConversation() {
       if (resetTask !== undefined) return resetTask;
-      if (disposed || state.session.resetPhase !== "confirming") return Promise.resolve();
+      if (!canChat() || disposed || state.session.resetPhase !== "confirming") {
+        return Promise.resolve();
+      }
       updateReset(() => hydrator.beginReset(), { type: "begin-reset" });
       const resetEpoch = ++epoch;
       const task = (async () => {

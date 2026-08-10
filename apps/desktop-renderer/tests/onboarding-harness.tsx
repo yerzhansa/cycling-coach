@@ -12,11 +12,17 @@ import type {
   OnboardingCompletion,
 } from "../src/onboarding/machine.js";
 import type { RideImportController } from "../src/ride-import.js";
+import type {
+  TelegramControlStatus,
+  TelegramSettingsFeedback,
+  TelegramSettingsState,
+} from "../src/settings/telegram-controller.js";
 import { createOnboardingViewAdapter } from "../src/state/adapters/onboarding.js";
 import { credentialDrafts } from "../src/state/credential-drafts.js";
 import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { EMPTY_SETTINGS_SURFACE, type TelegramSettingsPort } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
-import { OnboardingWizard } from "../src/ui/onboarding/OnboardingWizard.js";
+import { OnboardingWizard, SetupPanel } from "../src/ui/onboarding/OnboardingWizard.js";
 
 export type UserEvent = ReturnType<typeof userEvent.setup>;
 
@@ -31,7 +37,49 @@ export function resetOnboardingStore(): void {
   useEnduragentStore.setState({
     onboarding: CLOSED_ONBOARDING,
     onboardingActions: null,
+    settings: EMPTY_SETTINGS_SURFACE,
+    settingsPorts: null,
   });
+}
+
+export function testTelegramPort() {
+  return {
+    retry: vi.fn(),
+    pasteToken: vi.fn(),
+    enable: vi.fn(),
+    disable: vi.fn(),
+    remove: vi.fn(),
+    reconcile: vi.fn(),
+    removeWebhook: vi.fn(),
+    beginPairing: vi.fn(),
+    cancelPairing: vi.fn(),
+    acknowledgeGapWarning: vi.fn(),
+    addSender: vi.fn(),
+    removeSender: vi.fn(),
+  } satisfies TelegramSettingsPort;
+}
+
+export function readyTelegramSettings(
+  telegram: TelegramControlStatus,
+  feedback: TelegramSettingsFeedback | null = null,
+): Extract<TelegramSettingsState, { readonly status: "ready" }> {
+  return {
+    status: "ready",
+    telegram,
+    allowedSenders: { senders: [] },
+    senderLoadFailed: false,
+    announcement: feedback?.message ?? "",
+    healthAnnouncement: "",
+    feedback,
+  };
+}
+
+export function setTelegramSettings(state: TelegramSettingsState, port = testTelegramPort()) {
+  useEnduragentStore.setState({
+    settings: { ...useEnduragentStore.getState().settings, telegram: state },
+    settingsPorts: { telegram: port } as never,
+  });
+  return port;
 }
 
 export function mountWizard(input: {
@@ -39,8 +87,10 @@ export function mountWizard(input: {
   readonly rideImports?: RideImportController;
   readonly onRideImportPresentationChange?: (presenting: boolean) => void;
   readonly onComplete?: (completion: OnboardingCompletion) => void;
+  readonly credentialMutationsBlocked?: () => boolean;
   readonly createOperationId?: () => string;
   readonly afterPaint?: (callback: () => void) => () => void;
+  readonly placement?: "chat" | "settings";
 }): MountedWizard {
   const focusOpener = vi.fn<() => void>();
   const adapter = createOnboardingViewAdapter({
@@ -56,13 +106,18 @@ export function mountWizard(input: {
       : { onRideImportPresentationChange: input.onRideImportPresentationChange }),
     focusOpener,
     onComplete: input.onComplete ?? vi.fn(),
+    ...(input.credentialMutationsBlocked === undefined
+      ? {}
+      : { credentialMutationsBlocked: input.credentialMutationsBlocked }),
     ...(input.createOperationId === undefined
       ? {}
       : { createOperationId: input.createOperationId }),
     ...(input.afterPaint === undefined ? {} : { afterPaint: input.afterPaint }),
   });
   useEnduragentStore.getState().bindOnboardingActions(controller);
-  const rendered = render(<OnboardingWizard />);
+  const rendered = render(
+    input.placement === "settings" ? <SetupPanel placement="settings" /> : <OnboardingWizard />,
+  );
 
   return {
     controller,

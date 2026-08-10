@@ -109,7 +109,7 @@ export function TrainingAccountSection(): ReactElement {
             ) : null}
             {credentialMissing ? (
               <p className={styles.help} id="athlete-id-credential">
-                No training account credential is connected. Open setup to connect one.
+                No training account credential is connected. Use the setup area above to connect one.
               </p>
             ) : null}
             <p className={styles.error} id="athlete-id-validation" aria-live="polite">
@@ -144,7 +144,7 @@ export function TrainingAccountSection(): ReactElement {
                 port?.openSetup();
               }}
             >
-              Open setup
+              Review setup
             </button>
           ) : null}
           <button

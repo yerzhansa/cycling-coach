@@ -2,7 +2,10 @@ import type { SpendSummary, UnitsPreference } from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
 import type { DesktopCredentialId } from "../onboarding/bridge.js";
 import type { AthleteSettingsState } from "../settings/athlete-controller.js";
-import type { CredentialSettingsState } from "../settings/credential-controller.js";
+import {
+  repairRequiredCredential,
+  type CredentialSettingsState,
+} from "../settings/credential-controller.js";
 import type { ProviderModelSettingsState } from "../settings/provider-model-controller.js";
 import type { SessionSettingField, SessionSettingsState } from "../settings/session-controller.js";
 import type { TelegramSettingsState } from "../settings/telegram-controller.js";
@@ -187,6 +190,12 @@ export function settingsMutationActive(state: SettingsSurfaceState): boolean {
   return state.savingOwners.length > 0;
 }
 
+export function nonTelegramSettingsMutationActive(
+  state: Pick<SettingsSurfaceState, "savingOwners">,
+): boolean {
+  return state.savingOwners.some((owner) => owner !== "telegram");
+}
+
 export const createSettingsSlice: StateCreator<EnduragentState, [], [], SettingsSlice> = (
   set,
   get,
@@ -217,14 +226,15 @@ export const createSettingsSlice: StateCreator<EnduragentState, [], [], Settings
   },
   closeSettingsPanes() {
     get().settingsPorts?.panes.close();
+    const repairCredential = repairRequiredCredential(get().settings.credentials);
     set({
       settings: {
         ...get().settings,
         coach: CLOSED_PANE,
-        credentials: CLOSED_PANE,
+        credentials:
+          repairCredential === null ? CLOSED_PANE : { status: "closed", repairCredential },
         athlete: CLOSED_PANE,
         conversation: CLOSED_PANE,
-        telegram: CLOSED_PANE,
       },
     });
   },

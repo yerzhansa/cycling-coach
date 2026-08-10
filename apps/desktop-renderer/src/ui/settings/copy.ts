@@ -15,7 +15,7 @@ export const COACH_VALIDATION_COPY: Readonly<Record<ProviderModelValidationError
 export const COACH_SAVE_ERROR_COPY = {
   "invalid-input": "That provider or model wasn’t accepted. Check the model name and try again.",
   "credential-required":
-    "This provider needs a saved credential before it can coach you. Open setup to add one.",
+    "This provider needs a saved credential before it can coach you. Use the setup area above to add one.",
   "runtime-unavailable": "Coach settings couldn’t become active. Try saving again.",
   "request-failed": "Coach settings couldn’t be saved right now. Try again.",
 } as const;

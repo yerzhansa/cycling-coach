@@ -56,7 +56,9 @@ function isNonCredentialProvider(provider: string): provider is NonCredentialPro
 }
 
 export type CredentialSettingsFocus =
-  | { readonly target: "confirmation-cancel" | "confirmation-delete" | "setup" }
+  | { readonly target: "confirmation-cancel" | "confirmation-delete" }
+  | { readonly target: "feedback" }
+  | { readonly target: "setup"; readonly credential: DesktopCredentialId }
   | { readonly target: "delete"; readonly credential: DesktopCredentialId }
   | null;
 
@@ -65,13 +67,23 @@ interface CredentialSettingsContent {
   readonly providerStatuses: readonly ProviderStatusEntry[];
   readonly confirmation: DesktopCredentialId | null;
   readonly announcement: string;
+  readonly repairCredential: DesktopCredentialId | null;
   readonly recoveryAvailable: boolean;
   readonly focus: CredentialSettingsFocus;
 }
 
 export type CredentialSettingsState =
-  | { readonly status: "closed" }
-  | { readonly status: "loading" }
+  | {
+      readonly status: "closed";
+      readonly repairCredential?: DesktopCredentialId | null;
+    }
+  | {
+      readonly status: "loading";
+      readonly announcement: string;
+      readonly repairCredential: DesktopCredentialId | null;
+      readonly recoveryAvailable: boolean;
+      readonly focus: CredentialSettingsFocus;
+    }
   | ({
       readonly status: "ready" | "confirming" | "deleting" | "deleted";
     } & CredentialSettingsContent)
@@ -84,9 +96,33 @@ export type CredentialSettingsState =
       readonly status: "error";
       readonly kind: "load";
       readonly announcement: string;
+      readonly repairCredential: DesktopCredentialId | null;
       readonly recoveryAvailable: boolean;
       readonly focus: CredentialSettingsFocus;
     };
+
+export function repairRequiredCredential(
+  state: CredentialSettingsState,
+): DesktopCredentialId | null {
+  return state.status === "closed" ? (state.repairCredential ?? null) : state.repairCredential;
+}
+
+export function credentialChangesBlocked(
+  state: CredentialSettingsState,
+  settingsMutationActive: boolean,
+): boolean {
+  if (settingsMutationActive || repairRequiredCredential(state) !== null) return true;
+  if (
+    state.status === "ready" ||
+    state.status === "confirming" ||
+    state.status === "deleting" ||
+    state.status === "deleted" ||
+    (state.status === "error" && state.kind === "delete")
+  ) {
+    return state.confirmation !== null;
+  }
+  return false;
+}
 
 export interface CredentialSettingsView {
   bind(handlers: {
@@ -134,6 +170,9 @@ const CREDENTIAL_ORDER: readonly DesktopCredentialId[] = [
   "openrouter",
   "intervals-icu",
 ];
+
+const UNCERTAIN_DELETE_ANNOUNCEMENT =
+  "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.";
 
 function kind(credential: DesktopCredentialId): CredentialKind {
   if (credential === "openai-codex") return "ChatGPT profile";
@@ -246,6 +285,9 @@ export function createCredentialSettingsController(input: {
     readonly credential: DesktopCredentialId;
   }) => Promise<CredentialDeleteResult>;
   readonly openSetup: () => void;
+  readonly onDeleted?: () => Promise<void> | void;
+  readonly onReconciled?: () => Promise<void> | void;
+  readonly credentialMutationsBlocked?: () => boolean;
   readonly beginMutation: () => (() => void) | null;
   readonly view: CredentialSettingsView;
 }): CredentialSettingsController {
@@ -304,36 +346,55 @@ export function createCredentialSettingsController(input: {
 
   const startLoad = (): Promise<void> => {
     if (disposed || operation !== undefined) return operation ?? Promise.resolve();
+    const repairCredential = repairRequiredCredential(currentState);
+    const repairAnnouncement =
+      repairCredential === null
+        ? ""
+        : "announcement" in currentState && currentState.announcement.length > 0
+          ? currentState.announcement
+          : UNCERTAIN_DELETE_ANNOUNCEMENT;
     const operationGeneration = ++generation;
-    render({ status: "loading" });
-    const pending = loadEntries()
-      .then(
-        (loaded) => {
-          if (disposed || generation !== operationGeneration) return;
-          render({
-            status: "ready",
-            entries: loaded.entries,
-            providerStatuses: loaded.providerStatuses,
-            confirmation: null,
-            announcement: "",
-            recoveryAvailable: false,
-            focus: null,
-          });
-        },
-        () => {
-          if (disposed || generation !== operationGeneration) return;
-          render({
-            status: "error",
-            kind: "load",
-            announcement: "Saved credentials aren’t available. Reconnect and reload.",
-            recoveryAvailable: false,
-            focus: null,
-          });
-        },
-      )
-      .finally(() => {
-        if (operation === pending) operation = undefined;
-      });
+    render({
+      status: "loading",
+      announcement: repairAnnouncement,
+      repairCredential,
+      recoveryAvailable: false,
+      focus: repairCredential === null ? null : { target: "feedback" },
+    });
+    const pending = (async () => {
+      try {
+        const loaded = await loadEntries();
+        if (disposed || generation !== operationGeneration) return;
+        if (repairCredential !== null) await input.onReconciled?.();
+        if (disposed || generation !== operationGeneration) return;
+        render({
+          status: "ready",
+          entries: loaded.entries,
+          providerStatuses: loaded.providerStatuses,
+          confirmation: null,
+          announcement: "",
+          repairCredential: null,
+          recoveryAvailable: false,
+          focus:
+            repairCredential === null ? null : { target: "setup", credential: repairCredential },
+        });
+      } catch {
+        if (disposed || generation !== operationGeneration) return;
+        render({
+          status: "error",
+          kind: "load",
+          announcement:
+            repairAnnouncement.length === 0
+              ? "Saved credentials aren’t available. Reconnect and reload."
+              : repairAnnouncement,
+          repairCredential,
+          recoveryAvailable: false,
+          focus: repairCredential === null ? null : { target: "feedback" },
+        });
+      }
+    })().finally(() => {
+      if (operation === pending) operation = undefined;
+    });
     operation = pending;
     return pending;
   };
@@ -352,9 +413,13 @@ export function createCredentialSettingsController(input: {
   };
 
   const requestDelete = (credential: DesktopCredentialId): void => {
-    if (disposed || operation !== undefined) return;
+    if (disposed || operation !== undefined || input.credentialMutationsBlocked?.()) return;
     const content = contentState();
-    if (content === null || !content.entries.some((entry) => entry.credential === credential)) {
+    if (
+      content === null ||
+      content.repairCredential !== null ||
+      !content.entries.some((entry) => entry.credential === credential)
+    ) {
       return;
     }
     render({
@@ -363,6 +428,7 @@ export function createCredentialSettingsController(input: {
       providerStatuses: content.providerStatuses,
       confirmation: credential,
       announcement: `Confirm deletion of the ${PROVIDER_NAMES[credential]} credential.`,
+      repairCredential: content.repairCredential,
       recoveryAvailable: content.recoveryAvailable,
       focus: { target: "confirmation-cancel" },
     });
@@ -379,15 +445,20 @@ export function createCredentialSettingsController(input: {
       providerStatuses: content.providerStatuses,
       confirmation: null,
       announcement: "Credential deletion cancelled.",
+      repairCredential: content.repairCredential,
       recoveryAvailable: content.recoveryAvailable,
       focus: { target: "delete", credential },
     });
   };
 
   const confirmDelete = (): Promise<void> => {
-    if (disposed || operation !== undefined) return operation ?? Promise.resolve();
+    if (disposed || operation !== undefined || input.credentialMutationsBlocked?.()) {
+      return operation ?? Promise.resolve();
+    }
     const content = contentState();
-    if (content === null || content.confirmation === null) return Promise.resolve();
+    if (content === null || content.repairCredential !== null || content.confirmation === null) {
+      return Promise.resolve();
+    }
     const target = content.entries.find((entry) => entry.credential === content.confirmation);
     if (target === undefined) return Promise.resolve();
     const releaseMutation = input.beginMutation();
@@ -400,96 +471,121 @@ export function createCredentialSettingsController(input: {
       providerStatuses: content.providerStatuses,
       confirmation: credential,
       announcement: `Deleting the ${target.provider} credential locally…`,
+      repairCredential: content.repairCredential,
       recoveryAvailable: content.recoveryAvailable,
       focus: { target: "confirmation-delete" },
     });
-    const pending = input
-      .deleteCredential({ credential })
-      .then(async (result) => {
-        if (result.status === "uncertain") {
-          if (disposed || generation !== operationGeneration) return;
-          render({
-            status: "error",
-            kind: "delete",
-            reason: "storage-uncertain",
-            entries: content.entries,
-            providerStatuses: content.providerStatuses,
-            confirmation: null,
-            announcement:
-              "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
-            recoveryAvailable: content.recoveryAvailable,
-            focus: null,
-          });
-          return;
-        }
-        let entries = content.entries;
-        let providerStatuses = content.providerStatuses;
-        let refreshFailed = false;
-        try {
-          const loaded = await loadEntries();
-          entries = loaded.entries;
-          providerStatuses = loaded.providerStatuses;
-        } catch {
-          refreshFailed = true;
-          if (result.status === "deleted") {
-            entries = entries.filter((entry) => entry.credential !== credential);
-          }
-        }
+    const pending = (async () => {
+      let result: CredentialDeleteResult;
+      try {
+        result = await input.deleteCredential({ credential });
+      } catch {
         if (disposed || generation !== operationGeneration) return;
-        if (result.status === "refused") {
-          render({
-            status: "error",
-            kind: "delete",
-            reason: result.reason,
-            entries,
-            providerStatuses,
-            confirmation: null,
-            announcement: refusalCopy(result.reason),
-            recoveryAvailable:
-              content.recoveryAvailable || result.reason === "runtime-state-diverged",
-            focus: { target: "delete", credential },
-          });
-          return;
-        }
-        const recoveryAvailable = content.recoveryAvailable || target.runtimeState === "active";
-        const nextDelete = entries[0]?.credential;
-        render({
-          status: "deleted",
-          entries,
-          providerStatuses,
-          confirmation: null,
-          announcement: result.cleanupPending
-            ? "Credential deleted locally. Secure storage cleanup will be retried."
-            : refreshFailed
-              ? "Credential deleted locally. Current credential status couldn’t be refreshed."
-              : "Credential deleted locally.",
-          recoveryAvailable,
-          focus: recoveryAvailable
-            ? { target: "setup" }
-            : nextDelete === undefined
-              ? null
-              : { target: "delete", credential: nextDelete },
-        });
-      })
-      .catch(() => {
-        if (disposed || generation !== operationGeneration) return;
+        releaseMutation();
         render({
           status: "error",
           kind: "delete",
-          reason: "runtime-unavailable",
+          reason: "storage-uncertain",
           entries: content.entries,
           providerStatuses: content.providerStatuses,
           confirmation: null,
-          announcement:
-            "The credential state could not be confirmed. Reconnect and reload before trying again.",
+          announcement: UNCERTAIN_DELETE_ANNOUNCEMENT,
+          repairCredential: credential,
           recoveryAvailable: content.recoveryAvailable,
-          focus: { target: "delete", credential },
+          focus: { target: "feedback" },
         });
-      })
-      .finally(() => {
+        return;
+      }
+      if (result.status === "uncertain") {
+        if (disposed || generation !== operationGeneration) return;
         releaseMutation();
-        if (operation === pending) operation = undefined;
+        render({
+          status: "error",
+          kind: "delete",
+          reason: "storage-uncertain",
+          entries: content.entries,
+          providerStatuses: content.providerStatuses,
+          confirmation: null,
+          announcement: UNCERTAIN_DELETE_ANNOUNCEMENT,
+          repairCredential: credential,
+          recoveryAvailable: content.recoveryAvailable,
+          focus: { target: "feedback" },
+        });
+        return;
+      }
+      let entries = content.entries;
+      let providerStatuses = content.providerStatuses;
+      let refreshFailed = false;
+      try {
+        const loaded = await loadEntries();
+        entries = loaded.entries;
+        providerStatuses = loaded.providerStatuses;
+      } catch {
+        refreshFailed = true;
+        if (result.status === "deleted") {
+          entries = entries.filter((entry) => entry.credential !== credential);
+        }
+      }
+      if (disposed || generation !== operationGeneration) return;
+      if (result.status === "refused") {
+        const repairRequired = result.reason === "runtime-state-diverged";
+        releaseMutation();
+        render({
+          status: "error",
+          kind: "delete",
+          reason: result.reason,
+          entries,
+          providerStatuses,
+          confirmation: null,
+          announcement: refusalCopy(result.reason),
+          repairCredential: repairRequired ? credential : content.repairCredential,
+          recoveryAvailable: content.recoveryAvailable || repairRequired,
+          focus: repairRequired ? { target: "feedback" } : { target: "delete", credential },
+        });
+        return;
+      }
+      try {
+        await input.onDeleted?.();
+      } catch {
+        if (disposed || generation !== operationGeneration) return;
+        releaseMutation();
+        render({
+          status: "error",
+          kind: "load",
+          announcement:
+            "Credential deleted locally, but setup readiness couldn’t be refreshed. Reload credential status.",
+          repairCredential: credential,
+          recoveryAvailable: content.recoveryAvailable || target.runtimeState === "active",
+          focus: { target: "feedback" },
+        });
+        return;
+      }
+      if (disposed || generation !== operationGeneration) return;
+      releaseMutation();
+      const recoveryAvailable = content.recoveryAvailable || target.runtimeState === "active";
+      const nextDelete = entries[0]?.credential;
+      render({
+        status: "deleted",
+        entries,
+        providerStatuses,
+        confirmation: null,
+        announcement: result.cleanupPending
+          ? "Credential deleted locally. Secure storage cleanup will be retried."
+          : refreshFailed
+            ? "Credential deleted locally. Current credential status couldn’t be refreshed."
+            : "Credential deleted locally.",
+        repairCredential: null,
+        recoveryAvailable,
+        focus: recoveryAvailable
+          ? { target: "setup", credential }
+          : nextDelete === undefined
+            ? null
+            : { target: "delete", credential: nextDelete },
       });
+    })().finally(() => {
+      releaseMutation();
+      if (operation === pending) operation = undefined;
+    });
     operation = pending;
     return pending;
   };
@@ -505,7 +601,11 @@ export function createCredentialSettingsController(input: {
     if (disposed) return;
     ++generation;
     operation = undefined;
-    currentState = { status: "closed" };
+    const repairCredential = repairRequiredCredential(currentState);
+    currentState = {
+      status: "closed",
+      ...(repairCredential === null ? {} : { repairCredential }),
+    };
   };
 
   input.view.bind({

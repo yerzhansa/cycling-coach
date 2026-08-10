@@ -29,10 +29,15 @@ import { createTrainingViewAdapter } from "./state/adapters/training.js";
 import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
 import { credentialDrafts } from "./state/credential-drafts.js";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
-import { useEnduragentStore } from "./state/store.js";
+import { useEnduragentStore, type EnduragentState } from "./state/store.js";
+import { setupReady, setupRequired } from "./state/onboarding-slice.js";
+import { nonTelegramSettingsMutationActive } from "./state/settings-slice.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { createOnboardingCompletionController } from "./onboarding/completion.js";
-import { createOnboardingController } from "./onboarding/controller.js";
+import {
+  createOnboardingController,
+  onboardingCredentialMutationActive,
+} from "./onboarding/controller.js";
 import { createTrainingContextController } from "./training-context/controller.js";
 import { createManualSyncController } from "./training-context/manual-sync.js";
 import { createTrainingSyncCoordinator } from "./training-sync.js";
@@ -43,7 +48,10 @@ import { createProviderModelSettingsController } from "./settings/provider-model
 import { createAthleteSettingsController } from "./settings/athlete-controller.js";
 import { createSessionSettingsController } from "./settings/session-controller.js";
 import { createTelegramSettingsController } from "./settings/telegram-controller.js";
-import { createCredentialSettingsController } from "./settings/credential-controller.js";
+import {
+  credentialChangesBlocked,
+  createCredentialSettingsController,
+} from "./settings/credential-controller.js";
 import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
 import { createTrainingExportController } from "./training-export/controller.js";
 
@@ -52,6 +60,15 @@ export type Disposer = () => void;
 function focusComposer(): void {
   const composer = document.querySelector("#message");
   if (composer instanceof HTMLTextAreaElement) composer.focus();
+}
+
+export function onboardingCredentialMutationsBlocked(
+  state: Pick<EnduragentState, "settings">,
+): boolean {
+  return credentialChangesBlocked(
+    state.settings.credentials,
+    nonTelegramSettingsMutationActive(state.settings),
+  );
 }
 
 export function bootRenderer(): Disposer {
@@ -154,6 +171,10 @@ export function bootRenderer(): Disposer {
     refreshTrainingContext: () => trainingContextController.refresh(),
     refreshSpend: () => spendController.refresh(),
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
+    canChat: () => setupReady(store.getState()),
+  });
+  const disposeSetupReadiness = store.subscribe((state, previousState) => {
+    if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
   });
 
   const archiveAdapter = createArchiveViewAdapter({
@@ -202,6 +223,10 @@ export function bootRenderer(): Disposer {
     return client;
   };
   const onboardingBridge: OnboardingBridge = {
+    async getSetupStatus() {
+      const client = await onboardingClient();
+      return client.call("getSetupStatus", {});
+    },
     credentialStatuses: () => window.enduragentAuth.credentialStatuses(),
     retryFailedCredentials: () => window.enduragentAuth.retryFailedCredentials(),
     writeCredential: (value) => window.enduragentAuth.writeCredential(value),
@@ -270,22 +295,25 @@ export function bootRenderer(): Disposer {
       store.getState().setRideImportSuppressed(presenting),
     focusOpener: () => {},
     onComplete: (completion) => onboardingCompletion.complete(completion),
+    ownsDroppedImportFiles: () => {
+      const state = store.getState();
+      return (
+        state.activeView === "settings" || (state.activeView === "chat" && setupRequired(state))
+      );
+    },
+    credentialMutationsBlocked: () => onboardingCredentialMutationsBlocked(store.getState()),
   });
   store.getState().bindOnboardingActions(onboarding);
-  const openSetupFlow = (): void => {
-    void onboardingCompletion.openManually(() => onboarding.open());
-  };
   const closePanes = (): void => {
     providerModelSettingsController.close();
     credentialSettingsController.close();
     athleteSettingsController.close();
     sessionSettingsController.close();
-    telegramSettingsController.close();
   };
   const openSetupFromSettings = (): void => {
-    closePanes();
-    store.getState().leaveSettings();
-    openSetupFlow();
+    const heading = document.querySelector<HTMLElement>("#setup-panel-title");
+    heading?.scrollIntoView({ block: "start" });
+    heading?.focus();
   };
   const coachAdapter = createCoachSettingsAdapter({
     publish: (state) => store.getState().patchSettings({ coach: state }),
@@ -314,6 +342,13 @@ export function bootRenderer(): Disposer {
     loadClaudeCliStatus: () => window.enduragentAuth.claudeCliStatus(),
     deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
     openSetup: openSetupFromSettings,
+    onDeleted: () => onboarding.refresh(),
+    onReconciled: async () => {
+      await onboarding.refresh();
+      if (store.getState().onboarding.loadUnavailable) throw new TypeError();
+    },
+    credentialMutationsBlocked: () =>
+      onboardingCredentialMutationActive(store.getState().onboarding),
     beginMutation: () => store.getState().beginSettingsMutation("credential"),
     view: credentialAdapter.view,
   });
@@ -357,7 +392,6 @@ export function bootRenderer(): Disposer {
         void credentialSettingsController.activate();
         void athleteSettingsController.activate();
         void sessionSettingsController.activate();
-        void telegramSettingsController.activate();
       },
       close: closePanes,
     },
@@ -384,14 +418,9 @@ export function bootRenderer(): Disposer {
 
   void trainingContextController.start();
   spendController.start();
+  void telegramSettingsController.activate();
   void chatController.start();
-  if (onboardingCompletion.isCompleted()) {
-    store.getState().setOnboardingStartupSettled(true);
-  } else {
-    void onboardingCompletion
-      .openOnStartup(() => onboarding.open())
-      .then(() => store.getState().setOnboardingStartupSettled(true));
-  }
+  void onboarding.open().finally(() => store.getState().setOnboardingStartupSettled(true));
   void clients.getClient().then(
     () => {
       document.documentElement.dataset.rpc = "connected";
@@ -414,6 +443,7 @@ export function bootRenderer(): Disposer {
     store.getState().bindTrainingExportActions(null);
     store.getState().bindOnboardingActions(null);
     disposeRideAnalysisSelection();
+    disposeSetupReadiness();
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);
     releaseNotesController.dispose();

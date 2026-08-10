@@ -26,93 +26,119 @@ function response(value: unknown): readonly string[] {
   return [JSON.stringify(value)];
 }
 
-const script: DesktopFixtureScript = {
-  onRequest(value) {
-    const request = value as ScriptRequest;
-    if (request.method === "getRuntimeConfig") {
-      return response({
-        schemaVersion: 3,
-        llm: {
-          provider: "anthropic",
-          model: "fixture",
-          credential_configured: true,
-        },
-        intervals: {
-          athlete_id: "0",
-          credential_configured: false,
-          managedByEnvironment: { athleteId: false },
-        },
-        session: {
-          historyTokenBudgetRatio: 0.3,
-          idleMinutes: 0,
-          dailyResetHour: 4,
-          timezone: "UTC",
-        },
-      });
-    }
-    if (request.method === "configureRuntime") {
-      const params = request.params as {
-        readonly llm?: unknown;
-        readonly intervals?: unknown;
-        readonly session?: unknown;
-      };
-      return response({
-        schemaVersion: 3,
-        status: "applied",
-        applied: {
-          llm: params.llm !== undefined,
-          intervals: params.intervals !== undefined,
-          session: params.session !== undefined,
-        },
-      });
-    }
-    if (request.method === "saveIntake") {
-      return response({ schemaVersion: 1, saved: true });
-    }
-    if (request.method === "sync") {
-      return response({
-        schemaVersion: 1,
-        published: false,
-        referenceSucceeded: true,
-        requests: { store: 0, reference: 0, total: 0 },
-      });
-    }
-    if (request.method === "getAthleteState") {
-      return response({
-        schemaVersion: "1",
-        lastUpdated: "1998-07-19T08:00:00.000Z",
-        freshness: "fresh",
-        degraded: false,
-        lastSynced: null,
-        athleteProfile: {},
-        currentStatus: {},
-        derivedMetrics: {},
-        recentActivities: [],
-        plannedWorkouts: [],
-        wellness: {},
-      });
-    }
-    if (request.method === "getTranscriptPage") {
-      return response({ schemaVersion: 1, status: "page", turns: [], nextCursor: null });
-    }
-    if (request.method === "getUnitsPreference") {
-      return response({ value: "metric", source: "default" });
-    }
-    if (request.method === "hasSession") {
-      return response({ hasSession: false });
-    }
-    throw new TypeError(`unexpected fixture request: ${request.method}`);
-  },
-};
+interface FixtureIntake {
+  readonly swim_skill_floor: null;
+  readonly continuous_distance_capable: null;
+  readonly open_water_comfort: null;
+  readonly prior_bsi: false;
+  readonly clinician_cleared: null;
+  readonly injury_status: "none";
+}
+
+function makeScript(): DesktopFixtureScript {
+  let savedIntake: FixtureIntake | null = null;
+  let durableTrainingData = false;
+  return {
+    onRequest(value) {
+      const request = value as ScriptRequest;
+      if (request.method === "getRuntimeConfig") {
+        return response({
+          schemaVersion: 3,
+          llm: {
+            provider: "anthropic",
+            model: "fixture",
+            credential_configured: true,
+          },
+          intervals: {
+            athlete_id: "0",
+            credential_configured: false,
+            managedByEnvironment: { athleteId: false },
+          },
+          session: {
+            historyTokenBudgetRatio: 0.3,
+            idleMinutes: 0,
+            dailyResetHour: 4,
+            resetArchiveRetentionDays: 0,
+            timezone: "UTC",
+            managedByEnvironment: {
+              historyTokenBudgetRatio: false,
+              idleMinutes: false,
+              dailyResetHour: false,
+              resetArchiveRetentionDays: false,
+              timezone: false,
+            },
+          },
+        });
+      }
+      if (request.method === "configureRuntime") {
+        const params = request.params as {
+          readonly llm?: unknown;
+          readonly intervals?: unknown;
+          readonly session?: unknown;
+        };
+        return response({
+          schemaVersion: 3,
+          status: "applied",
+          applied: {
+            llm: params.llm !== undefined,
+            intervals: params.intervals !== undefined,
+            session: params.session !== undefined,
+          },
+        });
+      }
+      if (request.method === "getSetupStatus") {
+        return response({ schemaVersion: 1, intake: savedIntake, durableTrainingData });
+      }
+      if (request.method === "saveIntake") {
+        savedIntake = request.params as FixtureIntake;
+        return response({ schemaVersion: 1, saved: true });
+      }
+      if (request.method === "sync") {
+        durableTrainingData = true;
+        return response({
+          schemaVersion: 1,
+          published: true,
+          referenceSucceeded: true,
+          requests: { store: 1, reference: 1, total: 2 },
+        });
+      }
+      if (request.method === "getAthleteState") {
+        return response({
+          schemaVersion: "1",
+          lastUpdated: "1998-07-19T08:00:00.000Z",
+          freshness: "fresh",
+          degraded: false,
+          lastSynced: null,
+          athleteProfile: {},
+          currentStatus: {},
+          derivedMetrics: {},
+          recentActivities: [],
+          plannedWorkouts: [],
+          wellness: {},
+        });
+      }
+      if (request.method === "getTranscriptPage") {
+        return response({ schemaVersion: 1, status: "page", turns: [], nextCursor: null });
+      }
+      if (request.method === "getUnitsPreference") {
+        return response({ value: "metric", source: "default" });
+      }
+      if (request.method === "hasSession") {
+        return response({ hasSession: false });
+      }
+      throw new TypeError(`unexpected fixture request: ${request.method}`);
+    },
+  };
+}
 
 afterEach(async () => {
   await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()));
 });
 
 describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live", () => {
-  it("opens Setup as a first-run page and finishes into a working chat", async () => {
+  it("embeds first-run Setup in Chat and finishes into a working chat", async () => {
     const fixture = await launchDesktopFixture({
-      script,
+      script: makeScript(),
       token,
       width: 1440,
       height: 900,
@@ -122,7 +148,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
     fixtures.push(fixture);
     const observed = await fixture.evaluate<{
       readonly present: boolean;
-      readonly setupView: boolean;
+      readonly chatSetup: boolean;
       readonly scrimAbsent: boolean;
       readonly modalAbsent: boolean;
       readonly title: string;
@@ -131,24 +157,23 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       readonly chatWorking: boolean;
     }>(`
       const deadline = Date.now() + 10000;
-      while (!document.querySelector(".onboarding") && Date.now() < deadline) {
+      const setupSelector =
+        '[data-view="chat"][data-onboarding="settled"] [data-setup-host="chat"]';
+      while (!document.querySelector(setupSelector) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
-      const page = document.querySelector(".onboarding");
+      const page = document.querySelector(setupSelector);
       const present = page !== null;
-      const setupView =
-        document.querySelector('[data-view="setup"][data-onboarding="open"]') !== null;
+      const chatSetup = document.querySelector(setupSelector) !== null;
       const scrimAbsent = document.querySelector(".onboarding-scrim") === null;
       const modalAbsent =
         page?.getAttribute("role") !== "dialog" && page?.hasAttribute("aria-modal") !== true;
-      const title = document.querySelector("#onboarding-title")?.textContent ?? "";
+      const title = document.querySelector("#setup-panel-title")?.textContent ?? "";
       page?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 60));
-      const escapeStayed =
-        document.querySelector('[data-view="setup"][data-onboarding="open"]') !== null &&
-        document.querySelector(".onboarding") !== null;
+      const escapeStayed = document.querySelector(setupSelector) !== null;
       const button = (label) =>
-        Array.from(document.querySelectorAll(".onboarding button")).find(
+        Array.from(document.querySelectorAll(".setup-panel button")).find(
           (entry) => entry.textContent?.trim() === label,
         );
       const panelButton = (name, label) =>
@@ -160,13 +185,30 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
         while (document.querySelector(selector) === null && Date.now() < stepDeadline) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
-        return document.querySelector(selector);
+        const found = document.querySelector(selector);
+        if (found === null) throw new Error("timed out waiting for " + selector);
+        return found;
       };
       const waitGone = async (selector) => {
         const stepDeadline = Date.now() + 10000;
         while (document.querySelector(selector) !== null && Date.now() < stepDeadline) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
+        if (document.querySelector(selector) !== null) {
+          throw new Error("timed out waiting for " + selector + " to disappear");
+        }
+      };
+      const fill = (selector, value) => {
+        const input = document.querySelector(selector);
+        if (!(input instanceof HTMLInputElement)) {
+          throw new Error("missing input " + selector);
+        }
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        setter?.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
       };
       const pick = (id, value) => {
         const select = document.querySelector("#" + id);
@@ -182,51 +224,54 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       await waitFor('[data-lane="api-key"]');
       document.querySelector('[data-lane="api-key"]')?.click();
       await waitFor('[data-setup-panel="api-key"]');
-      const anthropic = document.querySelector('input[data-slot="anthropic"]');
-      if (anthropic) anthropic.value = "synthetic-model-key";
+      fill('input[data-slot="anthropic"]', "synthetic-model-key");
       panelButton("api-key", "Save")?.click();
       await waitGone('[data-setup-panel="api-key"]');
       document.querySelector('[data-setup-trigger="training"]')?.click();
       await waitFor('[data-setup-panel="training"]');
-      const intervals = document.querySelector('input[data-slot="intervals-icu"]');
-      if (intervals) intervals.value = "synthetic-training-key";
+      fill('input[data-slot="intervals-icu"]', "synthetic-training-key");
       panelButton("training", "Save")?.click();
       await waitFor('[data-setup-row="training"][data-state="ready"]');
       pick("onboarding-injury-status", "none");
       await new Promise((resolve) => setTimeout(resolve, 60));
       button("Start coaching")?.click();
       const chatDeadline = Date.now() + 10000;
-      while (
-        document.querySelector(
-          '[data-view="chat"][data-onboarding="closed"] textarea#message',
-        ) === null &&
-        Date.now() < chatDeadline
-      ) {
+      const chatReady = () => {
+        const composer = document.querySelector(
+          '[data-view="chat"][data-onboarding="settled"] textarea#message',
+        );
+        return (
+          document.querySelector("[data-setup-host]") === null &&
+          composer instanceof HTMLTextAreaElement &&
+          !composer.disabled
+        );
+      };
+      while (!chatReady() && Date.now() < chatDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
       const composer = document.querySelector(
-        '[data-view="chat"][data-onboarding="closed"] textarea#message',
+        '[data-view="chat"][data-onboarding="settled"] textarea#message',
       );
       return {
         present,
-        setupView,
+        chatSetup,
         scrimAbsent,
         modalAbsent,
         title,
         escapeStayed,
-        finished: document.querySelector(".onboarding") === null,
+        finished: document.querySelector("[data-setup-host]") === null,
         chatWorking: composer !== null && composer.disabled === false,
       };
     `);
     expect(observed).toEqual({
       present: true,
-      setupView: true,
+      chatSetup: true,
       scrimAbsent: true,
       modalAbsent: true,
-      title: "Get your coach running",
+      title: "Get your coach running before you can chat",
       escapeStayed: true,
       finished: true,
       chatWorking: true,
     });
-  });
+  }, 30_000);
 });

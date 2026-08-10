@@ -80,7 +80,7 @@ export function aiRowCopy(
   if (lane === "claude-cli" && wizard.claudeCliIdentity !== null) {
     return { title, subtitle: `${AI_ROW_PREFIX} · ${wizard.claudeCliIdentity}` };
   }
-  return { title, subtitle: AI_ROW_PREFIX };
+  return { title, subtitle: `Connected · ${AI_ROW_PREFIX.toLowerCase()}` };
 }
 
 export function claudeCliNote(

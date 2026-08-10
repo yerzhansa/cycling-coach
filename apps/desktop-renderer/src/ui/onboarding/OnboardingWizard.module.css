@@ -1,0 +1,119 @@
+.chatPanel {
+  max-width: 840px;
+}
+
+.chatHeader {
+  margin: 0 2px 18px;
+  align-items: flex-end;
+  gap: 20px;
+}
+
+.chatTitle {
+  font-size: 25px;
+  font-weight: 590;
+  line-height: 1.18;
+  letter-spacing: -0.035em;
+}
+
+.chatSubtitle {
+  max-width: 560px;
+  margin-top: 7px;
+  font-size: 13px;
+}
+
+.chatPanel :global([data-setup-card]) {
+  overflow: hidden;
+  border-radius: 16px;
+  box-shadow:
+    var(--edge),
+    0 10px 35px rgb(0 0 0 / 18%);
+}
+
+.chatPanel :global([data-setup-row]) {
+  min-height: 86px;
+  gap: 13px;
+  padding: 17px 18px;
+}
+
+.chatPanel :global([data-setup-disc]) {
+  width: 22px;
+  height: 22px;
+}
+
+.chatPanel :global([data-setup-disc="ready"] svg) {
+  width: 13px;
+  height: 13px;
+}
+
+.chatPanel :global([data-setup-row-title]) {
+  gap: 7px;
+  font-size: 15px;
+  font-weight: 560;
+  letter-spacing: -0.012em;
+}
+
+.chatPanel :global([data-setup-row-subtitle]) {
+  margin-top: 3px;
+  font-size: 13px;
+}
+
+.chatPanel :global([data-setup-trigger]) {
+  padding-right: 12px;
+  padding-left: 12px;
+}
+
+.chatPanel :global([data-setup-panel]) {
+  gap: 13px;
+  padding: 17px 18px 20px;
+}
+
+.chatPanel :global([data-setup-panel]) > :global(span:first-child) {
+  width: 22px;
+}
+
+.chatPanel :global([data-setup-panel="telegram"]) > :global(span:first-child),
+.chatPanel :global([data-setup-panel="telegram-remove"]) > :global(span:first-child) {
+  display: none;
+}
+
+.chatPanel :global([data-telegram-action="use-token"]) {
+  min-width: 186px;
+  height: 40px;
+  padding-right: 16px;
+  padding-left: 16px;
+}
+
+.chatPanel :global([data-setup-row="injury-status"] select),
+.chatPanel :global([data-setup-row="clinician-cleared"] select) {
+  width: 275px;
+  max-width: 275px;
+  height: 38px;
+  padding-right: 39px;
+  padding-left: 13px;
+}
+
+.chatFooter {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 68px;
+  padding: 15px 18px;
+  background: color-mix(in srgb, var(--bg) 22%, transparent);
+}
+
+.chatFooter > :first-child {
+  margin-right: auto;
+}
+
+@media (max-width: 920px) {
+  .chatHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .chatPanel :global([data-setup-row="injury-status"] select),
+  .chatPanel :global([data-setup-row="clinician-cleared"] select) {
+    width: 230px;
+    max-width: 230px;
+  }
+}

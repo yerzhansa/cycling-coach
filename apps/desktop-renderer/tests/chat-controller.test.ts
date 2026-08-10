@@ -132,6 +132,7 @@ function subject(
   reconnected: CoachClient = first,
   refreshImplementation: () => Promise<void> = async () => {},
   spendRefreshImplementation: () => Promise<void> = async () => {},
+  canChat: () => boolean = () => true,
 ) {
   const states: ChatState[] = [];
   const controls: ChatViewControls[] = [];
@@ -152,11 +153,76 @@ function subject(
     },
     refreshTrainingContext: refresh,
     refreshSpend,
+    canChat,
   });
   return { controller, provider, states, controls, refresh, refreshSpend };
 }
 
 describe("chat controller", () => {
+  it("keeps submit, reset, and queued drain inert while setup is not ready", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let ready = false;
+    const fake = client(replies(() => gate));
+    const { controller, states } = subject(
+      fake,
+      fake,
+      async () => {},
+      async () => {},
+      () => ready,
+    );
+
+    await controller.submit("Blocked");
+    expect(chatMessages(fake)).toEqual([]);
+    expect(controller.openNewConversation()).toBe(false);
+
+    ready = true;
+    const first = controller.submit("Allowed");
+    await Promise.resolve();
+    await controller.submit("Queued");
+    ready = false;
+    release();
+    await first;
+
+    expect(chatMessages(fake)).toEqual(["Allowed"]);
+    expect(states.at(-1)?.queued).toMatchObject([{ text: "Queued" }]);
+    expect(controller.openNewConversation()).toBe(false);
+  });
+
+  it("resumes a readiness-blocked queue exactly once", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let ready = true;
+    const fake = client(replies(() => gate));
+    const { controller, states } = subject(
+      fake,
+      fake,
+      async () => {},
+      async () => {},
+      () => ready,
+    );
+
+    const first = controller.submit("Allowed");
+    await Promise.resolve();
+    await controller.submit("Queued");
+    ready = false;
+    release();
+    await first;
+
+    expect(chatMessages(fake)).toEqual(["Allowed"]);
+    expect(states.at(-1)?.queued).toMatchObject([{ text: "Queued" }]);
+
+    ready = true;
+    await Promise.all([controller.resume(), controller.resume(), controller.resume()]);
+
+    expect(chatMessages(fake)).toEqual(["Allowed", "Queued"]);
+    expect(states.at(-1)?.queued).toEqual([]);
+  });
+
   it("renders the reauthentication copy instead of the generic failure copy", async () => {
     const reauthenticationCopy =
       "Your ChatGPT sign-in is no longer valid. Open Setup and sign in again.";
@@ -1352,10 +1418,7 @@ describe("chat controller", () => {
 
     await controller.submit("Sent after the failure");
 
-    expect(chatMessages(fake)).toEqual([
-      "Original",
-      "Queued behind it\n\nSent after the failure",
-    ]);
+    expect(chatMessages(fake)).toEqual(["Original", "Queued behind it\n\nSent after the failure"]);
     expect(states.at(-1)?.queued).toEqual([]);
   });
 

@@ -250,16 +250,17 @@ describe("desktop onboarding wizard", () => {
     expect(connect).toHaveBeenCalledTimes(1);
   });
 
-  it("ships the setup page and responsive accessibility hooks", async () => {
+  it("ships the reusable setup block and responsive accessibility hooks", async () => {
     const [wizard, aiRow, card] = await Promise.all([
       readFile(new URL("../src/ui/onboarding/OnboardingWizard.tsx", import.meta.url), "utf8"),
       readFile(new URL("../src/ui/onboarding/AiRow.tsx", import.meta.url), "utf8"),
       readFile(new URL("../src/ui/onboarding/SetupCard.tsx", import.meta.url), "utf8"),
     ]);
-    expect(wizard).toContain("<Page");
-    expect(wizard).toContain('title="Setup"');
-    expect(wizard).toContain('className="onboarding"');
-    expect(wizard).toContain("onboarding-dismiss");
+    expect(wizard).toContain("export function SetupPanel");
+    expect(wizard).toContain('data-setup-host={props.placement}');
+    expect(wizard).not.toContain('title="Setup"');
+    expect(wizard).not.toContain("onboarding-dismiss");
+    expect(wizard).not.toContain("Dismiss");
     expect(wizard).not.toContain('role="dialog"');
     expect(wizard).not.toContain('aria-modal="true"');
     expect(wizard).not.toContain('event.key === "Escape"');
