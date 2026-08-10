@@ -46,6 +46,8 @@ import type { DesktopTelegramController } from "../desktop-telegram-controller.j
 
 const AUTH_TIMEOUT_MS = 1_000;
 const MAX_PAYLOAD_BYTES = 1_048_576;
+const MAX_FRAGMENTS_PER_MESSAGE = 64;
+const MAX_BUFFERED_CHUNKS_PER_MESSAGE = 256;
 const AUTH_FAILURE_REASON = "authentication failed";
 const FORBIDDEN_RESPONSE =
   "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
@@ -476,7 +478,12 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     input.token,
     input.rendererCapabilityRandomBytes ?? randomBytes,
   );
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: MAX_PAYLOAD_BYTES,
+    maxFragments: MAX_FRAGMENTS_PER_MESSAGE,
+    maxBufferedChunks: MAX_BUFFERED_CHUNKS_PER_MESSAGE,
+  });
   const clients = new Set<ClientState>();
   const invocations = input.invocations ?? createInvocationCoordinator();
   const timer = input.timer ?? productionTimer();
