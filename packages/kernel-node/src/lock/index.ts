@@ -19,3 +19,4 @@ export type { LockfileBody } from "./lockfile-body.js";
 export { readLockfile } from "./lockfile-body.js";
 export type { HealthzVerdict, HealthzProbe } from "./healthz-probe.js";
 export { classifyHealthzResponse, HEALTHZ_SERVICE_MARKER } from "./healthz-probe.js";
+export { writeTempThenPublish } from "./write-temp.js";

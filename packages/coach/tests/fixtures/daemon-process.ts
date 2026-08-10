@@ -12,6 +12,7 @@ interface StartMessage {
   readonly home: AthleteHome;
   readonly mode?: "healthy" | "bound" | "foreign";
   readonly handoffCapability?: string;
+  readonly platform?: NodeJS.Platform;
 }
 
 function send(value: unknown): void {
@@ -68,7 +69,10 @@ async function main(): Promise<void> {
     return;
   }
   if (role === "fence-holder") {
-    const acquired = await acquireUpgradeFence({ configDir: message.home.configDir });
+    const acquired = await acquireUpgradeFence({
+      configDir: message.home.configDir,
+      ...(message.platform === undefined ? {} : { platform: message.platform }),
+    });
     if (acquired.status !== "acquired") {
       send({ type: "fence", result: acquired });
       return;
@@ -94,6 +98,7 @@ async function main(): Promise<void> {
       type: "admission",
       result: await admitStartupThroughUpgradeFence({
         configDir: message.home.configDir,
+        ...(message.platform === undefined ? {} : { platform: message.platform }),
         ...(message.handoffCapability === undefined
           ? {}
           : { handoffCapability: message.handoffCapability }),
