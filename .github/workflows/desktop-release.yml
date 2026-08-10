@@ -46,6 +46,7 @@ permissions:
 jobs:
   authorize-coordinator:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       actions: read
       contents: read
@@ -236,6 +237,7 @@ jobs:
 
   sign-macos:
     runs-on: macos-15
+    timeout-minutes: 120
     needs: authorize-coordinator
     environment: desktop-macos-signing
     permissions:
@@ -717,6 +719,7 @@ jobs:
 
   verify-macos-envelope:
     runs-on: macos-15
+    timeout-minutes: 45
     needs: sign-macos
     permissions:
       actions: read
@@ -918,6 +921,7 @@ jobs:
 
   stage-private-draft:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, verify-macos-envelope]
     environment: desktop-macos-publication
     permissions:
@@ -1003,6 +1007,7 @@ jobs:
 
   publish-assets:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, stage-private-draft]
     environment: desktop-macos-publication
     permissions:
@@ -1090,12 +1095,21 @@ jobs:
 
   request-latest:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, publish-assets]
+    outputs:
+      promotion_outcome: ${{ steps.promote.outputs.promotion_outcome }}
     environment: desktop-macos-latest
     permissions:
       actions: read
       contents: write
     steps:
+      - name: Reserve latest mutation reconciliation window
+        id: latest-deadline
+        run: |
+          set -euo pipefail
+          DEADLINE_SECONDS=$(( $(date -u +%s) + 42 * 60 ))
+          printf 'deadline_ms=%s000\n' "$DEADLINE_SECONDS" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.commit }}
@@ -1146,21 +1160,29 @@ jobs:
           printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
           test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
       - name: Compare-and-swap repository latest
+        id: promote
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          TRANSACTION_DEADLINE_MS: ${{ steps.latest-deadline.outputs.deadline_ms }}
           EXPECTED_LATEST_ID: ${{ needs.publish-assets.outputs.latest_id }}
           EXPECTED_LATEST_TAG: ${{ needs.publish-assets.outputs.latest_tag }}
           EXPECTED_LATEST_METADATA_SHA256: ${{ needs.publish-assets.outputs.latest_metadata_sha256 }}
         run: |
           pnpm desktop-release:transaction promote \
             --directory "$RUNNER_TEMP/desktop-release" \
+            --github-output "$GITHUB_OUTPUT" \
+            --transaction-deadline-ms "$TRANSACTION_DEADLINE_MS" \
             --expected-latest-id "$EXPECTED_LATEST_ID" \
             --expected-latest-tag "$EXPECTED_LATEST_TAG" \
             --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"
 
   reconcile-latest:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, publish-assets, request-latest]
+    if: >-
+      ${{ always() && needs.sign-macos.result == 'success' &&
+          needs.publish-assets.result == 'success' }}
     environment: desktop-macos-latest
     permissions:
       actions: read
@@ -1218,7 +1240,22 @@ jobs:
       - name: Reconcile repository latest read-only
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm desktop-release:transaction reconcile --directory "$RUNNER_TEMP/desktop-release"
+          PROMOTION_OUTCOME: ${{ needs.request-latest.outputs.promotion_outcome }}
+        run: |
+          set -euo pipefail
+          case "$PROMOTION_OUTCOME" in
+            ''|applied|unknown)
+              ;;
+            foreign|unapplied)
+              echo "::error::Latest promotion reached a terminal $PROMOTION_OUTCOME outcome"
+              exit 1
+              ;;
+            *)
+              echo "::error::Latest promotion outcome is invalid"
+              exit 1
+              ;;
+          esac
+          pnpm desktop-release:transaction reconcile --directory "$RUNNER_TEMP/desktop-release"
 
   verify-production-update:
     runs-on: macos-15
@@ -1325,6 +1362,7 @@ jobs:
 
   activate-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [sign-macos, publish-assets, request-latest, reconcile-latest, verify-production-update]
     if: >-
       ${{ always() && needs.publish-assets.result == 'success' &&
@@ -1398,6 +1436,7 @@ jobs:
 
   compensate-publication:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs:
       [
         sign-macos,

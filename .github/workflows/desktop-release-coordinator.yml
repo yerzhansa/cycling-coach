@@ -41,6 +41,7 @@ concurrency:
 jobs:
   bind-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -237,6 +238,7 @@ jobs:
 
   prepare-release-draft:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: bind-release
     permissions:
       contents: write

@@ -17,6 +17,7 @@ import {
   DESKTOP_FEED_URL,
   DESKTOP_MANIFEST,
   DESKTOP_RELEASE_SCHEMA_VERSION,
+  DesktopLatestPromotionOutcomeError,
   assertLatestCas,
   assertPublishableAssets,
   assertReleaseMode,
@@ -24,6 +25,7 @@ import {
   inspectNpmAttestationClaims,
   materializeDesktopPublicEnvelope,
   releaseFileNames,
+  runDesktopLatestPromotionWithOutput,
   sealDesktopRelease,
   verifyNpmProvenanceBundle,
   verifyDesktopRelease,
@@ -282,6 +284,43 @@ describe("advertised npm attestation claims", () => {
 });
 
 afterEach(() => rmSync(directory, { recursive: true, force: true }));
+
+describe("desktop latest promotion command output", () => {
+  it("records an applied outcome before resolving", async () => {
+    const output = join(directory, "github-output");
+
+    await expect(runDesktopLatestPromotionWithOutput(output, async () => "applied")).resolves.toBe(
+      "applied",
+    );
+
+    expect(readFileSync(output, "utf8")).toBe("promotion_outcome=applied\n");
+  });
+
+  it.each(["foreign", "unapplied", "unknown"] as const)(
+    "records a %s outcome before rejecting",
+    async (outcome) => {
+      const output = join(directory, "github-output");
+      const error = new DesktopLatestPromotionOutcomeError(outcome, "synthetic promotion failure");
+
+      await expect(
+        runDesktopLatestPromotionWithOutput(output, async () => Promise.reject(error)),
+      ).rejects.toBe(error);
+
+      expect(readFileSync(output, "utf8")).toBe(`promotion_outcome=${outcome}\n`);
+    },
+  );
+
+  it("records an unknown outcome for an unclassified command failure", async () => {
+    const output = join(directory, "github-output");
+    const error = new TypeError("synthetic command failure");
+
+    await expect(
+      runDesktopLatestPromotionWithOutput(output, async () => Promise.reject(error)),
+    ).rejects.toBe(error);
+
+    expect(readFileSync(output, "utf8")).toBe("promotion_outcome=unknown\n");
+  });
+});
 
 describe("desktop release envelope", () => {
   it("seals exactly four updater files with metadata last and digest bindings", async () => {

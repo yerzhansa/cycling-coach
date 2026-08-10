@@ -58,6 +58,23 @@ describe("desktop release workflow policy", () => {
     expect(source.version).toContain('DESKTOP_TAG="enduragent-desktop@$DESKTOP_VERSION"');
   });
 
+  it("requires explicit runtime bounds on every executable release job", () => {
+    const source = sources();
+    const coordinator = replaceRequired(
+      source.coordinator,
+      ["  bind-release:", "    runs-on: ubuntu-latest", "    timeout-minutes: 30"].join("\n"),
+      ["  bind-release:", "    runs-on: ubuntu-latest"].join("\n"),
+    );
+    expectIssue({ ...source, coordinator }, "coordinator executable jobs must have bounded");
+
+    const desktop = replaceRequired(
+      source.desktop,
+      ["  request-latest:", "    runs-on: ubuntu-latest", "    timeout-minutes: 45"].join("\n"),
+      ["  request-latest:", "    runs-on: ubuntu-latest"].join("\n"),
+    );
+    expectIssue({ ...source, desktop }, "release executable jobs must have bounded");
+  });
+
   it("requires the stable desktop tag namespace, manifest version, and exact tag ref", () => {
     const source = sources();
     const mutations = [
@@ -910,8 +927,8 @@ describe("desktop release workflow policy", () => {
     const githubTokenBinding = ["GITHUB_TOKEN", "${{ github.token }}"].join(": ");
     const desktop = replaceRequired(
       source.desktop,
-      "  sign-macos:\n    runs-on: macos-15\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: read",
-      "  sign-macos:\n    runs-on: macos-15\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: write",
+      "  sign-macos:\n    runs-on: macos-15\n    timeout-minutes: 120\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: read",
+      "  sign-macos:\n    runs-on: macos-15\n    timeout-minutes: 120\n    needs: authorize-coordinator\n    environment: desktop-macos-signing\n    permissions:\n      actions: read\n      contents: write",
     ).replaceAll(githubTokenBinding, "CSC_LINK: ${{ secrets.CSC_LINK }}");
     expectIssue({ ...source, desktop }, "macOS signing permissions");
     expectIssue({ ...source, desktop }, "escaped the signing job");
@@ -1112,8 +1129,8 @@ describe("desktop release workflow policy", () => {
       ),
       replaceRequired(
         source.desktop,
-        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    needs: [sign-macos, publish-assets, request-latest]\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: read",
-        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    needs: [sign-macos, publish-assets, request-latest]\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: write",
+        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    timeout-minutes: 45\n    needs: [sign-macos, publish-assets, request-latest]\n    if: >-\n      ${{ always() && needs.sign-macos.result == 'success' &&\n          needs.publish-assets.result == 'success' }}\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: read",
+        "  reconcile-latest:\n    runs-on: ubuntu-latest\n    timeout-minutes: 45\n    needs: [sign-macos, publish-assets, request-latest]\n    if: >-\n      ${{ always() && needs.sign-macos.result == 'success' &&\n          needs.publish-assets.result == 'success' }}\n    environment: desktop-macos-latest\n    permissions:\n      actions: read\n      contents: write",
       ),
       replaceRequired(
         source.desktop,
@@ -1127,6 +1144,154 @@ describe("desktop release workflow policy", () => {
         "latest request must compare-and-swap before read-only latest reconciliation",
       );
     }
+  });
+
+  it("reserves reconciliation before setup and preserves the 45-minute job cap", () => {
+    const source = sources();
+    const deadlineStep = [
+      "      - name: Reserve latest mutation reconciliation window",
+      "        id: latest-deadline",
+      "        run: |",
+      "          set -euo pipefail",
+      "          DEADLINE_SECONDS=$(( $(date -u +%s) + 42 * 60 ))",
+      '          printf \'deadline_ms=%s000\\n\' "$DEADLINE_SECONDS" >> "$GITHUB_OUTPUT"',
+    ].join("\n");
+    const checkoutStep = [
+      "      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
+      "        with:",
+      "          ref: ${{ inputs.commit }}",
+      "          persist-credentials: false",
+    ].join("\n");
+    const mutations = [
+      replaceRequired(source.desktop, "+ 42 * 60", "+ 43 * 60"),
+      replaceRequired(
+        source.desktop,
+        "          DEADLINE_SECONDS=$(( $(date -u +%s) + 42 * 60 ))\n          printf",
+        "          DEADLINE_SECONDS=$(( $(date -u +%s) + 42 * 60 ))\n          DEADLINE_SECONDS=$(( DEADLINE_SECONDS + 60 ))\n          printf",
+      ),
+      replaceRequired(
+        source.desktop,
+        `${deadlineStep}\n${checkoutStep}`,
+        `${checkoutStep}\n${deadlineStep}`,
+      ),
+      replaceRequired(
+        source.desktop,
+        "  request-latest:\n    runs-on: ubuntu-latest\n    timeout-minutes: 45",
+        "  request-latest:\n    runs-on: ubuntu-latest\n    timeout-minutes: 46",
+      ),
+      replaceRequired(
+        source.desktop,
+        "TRANSACTION_DEADLINE_MS: ${{ steps.latest-deadline.outputs.deadline_ms }}",
+        "TRANSACTION_DEADLINE_MS: ${{ github.run_id }}",
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue(
+        { ...source, desktop },
+        "latest mutation must reserve reconciliation before compare-and-swap",
+      );
+    }
+  });
+
+  it("persists terminal latest outcomes across the request and reconciliation jobs", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(
+        source.desktop,
+        "promotion_outcome: ${{ steps.promote.outputs.promotion_outcome }}",
+        "promotion_outcome: ${{ github.run_id }}",
+      ),
+      replaceRequired(source.desktop, "        id: promote", "        id: request"),
+      replaceRequired(
+        source.desktop,
+        '--directory "$RUNNER_TEMP/desktop-release" \\\n            --github-output "$GITHUB_OUTPUT" \\\n            --transaction-deadline-ms',
+        '--directory "$RUNNER_TEMP/desktop-release" \\\n            --github-output "$RUNNER_TEMP/outcome" \\\n            --transaction-deadline-ms',
+      ),
+      replaceRequired(
+        source.desktop,
+        "PROMOTION_OUTCOME: ${{ needs.request-latest.outputs.promotion_outcome }}",
+        "PROMOTION_OUTCOME: unknown",
+      ),
+      replaceRequired(source.desktop, "            foreign|unapplied)", "            foreign)"),
+      replaceRequired(
+        source.desktop,
+        "            ''|applied|unknown)",
+        "            ''|applied|unknown|foreign)",
+      ),
+      replaceRequired(
+        source.desktop,
+        "  request-latest:\n    runs-on: ubuntu-latest",
+        "  request-latest:\n    continue-on-error: true\n    runs-on: ubuntu-latest",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Compare-and-swap repository latest\n        id: promote",
+        "      - name: Compare-and-swap repository latest\n        continue-on-error: true\n        id: promote",
+      ),
+      replaceRequired(
+        source.desktop,
+        "  reconcile-latest:\n    runs-on: ubuntu-latest",
+        "  reconcile-latest:\n    continue-on-error: true\n    runs-on: ubuntu-latest",
+      ),
+      replaceRequired(
+        source.desktop,
+        "      - name: Reconcile repository latest read-only\n        env:",
+        "      - name: Reconcile repository latest read-only\n        continue-on-error: true\n        env:",
+      ),
+      replaceRequired(
+        source.desktop,
+        '            --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"\n\n  reconcile-latest:',
+        '            --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"\n          echo \'promotion_outcome=unknown\' >> "$GITHUB_OUTPUT"\n\n  reconcile-latest:',
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue(
+        { ...source, desktop },
+        "terminal outcomes must remain sticky across read-only reconciliation",
+      );
+    }
+  });
+
+  it("runs read-only reconciliation after request timeout without weakening later gates", () => {
+    const source = sources();
+    const reconciliationMutations = [
+      replaceRequired(
+        source.desktop,
+        "${{ always() && needs.sign-macos.result",
+        "${{ needs.sign-macos.result",
+      ),
+      replaceRequired(
+        source.desktop,
+        "needs.publish-assets.result == 'success' }}",
+        "needs.publish-assets.result == 'success' && needs.request-latest.result == 'success' }}",
+      ),
+    ];
+    for (const desktop of reconciliationMutations) {
+      expectIssue(
+        { ...source, desktop },
+        "latest request must compare-and-swap before read-only latest reconciliation",
+      );
+    }
+
+    const activation = replaceRequired(
+      source.desktop,
+      "needs.reconcile-latest.result == 'success' &&\n          ((inputs.mode",
+      "needs.reconcile-latest.result == 'success' &&\n          needs.request-latest.result == 'success' &&\n          ((inputs.mode",
+    );
+    expectIssue(
+      { ...source, desktop: activation },
+      "activation must follow mode-specific acceptance",
+    );
+
+    const compensation = replaceRequired(
+      source.desktop,
+      "needs.reconcile-latest.result == 'success' &&\n          needs.activate-release.result != 'success'",
+      "needs.reconcile-latest.result == 'success' &&\n          needs.request-latest.result == 'success' &&\n          needs.activate-release.result != 'success'",
+    );
+    expectIssue(
+      { ...source, desktop: compensation },
+      "compensation must require successful reconciliation",
+    );
   });
 
   it("requires the native production-feed round trip and gated activation", () => {

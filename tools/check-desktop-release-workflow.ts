@@ -22,6 +22,10 @@ function scalar(value: unknown): string {
   return typeof value === "string" ? value : (JSON.stringify(value) ?? "");
 }
 
+function continuesAfterError(value: unknown): boolean {
+  return value !== undefined && value !== false;
+}
+
 function steps(job: Mapping): Mapping[] {
   return Array.isArray(job.steps)
     ? job.steps.filter(
@@ -59,6 +63,11 @@ function exactStringSet(value: unknown, expected: string[]): boolean {
   const actual = (Array.isArray(value) ? value.map(String) : [scalar(value)]).sort();
   const wanted = [...expected].sort();
   return actual.length === wanted.length && actual.every((item, index) => item === wanted[index]);
+}
+
+function boundedJobTimeout(job: Mapping, maximumMinutes: number): boolean {
+  const value = job["timeout-minutes"];
+  return Number.isInteger(value) && Number(value) > 0 && Number(value) <= maximumMinutes;
 }
 
 function checkRecoveryOverlay(
@@ -264,6 +273,9 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     issues.push(
       "desktop coordinator must contain only binding, draft safeguard, and reusable call",
     );
+  }
+  if (!boundedJobTimeout(bind, 30) || !boundedJobTimeout(draft, 30)) {
+    issues.push("desktop coordinator executable jobs must have bounded runtimes");
   }
   exactPermissions(
     bind.permissions,
@@ -841,6 +853,22 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     "desktop.jobs.compensate-publication",
     issues,
   );
+  if (
+    ![
+      authorize,
+      sign,
+      verify,
+      stage,
+      publish,
+      requestLatest,
+      reconcileLatest,
+      roundTrip,
+      activate,
+      compensate,
+    ].every((job) => boundedJobTimeout(job, 120))
+  ) {
+    issues.push("desktop release executable jobs must have bounded runtimes");
+  }
 
   exactPermissions(
     authorize.permissions,
@@ -1148,6 +1176,64 @@ fi`;
   const publishRun = runs(publish).join("\n");
   const requestLatestRun = runs(requestLatest).join("\n");
   const reconcileLatestRun = runs(reconcileLatest).join("\n");
+  const requestLatestSteps = steps(requestLatest);
+  const latestDeadlineStep = namedStep(
+    requestLatest,
+    "Reserve latest mutation reconciliation window",
+  );
+  const latestDeadlineRun =
+    typeof latestDeadlineStep?.run === "string" ? latestDeadlineStep.run : "";
+  const expectedLatestDeadlineRun = [
+    "set -euo pipefail",
+    "DEADLINE_SECONDS=$(( $(date -u +%s) + 42 * 60 ))",
+    'printf \'deadline_ms=%s000\\n\' "$DEADLINE_SECONDS" >> "$GITHUB_OUTPUT"',
+    "",
+  ].join("\n");
+  const latestMutationStep = namedStep(requestLatest, "Compare-and-swap repository latest");
+  const latestMutationEnvironment = mapping(
+    latestMutationStep?.env,
+    "latest mutation environment",
+    issues,
+  );
+  const latestMutationRun =
+    typeof latestMutationStep?.run === "string" ? latestMutationStep.run : "";
+  const expectedLatestMutationRun = [
+    "pnpm desktop-release:transaction promote \\",
+    '  --directory "$RUNNER_TEMP/desktop-release" \\',
+    '  --github-output "$GITHUB_OUTPUT" \\',
+    '  --transaction-deadline-ms "$TRANSACTION_DEADLINE_MS" \\',
+    '  --expected-latest-id "$EXPECTED_LATEST_ID" \\',
+    '  --expected-latest-tag "$EXPECTED_LATEST_TAG" \\',
+    '  --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"',
+    "",
+  ].join("\n");
+  const requestLatestOutputs = mapping(requestLatest.outputs, "latest request outputs", issues);
+  const reconcileLatestStep = namedStep(reconcileLatest, "Reconcile repository latest read-only");
+  const reconcileLatestEnvironment = mapping(
+    reconcileLatestStep?.env,
+    "latest reconciliation environment",
+    issues,
+  );
+  const reconcileLatestStepRun =
+    typeof reconcileLatestStep?.run === "string" ? reconcileLatestStep.run : "";
+  const expectedReconcileLatestRun = [
+    "set -euo pipefail",
+    'case "$PROMOTION_OUTCOME" in',
+    "  ''|applied|unknown)",
+    "    ;;",
+    "  foreign|unapplied)",
+    '    echo "::error::Latest promotion reached a terminal $PROMOTION_OUTCOME outcome"',
+    "    exit 1",
+    "    ;;",
+    "  *)",
+    '    echo "::error::Latest promotion outcome is invalid"',
+    "    exit 1",
+    "    ;;",
+    "esac",
+    'pnpm desktop-release:transaction reconcile --directory "$RUNNER_TEMP/desktop-release"',
+    "",
+  ].join("\n");
+  const reconcileLatestCondition = scalar(reconcileLatest.if).replace(/\s+/gu, " ");
   const roundTripRun = runs(roundTrip).join("\n");
   const activateRun = runs(activate).join("\n");
   const compensateRun = runs(compensate).join("\n");
@@ -1259,6 +1345,36 @@ fi`;
     issues.push("desktop rollback must remain bound to normalized manifest baseline evidence");
   }
   if (
+    requestLatest["timeout-minutes"] !== 45 ||
+    requestLatestSteps[0] !== latestDeadlineStep ||
+    latestDeadlineStep?.id !== "latest-deadline" ||
+    latestDeadlineRun !== expectedLatestDeadlineRun ||
+    latestMutationEnvironment.TRANSACTION_DEADLINE_MS !==
+      "${{ steps.latest-deadline.outputs.deadline_ms }}" ||
+    !latestMutationRun.includes('--transaction-deadline-ms "$TRANSACTION_DEADLINE_MS"')
+  ) {
+    issues.push("desktop latest mutation must reserve reconciliation before compare-and-swap");
+  }
+  if (
+    latestMutationStep?.id !== "promote" ||
+    continuesAfterError(requestLatest["continue-on-error"]) ||
+    continuesAfterError(latestMutationStep?.["continue-on-error"]) ||
+    !exactKeys(requestLatestOutputs, ["promotion_outcome"]) ||
+    requestLatestOutputs.promotion_outcome !== "${{ steps.promote.outputs.promotion_outcome }}" ||
+    latestMutationRun !== expectedLatestMutationRun ||
+    !exactKeys(reconcileLatestEnvironment, ["GITHUB_TOKEN", "PROMOTION_OUTCOME"]) ||
+    reconcileLatestEnvironment.GITHUB_TOKEN !== "${{ github.token }}" ||
+    reconcileLatestEnvironment.PROMOTION_OUTCOME !==
+      "${{ needs.request-latest.outputs.promotion_outcome }}" ||
+    continuesAfterError(reconcileLatest["continue-on-error"]) ||
+    continuesAfterError(reconcileLatestStep?.["continue-on-error"]) ||
+    reconcileLatestStepRun !== expectedReconcileLatestRun
+  ) {
+    issues.push(
+      "desktop latest terminal outcomes must remain sticky across read-only reconciliation",
+    );
+  }
+  if (
     mapping(requestLatest.permissions, "latest request permissions", issues).contents !== "write" ||
     !exactStringSet(requestLatest.needs, ["sign-macos", "publish-assets"]) ||
     !requestLatestRun.includes("desktop-release:transaction promote") ||
@@ -1268,9 +1384,10 @@ fi`;
       '--expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"',
     ) ||
     !exactStringSet(reconcileLatest.needs, ["sign-macos", "publish-assets", "request-latest"]) ||
+    reconcileLatestCondition !==
+      "${{ always() && needs.sign-macos.result == 'success' && needs.publish-assets.result == 'success' }}" ||
     mapping(reconcileLatest.permissions, "latest reconciliation permissions", issues).contents !==
       "read" ||
-    !reconcileLatestRun.includes("desktop-release:transaction reconcile") ||
     reconcileLatestRun.includes("desktop-release:transaction promote") ||
     reconcileLatestRun.includes("--expected-latest-")
   ) {
@@ -1340,6 +1457,7 @@ fi`;
     !activateCondition.includes("needs.verify-production-update.result == 'skipped'") ||
     !activateCondition.includes("inputs.mode == 'steady'") ||
     !activateCondition.includes("needs.verify-production-update.result == 'success'") ||
+    activateCondition.includes("needs.request-latest.result") ||
     !activateRun.includes("desktop-release:transaction activate") ||
     !activateRun.includes("apps/desktop/CHANGELOG.md") ||
     activateRun.includes("packages/cycling-coach/CHANGELOG.md")
@@ -1368,6 +1486,7 @@ fi`;
     !compensateCondition.includes("needs.publish-assets.outputs.latest_id != ''") ||
     !compensateCondition.includes("needs.reconcile-latest.result == 'success'") ||
     !compensateCondition.includes("needs.activate-release.result != 'success'") ||
+    compensateCondition.includes("needs.request-latest.result") ||
     !compensateRun.includes("desktop-release:transaction compensate") ||
     !compensateRun.includes("apps/desktop/CHANGELOG.md") ||
     !compensateRun.includes('--expected-latest-id "$EXPECTED_LATEST_ID"') ||
