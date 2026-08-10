@@ -92,6 +92,18 @@ function versionReader(version = "2026.7.2") {
   return vi.fn(async () => JSON.stringify({ version }));
 }
 
+function canonicalDmgSigningIdentityResult() {
+  return {
+    stdout: "",
+    stderr: [
+      "Authority=Developer ID Application: Enduragent Test (FA494ACVTF)",
+      "Authority=Developer ID Certification Authority",
+      "Authority=Apple Root CA",
+      "TeamIdentifier=FA494ACVTF",
+    ].join("\n"),
+  };
+}
+
 function baselineVerifier() {
   return vi.fn(async () => verifiedBaselineApplication);
 }
@@ -645,7 +657,12 @@ describe("macOS release plan", () => {
     ]);
     const sealReleaseMetadata = vi.fn(async () => {});
     const verifyPackageLayout = vi.fn(async () => {});
-    const executeFile = vi.fn(async () => {});
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
+        return canonicalDmgSigningIdentityResult();
+      }
+      return { stdout: "", stderr: "" };
+    });
     const notarize = vi.fn(async () => {});
     const verifyBaselineApplication = baselineVerifier();
     const verifyIdentityContinuity = vi.fn(async () => verifiedLooseIdentity);
@@ -729,6 +746,7 @@ describe("macOS release plan", () => {
     expect(verifyIdentityContinuity).toHaveBeenCalledTimes(2);
     expect(executeFile.mock.calls).toEqual([
       ["/usr/bin/codesign", ["--verify", "--verbose=2", dmg]],
+      ["/usr/bin/codesign", ["--display", "--verbose=4", dmg]],
       ["/usr/bin/xcrun", ["stapler", "validate", "-v", dmg]],
       [
         "/usr/sbin/spctl",
@@ -845,7 +863,12 @@ describe("macOS release plan", () => {
       throw failure;
     });
     const verifyPackageLayout = vi.fn(async () => {});
-    const executeFile = vi.fn(async () => {});
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
+        return canonicalDmgSigningIdentityResult();
+      }
+      return { stdout: "", stderr: "" };
+    });
     const notarize = vi.fn(async () => {});
     const verifyIdentityContinuity = vi.fn(async () => verifiedLooseIdentity);
     const promoteReleaseEnvelope = vi.fn(async () => "/synthetic/envelope");
@@ -876,7 +899,7 @@ describe("macOS release plan", () => {
     expect(verifyPackageLayout).toHaveBeenCalledOnce();
     expect(notarize).toHaveBeenCalledOnce();
     expect(verifyIdentityContinuity).toHaveBeenCalledOnce();
-    expect(executeFile).toHaveBeenCalledTimes(3);
+    expect(executeFile).toHaveBeenCalledTimes(4);
     expect(sealReleaseMetadata).toHaveBeenCalledOnce();
     expect(promoteReleaseEnvelope).not.toHaveBeenCalled();
   });
