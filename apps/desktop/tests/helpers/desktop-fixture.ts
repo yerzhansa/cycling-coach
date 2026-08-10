@@ -326,6 +326,7 @@ export async function launchDesktopFixture(input: {
       env: {
         ...process.env,
         ENDURAGENT_HOME: athleteHome,
+        ENDURAGENT_ACCEPTANCE_HIDDEN: "1",
         FORCE_COLOR: undefined,
         NO_COLOR: undefined,
         CLICOLOR_FORCE: undefined,
