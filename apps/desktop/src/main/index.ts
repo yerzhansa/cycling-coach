@@ -83,6 +83,7 @@ import {
 import { createDesktopUpdateController } from "./update-controller.js";
 import { isDesktopUpdateReleaseEligible } from "./update-eligibility.js";
 import { installDesktopUpdateIpc } from "./update-ipc.js";
+import { createDesktopUpdateVersionFloor } from "./update-version-floor.js";
 import {
   createTelegramControlCoordinator,
   type TelegramDaemonBinding,
@@ -161,8 +162,13 @@ async function runDesktop(): Promise<void> {
   app.on("window-all-closed", () => {});
   await app.whenReady();
   if (desktopAcceptanceHidden) app.dock?.hide();
+  const desktopPreferencesRoot = join(
+    app.getPath("userData"),
+    BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME,
+  );
+  const updateVersionFloor = createDesktopUpdateVersionFloor({ root: desktopPreferencesRoot });
   const backgroundAtLoginPreference = createBackgroundAtLoginPreferenceStore({
-    root: join(app.getPath("userData"), BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME),
+    root: desktopPreferencesRoot,
   });
   desktopStartedInBackground =
     !securitySmokeMode && (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
@@ -212,6 +218,7 @@ async function runDesktop(): Promise<void> {
       currentVersion: app.getVersion(),
     }),
     currentVersion: app.getVersion(),
+    versionFloor: updateVersionFloor,
     loadUpdater: async () => {
       const { autoUpdater } = await import("electron-updater");
       return autoUpdater;

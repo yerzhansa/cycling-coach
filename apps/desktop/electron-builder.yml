@@ -30,6 +30,9 @@ extraResources:
     to: .
 mac:
   icon: resources/app-icon.png
+  # Squirrel.Mac otherwise accepts older builds that remain validly signed.
+  extendInfo:
+    ElectronSquirrelPreventDowngrades: true
   target:
     - target: dir
       arch: [arm64]
