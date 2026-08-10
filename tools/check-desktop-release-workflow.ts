@@ -1,14 +1,192 @@
 #!/usr/bin/env tsx
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as ts from "typescript";
 import { parse } from "yaml";
 
 type Mapping = Record<string, unknown>;
 
 const PROVISIONAL_RELEASE_BODY =
   "Desktop update validation is in progress. This release is not yet generally available.";
+const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const UPDATER_VERIFIER_PATH = "apps/desktop/scripts/verify-updater-round-trip.mjs";
+const UPDATER_RECOVERY_RESTORE_PATHS = [
+  "apps/desktop/scripts/development-package-plan.mjs",
+  "apps/desktop/scripts/macos-release-plan.mjs",
+  "apps/desktop/scripts/package-inventory.mjs",
+  "apps/desktop/scripts/package-plan.mjs",
+  "apps/desktop/scripts/support/",
+  "apps/desktop/scripts/verify-macos-release.mjs",
+  "apps/desktop/scripts/verify-package-layout.mjs",
+  UPDATER_VERIFIER_PATH,
+  "tools/desktop-release-transaction.ts",
+] as const;
+const UPDATER_RECOVERY_DIFF_PATHS = [
+  "apps/desktop/scripts/development-package-plan.mjs",
+  "apps/desktop/scripts/macos-release-plan.mjs",
+  "apps/desktop/scripts/package-inventory.mjs",
+  "apps/desktop/scripts/package-plan.mjs",
+  "apps/desktop/scripts/support/desktop-cdp.ts",
+  "apps/desktop/scripts/support/packaged-telegram/acceptance-deadline.ts",
+  "apps/desktop/scripts/support/packaged-telegram/daemon-utility.ts",
+  "apps/desktop/scripts/support/packaged-telegram/disposable-keychain.ts",
+  "apps/desktop/scripts/support/packaged-telegram/main-entry.ts",
+  "apps/desktop/scripts/support/packaged-telegram/package-acceptance.d.mts",
+  "apps/desktop/scripts/support/packaged-telegram/package-acceptance.mjs",
+  "apps/desktop/scripts/support/packaged-telegram/process-safety.ts",
+  "apps/desktop/scripts/support/packaged-telegram/startup-mode.ts",
+  "apps/desktop/scripts/support/packaged-telegram/telegram-fetch-route.ts",
+  "apps/desktop/scripts/verify-macos-release.mjs",
+  "apps/desktop/scripts/verify-package-layout.mjs",
+  UPDATER_VERIFIER_PATH,
+  "tools/desktop-release-transaction.ts",
+] as const;
+
+function repositoryPath(root: string, absolutePath: string): string | undefined {
+  const path = relative(root, absolutePath);
+  if (path === "" || path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)) {
+    return undefined;
+  }
+  return path.split(sep).join("/");
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function importCandidates(path: string): string[] {
+  const extension = extname(path);
+  const substitutions: Record<string, string[]> = {
+    ".js": [".ts", ".tsx", ".jsx"],
+    ".mjs": [".mts"],
+    ".cjs": [".cts"],
+  };
+  if (extension !== "") {
+    return [
+      path,
+      ...(substitutions[extension] ?? []).map(
+        (replacement) => `${path.slice(0, -extension.length)}${replacement}`,
+      ),
+    ];
+  }
+  const extensions = [".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs", ".jsx"];
+  return [
+    path,
+    ...extensions.map((candidateExtension) => `${path}${candidateExtension}`),
+    ...extensions.map((candidateExtension) => resolve(path, `index${candidateExtension}`)),
+  ];
+}
+
+function relativeImportSpecifiers(file: string): string[] {
+  const source = readFileSync(file, "utf8");
+  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.ESNext, true);
+  const specifiers = new Set<string>();
+  const record = (value: ts.Expression | undefined): void => {
+    if (value !== undefined && ts.isStringLiteralLike(value) && value.text.startsWith(".")) {
+      specifiers.add(value.text);
+    }
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      record(node.moduleSpecifier);
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      if (ts.isExternalModuleReference(node.moduleReference)) {
+        record(node.moduleReference.expression);
+      }
+    } else if (ts.isCallExpression(node)) {
+      const dynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const requireCall = ts.isIdentifier(node.expression) && node.expression.text === "require";
+      if (dynamicImport || requireCall) record(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return [...specifiers].sort();
+}
+
+function traceRelativeImportClosure(
+  root: string,
+  entryPath: string,
+  issues: string[],
+): string[] {
+  const visited = new Set<string>();
+  const pending = [entryPath];
+  while (pending.length > 0) {
+    const path = pending.pop();
+    if (path === undefined || visited.has(path)) continue;
+    const absolutePath = resolve(root, path);
+    if (!isFile(absolutePath)) {
+      issues.push(`updater recovery import ${path} must resolve to a source file`);
+      continue;
+    }
+    visited.add(path);
+    for (const specifier of relativeImportSpecifiers(absolutePath)) {
+      const candidate = importCandidates(resolve(dirname(absolutePath), specifier)).find(isFile);
+      const dependency = candidate === undefined ? undefined : repositoryPath(root, candidate);
+      if (dependency === undefined) {
+        issues.push(`updater recovery import ${specifier} from ${path} must resolve in the repository`);
+      } else if (!visited.has(dependency)) {
+        pending.push(dependency);
+      }
+    }
+  }
+  return [...visited].sort();
+}
+
+export function collectRelativeImportClosure(root: string, entryPath: string): string[] {
+  const issues: string[] = [];
+  const paths = traceRelativeImportClosure(resolve(root), entryPath, issues);
+  if (issues.length > 0) throw new TypeError(issues.join("\n"));
+  return paths;
+}
+
+function directoryFiles(root: string, directoryPath: string): string[] {
+  const files: string[] = [];
+  const visit = (path: string): void => {
+    for (const entry of readdirSync(resolve(root, path), { withFileTypes: true })) {
+      const child = `${path}${entry.name}`;
+      if (entry.isDirectory()) visit(`${child}/`);
+      else if (entry.isFile()) files.push(child);
+    }
+  };
+  visit(directoryPath);
+  return files.sort();
+}
+
+function pathspecCovers(pathspec: string, path: string): boolean {
+  return pathspec.endsWith("/") ? path.startsWith(pathspec) : path === pathspec;
+}
+
+function checkUpdaterRecoveryClosure(root: string, issues: string[]): void {
+  const closureIssues: string[] = [];
+  const closure = traceRelativeImportClosure(root, UPDATER_VERIFIER_PATH, closureIssues);
+  const expandedRestorePaths = UPDATER_RECOVERY_RESTORE_PATHS.flatMap((path) =>
+    path.endsWith("/") ? directoryFiles(root, path) : [path],
+  ).sort();
+  if (
+    closureIssues.length > 0 ||
+    closure.some(
+      (path) =>
+        !UPDATER_RECOVERY_RESTORE_PATHS.some((pathspec) => pathspecCovers(pathspec, path)) ||
+        !UPDATER_RECOVERY_DIFF_PATHS.includes(
+          path as (typeof UPDATER_RECOVERY_DIFF_PATHS)[number],
+        ),
+    ) ||
+    expandedRestorePaths.length !== UPDATER_RECOVERY_DIFF_PATHS.length ||
+    expandedRestorePaths.some((path, index) => path !== UPDATER_RECOVERY_DIFF_PATHS[index])
+  ) {
+    issues.push(
+      "verify-production-update recovery must cover the verifier relative-import closure and directory expansion",
+      ...closureIssues,
+    );
+  }
+}
 
 function mapping(value: unknown, label: string, issues: string[]): Mapping {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -73,9 +251,10 @@ function boundedJobTimeout(job: Mapping, maximumMinutes: number): boolean {
 function checkRecoveryOverlay(
   job: Mapping,
   label: string,
-  expectedPaths: string[],
+  expectedRestorePaths: readonly string[],
   requireAncestry: boolean,
   issues: string[],
+  expectedDiffPaths: readonly string[] = expectedRestorePaths,
 ): void {
   const jobSteps = steps(job);
   const checkoutIndex = jobSteps.findIndex(
@@ -83,7 +262,7 @@ function checkRecoveryOverlay(
   );
   const recoveryStep = namedStep(
     job,
-    expectedPaths.length === 1
+    expectedRestorePaths.length === 1
       ? "Bind recovery transaction tooling"
       : "Bind recovery release tooling",
   );
@@ -93,18 +272,22 @@ function checkRecoveryOverlay(
   const run = typeof recoveryStep?.run === "string" ? recoveryStep.run : "";
   const observedPaths =
     run.replaceAll("\\n", "\n").match(/\b(?:apps|packages|tools)\/[A-Za-z0-9_./@-]+/gu) ?? [];
-  const expectedDiff = expectedPaths.join("\\n");
+  const expectedDiff = expectedDiffPaths.join("\\n");
   const exactDiff =
-    expectedPaths.length === 1
-      ? run.includes(`test "$(git diff --cached --name-only)" = '${expectedPaths[0]}'`)
+    expectedDiffPaths.length === 1
+      ? run.includes(`test "$(git diff --cached --name-only)" = '${expectedDiffPaths[0]}'`)
       : run.includes(`EXPECTED_RECOVERY_DIFF=$'${expectedDiff}'`) &&
         run.includes('test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"');
   const expectedRestore = [
     'git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
-    ...expectedPaths.map(
-      (path, index) => `  ${path}${index === expectedPaths.length - 1 ? "" : " \\"}`,
+    ...expectedRestorePaths.map(
+      (path, index) => `  ${path}${index === expectedRestorePaths.length - 1 ? "" : " \\"}`,
     ),
   ].join("\n");
+  const expectedObservedPaths =
+    `${expectedRestore}\n${expectedDiff}`
+      .replaceAll("\\n", "\n")
+      .match(/\b(?:apps|packages|tools)\/[A-Za-z0-9_./@-]+/gu) ?? [];
   if (
     checkoutIndex === -1 ||
     recoveryIndex <= checkoutIndex ||
@@ -125,13 +308,10 @@ function checkRecoveryOverlay(
     !exactDiff ||
     !run.includes('test -z "$(git diff --name-only)"') ||
     !run.includes('test -z "$(git ls-files --others --exclude-standard)"') ||
-    observedPaths.length !== expectedPaths.length * 2 ||
-    observedPaths.some((path) => !expectedPaths.includes(path)) ||
-    expectedPaths.some(
-      (path) => observedPaths.filter((observedPath) => observedPath === path).length !== 2,
-    )
+    observedPaths.length !== expectedObservedPaths.length ||
+    observedPaths.some((path, index) => path !== expectedObservedPaths[index])
   ) {
-    issues.push(`${label} must overlay exactly ${expectedPaths.join(", ")}`);
+    issues.push(`${label} must overlay exactly ${expectedRestorePaths.join(", ")}`);
   }
 }
 
@@ -746,7 +926,12 @@ function checkNpmRelease(source: string, release: Mapping, issues: string[]): vo
   }
 }
 
-function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): void {
+function checkDesktopChild(
+  source: string,
+  desktop: Mapping,
+  issues: string[],
+  root: string,
+): void {
   const workflowOn = mapping(desktop.on, "desktop child.on", issues);
   if (Object.keys(workflowOn).length !== 1 || !("workflow_call" in workflowOn)) {
     issues.push("desktop-release.yml must be workflow_call-only");
@@ -1527,12 +1712,14 @@ fi`;
       issues,
     );
   }
+  checkUpdaterRecoveryClosure(root, issues);
   checkRecoveryOverlay(
     roundTrip,
     "verify-production-update recovery",
-    ["apps/desktop/scripts/verify-updater-round-trip.mjs", "tools/desktop-release-transaction.ts"],
+    UPDATER_RECOVERY_RESTORE_PATHS,
     false,
     issues,
+    UPDATER_RECOVERY_DIFF_PATHS,
   );
   const workspaceBuildStep = signingSteps.find((step) => step.run === "pnpm -r build");
   const baselineStep = namedStep(sign, "Resolve signed baseline");
@@ -1911,6 +2098,7 @@ export function inspectDesktopReleaseWorkflows(
   coordinatorSource: string,
   desktopSource: string,
   versionSource: string,
+  root = REPOSITORY_ROOT,
 ): string[] {
   const issues: string[] = [];
   let release: Mapping;
@@ -1939,13 +2127,13 @@ export function inspectDesktopReleaseWorkflows(
   checkCheckouts(version, "version", issues);
   checkNpmRelease(releaseSource, release, issues);
   checkCoordinator(coordinatorSource, coordinator, issues);
-  checkDesktopChild(desktopSource, desktop, issues);
+  checkDesktopChild(desktopSource, desktop, issues, resolve(root));
   checkVersionDispatch(version, issues);
   return issues;
 }
 
 export function main(): void {
-  const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
+  const root = REPOSITORY_ROOT;
   const issues = inspectDesktopReleaseWorkflows(
     readFileSync(resolve(root, ".github/workflows/release.yml"), "utf8"),
     readFileSync(resolve(root, ".github/workflows/desktop-release-coordinator.yml"), "utf8"),

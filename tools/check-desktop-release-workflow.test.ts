@@ -1,7 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { inspectDesktopReleaseWorkflows } from "./check-desktop-release-workflow.js";
@@ -11,6 +18,37 @@ const coordinatorPath = resolve(".github/workflows/desktop-release-coordinator.y
 const desktopPath = resolve(".github/workflows/desktop-release.yml");
 const versionPath = resolve(".github/workflows/version-pr.yml");
 const npmViewFixturePath = resolve("tools/fixtures/npm-view-cycling-coach-2026.7.28.json");
+const updaterRecoveryRestorePaths = [
+  "apps/desktop/scripts/development-package-plan.mjs",
+  "apps/desktop/scripts/macos-release-plan.mjs",
+  "apps/desktop/scripts/package-inventory.mjs",
+  "apps/desktop/scripts/package-plan.mjs",
+  "apps/desktop/scripts/support/",
+  "apps/desktop/scripts/verify-macos-release.mjs",
+  "apps/desktop/scripts/verify-package-layout.mjs",
+  "apps/desktop/scripts/verify-updater-round-trip.mjs",
+  "tools/desktop-release-transaction.ts",
+] as const;
+const updaterRecoveryDiffPaths = [
+  "apps/desktop/scripts/development-package-plan.mjs",
+  "apps/desktop/scripts/macos-release-plan.mjs",
+  "apps/desktop/scripts/package-inventory.mjs",
+  "apps/desktop/scripts/package-plan.mjs",
+  "apps/desktop/scripts/support/desktop-cdp.ts",
+  "apps/desktop/scripts/support/packaged-telegram/acceptance-deadline.ts",
+  "apps/desktop/scripts/support/packaged-telegram/daemon-utility.ts",
+  "apps/desktop/scripts/support/packaged-telegram/disposable-keychain.ts",
+  "apps/desktop/scripts/support/packaged-telegram/main-entry.ts",
+  "apps/desktop/scripts/support/packaged-telegram/package-acceptance.d.mts",
+  "apps/desktop/scripts/support/packaged-telegram/package-acceptance.mjs",
+  "apps/desktop/scripts/support/packaged-telegram/process-safety.ts",
+  "apps/desktop/scripts/support/packaged-telegram/startup-mode.ts",
+  "apps/desktop/scripts/support/packaged-telegram/telegram-fetch-route.ts",
+  "apps/desktop/scripts/verify-macos-release.mjs",
+  "apps/desktop/scripts/verify-package-layout.mjs",
+  "apps/desktop/scripts/verify-updater-round-trip.mjs",
+  "tools/desktop-release-transaction.ts",
+] as const;
 
 interface WorkflowSources {
   release: string;
@@ -40,6 +78,20 @@ function inspect(source: WorkflowSources): string[] {
 function replaceRequired(source: string, search: string, replacement: string): string {
   if (!source.includes(search)) throw new TypeError(`Mutation target not found: ${search}`);
   return source.replace(search, () => replacement);
+}
+
+function updaterRecoveryOverlay(
+  restorePaths: readonly string[],
+  diffPaths: readonly string[],
+): string {
+  return [
+    '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
+    ...restorePaths.map(
+      (path, index) => `            ${path}${index === restorePaths.length - 1 ? "" : " \\"}`,
+    ),
+    `          EXPECTED_RECOVERY_DIFF=$'${diffPaths.join("\\n")}'`,
+    '          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"',
+  ].join("\n");
 }
 
 function expectIssue(source: WorkflowSources, fragment: string): void {
@@ -1518,43 +1570,73 @@ ${updaterCommandBlock}
 
   it("binds updater recovery to the exact ordered acceptance-tooling overlay", () => {
     const source = sources();
-    const updaterOverlay = [
-      '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
-      "            apps/desktop/scripts/verify-updater-round-trip.mjs \\",
-      "            tools/desktop-release-transaction.ts",
-      "          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/verify-updater-round-trip.mjs\\ntools/desktop-release-transaction.ts'",
-      '          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"',
-    ].join("\n");
+    const updaterOverlay = updaterRecoveryOverlay(
+      updaterRecoveryRestorePaths,
+      updaterRecoveryDiffPaths,
+    );
+    const extraPath = "apps/desktop/src/main/index.ts";
+    const droppedRestorePaths = updaterRecoveryRestorePaths.filter(
+      (path) => path !== "apps/desktop/scripts/development-package-plan.mjs",
+    );
+    const droppedDiffPaths = updaterRecoveryDiffPaths.filter(
+      (path) => path !== "apps/desktop/scripts/development-package-plan.mjs",
+    );
+    const wrongRestoreOrder = [...updaterRecoveryRestorePaths];
+    [wrongRestoreOrder[0], wrongRestoreOrder[1]] = [wrongRestoreOrder[1], wrongRestoreOrder[0]];
+    const mismatchedDiffOrder = [...updaterRecoveryDiffPaths];
+    [mismatchedDiffOrder[0], mismatchedDiffOrder[1]] = [
+      mismatchedDiffOrder[1],
+      mismatchedDiffOrder[0],
+    ];
     const mutations = [
-      [
-        '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
-        "            tools/desktop-release-transaction.ts",
-        "          test \"$(git diff --cached --name-only)\" = 'tools/desktop-release-transaction.ts'",
-      ].join("\n"),
-      [
-        '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
-        "            apps/desktop/scripts/verify-updater-round-trip.mjs",
-        "          test \"$(git diff --cached --name-only)\" = 'apps/desktop/scripts/verify-updater-round-trip.mjs'",
-      ].join("\n"),
-      [
-        '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
-        "            apps/desktop/scripts/verify-updater-round-trip.mjs \\",
-        "            apps/desktop/src/main/index.ts \\",
-        "            tools/desktop-release-transaction.ts",
-        "          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/verify-updater-round-trip.mjs\\napps/desktop/src/main/index.ts\\ntools/desktop-release-transaction.ts'",
-        '          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"',
-      ].join("\n"),
-      [
-        '          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \\',
-        "            tools/desktop-release-transaction.ts \\",
-        "            apps/desktop/scripts/verify-updater-round-trip.mjs",
-        "          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/verify-updater-round-trip.mjs\\ntools/desktop-release-transaction.ts'",
-        '          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"',
-      ].join("\n"),
+      updaterRecoveryOverlay([...updaterRecoveryRestorePaths, extraPath], [
+        ...updaterRecoveryDiffPaths,
+        extraPath,
+      ]),
+      updaterRecoveryOverlay(droppedRestorePaths, droppedDiffPaths),
+      updaterRecoveryOverlay(wrongRestoreOrder, updaterRecoveryDiffPaths),
+      updaterRecoveryOverlay(updaterRecoveryRestorePaths, mismatchedDiffOrder),
     ];
     for (const replacement of mutations) {
       const desktop = replaceRequired(source.desktop, updaterOverlay, replacement);
       expectIssue({ ...source, desktop }, "verify-production-update recovery must overlay exactly");
+    }
+  });
+
+  it("rejects a verifier import closure file omitted from the recovery allowlist", () => {
+    const source = sources();
+    const root = mkdtempSync(join(tmpdir(), "desktop-recovery-closure-"));
+    try {
+      for (const path of updaterRecoveryDiffPaths) {
+        const destination = join(root, path);
+        mkdirSync(dirname(destination), { recursive: true });
+        copyFileSync(resolve(path), destination);
+      }
+      const verifierPath = join(root, "apps/desktop/scripts/verify-updater-round-trip.mjs");
+      writeFileSync(
+        verifierPath,
+        `${readFileSync(verifierPath, "utf8")}\nimport "./unlisted-recovery-helper.mjs";\n`,
+      );
+      writeFileSync(
+        join(root, "apps/desktop/scripts/unlisted-recovery-helper.mjs"),
+        "export {};\n",
+      );
+      const issues = inspectDesktopReleaseWorkflows(
+        source.release,
+        source.coordinator,
+        source.desktop,
+        source.version,
+        root,
+      );
+      expect(
+        issues.some((issue) =>
+          issue.includes(
+            "verify-production-update recovery must cover the verifier relative-import closure",
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

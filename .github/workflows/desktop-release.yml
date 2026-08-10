@@ -1219,9 +1219,16 @@ jobs:
           fi
           git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
           git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
+            apps/desktop/scripts/development-package-plan.mjs \
+            apps/desktop/scripts/macos-release-plan.mjs \
+            apps/desktop/scripts/package-inventory.mjs \
+            apps/desktop/scripts/package-plan.mjs \
+            apps/desktop/scripts/support/ \
+            apps/desktop/scripts/verify-macos-release.mjs \
+            apps/desktop/scripts/verify-package-layout.mjs \
             apps/desktop/scripts/verify-updater-round-trip.mjs \
             tools/desktop-release-transaction.ts
-          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/verify-updater-round-trip.mjs\ntools/desktop-release-transaction.ts'
+          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/development-package-plan.mjs\napps/desktop/scripts/macos-release-plan.mjs\napps/desktop/scripts/package-inventory.mjs\napps/desktop/scripts/package-plan.mjs\napps/desktop/scripts/support/desktop-cdp.ts\napps/desktop/scripts/support/packaged-telegram/acceptance-deadline.ts\napps/desktop/scripts/support/packaged-telegram/daemon-utility.ts\napps/desktop/scripts/support/packaged-telegram/disposable-keychain.ts\napps/desktop/scripts/support/packaged-telegram/main-entry.ts\napps/desktop/scripts/support/packaged-telegram/package-acceptance.d.mts\napps/desktop/scripts/support/packaged-telegram/package-acceptance.mjs\napps/desktop/scripts/support/packaged-telegram/process-safety.ts\napps/desktop/scripts/support/packaged-telegram/startup-mode.ts\napps/desktop/scripts/support/packaged-telegram/telegram-fetch-route.ts\napps/desktop/scripts/verify-macos-release.mjs\napps/desktop/scripts/verify-package-layout.mjs\napps/desktop/scripts/verify-updater-round-trip.mjs\ntools/desktop-release-transaction.ts'
           test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"
           test -z "$(git diff --name-only)"
           test -z "$(git ls-files --others --exclude-standard)"
