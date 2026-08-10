@@ -15,10 +15,14 @@ import {
   createSecuritySmokeLaunchEnvironment,
 } from "../smoke/security-smoke-environment.mjs";
 import { createDevelopmentPackagePlan } from "./development-package-plan.mjs";
+import { createWindowsDevelopmentPackagePlan } from "./windows-development-package-plan.mjs";
 
 const require = createRequire(import.meta.url);
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const developmentPackagePlan = createDevelopmentPackagePlan({ desktopRoot });
+const developmentPackagePlan =
+  process.platform === "win32"
+    ? createWindowsDevelopmentPackagePlan({ desktopRoot })
+    : createDevelopmentPackagePlan({ desktopRoot });
 const command = process.argv[2];
 const options = Object.fromEntries(
   process.argv
