@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createPackagePlan } from "./package-plan.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const canonicalDesktopRoot = resolve(scriptDirectory, "..");
@@ -15,29 +16,24 @@ export function createDevelopmentPackagePlan(input = {}) {
   if (!isAbsolute(desktopRoot)) {
     throw new TypeError("desktop root must be absolute");
   }
-  const outputPath = join(desktopRoot, DEVELOPMENT_OUTPUT_DIRECTORY);
-  const applicationPath = join(outputPath, "mac-arm64", `${DEVELOPMENT_PRODUCT_NAME}.app`);
-  return Object.freeze({
-    applicationPath,
-    executablePath: join(applicationPath, "Contents", "MacOS", DEVELOPMENT_PRODUCT_NAME),
-    outputPath,
-    builderOptions: {
-      projectDir: desktopRoot,
-      publish: "never",
-      config: {
-        extends: join(desktopRoot, "electron-builder.yml"),
-        appId: DEVELOPMENT_APP_ID,
-        productName: DEVELOPMENT_PRODUCT_NAME,
-        directories: { output: DEVELOPMENT_OUTPUT_DIRECTORY },
-        forceCodeSigning: false,
-        extraMetadata: {
-          name: DEVELOPMENT_PACKAGE_NAME,
-          enduragentDesktopDevelopment: true,
-        },
-        mac: {
-          identity: null,
-          target: [{ target: "dir", arch: ["arm64"] }],
-        },
+  return createPackagePlan({
+    desktopRoot,
+    outputDirectory: DEVELOPMENT_OUTPUT_DIRECTORY,
+    applicationRelativePath: join("mac-arm64", `${DEVELOPMENT_PRODUCT_NAME}.app`),
+    executableRelativePath: join("Contents", "MacOS", DEVELOPMENT_PRODUCT_NAME),
+    builderConfig: {
+      extends: join(desktopRoot, "electron-builder.yml"),
+      appId: DEVELOPMENT_APP_ID,
+      productName: DEVELOPMENT_PRODUCT_NAME,
+      directories: { output: DEVELOPMENT_OUTPUT_DIRECTORY },
+      forceCodeSigning: false,
+      extraMetadata: {
+        name: DEVELOPMENT_PACKAGE_NAME,
+        enduragentDesktopDevelopment: true,
+      },
+      mac: {
+        identity: null,
+        target: [{ target: "dir", arch: ["arm64"] }],
       },
     },
   });
