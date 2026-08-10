@@ -682,7 +682,9 @@ export function createMacosApplicationProcessObserver(application, context = {})
   const ensureMonitor = () => {
     if (monitor !== undefined) return;
     monitor = setInterval(() => {
-      void refresh().catch(() => undefined);
+      void refresh().catch(() => {
+        trackingFailed = true;
+      });
     }, trackingIntervalMs);
     monitor.unref?.();
   };
