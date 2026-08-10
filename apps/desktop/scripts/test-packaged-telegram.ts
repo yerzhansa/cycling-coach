@@ -787,7 +787,7 @@ async function seedCompletedOnboardingAfterStartup(
     page
       .evaluate<boolean>(`document.readyState === "complete" &&
         document.documentElement.dataset.rpc === "connected" &&
-        document.querySelector('[data-onboarding="open"]') !== null`)
+        document.querySelector('[data-onboarding="settled"]') !== null`)
       .catch(() => false),
   );
   const persisted = await page.evaluate<boolean>(
@@ -1152,10 +1152,10 @@ async function main(): Promise<void> {
     await seedCompletedOnboardingAfterStartup(page);
     await waitForButton(page, "Settings");
     await page.clickButton("Settings");
-    await waitUntil("Settings after onboarding dismissal", async () =>
+    await waitUntil("Settings after onboarding startup settled", async () =>
       page
         .evaluate<boolean>(
-          `document.querySelector('[data-view="settings"][data-onboarding="closed"]') !== null`,
+          `document.querySelector('[data-view="settings"][data-onboarding="settled"]') !== null`,
         )
         .catch(() => false),
     );
