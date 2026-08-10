@@ -505,18 +505,21 @@ describe("GitHub desktop release transaction", () => {
     let fireTimeout: (() => void) | undefined;
     let cancelled = false;
     let bodyReadStarted = false;
+    let requestSignal: AbortSignal | undefined;
     const client = new GithubClient(
       "yerzhansa/enduragent",
       "sensitive-token",
-      async () =>
-        ({
+      async (_input, init) => {
+        requestSignal = init?.signal ?? undefined;
+        return {
           ok: true,
           status: 200,
           json: async () => {
             bodyReadStarted = true;
             return new Promise<never>(() => undefined);
           },
-        }) as unknown as Response,
+        } as unknown as Response;
+      },
       {
         metadataRequestTimeoutMs: 17,
         scheduleTimeout: (callback, delayMs) => {
@@ -542,6 +545,7 @@ describe("GitHub desktop release transaction", () => {
     expect((error as Error).message).toBe("GitHub metadata request timed out");
     expect((error as Error).message).not.toContain("sensitive-token");
     expect((error as Error).message).not.toContain("github.com");
+    expect(requestSignal?.aborted).toBe(true);
     expect(cancelled).toBe(true);
   });
 
