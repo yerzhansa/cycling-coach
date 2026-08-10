@@ -12,6 +12,7 @@ import type { Duplex } from "node:stream";
 import { claimLockfile, readLockfile } from "./lockfile-body.js";
 import { readPortFile, writePortFile } from "./port-file.js";
 import { defaultHealthzProbe, isPortBound, type HealthzProbe } from "./healthz-probe.js";
+import { ensureWindowsPrivateDirectory } from "../home/windows-home-policy.js";
 
 export type WriterContentionDiagnostic =
   | {
@@ -45,6 +46,7 @@ export interface AcquireWriteLockOptions {
   readonly athleteHome: string;
   readonly version: string;
   readonly probeHealthz?: HealthzProbe;
+  readonly platform?: NodeJS.Platform;
 }
 
 export interface WriterProtocolHandlers {
@@ -272,7 +274,11 @@ export async function acquireWriteLock(
   opts: AcquireWriteLockOptions,
 ): Promise<AcquireWriteLockResult> {
   const probe = opts.probeHealthz ?? defaultHealthzProbe;
-  ensureConfigDirSecure(opts.configDir);
+  if ((opts.platform ?? process.platform) === "win32") {
+    await ensureWindowsPrivateDirectory(opts.configDir);
+  } else {
+    ensureConfigDirSecure(opts.configDir);
+  }
   const lockfilePath = join(opts.configDir, LOCKFILE_NAME);
   const portFilePath = join(opts.configDir, PORT_FILE_NAME);
 

@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, parse, resolve } from "node:path";
 import type { AthleteHome } from "./resolve-athlete-home.js";
+import { prepareWindowsAthleteHome } from "./windows-home-policy.js";
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
 
@@ -77,7 +78,17 @@ async function prepareRootDirectory(path: string): Promise<string> {
   return physicalPath;
 }
 
-export async function prepareAthleteHome(home: AthleteHome): Promise<AthleteHome> {
+export interface PrepareAthleteHomeOptions {
+  readonly platform?: NodeJS.Platform;
+}
+
+export async function prepareAthleteHome(
+  home: AthleteHome,
+  options: PrepareAthleteHomeOptions = {},
+): Promise<AthleteHome> {
+  if ((options.platform ?? process.platform) === "win32") {
+    return prepareWindowsAthleteHome(home);
+  }
   validateChildLayout(home);
   const root = await prepareRootDirectory(home.root);
 

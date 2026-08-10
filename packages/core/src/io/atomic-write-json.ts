@@ -1,5 +1,9 @@
 import { open, rename, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
+import {
+  classifyWindowsPrivatePathFailure,
+  type WindowsPrivatePathPolicyStage,
+} from "./windows-private-path-policy.js";
 
 /**
  * Atomically write a JSON-serialized value to `path` via write-to-temp +
@@ -15,7 +19,7 @@ import { randomBytes } from "node:crypto";
 export async function atomicWriteJson(
   path: string,
   value: unknown,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; platform?: NodeJS.Platform },
 ): Promise<void> {
   // Serialize FIRST so circular-reference / BigInt failures don't leave a
   // half-baked temp file on disk.
@@ -25,9 +29,11 @@ export async function atomicWriteJson(
   const tempPath = `${path}.tmp.${suffix}`;
 
   let fh: Awaited<ReturnType<typeof open>> | null = null;
+  let stage: WindowsPrivatePathPolicyStage = "content-write";
   try {
     fh = await open(tempPath, "w", 0o600);
     await fh.writeFile(body, "utf-8");
+    stage = "file-flush";
     await fh.sync();
     await fh.close();
     fh = null;
@@ -45,6 +51,7 @@ export async function atomicWriteJson(
       }
       return;
     }
+    stage = "rename";
     await rename(tempPath, path);
   } catch (err) {
     if (fh !== null) {
@@ -59,6 +66,8 @@ export async function atomicWriteJson(
     } catch {
       // Temp file may not exist (open failed) or rename succeeded already.
     }
-    throw err;
+    throw (opts?.platform ?? process.platform) === "win32"
+      ? classifyWindowsPrivatePathFailure(stage, err)
+      : err;
   }
 }

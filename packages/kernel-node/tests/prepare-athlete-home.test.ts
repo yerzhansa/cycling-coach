@@ -33,7 +33,9 @@ describe("prepareAthleteHome", () => {
     for (const path of [home.root, home.storeDir, home.archiveDir, home.configDir]) {
       expect((await lstat(path)).isDirectory()).toBe(true);
       expect(await realpath(path)).toBe(path);
-      expect((await stat(path)).mode & 0o777).toBe(0o700);
+      if (process.platform !== "win32") {
+        expect((await stat(path)).mode & 0o777).toBe(0o700);
+      }
     }
   });
 
@@ -53,31 +55,40 @@ describe("prepareAthleteHome", () => {
     expect(homes.every((home) => home.root === homes[0]!.root)).toBe(true);
   });
 
-  it("converges a root symlink and its physical path on one athlete-home identity", async () => {
-    const alias = await freshPath();
-    const physicalRoot = join(alias, "..", "physical-athlete");
-    await mkdir(physicalRoot);
-    await symlink(physicalRoot, alias, "dir");
+  it.runIf(process.platform !== "win32")(
+    "converges a root symlink and its physical path on one athlete-home identity",
+    async () => {
+      const alias = await freshPath();
+      const physicalRoot = join(alias, "..", "physical-athlete");
+      await mkdir(physicalRoot);
+      await symlink(physicalRoot, alias, "dir");
 
-    const throughAlias = await prepareAthleteHome(resolveAthleteHome({ ENDURAGENT_HOME: alias }));
-    const throughPhysicalPath = await prepareAthleteHome(
-      resolveAthleteHome({ ENDURAGENT_HOME: physicalRoot }),
-    );
+      const throughAlias = await prepareAthleteHome(resolveAthleteHome({ ENDURAGENT_HOME: alias }));
+      const throughPhysicalPath = await prepareAthleteHome(
+        resolveAthleteHome({ ENDURAGENT_HOME: physicalRoot }),
+      );
 
-    expect(throughAlias).toEqual(throughPhysicalPath);
-    expect(throughAlias.root).toBe(await realpath(physicalRoot));
-  });
+      expect(throughAlias).toEqual(throughPhysicalPath);
+      expect(throughAlias.root).toBe(await realpath(physicalRoot));
+    },
+  );
 
   it("rejects a child-directory symlink instead of following it", async () => {
     const root = await freshPath();
     const outside = join(root, "..", "outside-store");
     await mkdir(root);
     await mkdir(outside);
-    await symlink(outside, join(root, "store"), "dir");
+    await symlink(outside, join(root, "store"), process.platform === "win32" ? "junction" : "dir");
 
-    await expect(prepareAthleteHome(resolveAthleteHome({ ENDURAGENT_HOME: root }))).rejects.toThrow(
-      /store.*symbolic link/i,
-    );
+    const preparation = prepareAthleteHome(resolveAthleteHome({ ENDURAGENT_HOME: root }));
+    if (process.platform === "win32") {
+      await expect(preparation).rejects.toMatchObject({
+        stage: "child-entry",
+        category: "link-reparse-shaped",
+      });
+    } else {
+      await expect(preparation).rejects.toThrow(/store.*symbolic link/i);
+    }
   });
 
   it.each(["root", "store"] as const)(
@@ -97,41 +108,66 @@ describe("prepareAthleteHome", () => {
     },
   );
 
-  it("rejects a root symlink to a file without changing the target mode", async () => {
-    const root = await freshPath();
-    const target = join(root, "..", "athlete-file");
-    await writeFile(target, "not-a-directory", { mode: 0o600 });
-    await symlink(target, root, "file");
+  it.runIf(process.platform !== "win32")(
+    "rejects a root symlink to a file without changing the target mode",
+    async () => {
+      const root = await freshPath();
+      const target = join(root, "..", "athlete-file");
+      await writeFile(target, "not-a-directory", { mode: 0o600 });
+      await symlink(target, root, "file");
 
-    await expect(prepareAthleteHome(resolveAthleteHome({ ENDURAGENT_HOME: root }))).rejects.toThrow(
-      /root.*directory/i,
-    );
-    expect((await stat(target)).mode & 0o777).toBe(0o600);
-  });
+      const preparation = prepareAthleteHome(resolveAthleteHome({ ENDURAGENT_HOME: root }));
+      await expect(preparation).rejects.toThrow(/root.*directory/i);
+      expect((await stat(target)).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("rejects an athlete-home value whose child paths do not use the fixed layout", async () => {
     const root = await freshPath();
     const home = resolveAthleteHome({ ENDURAGENT_HOME: root });
 
-    await expect(
-      prepareAthleteHome({ ...home, archiveDir: join(root, "..", "outside-archive") }),
-    ).rejects.toThrow(/fixed child layout/i);
+    const preparation = prepareAthleteHome({
+      ...home,
+      archiveDir: join(root, "..", "outside-archive"),
+    });
+    if (process.platform === "win32") {
+      await expect(preparation).rejects.toMatchObject({
+        stage: "layout",
+        category: "corruption",
+      });
+    } else {
+      await expect(preparation).rejects.toThrow(/fixed child layout/i);
+    }
   });
 
   it("rejects a relative athlete-home root before creating it", async () => {
     const relativeRoot = `relative-athlete-home-${process.pid}`;
     roots.push(resolvePath(relativeRoot));
 
-    await expect(
-      prepareAthleteHome(resolveAthleteHome({ ENDURAGENT_HOME: relativeRoot })),
-    ).rejects.toThrow(/absolute/i);
+    const preparation = prepareAthleteHome(
+      resolveAthleteHome({ ENDURAGENT_HOME: relativeRoot }),
+    );
+    if (process.platform === "win32") {
+      await expect(preparation).rejects.toMatchObject({
+        stage: "layout",
+        category: "corruption",
+      });
+    } else {
+      await expect(preparation).rejects.toThrow(/absolute/i);
+    }
   });
 
   it("rejects the filesystem root before changing its permissions", async () => {
     const root = resolvePath("/");
 
-    await expect(prepareAthleteHome(resolveAthleteHome({ ENDURAGENT_HOME: root }))).rejects.toThrow(
-      /filesystem root/i,
-    );
+    const preparation = prepareAthleteHome(resolveAthleteHome({ ENDURAGENT_HOME: root }));
+    if (process.platform === "win32") {
+      await expect(preparation).rejects.toMatchObject({
+        stage: "root-bind",
+        category: "corruption",
+      });
+    } else {
+      await expect(preparation).rejects.toThrow(/filesystem root/i);
+    }
   });
 });

@@ -328,6 +328,7 @@ async function runChild(
 type InjectedStage =
   | "resolve"
   | "prepare"
+  | "windows-directory"
   | "acquire"
   | "mkdir"
   | "chmod"
@@ -371,6 +372,7 @@ function injected(options: InjectedOptions = {}) {
     }
   };
   const observed: {
+    prepare?: unknown;
     mkdir?: readonly [string, unknown];
     chmod?: readonly [string, number];
     open?: string;
@@ -420,9 +422,10 @@ function injected(options: InjectedOptions = {}) {
       fail("resolve");
       return home;
     },
-    async prepareAthleteHome(value: typeof home) {
+    async prepareAthleteHome(value: typeof home, prepareOptions?: unknown) {
       calls.push("prepare");
       expect(value).toBe(home);
+      observed.prepare = prepareOptions;
       fail("prepare");
       return preparedHome;
     },
@@ -431,6 +434,12 @@ function injected(options: InjectedOptions = {}) {
       observed.lock = value;
       fail("acquire");
       return handle;
+    },
+    async ensureWindowsPrivateDirectory(path: string) {
+      calls.push("windows-directory");
+      expect(path).toBe(preparedHome.storeDir);
+      fail("windows-directory");
+      return path;
     },
     async mkdir(path: string, mkdirOptions: unknown) {
       calls.push("mkdir");
@@ -858,6 +867,67 @@ describe("coach-dev import --report", () => {
     for (const privateValue of privateValues) {
       expect(serialized).not.toContain(privateValue);
     }
+  });
+
+  it("uses Windows structural policy without invoking the POSIX store chmod stage", async () => {
+    const scenario = injected({ fail: { chmod: new Error("must not run") } });
+
+    const result = await runCoachDevWriter(
+      {
+        env: {},
+        writerVersion: "windows-writer/1",
+        platform: "win32",
+        operation: async () => "done",
+      },
+      scenario.deps,
+    );
+
+    expect(result).toEqual({ status: "completed", value: "done" });
+    expect(scenario.calls).toEqual([
+      "resolve",
+      "prepare",
+      "acquire",
+      "mkdir",
+      "windows-directory",
+      "open",
+      "migrate",
+      "close",
+      "release",
+    ]);
+    expect(scenario.observed.prepare).toEqual({ platform: "win32" });
+    expect(scenario.observed.lock).toEqual({
+      configDir: scenario.home.configDir,
+      athleteHome: scenario.home.root,
+      version: "windows-writer/1",
+      platform: "win32",
+    });
+    expect(scenario.observed.chmod).toBeUndefined();
+  });
+
+  it("fails before store open when the Windows store-directory assertion fails", async () => {
+    const assertionFailure = new Error("private Windows assertion detail");
+    const scenario = injected({ fail: { "windows-directory": assertionFailure } });
+
+    const result = await runCoachDevWriter(
+      {
+        env: {},
+        writerVersion: "windows-writer/1",
+        platform: "win32",
+        operation: async () => "unreachable",
+      },
+      scenario.deps,
+    );
+
+    expect(result).toEqual({ status: "failed", stage: "secure store directory" });
+    expect(result.status === "failed" && result.cause).toBe(assertionFailure);
+    expect(scenario.calls).toEqual([
+      "resolve",
+      "prepare",
+      "acquire",
+      "mkdir",
+      "windows-directory",
+      "release",
+    ]);
   });
 
   it("runs the pre-open hook under the writer before store effects and releases on failure", async () => {

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -42,16 +42,31 @@ describe("Node filesystem adapter", () => {
     await writeFile(target, "old\n");
     await nodeFileSystem().writeFile(target, "replacement\n", { mode: 0o600 });
     expect(await readFile(target, "utf8")).toBe("replacement\n");
-    expect((await stat(target)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(target)).mode & 0o777).toBe(0o600);
+    }
   });
 
-  it("secures private directories to mode 0700", async () => {
+  it.runIf(process.platform !== "win32")("secures private directories to mode 0700", async () => {
     const directory = join(await root(), "private");
     await ensurePrivateDirectory(directory);
     expect((await stat(directory)).mode & 0o777).toBe(0o700);
     await ensurePrivateDirectory(directory);
     expect((await stat(directory)).mode & 0o777).toBe(0o700);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "uses structural checks instead of POSIX mode changes on Windows",
+    async () => {
+      const directory = join(await root(), "private");
+      await mkdir(directory, { mode: 0o755 });
+      const before = (await stat(directory)).mode & 0o777;
+
+      await ensurePrivateDirectory(directory, { platform: "win32" });
+
+      expect((await stat(directory)).mode & 0o777).toBe(before);
+    },
+  );
 
   it("removes absent files idempotently and rethrows other errors", async () => {
     const directory = await root();
