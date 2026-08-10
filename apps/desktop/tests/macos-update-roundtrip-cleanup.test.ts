@@ -47,7 +47,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         'const { spawn } = require("node:child_process");',
         `const helper = spawn(process.execPath, ["-e", ${JSON.stringify(helperCode)}, process.argv[1], process.argv[2]], { stdio: ["ignore", "inherit", "inherit", "pipe"] });`,
         'helper.stdio[3].once("data", () => {',
-        "  process.stdout.write(`helper:${helper.pid}\\n`, () => process.exit(0));",
+        "  process.stdout.write(`helper:${helper.pid}\\n`, () => setTimeout(() => process.exit(0), 300));",
         "});",
       ].join("");
       const child = actual.spawn(
@@ -173,6 +173,29 @@ async function stopChild(child: ChildProcess): Promise<void> {
   await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 1_000))]);
 }
 
+function observedProcessTable() {
+  const processes = [
+    { pid: process.pid, parentPid: process.ppid, startedAt: "Sun Aug 9 16:00:00 2026" },
+  ];
+  const child = harness.children.at(-1);
+  if (child?.pid !== undefined && processIsReachable(child.pid)) {
+    processes.push({
+      pid: child.pid,
+      parentPid: process.pid,
+      startedAt: "Sun Aug 9 16:00:01 2026",
+    });
+  }
+  const helperPid = harness.helperPid;
+  if (helperPid !== undefined && processIsReachable(helperPid)) {
+    processes.push({
+      pid: helperPid,
+      parentPid: child?.pid !== undefined && processIsReachable(child.pid) ? child.pid : 1,
+      startedAt: "Sun Aug 9 16:00:02 2026",
+    });
+  }
+  return processes;
+}
+
 afterEach(async () => {
   await Promise.all(harness.children.map(stopChild));
   await stopProcess(harness.helperPid);
@@ -275,6 +298,7 @@ describe("macOS updater failure cleanup", () => {
               ? { bundlePids: [helperPid], mainPids: [] }
               : { bundlePids: [], mainPids: [] };
           },
+          readProcessTable: async () => observedProcessTable(),
         },
       );
     } catch (error) {

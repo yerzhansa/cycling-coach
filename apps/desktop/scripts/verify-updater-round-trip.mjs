@@ -49,6 +49,8 @@ const shutdownTimeoutMs = 30_000;
 const cleanupTerminationGraceMs = 2_000;
 const cleanupKillGraceMs = 2_000;
 const cleanupSocketGraceMs = 1_000;
+const processTrackingIntervalMs = 250;
+const maximumProcessTableBytes = 4 * 1024 * 1024;
 const rendererRpcTimeoutMs = 30_000;
 const rendererDebuggerTimeoutSlackMs = 5_000;
 const credentialDirectoryName = "credentials-v1";
@@ -511,6 +513,319 @@ async function observeApplicationProcesses(application) {
     fail("application process observation failed");
   }
   return parseMacosApplicationProcessObservation(result.stdout, application);
+}
+
+const processStartPattern =
+  /^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u;
+
+export function parseMacosProcessTableObservation(bytes) {
+  if (
+    !(bytes instanceof Uint8Array) ||
+    bytes.length === 0 ||
+    bytes.length > maximumProcessTableBytes
+  ) {
+    fail("process table observation is invalid");
+  }
+  const processes = [];
+  const seen = new Set();
+  for (const rawLine of Buffer.from(bytes).toString("utf8").split(/\r?\n/u)) {
+    if (rawLine.trim() === "") continue;
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/u.exec(rawLine);
+    if (match === null) fail("process table observation is malformed");
+    const pid = Number(match[1]);
+    const parentPid = Number(match[2]);
+    const startedAt = match[3].replace(/\s+/gu, " ");
+    if (
+      !Number.isSafeInteger(pid) ||
+      pid < 1 ||
+      !Number.isSafeInteger(parentPid) ||
+      parentPid < 0 ||
+      !processStartPattern.test(startedAt) ||
+      seen.has(pid)
+    ) {
+      fail("process table observation is ambiguous");
+    }
+    seen.add(pid);
+    processes.push(Object.freeze({ pid, parentPid, startedAt }));
+  }
+  if (processes.length === 0) fail("process table observation is empty");
+  processes.sort((left, right) => left.pid - right.pid);
+  return Object.freeze(processes);
+}
+
+async function observeProcessTable() {
+  const result = await runAcceptanceCommand("/bin/ps", ["-ww", "-axo", "pid=,ppid=,lstart="], {
+    allowFailure: true,
+    environment: { ...process.env, LANG: "C", LC_ALL: "C" },
+    timeoutMs: 5_000,
+  });
+  if (
+    result.code !== 0 ||
+    result.signal !== null ||
+    result.stderr.length !== 0 ||
+    result.stdout.length === 0
+  ) {
+    fail("process table observation failed");
+  }
+  return parseMacosProcessTableObservation(result.stdout);
+}
+
+function processIdentityKey(identity) {
+  return `${identity.pid}:${identity.startedAt}`;
+}
+
+function sameProcessIdentity(left, right) {
+  return left.pid === right.pid && left.startedAt === right.startedAt;
+}
+
+function requireProcessTableObservation(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    fail("process table observation is invalid");
+  }
+  const seen = new Set();
+  const processes = value.map((candidate) => {
+    if (
+      !exactKeys(candidate, ["parentPid", "pid", "startedAt"]) ||
+      !Number.isSafeInteger(candidate.pid) ||
+      candidate.pid < 1 ||
+      !Number.isSafeInteger(candidate.parentPid) ||
+      candidate.parentPid < 0 ||
+      typeof candidate.startedAt !== "string" ||
+      !processStartPattern.test(candidate.startedAt) ||
+      seen.has(candidate.pid)
+    ) {
+      fail("process table observation is ambiguous");
+    }
+    seen.add(candidate.pid);
+    return Object.freeze({
+      pid: candidate.pid,
+      parentPid: candidate.parentPid,
+      startedAt: candidate.startedAt,
+    });
+  });
+  processes.sort((left, right) => left.pid - right.pid);
+  return Object.freeze(processes);
+}
+
+export function createMacosApplicationProcessObserver(application, context = {}) {
+  if (!isAbsolute(application) || !application.endsWith(".app")) {
+    fail("application process observer is invalid");
+  }
+  const observeBundleProcesses =
+    context.observeBundleProcesses ?? (() => observeApplicationProcesses(application));
+  const readProcessTable = context.readProcessTable ?? observeProcessTable;
+  const signalProcess = context.signalProcess ?? ((pid, signal) => process.kill(pid, signal));
+  const trackingIntervalMs = context.trackingIntervalMs ?? processTrackingIntervalMs;
+  if (!Number.isSafeInteger(trackingIntervalMs) || trackingIntervalMs < 10) {
+    fail("application process observer interval is invalid");
+  }
+
+  const roots = new Map();
+  let closed = false;
+  let monitor;
+  let refreshInFlight;
+  let trackingFailed = false;
+
+  const requireOpen = () => {
+    if (closed) fail("application process observer is closed");
+    if (trackingFailed) fail("application process tracking failed");
+  };
+
+  const updateRoot = (root, table) => {
+    if (root.frozen) return;
+    const currentByPid = new Map(table.map((identity) => [identity.pid, identity]));
+    const liveOwnedPids = new Set();
+    for (const identity of root.tracked.values()) {
+      const current = currentByPid.get(identity.pid);
+      if (current !== undefined && sameProcessIdentity(identity, current)) {
+        liveOwnedPids.add(identity.pid);
+      }
+    }
+    let added = true;
+    while (added) {
+      added = false;
+      for (const identity of table) {
+        const key = processIdentityKey(identity);
+        if (root.tracked.has(key) || !liveOwnedPids.has(identity.parentPid)) continue;
+        root.tracked.set(key, identity);
+        liveOwnedPids.add(identity.pid);
+        added = true;
+      }
+    }
+  };
+
+  const readAndTrack = async () => {
+    requireOpen();
+    let observed;
+    try {
+      observed = requireProcessTableObservation(await readProcessTable());
+    } catch (error) {
+      trackingFailed = true;
+      if (error instanceof MacosUpdaterRoundTripError) throw error;
+      fail("process table observation failed");
+    }
+    for (const root of roots.values()) updateRoot(root, observed);
+    return observed;
+  };
+
+  const refresh = async () => {
+    if (refreshInFlight !== undefined) return refreshInFlight;
+    const pending = readAndTrack();
+    refreshInFlight = pending;
+    try {
+      return await pending;
+    } finally {
+      if (refreshInFlight === pending) refreshInFlight = undefined;
+    }
+  };
+
+  const ensureMonitor = () => {
+    if (monitor !== undefined) return;
+    monitor = setInterval(() => {
+      void refresh().catch(() => {
+        trackingFailed = true;
+      });
+    }, trackingIntervalMs);
+    monitor.unref?.();
+  };
+
+  const liveTrackedProcesses = (table) => {
+    const currentByPid = new Map(table.map((identity) => [identity.pid, identity]));
+    const live = new Map();
+    for (const root of roots.values()) {
+      for (const identity of root.tracked.values()) {
+        const current = currentByPid.get(identity.pid);
+        if (current !== undefined && sameProcessIdentity(identity, current)) {
+          live.set(processIdentityKey(identity), current);
+        }
+      }
+    }
+    return live;
+  };
+
+  const trackRoot = async (pid) => {
+    if (!Number.isSafeInteger(pid) || pid < 1) fail("application process root is invalid");
+    const table = await refresh();
+    const identity = table.find((candidate) => candidate.pid === pid);
+    if (identity === undefined) fail("application process root is missing");
+    const key = processIdentityKey(identity);
+    let root = roots.get(key);
+    if (root === undefined) {
+      root = { frozen: false, identity, tracked: new Map([[key, identity]]) };
+      roots.set(key, root);
+      updateRoot(root, table);
+    }
+    ensureMonitor();
+    return identity;
+  };
+
+  const freezeRoot = async (identity) => {
+    const key = processIdentityKey(identity);
+    const root = roots.get(key);
+    if (root === undefined || !sameProcessIdentity(root.identity, identity)) {
+      fail("application process root is unknown");
+    }
+    const table = await refresh();
+    updateRoot(root, table);
+    root.frozen = true;
+    return Object.freeze([...root.tracked.values()]);
+  };
+
+  const freezeAll = async () => {
+    const table = await refresh();
+    for (const root of roots.values()) {
+      updateRoot(root, table);
+      root.frozen = true;
+    }
+  };
+
+  const observe = async () => {
+    requireOpen();
+    const before = await refresh();
+    const bundle = await observeBundleProcesses();
+    if (
+      !exactKeys(bundle, ["bundlePids", "mainPids"]) ||
+      !Array.isArray(bundle.bundlePids) ||
+      !Array.isArray(bundle.mainPids) ||
+      [...bundle.bundlePids, ...bundle.mainPids].some(
+        (pid) => !Number.isSafeInteger(pid) || pid < 1,
+      ) ||
+      new Set(bundle.bundlePids).size !== bundle.bundlePids.length ||
+      new Set(bundle.mainPids).size !== bundle.mainPids.length ||
+      bundle.mainPids.some((pid) => !bundle.bundlePids.includes(pid))
+    ) {
+      fail("application process observation is invalid");
+    }
+    const after = await refresh();
+    const beforeByPid = new Map(before.map((identity) => [identity.pid, identity]));
+    const afterByPid = new Map(after.map((identity) => [identity.pid, identity]));
+    const owned = liveTrackedProcesses(after);
+    for (const pid of bundle.bundlePids) {
+      const beforeIdentity = beforeByPid.get(pid);
+      const afterIdentity = afterByPid.get(pid);
+      if (
+        beforeIdentity === undefined ||
+        afterIdentity === undefined ||
+        !sameProcessIdentity(beforeIdentity, afterIdentity)
+      ) {
+        fail("application process observation changed while reading");
+      }
+      owned.set(processIdentityKey(afterIdentity), afterIdentity);
+    }
+    const ownedProcesses = [...owned.values()].sort((left, right) => left.pid - right.pid);
+    return Object.freeze({
+      bundlePids: Object.freeze([...bundle.bundlePids]),
+      mainPids: Object.freeze([...bundle.mainPids]),
+      ownedPids: Object.freeze(ownedProcesses.map((identity) => identity.pid)),
+      ownedProcesses: Object.freeze(ownedProcesses),
+    });
+  };
+
+  const signalIdentity = async (identity, signal) => {
+    // A PID can be reused after observation, so authority must survive this final birth check.
+    const table = await refresh();
+    const current = table.find((candidate) => candidate.pid === identity.pid);
+    if (current === undefined || !sameProcessIdentity(identity, current)) return true;
+    try {
+      signalProcess(identity.pid, signal);
+      return true;
+    } catch (error) {
+      return error?.code === "ESRCH";
+    }
+  };
+
+  const signalAll = async (signal) => {
+    const observation = await observe();
+    const rootKeys = new Set([...roots.values()].map((root) => processIdentityKey(root.identity)));
+    const ordered = [...observation.ownedProcesses].sort((left, right) => {
+      const leftRoot = rootKeys.has(processIdentityKey(left));
+      const rightRoot = rootKeys.has(processIdentityKey(right));
+      if (leftRoot !== rightRoot) return leftRoot ? -1 : 1;
+      return left.pid - right.pid;
+    });
+    let signaledAll = true;
+    for (const identity of ordered) {
+      if (!(await signalIdentity(identity, signal))) signaledAll = false;
+    }
+    return signaledAll;
+  };
+
+  const close = async () => {
+    if (closed) return;
+    if (monitor !== undefined) clearInterval(monitor);
+    if (refreshInFlight !== undefined) await refreshInFlight.catch(() => undefined);
+    closed = true;
+  };
+
+  return Object.freeze({
+    close,
+    freezeAll,
+    freezeRoot,
+    observe,
+    signalAll,
+    signalIdentity,
+    trackRoot,
+  });
 }
 
 async function debuggerListenerOwner(port, environment) {
@@ -1227,55 +1542,46 @@ async function closeRoundTripConnection(connection) {
   }).catch(() => false);
 }
 
-function signalObservedProcesses(observation, signal) {
-  for (const pid of observation.bundlePids) {
-    try {
-      process.kill(pid, signal);
-    } catch (error) {
-      if (error?.code !== "ESRCH") return false;
-    }
-  }
-  return true;
-}
-
-async function waitForObservedProcessExit(observeProcesses, application, timeoutMs) {
+async function waitForObservedProcessExit(processObserver, timeoutMs) {
   return waitUntil(
     "updater application cleanup",
     async () => {
-      const observation = await observeProcesses(application);
-      return observation.bundlePids.length === 0 ? true : false;
+      const observation = await processObserver.observe();
+      return observation.ownedPids.length === 0 ? true : false;
     },
     timeoutMs,
     100,
   ).catch(() => false);
 }
 
-async function terminateObservedApplication(observeProcesses, application) {
-  if (application === undefined) return true;
+async function terminateObservedApplication(processObserver) {
+  if (processObserver === undefined) return true;
   let observation;
   try {
-    observation = await observeProcesses(application);
+    observation = await processObserver.observe();
   } catch {
     return false;
   }
-  if (observation.bundlePids.length === 0) return true;
-  const gracefulSignalSent = signalObservedProcesses(observation, "SIGTERM");
+  if (observation.ownedPids.length === 0) return true;
+  const gracefulSignalSent = await processObserver.signalAll("SIGTERM");
   if (
     gracefulSignalSent &&
-    (await waitForObservedProcessExit(observeProcesses, application, cleanupTerminationGraceMs))
+    (await waitForObservedProcessExit(processObserver, cleanupTerminationGraceMs))
   ) {
     return true;
   }
-  try {
-    observation = await observeProcesses(application);
-  } catch {
-    return false;
-  }
-  if (!signalObservedProcesses(observation, "SIGKILL")) return false;
-  return waitForObservedProcessExit(observeProcesses, application, cleanupKillGraceMs);
+  if (!(await processObserver.signalAll("SIGKILL"))) return false;
+  return waitForObservedProcessExit(processObserver, cleanupKillGraceMs);
 }
 
 async function cleanupRoundTripResources(input) {
+  const observerFrozen =
+    input.processObserver === undefined
+      ? true
+      : await input.processObserver
+          .freezeAll()
+          .then(() => true)
+          .catch(() => false);
   const [connectionResults, childResults] = await Promise.all([
     Promise.all([
       closeRoundTripConnection(input.debuggerConnection),
@@ -1287,9 +1593,19 @@ async function cleanupRoundTripResources(input) {
     ]),
   ]);
   const applicationTerminated = input.terminateApplication
-    ? await terminateObservedApplication(input.observeProcesses, input.installedApplication)
+    ? observerFrozen && (await terminateObservedApplication(input.processObserver))
     : true;
-  return [...connectionResults, ...childResults, applicationTerminated].every(Boolean);
+  const observerClosed = await input.processObserver
+    ?.close()
+    .then(() => true)
+    .catch(() => false);
+  return [
+    ...connectionResults,
+    ...childResults,
+    observerFrozen,
+    applicationTerminated,
+    observerClosed ?? true,
+  ].every(Boolean);
 }
 
 async function restoreRoundTripKeychain(keychain) {
@@ -1316,7 +1632,6 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
     const inspectApplication = overrides.inspectApplication ?? inspectMacosReleaseApplication;
     const createScratch = overrides.createScratch ?? createPrivateScratch;
     const removeScratch = overrides.removeScratch ?? removePrivateScratch;
-    const observeProcesses = overrides.observeProcesses ?? observeApplicationProcesses;
     const writeEvidenceFile = overrides.writeEvidence ?? writeEvidence;
     phase = "verify-release-envelopes";
     const baselineArtifacts = await verifyArtifacts(input.baselineEnvelope, input.baselineVersion);
@@ -1346,6 +1661,7 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
     let debuggerConnection;
     let verificationConnection;
     let installedApplication;
+    let processObserver;
     let keychain;
     let completed = false;
     try {
@@ -1363,6 +1679,13 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       await mkdir(installRoot, { mode: 0o700 });
       installedApplication = join(installRoot, `${productName}.app`);
       await installApplication(baselineApplication, installedApplication);
+      processObserver = createMacosApplicationProcessObserver(installedApplication, {
+        observeBundleProcesses:
+          overrides.observeProcesses === undefined
+            ? undefined
+            : () => overrides.observeProcesses(installedApplication),
+        readProcessTable: overrides.readProcessTable,
+      });
       phase = "inspect-release-identities";
       const [baselineIdentity, candidateIdentity, installedBaselineIdentity] = await Promise.all([
         inspectApplication(baselineApplication),
@@ -1439,6 +1762,7 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       );
       if (launch.state !== "spawned") fail("baseline application could not launch");
       const initialPid = launch.pid;
+      const initialRootIdentity = await processObserver.trackRoot(initialPid);
       const debuggerUrl = await waitForPage(debuggerPort, { timeoutMs: 60_000 });
       if ((await debuggerListenerOwner(debuggerPort, environment)) !== initialPid) {
         fail("baseline debugger listener is outside the installed application");
@@ -1457,7 +1781,7 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       const beforePersistence = await seedApplicationState(debuggerConnection, persistenceInput);
       phase = "download-update";
       await waitForDownloadedState(debuggerConnection, input.candidateVersion);
-      const initialProcesses = await observeProcesses(installedApplication);
+      const initialProcesses = await processObserver.observe();
       if (initialProcesses.mainPids.length !== 1 || initialProcesses.mainPids[0] !== initialPid) {
         fail("baseline application process identity is ambiguous");
       }
@@ -1465,6 +1789,11 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         updaterCache,
         candidateArtifacts,
         candidateDigest,
+      );
+      // Freeze N before installation so an updater-spawned N+1 cannot inherit N's cleanup authority.
+      const trackedInitialProcesses = await processObserver.freezeRoot(initialRootIdentity);
+      const initialProcessIdentities = new Set(
+        [...trackedInitialProcesses, ...initialProcesses.ownedProcesses].map(processIdentityKey),
       );
       phase = "install-update";
       await clickInstallUpdate(debuggerConnection, input.candidateVersion);
@@ -1478,13 +1807,18 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       if (terminal.code !== 0 || terminal.signal !== null) {
         fail("baseline application did not exit cleanly for update");
       }
-      const initialPids = new Set(initialProcesses.bundlePids);
       phase = "observe-relaunch";
       const relaunchedProcesses = await waitUntil(
         "relaunched candidate application",
         async () => {
-          const observation = await observeProcesses(installedApplication);
-          if (observation.bundlePids.some((pid) => initialPids.has(pid))) return false;
+          const observation = await processObserver.observe();
+          if (
+            observation.ownedProcesses.some((identity) =>
+              initialProcessIdentities.has(processIdentityKey(identity)),
+            )
+          ) {
+            return false;
+          }
           if (observation.mainPids.length !== 1 || observation.mainPids[0] === initialPid)
             return false;
           return observation;
@@ -1493,6 +1827,7 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         250,
       );
       relaunchedPid = relaunchedProcesses.mainPids[0];
+      const relaunchedRootIdentity = await processObserver.trackRoot(relaunchedPid);
       phase = "verify-relaunch";
       const relaunchedIdentity = await waitUntil(
         "relaunched candidate identity",
@@ -1512,20 +1847,23 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         installedBaseline: installedBaselineIdentity,
         relaunched: relaunchedIdentity,
       });
-      const beforeFinalShutdown = await observeProcesses(installedApplication);
+      const beforeFinalShutdown = await processObserver.observe();
       if (
         beforeFinalShutdown.mainPids.length !== 1 ||
         beforeFinalShutdown.mainPids[0] !== relaunchedPid
       ) {
         fail("relaunched application process identity changed before shutdown");
       }
+      await processObserver.freezeRoot(relaunchedRootIdentity);
       phase = "shutdown-relaunch";
-      process.kill(relaunchedPid, "SIGTERM");
+      if (!(await processObserver.signalIdentity(relaunchedRootIdentity, "SIGTERM"))) {
+        fail("relaunched application graceful shutdown signal failed");
+      }
       await waitUntil(
         "relaunched application graceful shutdown",
         async () => {
-          const observation = await observeProcesses(installedApplication);
-          return observation.bundlePids.length === 0 ? true : false;
+          const observation = await processObserver.observe();
+          return observation.ownedPids.length === 0 ? true : false;
         },
         shutdownTimeoutMs,
         100,
@@ -1549,6 +1887,7 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       if (verificationLaunch.state !== "spawned") {
         fail("candidate persistence verification could not launch");
       }
+      const verificationRootIdentity = await processObserver.trackRoot(verificationLaunch.pid);
       const verificationUrl = await waitForPage(verificationPort, { timeoutMs: 60_000 });
       if ((await debuggerListenerOwner(verificationPort, environment)) !== verificationLaunch.pid) {
         fail("candidate persistence debugger listener is outside the installed application");
@@ -1557,8 +1896,11 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       await callAcceptanceCdp(verificationConnection, "Runtime.enable");
       phase = "verify-persistence";
       const afterPersistence = await readPersistenceView(verificationConnection, persistenceInput);
+      await processObserver.freezeRoot(verificationRootIdentity);
       phase = "shutdown-persistence-verification";
-      verificationChild.kill("SIGTERM");
+      if (!(await processObserver.signalIdentity(verificationRootIdentity, "SIGTERM"))) {
+        fail("candidate persistence verification shutdown signal failed");
+      }
       const verificationTerminal = await withAcceptanceDeadline(
         "candidate persistence verification shutdown",
         verificationExit,
@@ -1571,8 +1913,8 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       await waitUntil(
         "candidate persistence verification process cleanup",
         async () => {
-          const observation = await observeProcesses(installedApplication);
-          return observation.bundlePids.length === 0 ? true : false;
+          const observation = await processObserver.observe();
+          return observation.ownedPids.length === 0 ? true : false;
         },
         shutdownTimeoutMs,
         100,
@@ -1620,8 +1962,7 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         verificationConnection,
         initialChild,
         verificationChild,
-        installedApplication,
-        observeProcesses,
+        processObserver,
         terminateApplication: !completed,
       }).catch(() => false);
       const keychainRestored = cleaned ? await restoreRoundTripKeychain(keychain) : false;
