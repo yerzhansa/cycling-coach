@@ -494,6 +494,52 @@ describe("settings mutation lock", () => {
     expect(screen.getByRole("region", { name: "Settings" })).not.toHaveAttribute("aria-busy");
     expect(subject.calls.some((call) => call.method === "configureRuntime")).toBe(true);
   });
+
+  it("holds the update action until the active settings mutation settles", async () => {
+    const user = userEvent.setup();
+    const pending = deferred<unknown>();
+    const subject = await renderSettings({
+      configureRuntime: () => pending.promise,
+      updateState: { status: "downloaded", version: "1998.7.7" },
+    });
+    await act(async () => {
+      await subject.startUpdate();
+    });
+
+    const updateAction = await screen.findByRole("button", {
+      name: "Restart to update to version 1998.7.7",
+    });
+    expect(updateAction).toBeEnabled();
+
+    await user.clear(screen.getByLabelText("Idle reset (minutes)"));
+    await user.type(screen.getByLabelText("Idle reset (minutes)"), "45");
+    await user.click(screen.getByRole("button", { name: "Save conversation settings" }));
+
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().settings.savingOwners).toEqual(["session"]);
+    });
+    expect(updateAction).toBeDisabled();
+    expect(screen.getByRole("button", { name: "What’s new" })).toBeEnabled();
+    await user.click(updateAction);
+    expect(subject.restartToUpdate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pending.resolve({
+        schemaVersion: 3,
+        status: "applied",
+        applied: { llm: true, intervals: true, session: true },
+      });
+      await pending.promise;
+    });
+    await waitFor(() => {
+      expect(updateAction).toBeEnabled();
+    });
+
+    await user.click(updateAction);
+    await waitFor(() => {
+      expect(subject.restartToUpdate).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe("conversation settings", () => {
