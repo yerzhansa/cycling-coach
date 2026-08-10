@@ -141,6 +141,10 @@ function activeController(
 }
 
 describe("desktop update controller", () => {
+  it("checks for updates every six hours", () => {
+    expect(DESKTOP_UPDATE_INTERVAL_MS).toBe(6 * 60 * 60 * 1_000);
+  });
+
   it("is silent when release eligibility is disabled", async () => {
     const loadUpdater = vi.fn();
     const setInterval = vi.fn();
@@ -185,7 +189,7 @@ describe("desktop update controller", () => {
     expect(setInterval).not.toHaveBeenCalled();
   });
 
-  it("configures a quiet updater, performs startup and unref'd daily checks, and cleans up", async () => {
+  it("configures a quiet updater, performs startup and unref'd six-hour checks, and cleans up", async () => {
     const fake = fakeUpdater();
     vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.0"));
     const subject = activeController(fake.updater);
