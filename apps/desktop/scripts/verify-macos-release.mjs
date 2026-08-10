@@ -476,40 +476,6 @@ async function verifyMacosReleaseCandidateBundle(
   });
 }
 
-export async function verifyMacosReleaseCandidateApplication(
-  candidateApplication,
-  options,
-  overrides = {},
-) {
-  let candidateVersion;
-  try {
-    candidateVersion = requireStableSemVer(options?.candidateVersion);
-  } catch {
-    fail("candidate release version is invalid");
-  }
-  if (typeof candidateApplication !== "string" || !isAbsolute(candidateApplication)) {
-    fail("candidate application path must be absolute");
-  }
-  const dependencies = {
-    executeFile: overrides.executeFile ?? executeSystemFile,
-    extractAsarFile: overrides.extractAsarFile ?? extractFile,
-    lstat: overrides.lstat ?? lstat,
-    mkdtemp: overrides.mkdtemp ?? mkdtemp,
-    realpath: overrides.realpath ?? realpath,
-    rm: overrides.rm ?? rm,
-    statAsarFile: overrides.statAsarFile ?? statFile,
-    tmpdir: overrides.tmpdir ?? tmpdir,
-    uncacheAsar: overrides.uncacheAsar ?? uncacheAsarFile,
-  };
-  const bundle = await requireApplicationBundle(candidateApplication, "candidate", dependencies);
-  return verifyMacosReleaseCandidateBundle(
-    candidateApplication,
-    candidateVersion,
-    bundle,
-    dependencies,
-  );
-}
-
 async function readMacosReleaseUpdaterMetadata(application, dependencies) {
   const path = join(application, "Contents/Resources/app-update.yml");
   let before;
@@ -1482,26 +1448,6 @@ export async function verifyMacosReleaseApplicationContents(
   );
 }
 
-export async function verifyMacosGenesisReleaseApplicationContents(
-  artifactDirectory,
-  options,
-  overrides = {},
-) {
-  const verifyCandidateApplication =
-    overrides.verifyCandidateApplication ?? verifyMacosReleaseCandidateApplication;
-  return verifyMacosReleaseApplicationContentsWithCandidate(
-    artifactDirectory,
-    options,
-    overrides,
-    (application) =>
-      verifyCandidateApplication(
-        application,
-        { candidateVersion: options?.candidateVersion },
-        overrides,
-      ),
-  );
-}
-
 async function runSystemVerification(executeFile, executable, arguments_, failureMessage) {
   try {
     await executeFile(executable, arguments_);
@@ -1846,43 +1792,6 @@ export async function verifyMacosReleaseEnvelope(
     overrides,
   );
   return Object.freeze({ artifacts, identityContinuity });
-}
-
-export async function verifyMacosGenesisReleaseEnvelope(
-  artifactDirectory,
-  looseCandidateApplication,
-  options = {},
-  overrides = {},
-) {
-  const verifyReleaseArtifacts = overrides.verifyReleaseArtifacts ?? verifyMacosReleaseArtifacts;
-  const artifacts = await verifyReleaseArtifacts(artifactDirectory, options, overrides);
-  let candidateVersion;
-  try {
-    candidateVersion = requireStableSemVer(artifacts?.version);
-  } catch {
-    fail("verified release version is invalid");
-  }
-  const verifyCandidateApplication =
-    overrides.verifyCandidateApplication ?? verifyMacosReleaseCandidateApplication;
-  const candidateIdentity = await verifyCandidateApplication(
-    looseCandidateApplication,
-    { candidateVersion },
-    overrides,
-  );
-  if (candidateIdentity?.version !== candidateVersion) {
-    fail("loose candidate release identity is invalid");
-  }
-  const looseCandidateCodeIdentity = requireCandidateCodeIdentity(
-    candidateIdentity.candidateCodeIdentity,
-  );
-  const verifyReleaseApplicationContents =
-    overrides.verifyReleaseApplicationContents ?? verifyMacosGenesisReleaseApplicationContents;
-  await verifyReleaseApplicationContents(
-    artifactDirectory,
-    { candidateVersion, looseCandidateCodeIdentity },
-    overrides,
-  );
-  return Object.freeze({ artifacts, candidateIdentity });
 }
 
 async function main() {

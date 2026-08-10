@@ -8,13 +8,6 @@ on:
         description: "Exact enduragent-desktop@<version> tag"
         required: true
         type: string
-      desktop_mode:
-        description: "macOS release continuity mode"
-        type: choice
-        default: steady
-        options:
-          - steady
-          - genesis
       desktop_baseline_tag:
         description: "Explicit prior signed desktop release tag; leave empty to require repository latest"
         required: false
@@ -50,7 +43,6 @@ jobs:
       desktop_version: ${{ steps.bind.outputs.desktop_version }}
       commit: ${{ steps.bind.outputs.commit }}
       tooling_commit: ${{ steps.bind.outputs.tooling_commit }}
-      mode: ${{ steps.bind.outputs.mode }}
       baseline_tag: ${{ steps.bind.outputs.baseline_tag }}
       source_run_id: ${{ steps.bind.outputs.source_run_id }}
     steps:
@@ -62,7 +54,6 @@ jobs:
         id: bind
         env:
           RELEASE_TAG_INPUT: ${{ inputs.tag }}
-          RELEASE_MODE_INPUT: ${{ inputs.desktop_mode }}
           RELEASE_BASELINE_TAG_INPUT: ${{ inputs.desktop_baseline_tag }}
           RECOVERY_TOOLING_TAG_INPUT: ${{ inputs.recovery_tooling_tag }}
           RECOVERY_SOURCE_RUN_ID_INPUT: ${{ inputs.recovery_source_run_id }}
@@ -92,17 +83,8 @@ jobs:
             echo '::error::Desktop release commit must be merged into main'
             exit 1
           fi
-          MODE="$RELEASE_MODE_INPUT"
-          if [ "$MODE" != 'steady' ] && [ "$MODE" != 'genesis' ]; then
-            echo "::error::Unsupported desktop release mode '$MODE'"
-            exit 1
-          fi
           TOOLING_COMMIT="$COMMIT"
           if [ -n "$RECOVERY_TOOLING_TAG_INPUT" ]; then
-            if [ "$MODE" != 'steady' ]; then
-              echo '::error::Recovery tooling is allowed only for steady desktop releases'
-              exit 1
-            fi
             RECOVERY_TAG="$RECOVERY_TOOLING_TAG_INPUT"
             RECOVERY_REVISION="${RECOVERY_TAG#"${TAG}-recovery."}"
             if ! printf '%s' "$RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$' || \
@@ -130,8 +112,8 @@ jobs:
           fi
           SOURCE_RUN_ID=none
           if [ -n "$RECOVERY_SOURCE_RUN_ID_INPUT" ]; then
-            if [ -z "$RECOVERY_TOOLING_TAG_INPUT" ] || [ "$MODE" != 'steady' ]; then
-              echo '::error::A recovery source run requires steady mode and an immutable recovery tooling tag'
+            if [ -z "$RECOVERY_TOOLING_TAG_INPUT" ]; then
+              echo '::error::A recovery source run requires an immutable recovery tooling tag'
               exit 1
             fi
             printf '%s' "$RECOVERY_SOURCE_RUN_ID_INPUT" | grep -Eq '^[1-9][0-9]*$'
@@ -218,10 +200,6 @@ jobs:
           if [ -n "$RELEASE_BASELINE_TAG_INPUT" ]; then
             BASELINE_TAG="$RELEASE_BASELINE_TAG_INPUT"
           fi
-          if [ "$MODE" = 'genesis' ] && [ "$BASELINE_TAG" != 'none' ]; then
-            echo '::error::Genesis cannot consume a prior desktop baseline'
-            exit 1
-          fi
           if [ "$BASELINE_TAG" != 'none' ] && \
              [ "$BASELINE_TAG" != 'cycling-coach@2026.8.8' ] && \
              ! printf '%s' "$BASELINE_TAG" | grep -Eq '^enduragent-desktop@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
@@ -232,7 +210,6 @@ jobs:
           echo "desktop_version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
           echo "tooling_commit=$TOOLING_COMMIT" >> "$GITHUB_OUTPUT"
-          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "baseline_tag=$BASELINE_TAG" >> "$GITHUB_OUTPUT"
           echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
 
@@ -309,7 +286,6 @@ jobs:
       commit: ${{ needs.bind-release.outputs.commit }}
       tooling_commit: ${{ needs.bind-release.outputs.tooling_commit }}
       draft_id: ${{ needs.prepare-release-draft.outputs.draft_id }}
-      mode: ${{ needs.bind-release.outputs.mode }}
       draft_body_sha256: ${{ needs.prepare-release-draft.outputs.body_sha256 }}
       baseline_tag: ${{ needs.bind-release.outputs.baseline_tag }}
       source_run_id: ${{ needs.bind-release.outputs.source_run_id }}

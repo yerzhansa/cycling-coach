@@ -121,7 +121,7 @@ describe("desktop release workflow policy", () => {
     expectIssue({ ...source, coordinator }, "recovery tooling tag must be an optional string");
   });
 
-  it("requires an optional recovery source run guarded by steady recovery tooling", () => {
+  it("requires an optional recovery source run guarded by immutable recovery tooling", () => {
     const source = sources();
     const requiredSource = replaceRequired(
       source.coordinator,
@@ -144,12 +144,12 @@ describe("desktop release workflow policy", () => {
 
     const unguardedSource = replaceRequired(
       source.coordinator,
-      'if [ -z "$RECOVERY_TOOLING_TAG_INPUT" ] || [ "$MODE" != \'steady\' ]; then',
+      'if [ -z "$RECOVERY_TOOLING_TAG_INPUT" ]; then',
       "if false; then",
     );
     expectIssue(
       { ...source, coordinator: unguardedSource },
-      "source run must require a steady immutable recovery tag",
+      "source run must require an immutable recovery tag",
     );
   });
 
@@ -351,18 +351,13 @@ describe("desktop release workflow policy", () => {
     expectIssue({ ...source, coordinator }, "freeze the candidate release tuple once");
   });
 
-  it("binds recovery tooling to an exact steady-only tag on main", () => {
+  it("binds recovery tooling to an exact immutable tag on main", () => {
     const source = sources();
     const mutations = [
       replaceRequired(
         source.coordinator,
         "printf '%s' \"$RECOVERY_REVISION\" | grep -Eq '^[1-9][0-9]*$'",
         "printf '%s' \"$RECOVERY_REVISION\" | grep -Eq '^[0-9]+$'",
-      ),
-      replaceRequired(
-        source.coordinator,
-        "if [ \"$MODE\" != 'steady' ]; then",
-        "if [ \"$MODE\" != 'genesis' ]; then",
       ),
       replaceRequired(
         source.coordinator,
@@ -383,7 +378,7 @@ describe("desktop release workflow policy", () => {
     for (const [index, coordinator] of mutations.entries()) {
       expect(
         inspect({ ...source, coordinator }).some((issue) =>
-          issue.includes("distinct immutable steady-only tag"),
+          issue.includes("distinct immutable tag"),
         ),
         `recovery mutation ${index}`,
       ).toBe(true);
@@ -509,6 +504,30 @@ describe("desktop release workflow policy", () => {
     );
     expectIssue({ ...source, desktop }, "only the frozen desktop release tuple");
     expectIssue({ ...source, desktop }, "must not consume npm release identity");
+  });
+
+  it("rejects reintroduced genesis dispatch authority", () => {
+    const source = sources();
+    const coordinator = replaceRequired(
+      source.coordinator,
+      "      desktop_baseline_tag:\n",
+      "      desktop_mode:\n        description: Retired continuity mode\n        type: choice\n        options: [steady, genesis]\n      desktop_baseline_tag:\n",
+    );
+    expectIssue({ ...source, coordinator }, "coordinator inputs must remain desktop-only");
+
+    const desktop = replaceRequired(
+      source.desktop,
+      "      draft_body_sha256:\n",
+      "      mode:\n        description: Retired continuity mode\n        required: true\n        type: string\n      draft_body_sha256:\n",
+    );
+    expectIssue({ ...source, desktop }, "only the frozen desktop release tuple");
+
+    const version = replaceRequired(
+      source.version,
+      '-f tag="$DESKTOP_TAG"',
+      '-f tag="$DESKTOP_TAG" -f desktop_mode=genesis',
+    );
+    expectIssue({ ...source, version }, "independently tag and dispatch changed desktop SemVer");
   });
 
   it("keeps the desktop workflow reusable-call-only", () => {
@@ -985,8 +1004,8 @@ describe("desktop release workflow policy", () => {
       ),
       replaceRequired(
         source.desktop,
-        "      - name: Upload sealed baseline updater envelope\n        if: ${{ inputs.source_run_id == 'none' && inputs.mode == 'steady' }}",
-        "      - name: Upload sealed baseline updater envelope\n        if: ${{ inputs.mode == 'steady' }}",
+        "      - name: Upload sealed baseline updater envelope\n        if: ${{ inputs.source_run_id == 'none' }}",
+        "      - name: Upload sealed baseline updater envelope\n        if: ${{ always() }}",
       ),
     ];
     for (const desktop of mutations) {
@@ -1275,13 +1294,10 @@ describe("desktop release workflow policy", () => {
 
     const activation = replaceRequired(
       source.desktop,
-      "needs.reconcile-latest.result == 'success' &&\n          ((inputs.mode",
-      "needs.reconcile-latest.result == 'success' &&\n          needs.request-latest.result == 'success' &&\n          ((inputs.mode",
+      "needs.reconcile-latest.result == 'success' &&\n          needs.verify-production-update.result == 'success'",
+      "needs.reconcile-latest.result == 'success' &&\n          needs.request-latest.result == 'success' &&\n          needs.verify-production-update.result == 'success'",
     );
-    expectIssue(
-      { ...source, desktop: activation },
-      "activation must follow mode-specific acceptance",
-    );
+    expectIssue({ ...source, desktop: activation }, "activation must require native acceptance");
 
     const compensation = replaceRequired(
       source.desktop,
@@ -1375,7 +1391,7 @@ ${updaterCommandBlock}
       "needs.verify-production-update.result == 'success'",
       "needs.verify-production-update.result != 'failure'",
     );
-    expectIssue({ ...source, desktop: bypass }, "mode-specific acceptance");
+    expectIssue({ ...source, desktop: bypass }, "require native acceptance");
 
     const bypassReconciliation = replaceRequired(
       source.desktop,
@@ -1590,16 +1606,18 @@ ${updaterCommandBlock}
     expectIssue({ ...source, desktop }, "exact-four public envelope");
   });
 
-  it("requires explicit genesis and steady packaging plus native verification", () => {
+  it("requires steady-only packaging plus native verification", () => {
     const source = sources();
-    const wrongPackage = replaceRequired(source.desktop, "package:mac:genesis", "package:mac");
-    expectIssue({ ...source, desktop: wrongPackage }, "desktop packaging modes");
+    const wrongPackage = replaceRequired(source.desktop, "package:mac", "package:dir");
+    expectIssue({ ...source, desktop: wrongPackage }, "only steady desktop packaging");
     const wrongVerifier = replaceRequired(
       source.desktop,
-      "verify:mac-genesis-release \\",
       "verify:mac-release \\",
+      "verify:mac-genesis-release \\",
     );
     expectIssue({ ...source, desktop: wrongVerifier }, "exact-four public envelope");
+    const wrongTeam = replaceRequired(source.desktop, "\\(FA494ACVTF\\)$", "\\(AAAAAAAAAA\\)$");
+    expectIssue({ ...source, desktop: wrongTeam }, "exact-four public envelope");
   });
 
   it("requires independent candidate identity continuity", () => {

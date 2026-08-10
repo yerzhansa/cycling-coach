@@ -12,7 +12,7 @@ export const DESKTOP_RELEASE_SCHEMA_VERSION = 3 as const;
 export const DESKTOP_PROVISIONAL_RELEASE_BODY =
   "Desktop update validation is in progress. This release is not yet generally available.";
 
-export type DesktopReleaseMode = "steady" | "genesis";
+type RetainedDesktopReleaseMode = "steady" | "genesis";
 
 const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/u);
 const sha512Base64Schema = z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/u);
@@ -202,11 +202,17 @@ export function requireNpmVersion(value: unknown): string {
   return value;
 }
 
-export function requireMode(value: unknown): DesktopReleaseMode {
+function requireRetainedMode(value: unknown): RetainedDesktopReleaseMode {
   if (value !== "steady" && value !== "genesis") {
     throw new TypeError("desktop release mode is invalid");
   }
   return value;
+}
+
+function requireSteadyReleaseAuthority(mode: unknown): asserts mode is "steady" {
+  if (mode !== "steady") {
+    throw new TypeError("desktop genesis release authority is retired");
+  }
 }
 
 function desktopTag(version: string): string {
@@ -281,7 +287,7 @@ function requireBinding(input: {
   )
     throw new TypeError("signing identity is invalid");
   const baselineTag = typeof input.baselineTag === "string" ? input.baselineTag : "";
-  const mode = requireMode(input.mode);
+  const mode = requireRetainedMode(input.mode);
   const baselineEvidence = [
     input.baselineReleaseId,
     input.baselineCommit,
@@ -555,6 +561,7 @@ export async function sealDesktopRelease(
   bindingInput: Parameters<typeof requireBinding>[0],
 ): Promise<DesktopReleaseManifest> {
   const binding = requireBinding(bindingInput);
+  requireSteadyReleaseAuthority(binding.mode);
   const expected = releaseFileNames(binding.desktopVersion);
   const entries = (await readdir(directory)).sort();
   if (entries.length !== expected.length || expected.some((name) => !entries.includes(name))) {
@@ -740,27 +747,17 @@ export function assertPublishableAssets(
   if (stale) throw new TypeError(`stale release asset: ${stale.name}`);
 }
 
-export function assertReleaseMode(mode: DesktopReleaseMode, baselineVersion: string | null): void {
-  if (mode === "genesis" && baselineVersion !== null) {
-    throw new TypeError("genesis release refused after a desktop baseline exists");
-  }
-  if (mode === "steady" && baselineVersion === null) {
-    throw new TypeError("steady release requires a desktop baseline");
-  }
-}
-
 async function assertResolvedBaseline(
   manifest: DesktopReleaseManifest,
   baseline: Awaited<ReturnType<typeof newestDesktopRelease>>,
   client: GithubClient,
-): Promise<void> {
-  assertReleaseMode(manifest.mode, baseline?.version ?? null);
-  if (manifest.mode === "genesis") return;
-  const baselineZipName = baseline ? releaseFileNames(baseline.version)[1] : "";
-  const baselineZipAsset = baseline?.release.assets.find((asset) => asset.name === baselineZipName);
+): Promise<NonNullable<Awaited<ReturnType<typeof newestDesktopRelease>>>> {
+  requireSteadyReleaseAuthority(manifest.mode);
+  if (baseline === null) throw new TypeError("steady release requires a desktop baseline");
+  const baselineZipName = releaseFileNames(baseline.version)[1];
+  const baselineZipAsset = baseline.release.assets.find((asset) => asset.name === baselineZipName);
   const baselineZipBytes = baselineZipAsset ? await client.bytes(baselineZipAsset.url) : null;
   if (
-    !baseline ||
     compareVersions(baseline.version, manifest.desktopVersion) >= 0 ||
     manifest.baselineTag !== baseline.release.tag_name ||
     manifest.baselineReleaseId !== String(baseline.release.id) ||
@@ -772,6 +769,7 @@ async function assertResolvedBaseline(
   ) {
     throw new TypeError("desktop release baseline binding mismatch");
   }
+  return baseline;
 }
 
 export function assertRemoteAsset(file: DesktopReleaseFile, bytes: Uint8Array): void {
@@ -1319,8 +1317,8 @@ async function resolvedBaselineForManifest(
   manifest: DesktopReleaseManifest,
   client: GithubClient,
 ): Promise<Awaited<ReturnType<typeof newestDesktopRelease>>> {
+  requireSteadyReleaseAuthority(manifest.mode);
   const releases = await client.releases();
-  if (manifest.mode === "genesis") return newestDesktopRelease(releases, client, manifest.tag);
   const latest = await client.latestRelease();
   if (latest?.tag_name === manifest.tag) {
     return exactDesktopRelease(
@@ -1499,19 +1497,18 @@ export async function publishDesktopRelease(
   observedLatest?: LatestObservation,
 ): Promise<void> {
   const manifest = await verifyDesktopRelease(directory);
+  requireSteadyReleaseAuthority(manifest.mode);
   const release = await verifyRecoverableReleaseBinding(client, manifest);
   assertPublishableAssets(release.assets, manifest);
-  const baseline = await resolvedBaselineForManifest(manifest, client);
-  await assertResolvedBaseline(manifest, baseline, client);
+  const baseline = await assertResolvedBaseline(
+    manifest,
+    await resolvedBaselineForManifest(manifest, client),
+    client,
+  );
   if (observedLatest === undefined) {
     throw new TypeError("desktop publication requires a bound latest observation");
   }
-  assertLatestCas(
-    manifest.desktopVersion,
-    observedLatest,
-    await client.latest(),
-    baseline?.version ?? null,
-  );
+  assertLatestCas(manifest.desktopVersion, observedLatest, await client.latest(), baseline.version);
   let published = release;
   if (release.draft) {
     await stageExactAssets(client, release, directory, manifest);
@@ -1546,12 +1543,7 @@ export async function publishDesktopRelease(
       releasePropagationDeadline,
     );
   }
-  assertLatestCas(
-    manifest.desktopVersion,
-    observedLatest,
-    await client.latest(),
-    baseline?.version ?? null,
-  );
+  assertLatestCas(manifest.desktopVersion, observedLatest, await client.latest(), baseline.version);
 }
 
 export async function observeDesktopLatest(
@@ -1559,9 +1551,13 @@ export async function observeDesktopLatest(
   client: GithubClient,
 ): Promise<LatestObservation> {
   const manifest = await verifyDesktopRelease(directory);
+  requireSteadyReleaseAuthority(manifest.mode);
   const release = await verifyRecoverableReleaseBinding(client, manifest);
-  const baseline = await resolvedBaselineForManifest(manifest, client);
-  await assertResolvedBaseline(manifest, baseline, client);
+  await assertResolvedBaseline(
+    manifest,
+    await resolvedBaselineForManifest(manifest, client),
+    client,
+  );
   await assertCompleteReleaseAssets(client, release, manifest, "observed desktop release");
   return client.latest();
 }
@@ -1570,18 +1566,15 @@ export async function resolveDesktopRollbackLatest(
   directory: string,
   client: GithubClient,
   baselineMetadataSha256: string,
-  currentLatest?: LatestObservation,
 ): Promise<LatestObservation> {
   const manifest = await verifyDesktopRelease(directory);
-  const baseline = await resolvedBaselineForManifest(manifest, client);
-  await assertResolvedBaseline(manifest, baseline, client);
-  if (manifest.mode === "genesis") {
-    if (baselineMetadataSha256 !== "none") {
-      throw new TypeError("genesis rollback metadata must be none");
-    }
-    return requireObservedLatest(currentLatest ?? (await client.latest()));
-  }
-  if (!baseline || !sha256HexSchema.safeParse(baselineMetadataSha256).success) {
+  requireSteadyReleaseAuthority(manifest.mode);
+  const baseline = await assertResolvedBaseline(
+    manifest,
+    await resolvedBaselineForManifest(manifest, client),
+    client,
+  );
+  if (!sha256HexSchema.safeParse(baselineMetadataSha256).success) {
     throw new TypeError("steady rollback metadata binding is invalid");
   }
   const metadata = baseline.release.assets.find((asset) => asset.name === "latest-mac.yml");
@@ -1604,42 +1597,16 @@ export async function resolveDesktopRollbackLatest(
   };
 }
 
-async function verifyRestorableLatestObservation(
-  client: GithubClient,
-  rawObserved: LatestObservation,
-): Promise<LatestObservation> {
-  const observed = requireObservedLatest(rawObserved);
-  if (observed.id === null) return observed;
-  const release = await client.release(observed.id);
-  if (release.draft || release.prerelease || release.tag_name !== observed.tag) {
-    throw new TypeError("restorable latest release binding mismatch");
-  }
-  const metadata = release.assets.find((asset) => asset.name === "latest-mac.yml");
-  if (observed.metadataSha256 === null) {
-    if (metadata) throw new TypeError("restorable latest metadata appeared after observation");
-    return observed;
-  }
-  if (
-    !metadata ||
-    metadata.state !== "uploaded" ||
-    metadata.digest !== `sha256:${observed.metadataSha256}` ||
-    metadata.size <= 0
-  ) {
-    throw new TypeError("restorable latest metadata binding mismatch");
-  }
-  const bytes = await client.bytes(metadata.url);
-  if (bytes.length !== metadata.size || sha256(bytes) !== observed.metadataSha256) {
-    throw new TypeError("restorable latest metadata bytes mismatch");
-  }
-  return observed;
-}
-
 export async function stageDesktopRelease(directory: string, client: GithubClient): Promise<void> {
   const manifest = await verifyDesktopRelease(directory);
+  requireSteadyReleaseAuthority(manifest.mode);
   const release = await verifyRecoverableReleaseBinding(client, manifest);
   assertPublishableAssets(release.assets, manifest);
-  const baseline = await resolvedBaselineForManifest(manifest, client);
-  await assertResolvedBaseline(manifest, baseline, client);
+  await assertResolvedBaseline(
+    manifest,
+    await resolvedBaselineForManifest(manifest, client),
+    client,
+  );
   if (release.draft) await stageExactAssets(client, release, directory, manifest);
   else await assertCompleteReleaseAssets(client, release, manifest, "resumed public release");
 }
@@ -1658,6 +1625,7 @@ export async function promoteDesktopLatest(
       client.propagationDeadline("release"),
     );
     const manifest = await verifyDesktopRelease(directory);
+    requireSteadyReleaseAuthority(manifest.mode);
     const candidate = await client.release(manifest.draftId, preflightDeadlineAt);
     if (candidate.draft || candidate.prerelease || candidate.tag_name !== manifest.tag)
       throw new TypeError("published candidate binding mismatch");
@@ -1779,6 +1747,7 @@ export async function reconcileDesktopLatest(
   client: GithubClient,
 ): Promise<void> {
   const manifest = await verifyDesktopRelease(directory);
+  requireSteadyReleaseAuthority(manifest.mode);
   const candidate = await client.release(manifest.draftId);
   if (
     candidate.draft ||
@@ -2011,6 +1980,7 @@ export async function activateDesktopRelease(
   client: GithubClient,
 ): Promise<void> {
   const manifest = await verifyDesktopRelease(directory);
+  requireSteadyReleaseAuthority(manifest.mode);
   const finalBody = await readFinalReleaseBody(bodyPath, manifest);
   const candidate = await client.release(manifest.draftId);
   if (
@@ -2107,6 +2077,7 @@ export async function compensateDesktopRelease(
   rawObserved: LatestObservation,
 ): Promise<void> {
   const manifest = await verifyDesktopRelease(directory);
+  requireSteadyReleaseAuthority(manifest.mode);
   const finalBody = await readFinalReleaseBody(bodyPath, manifest);
   const observed = requireObservedLatest(rawObserved);
   let candidate = await client.release(manifest.draftId);
@@ -2146,15 +2117,11 @@ export async function compensateDesktopRelease(
     pollBudget,
   );
   const resolveRollback = async (): Promise<LatestObservation> => {
-    const rebound =
-      manifest.mode === "steady"
-        ? await resolveDesktopRollbackLatest(
-            directory,
-            client,
-            observed.metadataSha256 ?? "none",
-            observed,
-          )
-        : await verifyRestorableLatestObservation(client, observed);
+    const rebound = await resolveDesktopRollbackLatest(
+      directory,
+      client,
+      observed.metadataSha256 ?? "none",
+    );
     if (!sameLatest(rebound, observed)) {
       throw new TypeError("desktop compensation rollback target binding mismatch");
     }
@@ -2239,7 +2206,7 @@ export async function compensateDesktopRelease(
 export async function prepareDesktopBaseline(
   directory: string,
   client: GithubClient,
-  mode: DesktopReleaseMode,
+  mode: unknown,
   candidateTag: string,
   candidateVersion: string,
   requestedBaselineTag: string,
@@ -2249,18 +2216,8 @@ export async function prepareDesktopBaseline(
   if (candidateTag !== desktopTag(version)) {
     throw new TypeError("candidate desktop release tag and version do not match");
   }
+  requireSteadyReleaseAuthority(mode);
   const releases = await client.releases();
-  if (mode === "genesis") {
-    const baseline = await newestDesktopRelease(releases, client, candidateTag);
-    if (baseline !== null)
-      throw new TypeError("genesis release refused after a desktop baseline exists");
-    await writeFile(
-      output,
-      "baseline_tag=none\nbaseline_version=none\nbaseline_release_id=none\nbaseline_commit=none\nbaseline_zip_sha256=none\nbaseline_metadata_sha256=none\nbaseline_signing_identity=none\nbaseline_cdhash=none\nbaseline_zip=none\n",
-      { flag: "a" },
-    );
-    return;
-  }
   const baseline = await steadyDesktopBaseline(releases, client, requestedBaselineTag);
   if (baseline === null) throw new TypeError("steady release requires a desktop baseline");
   if (compareVersions(baseline.version, version) >= 0)
@@ -2446,7 +2403,7 @@ async function main(): Promise<void> {
     await prepareDesktopBaseline(
       directory,
       client,
-      requireMode(argument("mode")),
+      argument("mode"),
       argument("candidate-tag"),
       requireDesktopVersion(argument("candidate-version")),
       argument("baseline-tag"),
@@ -2460,7 +2417,6 @@ async function main(): Promise<void> {
       directory,
       client,
       argument("baseline-metadata-sha256"),
-      observed,
     );
     await writeLatestOutput(argument("github-output"), observed, rollback);
     return;

@@ -202,7 +202,6 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   if (
     !exactKeys(inputs, [
       "tag",
-      "desktop_mode",
       "desktop_baseline_tag",
       "recovery_tooling_tag",
       "recovery_source_run_id",
@@ -211,7 +210,6 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     issues.push("desktop coordinator inputs must remain desktop-only");
   }
   const tagInput = mapping(inputs.tag, "desktop coordinator tag input", issues);
-  const modeInput = mapping(inputs.desktop_mode, "desktop coordinator mode input", issues);
   const recoveryToolingTagInput = mapping(
     inputs.recovery_tooling_tag,
     "desktop coordinator recovery tooling tag input",
@@ -224,13 +222,6 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   );
   if (tagInput.required !== true || tagInput.type !== "string") {
     issues.push("desktop coordinator must require a string candidate tag");
-  }
-  if (
-    modeInput.type !== "choice" ||
-    modeInput.default !== "steady" ||
-    scalar(modeInput.options) !== '["steady","genesis"]'
-  ) {
-    issues.push("desktop coordinator must expose only steady and genesis modes");
   }
   if (
     recoveryToolingTagInput.type !== "string" ||
@@ -297,7 +288,6 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     desktop_version: "${{ steps.bind.outputs.desktop_version }}",
     commit: "${{ steps.bind.outputs.commit }}",
     tooling_commit: "${{ steps.bind.outputs.tooling_commit }}",
-    mode: "${{ steps.bind.outputs.mode }}",
     baseline_tag: "${{ steps.bind.outputs.baseline_tag }}",
     source_run_id: "${{ steps.bind.outputs.source_run_id }}",
   };
@@ -341,16 +331,12 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   if (
     !bindRun.includes("SOURCE_RUN_ID=none") ||
     !bindRun.includes('if [ -n "$RECOVERY_SOURCE_RUN_ID_INPUT" ]; then') ||
-    !bindRun.includes(
-      'if [ -z "$RECOVERY_TOOLING_TAG_INPUT" ] || [ "$MODE" != \'steady\' ]; then',
-    ) ||
+    !bindRun.includes('if [ -z "$RECOVERY_TOOLING_TAG_INPUT" ]; then') ||
     !bindRun.includes("printf '%s' \"$RECOVERY_SOURCE_RUN_ID_INPUT\" | grep -Eq '^[1-9][0-9]*$'") ||
     !bindRun.includes('SOURCE_RUN_ID="$RECOVERY_SOURCE_RUN_ID_INPUT"') ||
     !bindRun.includes('echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"')
   ) {
-    issues.push(
-      "desktop coordinator recovery source run must require a steady immutable recovery tag",
-    );
+    issues.push("desktop coordinator recovery source run must require an immutable recovery tag");
   }
   const coordinatorSourceWorkflowCase = `case "$SOURCE_WORKFLOW_PATH" in
     .github/workflows/desktop-release.yml)
@@ -449,7 +435,6 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
   if (
     !bindRun.includes('TOOLING_COMMIT="$COMMIT"') ||
     !bindRun.includes('if [ -n "$RECOVERY_TOOLING_TAG_INPUT" ]; then') ||
-    !bindRun.includes("if [ \"$MODE\" != 'steady' ]; then") ||
     !bindRun.includes('RECOVERY_REVISION="${RECOVERY_TAG#"${TAG}-recovery."}"') ||
     !bindRun.includes("printf '%s' \"$RECOVERY_REVISION\" | grep -Eq '^[1-9][0-9]*$'") ||
     !bindRun.includes('[ "$RECOVERY_TAG" != "${TAG}-recovery.${RECOVERY_REVISION}" ]') ||
@@ -462,9 +447,7 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     !bindRun.includes('git merge-base --is-ancestor "$TOOLING_COMMIT" refs/remotes/origin/main') ||
     !bindRun.includes('echo "tooling_commit=$TOOLING_COMMIT" >> "$GITHUB_OUTPUT"')
   ) {
-    issues.push(
-      "desktop recovery tooling must use a distinct immutable steady-only tag merged into main",
-    );
+    issues.push("desktop recovery tooling must use a distinct immutable tag merged into main");
   }
 
   const draftNeeds = scalar(draft.needs);
@@ -530,7 +513,6 @@ function checkCoordinator(source: string, coordinator: Mapping, issues: string[]
     commit: "${{ needs.bind-release.outputs.commit }}",
     tooling_commit: "${{ needs.bind-release.outputs.tooling_commit }}",
     draft_id: "${{ needs.prepare-release-draft.outputs.draft_id }}",
-    mode: "${{ needs.bind-release.outputs.mode }}",
     draft_body_sha256: "${{ needs.prepare-release-draft.outputs.body_sha256 }}",
     baseline_tag: "${{ needs.bind-release.outputs.baseline_tag }}",
     source_run_id: "${{ needs.bind-release.outputs.source_run_id }}",
@@ -777,7 +759,6 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     "commit",
     "tooling_commit",
     "draft_id",
-    "mode",
     "draft_body_sha256",
     "baseline_tag",
     "source_run_id",
@@ -901,7 +882,6 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     RELEASE_COMMIT: "${{ inputs.commit }}",
     RELEASE_TOOLING_COMMIT: "${{ inputs.tooling_commit }}",
     RELEASE_DRAFT_ID: "${{ inputs.draft_id }}",
-    RELEASE_MODE: "${{ inputs.mode }}",
     RELEASE_BODY_SHA256: "${{ inputs.draft_body_sha256 }}",
     RELEASE_BASELINE_TAG: "${{ inputs.baseline_tag }}",
     SOURCE_RUN_ID: "${{ inputs.source_run_id }}",
@@ -932,7 +912,6 @@ function checkDesktopChild(source: string, desktop: Mapping, issues: string[]): 
     !authorizeRun.includes('if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then') ||
     !authorizeRun.includes('test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"') ||
     !authorizeRun.includes('test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"') ||
-    !authorizeRun.includes("test \"$RELEASE_MODE\" = 'steady'") ||
     !authorizeRun.includes(
       'CURRENT_RECOVERY_REVISION="${WORKFLOW_REF_NAME#"${RELEASE_TAG}-recovery."}"',
     ) ||
@@ -1000,7 +979,6 @@ fi`;
       "for output in source_run_id source_run_attempt artifact_name artifact_id artifact_digest baseline_artifact_name baseline_artifact_id baseline_artifact_digest; do",
     ) ||
     !authorizeRun.includes('test "$SOURCE_RUN_ID" != "$GITHUB_RUN_ID"') ||
-    !authorizeRun.includes("test \"$RELEASE_MODE\" = 'steady'") ||
     !authorizeRun.includes('test "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT"') ||
     !authorizeRun.includes("test \"$CURRENT_RECOVERY_REVISION\" != 'none'") ||
     !authorizeRun.includes(
@@ -1428,7 +1406,7 @@ fi`;
     dependencyBuildIndex <= roundTripInstallIndex ||
     dependencyBuildIndex >= roundTripExerciseIndex ||
     roundTrip["timeout-minutes"] !== 30 ||
-    roundTrip.if !== "${{ inputs.mode == 'steady' }}" ||
+    roundTrip.if !== undefined ||
     !exactStringSet(roundTrip.needs, ["sign-macos", "reconcile-latest"]) ||
     !roundTripRun.includes("desktop-release:transaction public-envelope") ||
     countShellLine(roundTripRun, nativeUpdaterCommand) !== 1 ||
@@ -1453,18 +1431,13 @@ fi`;
     !activateCondition.includes("always()") ||
     !activateCondition.includes("needs.publish-assets.result == 'success'") ||
     !activateCondition.includes("needs.reconcile-latest.result == 'success'") ||
-    !activateCondition.includes("inputs.mode == 'genesis'") ||
-    !activateCondition.includes("needs.verify-production-update.result == 'skipped'") ||
-    !activateCondition.includes("inputs.mode == 'steady'") ||
     !activateCondition.includes("needs.verify-production-update.result == 'success'") ||
     activateCondition.includes("needs.request-latest.result") ||
     !activateRun.includes("desktop-release:transaction activate") ||
     !activateRun.includes("apps/desktop/CHANGELOG.md") ||
     activateRun.includes("packages/cycling-coach/CHANGELOG.md")
   ) {
-    issues.push(
-      "desktop activation must follow mode-specific acceptance and desktop release notes",
-    );
+    issues.push("desktop activation must require native acceptance and desktop release notes");
   }
   const compensateCondition = scalar(compensate.if).replace(/\s+/gu, " ");
   const compensateStep = namedStep(compensate, "Restore prior latest and withdraw candidate");
@@ -1582,7 +1555,7 @@ fi`;
     cleanupStep?.if !== "${{ always() && inputs.source_run_id == 'none' }}" ||
     sealStep?.if !== freshOnly ||
     sealedUploadStep?.if !== freshOnly ||
-    baselineUploadStep?.if !== "${{ inputs.source_run_id == 'none' && inputs.mode == 'steady' }}" ||
+    baselineUploadStep?.if !== freshOnly ||
     resumedArtifactStep?.if !== resumedOnly ||
     resumedBaselineStep?.if !== resumedOnly ||
     resumedEvidenceStep?.if !== resumedOnly
@@ -1711,20 +1684,14 @@ fi`;
     issues.push("macOS signing must fail closed when an environment secret is unavailable");
   }
   if (
-    (signingRun.match(/pnpm --filter @enduragent\/desktop package:mac:genesis(?:\s|$)/gu) ?? [])
-      .length !== 1 ||
     (signingRun.match(/pnpm --filter @enduragent\/desktop package:mac(?:\s|$)/gu) ?? []).length !==
       1 ||
-    countShellLine(signingRun, 'case "$RELEASE_MODE" in') !== 1 ||
-    !signingRun.includes("genesis)") ||
-    !signingRun.includes("steady)") ||
-    signingEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
-    signingEnvironment.ENDURAGENT_MACOS_GENESIS_VERSION !== "${{ inputs.desktop_version }}" ||
+    /genesis|RELEASE_MODE|ENDURAGENT_MACOS_GENESIS_VERSION/u.test(signingRun) ||
     !source.includes('--desktop-version "$DESKTOP_VERSION"') ||
     !source.includes('--candidate-tag "$RELEASE_TAG"') ||
     nonSigningText.includes("package:mac")
   ) {
-    issues.push("signing must dispatch explicit genesis and steady desktop packaging modes");
+    issues.push("signing must dispatch only steady desktop packaging");
   }
   if (
     keyCreation === -1 ||
@@ -1761,19 +1728,7 @@ fi`;
   const independentRun = typeof independentStep?.run === "string" ? independentStep.run : "";
   const transactionVerification = independentRun.indexOf("desktop-release:transaction verify");
   const publicEnvelope = independentRun.indexOf("desktop-release:transaction public-envelope");
-  const genesisVerification = independentRun.indexOf(
-    "verify:mac-genesis-release \\",
-    publicEnvelope,
-  );
   const steadyVerification = independentRun.indexOf("verify:mac-release \\", publicEnvelope);
-  const genesisCase = independentRun.slice(
-    independentRun.indexOf("genesis)", publicEnvelope),
-    independentRun.indexOf(";;", independentRun.indexOf("genesis)", publicEnvelope)),
-  );
-  const steadyCase = independentRun.slice(
-    independentRun.indexOf("steady)", publicEnvelope),
-    independentRun.indexOf(";;", independentRun.indexOf("steady)", publicEnvelope)),
-  );
   if (
     independentBaselineEnvironment.RELEASE_BASELINE_TAG !==
       "${{ needs.sign-macos.outputs.baseline_tag }}" ||
@@ -1788,23 +1743,13 @@ fi`;
   if (
     transactionVerification === -1 ||
     publicEnvelope <= transactionVerification ||
-    genesisVerification <= publicEnvelope ||
     steadyVerification <= publicEnvelope ||
-    independentEnvironment.RELEASE_MODE !== "${{ inputs.mode }}" ||
-    countShellLine(independentRun, 'case "$RELEASE_MODE" in') !== 1 ||
-    countShellLine(
-      independentRun,
-      "pnpm --filter @enduragent/desktop verify:mac-genesis-release \\",
-    ) !== 1 ||
     countShellLine(independentRun, "pnpm --filter @enduragent/desktop verify:mac-release \\") !==
       1 ||
-    (independentRun.slice(publicEnvelope).match(/"\$PUBLIC_ENVELOPE"/gu) ?? []).length !== 3 ||
-    !genesisCase.includes('"$PUBLIC_ENVELOPE"') ||
-    !genesisCase.includes('"$CANDIDATE_APP"') ||
-    genesisCase.includes("$INDEPENDENT_BASELINE_APP") ||
-    !steadyCase.includes('"$PUBLIC_ENVELOPE"') ||
-    !steadyCase.includes('"$INDEPENDENT_BASELINE_APP"') ||
-    !steadyCase.includes('"$CANDIDATE_APP"') ||
+    (independentRun.slice(publicEnvelope).match(/"\$PUBLIC_ENVELOPE"/gu) ?? []).length !== 2 ||
+    !independentRun.slice(steadyVerification).includes('"$PUBLIC_ENVELOPE"') ||
+    !independentRun.slice(steadyVerification).includes('"$INDEPENDENT_BASELINE_APP"') ||
+    !independentRun.slice(steadyVerification).includes('"$CANDIDATE_APP"') ||
     source.split("\\(FA494ACVTF\\)$").length - 1 !== 6 ||
     countShellLine(independentRun, 'test "$INDEPENDENT_CDHASH" = "$CANDIDATE_CDHASH"') !== 1 ||
     countShellLine(
@@ -1952,7 +1897,8 @@ function checkVersionDispatch(version: Mapping, issues: string[]): void {
     !versionText.includes(
       'gh workflow run desktop-release-coordinator.yml --ref "$DESKTOP_TAG" \\',
     ) ||
-    !versionText.includes('-f tag="$DESKTOP_TAG" -f desktop_mode=steady') ||
+    !versionText.includes('-f tag="$DESKTOP_TAG"') ||
+    versionText.includes("desktop_mode") ||
     versionText.includes("gh workflow run desktop-release.yml") ||
     (versionText.match(/for attempt in \$\(seq 1 6\)/gu) ?? []).length < 2
   ) {

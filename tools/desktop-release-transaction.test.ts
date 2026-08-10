@@ -20,7 +20,6 @@ import {
   DesktopLatestPromotionOutcomeError,
   assertLatestCas,
   assertPublishableAssets,
-  assertReleaseMode,
   assertRemoteAsset,
   inspectNpmAttestationClaims,
   materializeDesktopPublicEnvelope,
@@ -490,11 +489,21 @@ describe("desktop release publication guards", () => {
     expect(() => assertRemoteAsset(manifest.files[0], Buffer.from("other"))).toThrow("conflicting");
   });
 
-  it("refuses genesis after a baseline and steady mode without one", () => {
-    expect(() => assertReleaseMode("genesis", "0.1.6")).toThrow("genesis");
-    expect(() => assertReleaseMode("steady", null)).toThrow("baseline");
-    expect(() => assertReleaseMode("genesis", null)).not.toThrow();
-    expect(() => assertReleaseMode("steady", "0.1.6")).not.toThrow();
+  it("refuses to seal a new genesis transaction", async () => {
+    writeEnvelope();
+    await expect(
+      sealDesktopRelease(directory, {
+        ...binding,
+        mode: "genesis",
+        baselineTag: "none",
+        baselineReleaseId: "none",
+        baselineCommit: "none",
+        baselineZipSha256: "none",
+        baselineSigningIdentity: "none",
+        baselineCdHash: "none",
+      }),
+    ).rejects.toThrow("genesis release authority is retired");
+    expect(readdirSync(directory)).not.toContain(DESKTOP_MANIFEST);
   });
 
   it("requires an unchanged latest observation and monotonic desktop version", () => {
