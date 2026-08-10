@@ -160,6 +160,31 @@ describe("desktop update controller", () => {
     expect(setInterval).not.toHaveBeenCalled();
   });
 
+  it("requires an app restart when the packaged updater fails to load", async () => {
+    const loadUpdater = vi.fn(async (): Promise<DesktopAutoUpdater> => {
+      throw new Error("synthetic packaged updater load failure");
+    });
+    const setInterval = vi.fn();
+    const controller = createDesktopUpdateController({
+      releaseEligible: true,
+      currentVersion: "0.1.0",
+      loadUpdater,
+      requestQuit: vi.fn(),
+      setInterval,
+    });
+
+    await controller.start();
+
+    expect(controller.state()).toEqual({ status: "restart-required", stage: "check" });
+    await expect(controller.check()).resolves.toEqual({
+      status: "restart-required",
+      stage: "check",
+    });
+    await controller.start();
+    expect(loadUpdater).toHaveBeenCalledOnce();
+    expect(setInterval).not.toHaveBeenCalled();
+  });
+
   it("configures a quiet updater, performs startup and unref'd daily checks, and cleans up", async () => {
     const fake = fakeUpdater();
     vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.0"));

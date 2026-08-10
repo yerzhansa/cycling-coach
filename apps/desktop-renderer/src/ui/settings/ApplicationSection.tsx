@@ -66,7 +66,7 @@ function updateCopy(state: DesktopUpdateState): UpdateCopy {
         announcement:
           state.stage === "download"
             ? "Update download timed out. Quit and reopen Enduragent to try again."
-            : "Update check timed out. Quit and reopen Enduragent to try again.",
+            : "Updates could not start. Quit and reopen Enduragent to try again.",
       };
     default:
       return {

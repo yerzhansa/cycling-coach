@@ -370,7 +370,7 @@ export function createDesktopUpdateController(input: {
     try {
       updater = await input.loadUpdater();
     } catch {
-      if (!closed) publish({ status: "failed", stage: "check" });
+      if (!closed) publish({ status: "restart-required", stage: "check" });
       return;
     }
     if (closed) return;
