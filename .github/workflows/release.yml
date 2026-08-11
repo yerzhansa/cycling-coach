@@ -626,75 +626,6 @@ jobs:
           echo "draft_id=$DRAFT_ID" >> "$GITHUB_OUTPUT"
           echo "body_sha256=$BODY_SHA256" >> "$GITHUB_OUTPUT"
 
-  desktop-release:
-    runs-on: ubuntu-latest
-    needs: [parse-tag, verify-npm-publication, prepare-release-draft]
-    if: ${{ false }}
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Dispatch and await environment-bound desktop transaction
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.parse-tag.outputs.ref }}
-          NPM_VERSION: ${{ needs.parse-tag.outputs.version }}
-          DESKTOP_VERSION: ${{ needs.parse-tag.outputs.desktop_version }}
-          RELEASE_COMMIT: ${{ needs.parse-tag.outputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ github.sha }}
-          RELEASE_DRAFT_ID: ${{ needs.prepare-release-draft.outputs.draft_id }}
-          RELEASE_MODE: ${{ needs.parse-tag.outputs.desktop_mode }}
-          RELEASE_BODY_SHA256: ${{ needs.prepare-release-draft.outputs.draft_body_sha256 }}
-          NPM_INTEGRITY: ${{ needs.verify-npm-publication.outputs.npm_integrity }}
-          NPM_ATTESTATION_URL: ${{ needs.verify-npm-publication.outputs.npm_attestation_url }}
-          RELEASE_BASELINE_TAG: ${{ needs.parse-tag.outputs.desktop_baseline_tag }}
-          COORDINATOR_RUN_ID: ${{ github.run_id }}
-          COORDINATOR_RUN_ATTEMPT: ${{ github.run_attempt }}
-          COORDINATOR_REF: ${{ github.ref }}
-        run: |
-          set -euo pipefail
-          DESKTOP_WORKFLOW_REF=main
-          if [ "$COORDINATOR_REF" = "refs/tags/$RELEASE_TAG" ]; then
-            DESKTOP_WORKFLOW_REF="$RELEASE_TAG"
-          fi
-          EXPECTED_TITLE="Desktop release $RELEASE_TAG via $COORDINATOR_RUN_ID.$COORDINATOR_RUN_ATTEMPT"
-          gh workflow run desktop-release.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "$DESKTOP_WORKFLOW_REF" \
-            -f tag="$RELEASE_TAG" \
-            -f npm_version="$NPM_VERSION" \
-            -f desktop_version="$DESKTOP_VERSION" \
-            -f commit="$RELEASE_COMMIT" \
-            -f tooling_commit="$RELEASE_TOOLING_COMMIT" \
-            -f draft_id="$RELEASE_DRAFT_ID" \
-            -f mode="$RELEASE_MODE" \
-            -f draft_body_sha256="$RELEASE_BODY_SHA256" \
-            -f npm_integrity="$NPM_INTEGRITY" \
-            -f npm_attestation_url="$NPM_ATTESTATION_URL" \
-            -f baseline_tag="$RELEASE_BASELINE_TAG" \
-            -f coordinator_run_id="$COORDINATOR_RUN_ID" \
-            -f coordinator_run_attempt="$COORDINATOR_RUN_ATTEMPT"
-          DESKTOP_RUN_ID=''
-          for attempt in $(seq 1 12); do
-            DESKTOP_RUNS=$(gh run list \
-              --repo "$GITHUB_REPOSITORY" \
-              --workflow desktop-release.yml \
-              --event workflow_dispatch \
-              --limit 20 \
-              --json databaseId,displayTitle)
-            DESKTOP_RUN_ID=$(printf '%s' "$DESKTOP_RUNS" | jq -r --arg title "$EXPECTED_TITLE" \
-              '[.[] | select(.displayTitle == $title)] | first | .databaseId // empty')
-            if [ -n "$DESKTOP_RUN_ID" ]; then
-              break
-            fi
-            sleep 5
-          done
-          if [ -z "$DESKTOP_RUN_ID" ]; then
-            echo '::error::Dispatched desktop workflow run could not be identified'
-            exit 1
-          fi
-          echo "::notice::Awaiting desktop workflow run $DESKTOP_RUN_ID"
-          gh run watch "$DESKTOP_RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status
   publish-package-only-release:
     runs-on: ubuntu-latest
     needs: [parse-tag, verify-npm-publication]
@@ -715,7 +646,8 @@ jobs:
           PACKAGE="$RELEASE_PACKAGE"
           TAG="$RELEASE_TAG"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::notice::Release $TAG already exists (likely created via UI). Leaving it untouched."
+            gh release edit "$TAG" --latest=false
+            echo "::notice::Release $TAG already exists and remains non-latest."
           else
             BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' "packages/$PACKAGE/CHANGELOG.md" | tail -n +2)
             gh release create "$TAG" --latest=false --title "$TAG" --notes "$BODY"

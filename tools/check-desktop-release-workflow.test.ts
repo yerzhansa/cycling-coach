@@ -106,7 +106,11 @@ describe("desktop release workflow policy", () => {
     expect(source.coordinator).toContain('git show "$COMMIT:apps/desktop/package.json"');
     expect(source.coordinator).toContain("uses: ./.github/workflows/desktop-release.yml");
     expect(source.desktop).toContain(".github/workflows/desktop-release-coordinator.yml");
+    expect(source.desktop).toContain("  workflow_call:");
+    expect(source.desktop).toContain("  workflow_dispatch:");
+    expect(source.desktop).toContain("vars.ENABLE_DESKTOP_MACOS_RELEASE");
     expect(source.desktop).not.toMatch(/\bnpm_(?:version|integrity|attestation_url)\b/u);
+    expect(source.release).not.toContain("gh workflow run desktop-release.yml");
     expect(source.version).toContain('DESKTOP_TAG="enduragent-desktop@$DESKTOP_VERSION"');
   });
 
@@ -582,10 +586,104 @@ describe("desktop release workflow policy", () => {
     expectIssue({ ...source, version }, "independently tag and dispatch changed desktop SemVer");
   });
 
-  it("keeps the desktop workflow reusable-call-only", () => {
+  it("exposes exactly the reusable and direct desktop triggers", () => {
     const source = sources();
-    const desktop = replaceRequired(source.desktop, "  workflow_call:", "  workflow_dispatch:");
-    expectIssue({ ...source, desktop }, "workflow_call-only");
+    const wrongTrigger = replaceRequired(
+      source.desktop,
+      "  workflow_dispatch:",
+      "  schedule:\n    - cron: '0 0 * * *'\n  disabled_dispatch:",
+    );
+    expectIssue({ ...source, desktop: wrongTrigger }, "exactly workflow_call and workflow_dispatch");
+
+    const divergentDescription = replaceRequired(
+      source.desktop,
+      "description: Exact commit supplying audited release-only tooling",
+      "description: Exact commit supplying release-only tooling",
+    );
+    expectIssue(
+      { ...source, desktop: divergentDescription },
+      "one identical frozen tuple to the coordinator call and the operator dispatch",
+    );
+
+    const optionalDispatchInput = replaceRequired(
+      source.desktop,
+      "      source_run_id:\n        description: Failed source run id or none\n        required: true\n        type: string\npermissions:",
+      "      source_run_id:\n        description: Failed source run id or none\n        required: false\n        type: string\npermissions:",
+    );
+    expectIssue(
+      { ...source, desktop: optionalDispatchInput },
+      "workflow_dispatch must require string input source_run_id",
+    );
+    expectIssue(
+      { ...source, desktop: optionalDispatchInput },
+      "one identical frozen tuple to the coordinator call and the operator dispatch",
+    );
+
+    const nonStringDispatchInput = replaceRequired(
+      source.desktop,
+      "      source_run_id:\n        description: Failed source run id or none\n        required: true\n        type: string\npermissions:",
+      "      source_run_id:\n        description: Failed source run id or none\n        required: true\n        type: boolean\npermissions:",
+    );
+    expectIssue(
+      { ...source, desktop: nonStringDispatchInput },
+      "workflow_dispatch must require string input source_run_id",
+    );
+    expectIssue(
+      { ...source, desktop: nonStringDispatchInput },
+      "one identical frozen tuple to the coordinator call and the operator dispatch",
+    );
+
+    const extraDispatchInput = replaceRequired(
+      source.desktop,
+      "  workflow_dispatch:\n    inputs:\n",
+      "  workflow_dispatch:\n    inputs:\n      bypass:\n        required: true\n        type: boolean\n",
+    );
+    expectIssue(
+      { ...source, desktop: extraDispatchInput },
+      "direct dispatch must accept exactly the frozen desktop release tuple",
+    );
+  });
+
+  it("keeps desktop-release.yml direct dispatch operator-only", () => {
+    const source = sources();
+    const issue = "desktop-release.yml direct dispatch must stay operator-only";
+    const release = replaceRequired(
+      source.release,
+      "          PACKAGE=\"$RELEASE_PACKAGE\"",
+      "          gh workflow run desktop-release.yml\n          PACKAGE=\"$RELEASE_PACKAGE\"",
+    );
+    expectIssue({ ...source, release }, issue);
+
+    const coordinator = replaceRequired(
+      source.coordinator,
+      "          TAG=\"$RELEASE_TAG_INPUT\"",
+      "          gh workflow run desktop-release.yml\n          TAG=\"$RELEASE_TAG_INPUT\"",
+    );
+    expectIssue({ ...source, coordinator }, issue);
+
+    const version = replaceRequired(
+      source.version,
+      "          PREVIOUS_COMMIT=$(git rev-parse HEAD^)",
+      "          gh workflow run desktop-release.yml\n          PREVIOUS_COMMIT=$(git rev-parse HEAD^)",
+    );
+    expectIssue({ ...source, version }, issue);
+  });
+
+  it("binds direct run identity and shares the stable release lock", () => {
+    const source = sources();
+    const runName = replaceRequired(
+      source.desktop,
+      "Desktop release ${{ inputs.tag }} via ${{ github.run_id }}.${{ github.run_attempt }} binding ${{ inputs.tooling_commit }}",
+      "Desktop release ${{ inputs.tag }}",
+    );
+    expectIssue({ ...source, desktop: runName }, "run name must bind its tag");
+
+    const concurrency = replaceRequired(
+      source.desktop,
+      "'stable-desktop' || format('stable-desktop-child-{0}', github.run_id)",
+      "'unstable-desktop' || format('unstable-desktop-child-{0}', github.run_id)",
+    );
+    expectIssue({ ...source, desktop: concurrency }, "share the stable lock");
   });
 
   it("requires the child source run id in the frozen reusable tuple", () => {
@@ -638,14 +736,19 @@ describe("desktop release workflow policy", () => {
       ),
       replaceRequired(
         source.desktop,
-        'test "$CALLER_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/desktop-release-coordinator.yml@$WORKFLOW_REF"',
-        'test "$CALLER_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/release.yml@$WORKFLOW_REF"',
+        'COORDINATOR_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/desktop-release-coordinator.yml@$WORKFLOW_REF"',
+        'COORDINATOR_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/release.yml@$WORKFLOW_REF"',
+      ),
+      replaceRequired(
+        source.desktop,
+        'DIRECT_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml@$WORKFLOW_REF"',
+        'DIRECT_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/release.yml@$WORKFLOW_REF"',
       ),
       replaceRequired(source.desktop, 'test "$CALLER_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"', "true"),
       replaceRequired(
         source.desktop,
-        'test "$CALLED_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml@$WORKFLOW_REF"',
-        'test "$CALLED_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/release.yml@$WORKFLOW_REF"',
+        'test "$CALLED_WORKFLOW_REF" = "$DIRECT_WORKFLOW_REF"',
+        'test "$CALLED_WORKFLOW_REF" = "$COORDINATOR_WORKFLOW_REF"',
       ),
       replaceRequired(source.desktop, 'test "$CALLED_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"', "true"),
       replaceRequired(
@@ -655,18 +758,22 @@ describe("desktop release workflow policy", () => {
       ),
     ];
     for (const desktop of mutations) {
-      expectIssue({ ...source, desktop }, "same-run active coordinator and called workflow");
+      expectIssue({ ...source, desktop }, "active coordinator call or exact direct workflow");
     }
   });
 
   it("binds child authorization to the normal or recovery workflow ref", () => {
     const source = sources();
+    const wrongEnvironment = replaceRequired(
+      source.desktop,
+      "          RELEASE_TAG: ${{ inputs.tag }}",
+      "          RELEASE_TAG: ${{ inputs.tooling_commit }}",
+    );
+    expectIssue(
+      { ...source, desktop: wrongEnvironment },
+      "active coordinator call or exact direct workflow",
+    );
     const mutations = [
-      replaceRequired(
-        source.desktop,
-        "          RELEASE_TAG: ${{ inputs.tag }}",
-        "          RELEASE_TAG: ${{ inputs.tooling_commit }}",
-      ),
       replaceRequired(
         source.desktop,
         'test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"',
@@ -679,7 +786,84 @@ describe("desktop release workflow policy", () => {
       ),
     ];
     for (const desktop of mutations) {
-      expectIssue({ ...source, desktop }, "same-run active coordinator and called workflow");
+      expectIssue({ ...source, desktop }, "independently bind the enabled tag");
+    }
+  });
+
+  it("pins direct authorization to the enabled immutable release tuple", () => {
+    const source = sources();
+    const mutations = [
+      replaceRequired(source.desktop, "test \"$DESKTOP_ENABLED\" = 'true'", "true"),
+      replaceRequired(
+        source.desktop,
+        "printf '%s' \"$RELEASE_TAG\" | grep -Eq '^enduragent-desktop@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$'",
+        "printf '%s' \"$RELEASE_TAG\" | grep -Eq '^enduragent-desktop@'",
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$BOUND_RELEASE_COMMIT" = "$RELEASE_COMMIT"',
+        "true",
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$MANIFEST_VERSION" = "$DESKTOP_VERSION"',
+        "true",
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$EXPECTED_BODY_SHA256" = "$RELEASE_BODY_SHA256"',
+        "true",
+      ),
+      replaceRequired(
+        source.desktop,
+        'git merge-base --is-ancestor "$RELEASE_TOOLING_COMMIT" refs/remotes/origin/main',
+        'git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main',
+      ),
+      replaceRequired(
+        source.desktop,
+        "[ \"$RELEASE_BASELINE_TAG\" != 'cycling-coach@2026.8.8' ]",
+        "true",
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue({ ...source, desktop }, "independently bind the enabled tag");
+    }
+  });
+
+  it("does not let fresh dispatch skip common authorization", () => {
+    const source = sources();
+    const withoutGate = replaceRequired(
+      source.desktop,
+      "          test \"$DESKTOP_ENABLED\" = 'true'\n",
+      "",
+    );
+    const desktop = replaceRequired(
+      withoutGate,
+      "          fi\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+      "          fi\n          test \"$DESKTOP_ENABLED\" = 'true'\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+    );
+    const withoutWorkflowRefBinding = replaceRequired(
+      source.desktop,
+      '            test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"\n',
+      "",
+    );
+    const movedWorkflowRefBinding = replaceRequired(
+      withoutWorkflowRefBinding,
+      "          fi\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+      "          fi\n          test \"$WORKFLOW_REF\" = \"refs/tags/$RELEASE_TAG\"\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+    );
+    const withoutCandidateTag = replaceRequired(
+      source.desktop,
+      "          CANDIDATE_RELEASE=$(gh api \"repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID\")\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.id | tostring')\" = \"$RELEASE_DRAFT_ID\"\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.tag_name')\" = \"$RELEASE_TAG\"\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.prerelease')\" = 'false'\n          if [ \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.draft')\" = 'true' ]; then",
+      "          CANDIDATE_RELEASE=$(gh api \"repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID\")\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.id | tostring')\" = \"$RELEASE_DRAFT_ID\"\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.prerelease')\" = 'false'\n          if [ \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.draft')\" = 'true' ]; then",
+    );
+    const movedCandidateTag = replaceRequired(
+      withoutCandidateTag,
+      "          fi\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+      "          fi\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.tag_name')\" = \"$RELEASE_TAG\"\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+    );
+    for (const mutation of [desktop, movedWorkflowRefBinding, movedCandidateTag]) {
+      expectIssue({ ...source, desktop: mutation }, "common authorization before exit");
     }
   });
 
@@ -697,6 +881,7 @@ describe("desktop release workflow policy", () => {
         "([.[].jobs[]] | length) == .[0].total_count",
         "([.[].jobs[]] | length) > 0",
       ),
+      replaceRequired(source.desktop, ".expired == false", ".expired == true"),
       source.desktop.replaceAll(".workflow_run.head_repository_id", ".workflow_run.repository_id"),
     ];
     for (const desktop of mutations) {
@@ -854,17 +1039,28 @@ describe("desktop release workflow policy", () => {
     }
   });
 
-  it("keeps candidate release reads out of the read-only authorizer", () => {
+  it("validates the bound candidate before either release path can sign", () => {
     const source = sources();
-    const desktop = replaceRequired(
-      source.desktop,
-      "          set -euo pipefail\n          printf '%s' \"$CURRENT_RUN_ID\"",
-      '          set -euo pipefail\n          CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")\n          printf \'%s\' "$CURRENT_RUN_ID"',
-    );
-    expectIssue(
-      { ...source, desktop },
-      "same-run active coordinator and called workflow identities",
-    );
+    const mutations = [
+      replaceRequired(
+        source.desktop,
+        'test "$(printf \'%s\' "$CANDIDATE_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
+        "true",
+      ),
+      replaceRequired(
+        source.desktop,
+        'test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"',
+        "true",
+      ),
+      replaceRequired(
+        source.desktop,
+        "gh api -H 'Cache-Control: no-cache' \"repos/$GITHUB_REPOSITORY/releases/latest\"",
+        'gh api "repos/$GITHUB_REPOSITORY/releases/latest"',
+      ),
+    ];
+    for (const desktop of mutations) {
+      expectIssue({ ...source, desktop }, "validate the bound draft or exact recoverable public");
+    }
   });
 
   it("revalidates recoverable candidate state at the protected staging boundary", () => {
@@ -880,38 +1076,31 @@ describe("desktop release workflow policy", () => {
         "          fi\n      - name: Upload updater envelope to the private draft",
         "          fi\n      - run: echo delayed\n      - name: Upload updater envelope to the private draft",
       ),
-      replaceRequired(
-        source.desktop,
+      source.desktop.replaceAll(
         'test "$(printf \'%s\' "$CANDIDATE_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
         "true",
       ),
-      replaceRequired(
-        source.desktop,
+      source.desktop.replaceAll(
         "            test \"$SOURCE_RUN_ID\" != 'none'",
         "            true",
       ),
-      replaceRequired(
-        source.desktop,
+      source.desktop.replaceAll(
         "Desktop update validation is in progress. This release is not yet generally available.",
         "A public body that is not the exact provisional sentinel.",
       ),
-      replaceRequired(
-        source.desktop,
+      source.desktop.replaceAll(
         'test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"',
         "true",
       ),
-      replaceRequired(
-        source.desktop,
+      source.desktop.replaceAll(
         "gh api -H 'Cache-Control: no-cache' \"repos/$GITHUB_REPOSITORY/releases/latest\"",
         'gh api "repos/$GITHUB_REPOSITORY/releases/latest"',
       ),
-      replaceRequired(
-        source.desktop,
+      source.desktop.replaceAll(
         'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.id | tostring\')" = "$RELEASE_DRAFT_ID"',
         "true",
       ),
-      replaceRequired(
-        source.desktop,
+      source.desktop.replaceAll(
         'test "$(printf \'%s\' "$LATEST_RELEASE" | jq -r \'.tag_name\')" = "$RELEASE_TAG"',
         "true",
       ),
@@ -939,14 +1128,33 @@ describe("desktop release workflow policy", () => {
     expectIssue({ ...source, release: enabledLegacy }, "must remain literally disabled");
   });
 
-  it("keeps npm GitHub releases non-latest and non-destructive", () => {
+  it("keeps every npm GitHub Release mutation explicitly non-latest", () => {
     const source = sources();
-    const release = replaceRequired(
-      source.release,
-      'gh release create "$TAG" --latest=false --title',
-      'gh release create "$TAG" --title',
-    );
-    expectIssue({ ...source, release }, "npm GitHub releases must be verified, non-latest");
+    const mutations = [
+      replaceRequired(
+        source.release,
+        'gh release create "$TAG" --draft --latest=false --target',
+        'gh release create "$TAG" --draft --target',
+      ),
+      replaceRequired(
+        source.release,
+        'gh release create "$TAG" --latest=false --title',
+        'gh release create "$TAG" --title',
+      ),
+      replaceRequired(
+        source.release,
+        'gh release edit "$TAG" --latest=false',
+        'gh release edit "$TAG"',
+      ),
+      replaceRequired(
+        source.release,
+        '            gh release edit "$TAG" --latest=false',
+        '            gh release edit "$TAG" --latest=false\n            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/1"',
+      ),
+    ];
+    for (const release of mutations) {
+      expectIssue({ ...source, release }, "explicitly preserve the desktop latest pointer");
+    }
   });
 
   it("skips unchanged public package versions before tagging", () => {
@@ -1504,15 +1712,14 @@ ${updaterCommandBlock}
       'test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"',
       "true",
     );
-    expectIssue({ ...source, desktop: unbound }, "same-run active coordinator");
+    expectIssue({ ...source, desktop: unbound }, "independently bind the enabled tag");
     const productOverlay = replaceRequired(
       source.desktop,
       "            apps/desktop/scripts/macos-release-cli.mjs \\\n",
       "            apps/desktop/src/main/index.ts\n",
     );
     expectIssue({ ...source, desktop: productOverlay }, "manual signing recovery must overlay");
-    const reversedAncestry = replaceRequired(
-      source.desktop,
+    const reversedAncestry = source.desktop.replaceAll(
       'git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"',
       'git merge-base --is-ancestor "$RELEASE_TOOLING_COMMIT" "$RELEASE_COMMIT"',
     );

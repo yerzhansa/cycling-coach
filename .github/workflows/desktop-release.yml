@@ -1,4 +1,5 @@
 name: Desktop release
+run-name: Desktop release ${{ inputs.tag }} via ${{ github.run_id }}.${{ github.run_attempt }} binding ${{ inputs.tooling_commit }}
 
 on:
   workflow_call:
@@ -16,7 +17,41 @@ on:
         required: true
         type: string
       tooling_commit:
-        description: Exact coordinator commit supplying audited release-only tooling
+        description: Exact commit supplying audited release-only tooling
+        required: true
+        type: string
+      draft_id:
+        description: Bound unpublished GitHub Release id
+        required: true
+        type: string
+      draft_body_sha256:
+        description: Bound draft release-notes digest
+        required: true
+        type: string
+      baseline_tag:
+        description: Prior signed desktop release tag or none
+        required: true
+        type: string
+      source_run_id:
+        description: Failed source run id or none
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact enduragent-desktop release tag
+        required: true
+        type: string
+      desktop_version:
+        description: Frozen desktop SemVer
+        required: true
+        type: string
+      commit:
+        description: Exact tagged source commit
+        required: true
+        type: string
+      tooling_commit:
+        description: Exact commit supplying audited release-only tooling
         required: true
         type: string
       draft_id:
@@ -38,6 +73,11 @@ on:
 permissions:
   actions: read
   contents: read
+
+concurrency:
+  group: ${{ github.workflow_ref == format('{0}/.github/workflows/desktop-release.yml@{1}', github.repository, github.ref) && 'stable-desktop' || format('stable-desktop-child-{0}', github.run_id) }}
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   authorize-coordinator:
@@ -72,6 +112,7 @@ jobs:
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
           RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          DESKTOP_ENABLED: ${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}
           WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_REF_NAME: ${{ github.ref_name }}
           WORKFLOW_COMMIT: ${{ github.sha }}
@@ -95,6 +136,26 @@ jobs:
           printf '%s' "$RELEASE_TOOLING_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$RELEASE_BODY_SHA256" | grep -Eq '^[0-9a-f]{64}$'
           test "$EVENT_NAME" = 'workflow_dispatch'
+          test "$DESKTOP_ENABLED" = 'true'
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^enduragent-desktop@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::Desktop tag '$RELEASE_TAG' is invalid"
+            exit 1
+          fi
+          test "$RELEASE_TAG" = "enduragent-desktop@$DESKTOP_VERSION"
+          git fetch --force --no-tags origin \
+            "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" \
+            main:refs/remotes/origin/main
+          BOUND_RELEASE_COMMIT=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+          test "$BOUND_RELEASE_COMMIT" = "$RELEASE_COMMIT"
+          MANIFEST_VERSION=$(git show "$RELEASE_COMMIT:apps/desktop/package.json" | jq -er '.version')
+          test "$MANIFEST_VERSION" = "$DESKTOP_VERSION"
+          FIRST_HEADING=$(git show "$RELEASE_COMMIT:apps/desktop/CHANGELOG.md" | grep -m1 '^## ')
+          test "$FIRST_HEADING" = "## $DESKTOP_VERSION"
+          EXPECTED_BODY=$(git show "$RELEASE_COMMIT:apps/desktop/CHANGELOG.md" | awk '/^## /{i++} i==1{print} i==2{exit}' | tail -n +2)
+          test -n "$EXPECTED_BODY"
+          EXPECTED_BODY_SHA256=$(printf '%s' "$EXPECTED_BODY" | shasum -a 256 | awk '{print $1}')
+          test "$EXPECTED_BODY_SHA256" = "$RELEASE_BODY_SHA256"
+          git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main
           test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"
           CURRENT_RECOVERY_REVISION=none
           if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
@@ -105,13 +166,53 @@ jobs:
             printf '%s' "$CURRENT_RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$'
             test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${CURRENT_RECOVERY_REVISION}"
             test "$WORKFLOW_REF" = "refs/tags/$WORKFLOW_REF_NAME"
+            git fetch --force --no-tags origin \
+              "refs/tags/$WORKFLOW_REF_NAME:refs/tags/$WORKFLOW_REF_NAME"
+            test "$(git rev-parse "refs/tags/$WORKFLOW_REF_NAME^{commit}")" = "$RELEASE_TOOLING_COMMIT"
+            git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"
+            git merge-base --is-ancestor "$RELEASE_TOOLING_COMMIT" refs/remotes/origin/main
           fi
-          test "$CALLER_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/desktop-release-coordinator.yml@$WORKFLOW_REF"
-          test "$CALLER_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
-          test "$CALLED_WORKFLOW_REF" = "$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml@$WORKFLOW_REF"
-          test "$CALLED_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
-          test "$CALLED_WORKFLOW_REPOSITORY" = "$GITHUB_REPOSITORY"
-          test "$CALLED_WORKFLOW_FILE_PATH" = '.github/workflows/desktop-release.yml'
+          COORDINATOR_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/desktop-release-coordinator.yml@$WORKFLOW_REF"
+          DIRECT_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml@$WORKFLOW_REF"
+          case "$CALLER_WORKFLOW_REF" in
+            "$COORDINATOR_WORKFLOW_REF")
+              test "$CALLER_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
+              test "$CALLED_WORKFLOW_REF" = "$DIRECT_WORKFLOW_REF"
+              test "$CALLED_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
+              test "$CALLED_WORKFLOW_REPOSITORY" = "$GITHUB_REPOSITORY"
+              test "$CALLED_WORKFLOW_FILE_PATH" = '.github/workflows/desktop-release.yml'
+              ;;
+            "$DIRECT_WORKFLOW_REF")
+              test "$CALLER_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
+              ;;
+            *)
+              echo '::error::Desktop release invocation used an unauthorized workflow identity'
+              exit 1
+              ;;
+          esac
+          if [ "$RELEASE_BASELINE_TAG" != 'none' ] && \
+             [ "$RELEASE_BASELINE_TAG" != 'cycling-coach@2026.8.8' ] && \
+             ! printf '%s' "$RELEASE_BASELINE_TAG" | grep -Eq '^enduragent-desktop@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo '::error::Explicit desktop baseline tag is invalid'
+            exit 1
+          fi
+          CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")
+          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
+          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
+          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.prerelease')" = 'false'
+          if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.draft')" = 'true' ]; then
+            CANDIDATE_BODY_SHA256=$(printf '%s' "$CANDIDATE_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
+            test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"
+          else
+            test "$SOURCE_RUN_ID" != 'none'
+            if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.body')" != 'Desktop update validation is in progress. This release is not yet generally available.' ]; then
+              CANDIDATE_BODY_SHA256=$(printf '%s' "$CANDIDATE_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
+              test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"
+              LATEST_RELEASE=$(gh api -H 'Cache-Control: no-cache' "repos/$GITHUB_REPOSITORY/releases/latest")
+              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
+              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
+            fi
+          fi
           if [ "$SOURCE_RUN_ID" = 'none' ]; then
             for output in source_run_id source_run_attempt artifact_name artifact_id artifact_digest baseline_artifact_name baseline_artifact_id baseline_artifact_digest; do
               echo "$output=none" >> "$GITHUB_OUTPUT"
