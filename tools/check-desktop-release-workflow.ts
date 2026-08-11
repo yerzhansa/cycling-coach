@@ -3,6 +3,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import * as ts from "typescript";
 import { parse } from "yaml";
 
@@ -997,6 +998,11 @@ function checkDesktopChild(
   }
   if (!exactKeys(dispatchInputs, expectedInputs)) {
     issues.push("desktop direct dispatch must accept exactly the frozen desktop release tuple");
+  }
+  if (!isDeepStrictEqual(inputs, dispatchInputs)) {
+    issues.push(
+      "desktop release triggers must expose one identical frozen tuple to the coordinator call and the operator dispatch",
+    );
   }
   for (const input of expectedInputs) {
     const declaration = mapping(inputs[input], `desktop child input ${input}`, issues);
@@ -2304,6 +2310,13 @@ export function inspectDesktopReleaseWorkflows(
     releaseSource.includes("desktop-release:transaction --")
   ) {
     issues.push("release transaction commands must not pass a pnpm argument separator");
+  }
+  if (
+    [releaseSource, coordinatorSource, desktopSource, versionSource].some((source) =>
+      source.includes("gh workflow run desktop-release.yml"),
+    )
+  ) {
+    issues.push("desktop-release.yml direct dispatch must stay operator-only: no workflow may dispatch it");
   }
   checkCheckouts(release, "npm release", issues);
   checkCheckouts(coordinator, "desktop coordinator", issues);

@@ -110,6 +110,7 @@ describe("desktop release workflow policy", () => {
     expect(source.desktop).toContain("  workflow_dispatch:");
     expect(source.desktop).toContain("vars.ENABLE_DESKTOP_MACOS_RELEASE");
     expect(source.desktop).not.toMatch(/\bnpm_(?:version|integrity|attestation_url)\b/u);
+    expect(source.release).not.toContain("gh workflow run desktop-release.yml");
     expect(source.version).toContain('DESKTOP_TAG="enduragent-desktop@$DESKTOP_VERSION"');
   });
 
@@ -594,24 +595,42 @@ describe("desktop release workflow policy", () => {
     );
     expectIssue({ ...source, desktop: wrongTrigger }, "exactly workflow_call and workflow_dispatch");
 
+    const divergentDescription = replaceRequired(
+      source.desktop,
+      "description: Exact commit supplying audited release-only tooling",
+      "description: Exact commit supplying release-only tooling",
+    );
+    expectIssue(
+      { ...source, desktop: divergentDescription },
+      "one identical frozen tuple to the coordinator call and the operator dispatch",
+    );
+
     const optionalDispatchInput = replaceRequired(
       source.desktop,
-      "      tooling_commit:\n        description: Exact workflow commit supplying audited release-only tooling\n        required: true\n        type: string",
-      "      tooling_commit:\n        description: Exact workflow commit supplying audited release-only tooling\n        required: false\n        type: string",
+      "      source_run_id:\n        description: Failed source run id or none\n        required: true\n        type: string\npermissions:",
+      "      source_run_id:\n        description: Failed source run id or none\n        required: false\n        type: string\npermissions:",
     );
     expectIssue(
       { ...source, desktop: optionalDispatchInput },
-      "workflow_dispatch must require string input tooling_commit",
+      "workflow_dispatch must require string input source_run_id",
+    );
+    expectIssue(
+      { ...source, desktop: optionalDispatchInput },
+      "one identical frozen tuple to the coordinator call and the operator dispatch",
     );
 
     const nonStringDispatchInput = replaceRequired(
       source.desktop,
-      "      tooling_commit:\n        description: Exact workflow commit supplying audited release-only tooling\n        required: true\n        type: string",
-      "      tooling_commit:\n        description: Exact workflow commit supplying audited release-only tooling\n        required: true\n        type: boolean",
+      "      source_run_id:\n        description: Failed source run id or none\n        required: true\n        type: string\npermissions:",
+      "      source_run_id:\n        description: Failed source run id or none\n        required: true\n        type: boolean\npermissions:",
     );
     expectIssue(
       { ...source, desktop: nonStringDispatchInput },
-      "workflow_dispatch must require string input tooling_commit",
+      "workflow_dispatch must require string input source_run_id",
+    );
+    expectIssue(
+      { ...source, desktop: nonStringDispatchInput },
+      "one identical frozen tuple to the coordinator call and the operator dispatch",
     );
 
     const extraDispatchInput = replaceRequired(
@@ -623,6 +642,31 @@ describe("desktop release workflow policy", () => {
       { ...source, desktop: extraDispatchInput },
       "direct dispatch must accept exactly the frozen desktop release tuple",
     );
+  });
+
+  it("keeps desktop-release.yml direct dispatch operator-only", () => {
+    const source = sources();
+    const issue = "desktop-release.yml direct dispatch must stay operator-only";
+    const release = replaceRequired(
+      source.release,
+      "          PACKAGE=\"$RELEASE_PACKAGE\"",
+      "          gh workflow run desktop-release.yml\n          PACKAGE=\"$RELEASE_PACKAGE\"",
+    );
+    expectIssue({ ...source, release }, issue);
+
+    const coordinator = replaceRequired(
+      source.coordinator,
+      "          TAG=\"$RELEASE_TAG_INPUT\"",
+      "          gh workflow run desktop-release.yml\n          TAG=\"$RELEASE_TAG_INPUT\"",
+    );
+    expectIssue({ ...source, coordinator }, issue);
+
+    const version = replaceRequired(
+      source.version,
+      "          PREVIOUS_COMMIT=$(git rev-parse HEAD^)",
+      "          gh workflow run desktop-release.yml\n          PREVIOUS_COMMIT=$(git rev-parse HEAD^)",
+    );
+    expectIssue({ ...source, version }, issue);
   });
 
   it("binds direct run identity and shares the stable release lock", () => {
