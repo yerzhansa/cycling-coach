@@ -53,6 +53,7 @@ export const DEFAULT_WINDOWS_PARITY_SCENARIO_MANIFESTS: readonly [
   "chat-settings.scenarios.json",
   "training.scenarios.json",
   "telegram.scenarios.json",
+  "shell-lifecycle.scenarios.json",
 ];
 
 export function loadWindowsParityScenarios(

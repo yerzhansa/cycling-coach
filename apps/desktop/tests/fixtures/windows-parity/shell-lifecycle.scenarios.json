@@ -1,0 +1,362 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "shell.bootstrap.user-data",
+      "surface": "shell-bootstrap",
+      "expected": "Windows binds Electron user data exactly once under Local AppData and fails closed with a path-free stage when the location cannot be applied.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/windows-user-data.test.ts > uses LOCALAPPDATA as the primary Windows location",
+        "apps/desktop/tests/windows-user-data.test.ts > sets userData exactly once to the decided Windows path",
+        "apps/desktop/tests/windows-user-data.test.ts > reports only the set-user-data stage when Electron rejects the path"
+      ]
+    },
+    {
+      "id": "shell.bootstrap.app-identity",
+      "surface": "shell-bootstrap",
+      "expected": "Windows binds the frozen AppUserModelID before scheme registration, the single-instance lock, or window interaction, and an identity failure stops bootstrap without private details.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/desktop-lifecycle.test.ts > binds the frozen AppUserModelID only on Windows",
+        "apps/desktop/tests/desktop-lifecycle.test.ts > fails closed when Windows rejects the AppUserModelID",
+        "apps/desktop/tests/desktop-lifecycle.test.ts > binds identity before scheme, lock, and window interaction in the production entry"
+      ]
+    },
+    {
+      "id": "shell.single-instance.activation",
+      "surface": "shell-activation",
+      "expected": "A losing Windows launch exits before desktop bootstrap, while its activation is relayed to restore, show, and focus the resident main window; early duplicate activations coalesce once.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/desktop-lifecycle.test.ts > restores, shows, and focuses the resident window for a second launch",
+        "apps/desktop/tests/desktop-lifecycle.test.ts > coalesces early Windows activation and presents every later second launch",
+        "apps/desktop/tests/residency.test.ts > keeps the production failure adapter closed and gates the loser before bootstrap"
+      ]
+    },
+    {
+      "id": "shell.tray.window-residency",
+      "surface": "shell-tray",
+      "expected": "Closing the Windows main window hides it without quitting, tray left-click opens it, and explicit Quit permits the window and application to close.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/residency.test.ts > uses the Windows tray icon as-is and opens the main window on left click",
+        "apps/desktop/tests/residency.test.ts > hides a Windows main window on close and allows explicit Quit to close it"
+      ]
+    },
+    {
+      "id": "shell.tray.native-menu",
+      "surface": "shell-tray",
+      "expected": "Windows tray right-click builds a fresh native Open Enduragent, Start in background at login, and Quit Enduragent menu from current Startup Apps truth, without creating the macOS popover.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/residency.test.ts > uses the Windows tray icon as-is and opens the main window on left click",
+        "apps/desktop/tests/residency.test.ts > uses effective Windows Startup Apps truth in the native menu",
+        "apps/desktop/tests/residency.test.ts > builds a fresh exact native menu and uses current checkbox truth"
+      ]
+    },
+    {
+      "id": "shell.login.registration",
+      "surface": "shell-login",
+      "expected": "Login start reads, writes, and verifies the named per-user Windows registration for the installed executable and background argument, and uninstall deletes the matching HKCU Run value.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/login-item.test.ts > reads the exact argument-marked Windows registration",
+        "apps/desktop/tests/login-item.test.ts > writes and verifies the named per-user Windows registration when enabled=%s",
+        "apps/desktop/tests/windows-icons.test.ts > keeps the runtime login value name aligned with the uninstall hook"
+      ]
+    },
+    {
+      "id": "shell.login.background-launch",
+      "surface": "shell-login",
+      "expected": "Only the exact enabled Windows login invocation starts resident in the background; manual launches remain foreground and the background preference reopens durably without POSIX-only assumptions.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/login-item.test.ts > defaults to foreground and persists a restart-safe background preference",
+        "apps/desktop/tests/login-item.test.ts > persists the Windows preference without POSIX ownership or directory sync",
+        "apps/desktop/tests/login-item.test.ts > starts in the Windows background only for the exact enabled login invocation"
+      ]
+    },
+    {
+      "id": "shell.windows.login-reboot",
+      "surface": "shell-login",
+      "expected": "After enabling Start in background at login and rebooting Windows, the owning user signs in to one background-resident Enduragent instance with a tray icon and no foreground window until opened. This remains VM-only because it requires a real reboot and Windows Startup Apps invocation.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "shell.windows.power-events",
+      "surface": "shell-power",
+      "expected": "A real Windows suspend and resume leaves the installed resident shell available from the tray and lets the shipped power lifecycle reconcile without changing durable login or channel intent. This remains VM-only because synthetic event emitters cannot prove OS power delivery or post-wake shell residency.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "upgrade-fence.transport.admission",
+      "surface": "upgrade-fence",
+      "expected": "Windows dispatches upgrade acquisition and startup admission to a claim file backed by loopback TCP: ordinary or wrong callers are reserved, one designated capability is admitted once, and release returns admission to clear.",
+      "automation": "deterministic",
+      "tests": [
+        "packages/coach/tests/upgrade-fence.test.ts > routes acquisition to the Windows claim-file transport",
+        "packages/coach/tests/upgrade-fence.test.ts > routes admission to the Windows claim-file transport",
+        "packages/coach/tests/windows-upgrade-fence.test.ts > matches admission, one-shot capability, release, and permission contracts"
+      ]
+    },
+    {
+      "id": "upgrade-fence.transport.contention",
+      "surface": "upgrade-fence",
+      "expected": "A live or nonresponsive holder keeps startup reserved, its nonce-authenticated claim stays intact, and simultaneous Windows acquisitions produce exactly one owner and one reserved contender.",
+      "automation": "deterministic",
+      "tests": [
+        "packages/coach/tests/windows-upgrade-fence.test.ts > reserves a hung holder after the monotonic deadline without reclaiming its claim",
+        "packages/coach/tests/windows-upgrade-fence.test.ts > keeps a live claim when the holder returns the correct nonce echo",
+        "packages/coach/tests/windows-upgrade-fence.test.ts > arbitrates concurrent acquisitions with exactly one winner"
+      ]
+    },
+    {
+      "id": "upgrade-fence.transport.stale-claim",
+      "surface": "upgrade-fence",
+      "expected": "A dead holder or nonce-invalid loopback squatter has its stale Windows claim reclaimed so a fresh owner can acquire, while release never unlinks a replacement claim inode it does not own.",
+      "automation": "deterministic",
+      "tests": [
+        "packages/coach/tests/windows-upgrade-fence.test.ts > does not unlink a replacement claim inode during release",
+        "packages/coach/tests/windows-upgrade-fence.test.ts > recovers a claim left behind by a crashed holder and permits a fresh acquisition",
+        "packages/coach/tests/windows-upgrade-fence.test.ts > reclaims a port squatter returning %s"
+      ]
+    },
+    {
+      "id": "daemon.supervision.windows-ownership",
+      "surface": "daemon-supervision",
+      "expected": "Windows accepts only a live app-supervised daemon with the current utility child handle and refuses an attached or dead peer without claiming, killing, or hard-stopping an unowned process.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/supervisor.test.ts > accepts a live app-supervised Windows resolution",
+        "apps/desktop/tests/supervisor.test.ts > refuses a Windows daemon without a current app child handle",
+        "apps/desktop/tests/supervisor.test.ts > refuses a dead Windows app child instead of claiming ownership"
+      ]
+    },
+    {
+      "id": "daemon.supervision.start-stop",
+      "surface": "daemon-supervision",
+      "expected": "The desktop starts its owned daemon through strict utility control frames, acknowledges one exact terminal frame, requests graceful shutdown, observes exit, and does not restart an intentionally stopped child.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/utility-protocol.test.ts > accepts only strict start and shutdown control frames",
+        "apps/desktop/tests/supervisor.test.ts > starts over the closed control protocol and acknowledges one exact terminal frame",
+        "apps/desktop/tests/supervisor.test.ts > does not restart when shutdown requested the child exit"
+      ]
+    },
+    {
+      "id": "daemon.supervision.crash-restart",
+      "surface": "daemon-supervision",
+      "expected": "An unexpected owned-daemon exit triggers bounded backoff, prepares successor coordinates before publishing the next generation, and ends in a truthful terminal state after the restart budget is exhausted.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/supervisor.test.ts > restarts after an unexpected child exit and publishes the new live coordinates",
+        "apps/desktop/tests/supervisor.test.ts > prepares the successor coordinates before publishing them",
+        "apps/desktop/tests/supervisor.test.ts > stops after three quick restart attempts when children keep dying"
+      ]
+    },
+    {
+      "id": "daemon.shutdown.quit-drain",
+      "surface": "daemon-shutdown",
+      "expected": "Explicit Quit is deduplicated, closes resident tray resources, drains accepted desktop work before normal exit, blocks repeated pre-drain exits, and never restarts the intentionally stopped daemon.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/residency.test.ts > deduplicates quit and destroys popover before tray exactly once",
+        "apps/desktop/tests/quit-coordinator.test.ts > blocks repeated pre-drain quits and permits only the updater-generated post-drain quit",
+        "apps/desktop/tests/quit-coordinator.test.ts > permits a normal final exit only after a successful drain",
+        "apps/desktop/tests/supervisor.test.ts > does not restart when shutdown requested the child exit"
+      ]
+    },
+    {
+      "id": "package.startup.mode",
+      "surface": "packaged-startup",
+      "expected": "The packaged-acceptance startup adapter consumes only the exact one-shot OS-login marker, forces an unmarked acceptance launch to manual, and deletes and rejects every non-exact marker.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/packaged-startup-mode.test.ts > consumes an exact marker and injects one OS-login observation",
+        "apps/desktop/tests/packaged-startup-mode.test.ts > injects one manual observation for an unmarked acceptance launch",
+        "apps/desktop/tests/packaged-startup-mode.test.ts > deletes and rejects every non-exact marker"
+      ]
+    },
+    {
+      "id": "package.process.safety",
+      "surface": "packaged-process",
+      "expected": "Packaged acceptance installs its exact quit control before production startup, treats only spawn followed by exit zero without a signal as clean, and permits release only after successful execution and a clear process scan.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/packaged-process-safety.test.ts > registers an exact, fragmented stdin quit frame before production startup",
+        "apps/desktop/tests/packaged-process-safety.test.ts > requires spawn followed by close zero with no signal",
+        "apps/desktop/tests/packaged-process-safety.test.ts > permits release only after successful execution, clean direct exits, and a clear scan"
+      ]
+    },
+    {
+      "id": "package.nsis.install-plan",
+      "surface": "windows-installer",
+      "expected": "The private Windows artifact is one-click, unsigned x64 NSIS, per-user and as-invoker with no elevation helper, a Start menu shortcut but no desktop shortcut, and the committed application and tray icons.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/windows-package-plan.test.ts > seals every frozen identity value in the unsigned x64 NSIS plan",
+        "apps/desktop/tests/windows-icons.test.ts > keeps the Windows builder wired to the committed ICO resources",
+        "apps/desktop/tests/windows-package-layout.test.ts > accepts the exact x64 application and unsigned NSIS package"
+      ]
+    },
+    {
+      "id": "package.nsis.runtime-layout",
+      "surface": "windows-package",
+      "expected": "The Windows application has only its declared x64 runtime, ASAR, icons, and self-test resources; source maps, tests, fixtures, undeclared resources, and native packages are rejected as development or unsafe residue.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/windows-package-layout.test.ts > accepts the exact x64 application and unsigned NSIS package",
+        "apps/desktop/tests/windows-package-layout.test.ts > rejects forbidden ASAR path %s",
+        "apps/desktop/tests/windows-package-layout.test.ts > rejects undeclared package resources",
+        "apps/desktop/tests/windows-package-layout.test.ts > rejects native packages inside the ASAR"
+      ]
+    },
+    {
+      "id": "package.nsis.verification",
+      "surface": "windows-package",
+      "expected": "Packaging cleans output, builds one exact versioned installer, and verifies it before release; signed, renamed, non-NSIS, missing, or undeclared installer contents fail closed.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/windows-package-plan.test.ts > cleans, builds, checks the singleton artifact, and verifies in order",
+        "apps/desktop/tests/windows-package-layout.test.ts > rejects signed, renamed, and non-NSIS installer artifacts",
+        "apps/desktop/tests/windows-package-layout.test.ts > rejects undeclared and missing entries inside the installer"
+      ]
+    },
+    {
+      "id": "updater.unsigned.package-truth",
+      "surface": "windows-updater",
+      "expected": "The unsigned Windows package is update-ineligible, contains no release marker or updater metadata, leaves updater loading and scheduling off, and never shows the sidebar's Update available action while disabled.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/windows-package-plan.test.ts > seals every frozen identity value in the unsigned x64 NSIS plan",
+        "apps/desktop/tests/windows-package-layout.test.ts > keeps ordinary Windows packages updater-inert",
+        "apps/desktop/tests/update-controller.test.ts > is silent when release eligibility is disabled",
+        "apps/desktop-renderer/tests/sidebar-surface.test.tsx > appears only when an update is ready and names its version"
+      ]
+    },
+    {
+      "id": "updater.unsigned.version-floor",
+      "surface": "windows-updater",
+      "expected": "Even when updates are disabled, startup records the running desktop version; the durable highest-version floor survives restart and a future eligible update path refuses any lower candidate.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/update-controller.test.ts > is silent when release eligibility is disabled",
+        "apps/desktop/tests/update-version-floor.test.ts > survives a restart and never falls below the highest version run",
+        "apps/desktop/tests/update-controller.test.ts > refuses and reports a candidate lower than the recorded version floor"
+      ]
+    },
+    {
+      "id": "storage.first-run.configuration",
+      "surface": "shell-storage",
+      "expected": "Windows prepares the athlete home, seeds a parseable first-run configuration only when absent, reopens an existing configuration unchanged, and completes this work before constructing the daemon supervisor.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/first-run-config.test.ts > leaves an existing arbitrary configuration byte-identical",
+        "apps/desktop/tests/first-run-config.test.ts > seeds and reopens a Windows configuration without POSIX mode assertions",
+        "apps/desktop/tests/first-run-config.test.ts > prepares the home before seeding and constructing the daemon supervisor"
+      ]
+    },
+    {
+      "id": "storage.windows.durable-writes",
+      "surface": "shell-storage",
+      "expected": "Windows shell stores use file-flush and private-path durability without unsupported POSIX ownership or directory-sync assumptions, and sharing failures remain path-free and stage-coded.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/durable-atomic-replace.test.ts > uses the Windows durability taxonomy without chmod or directory sync",
+        "apps/desktop/tests/durable-atomic-replace.test.ts > surfaces a path-free Windows sharing failure at the rename stage",
+        "apps/desktop/tests/login-item.test.ts > persists the Windows preference without POSIX ownership or directory sync"
+      ]
+    },
+    {
+      "id": "shell.windows.second-launch",
+      "surface": "shell-activation",
+      "expected": "Launching the installed Start menu shortcut twice leaves one Enduragent process family and brings the existing main window to the foreground from normal, minimized, and close-to-tray states. This remains VM-only because it requires the real Windows single-instance lock, process table, and foreground activation policy.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "shell.windows.tray-residency",
+      "surface": "shell-tray",
+      "expected": "The installed tray survives main-window close, left-click opens the window, right-click shows the native residency menu without a popover, and Quit removes the tray and process family. This remains VM-only because Electron doubles cannot prove Explorer tray interaction or native menu behavior.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "package.windows.installation",
+      "surface": "windows-installer",
+      "expected": "Running the unsigned installer as a standard user completes without elevation, installs per-user, exposes the correct Start menu and Apps list identity and icons, creates no desktop shortcut, and contains no development resources. This remains VM-only because archive verification cannot prove Windows installer UI, shell integration, or elevation behavior.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "package.windows.process-release",
+      "surface": "packaged-process",
+      "expected": "After explicit Quit, no installed Enduragent main, utility, renderer, crash handler, or other helper process retains the installation or user-data trees. This remains VM-only because proving the complete Windows process tree and open handles requires kernel-backed observations in the installed VM.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "updater.windows.unsigned-ui",
+      "surface": "windows-updater",
+      "expected": "The installed unsigned package starts and remains updater-disabled with no download traffic, staged update, Update available chip, or restart-to-install prompt. This remains VM-only because the final proof spans packaged metadata, the real runtime, network observation, and rendered Windows UI.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.windows.integration-cleanup",
+      "surface": "windows-uninstall",
+      "expected": "After seeded use, uninstall removes the program directory, Start menu shortcut, Apps list entry, uninstaller, tray process, and owned HKCU Run value without deleting athlete or user-data roots. This remains VM-only because it requires executing the real NSIS uninstaller and inspecting Windows shell and registry state.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.durable.athlete-config",
+      "surface": "windows-reinstall",
+      "expected": "After seed, uninstall, and same-user reinstall, athlete configuration, selected provider and model, intake, training account identity, and stored subscription profile reopen byte-for-byte or semantically unchanged. This remains VM-only because it crosses the real NSIS boundary and reopens the owning user's athlete-home configuration.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.durable.training-store",
+      "surface": "windows-reinstall",
+      "expected": "After seed, uninstall, and same-user reinstall, the SQLite training store reopens with imported and synced activities, athlete identity, analyses, and readiness unchanged. This remains VM-only because it requires a real uninstall boundary and reopening the installed Windows SQLite runtime against the preserved store.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.durable.training-archive",
+      "surface": "windows-reinstall",
+      "expected": "After seed, uninstall, and same-user reinstall, archived source training files remain byte-identical and usable for repeat-safe recovery. This remains VM-only because it requires a real uninstall boundary and byte comparison of the preserved athlete archive.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.durable.coaching-data",
+      "surface": "windows-reinstall",
+      "expected": "After seed, uninstall, and same-user reinstall, current and past conversations, coach memory and provenance, Reference snapshots, sync history, spend state, and Telegram allowed-user access reopen unchanged. This remains VM-only because it requires inventorying and reopening every durable athlete-data class across the real uninstall boundary.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.durable.desktop-credentials",
+      "surface": "windows-reinstall",
+      "expected": "After seed, uninstall, and same-user reinstall, every configured provider and Intervals.icu credential remains ciphertext at rest and decrypts to a usable value only for the owning Windows user. This remains VM-only because DPAPI continuity and ownership cannot be proved without the original Windows user profile across uninstall and reinstall.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.durable.telegram-channel",
+      "surface": "windows-reinstall",
+      "expected": "After seed, uninstall, and same-user reinstall, the Telegram bot profile still decrypts, and its enabled intent, power-gap state, pairing identity, and allowed-user access reopen unchanged. This remains VM-only because it requires real DPAPI, daemon, and preserved user-data behavior across uninstall and reinstall.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.durable.desktop-preferences",
+      "surface": "windows-reinstall",
+      "expected": "After seed, uninstall, and same-user reinstall, the background-at-login preference and highest desktop version floor reopen unchanged while the removed Run registration stays off until explicitly enabled again. This remains VM-only because it crosses both preserved user-data and removed Windows registry state.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.durable.renderer-preferences",
+      "surface": "windows-reinstall",
+      "expected": "After seed, uninstall, and same-user reinstall, the chosen appearance and app palette reopen from the preserved renderer local storage while session-only storage is not treated as durable. This remains VM-only because Chromium storage preservation is observable only in the installed owning-user profile across the NSIS boundary.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "uninstall.transients.relaunch",
+      "surface": "windows-reinstall",
+      "expected": "Stale updater cache or staging, lock files, daemon PID and port registrations, upgrade-fence claim coordinates, crash breadcrumbs, and owned temporary files never block same-user reinstall or a clean relaunch. This remains VM-only because it requires seeding real cross-process crash residue and exercising installer and runtime recovery on Windows.",
+      "automation": "vm-only"
+    }
+  ]
+}
