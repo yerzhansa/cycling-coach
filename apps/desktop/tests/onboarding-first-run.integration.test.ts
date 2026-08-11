@@ -37,7 +37,7 @@ interface FixtureIntake {
 
 function makeScript(): DesktopFixtureScript {
   let savedIntake: FixtureIntake | null = null;
-  let durableTrainingData = false;
+  let durableTrainingData = true;
   return {
     onRequest(value) {
       const request = value as ScriptRequest;
@@ -228,10 +228,14 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       panelButton("api-key", "Save")?.click();
       await waitGone('[data-setup-panel="api-key"]');
       document.querySelector('[data-setup-trigger="training"]')?.click();
-      await waitFor('[data-setup-panel="training"]');
-      fill('input[data-slot="intervals-icu"]', "synthetic-training-key");
-      panelButton("training", "Save")?.click();
-      await waitFor('[data-setup-row="training"][data-state="ready"]');
+      const trainingPanel = await waitFor('[data-setup-panel="training"]');
+      if (panelButton("training", "Use copied API key") === undefined) {
+        throw new Error("missing Use copied API key action");
+      }
+      if (trainingPanel.querySelector('input[data-slot="intervals-icu"]') !== null) {
+        throw new Error("unexpected Intervals.icu credential input");
+      }
+      await waitFor('[data-setup-readiness="2"]');
       pick("onboarding-injury-status", "none");
       await new Promise((resolve) => setTimeout(resolve, 60));
       button("Start coaching")?.click();
