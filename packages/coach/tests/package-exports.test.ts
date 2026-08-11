@@ -15,6 +15,7 @@ describe("coach package handoff", () => {
       bin: Record<string, string>;
     };
     expect(packageJson.exports).toEqual({
+      "./abortable-operation": "./dist/abortable-operation.js",
       "./runtime": "./dist/runtime.js",
       "./sync": "./dist/sync.js",
       "./backfill": "./dist/backfill.js",
@@ -39,6 +40,7 @@ describe("coach package handoff", () => {
       "season-review": "node dist/season-review-command.js",
     });
     const entries = [
+      "abortable-operation",
       "runtime",
       "sync",
       "backfill",

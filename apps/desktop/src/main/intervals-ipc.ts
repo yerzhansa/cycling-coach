@@ -4,6 +4,7 @@ import {
   type IntervalsCredentialVerificationRefusalReason,
   type IntervalsCredentialVerificationResult,
 } from "@enduragent/coach/backfill";
+import { awaitWithSignal } from "@enduragent/coach/abortable-operation";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import type { Clipboard, IpcMain, IpcMainInvokeEvent } from "electron";
 import { DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL } from "./constants.js";
@@ -38,7 +39,7 @@ export interface DesktopIntervalsCredentialStatus {
   readonly runtimeState: CredentialRuntimeState | null;
 }
 
-export type DesktopIntervalsMutationRefusalReason =
+type DesktopIntervalsMutationRefusalReason =
   | "clipboard-unavailable"
   | "clipboard-clear-failed"
   | "invalid-key-format"
@@ -47,19 +48,6 @@ export type DesktopIntervalsMutationRefusalReason =
   | "unsafe-backend"
   | "storage-failed"
   | "runtime-unavailable";
-
-export type DesktopIntervalsMutationResult =
-  | Readonly<{ outcome: "applied"; current: DesktopIntervalsCredentialStatus }>
-  | Readonly<{
-      outcome: "refused";
-      reason: DesktopIntervalsMutationRefusalReason;
-      current: DesktopIntervalsCredentialStatus;
-    }>
-  | Readonly<{
-      outcome: "uncertain";
-      reason: "storage-uncertain" | "runtime-uncertain";
-      current: DesktopIntervalsCredentialStatus;
-    }>;
 
 export function createDesktopIntervalsCredentialVerifier(input: {
   readonly storePath: string;
@@ -90,10 +78,8 @@ type DesktopIntervalsMutationCore =
       reason: "storage-uncertain" | "runtime-uncertain";
     }>;
 
-type DesktopIntervalsMutationTransaction = Readonly<{
-  mutation: unknown;
-  current: unknown;
-}>;
+type DesktopIntervalsMutationResult = DesktopIntervalsMutationCore &
+  Readonly<{ current: DesktopIntervalsCredentialStatus }>;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -221,27 +207,6 @@ function mutationFromWrite(value: unknown): DesktopIntervalsMutationCore {
   throw new TypeError();
 }
 
-async function withAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  signal.throwIfAborted();
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => {
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    void operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error);
-      },
-    );
-  });
-}
-
 function captureClipboard(clipboard: Pick<Clipboard, "readText" | "clear">):
   | { readonly status: "captured"; readonly apiKey: string }
   | {
@@ -337,7 +302,8 @@ export function installDesktopIntervalsIpc(input: {
           () => pendingVerifications.delete(operation),
           () => pendingVerifications.delete(operation),
         );
-        const verification = copyVerification(await withAbort(operation, signal));
+        signal.throwIfAborted();
+        const verification = copyVerification(await awaitWithSignal(operation, signal));
         if (verificationSignal.aborted) {
           return { status: "refused", reason: "validation-aborted" };
         }
@@ -359,12 +325,31 @@ export function installDesktopIntervalsIpc(input: {
       clearTimeout(timeout);
     }
   };
-  const runMutation = (
-    operation: () => Promise<DesktopIntervalsMutationTransaction>,
-  ): Promise<DesktopIntervalsMutationResult> =>
+  const runCapturedCredential = (apiKey: string): Promise<DesktopIntervalsMutationResult> =>
     serialize(async () => {
       try {
-        const transaction = await operation();
+        const transaction = await input.vault.runExclusiveMutation(async (mutation) => {
+          const verification = await verifyCandidate(apiKey);
+          let result: DesktopIntervalsMutationCore;
+          if (verification.status === "refused") {
+            result = { outcome: "refused", reason: verification.reason };
+          } else {
+            result = mutationFromWrite(
+              await mutation.writeCredential(
+                {
+                  slot: "intervals-icu",
+                  value: apiKey,
+                },
+                { rollbackOnRuntimeRefusal: true },
+              ),
+            );
+          }
+          const statuses = await mutation.credentialStatuses();
+          return {
+            mutation: result,
+            current: statuses.find((entry) => entry.slot === "intervals-icu"),
+          };
+        });
         if (!record(transaction) || !exactKeys(transaction, ["current", "mutation"])) {
           throw new TypeError();
         }
@@ -390,30 +375,7 @@ export function installDesktopIntervalsIpc(input: {
         trustedZeroArgument(event, args);
         const captured = captureClipboard(input.clipboard);
         if (captured.status === "refused") return localRefusal(captured.reason);
-        return runMutation(() =>
-          input.vault.runExclusiveMutation(async (mutation) => {
-            const verification = await verifyCandidate(captured.apiKey);
-            let result: DesktopIntervalsMutationCore;
-            if (verification.status === "refused") {
-              result = { outcome: "refused", reason: verification.reason };
-            } else {
-              result = mutationFromWrite(
-                await mutation.writeCredential(
-                  {
-                    slot: "intervals-icu",
-                    value: captured.apiKey,
-                  },
-                  { rollbackOnRuntimeRefusal: true },
-                ),
-              );
-            }
-            const statuses = await mutation.credentialStatuses();
-            return {
-              mutation: result,
-              current: statuses.find((entry) => entry.slot === "intervals-icu"),
-            };
-          }),
-        );
+        return runCapturedCredential(captured.apiKey);
       },
     ],
   ] as const;

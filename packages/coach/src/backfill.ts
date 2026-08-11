@@ -26,6 +26,7 @@ import {
   type IntervalsIcuSource,
   type IntervalsLandingAcl,
 } from "@enduragent/sync-intervals-icu";
+import { awaitWithSignal } from "./abortable-operation.js";
 import { withCoachStoreWriter } from "./runtime.js";
 
 export const DEFAULT_BACKFILL_BATCH_SIZE = 400;
@@ -107,11 +108,7 @@ export type IntervalsCredentialVerificationResult =
       reason: IntervalsCredentialVerificationRefusalReason;
     }>;
 
-export type IntervalsStoreOwnerComparison =
-  | "unowned"
-  | "matched"
-  | "mismatch"
-  | "store-unavailable";
+export type IntervalsStoreOwnerComparison = Exclude<StoreOwnerCheckResult, "unresolved">;
 
 const lookupArchiveResult: ArchiveWriteResult = Object.freeze({
   address: "0".repeat(64),
@@ -385,7 +382,7 @@ export async function checkIntervalsStoreOwnerAtPath(
   }
 }
 
-export async function compareIntervalsStoreOwnerFingerprintAtPath(
+async function compareIntervalsStoreOwnerFingerprintAtPath(
   storePath: string,
   fingerprint: string,
 ): Promise<IntervalsStoreOwnerComparison> {
@@ -450,23 +447,7 @@ async function withIntervalsCredentialAbort<T>(
   signal: AbortSignal,
 ): Promise<T> {
   signal.throwIfAborted();
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => {
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    void operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error);
-      },
-    );
-  });
+  return await awaitWithSignal(operation, signal);
 }
 
 function timeoutFailure(error: unknown): boolean {
@@ -538,7 +519,10 @@ export async function verifyIntervalsCredentialAtPath(
       if (overallController.signal.aborted || timeoutFailure(error)) {
         return { status: "refused", reason: "validation-timeout" };
       }
-      if (error instanceof IntervalsHttpError) {
+      if (
+        error instanceof IntervalsHttpError ||
+        error instanceof IntervalsCredentialTransportError
+      ) {
         return {
           status: "refused",
           reason:
@@ -549,12 +533,7 @@ export async function verifyIntervalsCredentialAtPath(
       }
       return {
         status: "refused",
-        reason:
-          error instanceof IntervalsCredentialTransportError
-            ? error.status === 401 || error.status === 403
-              ? "credential-rejected"
-              : "validation-unavailable"
-            : "malformed-athlete-response",
+        reason: "malformed-athlete-response",
       };
     }
     if (fingerprint === null) return { status: "refused", reason: "owner-unresolved" };

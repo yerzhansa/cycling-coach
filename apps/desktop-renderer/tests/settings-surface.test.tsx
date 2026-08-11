@@ -17,6 +17,7 @@ import type {
 } from "../src/onboarding/machine.js";
 import { createOnboardingState } from "../src/onboarding/machine.js";
 import {
+  createOnboardingController,
   onboardingCredentialMutationActive,
   type OnboardingController,
 } from "../src/onboarding/controller.js";
@@ -30,6 +31,7 @@ import {
   type TelegramControlStatus,
 } from "../src/settings/telegram-controller.js";
 import { createSpendMeterController } from "../src/spend-meter/controller.js";
+import { createOnboardingViewAdapter } from "../src/state/adapters/onboarding.js";
 import { createReleaseNotesSettingsAdapter } from "../src/state/adapters/release-notes.js";
 import {
   createAthleteSettingsAdapter,
@@ -40,6 +42,7 @@ import {
 import { createSpendSettingsAdapter } from "../src/state/adapters/spend.js";
 import { createTelegramSettingsAdapter } from "../src/state/adapters/telegram.js";
 import { createUpdateSettingsAdapter } from "../src/state/adapters/update.js";
+import { credentialDrafts } from "../src/state/credential-drafts.js";
 import { CLOSED_PANE, EMPTY_SETTINGS_SURFACE } from "../src/state/settings-slice.js";
 import { READY_ONBOARDING, setupReady } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
@@ -47,6 +50,7 @@ import type { DesktopUpdateState } from "../src/update/controller.js";
 import { createDesktopUpdateController } from "../src/update/controller.js";
 import { CONVERSATION_FIELDS } from "../src/ui/settings/copy.js";
 import { SettingsView } from "../src/ui/settings/SettingsView.js";
+import { testBridge } from "./onboarding-harness.js";
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -170,6 +174,7 @@ interface HarnessOptions {
   readonly chatGptStatus?: ChatGptStatus;
   readonly claudeCliStatus?: () => Promise<ClaudeCliStatus>;
   readonly deleteCredential?: () => Promise<CredentialDeleteResult>;
+  readonly onDeleted?: () => Promise<void> | void;
   readonly onReconciled?: () => Promise<void> | void;
   readonly releaseNotes?: () => Promise<ReleaseNotesResult>;
   readonly updateState?: DesktopUpdateState;
@@ -230,6 +235,7 @@ function createHarness(options: HarnessOptions = {}) {
       })),
   );
   const openSetup = vi.fn();
+  const onDeleted = vi.fn(options.onDeleted ?? (async () => {}));
   const onReconciled = vi.fn(options.onReconciled ?? (async () => {}));
 
   const coachAdapter = createCoachSettingsAdapter({
@@ -279,6 +285,7 @@ function createHarness(options: HarnessOptions = {}) {
       : { loadClaudeCliStatus: options.claudeCliStatus }),
     deleteCredential,
     openSetup,
+    onDeleted,
     onReconciled,
     credentialMutationsBlocked: () =>
       onboardingCredentialMutationActive(store.getState().onboarding),
@@ -402,6 +409,7 @@ function createHarness(options: HarnessOptions = {}) {
     restartToUpdate,
     checkForUpdates,
     openSetup,
+    onDeleted,
     onReconciled,
     pasteTelegramToken,
     loadTelegramStatus,
@@ -504,6 +512,89 @@ async function renderSettings(options: HarnessOptions = {}) {
 }
 
 describe("settings setup inventory", () => {
+  it("reloads a stale credential inventory before confirming an Intervals deletion", async () => {
+    const user = userEvent.setup();
+    let intervalsConnected = false;
+    const loadCredentialStatuses = vi.fn(
+      async (): Promise<readonly CredentialSlotStatus[]> => [
+        { slot: "anthropic", state: "configured", runtimeState: "active" },
+        ...(intervalsConnected
+          ? ([
+              { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+            ] as const)
+          : []),
+      ],
+    );
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.credentialStatuses.mockImplementation(loadCredentialStatuses);
+    bridge.pasteIntervalsApiKeyFromClipboard.mockImplementation(async () => {
+      intervalsConnected = true;
+      return {
+        outcome: "applied",
+        current: { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+      };
+    });
+    const onboardingView = createOnboardingViewAdapter({
+      publish: (next) => useEnduragentStore.getState().setOnboarding(next),
+    });
+    const onboarding = createOnboardingController({
+      bridge,
+      credentials: credentialDrafts,
+      view: onboardingView.view,
+      focusOpener: vi.fn(),
+      onComplete: vi.fn(),
+    });
+    useEnduragentStore.getState().bindOnboardingActions(onboarding);
+
+    try {
+      await act(async () => onboarding.open());
+      await renderSettings({
+        runtime: () =>
+          snapshot({
+            intervals: {
+              athlete_id: "i1",
+              credential_configured: intervalsConnected,
+              managedByEnvironment: { athleteId: false },
+            },
+          }),
+        loadCredentialStatuses,
+      });
+
+      expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+        status: "ready",
+        entries: expect.not.arrayContaining([
+          expect.objectContaining({ credential: "intervals-icu" }),
+        ]),
+      });
+      expect(loadCredentialStatuses).toHaveBeenCalledTimes(2);
+
+      await user.click(screen.getByRole("button", { name: "Connect Intervals.icu" }));
+      await user.click(screen.getByRole("button", { name: "Use copied API key" }));
+      const remove = await screen.findByRole("button", {
+        name: "Delete the Intervals.icu connection",
+      });
+      await waitFor(() => expect(remove).toHaveFocus());
+      expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+        status: "ready",
+        entries: expect.not.arrayContaining([
+          expect.objectContaining({ credential: "intervals-icu" }),
+        ]),
+      });
+      expect(loadCredentialStatuses).toHaveBeenCalledTimes(2);
+
+      await user.click(remove);
+
+      expect(await screen.findByText("Delete the Intervals.icu connection?")).toBeInTheDocument();
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      await waitFor(() => expect(cancel).toHaveFocus());
+      expect(loadCredentialStatuses).toHaveBeenCalledTimes(3);
+    } finally {
+      onboarding.dispose();
+      onboardingView.dispose();
+      useEnduragentStore.getState().bindOnboardingActions(null);
+    }
+  });
+
   it("renders setup first without standalone Credentials or Application setup actions", async () => {
     await renderSettings();
     const settings = screen.getByRole("region", { name: "Settings" });
@@ -523,19 +614,19 @@ describe("settings setup inventory", () => {
     ).toContain("border-transparent");
     expect(
       within(trainingRow as HTMLElement).getByRole("button", {
-        name: "Change Intervals.icu",
+        name: "Delete the Intervals.icu connection",
       }).className,
-    ).toContain("border-transparent");
+    ).toContain("text-danger");
     expect(
       within(aiRow as HTMLElement).getByRole("button", {
         name: "Delete the Anthropic credential",
       }).className,
     ).toMatch(/danger/u);
     expect(
-      within(trainingRow as HTMLElement).getByRole("button", {
-        name: "Delete the intervals.icu credential",
-      }).className,
-    ).toMatch(/danger/u);
+      within(trainingRow as HTMLElement).queryByRole("button", {
+        name: "Change Intervals.icu",
+      }),
+    ).toBeNull();
     expect(setup?.querySelector('[data-setup-row="saved-anthropic"]')).toBeNull();
     expect(setup?.querySelector('[data-setup-row="saved-openrouter"]')).not.toBeNull();
     expect(screen.queryByRole("region", { name: "Credentials" })).toBeNull();
@@ -806,7 +897,9 @@ describe("credential deletion", () => {
 
     await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Change the OpenRouter credential" })).toBeDisabled();
 
     await user.click(
@@ -814,7 +907,9 @@ describe("credential deletion", () => {
     );
     await waitFor(() => expect(subject.deleteCredential).toHaveBeenCalledOnce());
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
 
     act(() =>
       deletion.resolve({
@@ -825,7 +920,9 @@ describe("credential deletion", () => {
     );
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeEnabled();
-      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+      ).toBeEnabled();
       expect(
         screen.getByRole("button", { name: "Change the OpenRouter credential" }),
       ).toBeEnabled();
@@ -847,7 +944,7 @@ describe("credential deletion", () => {
     expect(screen.getByRole("button", { name: "Delete the Anthropic credential" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Delete the intervals.icu credential" }),
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Change the OpenRouter credential" })).toBeDisabled();
 
@@ -918,6 +1015,78 @@ describe("credential deletion", () => {
     });
   });
 
+  it("restores focus to the Intervals Delete action when confirmation is escaped", async () => {
+    const user = userEvent.setup();
+    await renderSettings();
+
+    const remove = screen.getByRole("button", {
+      name: "Delete the Intervals.icu connection",
+    });
+    await user.click(remove);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(remove).toHaveFocus());
+    expect(screen.queryByText("Delete the Intervals.icu connection?")).toBeNull();
+  });
+
+  it("opens and focuses first-time Intervals setup after deletion without lowering durable readiness", async () => {
+    const user = userEvent.setup();
+    let intervalsConfigured = true;
+    const subject = await renderSettings({
+      runtime: () =>
+        snapshot({
+          intervals: {
+            athlete_id: "i1",
+            credential_configured: intervalsConfigured,
+            managedByEnvironment: { athleteId: false },
+          },
+        }),
+      deleteCredential: async () => {
+        intervalsConfigured = false;
+        return {
+          credential: "intervals-icu",
+          status: "deleted",
+          cleanupPending: false,
+        };
+      },
+      onDeleted: () => {
+        useEnduragentStore.setState((state) => ({
+          onboarding: {
+            ...state.onboarding,
+            wizard: {
+              ...state.onboarding.wizard,
+              credentialStatus: {
+                ...state.onboarding.wizard.credentialStatus,
+                "intervals-icu": "missing",
+              },
+            },
+          },
+        }));
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Delete the Intervals.icu connection" }));
+    await user.click(screen.getByRole("button", { name: "Delete connection" }));
+
+    await waitFor(() => {
+      expect(subject.deleteCredential).toHaveBeenCalledWith({ credential: "intervals-icu" });
+      expect(subject.onDeleted).toHaveBeenCalledOnce();
+      expect(screen.getByRole("heading", { name: "Connect Intervals.icu" })).toHaveFocus();
+    });
+    expect(screen.getByRole("button", { name: "Connect Intervals.icu" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(useEnduragentStore.getState().onboarding.readiness.trainingData).toBe(true);
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+    expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+      status: "deleted",
+      focus: null,
+    });
+  });
+
   it("globally locks credentials and clears an open provider secret after uncertain deletion", async () => {
     const user = userEvent.setup();
     await renderSettings({
@@ -955,9 +1124,8 @@ describe("credential deletion", () => {
     expect(screen.getByRole("button", { name: "Delete the Anthropic credential" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Change the OpenRouter credential" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Delete the intervals.icu credential" }),
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
     ).toBeDisabled();
     expect(setupReady(useEnduragentStore.getState())).toBe(false);
 
@@ -967,7 +1135,9 @@ describe("credential deletion", () => {
         screen.getByRole("button", { name: "Change the OpenRouter credential" }),
       ).toBeEnabled();
       expect(screen.getByRole("button", { name: "Change what powers your coach" })).toHaveFocus();
-      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+      ).toBeEnabled();
     });
     expect(setupReady(useEnduragentStore.getState())).toBe(true);
   });
@@ -996,7 +1166,9 @@ describe("credential deletion", () => {
       repairCredential: "openrouter",
     });
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
     expect(setupReady(useEnduragentStore.getState())).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Reload credential status" }));
@@ -1033,7 +1205,9 @@ describe("credential deletion", () => {
       repairCredential: "anthropic",
     });
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
     expect(setupReady(useEnduragentStore.getState())).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Reload credential status" }));
@@ -1044,7 +1218,7 @@ describe("credential deletion", () => {
     expect(setupReady(useEnduragentStore.getState())).toBe(true);
   });
 
-  it("clears an open training secret and keeps global repair feedback stable", async () => {
+  it("keeps Intervals secrets out of the DOM and preserves repair feedback after uncertainty", async () => {
     const user = userEvent.setup();
     await renderSettings({
       deleteCredential: async () => ({
@@ -1054,17 +1228,15 @@ describe("credential deletion", () => {
       }),
     });
 
-    await user.click(screen.getByRole("button", { name: "Change Intervals.icu" }));
-    const secret = await screen.findByLabelText("Intervals.icu API key");
-    await user.type(secret, "synthetic-intervals-secret");
-    expect(secret).toHaveValue("synthetic-intervals-secret");
-
-    await user.click(screen.getByRole("button", { name: "Delete the intervals.icu credential" }));
-    await user.click(
-      screen.getByRole("button", {
-        name: "Confirm deletion of the intervals.icu credential",
-      }),
-    );
+    expect(screen.queryByLabelText("Intervals.icu API key")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Delete the Intervals.icu connection" }));
+    expect(screen.getByText("Delete the Intervals.icu connection?")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Your saved API key and imported connection will be removed. Your synced rides and past chats stay on this Mac.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete connection" }));
 
     const feedback = await screen.findByText(
       "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
@@ -1072,23 +1244,25 @@ describe("credential deletion", () => {
     await waitFor(() => {
       expect(feedback.parentElement).toHaveFocus();
       expect(document.querySelector('[data-setup-panel="training"]')).toBeNull();
-      expect(secret).toHaveValue("");
     });
+    expect(screen.queryByLabelText("Intervals.icu API key")).toBeNull();
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete the Anthropic credential" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Change the OpenRouter credential" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Delete the intervals.icu credential" }),
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
     ).toBeDisabled();
     expect(setupReady(useEnduragentStore.getState())).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Reload credential status" }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toHaveFocus();
+      expect(screen.getByRole("heading", { name: "Setup" })).toHaveFocus();
       expect(
         screen.getByRole("button", { name: "Change the OpenRouter credential" }),
+      ).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
       ).toBeEnabled();
     });
     expect(setupReady(useEnduragentStore.getState())).toBe(true);
@@ -1132,7 +1306,9 @@ describe("credential deletion", () => {
     });
     expect(screen.getByText(message)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
     expect(setupReady(useEnduragentStore.getState())).toBe(false);
 
     act(() => pendingReload.reject(new Error("synthetic reload failure")));
@@ -1146,14 +1322,18 @@ describe("credential deletion", () => {
       expect(screen.getByText(message).parentElement).toHaveFocus();
     });
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
     expect(setupReady(useEnduragentStore.getState())).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Reload credential status" }));
     await waitFor(() => {
       expect(loadCredentialStatuses).toHaveBeenCalledTimes(3);
       expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeEnabled();
-      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+      ).toBeEnabled();
     });
     expect(setupReady(useEnduragentStore.getState())).toBe(true);
   });
@@ -1188,14 +1368,18 @@ describe("credential deletion", () => {
       });
     });
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
     expect(setupReady(useEnduragentStore.getState())).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Reload credential status" }));
     await waitFor(() => {
       expect(subject.onReconciled).toHaveBeenCalledTimes(2);
       expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeEnabled();
-      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+      ).toBeEnabled();
     });
     expect(setupReady(useEnduragentStore.getState())).toBe(true);
   });
@@ -1244,7 +1428,9 @@ describe("credential deletion", () => {
       repairCredential: "openrouter",
     });
     expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
     expect(
       screen.getByText(
         "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
@@ -1255,7 +1441,9 @@ describe("credential deletion", () => {
     act(() => reentryReload.resolve(statuses));
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Change what powers your coach" })).toBeEnabled();
-      expect(screen.getByRole("button", { name: "Change Intervals.icu" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+      ).toBeEnabled();
     });
     expect(harness.onReconciled).toHaveBeenCalledOnce();
     expect(setupReady(useEnduragentStore.getState())).toBe(true);

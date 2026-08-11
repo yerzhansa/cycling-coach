@@ -57,14 +57,10 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
 
   const wizard = surface.wizard;
   const readiness = surface.readiness;
-  const requiredReadyCount =
-    surface.loading || surface.loadUnavailable
-      ? 0
-      : [
-          readiness.provider,
-          readiness.trainingData,
-          readiness.intake || intakeComplete(wizard.intake),
-        ].filter(Boolean).length;
+  const requiredReadyCount = [readiness.provider, readiness.trainingData, readiness.intake].filter(
+    Boolean,
+  ).length;
+  const requiredSetupReady = requiredReadyCount === 3;
   const activeCredential = desktopCredentialId(surface.configuration?.active?.provider);
   const primaryAiCredential =
     activeCredential === surface.draft?.provider.provider ? activeCredential : null;
@@ -119,14 +115,16 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
             <p className={`${styles.chatSubtitle} text-ink-2`}>{SETUP_CHAT_SUBTITLE}</p>
           </div>
           <span
-            className={`inline-flex h-[29px] flex-none items-center gap-2 rounded-full border px-2.5 text-xs ${requiredReadyCount === 3 ? "border-[color-mix(in_srgb,var(--ok)_34%,transparent)] bg-[color-mix(in_srgb,var(--ok)_8%,transparent)] text-ok" : "border-line-2 bg-surface text-ink-2"}`}
+            className={`inline-flex h-ctl-sm flex-none items-center gap-2 rounded-full border px-row text-xs ${requiredSetupReady ? "border-ok/35 bg-ok/10 text-ok" : "border-line-2 bg-surface text-ink-2"}`}
             data-setup-readiness={requiredReadyCount}
-            data-state={requiredReadyCount === 3 ? "ready" : "pending"}
+            data-state={requiredSetupReady ? "ready" : "pending"}
             role="status"
             aria-live="polite"
+            aria-atomic="true"
           >
             <span
-              className={`size-[7px] rounded-full ${requiredReadyCount === 3 ? "bg-ok" : "bg-warn"}`}
+              className={`size-2 rounded-full ring-4 ${requiredSetupReady ? "bg-ok ring-ok/10" : "bg-warn ring-warn/10"}`}
+              data-setup-readiness-dot={requiredSetupReady ? "ready" : "pending"}
               aria-hidden="true"
             />
             {requiredReadyCount} of 3 required ready

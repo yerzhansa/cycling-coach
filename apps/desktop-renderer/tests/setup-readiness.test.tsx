@@ -22,6 +22,18 @@ const savedIntake = {
   injury_status: "managing",
 } as const;
 
+function readinessBadge(): HTMLElement {
+  const badge = document.querySelector<HTMLElement>("[data-setup-readiness]");
+  if (badge === null) throw new TypeError("setup readiness badge missing");
+  return badge;
+}
+
+function readinessDot(): HTMLElement {
+  const dot = readinessBadge().querySelector<HTMLElement>("[data-setup-readiness-dot]");
+  if (dot === null) throw new TypeError("setup readiness dot missing");
+  return dot;
+}
+
 describe("authoritative setup readiness", () => {
   afterEach(() => resetOnboardingStore());
 
@@ -48,8 +60,114 @@ describe("authoritative setup readiness", () => {
       intake: true,
     });
     expect(setupReady(useEnduragentStore.getState())).toBe(true);
+    expect(readinessBadge()).toHaveTextContent("3 of 3 required ready");
+    expect(readinessBadge()).toHaveAttribute("data-state", "ready");
+    expect(readinessBadge()).toHaveAttribute("role", "status");
+    expect(readinessBadge()).toHaveAttribute("aria-live", "polite");
+    expect(readinessBadge()).toHaveAttribute("aria-atomic", "true");
+    expect(readinessBadge()).toHaveClass("border-ok/35", "bg-ok/10", "text-ok");
+    expect(readinessDot()).toHaveAttribute("data-setup-readiness-dot", "ready");
+    expect(readinessDot()).toHaveClass("bg-ok", "ring-ok/10");
     wizard.controller.dispose();
   });
+
+  it.each([
+    {
+      providerReady: true,
+      hasSavedIntake: true,
+      durableTrainingData: true,
+      expectedCount: 3,
+      expectedReady: true,
+    },
+    {
+      providerReady: true,
+      hasSavedIntake: true,
+      durableTrainingData: false,
+      expectedCount: 2,
+      expectedReady: false,
+    },
+    {
+      providerReady: false,
+      hasSavedIntake: false,
+      durableTrainingData: true,
+      expectedCount: 1,
+      expectedReady: false,
+    },
+    {
+      providerReady: false,
+      hasSavedIntake: false,
+      durableTrainingData: false,
+      expectedCount: 0,
+      expectedReady: false,
+    },
+  ])(
+    "re-evaluates retained training data after an Intervals deletion refresh when provider ready is $providerReady, intake saved is $hasSavedIntake, and durable data is $durableTrainingData",
+    async ({
+      providerReady,
+      hasSavedIntake,
+      durableTrainingData,
+      expectedCount,
+      expectedReady,
+    }) => {
+      const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+      bridge.chatGptStatus.mockResolvedValue({
+        state: providerReady ? "configured" : "absent",
+        runtimeReady: providerReady,
+      });
+      bridge.credentialStatuses
+        .mockResolvedValueOnce([
+          { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+        ])
+        .mockResolvedValueOnce([]);
+      bridge.getSetupStatus = vi
+        .fn()
+        .mockResolvedValueOnce({
+          schemaVersion: 1 as const,
+          intake: hasSavedIntake ? savedIntake : null,
+          durableTrainingData: false,
+        })
+        .mockResolvedValueOnce({
+          schemaVersion: 1 as const,
+          intake: hasSavedIntake ? savedIntake : null,
+          durableTrainingData,
+        });
+      const wizard = mountWizard({ bridge });
+      await wizard.open();
+
+      expect(useEnduragentStore.getState().onboarding.readiness.trainingData).toBe(true);
+      expect(readinessBadge()).toHaveTextContent(
+        `${Number(providerReady) + Number(hasSavedIntake) + 1} of 3 required ready`,
+      );
+
+      await act(async () => wizard.controller.refresh());
+
+      expect(
+        useEnduragentStore
+          .getState()
+          .onboarding.statuses.some((status) => status.slot === "intervals-icu"),
+      ).toBe(false);
+      expect(useEnduragentStore.getState().onboarding.readiness.trainingData).toBe(
+        durableTrainingData,
+      );
+      expect(setupReady(useEnduragentStore.getState())).toBe(expectedReady);
+      expect(readinessBadge()).toHaveTextContent(`${expectedCount} of 3 required ready`);
+      expect(readinessBadge()).toHaveAttribute("data-state", expectedReady ? "ready" : "pending");
+      expect(readinessBadge()).toHaveClass(
+        expectedReady ? "border-ok/35" : "border-line-2",
+        expectedReady ? "bg-ok/10" : "bg-surface",
+        expectedReady ? "text-ok" : "text-ink-2",
+      );
+      expect(readinessDot()).toHaveAttribute(
+        "data-setup-readiness-dot",
+        expectedReady ? "ready" : "pending",
+      );
+      expect(readinessDot()).toHaveClass(
+        expectedReady ? "bg-ok" : "bg-warn",
+        expectedReady ? "ring-ok/10" : "ring-warn/10",
+      );
+      wizard.controller.dispose();
+    },
+  );
 
   it("fails closed while the durable setup read is still loading", async () => {
     let resolve!: (value: {
@@ -161,6 +279,9 @@ describe("authoritative setup readiness", () => {
       refreshing = wizard.controller.refresh();
     });
 
+    expect(setupReady(useEnduragentStore.getState())).toBe(false);
+    expect(readinessBadge()).toHaveTextContent("3 of 3 required ready");
+    expect(readinessBadge()).toHaveAttribute("data-state", "ready");
     const injury = control<HTMLSelectElement>("onboarding-injury-status");
     expect(injury).toBeDisabled();
     expect(control<HTMLButtonElement>("setup-panel-title").closest("section")).toHaveAttribute(
@@ -279,7 +400,7 @@ describe("authoritative setup readiness", () => {
 
     repairRequired = true;
     wizard.controller.saveModelKey();
-    wizard.controller.saveTrainingKey();
+    wizard.controller.connectTrainingData();
     wizard.controller.retrySavedKeys();
     wizard.controller.startChatGptLogin();
     wizard.controller.retryChatGptActivation();
@@ -289,6 +410,7 @@ describe("authoritative setup readiness", () => {
 
     await act(async () => Promise.resolve());
     expect(bridge.writeCredential).not.toHaveBeenCalled();
+    expect(bridge.pasteIntervalsApiKeyFromClipboard).not.toHaveBeenCalled();
     expect(bridge.retryFailedCredentials).not.toHaveBeenCalled();
     expect(bridge.chatGptLogin).not.toHaveBeenCalled();
     expect(bridge.applyLlmSelection).not.toHaveBeenCalled();
@@ -322,6 +444,11 @@ describe("authoritative setup readiness", () => {
 
       expect(useEnduragentStore.getState().onboarding.readiness[missing]).toBe(false);
       expect(setupReady(useEnduragentStore.getState())).toBe(false);
+      expect(readinessBadge()).toHaveTextContent("2 of 3 required ready");
+      expect(readinessBadge()).toHaveAttribute("data-state", "pending");
+      expect(readinessBadge()).toHaveClass("border-line-2", "bg-surface", "text-ink-2");
+      expect(readinessDot()).toHaveAttribute("data-setup-readiness-dot", "pending");
+      expect(readinessDot()).toHaveClass("bg-warn", "ring-warn/10");
       wizard.controller.dispose();
     },
   );

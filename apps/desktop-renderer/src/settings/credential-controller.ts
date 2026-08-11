@@ -59,6 +59,7 @@ export type CredentialSettingsFocus =
   | { readonly target: "confirmation-cancel" | "confirmation-delete" }
   | { readonly target: "feedback" }
   | { readonly target: "setup"; readonly credential: DesktopCredentialId }
+  | { readonly target: "setup-open" }
   | { readonly target: "delete"; readonly credential: DesktopCredentialId }
   | null;
 
@@ -130,6 +131,7 @@ export interface CredentialSettingsView {
     readonly onRequestDelete: (credential: DesktopCredentialId) => void;
     readonly onCancelDelete: () => void;
     readonly onConfirmDelete: () => void;
+    readonly onSetupOpened: () => void;
     readonly onOpenSetup: () => void;
   }): void;
   render(state: Exclude<CredentialSettingsState, { readonly status: "closed" }>): void;
@@ -399,7 +401,7 @@ export function createCredentialSettingsController(input: {
     return pending;
   };
 
-  const contentState = (): CredentialSettingsContent | null => {
+  const contentState = (): Extract<CredentialSettingsState, CredentialSettingsContent> | null => {
     if (
       currentState.status === "ready" ||
       currentState.status === "confirming" ||
@@ -412,15 +414,14 @@ export function createCredentialSettingsController(input: {
     return null;
   };
 
-  const requestDelete = (credential: DesktopCredentialId): void => {
-    if (disposed || operation !== undefined || input.credentialMutationsBlocked?.()) return;
+  const showDeleteConfirmation = (credential: DesktopCredentialId): boolean => {
     const content = contentState();
     if (
       content === null ||
       content.repairCredential !== null ||
       !content.entries.some((entry) => entry.credential === credential)
     ) {
-      return;
+      return false;
     }
     render({
       status: "confirming",
@@ -432,6 +433,34 @@ export function createCredentialSettingsController(input: {
       recoveryAvailable: content.recoveryAvailable,
       focus: { target: "confirmation-cancel" },
     });
+    return true;
+  };
+
+  const requestDelete = (credential: DesktopCredentialId): void => {
+    if (
+      disposed ||
+      operation !== undefined ||
+      input.credentialMutationsBlocked?.() ||
+      repairRequiredCredential(currentState) !== null
+    ) {
+      return;
+    }
+    if (showDeleteConfirmation(credential)) return;
+    if (credential !== "intervals-icu") return;
+    const content = contentState();
+    if (content?.entries.some((entry) => entry.credential === credential)) return;
+    void (async () => {
+      await startLoad();
+      if (
+        disposed ||
+        operation !== undefined ||
+        input.credentialMutationsBlocked?.() ||
+        repairRequiredCredential(currentState) !== null
+      ) {
+        return;
+      }
+      showDeleteConfirmation(credential);
+    })();
   };
 
   const cancelDelete = (): void => {
@@ -576,11 +605,14 @@ export function createCredentialSettingsController(input: {
             : "Credential deleted locally.",
         repairCredential: null,
         recoveryAvailable,
-        focus: recoveryAvailable
-          ? { target: "setup", credential }
-          : nextDelete === undefined
-            ? null
-            : { target: "delete", credential: nextDelete },
+        focus:
+          credential === "intervals-icu"
+            ? { target: "setup-open" }
+            : recoveryAvailable
+              ? { target: "setup", credential }
+              : nextDelete === undefined
+                ? null
+                : { target: "delete", credential: nextDelete },
       });
     })().finally(() => {
       releaseMutation();
@@ -595,6 +627,12 @@ export function createCredentialSettingsController(input: {
     if (disposed || operation !== undefined || content?.recoveryAvailable !== true) return;
     currentState = { status: "closed" };
     input.openSetup();
+  };
+
+  const setupOpened = (): void => {
+    const content = contentState();
+    if (content === null || content.focus?.target !== "setup-open") return;
+    render({ ...content, focus: null });
   };
 
   const close = (): void => {
@@ -613,6 +651,7 @@ export function createCredentialSettingsController(input: {
     onRequestDelete: requestDelete,
     onCancelDelete: cancelDelete,
     onConfirmDelete: () => void confirmDelete(),
+    onSetupOpened: setupOpened,
     onOpenSetup: openSetup,
   });
 

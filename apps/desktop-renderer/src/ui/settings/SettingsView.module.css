@@ -162,13 +162,6 @@
   background-color: color-mix(in srgb, var(--danger) var(--tint), transparent);
 }
 
-.confirmation {
-  composes: sunken from "../../theme/surface.module.css";
-  flex: 1 0 100%;
-  padding: 12px;
-  border: 1px solid var(--line);
-}
-
 .confirmationTitle {
   margin: 0;
   font-size: 13.5px;

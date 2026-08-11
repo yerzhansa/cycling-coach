@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   ADVANCED_MODEL_CREDENTIAL_SLOTS,
-  INTERVALS_GUIDANCE,
   ONBOARDING_STEP_IDS,
   PRIMARY_MODEL_CREDENTIAL_SLOTS,
 } from "../src/onboarding/constants.js";
@@ -21,6 +20,7 @@ const SETUP_SOURCES = [
   "IntakeRows.tsx",
   "InfoTip.tsx",
   "CredentialField.tsx",
+  "../shared/buttons.ts",
 ] as const;
 
 const BANNED_TRAINING_TERMS = [
@@ -38,7 +38,7 @@ const PROVIDER_WORD_ALLOWLIST = [
 ] as const;
 
 describe("desktop onboarding wizard", () => {
-  it("pins the ratified steps, provider catalogue, and intervals guidance", () => {
+  it("pins the ratified steps and provider catalogue", () => {
     expect(ONBOARDING_STEP_IDS).toEqual(["coach-keys", "training-data", "safety-intake", "ready"]);
     expect(PRIMARY_MODEL_CREDENTIAL_SLOTS).toEqual([
       { id: "anthropic", label: "Anthropic API key", hint: "Recommended" },
@@ -53,9 +53,6 @@ describe("desktop onboarding wizard", () => {
       "kimi",
       "zai",
     ]);
-    expect(INTERVALS_GUIDANCE).toBe(
-      "Connect your device platform to intervals.icu directly, not via Strava.",
-    );
   });
 
   it("enforces absolute unique FIT, TCX, and GPX selections before dispatch", () => {
@@ -278,14 +275,14 @@ describe("desktop onboarding wizard", () => {
   });
 
   it("keeps setup control heights on the shared height tokens", async () => {
-    const card = await readFile(
-      new URL("../src/ui/onboarding/SetupCard.tsx", import.meta.url),
+    const buttons = await readFile(
+      new URL("../src/ui/shared/buttons.ts", import.meta.url),
       "utf8",
     );
-    expect(card).toContain("h-ctl-sm");
-    expect(card).toContain("h-ctl-lg");
-    expect(card).not.toContain("h-[28px]");
-    expect(card).not.toContain("h-[36px]");
+    expect(buttons).toContain("h-ctl-sm");
+    expect(buttons).toContain("h-ctl-lg");
+    expect(buttons).not.toContain("h-[28px]");
+    expect(buttons).not.toContain("h-[36px]");
   });
 
   it("keeps one field class shared by every setup input", async () => {
@@ -353,8 +350,8 @@ describe("desktop onboarding wizard", () => {
         brand: false,
       });
     }
-    const card = sources[SETUP_SOURCES.indexOf("SetupCard.tsx")] ?? "";
-    expect(card).toContain("bg-ink text-bg");
+    const buttons = sources[SETUP_SOURCES.indexOf("../shared/buttons.ts")] ?? "";
+    expect(buttons).toContain("bg-ink text-bg");
     const row = sources[SETUP_SOURCES.indexOf("SetupRow.tsx")] ?? "";
     expect(row).toContain("text-ok");
   });

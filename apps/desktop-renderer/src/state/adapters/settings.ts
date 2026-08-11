@@ -96,6 +96,7 @@ export function createCredentialSettingsAdapter(input: {
       requestDelete: (credential) => handlers?.onRequestDelete(credential),
       cancelDelete: () => handlers?.onCancelDelete(),
       confirmDelete: () => handlers?.onConfirmDelete(),
+      setupOpened: () => handlers?.onSetupOpened(),
       openSetup: () => handlers?.onOpenSetup(),
     },
   };

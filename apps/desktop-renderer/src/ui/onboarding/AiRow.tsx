@@ -415,17 +415,6 @@ export function AiRow(props: {
       {panel === "chatgpt" ? (
         <SetupSubPanel name="chatgpt">
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className={BUTTON_SOLID_SM}
-              disabled={controlsDisabled || chatGptLoginPending || chatGptActivating}
-              onClick={() => {
-                if (chatGptStored) actions?.retryChatGptActivation();
-                else login();
-              }}
-            >
-              {chatGptPrimaryLabel}
-            </button>
             {autoChatGptPanel && !chatGptLoginPending ? null : (
               <button
                 type="button"
@@ -446,6 +435,17 @@ export function AiRow(props: {
                 {chatGptLoginPending ? CHATGPT_CANCEL_SIGN_IN_LABEL : revertLabel}
               </button>
             )}
+            <button
+              type="button"
+              className={BUTTON_SOLID_SM}
+              disabled={controlsDisabled || chatGptLoginPending || chatGptActivating}
+              onClick={() => {
+                if (chatGptStored) actions?.retryChatGptActivation();
+                else login();
+              }}
+            >
+              {chatGptPrimaryLabel}
+            </button>
           </div>
           {chatGptStatusCopy === null ? null : (
             <p
@@ -505,21 +505,21 @@ export function AiRow(props: {
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  className={BUTTON_SOLID_SM}
-                  disabled={controlsDisabled}
-                  aria-label={AI_SAVE_LABEL}
-                  onClick={save}
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
                   className={BUTTON_QUIET_SM}
                   disabled={controlsDisabled}
                   aria-label={AI_CANCEL_LABEL}
                   onClick={() => revert()}
                 >
                   Cancel
+                </button>
+                <button
+                  type="button"
+                  className={BUTTON_SOLID_SM}
+                  disabled={controlsDisabled}
+                  aria-label={AI_SAVE_LABEL}
+                  onClick={save}
+                >
+                  Save
                 </button>
               </div>
               <span className={SETUP_HINT_CLASS}>{API_KEY_PANEL_HINT}</span>

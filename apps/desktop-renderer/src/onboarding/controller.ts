@@ -5,7 +5,10 @@ import {
 } from "../ride-import.js";
 import type {
   CredentialWriteResult,
+  IntervalsCredentialMutationRefusalReason,
+  IntervalsCredentialMutationResult,
   OnboardingBridge,
+  OnboardingCredentialWriteInput,
   OnboardingLlmConfiguration,
   OnboardingLlmEndpointSelection,
   OnboardingLlmSelection,
@@ -15,7 +18,6 @@ import {
   DESKTOP_CREDENTIAL_SLOTS,
   type DesktopCredentialSlot,
 } from "./constants.js";
-import { credentialPresentation } from "./credential-presentation.js";
 import { handoffCredential, type CredentialDraftPort } from "./credentials.js";
 import type { SetupCommit } from "./lanes.js";
 import {
@@ -101,7 +103,7 @@ export interface OnboardingView {
 
 export interface OnboardingActions {
   saveModelKey(): void;
-  saveTrainingKey(): void;
+  connectTrainingData(): void;
   finish(): void;
   dismiss(): void;
   retrySavedKeys(): void;
@@ -133,8 +135,11 @@ export interface OnboardingController extends OnboardingActions {
   importDroppedFiles(paths: readonly string[]): void;
 }
 
-function credentialSlotFor(provider: string | undefined): DesktopCredentialSlot | undefined {
-  return DESKTOP_CREDENTIAL_SLOTS.find((slot) => slot === provider);
+function credentialSlotFor(
+  provider: string | undefined,
+): OnboardingCredentialWriteInput["slot"] | undefined {
+  const slot = DESKTOP_CREDENTIAL_SLOTS.find((candidate) => candidate === provider);
+  return slot === "intervals-icu" ? undefined : slot;
 }
 
 export interface OnboardingControllerOptions {
@@ -242,6 +247,26 @@ const CREDENTIAL_WRITE_REFUSAL_ERRORS = {
   "storage-uncertain": "storage-uncertain",
 } as const satisfies Readonly<Record<CredentialWriteFailureReason, OnboardingErrorCode>>;
 
+const INTERVALS_REFUSAL_ERRORS = {
+  "clipboard-unavailable": "intervals-clipboard-unavailable",
+  "clipboard-clear-failed": "intervals-clipboard-clear-failed",
+  "invalid-key-format": "intervals-key-rejected",
+  "credential-rejected": "intervals-key-rejected",
+  "malformed-athlete-response": "intervals-validation-unavailable",
+  "validation-timeout": "intervals-validation-unavailable",
+  "validation-aborted": "intervals-validation-unavailable",
+  "validation-unavailable": "intervals-validation-unavailable",
+  "training-account-mismatch": "training-account-mismatch",
+  "owner-unresolved": "intervals-owner-unavailable",
+  "store-unavailable": "intervals-owner-unavailable",
+  "encryption-unavailable": "encryption-unavailable",
+  "unsafe-backend": "unsafe-backend",
+  "storage-failed": "storage-failed",
+  "runtime-unavailable": "intervals-runtime-unavailable",
+} as const satisfies Readonly<
+  Record<IntervalsCredentialMutationRefusalReason, OnboardingErrorCode>
+>;
+
 const ENDPOINT_MODES: readonly OnboardingLlmEndpointSelection["mode"][] = [
   "automatic",
   "default",
@@ -253,6 +278,20 @@ function credentialWriteRefusalError(reason: unknown): OnboardingErrorCode {
     return CREDENTIAL_WRITE_REFUSAL_ERRORS[reason as CredentialWriteFailureReason];
   }
   return "credential-save-failed";
+}
+
+function intervalsMutationError(
+  result: IntervalsCredentialMutationResult,
+): OnboardingErrorCode | null {
+  if (result.outcome === "applied") {
+    return result.current.state === "configured" && result.current.runtimeState === "active"
+      ? null
+      : "intervals-runtime-unavailable";
+  }
+  if (result.outcome === "refused") return INTERVALS_REFUSAL_ERRORS[result.reason];
+  return result.reason === "storage-uncertain"
+    ? "intervals-storage-uncertain"
+    : "intervals-runtime-uncertain";
 }
 
 export function credentialSlotStatus(
@@ -558,124 +597,90 @@ export function createOnboardingController(
     return statuses.status === "fulfilled";
   };
 
-  const invalidateCredentialRuntimeStatuses = (slots: ReadonlySet<DesktopCredentialSlot>): void => {
-    if (slots.size === 0) return;
+  const invalidateCredentialRuntimeStatus = (
+    slot: OnboardingCredentialWriteInput["slot"],
+  ): void => {
     const credentialRuntimeStatus = { ...state.credentialRuntimeStatus };
-    for (const slot of slots) credentialRuntimeStatus[slot] = null;
+    credentialRuntimeStatus[slot] = null;
     state = { ...state, credentialRuntimeStatus };
     credentialStatuses = credentialStatuses.map((status) =>
-      slots.has(status.slot) ? { ...status, runtimeState: null } : status,
+      status.slot === slot ? { ...status, runtimeState: null } : status,
     );
   };
 
-  const savePasswordControls = async (
+  const saveModelCredential = async (
     expectedVisit: number,
-    slots: readonly DesktopCredentialSlot[],
-    selection?: OnboardingLlmSelection,
+    slot: OnboardingCredentialWriteInput["slot"] | undefined,
+    selection: OnboardingLlmSelection,
   ): Promise<{
     readonly error: OnboardingErrorCode | null;
     readonly selectedApplied: boolean;
   } | null> => {
-    const controls = [...options.credentials.harvest(slots)];
-    const selectedSlot = selection?.provider === "openai-codex" ? undefined : selection?.provider;
-    controls.sort((left, right) => {
-      const leftSelected = left.dataset.slot === selectedSlot ? 1 : 0;
-      const rightSelected = right.dataset.slot === selectedSlot ? 1 : 0;
-      return leftSelected - rightSelected;
-    });
-    let attempted = false;
-    let selectedApplied = false;
+    if (slot === undefined) return { error: null, selectedApplied: false };
+    const input = options.credentials
+      .harvest([slot])
+      .find((candidate) => candidate.dataset.slot === slot);
+    if (input === undefined) {
+      return { error: null, selectedApplied: false };
+    }
+    if (visit !== expectedVisit || !presenting) return null;
+    if (input.value.trim().length === 0) {
+      input.value = "";
+      return { error: null, selectedApplied: false };
+    }
     const outcome: {
       failure: OnboardingErrorCode | null;
-      nonRuntimeFailure: OnboardingErrorCode | null;
-    } = { failure: null, nonRuntimeFailure: null };
-    const runtimeUnavailableSlots = new Set<DesktopCredentialSlot>();
-    const attemptedSlots = new Set<DesktopCredentialSlot>();
-    let statusRefreshFailed = false;
-    for (const input of controls) {
-      if (visit !== expectedVisit || !presenting) return null;
-      try {
-        if (input.value.trim().length === 0) continue;
-        const attemptedSlot = credentialSlotFor(input.dataset.slot);
-        if (attemptedSlot === undefined) continue;
-        attempted = true;
-        attemptedSlots.add(attemptedSlot);
-        let configured = false;
-        const appliesSelection = input.dataset.slot === selectedSlot;
-        await handoffCredential(
-          input,
-          async (value) => {
-            const result = await options.bridge.writeCredential(value);
-            if (disposed || visit !== expectedVisit || !presenting) return;
-            if (result.status === "configured") {
-              configured = true;
-              if (appliesSelection && result.runtimeReady) selectedApplied = true;
-            } else {
-              if (result.reason === "runtime-unavailable") {
-                runtimeUnavailableSlots.add(result.slot);
-              }
-              const writeFailure = credentialWriteRefusalError(result.reason);
-              outcome.failure ??= writeFailure;
-              if (writeFailure !== "runtime-unavailable") {
-                outcome.nonRuntimeFailure ??= writeFailure;
-              }
-            }
-          },
-          appliesSelection ? selection : undefined,
-        );
-        if (disposed || visit !== expectedVisit || !presenting) return null;
-        if (!configured && outcome.failure === null) {
-          outcome.failure = "credential-save-failed";
-          outcome.nonRuntimeFailure ??= "credential-save-failed";
-        }
-      } catch {
-        outcome.failure ??= "credential-save-failed";
-        outcome.nonRuntimeFailure ??= "credential-save-failed";
-      } finally {
-        input.value = "";
-      }
+      selectedApplied: boolean;
+    } = { failure: null, selectedApplied: false };
+    try {
+      await handoffCredential(
+        input,
+        async (value) => {
+          const result = await options.bridge.writeCredential(value);
+          if (disposed || visit !== expectedVisit || !presenting) return;
+          if (result.status === "configured") {
+            if (result.runtimeReady) outcome.selectedApplied = true;
+          } else {
+            outcome.failure = credentialWriteRefusalError(result.reason);
+          }
+        },
+        selection,
+      );
       if (disposed || visit !== expectedVisit || !presenting) return null;
+    } catch {
+      outcome.failure = "credential-save-failed";
+    } finally {
+      input.value = "";
     }
-    if (attempted) {
-      const refreshed = await refreshStatuses(expectedVisit);
-      if (disposed || visit !== expectedVisit || !presenting) return null;
-      if (!refreshed) {
-        statusRefreshFailed = true;
-        invalidateCredentialRuntimeStatuses(attemptedSlots);
-      }
-    }
-    if (statusRefreshFailed) {
+    if (disposed || visit !== expectedVisit || !presenting) return null;
+    const refreshed = await refreshStatuses(expectedVisit);
+    if (disposed || visit !== expectedVisit || !presenting) return null;
+    if (!refreshed) {
+      invalidateCredentialRuntimeStatus(slot);
       return {
-        error: outcome.nonRuntimeFailure ?? "credential-status-unavailable",
-        selectedApplied,
+        error:
+          outcome.failure === null || outcome.failure === "runtime-unavailable"
+            ? "credential-status-unavailable"
+            : outcome.failure,
+        selectedApplied: outcome.selectedApplied,
       };
     }
-    if (runtimeUnavailableSlots.size === 0) {
-      return { error: outcome.failure, selectedApplied };
+    if (outcome.failure !== "runtime-unavailable") {
+      return { error: outcome.failure, selectedApplied: outcome.selectedApplied };
     }
-    if (outcome.nonRuntimeFailure !== null) {
-      return { error: outcome.nonRuntimeFailure, selectedApplied };
-    }
-    const refreshedRuntimeStatuses = Array.from(runtimeUnavailableSlots, (slot) =>
-      credentialStatuses.find((entry) => entry.slot === slot),
-    );
+    const refreshedRuntimeStatus = credentialStatuses.find((entry) => entry.slot === slot);
     if (
-      refreshedRuntimeStatuses.some(
-        (entry) => entry === undefined || entry.state === "missing" || entry.state === "re-prompt",
-      )
+      refreshedRuntimeStatus === undefined ||
+      refreshedRuntimeStatus.state === "missing" ||
+      refreshedRuntimeStatus.state === "re-prompt"
     ) {
-      return { error: "credential-reenter-required", selectedApplied };
+      return { error: "credential-reenter-required", selectedApplied: outcome.selectedApplied };
     }
-    if (refreshedRuntimeStatuses.some((entry) => entry?.runtimeState === "failed")) {
-      return { error: "runtime-unavailable", selectedApplied };
+    if (refreshedRuntimeStatus.runtimeState === "failed") {
+      return { error: "runtime-unavailable", selectedApplied: outcome.selectedApplied };
     }
-    return { error: null, selectedApplied };
+    return { error: null, selectedApplied: outcome.selectedApplied };
   };
-
-  const hasRetryableCredential = (slot: DesktopCredentialSlot): boolean =>
-    credentialStatuses.some(
-      (entry) => entry.slot === slot && credentialPresentation(entry).retryable,
-    );
 
   const saveModelKey = async (): Promise<void> => {
     if (
@@ -700,11 +705,7 @@ export function createOnboardingController(
       return;
     }
     const slot = credentialSlotFor(parsedSelection.selection.provider);
-    const saved = await savePasswordControls(
-      submitVisit,
-      slot === undefined ? [] : [slot],
-      parsedSelection.selection,
-    );
+    const saved = await saveModelCredential(submitVisit, slot, parsedSelection.selection);
     if (visit !== submitVisit || !presenting) return;
     if (saved === null) return;
     let saveError = saved.error;
@@ -741,7 +742,7 @@ export function createOnboardingController(
     publish();
   };
 
-  const saveTrainingKey = async (): Promise<void> => {
+  const connectTrainingData = async (): Promise<void> => {
     if (
       disposed ||
       !presenting ||
@@ -757,16 +758,24 @@ export function createOnboardingController(
     actionStatus = null;
     state = withBusy(state, true);
     publish();
-    const saved = await savePasswordControls(submitVisit, ["intervals-icu"]);
+    let result: IntervalsCredentialMutationResult;
+    try {
+      result = await options.bridge.pasteIntervalsApiKeyFromClipboard();
+    } catch {
+      if (visit !== submitVisit || !presenting) return;
+      state = withError(state, "intervals-validation-unavailable");
+      publish();
+      return;
+    }
     if (visit !== submitVisit || !presenting) return;
-    if (saved === null) return;
-    const saveError = saved.error;
+    credentialStatuses = [
+      ...credentialStatuses.filter((entry) => entry.slot !== "intervals-icu"),
+      result.current,
+    ];
+    state = withCredentialStatuses(state, credentialStatuses);
+    const saveError = intervalsMutationError(result);
     state = withBusy(state, false);
     if (saveError !== null) state = withError(state, saveError);
-    else if (hasRetryableCredential("intervals-icu")) {
-      state = withError(state, "runtime-unavailable");
-    } else if (!hasTrainingData(state)) state = withError(state, "training-data-required");
-    focusTitle();
     publish();
   };
 
@@ -1091,8 +1100,8 @@ export function createOnboardingController(
     saveModelKey(): void {
       void saveModelKey();
     },
-    saveTrainingKey(): void {
-      void saveTrainingKey();
+    connectTrainingData(): void {
+      void connectTrainingData();
     },
     finish(): void {
       void finishSetup();

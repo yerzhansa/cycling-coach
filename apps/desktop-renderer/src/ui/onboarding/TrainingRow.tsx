@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import type { OnboardingActions, OnboardingSurfaceState } from "../../onboarding/controller.js";
 import { credentialPresentation } from "../../onboarding/credential-presentation.js";
 import { errorSection } from "../../onboarding/lanes.js";
@@ -16,14 +16,13 @@ import {
   INTERVALS_PANEL_HINT,
   RETRY_SAVED_KEYS_LABEL,
   TRAINING_CANCEL_LABEL,
-  TRAINING_KEY_LABEL,
+  TRAINING_CONNECT_TITLE,
   TRAINING_ROW_SUBTITLES,
   TRAINING_ROW_TITLE,
   TRAINING_ROW_TOOLTIP,
-  TRAINING_SAVE_LABEL,
   TRAINING_TRIGGER_LABELS,
+  TRAINING_USE_COPIED_KEY_LABEL,
 } from "./copy.js";
-import { CredentialField } from "./CredentialField.js";
 import { InfoTip } from "./InfoTip.js";
 import {
   CredentialDeleteButton,
@@ -33,7 +32,6 @@ import {
   BUTTON_OUTLINE_SM,
   BUTTON_QUIET_SM,
   BUTTON_SOLID_SM,
-  SETUP_HINT_CLASS,
   SETUP_LINK_BUTTON,
 } from "./SetupCard.js";
 import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
@@ -47,12 +45,14 @@ export function TrainingRow(props: {
   const wizard = surface.wizard;
   const busy = wizard.busy;
   const credentialSettings = useEnduragentStore((state) => state.settings.credentials);
+  const credentialPort = useEnduragentStore((state) => state.settingsPorts?.credentials ?? null);
   const settingsMutating = useEnduragentStore((state) =>
     props.placement === "settings"
       ? settingsMutationActive(state.settings)
       : nonTelegramSettingsMutationActive(state.settings),
   );
-  const repairRequired = repairRequiredCredential(credentialSettings) !== null;
+  const repairCredential = repairRequiredCredential(credentialSettings);
+  const repairRequired = repairCredential !== null;
   const controlsDisabled =
     busy ||
     surface.loading ||
@@ -60,52 +60,75 @@ export function TrainingRow(props: {
     credentialChangesBlocked(credentialSettings, settingsMutating);
   const importing = surface.rideImport.status === "running";
   const connected = wizard.credentialStatus["intervals-icu"] === "configured";
-  const ready = surface.readiness.trainingData;
   const retryable = surface.statuses.some(
     (entry) => entry.slot === "intervals-icu" && credentialPresentation(entry).retryable,
   );
   const ownsError = errorSection(wizard.fixedError, surface.lastCommit) === "training";
   const [open, setOpen] = useState(false);
-  const [savePhase, setSavePhase] = useState<"idle" | "requested" | "running">("idle");
+  const [connectPhase, setConnectPhase] = useState<"idle" | "connecting">("idle");
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const deleteRef = useRef<HTMLButtonElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const repairFeedbackRef = useRef<HTMLDivElement>(null);
+  const focusHeadingAfterOpen = useRef<"delete" | "trigger" | null>(null);
   const panelId = "onboarding-training-panel";
+  const credentialFocus = "focus" in credentialSettings ? credentialSettings.focus : null;
 
   useEffect(() => {
-    if (savePhase === "requested") {
-      if (busy && surface.lastCommit === "training") setSavePhase("running");
-      else if (!busy) setSavePhase("idle");
-      return;
-    }
-    if (savePhase !== "running" || busy) return;
-    if (ready && !retryable && wizard.fixedError === null) {
+    if (connectPhase === "idle" || busy || surface.lastCommit !== "training") return;
+    if (connected) {
       setOpen(false);
+      deleteRef.current?.focus();
     }
-    setSavePhase("idle");
-  }, [busy, ready, retryable, savePhase, surface.lastCommit, wizard.fixedError]);
+    setConnectPhase("idle");
+  }, [busy, connected, connectPhase, surface.lastCommit]);
 
   useEffect(() => {
     if (!repairRequired) return;
     setOpen(false);
-    setSavePhase("idle");
+    setConnectPhase("idle");
   }, [repairRequired]);
 
-  const subtitle = connected
-    ? TRAINING_ROW_SUBTITLES.connected
-    : ready
-      ? TRAINING_ROW_SUBTITLES.imported
-      : TRAINING_ROW_SUBTITLES.missing;
+  useLayoutEffect(() => {
+    if (connected || credentialFocus?.target !== "setup-open") return;
+    focusHeadingAfterOpen.current = "delete";
+    setOpen(true);
+  }, [connected, credentialFocus]);
 
-  const save = (): void => {
+  useLayoutEffect(() => {
+    const reason = focusHeadingAfterOpen.current;
+    if (!open || reason === null) return;
+    headingRef.current?.focus();
+    if (reason === "delete") {
+      if (credentialPort === null) return;
+      credentialPort.setupOpened();
+    }
+    focusHeadingAfterOpen.current = null;
+  }, [credentialPort, open]);
+
+  useEffect(() => {
+    if (
+      props.placement === "chat" &&
+      repairCredential === "intervals-icu" &&
+      credentialFocus?.target === "feedback"
+    ) {
+      repairFeedbackRef.current?.focus();
+    }
+  }, [credentialFocus, props.placement, repairCredential]);
+
+  const subtitle = connected ? TRAINING_ROW_SUBTITLES.connected : TRAINING_ROW_SUBTITLES.missing;
+
+  const connect = (): void => {
     if (actions === null || controlsDisabled || importing) return;
-    setSavePhase("requested");
-    actions.saveTrainingKey();
+    setConnectPhase("connecting");
+    actions.connectTrainingData();
   };
 
   return (
     <>
       <SetupRow
         id="training"
-        status={ready ? "ready" : "pending"}
+        status={connected ? "ready" : "pending"}
         title={TRAINING_ROW_TITLE}
         subtitle={subtitle}
         info={
@@ -116,80 +139,69 @@ export function TrainingRow(props: {
           />
         }
         trailing={
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          connected ? (
+            <CredentialDeleteButton credential="intervals-icu" buttonRef={deleteRef} />
+          ) : (
             <button
               ref={triggerRef}
               type="button"
               data-setup-trigger="training"
-              className={connected ? BUTTON_QUIET_SM : BUTTON_OUTLINE_SM}
+              className={BUTTON_OUTLINE_SM}
               disabled={controlsDisabled}
               aria-expanded={open}
-              aria-label={
-                connected ? TRAINING_TRIGGER_LABELS.connected : TRAINING_TRIGGER_LABELS.disconnected
-              }
+              aria-label={TRAINING_TRIGGER_LABELS.disconnected}
               {...(open ? { "aria-controls": panelId } : {})}
               onClick={() => {
-                setOpen((current) => !current);
+                if (open) {
+                  setOpen(false);
+                  return;
+                }
+                focusHeadingAfterOpen.current = "trigger";
+                setOpen(true);
               }}
             >
-              {connected ? "Change" : "Connect"}
+              Connect
             </button>
-            {props.placement === "settings" ? (
-              <CredentialDeleteButton credential="intervals-icu" />
-            ) : null}
-          </div>
+          )
         }
       />
-      {props.placement === "settings" ? (
-        <CredentialDeleteConfirmation credential="intervals-icu" />
-      ) : null}
-      {open && !repairRequired ? (
+      <CredentialDeleteConfirmation credential="intervals-icu" />
+      {!connected && open && !repairRequired ? (
         <SetupSubPanel name="training" id={panelId}>
-          <CredentialField
-            slot="intervals-icu"
-            label={TRAINING_KEY_LABEL}
-            disabled={controlsDisabled}
-            {...(ownsError ? { describedBy: "onboarding-error" } : {})}
-            onEnter={save}
-          />
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className={BUTTON_SOLID_SM}
-              disabled={controlsDisabled || importing}
-              aria-label={TRAINING_SAVE_LABEL}
-              onClick={save}
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              className={BUTTON_QUIET_SM}
-              disabled={controlsDisabled}
-              aria-label={TRAINING_CANCEL_LABEL}
-              onClick={() => {
-                setOpen(false);
-                triggerRef.current?.focus();
-              }}
-            >
-              Cancel
-            </button>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-7 gap-y-3">
+            <div className="min-w-52 flex-1">
+              <h3
+                ref={headingRef}
+                tabIndex={-1}
+                className="m-0 text-[13.5px] font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
+              >
+                {TRAINING_CONNECT_TITLE}
+              </h3>
+              <p className="mt-1 mb-0 text-xs text-ink-2">{INTERVALS_PANEL_HINT}</p>
+            </div>
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                className={BUTTON_QUIET_SM}
+                disabled={controlsDisabled}
+                aria-label={TRAINING_CANCEL_LABEL}
+                onClick={() => {
+                  setOpen(false);
+                  triggerRef.current?.focus();
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={BUTTON_SOLID_SM}
+                disabled={controlsDisabled || importing}
+                onClick={connect}
+              >
+                {connectPhase === "idle" ? TRAINING_USE_COPIED_KEY_LABEL : "Connecting…"}
+              </button>
+            </div>
           </div>
-          <span className={SETUP_HINT_CLASS}>{INTERVALS_PANEL_HINT}</span>
-          {retryable ? (
-            <button
-              type="button"
-              className={SETUP_LINK_BUTTON}
-              disabled={controlsDisabled || importing}
-              onClick={() => {
-                if (actions === null) return;
-                setSavePhase("requested");
-                actions.retrySavedKeys();
-              }}
-            >
-              {RETRY_SAVED_KEYS_LABEL}
-            </button>
-          ) : null}
           <button
             type="button"
             className={SETUP_LINK_BUTTON}
@@ -203,9 +215,51 @@ export function TrainingRow(props: {
           <SetupError surface={surface} section="training" />
         </SetupSubPanel>
       ) : null}
-      {!open && ownsError ? (
+      {connected && (retryable || ownsError) ? (
+        <SetupSubPanel name="training-recovery">
+          {retryable ? (
+            <button
+              type="button"
+              className={SETUP_LINK_BUTTON}
+              disabled={controlsDisabled || importing}
+              onClick={() => {
+                if (actions === null) return;
+                setConnectPhase("connecting");
+                actions.retrySavedKeys();
+              }}
+            >
+              {RETRY_SAVED_KEYS_LABEL}
+            </button>
+          ) : null}
+          <SetupError surface={surface} section="training" />
+        </SetupSubPanel>
+      ) : null}
+      {!connected && !open && ownsError ? (
         <SetupSubPanel name="training-error">
           <SetupError surface={surface} section="training" />
+        </SetupSubPanel>
+      ) : null}
+      {props.placement === "chat" && repairCredential === "intervals-icu" ? (
+        <SetupSubPanel name="training-repair">
+          <div
+            ref={repairFeedbackRef}
+            tabIndex={-1}
+            className="focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
+          >
+            <p className="m-0 text-xs text-ink-2" role="status" aria-live="polite">
+              {"announcement" in credentialSettings && credentialSettings.announcement.length > 0
+                ? credentialSettings.announcement
+                : "Credential status must be reloaded before training setup can continue."}
+            </p>
+            <button
+              type="button"
+              className={SETUP_LINK_BUTTON}
+              disabled={settingsMutating || credentialSettings.status === "loading"}
+              onClick={() => credentialPort?.retry()}
+            >
+              Reload credential status
+            </button>
+          </div>
         </SetupSubPanel>
       ) : null}
     </>

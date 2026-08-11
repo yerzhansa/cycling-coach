@@ -11,6 +11,7 @@
     "enduragent": "./dist/enduragent.js"
   },
   "exports": {
+    "./abortable-operation": "./dist/abortable-operation.js",
     "./runtime": "./dist/runtime.js",
     "./sync": "./dist/sync.js",
     "./backfill": "./dist/backfill.js",

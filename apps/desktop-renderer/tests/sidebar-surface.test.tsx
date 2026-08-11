@@ -40,6 +40,12 @@ function chip(): HTMLElement {
   return element;
 }
 
+function setupReadiness(): HTMLElement {
+  const element = document.querySelector<HTMLElement>("[data-sidebar-setup-readiness]");
+  if (element === null) throw new TypeError("sidebar setup readiness missing");
+  return element;
+}
+
 beforeEach(() => {
   useEnduragentStore.setState({
     activeView: "chat",
@@ -296,6 +302,42 @@ describe("sidebar sync chip", () => {
 });
 
 describe("sidebar setup gating", () => {
+  it("shows whether required setup is ready", () => {
+    render(<Sidebar />);
+
+    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "ready");
+    expect(setupReadiness()).toHaveTextContent("Ready");
+    expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveAttribute(
+      "data-sidebar-setup-dot",
+      "ready",
+    );
+    expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveClass("bg-ok");
+
+    update({ onboarding: CLOSED_ONBOARDING });
+
+    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "waiting");
+    expect(setupReadiness()).toHaveTextContent("Waiting for setup");
+    expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveAttribute(
+      "data-sidebar-setup-dot",
+      "waiting",
+    );
+    expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveClass("bg-warn");
+  });
+
+  it("waits when initialized setup is only partially ready", () => {
+    render(<Sidebar />);
+
+    update({
+      onboarding: {
+        ...READY_ONBOARDING,
+        readiness: { provider: true, trainingData: true, intake: false },
+      },
+    });
+
+    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "waiting");
+    expect(setupReadiness()).toHaveTextContent("Waiting for setup");
+  });
+
   it("has no Setup destination and keeps non-chat destinations usable", async () => {
     const user = userEvent.setup();
     useEnduragentStore.setState({ onboarding: CLOSED_ONBOARDING });
