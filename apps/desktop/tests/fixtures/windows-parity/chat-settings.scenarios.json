@@ -1,0 +1,320 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "chat.send.keyboard",
+      "surface": "chat",
+      "expected": "Enter sends a nonblank draft, Shift+Enter inserts a newline, and blank drafts do not send.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > composer > keeps Shift+Enter as a newline and ignores blank drafts"
+    },
+    {
+      "id": "chat.send.ime-composition",
+      "surface": "chat",
+      "expected": "An Enter key event never submits while an IME composition is in progress.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > composer > never submits while an IME composition is in flight"
+    },
+    {
+      "id": "chat.streaming.ordered",
+      "surface": "chat",
+      "expected": "The coach response streams ordered deltas immediately and settles once to the canonical final text.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-controller.test.ts > renders ordered deltas immediately and canonical final text once without turn-start"
+    },
+    {
+      "id": "chat.streaming.type-ahead",
+      "surface": "chat",
+      "expected": "The composer remains enabled while a coach turn streams so the athlete can type and submit the next message.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > composer > keeps sending available while a turn streams so the message can queue"
+    },
+    {
+      "id": "chat.streaming.interruption-retry",
+      "surface": "chat",
+      "expected": "An interrupted turn preserves partial coach text and the athlete message, then offers an explicit retry without duplicating the athlete row.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-controller.test.ts > preserves a disconnected draft and retries explicitly without duplicating the user row"
+    },
+    {
+      "id": "chat.queue.drain",
+      "surface": "chat",
+      "expected": "A message sent during streaming is shown as queued and dispatches exactly once after the active turn succeeds.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-controller.test.ts > queues a message sent while the coach streams and dispatches it once the turn settles"
+    },
+    {
+      "id": "chat.queue.coalescing",
+      "surface": "chat",
+      "expected": "Queued free text coalesces into one next turn while each queued slash command remains its own turn.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-controller.test.ts > coalesces queued free text into one turn and keeps each command on its own turn"
+    },
+    {
+      "id": "chat.queue.hold-and-remove",
+      "surface": "chat",
+      "expected": "Queued messages remain held after a failed or interrupted turn and each queued item can be removed before dispatch.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-controller.test.ts > keeps a queued message un-drained after a failed turn and removes it on request"
+    },
+    {
+      "id": "chat.commands.slash-picker",
+      "surface": "chat",
+      "expected": "The slash picker filters the shipped /start, /plan, /workout, /status, /review, /sync, /version, /whatsnew, and /update commands and supports keyboard or click selection without sending on selection.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > slash command picker > moves the selection with the arrow keys and accepts with Enter"
+    },
+    {
+      "id": "chat.commands.quick-actions",
+      "surface": "chat",
+      "expected": "Quick actions submit the shipped plan, workout, status, and review commands and restore keyboard focus after the turn settles.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > composer > restores focus to a keyboard-activated quick action once the turn settles"
+    },
+    {
+      "id": "chat.history.current-conversation",
+      "surface": "chat",
+      "expected": "The current conversation hydrates saved turns, offers earlier pages only when available, and automatically requests an earlier page at the scroll top.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > history controls > auto-loads earlier pages when the transcript is scrolled to the top"
+    },
+    {
+      "id": "chat.history.current-recovery",
+      "surface": "chat",
+      "expected": "A current-conversation history failure replaces paging with clear unavailable copy and a retry action.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > history controls > swaps to the failure copy and a retry control when history is unavailable"
+    },
+    {
+      "id": "chat.history.past-list",
+      "surface": "chat",
+      "expected": "Past conversations load newest first, expose truncation when older entries are omitted, and recover a list failure through retry.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/archive-controller.test.ts > publishes the newest-first list and the truncation signal"
+    },
+    {
+      "id": "chat.history.past-viewer",
+      "surface": "chat",
+      "expected": "Opening a past conversation shows a read-only transcript with back navigation, no composer, and paged earlier messages.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/archive-surface.test.tsx > renders a read-only transcript with back navigation and no composer"
+    },
+    {
+      "id": "chat.history.past-recovery",
+      "surface": "chat",
+      "expected": "A failed past-conversation page can retry the exact request, while a superseded archive is shown as unavailable without an invalid retry.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/archive-controller.test.ts > retries the exact failed page request"
+    },
+    {
+      "id": "chat.new-conversation.cancel",
+      "surface": "chat",
+      "expected": "Cancelling the new-conversation confirmation preserves the conversation and restores focus to the opener.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > new conversation dialog > returns focus to the opener when the athlete cancels"
+    },
+    {
+      "id": "chat.new-conversation.confirm",
+      "surface": "chat",
+      "expected": "Confirming a new conversation clears visible and restored conversation messages while retaining training data and saved coach memory.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > new conversation dialog > walks the confirm flow and hands focus back to the composer"
+    },
+    {
+      "id": "chat.archive.on-reset",
+      "surface": "chat",
+      "expected": "A completed new-conversation reset archives the preceding conversation once so it is available from Past conversations.",
+      "automation": "deterministic",
+      "test": "packages/core/tests/conversation-store.test.ts > surfaces the pre-reset conversation as an archived read after a completed reset"
+    },
+    {
+      "id": "chat.markdown.safe-subset",
+      "surface": "chat",
+      "expected": "Settled coach text renders the shipped finite Markdown subset while raw HTML and image syntax remain literal and cannot create network-capable elements.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-markdown.test.ts > keeps raw HTML and image syntax literal without creating network-capable elements"
+    },
+    {
+      "id": "settings.setup.inventory",
+      "surface": "settings",
+      "expected": "Setup appears first and contains the shipped coach provider, Intervals.icu, injury status, conditional clinician clearance, and Settings credential rows; Telegram remains optional in Chat setup.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > renders every required row in order and admits the clearance row to the same card"
+    },
+    {
+      "id": "settings.setup.readiness-gate",
+      "surface": "settings",
+      "expected": "First-run coaching remains blocked until a supported coach provider, durable training data, and the required intake are ready; Telegram never blocks Chat.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > keeps Start coaching disabled until every requirement is met"
+    },
+    {
+      "id": "settings.providers.lanes",
+      "surface": "settings",
+      "expected": "Provider setup offers only lanes reported by production: Claude subscription when eligible, ChatGPT subscription, and the API-key provider catalogue, with the current lane identified.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > opens a menu of the offered lanes with the current one ticked"
+    },
+    {
+      "id": "settings.providers.chatgpt-sign-in",
+      "surface": "settings",
+      "expected": "Starting ChatGPT subscription sign-in requests browser authorization once, shows Waiting for browser, Completing sign-in, Signed in, Activating coach, and Ready in order, stores the profile before activation, and retries activation without signing in again.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop-renderer/tests/onboarding-surface.test.tsx > runs ChatGPT sign-in through pending to a ready row",
+        "apps/desktop-renderer/tests/onboarding-chatgpt-lifecycle.test.tsx > renders every phase and replaces generic progress at exactly three seconds",
+        "apps/desktop-renderer/tests/onboarding-chatgpt-lifecycle.test.tsx > retries activation without starting OAuth again",
+        "apps/desktop/tests/chatgpt-auth.test.ts > forwards the separate login limits and closed progress phases",
+        "apps/desktop/tests/chatgpt-auth.test.ts > publishes stored before a separate keyless runtime activation"
+      ]
+    },
+    {
+      "id": "settings.providers.chatgpt-refusals",
+      "surface": "settings",
+      "expected": "ChatGPT refusal copy distinguishes an existing sign-in, an unavailable callback, timeout, cancellation, failed exchange, failed profile storage, and unavailable runtime activation; a refused sign-in stays in the panel with sign-in enabled for retry.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop-renderer/tests/onboarding-surface.test.tsx > renders the refusal state inside the ChatGPT panel",
+        "apps/desktop/tests/chatgpt-auth.test.ts > maps timeout, browser cancellation, and exchange failures",
+        "apps/desktop/tests/chatgpt-auth.test.ts > refuses concurrent login and maps callback, storage, and runtime failures"
+      ]
+    },
+    {
+      "id": "settings.providers.claude-readiness",
+      "surface": "settings",
+      "expected": "Claude CLI shows checking, signed-in subscription, API-key billing, missing or outdated binary, signed-out, token-only, and disabled readiness truth with Check again recovery.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > opens Setup before the account probe answers and explains it is still checking",
+        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > offers the lane and carries the signed-in identity into the row",
+        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > falls back to the email alone when the probe reports no plan",
+        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > names API key billing instead of claiming a subscription",
+        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > leaves the lane out of the menu and explains $state in place",
+        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > rechecks the account from the menu note and never grows a key field"
+      ]
+    },
+    {
+      "id": "settings.providers.coach-route",
+      "surface": "settings",
+      "expected": "The athlete can change the active provider and model, use a custom model, and save through the existing coach-route flow; credential-required failures lead back to Setup.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/settings-surface.test.tsx > saves a custom model through the sentinel option"
+    },
+    {
+      "id": "settings.providers.credential-management",
+      "surface": "settings",
+      "expected": "Saved provider credentials show active or saved-not-in-use truth, require two-step deletion, and explain that local deletion does not change the provider account.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/settings-surface.test.tsx > confirms in two steps and restores focus when cancelled"
+    },
+    {
+      "id": "settings.providers.windows-codex-recovery",
+      "surface": "settings",
+      "expected": "On Windows an active codex-agent profile is not treated as ready, is labeled Change required, and can be replaced through the existing Claude CLI or API-key provider flow without deleting unrelated state.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/settings-surface.test.tsx > requires a supported provider change for an active Windows Codex-agent profile"
+    },
+    {
+      "id": "settings.intervals.connect",
+      "surface": "settings",
+      "expected": "Intervals.icu setup reads a copied API key without rendering the secret, validates ownership, and activates the connection only after an authoritative applied result.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > connects Intervals.icu from copied metadata without rendering a secret field"
+    },
+    {
+      "id": "settings.intervals.delete-only",
+      "surface": "settings",
+      "expected": "A connected Intervals.icu account offers Delete rather than replacement, requires confirmation, and retains synced rides and past chats after deleting the saved connection.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > keeps AI changes quiet and gives connected Intervals only Delete"
+    },
+    {
+      "id": "settings.telegram.delete-only",
+      "surface": "settings",
+      "expected": "A connected Telegram bot exposes deletion rather than token replacement, requires explicit confirmation, and keeps the bot and chat in Telegram while deleting the local encrypted token and allowed-user access.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > requires confirmation before deleting the encrypted bot credential"
+    },
+    {
+      "id": "settings.training-account.identity",
+      "surface": "settings",
+      "expected": "The training account identifies the active Intervals.icu athlete and routes account changes through supported connection setup rather than an in-place athlete switch.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/athlete-settings.test.ts > sends only the exact athlete patch for %s and rereads authority"
+    },
+    {
+      "id": "settings.conversation.lifecycle",
+      "surface": "settings",
+      "expected": "Conversation settings expose timezone, daily reset hour, idle reset minutes, archive retention days, and history budget; only dirty unmanaged fields are saved and lifecycle effects are disclosed.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/settings-surface.test.tsx > sends only the dirty fields"
+    },
+    {
+      "id": "settings.spend.daily-cap",
+      "surface": "settings",
+      "expected": "Spend shows the current daily cap and usage truth, publishes the cap warning to Chat, and saves a revised cap without losing an in-progress edit on refresh.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/settings-surface.test.tsx > publishes the cap warning for the chat surface and saves a new cap"
+    },
+    {
+      "id": "settings.preferences.units",
+      "surface": "settings",
+      "expected": "Units can switch between metric and imperial for distance and body mass while cycling power-to-weight remains W/kg.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/training-context.test.ts > renders only the authoritative units result and retains selection on failed save"
+    },
+    {
+      "id": "settings.preferences.theme",
+      "surface": "settings",
+      "expected": "Appearance supports System, Light, and Dark, with System following the host light/dark setting and the choice persisting.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/settings-preferences.test.tsx > follows the system colour scheme when the appearance is System"
+    },
+    {
+      "id": "settings.preferences.palette",
+      "surface": "settings",
+      "expected": "Every shipped app palette is selectable, the active palette is marked, and a selection applies and persists immediately across both themes.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/settings-preferences.test.tsx > applies and persists a palette choice"
+    },
+    {
+      "id": "settings.application.update",
+      "surface": "settings",
+      "expected": "The application row reflects update state and invokes the available check, download, or restart action while other settings mutations hold it disabled.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/settings-surface.test.tsx > runs the update action the state calls for"
+    },
+    {
+      "id": "settings.application.release-notes",
+      "surface": "settings",
+      "expected": "Release notes open from Settings, render the available version notes, and expose retry when notes are unavailable.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/settings-surface.test.tsx > opens release notes and offers a retry when they are unavailable"
+    },
+    {
+      "id": "settings.application.reset-conversation",
+      "surface": "settings",
+      "expected": "Reset conversation uses the same confirmation flow as Chat and clears conversation history without removing training data or saved coach memory.",
+      "automation": "deterministic",
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > new conversation dialog > walks the confirm flow and hands focus back to the composer"
+    },
+    {
+      "id": "settings.windows.credential-wording",
+      "surface": "settings",
+      "expected": "Installed Windows surfaces identify DPAPI-backed credential encryption instead of macOS or Keychain when secure credential storage needs explanation or recovery.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "settings.windows.login-start",
+      "surface": "settings",
+      "expected": "The installed Windows tray menu shows Start in background at login, reflects authoritative Windows Startup Apps truth, and persists the background preference without elevating or changing OS registration unexpectedly.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "settings.windows.tray-language",
+      "surface": "settings",
+      "expected": "The installed Windows app uses tray language where residency is visible, opens the main window on tray left click, and never presents the macOS menu-bar popover copy.",
+      "automation": "vm-only"
+    }
+  ]
+}

@@ -94,6 +94,7 @@ function createSubject(input: {
   readonly load?: () => Promise<OnboardingLlmConfiguration>;
   readonly apply?: () => Promise<OnboardingLlmSelectionResult>;
   readonly openSetup?: () => void;
+  readonly codexAgentSupported?: boolean;
 }) {
   const subject = fakeView();
   const load = input.load ?? vi.fn(async () => configuration());
@@ -104,6 +105,9 @@ function createSubject(input: {
     load,
     apply,
     openSetup: input.openSetup ?? vi.fn(),
+    ...(input.codexAgentSupported === undefined
+      ? {}
+      : { codexAgentSupported: input.codexAgentSupported }),
     view: subject.view,
   });
   return { controller, subject, load, apply };
@@ -222,6 +226,34 @@ describe("provider and model settings controller", () => {
     });
     expect(formState(controller)).toMatchObject({
       active: { provider: "openai", model: "gpt-standard" },
+      dirty: false,
+    });
+  });
+
+  it("requires a provider change when Windows reports Codex agent unsupported", async () => {
+    const { controller, subject, apply } = createSubject({
+      load: vi.fn(async () => configuration({ provider: "codex-agent", model: "gpt-codex" })),
+      codexAgentSupported: false,
+    });
+
+    await controller.activate();
+    expect(formState(controller)).toMatchObject({
+      active: { provider: "codex-agent", model: "gpt-codex" },
+      draft: null,
+      providerChangeRequired: true,
+    });
+
+    subject.provider("anthropic");
+    subject.save();
+    await vi.waitFor(() => expect(controller.state().status).toBe("saved"));
+    expect(apply).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-sonnet",
+      endpoint: { mode: "automatic" },
+    });
+    expect(formState(controller)).toMatchObject({
+      active: { provider: "anthropic", model: "claude-sonnet" },
+      providerChangeRequired: false,
       dirty: false,
     });
   });

@@ -155,6 +155,7 @@ export interface OnboardingControllerOptions {
   readonly credentialMutationsBlocked?: () => boolean;
   readonly createOperationId?: () => string;
   readonly afterPaint?: (callback: () => void) => () => void;
+  readonly codexAgentSupported?: boolean;
 }
 
 export const CHATGPT_PROGRESS_DETAIL_DELAY_MS = 3_000;
@@ -359,6 +360,7 @@ export function createOnboardingController(
 
   const activeProviderIsReady = (): boolean => {
     const active = llmConfiguration?.active ?? null;
+    if (active?.provider === "codex-agent" && options.codexAgentSupported === false) return false;
     return selectedProviderReady(state, active, active);
   };
 

@@ -314,6 +314,7 @@ async function security() {
             "onUpdateState",
             "pasteIntervalsApiKeyFromClipboard",
             "pasteTelegramTokenFromClipboard",
+            "platform",
             "reconcileTelegram",
             "releaseNotes",
             "removeTelegram",

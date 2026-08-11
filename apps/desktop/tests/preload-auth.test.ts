@@ -41,6 +41,7 @@ vi.mock("electron", () => ({
 }));
 
 interface AuthBridge {
+  readonly platform: unknown;
   getDaemonConnection(failedGeneration?: number): Promise<unknown>;
   getTranscriptPage(input: unknown): Promise<unknown>;
   listArchivedConversations(): Promise<unknown>;
@@ -257,6 +258,7 @@ describe("desktop preload ChatGPT auth", () => {
         "onUpdateState",
         "pasteIntervalsApiKeyFromClipboard",
         "pasteTelegramTokenFromClipboard",
+        "platform",
         "reconcileTelegram",
         "releaseNotes",
         "removeTelegram",

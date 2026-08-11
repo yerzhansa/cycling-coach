@@ -25,6 +25,7 @@ export interface ProviderModelFormState {
   readonly providers: readonly OnboardingLlmProviderConfiguration[];
   readonly active: OnboardingLlmConfiguration["active"];
   readonly draft: ProviderModelDraft | null;
+  readonly providerChangeRequired: boolean;
   readonly dirty: boolean;
   readonly validationError: ProviderModelValidationError | null;
 }
@@ -117,11 +118,12 @@ function isDirty(
   return active.provider !== draft.provider.provider || active.model !== selectedModel(draft);
 }
 
-function formState(editable: EditableState): ProviderModelFormState {
+function formState(editable: EditableState, codexAgentSupported: boolean): ProviderModelFormState {
   return {
     providers: editable.providers,
     active: editable.active,
     draft: editable.draft,
+    providerChangeRequired: !codexAgentSupported && editable.active?.provider === "codex-agent",
     dirty: isDirty(editable.active, editable.draft),
     validationError: validationError(editable.draft),
   };
@@ -145,6 +147,7 @@ export function createProviderModelSettingsController(input: {
   readonly openSetup: () => void;
   readonly view: ProviderModelSettingsView;
   readonly beginMutation?: () => (() => void) | null;
+  readonly codexAgentSupported?: boolean;
 }): ProviderModelSettingsController {
   let currentState: ProviderModelSettingsState = { status: "closed" };
   let generation = 0;
@@ -190,11 +193,14 @@ export function createProviderModelSettingsController(input: {
           if (draft !== null) providerDrafts.set(draft.provider.provider, draft);
           render({
             status: "ready",
-            ...formState({
-              providers: configuration.providers,
-              active: configuration.active,
-              draft,
-            }),
+            ...formState(
+              {
+                providers: configuration.providers,
+                active: configuration.active,
+                draft,
+              },
+              input.codexAgentSupported ?? true,
+            ),
           });
         },
         () => {
@@ -230,7 +236,7 @@ export function createProviderModelSettingsController(input: {
     providerDrafts.set(draft.provider.provider, draft);
     render({
       status: "ready",
-      ...formState({ ...editable, draft }),
+      ...formState({ ...editable, draft }, input.codexAgentSupported ?? true),
     });
   };
 
@@ -271,7 +277,7 @@ export function createProviderModelSettingsController(input: {
     if (disposed || saveOperation !== undefined) return saveOperation ?? Promise.resolve();
     const editable = editableState(currentState);
     if (editable === null || currentState.status === "saving") return Promise.resolve();
-    const form = formState(editable);
+    const form = formState(editable, input.codexAgentSupported ?? true);
     if (form.draft === null || !form.dirty || form.validationError !== null) {
       return Promise.resolve();
     }
@@ -301,11 +307,14 @@ export function createProviderModelSettingsController(input: {
           const active = { provider: selection.provider, model: selection.model };
           render({
             status: "saved",
-            ...formState({
-              providers: form.providers,
-              active,
-              draft: form.draft,
-            }),
+            ...formState(
+              {
+                providers: form.providers,
+                active,
+                draft: form.draft,
+              },
+              input.codexAgentSupported ?? true,
+            ),
           });
         },
         () => {

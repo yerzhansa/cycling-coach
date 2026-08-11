@@ -11,6 +11,7 @@ import {
   type TelegramControlStatus,
   type TelegramSettingsState,
 } from "../../settings/telegram-controller.js";
+import { PLATFORM_COPY } from "../../platform-copy.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import {
@@ -80,7 +81,7 @@ function attentionCopy(status: TelegramControlStatus): string | null {
   }
   if (status.channel.state === "failed") {
     if (status.channel.errorCode === "telegram-credential-encryption-unavailable") {
-      return "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again.";
+      return `Secure token storage is unavailable. Quit and reopen Enduragent, ${PLATFORM_COPY.credentialRecoveryAction}, then choose Check again.`;
     }
     if (status.channel.errorCode === "telegram-credential-unsafe-backend") {
       return "No secure credential backend is available, so Enduragent refused to access the saved bot token without encryption. Quit and reopen Enduragent, then choose Check again.";
@@ -106,7 +107,7 @@ function attentionCopy(status: TelegramControlStatus): string | null {
     return "Telegram could not start. Keep Enduragent open, check the internet connection, then choose Check again.";
   }
   if (status.channel.state === "offline-retrying") {
-    return "Telegram is temporarily offline. Enduragent will retry while this Mac is awake and online.";
+    return `Telegram is temporarily offline. Enduragent will retry while ${PLATFORM_COPY.computer} is awake and online.`;
   }
   return null;
 }
@@ -259,15 +260,15 @@ export function TelegramSection(): ReactElement {
           )}
         </div>
         <p className="m-0 border-b border-line px-4 py-[13px] text-[13px] text-ink-2">
-          Telegram works only while Enduragent and its local coaching service are running, and this
-          Mac is awake and online.
+          Telegram works only while Enduragent and its local coaching service are running, and{" "}
+          {PLATFORM_COPY.computer} is awake and online.
         </p>
         <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {healthAnnouncement}
         </span>
         {telegram?.channel.state === "suspended" ? (
           <p className="m-0 border-b border-line px-4 py-[13px] text-[13px] text-ink-2">
-            Telegram polling resumes when this Mac wakes.
+            Telegram polling resumes when {PLATFORM_COPY.computer} wakes.
           </p>
         ) : null}
 
@@ -476,8 +477,8 @@ export function TelegramSection(): ReactElement {
         {telegram?.credentialConfigured === true && botUsername !== null && confirmRemove ? (
           <InlineConfirmation
             name="delete-telegram"
-            title={`Delete @${botUsername} from this Mac?`}
-            copy="This turns the bot off, deletes its encrypted token and allowed-user access from this Mac. The Telegram bot and its chat remain in Telegram."
+            title={`Delete @${botUsername} from ${PLATFORM_COPY.computer}?`}
+            copy={`This turns the bot off, deletes its encrypted token and allowed-user access from ${PLATFORM_COPY.computer}. The Telegram bot and its chat remain in Telegram.`}
             confirmLabel="Delete connection"
             focusTarget={null}
             cancelDisabled={busy}
@@ -498,8 +499,8 @@ export function TelegramSection(): ReactElement {
             <div>
               <p className={CONFIRMATION_TITLE_CLASS}>Remove the existing webhook</p>
               <p className={CONFIRMATION_COPY_CLASS}>
-                Telegram cannot deliver to a webhook and this Mac at the same time. This explicit
-                action keeps pending updates and lets Desktop begin polling.
+                Telegram cannot deliver to a webhook and {PLATFORM_COPY.computer} at the same time.
+                This explicit action keeps pending updates and lets Desktop begin polling.
               </p>
             </div>
             <button
@@ -556,7 +557,7 @@ export function TelegramSection(): ReactElement {
               <div className={ROW_TITLE_CLASS}>Pair the primary user</div>
               <div className={ROW_DETAIL_CLASS}>
                 {pairingFailure ??
-                  "A one-minute code ensures only the person with access to this Mac can claim the bot."}
+                  `A one-minute code ensures only the person with access to ${PLATFORM_COPY.computer} can claim the bot.`}
               </div>
             </div>
             <button

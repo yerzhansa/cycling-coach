@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { PLATFORM_COPY } from "../../platform-copy.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AppearanceControl } from "./AppearanceControl.js";
 import { PalettePicker } from "./PalettePicker.js";
@@ -28,7 +29,9 @@ export function PreferencesSection(): ReactElement {
         <div className={styles.row}>
           <div className={styles.label}>
             <div className={styles.rowTitle}>Appearance</div>
-            <div className={styles.rowDetail}>System follows your macOS light and dark setting</div>
+            <div className={styles.rowDetail}>
+              System follows your {PLATFORM_COPY.operatingSystem} light and dark setting
+            </div>
           </div>
           <AppearanceControl />
         </div>

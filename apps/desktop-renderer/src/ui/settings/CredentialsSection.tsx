@@ -3,6 +3,7 @@ import type { DesktopCredentialId } from "../../onboarding/bridge.js";
 import { DESKTOP_CREDENTIAL_SLOTS } from "../../onboarding/constants.js";
 import { onboardingCredentialMutationActive } from "../../onboarding/controller.js";
 import { claudeCliPresentation } from "../../onboarding/credential-presentation.js";
+import { PLATFORM_COPY } from "../../platform-copy.js";
 import type {
   CredentialSettingsEntry,
   CredentialSettingsState,
@@ -154,8 +155,8 @@ export function CredentialDeleteConfirmation(props: {
       }
       copy={
         intervals
-          ? "Your saved API key and imported connection will be removed. Your synced rides and past chats stay on this Mac."
-          : "This removes it from this Mac only. Enduragent will stop using it if it is active. Your provider account is unchanged."
+          ? `Your saved API key and imported connection will be removed. Your synced rides and past chats stay on ${PLATFORM_COPY.computer}.`
+          : `This removes it from ${PLATFORM_COPY.computer} only. Enduragent will stop using it if it is active. Your provider account is unchanged.`
       }
       confirmLabel={intervals ? "Delete connection" : "Delete credential"}
       {...(intervals

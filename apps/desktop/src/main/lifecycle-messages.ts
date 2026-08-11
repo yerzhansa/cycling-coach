@@ -1,5 +1,6 @@
 import type { DesktopDaemonResolution } from "@enduragent/coach/enduragent";
 import type { DesktopDaemonLifecycleState } from "./daemon-lifecycle.js";
+import { desktopPlatformProjection } from "./platform-copy.js";
 
 export interface DesktopErrorCopy {
   readonly title: string;
@@ -8,6 +9,7 @@ export interface DesktopErrorCopy {
 
 export function startupRefusalCopy(
   cause: Extract<DesktopDaemonResolution, { status: "refused" }>["cause"],
+  platform: NodeJS.Platform = process.platform,
 ): DesktopErrorCopy {
   if (cause === "not-configured") {
     return {
@@ -45,8 +47,7 @@ export function startupRefusalCopy(
   }
   return {
     title: "Enduragent couldn’t start its background service",
-    content:
-      "The background service could not start or its saved connection state could not be read. Quit Enduragent and reopen it. If the problem continues, restart your Mac before trying again.",
+    content: `The background service could not start or its saved connection state could not be read. Quit Enduragent and reopen it. If the problem continues, ${desktopPlatformProjection(platform).copy.restartComputer} before trying again.`,
   };
 }
 

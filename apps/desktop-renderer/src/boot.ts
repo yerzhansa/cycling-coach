@@ -38,6 +38,7 @@ import {
   createOnboardingController,
   onboardingCredentialMutationActive,
 } from "./onboarding/controller.js";
+import { rendererPlatformProjection } from "./platform-copy.js";
 import { createTrainingContextController } from "./training-context/controller.js";
 import { createManualSyncController } from "./training-context/manual-sync.js";
 import { createTrainingSyncCoordinator } from "./training-sync.js";
@@ -73,6 +74,7 @@ export function onboardingCredentialMutationsBlocked(
 
 export function bootRenderer(): Disposer {
   const store = useEnduragentStore;
+  const platform = rendererPlatformProjection(window.enduragentAuth.platform);
   store.getState().setOnboardingStartupSettled(false);
   const onLifecycle = (event: WindowEventMap["enduragent-lifecycle"]): void => {
     document.documentElement.dataset.rpc = event.detail.status;
@@ -304,6 +306,7 @@ export function bootRenderer(): Disposer {
       );
     },
     credentialMutationsBlocked: () => onboardingCredentialMutationsBlocked(store.getState()),
+    codexAgentSupported: platform.capabilities.codexAgent,
   });
   store.getState().bindOnboardingActions(onboarding);
   const closePanes = (): void => {
@@ -366,6 +369,7 @@ export function bootRenderer(): Disposer {
     apply: (selection) => window.enduragentAuth.applyLlmSelection(selection),
     openSetup: openSetupFromSettings,
     beginMutation: () => store.getState().beginSettingsMutation("provider-model"),
+    codexAgentSupported: platform.capabilities.codexAgent,
     view: coachAdapter.view,
   });
   const telegramSettingsController = createTelegramSettingsController({
