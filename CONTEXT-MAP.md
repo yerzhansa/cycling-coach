@@ -38,9 +38,8 @@ Current state of the Core/Sport seam:
 
 Changesets-driven, tag-triggered release split:
 
-1. **`version-pr.yml`** opens or updates the bot-managed "Version Packages" PR. When that PR is merged, it tags and dispatches only public packages whose versions changed; a changed desktop app is independently tagged as `enduragent-desktop@<SemVer>`.
+1. **`version-pr.yml`** opens or updates the bot-managed "Version Packages" PR. When that PR is merged, it tags and dispatches only public packages whose versions changed; a changed desktop app is independently tagged as `enduragent-desktop@<SemVer>`, given a draft release bound to the exact commit and desktop changelog, and dispatched to `desktop-release.yml`.
 2. **`release.yml`** handles npm packages only. It gates on build + test + smoke-install, publishes via OIDC trusted publisher, and creates a non-latest GitHub Release so package releases cannot replace the desktop updater feed.
-3. **`desktop-release-coordinator.yml`** validates the desktop tag against `apps/desktop/package.json`, binds a draft to the exact commit and desktop changelog, then dispatches the protected macOS transaction without publishing npm.
-4. **`desktop-release.yml`** signs and notarizes on macOS, verifies the exact four updater assets, exercises the production `N → N+1` updater round trip, promotes metadata last, and activates the tested release as repository latest.
+3. **`desktop-release.yml`** signs and notarizes on macOS, independently verifies the signed updater envelope, publishes the exact four updater assets to the bound draft, promotes it to repository latest, and confirms the production feed serves the new version.
 
 Currently only `cycling-coach` is npm-publishable (per ADR-0009). The private desktop app follows its own SemVer and release transaction; changing it never changes or publishes `cycling-coach`. See `CONTRIBUTING.md` for the contributor-side steps.

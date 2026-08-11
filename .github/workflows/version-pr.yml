@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write   # dispatch package or desktop release coordinators after a Version-PR merge
+      actions: write   # dispatch package or desktop release workflows after a Version-PR merge
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -123,6 +123,7 @@ jobs:
           done
 
           DESKTOP_PACKAGE_JSON=apps/desktop/package.json
+          DESKTOP_CHANGELOG=apps/desktop/CHANGELOG.md
           DESKTOP_VERSION=$(jq -er '.version' "$DESKTOP_PACKAGE_JSON")
           PREVIOUS_DESKTOP_VERSION=$(git show "$PREVIOUS_COMMIT:$DESKTOP_PACKAGE_JSON" | jq -er '.version')
           if [ "$DESKTOP_VERSION" = "$PREVIOUS_DESKTOP_VERSION" ]; then
@@ -142,10 +143,42 @@ jobs:
               -f ref="refs/tags/$DESKTOP_TAG" -f sha="$RELEASE_COMMIT" >/dev/null
             echo "::notice::Created tag $DESKTOP_TAG at $RELEASE_COMMIT"
           fi
+          FIRST_HEADING=$(grep -m1 '^## ' "$DESKTOP_CHANGELOG")
+          test "$FIRST_HEADING" = "## $DESKTOP_VERSION"
+          RELEASE_BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' "$DESKTOP_CHANGELOG" | tail -n +2)
+          test -n "$RELEASE_BODY"
+          RELEASE_BODY_SHA256=$(printf '%s' "$RELEASE_BODY" | shasum -a 256 | awk '{print $1}')
+          EXISTING_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name == \"$DESKTOP_TAG\")] | first")
+          if [ -n "$EXISTING_RELEASE" ] && [ "$EXISTING_RELEASE" != "null" ]; then
+            if [ "$(printf '%s' "$EXISTING_RELEASE" | jq -r '.draft')" != 'true' ]; then
+              echo "::notice::$DESKTOP_TAG is already published — skipping desktop release dispatch"
+              exit 0
+            fi
+            DRAFT_ID=$(printf '%s' "$EXISTING_RELEASE" | jq -er '.id | tostring')
+            EXISTING_BODY_SHA256=$(printf '%s' "$EXISTING_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
+            test "$EXISTING_BODY_SHA256" = "$RELEASE_BODY_SHA256"
+            echo "::notice::Reusing desktop draft release $DRAFT_ID for $DESKTOP_TAG"
+          else
+            gh release create "$DESKTOP_TAG" \
+              --draft \
+              --latest=false \
+              --target "$RELEASE_COMMIT" \
+              --title "Enduragent Desktop $DESKTOP_VERSION" \
+              --notes "$RELEASE_BODY"
+            DRAFT_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq "[.[] | select(.tag_name == \"$DESKTOP_TAG\")] | first | .id | tostring")
+            printf '%s' "$DRAFT_ID" | grep -Eq '^[1-9][0-9]*$'
+            echo "::notice::Created desktop draft release $DRAFT_ID for $DESKTOP_TAG"
+          fi
           DISPATCHED=false
           for attempt in $(seq 1 6); do
-            if gh workflow run desktop-release-coordinator.yml --ref "$DESKTOP_TAG" \
-              -f tag="$DESKTOP_TAG"; then
+            if gh workflow run desktop-release.yml --ref "$DESKTOP_TAG" \
+              -f tag="$DESKTOP_TAG" \
+              -f desktop_version="$DESKTOP_VERSION" \
+              -f commit="$RELEASE_COMMIT" \
+              -f draft_id="$DRAFT_ID" \
+              -f draft_body_sha256="$RELEASE_BODY_SHA256"; then
               DISPATCHED=true
               break
             fi
@@ -154,7 +187,8 @@ jobs:
             fi
           done
           if [ "$DISPATCHED" != "true" ]; then
-            echo "::error::Unable to dispatch desktop release for $DESKTOP_TAG after bounded retries"
+            echo "::error::Unable to dispatch desktop-release.yml for $DESKTOP_TAG after bounded retries"
+            echo "Manual dispatch: gh workflow run desktop-release.yml --ref $DESKTOP_TAG -f tag=$DESKTOP_TAG -f desktop_version=$DESKTOP_VERSION -f commit=$RELEASE_COMMIT -f draft_id=$DRAFT_ID -f draft_body_sha256=$RELEASE_BODY_SHA256"
             exit 1
           fi
           echo "::notice::Dispatched desktop release for $DESKTOP_TAG"
