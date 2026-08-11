@@ -131,6 +131,26 @@ describe("desktop release workflow policy", () => {
     expectIssue({ ...source, desktop }, "release executable jobs must have bounded");
   });
 
+  it("requires write permission for a job that reads a draft release", () => {
+    const source = sources();
+    const desktop = replaceRequired(
+      source.desktop,
+      "  authorize-coordinator:\n    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      actions: read\n      contents: write",
+      "  authorize-coordinator:\n    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      actions: read\n      contents: read",
+    );
+    expectIssue({ ...source, desktop }, "draft release reads require exact contents permission");
+  });
+
+  it("rejects write permission for a job that reads only the latest release", () => {
+    const source = sources();
+    const desktop = replaceRequired(
+      source.desktop,
+      'CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")',
+      'CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest")',
+    );
+    expectIssue({ ...source, desktop }, "draft release reads require exact contents permission");
+  });
+
   it("requires the stable desktop tag namespace, manifest version, and exact tag ref", () => {
     const source = sources();
     const mutations = [
