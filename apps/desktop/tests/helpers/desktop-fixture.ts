@@ -42,6 +42,7 @@ interface ScriptRequest {
 
 const require = createRequire(import.meta.url);
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const DESKTOP_FIXTURE_LAUNCH_TIMEOUT_MS = 45_000;
 const disabledTelegramSnapshot: TelegramControlSnapshot = {
   channel: { desiredState: "disabled", state: "disabled" },
   bot: { state: "unconfigured" },
@@ -369,7 +370,9 @@ export async function launchDesktopFixture(input: {
   };
   let closed = false;
   try {
-    const debuggerUrl = await waitForPage(debuggerPort);
+    const debuggerUrl = await waitForPage(debuggerPort, {
+      timeoutMs: DESKTOP_FIXTURE_LAUNCH_TIMEOUT_MS,
+    });
     cdp = await connectCdp(debuggerUrl, (message) => {
       if (message.method !== "Runtime.consoleAPICalled") return;
       const args =
