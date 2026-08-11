@@ -842,7 +842,29 @@ describe("desktop release workflow policy", () => {
       "          fi\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
       "          fi\n          test \"$DESKTOP_ENABLED\" = 'true'\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
     );
-    expectIssue({ ...source, desktop }, "common authorization before exit");
+    const withoutWorkflowRefBinding = replaceRequired(
+      source.desktop,
+      '            test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"\n',
+      "",
+    );
+    const movedWorkflowRefBinding = replaceRequired(
+      withoutWorkflowRefBinding,
+      "          fi\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+      "          fi\n          test \"$WORKFLOW_REF\" = \"refs/tags/$RELEASE_TAG\"\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+    );
+    const withoutCandidateTag = replaceRequired(
+      source.desktop,
+      "          CANDIDATE_RELEASE=$(gh api \"repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID\")\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.id | tostring')\" = \"$RELEASE_DRAFT_ID\"\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.tag_name')\" = \"$RELEASE_TAG\"\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.prerelease')\" = 'false'\n          if [ \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.draft')\" = 'true' ]; then",
+      "          CANDIDATE_RELEASE=$(gh api \"repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID\")\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.id | tostring')\" = \"$RELEASE_DRAFT_ID\"\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.prerelease')\" = 'false'\n          if [ \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.draft')\" = 'true' ]; then",
+    );
+    const movedCandidateTag = replaceRequired(
+      withoutCandidateTag,
+      "          fi\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+      "          fi\n          test \"$(printf '%s' \"$CANDIDATE_RELEASE\" | jq -r '.tag_name')\" = \"$RELEASE_TAG\"\n          printf '%s' \"$SOURCE_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'",
+    );
+    for (const mutation of [desktop, movedWorkflowRefBinding, movedCandidateTag]) {
+      expectIssue({ ...source, desktop: mutation }, "common authorization before exit");
+    }
   });
 
   it("independently revalidates source run, attempt jobs, and artifact provenance", () => {
