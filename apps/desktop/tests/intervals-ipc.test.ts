@@ -905,7 +905,7 @@ describe("Intervals.icu credential verification", () => {
       "CREATE TABLE store_owner (singleton INTEGER PRIMARY KEY, account_fingerprint TEXT NOT NULL)",
     );
     store.close();
-    const readRuntimeConfig = vi.fn(async () => runtimeSnapshot(""));
+    const readRuntimeConfig = vi.fn(async (_signal?: AbortSignal) => runtimeSnapshot(""));
     const verifyIntervalsCredential = vi.fn(async () => {
       throw new CoachRpcRemoteError(-32601, "synthetic method unavailable");
     });
