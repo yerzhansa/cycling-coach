@@ -125,6 +125,7 @@ import {
   AllowedSendersCommitUncertainError,
   AllowedSendersRecoveryRequiredError,
   LockfileContentionError,
+  MAX_ALLOWED_SENDERS_FILE_BYTES,
   loadAllowedSenders,
   loadAllowedSendersFromFile,
   saveAllowedSenders,
@@ -141,6 +142,7 @@ import {
   readKnownSessions,
   type AllowedSenders,
 } from "../src/channels/allowed-senders.js";
+import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-policy.js";
 
 let dataDir: string;
 const ENV_KEYS = ["CYCLING_COACH_OPERATOR_ID", "CYCLING_COACH_DM_POLICY"];
@@ -1348,5 +1350,169 @@ describe("saveAllowedSenders — data-dir perms (S3)", () => {
     expect(statSync(dataDir).mode & 0o777).toBe(0o700);
     expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/\[security\].*permissions.*0o700/));
     errSpy.mockRestore();
+  });
+});
+
+describe("win32 sender authorization storage", () => {
+  const windows = { platform: "win32" as const };
+
+  it("preserves structurally bound state without POSIX mode checks or directory sync", () => {
+    chmodSync(dataDir, 0o755);
+    traceDurability();
+
+    expect(bindDesktopTelegramAccess(dataDir, "10001", windows)).toBe("reset");
+    expect(claimPrimaryOperator(dataDir, "12345", windows).status).toBe("claimed");
+
+    expect(statSync(dataDir).mode & 0o777).toBe(0o755);
+    expect(durabilityFs.events).not.toContain("fsync:directory");
+    expect(loadAllowedSendersFromFile(dataDir, windows)).toMatchObject({
+      desktopBotId: "10001",
+      primaryOperator: "12345",
+      allowFrom: ["12345"],
+    });
+  });
+
+  it("rejects corrupt state with path-free stage diagnostics", () => {
+    const path = join(dataDir, "allowed-senders.json");
+    writeFileSync(path, "{invalid", { mode: 0o600 });
+
+    const failure = (() => {
+      try {
+        loadAllowedSendersFromFile(dataDir, windows);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect((failure as Error).message).not.toContain(dataDir);
+  });
+
+  it("rejects invalid UTF-8 state with path-free stage diagnostics", () => {
+    const path = join(dataDir, "allowed-senders.json");
+    writeFileSync(path, Buffer.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d]));
+
+    const failure = (() => {
+      try {
+        loadAllowedSendersFromFile(dataDir, windows);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect((failure as Error).message).not.toContain(dataDir);
+  });
+
+  it("rejects oversized state before parsing", () => {
+    const path = join(dataDir, "allowed-senders.json");
+    writeFileSync(path, Buffer.alloc(MAX_ALLOWED_SENDERS_FILE_BYTES + 1, 0x20));
+
+    const failure = (() => {
+      try {
+        loadAllowedSendersFromFile(dataDir, windows);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+  });
+
+  it("rejects an uninspectable reset fence with stage diagnostics", () => {
+    traceDurability("lstat:reset-marker");
+
+    const failure = (() => {
+      try {
+        loadAllowedSendersFromFile(dataDir, windows);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "io-failure" });
+    expect((failure as Error).message).not.toContain(dataDir);
+  });
+
+  it("does not swallow file flush failures", () => {
+    traceDurability("fsync:allowlist-temp");
+
+    const failure = (() => {
+      try {
+        bindDesktopTelegramAccess(dataDir, "10001", windows);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "file-flush", category: "io-failure" });
+    expect((failure as Error).message).not.toContain(dataDir);
+  });
+
+  it("does not swallow rename failures", () => {
+    traceDurability("rename:allowlist");
+
+    const failure = (() => {
+      try {
+        bindDesktopTelegramAccess(dataDir, "10001", windows);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "rename", category: "io-failure" });
+    expect((failure as Error).message).not.toContain(dataDir);
+  });
+
+  it("rejects a live lock with path-free sharing diagnostics", () => {
+    writeFileSync(
+      join(dataDir, ".allowed-senders.lock"),
+      `${process.pid}\n${new Date().toISOString()}\nlock-token`,
+      { mode: 0o600 },
+    );
+
+    const failure = (() => {
+      try {
+        bindDesktopTelegramAccess(dataDir, "10001", windows);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+
+    expect(failure).toBeInstanceOf(LockfileContentionError);
+    expect(failure).toMatchObject({ stage: "binding-check", category: "sharing-violation" });
+    expect((failure as Error).message).not.toContain(dataDir);
+  });
+
+  it("rejects a corrupt lock without reclaiming it", () => {
+    const lockPath = join(dataDir, ".allowed-senders.lock");
+    writeFileSync(lockPath, "invalid", { mode: 0o600 });
+
+    const failure = (() => {
+      try {
+        bindDesktopTelegramAccess(dataDir, "10001", windows);
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect(readFileSync(lockPath, "utf8")).toBe("invalid");
+    expect((failure as Error).message).not.toContain(dataDir);
   });
 });

@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, readFile, readdir, stat, symlink } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, open, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -12,6 +12,7 @@ import {
   loadReferenceCaptureSidecars,
   parseReferenceCaptureReview,
   readVerifiedReferenceSnapshot,
+  WindowsReferenceCaptureSidecarError,
   writeReferenceCaptureSidecars,
 } from "../src/capture-manifest/index.js";
 
@@ -104,5 +105,138 @@ describe("immutable Reference capture sidecars", () => {
     await writeReferenceCaptureSidecars({ root, manifest: manifest(SECOND),
       review: { schema_version: 1, capture_id: SECOND, reviewed_on: "1998-07-19", replaces_capture_id: FIRST, reason: "provider-refresh" }, assertReplayable: replay });
     expect(await readFile(join(root, "captures", FIRST, "manifest.json"), "utf8")).toContain(FIRST);
+  });
+
+  it("uses structural bindings on win32 without comparing POSIX modes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "capture-home-")), replay = vi.fn(async () => {});
+    const result = await writeReferenceCaptureSidecars({ root, manifest: manifest(),
+      review: { schema_version: 1, capture_id: FIRST, reviewed_on: "1998-07-18", replaces_capture_id: null, reason: "initial" },
+      assertReplayable: replay, platform: "win32" });
+    const captures = join(root, "captures"), directory = join(captures, FIRST);
+    await chmod(captures, 0o755);
+    await chmod(directory, 0o755);
+    await chmod(join(directory, "manifest.json"), 0o644);
+    await chmod(join(directory, "review.json"), 0o644);
+    await expect(loadReferenceCaptureSidecars({ root, captureId: FIRST,
+      assertReplayable: replay, platform: "win32" })).resolves.toEqual(result);
+    expect(replay).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects corrupt win32 sidecars with path-free stage diagnostics", async () => {
+    const root = await mkdtemp(join(tmpdir(), "capture-home-"));
+    await writeReferenceCaptureSidecars({ root, manifest: manifest(),
+      review: { schema_version: 1, capture_id: FIRST, reviewed_on: "1998-07-18", replaces_capture_id: null, reason: "initial" },
+      assertReplayable: async () => {}, platform: "win32" });
+    const manifestPath = join(root, "captures", FIRST, "manifest.json");
+    await chmod(manifestPath, 0o600);
+    await writeFile(manifestPath, "{invalid");
+    const failure = await loadReferenceCaptureSidecars({ root, captureId: FIRST,
+      assertReplayable: async () => {}, platform: "win32" }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WindowsReferenceCaptureSidecarError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect((failure as Error).message).not.toContain(root);
+  });
+
+  it("rejects locked win32 sidecars with path-free sharing diagnostics", async () => {
+    const root = await mkdtemp(join(tmpdir(), "capture-home-"));
+    await writeReferenceCaptureSidecars({ root, manifest: manifest(),
+      review: { schema_version: 1, capture_id: FIRST, reviewed_on: "1998-07-18", replaces_capture_id: null, reason: "initial" },
+      assertReplayable: async () => {}, platform: "win32" });
+    const openFile = vi.fn(async () => {
+      throw Object.assign(new Error(`locked ${root}`), { code: "EBUSY" });
+    }) as unknown as typeof open;
+    const failure = await loadReferenceCaptureSidecars({ root, captureId: FIRST,
+      assertReplayable: async () => {}, platform: "win32", openFile })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WindowsReferenceCaptureSidecarError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "sharing-violation" });
+    expect((failure as Error).message).not.toContain(root);
+  });
+
+  it("does not swallow win32 file flush failures", async () => {
+    const root = await mkdtemp(join(tmpdir(), "capture-home-"));
+    const failure = await writeReferenceCaptureSidecars({ root, manifest: manifest(),
+      review: { schema_version: 1, capture_id: FIRST, reviewed_on: "1998-07-18", replaces_capture_id: null, reason: "initial" },
+      assertReplayable: async () => {}, platform: "win32" }, {
+      syncFile: async () => {
+        throw Object.assign(new Error(`flush ${root}`), { code: "EIO" });
+      },
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WindowsReferenceCaptureSidecarError);
+    expect(failure).toMatchObject({ stage: "file-flush", category: "io-failure" });
+    expect((failure as Error).message).not.toContain(root);
+    await expect(stat(join(root, "captures", `.pending-${FIRST}`))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("preserves win32 replay validation failures", async () => {
+    const root = await mkdtemp(join(tmpdir(), "capture-home-"));
+    const validationFailure = new Error("replay validation failed");
+    const failure = await writeReferenceCaptureSidecars({ root, manifest: manifest(),
+      review: { schema_version: 1, capture_id: FIRST, reviewed_on: "1998-07-18", replaces_capture_id: null, reason: "initial" },
+      assertReplayable: async () => { throw validationFailure; }, platform: "win32" })
+      .catch((error: unknown) => error);
+    expect(failure).toBe(validationFailure);
+    await expect(stat(join(root, "captures", `.pending-${FIRST}`))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("classifies win32 pre-publication failures without disclosing paths", async () => {
+    const root = await mkdtemp(join(tmpdir(), "capture-home-"));
+    const failure = await writeReferenceCaptureSidecars({ root, manifest: manifest(),
+      review: { schema_version: 1, capture_id: FIRST, reviewed_on: "1998-07-18", replaces_capture_id: null, reason: "initial" },
+      assertReplayable: async () => {}, platform: "win32" }, {
+      beforeRename: async () => {
+        throw Object.assign(new Error(`publication ${root}`), { code: "EBUSY" });
+      },
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WindowsReferenceCaptureSidecarError);
+    expect(failure).toMatchObject({ stage: "rename", category: "sharing-violation" });
+    expect((failure as Error).message).not.toContain(root);
+  });
+
+  it("preserves unrelated state when a win32 publication rename fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "capture-home-"));
+    const finalDirectory = join(root, "captures", FIRST);
+    const unrelated = join(finalDirectory, "unrelated.txt");
+    const failure = await writeReferenceCaptureSidecars({ root, manifest: manifest(),
+      review: { schema_version: 1, capture_id: FIRST, reviewed_on: "1998-07-18", replaces_capture_id: null, reason: "initial" },
+      assertReplayable: async () => {}, platform: "win32" }, {
+      beforeRename: async () => {
+        await mkdir(finalDirectory);
+        await writeFile(unrelated, "preserve");
+      },
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WindowsReferenceCaptureSidecarError);
+    expect(failure).toMatchObject({ stage: "rename", category: "io-failure" });
+    await expect(readFile(unrelated, "utf8")).resolves.toBe("preserve");
+    await expect(stat(join(root, "captures", `.pending-${FIRST}`))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("does not remove unrelated state from a failed win32 pending directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "capture-home-"));
+    const pendingDirectory = join(root, "captures", `.pending-${FIRST}`);
+    const unrelated = join(pendingDirectory, "unrelated.txt");
+    const failure = await writeReferenceCaptureSidecars({ root, manifest: manifest(),
+      review: { schema_version: 1, capture_id: FIRST, reviewed_on: "1998-07-18", replaces_capture_id: null, reason: "initial" },
+      assertReplayable: async () => {}, platform: "win32" }, {
+      beforeRename: async () => {
+        await writeFile(unrelated, "preserve");
+        throw Object.assign(new Error(`publication ${root}`), { code: "EIO" });
+      },
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WindowsReferenceCaptureSidecarError);
+    expect(failure).toMatchObject({ stage: "rename", category: "io-failure" });
+    await expect(readFile(unrelated, "utf8")).resolves.toBe("preserve");
+    await expect(stat(join(pendingDirectory, "manifest.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(stat(join(pendingDirectory, "review.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });

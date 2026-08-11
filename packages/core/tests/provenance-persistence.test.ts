@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatStore } from "../src/agent/chat-store.js";
@@ -10,8 +19,12 @@ import {
   unwrapBoundToolResult,
 } from "@enduragent/engine";
 import { Memory } from "../src/memory/store.js";
-import { ProvenanceMetadata } from "../src/memory/provenance-metadata.js";
+import {
+  MAX_PROVENANCE_METADATA_BYTES,
+  ProvenanceMetadata,
+} from "../src/memory/provenance-metadata.js";
 import { contentDigest, getMessageProvenance, setMessageProvenance } from "../src/provenance.js";
+import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-policy.js";
 
 const GARMIN = { garmin: true, nonGarmin: false, unknown: false };
 const UNKNOWN = { garmin: false, nonGarmin: false, unknown: true };
@@ -218,6 +231,133 @@ describe("memory, daily-note, plan, and ledger digest binding", () => {
       expect(secondWrite.length).toBeGreaterThan(firstWrite.length);
       expect(metadata.read("first", "one")).toEqual(GARMIN);
       expect(metadata.read("second", "two")).toEqual(UNKNOWN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists provenance on win32 without attempting directory sync", () => {
+    const dir = tempDir("cc-memory-provenance-win32-");
+    try {
+      const memoryDir = join(dir, "memory");
+      mkdirSync(memoryDir, { recursive: true });
+      let directorySyncs = 0;
+      const metadata = new ProvenanceMetadata(memoryDir, {
+        platform: "win32",
+        syncDirectory: () => {
+          directorySyncs += 1;
+          throw new Error("directory sync is unavailable");
+        },
+      });
+
+      metadata.write("first", "one", GARMIN);
+
+      expect(directorySyncs).toBe(0);
+      expect(metadata.read("first", "one")).toEqual(GARMIN);
+      expect(readFileSync(join(memoryDir, ".source-provenance.jsonl"), "utf8")).toContain(
+        '"key":"first"',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("threads injected win32 semantics through Memory writes", () => {
+    const dir = tempDir("cc-memory-win32-");
+    try {
+      const memory = new Memory(dir, "UTC", { platform: "win32" });
+
+      memory.writeSection("profile", "Private note", "chat-tool", GARMIN);
+
+      expect(memory.provenanceForSection("profile")).toEqual(GARMIN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects corrupt win32 provenance with path-free stage diagnostics", () => {
+    const dir = tempDir("cc-memory-provenance-corrupt-win32-");
+    try {
+      const memoryDir = join(dir, "memory");
+      mkdirSync(memoryDir, { recursive: true });
+      writeFileSync(join(memoryDir, ".source-provenance.jsonl"), "{invalid\n");
+      const metadata = new ProvenanceMetadata(memoryDir, { platform: "win32" });
+      const failure = (() => {
+        try {
+          metadata.read("first", "one");
+        } catch (error) {
+          return error;
+        }
+        return undefined;
+      })();
+
+      expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+      expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+      expect((failure as Error).message).not.toContain(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts structurally bound win32 provenance without POSIX mode checks", () => {
+    const dir = tempDir("cc-memory-provenance-mode-win32-");
+    try {
+      const memoryDir = join(dir, "memory");
+      mkdirSync(memoryDir, { recursive: true });
+      const path = join(memoryDir, ".source-provenance.jsonl");
+      const metadata = new ProvenanceMetadata(memoryDir, { platform: "win32" });
+      metadata.write("first", "one", GARMIN);
+      chmodSync(memoryDir, 0o755);
+      chmodSync(path, 0o644);
+
+      expect(new ProvenanceMetadata(memoryDir, { platform: "win32" }).read("first", "one"))
+        .toEqual(GARMIN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects oversized win32 provenance before reading it", () => {
+    const dir = tempDir("cc-memory-provenance-oversized-win32-");
+    try {
+      const memoryDir = join(dir, "memory");
+      mkdirSync(memoryDir, { recursive: true });
+      const path = join(memoryDir, ".source-provenance.jsonl");
+      writeFileSync(path, "");
+      truncateSync(path, MAX_PROVENANCE_METADATA_BYTES + 1);
+      const metadata = new ProvenanceMetadata(memoryDir, { platform: "win32" });
+
+      expect(() => metadata.read("first", "one")).toThrow(
+        expect.objectContaining({ stage: "read-check", category: "corruption" }),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not swallow win32 provenance file flush failures", () => {
+    const dir = tempDir("cc-memory-provenance-flush-win32-");
+    try {
+      const memoryDir = join(dir, "memory");
+      mkdirSync(memoryDir, { recursive: true });
+      const metadata = new ProvenanceMetadata(memoryDir, {
+        platform: "win32",
+        syncFile: () => {
+          throw Object.assign(new Error(`locked ${dir}`), { code: "EBUSY" });
+        },
+      });
+      const failure = (() => {
+        try {
+          metadata.write("first", "one", GARMIN);
+        } catch (error) {
+          return error;
+        }
+        return undefined;
+      })();
+
+      expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+      expect(failure).toMatchObject({ stage: "file-flush", category: "sharing-violation" });
+      expect((failure as Error).message).not.toContain(dir);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

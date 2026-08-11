@@ -1,21 +1,43 @@
 import {
   appendFileSync,
   closeSync,
+  constants as fsConstants,
   existsSync,
   fdatasyncSync,
   fstatSync,
   fsyncSync,
+  lstatSync,
   openSync,
   readFileSync,
   readSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { TextDecoder } from "node:util";
 import {
   UNKNOWN_PROVENANCE,
   contentDigest,
   isSourceProvenance,
   type SourceProvenance,
 } from "../provenance.js";
+import {
+  WindowsPrivatePathPolicyError,
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivateFileBinding,
+  assertWindowsPrivateFileMetadata,
+  assertWindowsPrivatePathRead,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathDurability,
+  classifyWindowsPrivatePathFailure,
+  sameWindowsPrivatePathIdentity,
+  windowsPrivatePathIdentity,
+  type WindowsPrivateDirectoryBinding,
+  type WindowsPrivatePathIdentity,
+  type WindowsPrivatePathPolicyStage,
+} from "../io/windows-private-path-policy.js";
+
+export const MAX_PROVENANCE_METADATA_BYTES = 67_108_864;
+
+const STRICT_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 interface Entry {
   readonly digest: string;
@@ -35,6 +57,21 @@ interface DeleteRecord {
 }
 
 type JournalRecord = PutRecord | DeleteRecord;
+
+export interface ProvenanceMetadataOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly syncFile?: (descriptor: number) => void;
+  readonly syncDirectory?: (path: string) => void;
+}
+
+function syncDirectory(path: string): void {
+  const directoryFd = openSync(path, "r");
+  try {
+    fsyncSync(directoryFd);
+  } finally {
+    closeSync(directoryFd);
+  }
+}
 
 function parseRecord(value: unknown): JournalRecord | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -60,12 +97,23 @@ function parseRecord(value: unknown): JournalRecord | undefined {
 export class ProvenanceMetadata {
   private readonly directoryPath: string;
   private readonly path: string;
+  private readonly platform: NodeJS.Platform;
+  private readonly syncFile: (descriptor: number) => void;
+  private readonly syncDirectory: (path: string) => void;
+  private readonly windowsDirectory: WindowsPrivateDirectoryBinding | undefined;
   private cached?: Map<string, Entry>;
   private directorySynced = false;
 
-  constructor(memoryDir: string) {
+  constructor(memoryDir: string, options: ProvenanceMetadataOptions = {}) {
     this.directoryPath = memoryDir;
     this.path = join(memoryDir, ".source-provenance.jsonl");
+    this.platform = options.platform ?? process.platform;
+    this.syncFile = options.syncFile ?? fdatasyncSync;
+    this.syncDirectory = options.syncDirectory ?? syncDirectory;
+    this.windowsDirectory =
+      this.platform === "win32"
+        ? bindWindowsPrivateDirectory(dirname(memoryDir), memoryDir)
+        : undefined;
   }
 
   read(key: string, content: string): SourceProvenance {
@@ -117,37 +165,278 @@ export class ProvenanceMetadata {
     if (records.length === 0) return;
 
     const serialized = records.map((record) => JSON.stringify(record)).join("\n") + "\n";
-    const fd = openSync(this.path, "a+", 0o600);
-    try {
-      const size = fstatSync(fd).size;
-      const lastByte = Buffer.allocUnsafe(1);
-      const boundary =
-        size > 0 && readSync(fd, lastByte, 0, 1, size - 1) === 1 && lastByte[0] !== 0x0a
-          ? "\n"
-          : "";
-      appendFileSync(fd, boundary + serialized, { encoding: "utf8" });
-      fdatasyncSync(fd);
-      if (!this.directorySynced) {
-        const directoryFd = openSync(this.directoryPath, "r");
-        try {
-          fsyncSync(directoryFd);
-          this.directorySynced = true;
-        } finally {
-          closeSync(directoryFd);
+    let windowsCache: Map<string, Entry> | undefined;
+    if (this.platform === "win32") {
+      windowsCache = this.load();
+      this.appendWindows(serialized);
+    } else {
+      const fd = openSync(this.path, "a+", 0o600);
+      try {
+        const size = fstatSync(fd).size;
+        const lastByte = Buffer.allocUnsafe(1);
+        const boundary =
+          size > 0 && readSync(fd, lastByte, 0, 1, size - 1) === 1 && lastByte[0] !== 0x0a
+            ? "\n"
+            : "";
+        appendFileSync(fd, boundary + serialized, { encoding: "utf8" });
+        fdatasyncSync(fd);
+        if (!this.directorySynced) {
+          const directoryFd = openSync(this.directoryPath, "r");
+          try {
+            fsyncSync(directoryFd);
+            this.directorySynced = true;
+          } finally {
+            closeSync(directoryFd);
+          }
         }
+      } finally {
+        closeSync(fd);
       }
-    } finally {
-      closeSync(fd);
     }
 
-    const cache = this.load();
+    const cache = windowsCache ?? this.load();
     for (const record of records) {
       if (record.op === "delete") cache.delete(record.key);
       else cache.set(record.key, { digest: record.digest, provenance: record.provenance });
     }
   }
 
+  private appendWindows(serialized: string): void {
+    let fd: number | undefined;
+    let stage: WindowsPrivatePathPolicyStage = "content-write";
+    try {
+      const opened = this.openWindowsFile(fsConstants.O_RDWR | fsConstants.O_APPEND);
+      if (opened === undefined) {
+        assertWindowsPrivateDirectoryStable(this.windowsDirectory!);
+        fd = openSync(
+          this.path,
+          fsConstants.O_RDWR |
+            fsConstants.O_APPEND |
+            fsConstants.O_CREAT |
+            fsConstants.O_EXCL,
+          0o600,
+        );
+        const created = fstatSync(fd);
+        assertWindowsPrivateFileMetadata(created);
+        const identity = windowsPrivatePathIdentity(created);
+        assertWindowsPrivateFileBinding(this.windowsDirectory!, this.path, identity);
+        stage = "read-check";
+        const contents = this.readWindowsDescriptor(fd, identity);
+        this.assertWindowsRecords(contents);
+        stage = "content-write";
+        this.appendWindowsDescriptor(fd, identity, created.size, contents, serialized);
+      } else {
+        fd = opened.fd;
+        stage = "read-check";
+        const contents = this.readWindowsDescriptor(fd, opened.identity);
+        this.assertWindowsRecords(contents);
+        stage = "content-write";
+        this.appendWindowsDescriptor(
+          fd,
+          opened.identity,
+          fstatSync(fd).size,
+          contents,
+          serialized,
+        );
+      }
+      stage = "file-flush";
+      this.syncFile(fd);
+      const flushed = fstatSync(fd);
+      assertWindowsPrivateFileMetadata(flushed);
+      assertWindowsPrivateFileBinding(
+        this.windowsDirectory!,
+        this.path,
+        windowsPrivatePathIdentity(flushed),
+      );
+      closeSync(fd);
+      fd = undefined;
+      assertWindowsPrivateDirectoryStable(this.windowsDirectory!);
+      if (!this.directorySynced) {
+        if (classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable") {
+          this.directorySynced = true;
+        } else {
+          this.syncDirectory(this.directoryPath);
+          this.directorySynced = true;
+        }
+      }
+    } catch (error) {
+      throw classifyWindowsPrivatePathFailure(stage, error);
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {}
+      }
+    }
+  }
+
+  private openWindowsFile(
+    flags: number,
+  ): { readonly fd: number; readonly identity: WindowsPrivatePathIdentity } | undefined {
+    assertWindowsPrivateDirectoryStable(this.windowsDirectory!);
+    let before;
+    try {
+      before = lstatSync(this.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        assertWindowsPrivateDirectoryStable(this.windowsDirectory!);
+        return undefined;
+      }
+      throw error;
+    }
+    assertWindowsPrivateFileMetadata(before);
+    const identity = windowsPrivatePathIdentity(before);
+    assertWindowsPrivateFileBinding(this.windowsDirectory!, this.path, identity);
+    const fd = openSync(this.path, flags);
+    try {
+      const opened = fstatSync(fd);
+      assertWindowsPrivateFileMetadata(opened);
+      if (!sameWindowsPrivatePathIdentity(identity, windowsPrivatePathIdentity(opened))) {
+        throw new WindowsPrivatePathPolicyError("binding-check", "corruption");
+      }
+      assertWindowsPrivateFileBinding(this.windowsDirectory!, this.path, identity);
+      return { fd, identity };
+    } catch (error) {
+      closeSync(fd);
+      throw error;
+    }
+  }
+
+  private readWindowsDescriptor(fd: number, identity: WindowsPrivatePathIdentity): string {
+    const before = fstatSync(fd);
+    assertWindowsPrivateFileMetadata(before);
+    assertWindowsPrivatePathRead({
+      bounded:
+        Number.isSafeInteger(before.size) &&
+        before.size >= 0 &&
+        before.size <= MAX_PROVENANCE_METADATA_BYTES,
+      identityStable: sameWindowsPrivatePathIdentity(
+        identity,
+        windowsPrivatePathIdentity(before),
+      ),
+      contentValid: true,
+      authenticatedHomeBinding: true,
+    });
+    const buffer = Buffer.alloc(before.size + 1);
+    try {
+      let offset = 0;
+      while (offset < before.size) {
+        const bytesRead = readSync(fd, buffer, offset, before.size - offset, offset);
+        if (bytesRead <= 0) break;
+        offset += bytesRead;
+      }
+      const extraBytes = readSync(fd, buffer, before.size, 1, before.size);
+      const after = fstatSync(fd);
+      assertWindowsPrivateFileMetadata(after);
+      const current = assertWindowsPrivateFileBinding(
+        this.windowsDirectory!,
+        this.path,
+        identity,
+      );
+      let contents = "";
+      let contentValid = true;
+      try {
+        contents = STRICT_UTF8_DECODER.decode(buffer.subarray(0, before.size));
+      } catch {
+        contentValid = false;
+      }
+      assertWindowsPrivatePathRead({
+        bounded: offset === before.size && extraBytes === 0,
+        identityStable:
+          sameWindowsPrivatePathIdentity(identity, windowsPrivatePathIdentity(after)) &&
+          before.size === after.size &&
+          before.size === current.size &&
+          before.mtimeMs === after.mtimeMs &&
+          before.mtimeMs === current.mtimeMs &&
+          before.ctimeMs === after.ctimeMs &&
+          before.ctimeMs === current.ctimeMs,
+        contentValid,
+        authenticatedHomeBinding: true,
+      });
+      assertWindowsPrivateDirectoryStable(this.windowsDirectory!);
+      return contents;
+    } finally {
+      buffer.fill(0);
+    }
+  }
+
+  private appendWindowsDescriptor(
+    fd: number,
+    identity: WindowsPrivatePathIdentity,
+    size: number,
+    contents: string,
+    serialized: string,
+  ): void {
+    const boundary = contents.length > 0 && !contents.endsWith("\n") ? "\n" : "";
+    const payload = boundary + serialized;
+    const expectedSize = size + Buffer.byteLength(payload, "utf8");
+    assertWindowsPrivatePathRead({
+      bounded:
+        Number.isSafeInteger(expectedSize) && expectedSize <= MAX_PROVENANCE_METADATA_BYTES,
+      identityStable: true,
+      contentValid: true,
+      authenticatedHomeBinding: true,
+    });
+    appendFileSync(fd, payload, { encoding: "utf8" });
+    const written = fstatSync(fd);
+    assertWindowsPrivateFileMetadata(written);
+    if (
+      !sameWindowsPrivatePathIdentity(identity, windowsPrivatePathIdentity(written)) ||
+      written.size !== expectedSize
+    ) {
+      throw new WindowsPrivatePathPolicyError("content-write", "corruption");
+    }
+    assertWindowsPrivateFileBinding(this.windowsDirectory!, this.path, identity);
+  }
+
+  private assertWindowsRecords(contents: string): Map<string, Entry> {
+    const entries = new Map<string, Entry>();
+    for (const line of contents.split("\n")) {
+      if (line === "") continue;
+      let record: JournalRecord | undefined;
+      try {
+        record = parseRecord(JSON.parse(line) as unknown);
+      } catch {
+        throw new WindowsPrivatePathPolicyError("read-check", "corruption");
+      }
+      if (record === undefined) {
+        throw new WindowsPrivatePathPolicyError("read-check", "corruption");
+      }
+      if (record.op === "delete") entries.delete(record.key);
+      else entries.set(record.key, { digest: record.digest, provenance: record.provenance });
+    }
+    return entries;
+  }
+
+  private loadWindows(): Map<string, Entry> {
+    let fd: number | undefined;
+    try {
+      const opened = this.openWindowsFile(fsConstants.O_RDONLY);
+      if (opened === undefined) return new Map();
+      fd = opened.fd;
+      const entries = this.assertWindowsRecords(
+        this.readWindowsDescriptor(fd, opened.identity),
+      );
+      closeSync(fd);
+      fd = undefined;
+      return entries;
+    } catch (error) {
+      throw classifyWindowsPrivatePathFailure("read-check", error);
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {}
+      }
+    }
+  }
+
   private load(): Map<string, Entry> {
+    if (this.platform === "win32") {
+      const entries = this.loadWindows();
+      this.cached = entries;
+      return entries;
+    }
     if (this.cached !== undefined) return this.cached;
     const entries = new Map<string, Entry>();
     if (!existsSync(this.path)) {

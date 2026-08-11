@@ -67,6 +67,7 @@ async function makeRuntime(
   runtimeConfig: Config = config,
   readConfig?: () => Config,
   readonlyStore: SqlReadStore = emptyReadonlyStore(),
+  platform?: NodeJS.Platform,
 ) {
   const root = await mkdtemp(join(await realpath(tmpdir()), "store-runtime-"));
   roots.push(root);
@@ -114,6 +115,7 @@ async function makeRuntime(
       configDir: join(root, "config"),
     },
     reference,
+    ...(platform === undefined ? {} : { platform }),
     dependencies: {
       capture,
       refreshCurves,
@@ -127,6 +129,15 @@ async function makeRuntime(
 }
 
 describe("StoreRuntime", () => {
+  it("threads injected win32 semantics into Reference capture", async () => {
+    const { runtime, capture } = await makeRuntime(config, undefined, emptyReadonlyStore(), "win32");
+
+    await runtime.runWindow();
+
+    expect(capture).toHaveBeenCalledWith(expect.objectContaining({ platform: "win32" }));
+    await runtime.close();
+  });
+
   it("runs base capture, curve acquisition, and legacy refresh in one ledger window", async () => {
     const { runtime, capture, refreshCurves, produce, reference } = await makeRuntime();
     const result = await runtime.runWindow();
