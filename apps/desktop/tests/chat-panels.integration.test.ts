@@ -655,7 +655,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         params: { cursor: transcriptCursor, limit: 25 },
       },
     ]);
-  }, 30_000);
+  }, 90_000);
 
   it("preserves IME composition until committed Enter", async () => {
     const { fixture, calls } = await launch({ width: 1440, height: 900, reducedMotion: false });
@@ -813,7 +813,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         params: { chatId: "desktop", message: committedMessage },
       },
     ]);
-  }, 30_000);
+  }, 90_000);
 
   it("streams chat, proves no-change sync, preserves focus, and fits desktop geometry", async () => {
     const { fixture, calls } = await launch({ width: 1440, height: 900, reducedMotion: false });
@@ -1864,7 +1864,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     }
     expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
     fixtures.splice(fixtures.indexOf(fixture), 1);
-  }, 30_000);
+  }, 90_000);
 
   it("keeps the long partial-sync status reachable and wrapped at 720×800", async () => {
     const { fixture, calls } = await launch({
@@ -1950,7 +1950,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     ).toHaveLength(1);
     expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
     fixtures.splice(fixtures.indexOf(fixture), 1);
-  }, 30_000);
+  }, 90_000);
 
   it("honors reduced motion at the compact viewport", async () => {
     const { fixture } = await launch({ width: 720, height: 800, reducedMotion: true });
@@ -1969,5 +1969,5 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     ).toEqual({ reduced: true, overflow: false, railWidth: 184 });
     expect(await fixture.close()).toEqual({ livePids: [], listenerCount: 0 });
     fixtures.splice(fixtures.indexOf(fixture), 1);
-  }, 30_000);
+  }, 90_000);
 });

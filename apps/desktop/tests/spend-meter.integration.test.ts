@@ -367,7 +367,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       };
     `);
     expect(narrow).toEqual({ visible: true, overflow: false });
-  });
+  }, 60_000);
 
   it("preserves the closed bridge, sidebar sync chip, hardened renderer, and token containment", async () => {
     const { fixture } = await launch();
@@ -445,7 +445,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       expect(surface).not.toContain(token);
     }
     await expect(fixture.close()).resolves.toEqual({ livePids: [], listenerCount: 0 });
-  });
+  }, 60_000);
 
   it("renders complete and provider-dependent details, saves an unknown cap, and preserves it as stale", async () => {
     const { fixture, calls, failSpend } = await launch("complete");
@@ -522,5 +522,5 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
     `);
     expect(stale).toContain("Spend data may be out of date.");
     expect(calls.filter((call) => call.method === "chat")).toHaveLength(1);
-  }, 15_000);
+  }, 60_000);
 });

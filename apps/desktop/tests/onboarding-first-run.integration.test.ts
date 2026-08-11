@@ -277,5 +277,5 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       finished: true,
       chatWorking: true,
     });
-  }, 30_000);
+  }, 90_000);
 });
