@@ -1,22 +1,34 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   chmodSync,
   existsSync,
+  fsyncSync,
   linkSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { archiveAndResetDurably, ChatStore, TURN_FAILURE_MARKER } from "../src/agent/chat-store.js";
+import { basename, join } from "node:path";
+import {
+  archiveAndResetDurably,
+  ChatStore,
+  createChatStoreWithHooks,
+  MAX_CHAT_SESSION_BYTES,
+  TURN_FAILURE_MARKER,
+} from "../src/agent/chat-store.js";
+import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-policy.js";
 import { makeSummaryMessage } from "@enduragent/engine";
 
 // ESM module namespaces are non-configurable, so vi.spyOn cannot intercept a
@@ -79,6 +91,17 @@ function durableArchivePath(chatId: string): string {
     sessionsDir,
     `${chatId}.jsonl.reset.${DURABLE_RESET.boundaryAt.replace(/:/g, "-")}.${DURABLE_RESET.resetId}`,
   );
+}
+
+function windowsSessionPath(chatId: string): string {
+  const digest = createHash("sha256").update(chatId, "utf8").digest("hex");
+  return join(sessionsDir, `${digest}.jsonl`);
+}
+
+function windowsDurableArchivePath(chatId: string): string {
+  return `${windowsSessionPath(chatId)}.reset.${DURABLE_RESET.boundaryAt.replace(/:/g, "-")}.${
+    DURABLE_RESET.resetId
+  }`;
 }
 
 function listArchives(chatId: string): string[] {
@@ -174,6 +197,255 @@ describe("ChatStore — on-disk permissions", () => {
 
     expect(() => new ChatStore(dataDir)).toThrow("Sessions directory is unsafe.");
     expect(lstatSync(sessionsDir).isFile()).toBe(true);
+  });
+});
+
+describe("ChatStore — Windows private paths", () => {
+  it("persists and reopens a session through injected Windows semantics", () => {
+    const chatId = "telegram:synthetic-restart";
+    const first = new ChatStore(dataDir, 0, { platform: "win32" });
+    first.appendTurn(chatId, "synthetic athlete", "synthetic coach", LINEAGE);
+    first.archivePreCompact(chatId);
+
+    const reopened = new ChatStore(dataDir, 0, { platform: "win32" });
+
+    expect(reopened.load(chatId).messages).toEqual([
+      { role: "user", content: "synthetic athlete" },
+      { role: "assistant", content: "synthetic coach" },
+    ]);
+    expect(readdirSync(sessionsDir)).toHaveLength(2);
+    expect(
+      readdirSync(sessionsDir).every((name) => /^[a-f0-9]{64}\.jsonl(?:\.|$)/.test(name)),
+    ).toBe(true);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not inspect or repair POSIX modes under injected Windows semantics",
+    () => {
+      mkdirSync(sessionsDir, { mode: 0o755 });
+      chmodSync(sessionsDir, 0o755);
+      const path = windowsSessionPath("mode");
+      writeFileSync(
+        path,
+        '{"role":"user","content":"synthetic","ts":"2026-07-22T00:00:00.000Z"}\n',
+        { mode: 0o644 },
+      );
+      chmodSync(path, 0o644);
+
+      const store = new ChatStore(dataDir, 0, { platform: "win32" });
+
+      expect(store.load("mode").messages).toEqual([{ role: "user", content: "synthetic" }]);
+      expect(lstatSync(sessionsDir).mode & 0o7777).toBe(0o755);
+      expect(lstatSync(path).mode & 0o7777).toBe(0o644);
+    },
+  );
+
+  it("rejects a replaced sessions directory as path-free corruption", () => {
+    const store = new ChatStore(dataDir, 0, { platform: "win32" });
+    store.appendTurn("directory-swap", "synthetic athlete", "synthetic coach", LINEAGE);
+    const original = `${sessionsDir}.original`;
+    renameSync(sessionsDir, original);
+    mkdirSync(sessionsDir, { mode: 0o700 });
+
+    let failure: unknown;
+    try {
+      store.load("directory-swap");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "binding-check", category: "corruption" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(sessionsDir);
+    expect(JSON.stringify(failure)).not.toContain(sessionsDir);
+    expect(existsSync(join(original, basename(windowsSessionPath("directory-swap"))))).toBe(true);
+  });
+
+  it("rejects an oversized Windows session before allocating its contents", () => {
+    const chatId = "telegram:synthetic-oversized";
+    const store = new ChatStore(dataDir, 0, { platform: "win32" });
+    store.appendTurn(chatId, "synthetic athlete", "synthetic coach", LINEAGE);
+    const path = windowsSessionPath(chatId);
+    truncateSync(path, MAX_CHAT_SESSION_BYTES + 1);
+
+    let failure: unknown;
+    try {
+      store.load(chatId);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
+    expect(lstatSync(path).size).toBe(MAX_CHAT_SESSION_BYTES + 1);
+  });
+
+  it("rejects malformed Windows session content without quarantining or rewriting it", () => {
+    const chatId = "telegram:synthetic-corrupt";
+    const store = new ChatStore(dataDir, 0, { platform: "win32" });
+    const path = windowsSessionPath(chatId);
+    const corrupt = '{"role":"user","content":}\n';
+    writeFileSync(path, corrupt, { mode: 0o600 });
+
+    let loadFailure: unknown;
+    try {
+      store.load(chatId);
+    } catch (error) {
+      loadFailure = error;
+    }
+    let appendFailure: unknown;
+    try {
+      store.appendTurn(chatId, "synthetic athlete", "synthetic coach", LINEAGE);
+    } catch (error) {
+      appendFailure = error;
+    }
+
+    for (const failure of [loadFailure, appendFailure]) {
+      expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+      expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+      expect(failure).not.toHaveProperty("path");
+      expect(failure).not.toHaveProperty("cause");
+      expect(String(failure)).not.toContain(path);
+      expect(JSON.stringify(failure)).not.toContain(path);
+    }
+    expect(readFileSync(path, "utf8")).toBe(corrupt);
+    expect(readdirSync(sessionsDir)).toEqual([basename(path)]);
+  });
+
+  it("classifies directory sync as unavailable while retaining file flushes", () => {
+    const syncDirectory = vi.fn(() => {
+      throw new Error("Windows directory sync hook must not run");
+    });
+    const syncFile = vi.fn((descriptor: number) => fsyncSync(descriptor));
+    const store = createChatStoreWithHooks(
+      dataDir,
+      0,
+      { syncDirectory, syncFile },
+      { platform: "win32" },
+    );
+    store.appendTurn("durable", "synthetic athlete", "synthetic coach", LINEAGE);
+
+    archiveAndResetDurably(store, "durable", DURABLE_RESET);
+
+    expect(syncDirectory).not.toHaveBeenCalled();
+    expect(syncFile).toHaveBeenCalledTimes(2);
+    expect(existsSync(windowsDurableArchivePath("durable"))).toBe(true);
+  });
+
+  it("opens copied and reset session targets with writable Windows flush handles", () => {
+    let syncs = 0;
+    const store = createChatStoreWithHooks(
+      dataDir,
+      0,
+      {
+        syncFile: (descriptor) => {
+          syncs += 1;
+          if (syncs > 1) {
+            const firstByte = Buffer.allocUnsafe(1);
+            expect(readSync(descriptor, firstByte, 0, 1, 0)).toBe(1);
+            expect(writeSync(descriptor, firstByte, 0, 1, 0)).toBe(1);
+          }
+          fsyncSync(descriptor);
+        },
+      },
+      { platform: "win32" },
+    );
+    store.appendTurn("writable-flush", "synthetic athlete", "synthetic coach", LINEAGE);
+
+    store.archivePreCompact("writable-flush");
+    archiveAndResetDurably(store, "writable-flush", DURABLE_RESET);
+
+    expect(syncs).toBe(3);
+    expect(existsSync(windowsDurableArchivePath("writable-flush"))).toBe(true);
+  });
+
+  it("rejects a hardlinked active session as path-free corruption", () => {
+    const store = new ChatStore(dataDir, 0, { platform: "win32" });
+    store.appendTurn("linked", "synthetic athlete", "synthetic coach", LINEAGE);
+    const active = windowsSessionPath("linked");
+    linkSync(active, join(dataDir, "synthetic-shared-session.jsonl"));
+
+    let failure: unknown;
+    try {
+      archiveAndResetDurably(store, "linked", DURABLE_RESET);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "binding-check", category: "corruption" });
+    expect(String(failure)).not.toContain(active);
+    expect(JSON.stringify(failure)).not.toContain(active);
+  });
+
+  it("does not swallow a Windows sharing violation during file flush", () => {
+    const active = windowsSessionPath("locked");
+    let syncs = 0;
+    const store = createChatStoreWithHooks(
+      dataDir,
+      0,
+      {
+        syncFile: (descriptor) => {
+          syncs += 1;
+          if (syncs === 2) {
+            throw Object.assign(new Error(`locked ${active}`), { code: "EACCES", path: active });
+          }
+          fsyncSync(descriptor);
+        },
+      },
+      { platform: "win32" },
+    );
+    store.appendTurn("locked", "synthetic athlete", "synthetic coach", LINEAGE);
+
+    let failure: unknown;
+    try {
+      archiveAndResetDurably(store, "locked", DURABLE_RESET);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "file-flush", category: "sharing-violation" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(active);
+    expect(JSON.stringify(failure)).not.toContain(active);
+  });
+
+  it("does not swallow a Windows sharing violation during archive rename", () => {
+    const active = windowsSessionPath("rename-locked");
+    const store = createChatStoreWithHooks(
+      dataDir,
+      0,
+      {
+        rename: () => {
+          throw Object.assign(new Error(`locked ${active}`), { code: "EACCES", path: active });
+        },
+      },
+      { platform: "win32" },
+    );
+    store.appendTurn("rename-locked", "synthetic athlete", "synthetic coach", LINEAGE);
+
+    let failure: unknown;
+    try {
+      store.archiveAndReset("rename-locked");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "rename", category: "sharing-violation" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(active);
+    expect(JSON.stringify(failure)).not.toContain(active);
+    expect(existsSync(active)).toBe(true);
   });
 });
 

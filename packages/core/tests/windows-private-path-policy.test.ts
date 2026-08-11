@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   WindowsPrivatePathPolicyError,
+  assertWindowsPrivatePathBinding,
   assertWindowsPrivatePathEntry,
   assertWindowsPrivatePathRead,
   classifyWindowsPrivatePathDurability,
@@ -103,6 +104,25 @@ describe("Windows private path policy", () => {
         }),
       ),
     ).toMatchObject({ stage: "entry-check", category: "link-reparse-shaped" });
+  });
+
+  it("classifies an unstable or unauthenticated binding as corruption", () => {
+    expect(
+      captureFailure(() =>
+        assertWindowsPrivatePathBinding({
+          identityStable: false,
+          authenticatedHomeBinding: true,
+        }),
+      ),
+    ).toMatchObject({ stage: "binding-check", category: "corruption" });
+    expect(
+      captureFailure(() =>
+        assertWindowsPrivatePathBinding({
+          identityStable: true,
+          authenticatedHomeBinding: false,
+        }),
+      ),
+    ).toMatchObject({ stage: "binding-check", category: "corruption" });
   });
 
   it("accepts a bounded stable read bound to the authenticated home", () => {

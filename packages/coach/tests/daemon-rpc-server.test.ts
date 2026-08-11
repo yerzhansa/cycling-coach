@@ -17,7 +17,11 @@ import { join } from "node:path";
 import { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import type { CreateTelegramChannelInput, TelegramChannelRuntime } from "@enduragent/core";
+import {
+  WindowsPrivatePathPolicyError,
+  type CreateTelegramChannelInput,
+  type TelegramChannelRuntime,
+} from "@enduragent/core";
 import {
   COACH_RPC_METHOD_REGISTRY,
   PROTOCOL_VERSION,
@@ -371,6 +375,117 @@ describe("daemon token", () => {
       await expect(ensureDaemonToken(root)).rejects.toThrow("daemon token file is invalid");
       if (fixture === "mode") expect((await lstat(path)).mode & 0o777).toBe(0o644);
     }
+  });
+
+  it("creates and reuses a token through injected Windows semantics", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "daemon-token-windows-"));
+    roots.push(root);
+    const bytes = Buffer.alloc(32, 9);
+
+    const created = await ensureDaemonToken(root, {
+      platform: "win32",
+      randomBytes: () => bytes,
+    });
+
+    await expect(ensureDaemonToken(root, { platform: "win32" })).resolves.toEqual(created);
+    expect(await readFile(created.path, "utf8")).toBe(`${created.value}\n`);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not inspect or repair POSIX token modes under injected Windows semantics",
+    async () => {
+      const root = await mkdtemp(join(await realpath(tmpdir()), "daemon-token-windows-mode-"));
+      roots.push(root);
+      const path = join(root, "daemon.token");
+      await writeFile(path, `${"x".repeat(43)}\n`, { mode: 0o644 });
+      await chmod(path, 0o644);
+
+      await expect(ensureDaemonToken(root, { platform: "win32" })).resolves.toEqual({
+        path,
+        value: "x".repeat(43),
+      });
+      expect((await lstat(path)).mode & 0o777).toBe(0o644);
+    },
+  );
+
+  it("rejects oversized Windows token state as path-free corruption", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "daemon-token-windows-corrupt-"));
+    roots.push(root);
+    const path = join(root, "daemon.token");
+    const corrupt = `${"x".repeat(44)}\n`;
+    await writeFile(path, corrupt, { mode: 0o600 });
+
+    const failure = await ensureDaemonToken(root, { platform: "win32" }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
+    expect(await readFile(path, "utf8")).toBe(corrupt);
+  });
+
+  it("does not swallow a Windows sharing violation during token creation", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "daemon-token-windows-locked-"));
+    roots.push(root);
+    const path = join(root, "daemon.token");
+
+    const failure = await ensureDaemonToken(root, {
+      platform: "win32",
+      openFile: async () => {
+        throw Object.assign(new Error(`locked ${path}`), { code: "EACCES", path });
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "content-write", category: "sharing-violation" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
+  });
+
+  it("rejects a sharing-locked Windows token on restart", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "daemon-token-windows-read-lock-"));
+    roots.push(root);
+    const path = join(root, "daemon.token");
+    const persisted = `${"x".repeat(43)}\n`;
+    await writeFile(path, persisted, { mode: 0o600 });
+
+    const failure = await ensureDaemonToken(root, {
+      platform: "win32",
+      openFile: async () => {
+        throw Object.assign(new Error(`locked ${path}`), { code: "EACCES", path });
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "sharing-violation" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
+    expect(await readFile(path, "utf8")).toBe(persisted);
+  });
+
+  it("keeps a missing Windows config binding path-free and stage-coded", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "daemon-token-windows-missing-"));
+    roots.push(root);
+    const configDir = join(root, "missing-config");
+
+    const failure = await ensureDaemonToken(configDir, { platform: "win32" }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "binding-check", category: "io-failure" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(configDir);
+    expect(JSON.stringify(failure)).not.toContain(configDir);
   });
 });
 

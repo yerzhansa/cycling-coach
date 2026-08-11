@@ -1,7 +1,19 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import {
+  WindowsPrivatePathPolicyError,
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivateFileBinding,
+  assertWindowsPrivateFileMetadata,
+  assertWindowsPrivatePathRead,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathFailure,
+  sameWindowsPrivatePathIdentity,
+  windowsPrivatePathIdentity,
+  type WindowsPrivateDirectoryBinding,
+} from "@enduragent/core";
 import {
   ClientHandshakeFrameSchema,
   COACH_RPC_METHOD_REGISTRY,
@@ -45,6 +57,7 @@ import { serializeBoundaryError } from "./error-boundary.js";
 import type { DesktopTelegramController } from "../desktop-telegram-controller.js";
 
 const AUTH_TIMEOUT_MS = 1_000;
+const MAX_DAEMON_TOKEN_FILE_BYTES = 44;
 const MAX_PAYLOAD_BYTES = 1_048_576;
 const MAX_FRAGMENTS_PER_MESSAGE = 64;
 const MAX_BUFFERED_CHUNKS_PER_MESSAGE = 256;
@@ -85,11 +98,94 @@ export interface DaemonToken {
 }
 
 export interface DaemonTokenDependencies {
+  readonly openFile?: typeof open;
   readonly randomBytes?: typeof randomBytes;
+  readonly platform?: NodeJS.Platform;
 }
 
 function validToken(value: string): boolean {
   return /^[A-Za-z0-9_-]{43}$/.test(value);
+}
+
+async function readExistingWindowsToken(
+  path: string,
+  directory: WindowsPrivateDirectoryBinding,
+  openFile: typeof open,
+): Promise<DaemonToken> {
+  let metadata: Awaited<ReturnType<typeof lstat>>;
+  try {
+    metadata = await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw error;
+    throw classifyWindowsPrivatePathFailure("entry-check", error);
+  }
+  assertWindowsPrivateFileMetadata(metadata);
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  let result: DaemonToken | undefined;
+  let failure: WindowsPrivatePathPolicyError | undefined;
+  try {
+    handle = await openFile(path, constants.O_RDONLY);
+    const openedMetadata = await handle.stat();
+    assertWindowsPrivateFileMetadata(openedMetadata);
+    if (
+      !sameWindowsPrivatePathIdentity(
+        windowsPrivatePathIdentity(metadata),
+        windowsPrivatePathIdentity(openedMetadata),
+      )
+    ) {
+      throw new WindowsPrivatePathPolicyError("binding-check", "corruption");
+    }
+    assertWindowsPrivateFileBinding(directory, path, windowsPrivatePathIdentity(openedMetadata));
+    const bytes = Buffer.allocUnsafe(MAX_DAEMON_TOKEN_FILE_BYTES + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const read = await handle.read(bytes, offset, bytes.length - offset, offset);
+      if (read.bytesRead === 0) break;
+      offset += read.bytesRead;
+    }
+    const afterRead = await handle.stat();
+    assertWindowsPrivateFileMetadata(afterRead);
+    const current = assertWindowsPrivateFileBinding(
+      directory,
+      path,
+      windowsPrivatePathIdentity(afterRead),
+    );
+    const raw = bytes.subarray(0, offset).toString("utf8");
+    const value = raw.endsWith("\n") ? raw.slice(0, -1) : "";
+    const contentValid =
+      offset === MAX_DAEMON_TOKEN_FILE_BYTES && validToken(value) && raw === `${value}\n`;
+    assertWindowsPrivatePathRead({
+      bounded: offset <= MAX_DAEMON_TOKEN_FILE_BYTES,
+      identityStable:
+        sameWindowsPrivatePathIdentity(
+          windowsPrivatePathIdentity(openedMetadata),
+          windowsPrivatePathIdentity(afterRead),
+        ) &&
+        openedMetadata.size === afterRead.size &&
+        openedMetadata.size === current.size &&
+        openedMetadata.mtimeMs === afterRead.mtimeMs &&
+        openedMetadata.mtimeMs === current.mtimeMs &&
+        openedMetadata.ctimeMs === afterRead.ctimeMs &&
+        openedMetadata.ctimeMs === current.ctimeMs,
+      contentValid,
+      authenticatedHomeBinding: true,
+    });
+    result = { path, value };
+  } catch (error) {
+    failure = classifyWindowsPrivatePathFailure("read-check", error);
+  }
+  if (handle !== undefined) {
+    try {
+      await handle.close();
+    } catch (error) {
+      failure ??= classifyWindowsPrivatePathFailure("read-check", error);
+    }
+  }
+  if (failure !== undefined) throw failure;
+  if (result === undefined) {
+    throw new WindowsPrivatePathPolicyError("read-check", "io-failure");
+  }
+  return result;
 }
 
 async function readExistingToken(path: string): Promise<DaemonToken> {
@@ -120,10 +216,65 @@ async function readExistingToken(path: string): Promise<DaemonToken> {
   return { path, value };
 }
 
+async function ensureWindowsDaemonToken(
+  configDir: string,
+  dependencies: DaemonTokenDependencies,
+): Promise<DaemonToken> {
+  const path = join(configDir, "daemon.token");
+  const openFile = dependencies.openFile ?? open;
+  const directory = bindWindowsPrivateDirectory(dirname(configDir), configDir);
+  try {
+    return await readExistingWindowsToken(path, directory, openFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const value = (dependencies.randomBytes ?? randomBytes)(32).toString("base64url");
+  if (!validToken(value)) throw new Error("daemon token generation failed");
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  let stage: "content-write" | "file-flush" = "content-write";
+  let failure: WindowsPrivatePathPolicyError | undefined;
+  try {
+    assertWindowsPrivateDirectoryStable(directory);
+    handle = await openFile(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+    const created = await handle.stat();
+    assertWindowsPrivateFileMetadata(created);
+    assertWindowsPrivateFileBinding(directory, path, windowsPrivatePathIdentity(created));
+    await handle.writeFile(`${value}\n`, "utf8");
+    stage = "file-flush";
+    await handle.sync();
+    const synced = await handle.stat();
+    assertWindowsPrivateFileMetadata(synced);
+    assertWindowsPrivateFileBinding(directory, path, windowsPrivatePathIdentity(synced));
+    await handle.close();
+    handle = undefined;
+  } catch (error) {
+    if (handle === undefined && (error as NodeJS.ErrnoException).code === "EEXIST") {
+      return readExistingWindowsToken(path, directory, openFile);
+    }
+    failure = classifyWindowsPrivatePathFailure(stage, error);
+  }
+  if (handle !== undefined) {
+    try {
+      await handle.close();
+    } catch (error) {
+      failure ??= classifyWindowsPrivatePathFailure(stage, error);
+    }
+  }
+  if (failure !== undefined) throw failure;
+  const persisted = await readExistingWindowsToken(path, directory, openFile);
+  if (persisted.value !== value) {
+    throw new WindowsPrivatePathPolicyError("read-check", "corruption");
+  }
+  return persisted;
+}
+
 export async function ensureDaemonToken(
   configDir: string,
   dependencies: DaemonTokenDependencies = {},
 ): Promise<DaemonToken> {
+  if ((dependencies.platform ?? process.platform) === "win32") {
+    return ensureWindowsDaemonToken(configDir, dependencies);
+  }
   const path = join(configDir, "daemon.token");
   try {
     return await readExistingToken(path);
