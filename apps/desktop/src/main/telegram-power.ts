@@ -4,7 +4,15 @@ import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { AthleteHomeIdentitySchema, type AthleteHomeIdentity } from "@enduragent/coach-contract";
 import type { PowerMonitor } from "electron";
+import {
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivatePathRead,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathDurability,
+  type WindowsPrivateDirectoryBinding,
+} from "@enduragent/core";
 import { durableAtomicReplace, type DurableReplaceOutcome } from "./durable-atomic-replace.js";
+import { assertWindowsPrivateFileAtPath, readWindowsPrivateFile } from "./windows-private-file.js";
 
 export const TELEGRAM_POWER_STATE_FILE_NAME = "power-state.json" as const;
 export const TELEGRAM_POWER_STATE_DIRECTORY_MODE = 0o700;
@@ -53,6 +61,8 @@ export interface CreateDesktopTelegramPowerLifecycleInput {
   readonly syncParentDirectory?: (root: string) => Promise<void>;
   readonly reportFailure?: (failure: TelegramPowerFailure) => void;
   readonly observeWarning?: (warning: TelegramGapWarning) => void;
+  readonly platform?: NodeJS.Platform;
+  readonly openFile?: typeof open;
 }
 
 interface TelegramPowerStateRecord {
@@ -197,9 +207,18 @@ function assertOwner(metadata: Stats, mode: number): void {
   }
 }
 
-async function assertDirectory(root: string, create: boolean): Promise<void> {
+async function assertDirectory(
+  root: string,
+  create: boolean,
+  platform: NodeJS.Platform,
+  bindWindowsDirectory: () => WindowsPrivateDirectoryBinding,
+): Promise<void> {
   if (create) await mkdir(root, { recursive: true, mode: TELEGRAM_POWER_STATE_DIRECTORY_MODE });
   const metadata = await lstat(root);
+  if (platform === "win32") {
+    bindWindowsDirectory();
+    return;
+  }
   if (!metadata.isDirectory()) throw new TypeError("Telegram power state root is not a directory");
   assertOwner(metadata, TELEGRAM_POWER_STATE_DIRECTORY_MODE);
 }
@@ -223,6 +242,8 @@ function createStateStore(input: {
   readonly removeFile?: typeof rm;
   readonly syncDirectory?: (root: string) => Promise<void>;
   readonly syncParentDirectory?: (root: string) => Promise<void>;
+  readonly platform: NodeJS.Platform;
+  readonly openFile?: typeof open;
 }) {
   const target = join(input.root, TELEGRAM_POWER_STATE_FILE_NAME);
   let namespaceState: "pending" | "verified" | "uncertain" = "pending";
@@ -237,14 +258,41 @@ function createStateStore(input: {
     }
     await directory.close().catch(() => undefined);
   };
-  const synchronizeDirectory = input.syncDirectory ?? defaultSynchronizeDirectory;
-  const synchronizeParentDirectory = input.syncParentDirectory ?? defaultSynchronizeDirectory;
+  const rawSynchronizeDirectory = input.syncDirectory ?? defaultSynchronizeDirectory;
+  const rawSynchronizeParentDirectory = input.syncParentDirectory ?? defaultSynchronizeDirectory;
+  const synchronizeDirectory = async (root: string): Promise<void> => {
+    if (
+      input.platform === "win32" &&
+      classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable"
+    ) {
+      return;
+    }
+    await rawSynchronizeDirectory(root);
+  };
+  const synchronizeParentDirectory = async (root: string): Promise<void> => {
+    if (
+      input.platform === "win32" &&
+      classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable"
+    ) {
+      return;
+    }
+    await rawSynchronizeParentDirectory(root);
+  };
+  let windowsDirectory: WindowsPrivateDirectoryBinding | undefined;
+  const bindStateDirectory = (): WindowsPrivateDirectoryBinding => {
+    if (windowsDirectory === undefined) {
+      windowsDirectory = bindWindowsPrivateDirectory(dirname(input.root), input.root);
+    } else {
+      assertWindowsPrivateDirectoryStable(windowsDirectory);
+    }
+    return windowsDirectory;
+  };
   const reconcileNamespace = async (): Promise<void> => {
     if (namespaceState === "verified") return;
     if (namespaceState === "uncertain") throw new TypeError("Telegram power state is uncertain");
     try {
       try {
-        await assertDirectory(input.root, false);
+        await assertDirectory(input.root, false, input.platform, bindStateDirectory);
       } catch (error) {
         if (isMissing(error)) {
           namespaceState = "verified";
@@ -276,6 +324,29 @@ function createStateStore(input: {
     } catch (error) {
       if (isMissing(error)) return emptyState(input.athleteHome);
       throw error;
+    }
+    if (input.platform === "win32") {
+      const snapshot = await readWindowsPrivateFile({
+        directory: bindStateDirectory(),
+        path: target,
+        maximumBytes: MAX_STATE_FILE_BYTES,
+        openFile: input.openFile,
+      });
+      if (snapshot === undefined) return emptyState(input.athleteHome);
+      try {
+        const state = parseState(snapshot.contents.toString("utf8"), input.athleteHome);
+        if (state === undefined) {
+          assertWindowsPrivatePathRead({
+            bounded: true,
+            identityStable: true,
+            contentValid: false,
+            authenticatedHomeBinding: true,
+          });
+        }
+        return state!;
+      } finally {
+        snapshot.contents.fill(0);
+      }
     }
     if (!rootMetadata.isDirectory()) throw new TypeError("invalid Telegram power state root");
     assertOwner(rootMetadata, TELEGRAM_POWER_STATE_DIRECTORY_MODE);
@@ -315,15 +386,25 @@ function createStateStore(input: {
 
   const write = async (state: TelegramPowerStateRecord): Promise<DurableReplaceOutcome> => {
     await reconcileNamespace();
-    await assertDirectory(input.root, true);
+    await assertDirectory(input.root, true, input.platform, bindStateDirectory);
     if (!parentDirectoryVerified) {
       await synchronizeParentDirectory(dirname(input.root));
       parentDirectoryVerified = true;
     }
     try {
       const existing = await lstat(target);
-      if (!existing.isFile()) throw new TypeError("invalid Telegram power state target");
-      assertOwner(existing, TELEGRAM_POWER_STATE_FILE_MODE);
+      if (input.platform === "win32") {
+        assertWindowsPrivateFileAtPath(
+          bindStateDirectory(),
+          target,
+          existing,
+          0,
+          MAX_STATE_FILE_BYTES,
+        );
+      } else {
+        if (!existing.isFile()) throw new TypeError("invalid Telegram power state target");
+        assertOwner(existing, TELEGRAM_POWER_STATE_FILE_MODE);
+      }
     } catch (error) {
       if (!isMissing(error)) throw error;
     }
@@ -339,7 +420,8 @@ function createStateStore(input: {
         createId: () => id,
         renameFile: input.renameFile,
         removeFile: input.removeFile,
-        syncDirectory: input.syncDirectory,
+        syncDirectory: input.platform === "win32" ? synchronizeDirectory : input.syncDirectory,
+        platform: input.platform,
       });
       namespaceState = outcome.state === "commit-uncertain" ? "uncertain" : "verified";
       return outcome;
@@ -378,6 +460,8 @@ export function createDesktopTelegramPowerLifecycle(
     removeFile: input.removeFile,
     syncDirectory: input.syncDirectory,
     syncParentDirectory: input.syncParentDirectory,
+    platform: input.platform ?? process.platform,
+    openFile: input.openFile,
   });
   let cached: TelegramGapWarning = CLEAR_WARNING;
   let pending: Promise<void> = Promise.resolve();

@@ -6,11 +6,24 @@ import {
   type ConfigureRuntimeRpcRefusalReason,
 } from "@enduragent/coach-contract";
 import {
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivatePathRead,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathDurability,
+  WindowsPrivatePathPolicyError,
+  type WindowsPrivateDirectoryBinding,
+} from "@enduragent/core";
+import {
   parseOnboardingLlmSelection,
   type OnboardingLlmSelection,
   type OnboardingLlmSelectionResult,
 } from "./llm-selection.js";
 import { durablyReplaceReversible } from "./durable-atomic-replace.js";
+import {
+  assertWindowsPrivateFileAtPath,
+  MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+  readWindowsPrivateFile,
+} from "./windows-private-file.js";
 
 export const DESKTOP_CREDENTIAL_SLOTS = [
   "anthropic",
@@ -153,10 +166,12 @@ interface CredentialVaultOptions {
   readonly renameCredentialFile?: typeof rename;
   readonly removeCredentialFile?: typeof rm;
   readonly readCredentialFile?: typeof readFile;
+  readonly openCredentialFile?: typeof open;
   readonly openCredentialDirectory?: typeof open;
   readonly syncCredentialDirectory?: (root: string) => Promise<void>;
   readonly syncCredentialParentDirectory?: (root: string) => Promise<void>;
   readonly createId?: () => string;
+  readonly platform?: NodeJS.Platform;
 }
 
 export function replaceCredentialRuntimeStates(
@@ -200,6 +215,8 @@ interface ReadCredential {
 
 type CredentialVaultDurabilityState = "pending" | "verified" | "unsafe" | "uncertain";
 
+type CredentialEncryptionRefusal = "encryption-unavailable" | "unsafe-backend";
+
 function isCredentialSlot(value: unknown): value is DesktopCredentialSlot {
   return (
     typeof value === "string" && (DESKTOP_CREDENTIAL_SLOTS as readonly string[]).includes(value)
@@ -208,6 +225,24 @@ function isCredentialSlot(value: unknown): value is DesktopCredentialSlot {
 
 function permissions(mode: number): number {
   return mode & 0o777;
+}
+
+function encryptionRefusal(
+  encryption: CredentialEncryptionPort,
+  platform: NodeJS.Platform,
+): CredentialEncryptionRefusal | undefined {
+  try {
+    if (!encryption.isEncryptionAvailable()) return "encryption-unavailable";
+    if (
+      platform !== "win32" &&
+      encryption.getSelectedStorageBackend?.() === UNSAFE_STORAGE_BACKEND
+    ) {
+      return "unsafe-backend";
+    }
+    return undefined;
+  } catch {
+    return "encryption-unavailable";
+  }
 }
 
 function transientCredentialSlot(entry: string): DesktopCredentialSlot | undefined {
@@ -241,10 +276,18 @@ function serializeCredentialRoot<T>(root: string, operation: () => Promise<T>): 
   return result;
 }
 
-async function secureDirectory(root: string): Promise<boolean> {
+async function secureDirectory(
+  root: string,
+  platform: NodeJS.Platform,
+  bindWindowsDirectory: () => WindowsPrivateDirectoryBinding,
+): Promise<boolean> {
   try {
     await mkdir(root, { recursive: true, mode: CREDENTIAL_DIRECTORY_MODE });
     const entry = await lstat(root);
+    if (platform === "win32") {
+      bindWindowsDirectory();
+      return true;
+    }
     return (
       entry.isDirectory() &&
       !entry.isSymbolicLink() &&
@@ -255,9 +298,23 @@ async function secureDirectory(root: string): Promise<boolean> {
   }
 }
 
-async function validTarget(path: string): Promise<boolean> {
+async function validTarget(
+  path: string,
+  platform: NodeJS.Platform,
+  windowsDirectory: WindowsPrivateDirectoryBinding | undefined,
+): Promise<boolean> {
   try {
     const entry = await lstat(path);
+    if (platform === "win32") {
+      assertWindowsPrivateFileAtPath(
+        windowsDirectory!,
+        path,
+        entry,
+        1,
+        MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+      );
+      return true;
+    }
     return (
       entry.isFile() &&
       !entry.isSymbolicLink() &&
@@ -270,6 +327,7 @@ async function validTarget(path: string): Promise<boolean> {
 }
 
 export function createCredentialVault(options: CredentialVaultOptions): CredentialVault {
+  const platform = options.platform ?? process.platform;
   const runtimeState =
     options.runtimeState ?? new Map<DesktopCredentialSlot, CredentialRuntimeState>();
   const setRuntimeState = (slot: DesktopCredentialSlot, state: CredentialRuntimeState): void => {
@@ -283,7 +341,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     runtimeState.delete(slot);
     options.onRuntimeStateChange?.(slot);
   };
-  const syncCredentialDirectory =
+  const rawSyncCredentialDirectory =
     options.syncCredentialDirectory ??
     (async (root: string): Promise<void> => {
       const directory = await (options.openCredentialDirectory ?? open)(root, "r");
@@ -295,7 +353,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
       }
       await directory.close().catch(() => undefined);
     });
-  const syncCredentialParentDirectory =
+  const rawSyncCredentialParentDirectory =
     options.syncCredentialParentDirectory ??
     (async (root: string): Promise<void> => {
       const directory = await open(root, "r");
@@ -307,6 +365,24 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
       }
       await directory.close().catch(() => undefined);
     });
+  const syncCredentialDirectory = async (root: string): Promise<void> => {
+    if (
+      platform === "win32" &&
+      classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable"
+    ) {
+      return;
+    }
+    await rawSyncCredentialDirectory(root);
+  };
+  const syncCredentialParentDirectory = async (root: string): Promise<void> => {
+    if (
+      platform === "win32" &&
+      classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable"
+    ) {
+      return;
+    }
+    await rawSyncCredentialParentDirectory(root);
+  };
   const renameCredentialFile = options.renameCredentialFile ?? rename;
   const removeCredentialFile = options.removeCredentialFile ?? rm;
   const readCredentialFile = options.readCredentialFile ?? readFile;
@@ -315,6 +391,16 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
   let durabilityState: CredentialVaultDurabilityState = "pending";
   let durabilityReconciliation: Promise<CredentialVaultDurabilityState> | undefined;
   let parentDirectoryVerified = false;
+  let windowsDirectory: WindowsPrivateDirectoryBinding | undefined;
+
+  const bindCredentialDirectory = (): WindowsPrivateDirectoryBinding => {
+    if (windowsDirectory === undefined) {
+      windowsDirectory = bindWindowsPrivateDirectory(dirname(options.root), options.root);
+    } else {
+      assertWindowsPrivateDirectoryStable(windowsDirectory);
+    }
+    return windowsDirectory;
+  };
 
   const exclusive = <T>(operation: () => Promise<T>): Promise<T> =>
     serializeCredentialRoot(options.root, operation);
@@ -325,7 +411,9 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     durabilityReconciliation = (async (): Promise<CredentialVaultDurabilityState> => {
       try {
         const directory = await lstat(options.root);
-        if (
+        if (platform === "win32") {
+          bindCredentialDirectory();
+        } else if (
           !directory.isDirectory() ||
           directory.isSymbolicLink() ||
           permissions(directory.mode) !== CREDENTIAL_DIRECTORY_MODE
@@ -338,7 +426,12 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
           durabilityState = "verified";
           return durabilityState;
         }
-        durabilityState = "uncertain";
+        durabilityState =
+          error instanceof WindowsPrivatePathPolicyError &&
+          error.category !== "sharing-violation" &&
+          error.category !== "io-failure"
+            ? "unsafe"
+            : "uncertain";
         return durabilityState;
       }
 
@@ -405,6 +498,28 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     let encrypted: Buffer | undefined;
     try {
       const directory = await lstat(options.root);
+      if (platform === "win32") {
+        const snapshot = await readWindowsPrivateFile({
+          directory: bindCredentialDirectory(),
+          path,
+          minimumBytes: 1,
+          maximumBytes: MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+          openFile: options.openCredentialFile,
+        });
+        if (snapshot === undefined) return { slot, state: "missing", modifiedAt: 0 };
+        encrypted = snapshot.contents;
+        if (encryptionRefusal(options.encryption, platform) !== undefined) {
+          return { slot, state: "re-prompt", modifiedAt: snapshot.modifiedAt };
+        }
+        const value = options.encryption.decryptString(encrypted).trim();
+        assertWindowsPrivatePathRead({
+          bounded: true,
+          identityStable: true,
+          contentValid: value.length > 0,
+          authenticatedHomeBinding: true,
+        });
+        return { slot, state: "configured", value, modifiedAt: snapshot.modifiedAt };
+      }
       if (
         !directory.isDirectory() ||
         directory.isSymbolicLink() ||
@@ -521,15 +636,9 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     if (value.length === 0) {
       return { slot: input.slot, status: "refused", reason: "invalid-input" };
     }
-    try {
-      if (!options.encryption.isEncryptionAvailable()) {
-        return { slot: input.slot, status: "refused", reason: "encryption-unavailable" };
-      }
-      if (options.encryption.getSelectedStorageBackend?.() === UNSAFE_STORAGE_BACKEND) {
-        return { slot: input.slot, status: "refused", reason: "unsafe-backend" };
-      }
-    } catch {
-      return { slot: input.slot, status: "refused", reason: "encryption-unavailable" };
+    const encryptionFailure = encryptionRefusal(options.encryption, platform);
+    if (encryptionFailure !== undefined) {
+      return { slot: input.slot, status: "refused", reason: encryptionFailure };
     }
     const durability = await reconcileDurability();
     if (durability === "uncertain") {
@@ -538,7 +647,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     if (durability !== "verified") {
       return { slot: input.slot, status: "refused", reason: "storage-failed" };
     }
-    if (!(await secureDirectory(options.root))) {
+    if (!(await secureDirectory(options.root, platform, bindCredentialDirectory))) {
       return { slot: input.slot, status: "refused", reason: "storage-failed" };
     }
     if (!parentDirectoryVerified) {
@@ -550,20 +659,42 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
       }
     }
     const target = join(options.root, `${input.slot}.bin`);
-    if (!(await validTarget(target))) {
+    if (!(await validTarget(target, platform, windowsDirectory))) {
       return { slot: input.slot, status: "refused", reason: "storage-failed" };
     }
     const previousRuntimeState = runtimeState.get(input.slot);
     let encrypted: Buffer | undefined;
     let previous: Buffer | undefined;
+    let plaintext: Buffer | undefined;
     try {
-      try {
-        previous = await readCredentialFile(target);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (platform === "win32") {
+        previous = (
+          await readWindowsPrivateFile({
+            directory: bindCredentialDirectory(),
+            path: target,
+            minimumBytes: 1,
+            maximumBytes: MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+            openFile: options.openCredentialFile,
+          })
+        )?.contents;
+      } else {
+        try {
+          previous = await readCredentialFile(target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
       }
       encrypted = options.encryption.encryptString(value);
       if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new TypeError();
+      if (platform === "win32") {
+        plaintext = Buffer.from(value, "utf8");
+        assertWindowsPrivatePathRead({
+          bounded: encrypted.length <= MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+          identityStable: true,
+          contentValid: !encrypted.includes(plaintext),
+          authenticatedHomeBinding: true,
+        });
+      }
       const stored = await durablyReplaceReversible({
         root: options.root,
         fileName: `${input.slot}.bin`,
@@ -574,6 +705,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
         renameFile: renameCredentialFile,
         removeFile: removeCredentialFile,
         syncDirectory: syncCredentialDirectory,
+        platform,
       });
       if (stored.state === "refused") {
         uncertainSlots.delete(input.slot);
@@ -620,6 +752,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
                 renameFile: renameCredentialFile,
                 removeFile: removeCredentialFile,
                 syncDirectory: syncCredentialDirectory,
+                platform,
               });
               storageRestored = restored.state === "applied";
             }
@@ -652,6 +785,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     } finally {
       previous?.fill(0);
       encrypted?.fill(0);
+      plaintext?.fill(0);
     }
   };
 

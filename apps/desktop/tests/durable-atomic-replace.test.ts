@@ -1,6 +1,7 @@
 import { mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WindowsPrivatePathPolicyError } from "@enduragent/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   durableAtomicReplace,
@@ -296,5 +297,71 @@ describe("durable atomic replace", () => {
     await expect(readFile(target, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect((await readdir(root)).filter((entry) => entry.endsWith(".deleted"))).toEqual([]);
     expect(idCount).toBe(1);
+  });
+
+  it("uses the Windows durability taxonomy without chmod or directory sync", async () => {
+    const root = await temporaryRoot();
+    const synchronizeDirectory = vi.fn(async () => {
+      throw new TypeError("Windows directory sync must stay unavailable");
+    });
+    const chmod = vi.fn(async () => {
+      throw new TypeError("Windows must not apply a POSIX mode");
+    });
+
+    const result = await durableAtomicReplace({
+      root,
+      fileName: "setting.json",
+      contents: "candidate",
+      mode: 0o600,
+      platform: "win32",
+      createId: () => "windows-write",
+      openFile: (async (path, flags, mode) => {
+        const handle = await open(path, flags, mode);
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === "chmod") return chmod;
+            const value = Reflect.get(target, property);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      }) as typeof open,
+      syncDirectory: synchronizeDirectory,
+    });
+
+    expect(result).toEqual({ state: "durably-committed" });
+    await expect(readFile(join(root, "setting.json"), "utf8")).resolves.toBe("candidate");
+    expect(chmod).not.toHaveBeenCalled();
+    expect(synchronizeDirectory).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a path-free Windows sharing failure at the rename stage", async () => {
+    const root = await temporaryRoot();
+    const failure = Object.assign(new Error(`${root} synthetic-secret`), { code: "EBUSY" });
+    let observed: unknown;
+
+    try {
+      await durableAtomicReplace({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        mode: 0o600,
+        platform: "win32",
+        createId: () => "windows-sharing",
+        renameFile: async () => {
+          throw failure;
+        },
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(observed).toMatchObject({
+      message: "Windows private path policy failed",
+      stage: "rename",
+      category: "sharing-violation",
+    });
+    expect(JSON.stringify(observed)).not.toContain(root);
+    expect(JSON.stringify(observed)).not.toContain("synthetic-secret");
   });
 });

@@ -11,6 +11,13 @@ import {
   type TelegramBotUsername,
   type TelegramCredential,
 } from "@enduragent/coach-contract";
+import {
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivatePathRead,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathDurability,
+  type WindowsPrivateDirectoryBinding,
+} from "@enduragent/core";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
 import {
   durablyReplaceReversible,
@@ -21,6 +28,11 @@ import {
   type TelegramSecureStorageObserver,
   type TelegramSecureStorageStage,
 } from "./telegram-secure-storage-diagnostics.js";
+import {
+  assertWindowsPrivateFileAtPath,
+  MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+  readWindowsPrivateFile,
+} from "./windows-private-file.js";
 
 export const TELEGRAM_CREDENTIAL_DIRECTORY_NAME = "telegram-channel-v1" as const;
 export const TELEGRAM_PROFILE_FILE_NAME = "profile.bin" as const;
@@ -136,6 +148,8 @@ export interface TelegramCredentialVaultOptions {
   readonly syncDirectory?: (root: string) => Promise<void>;
   readonly syncParentDirectory?: (root: string) => Promise<void>;
   readonly observeSecureStorageFailure?: TelegramSecureStorageObserver;
+  readonly platform?: NodeJS.Platform;
+  readonly openFile?: typeof open;
 }
 
 interface TelegramDesiredStateRecord {
@@ -263,10 +277,16 @@ function parseDesiredStateRecord(value: string): TelegramDesiredStateRecord | un
   return { schemaVersion: 1, athleteHome, enabled: record.enabled };
 }
 
-function encryptionRefusal(encryption: CredentialEncryptionPort): EncryptionRefusal | undefined {
+function encryptionRefusal(
+  encryption: CredentialEncryptionPort,
+  platform: NodeJS.Platform,
+): EncryptionRefusal | undefined {
   try {
     if (!encryption.isEncryptionAvailable()) return "encryption-unavailable";
-    if (encryption.getSelectedStorageBackend?.() === UNSAFE_STORAGE_BACKEND) {
+    if (
+      platform !== "win32" &&
+      encryption.getSelectedStorageBackend?.() === UNSAFE_STORAGE_BACKEND
+    ) {
       return "unsafe-backend";
     }
     return undefined;
@@ -275,9 +295,17 @@ function encryptionRefusal(encryption: CredentialEncryptionPort): EncryptionRefu
   }
 }
 
-async function secureDirectoryState(root: string): Promise<"missing" | "secure" | "unsafe"> {
+async function secureDirectoryState(
+  root: string,
+  platform: NodeJS.Platform,
+  bindWindowsDirectory: () => WindowsPrivateDirectoryBinding,
+): Promise<"missing" | "secure" | "unsafe"> {
   try {
     const entry = await lstat(root);
+    if (platform === "win32") {
+      bindWindowsDirectory();
+      return "secure";
+    }
     return entry.isDirectory() &&
       !entry.isSymbolicLink() &&
       permissions(entry.mode) === TELEGRAM_CREDENTIAL_DIRECTORY_MODE
@@ -288,18 +316,36 @@ async function secureDirectoryState(root: string): Promise<"missing" | "secure" 
   }
 }
 
-async function ensureSecureDirectory(root: string): Promise<boolean> {
+async function ensureSecureDirectory(
+  root: string,
+  platform: NodeJS.Platform,
+  bindWindowsDirectory: () => WindowsPrivateDirectoryBinding,
+): Promise<boolean> {
   try {
     await mkdir(root, { recursive: true, mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
-    return (await secureDirectoryState(root)) === "secure";
+    return (await secureDirectoryState(root, platform, bindWindowsDirectory)) === "secure";
   } catch {
     return false;
   }
 }
 
-async function targetState(path: string): Promise<TargetState> {
+async function targetState(
+  path: string,
+  platform: NodeJS.Platform,
+  windowsDirectory: WindowsPrivateDirectoryBinding | undefined,
+): Promise<TargetState> {
   try {
     const entry = await lstat(path);
+    if (platform === "win32") {
+      assertWindowsPrivateFileAtPath(
+        windowsDirectory!,
+        path,
+        entry,
+        1,
+        MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+      );
+      return "valid";
+    }
     return entry.isFile() &&
       !entry.isSymbolicLink() &&
       entry.size > 0 &&
@@ -328,19 +374,48 @@ export function createTelegramCredentialVault(
   if (typeof options.root !== "string" || options.root.length === 0) {
     throw new TypeError("invalid Telegram credential vault root");
   }
+  const platform = options.platform ?? process.platform;
   const athleteHome = AthleteHomeIdentitySchema.parse(options.athleteHome);
   const createId = options.createId ?? randomUUID;
   const createProfileId = options.createProfileId ?? randomUUID;
   const renameFile = options.renameFile ?? rename;
   const removeFile = options.removeFile ?? rm;
-  const sync = options.syncDirectory ?? syncDirectory;
-  const syncParent = options.syncParentDirectory ?? syncDirectory;
+  const rawSync = options.syncDirectory ?? syncDirectory;
+  const rawSyncParent = options.syncParentDirectory ?? syncDirectory;
+  const sync = async (root: string): Promise<void> => {
+    if (
+      platform === "win32" &&
+      classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable"
+    ) {
+      return;
+    }
+    await rawSync(root);
+  };
+  const syncParent = async (root: string): Promise<void> => {
+    if (
+      platform === "win32" &&
+      classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable"
+    ) {
+      return;
+    }
+    await rawSyncParent(root);
+  };
   let operationQueue = Promise.resolve();
   let namespaceVerification: NamespaceVerification = "pending";
   let transientArtifactsMayExist = false;
   let profileUncertain = false;
   let desiredStateUncertain = false;
   let parentDirectoryVerified = false;
+  let windowsDirectory: WindowsPrivateDirectoryBinding | undefined;
+
+  const bindCredentialDirectory = (): WindowsPrivateDirectoryBinding => {
+    if (windowsDirectory === undefined) {
+      windowsDirectory = bindWindowsPrivateDirectory(dirname(options.root), options.root);
+    } else {
+      assertWindowsPrivateDirectoryStable(windowsDirectory);
+    }
+    return windowsDirectory;
+  };
 
   const observeFailure = (
     stage: TelegramSecureStorageStage,
@@ -350,7 +425,7 @@ export function createTelegramCredentialVault(
   };
 
   const observedEncryptionRefusal = (): EncryptionRefusal | undefined => {
-    const reason = encryptionRefusal(options.encryption);
+    const reason = encryptionRefusal(options.encryption, platform);
     if (reason !== undefined) observeFailure("encryption-availability", reason);
     return reason;
   };
@@ -365,7 +440,7 @@ export function createTelegramCredentialVault(
   };
 
   const reconcileOwnedTransients = async (forceSync: boolean): Promise<boolean> => {
-    const directory = await secureDirectoryState(options.root);
+    const directory = await secureDirectoryState(options.root, platform, bindCredentialDirectory);
     if (directory !== "secure") return true;
     let entries: readonly string[];
     try {
@@ -411,14 +486,14 @@ export function createTelegramCredentialVault(
   };
 
   const readProfile = async (): Promise<ReadProfile> => {
-    const directory = await secureDirectoryState(options.root);
+    const directory = await secureDirectoryState(options.root, platform, bindCredentialDirectory);
     if (directory === "missing") return { state: "missing" };
     if (directory === "unsafe") {
       observeFailure("namespace", "storage-failed");
       return { state: "re-prompt", reason: "storage-failed" };
     }
     const path = join(options.root, TELEGRAM_PROFILE_FILE_NAME);
-    const file = await targetState(path);
+    const file = await targetState(path, platform, windowsDirectory);
     if (file === "missing") return { state: "missing" };
     if (file === "unsafe") {
       observeFailure("profile-atomic-write", "storage-failed");
@@ -430,7 +505,19 @@ export function createTelegramCredentialVault(
     }
     let encrypted: Buffer | undefined;
     try {
-      encrypted = await readFile(path);
+      if (platform === "win32") {
+        const snapshot = await readWindowsPrivateFile({
+          directory: bindCredentialDirectory(),
+          path,
+          minimumBytes: 1,
+          maximumBytes: MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+          openFile: options.openFile,
+        });
+        if (snapshot === undefined) throw new TypeError();
+        encrypted = snapshot.contents;
+      } else {
+        encrypted = await readFile(path);
+      }
     } catch {
       observeFailure("profile-atomic-write", "storage-failed");
       return { state: "re-prompt", reason: "storage-failed" };
@@ -438,6 +525,14 @@ export function createTelegramCredentialVault(
     try {
       const profile = parseProfileRecord(options.encryption.decryptString(encrypted));
       if (profile === undefined) {
+        if (platform === "win32") {
+          assertWindowsPrivatePathRead({
+            bounded: true,
+            identityStable: true,
+            contentValid: false,
+            authenticatedHomeBinding: true,
+          });
+        }
         observeFailure("encryption-availability", "storage-failed");
         return { state: "re-prompt", reason: "decrypt-failed" };
       }
@@ -452,22 +547,46 @@ export function createTelegramCredentialVault(
   };
 
   const readDesiredState = async (): Promise<TelegramDesiredState> => {
-    const directory = await secureDirectoryState(options.root);
+    const directory = await secureDirectoryState(options.root, platform, bindCredentialDirectory);
     if (directory === "missing") return { state: "missing", enabled: false };
     if (directory === "unsafe") {
       observeFailure("namespace", "storage-failed");
       return { state: "re-prompt", enabled: false };
     }
     const path = join(options.root, TELEGRAM_DESIRED_STATE_FILE_NAME);
-    const file = await targetState(path);
+    const file = await targetState(path, platform, windowsDirectory);
     if (file === "missing") return { state: "missing", enabled: false };
     if (file === "unsafe") {
       observeFailure("desired-state-write", "storage-failed");
       return { state: "re-prompt", enabled: false };
     }
+    let contents: Buffer | undefined;
     try {
-      const record = parseDesiredStateRecord(await readFile(path, "utf8"));
+      let serialized: string;
+      if (platform === "win32") {
+        contents = (
+          await readWindowsPrivateFile({
+            directory: bindCredentialDirectory(),
+            path,
+            minimumBytes: 1,
+            maximumBytes: MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+            openFile: options.openFile,
+          })
+        )?.contents;
+        serialized = contents?.toString("utf8") ?? "";
+      } else {
+        serialized = await readFile(path, "utf8");
+      }
+      const record = parseDesiredStateRecord(serialized);
       if (record === undefined) {
+        if (platform === "win32") {
+          assertWindowsPrivatePathRead({
+            bounded: true,
+            identityStable: true,
+            contentValid: false,
+            authenticatedHomeBinding: true,
+          });
+        }
         observeFailure("desired-state-write", "storage-failed");
         return { state: "re-prompt", enabled: false };
       }
@@ -476,6 +595,8 @@ export function createTelegramCredentialVault(
     } catch {
       observeFailure("desired-state-write", "storage-failed");
       return { state: "re-prompt", enabled: false };
+    } finally {
+      contents?.fill(0);
     }
   };
 
@@ -484,7 +605,7 @@ export function createTelegramCredentialVault(
     candidate: Buffer,
     stage: Extract<TelegramSecureStorageStage, "profile-atomic-write" | "desired-state-write">,
   ): Promise<ReversibleDurableReplaceOutcome> => {
-    if (!(await ensureSecureDirectory(options.root))) {
+    if (!(await ensureSecureDirectory(options.root, platform, bindCredentialDirectory))) {
       observeFailure("namespace", "storage-failed");
       return { state: "refused" };
     }
@@ -498,14 +619,36 @@ export function createTelegramCredentialVault(
       }
     }
     const target = join(options.root, fileName);
-    const state = await targetState(target);
+    const state = await targetState(target, platform, windowsDirectory);
     if (state === "unsafe") {
       observeFailure(stage, "storage-failed");
       return { state: "refused" };
     }
     let previous: Buffer | undefined;
     try {
-      if (state === "valid") previous = await readFile(target);
+      if (platform === "win32") {
+        assertWindowsPrivatePathRead({
+          bounded: candidate.length <= MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+          identityStable: true,
+          contentValid: candidate.length > 0,
+          authenticatedHomeBinding: true,
+        });
+      }
+      if (state === "valid") {
+        previous =
+          platform === "win32"
+            ? (
+                await readWindowsPrivateFile({
+                  directory: bindCredentialDirectory(),
+                  path: target,
+                  minimumBytes: 1,
+                  maximumBytes: MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
+                  openFile: options.openFile,
+                })
+              )?.contents
+            : await readFile(target);
+        if (previous === undefined) throw new TypeError();
+      }
       transientArtifactsMayExist = true;
       const stored = await durablyReplaceReversible({
         root: options.root,
@@ -517,6 +660,7 @@ export function createTelegramCredentialVault(
         renameFile,
         removeFile,
         syncDirectory: sync,
+        platform,
       });
       if (stored.state !== "applied") {
         observeFailure(
@@ -536,9 +680,13 @@ export function createTelegramCredentialVault(
   const removeStoredProfile = async (): Promise<
     "deleted" | "cleanup-pending" | "retained" | "uncertain"
   > => {
-    if ((await secureDirectoryState(options.root)) !== "secure") return "retained";
+    if (
+      (await secureDirectoryState(options.root, platform, bindCredentialDirectory)) !== "secure"
+    ) {
+      return "retained";
+    }
     const target = join(options.root, TELEGRAM_PROFILE_FILE_NAME);
-    if ((await targetState(target)) !== "valid") return "retained";
+    if ((await targetState(target, platform, windowsDirectory)) !== "valid") return "retained";
     let id: string;
     try {
       id = createId();
@@ -635,10 +783,26 @@ export function createTelegramCredentialVault(
           bot,
         };
         let encrypted: Buffer | undefined;
+        let plaintext: Buffer | undefined;
+        let tokenPlaintext: Buffer | undefined;
         try {
-          encrypted = options.encryption.encryptString(JSON.stringify(profile));
+          const serialized = JSON.stringify(profile);
+          encrypted = options.encryption.encryptString(serialized);
           if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new TypeError();
+          if (platform === "win32") {
+            plaintext = Buffer.from(serialized, "utf8");
+            tokenPlaintext = Buffer.from(token, "utf8");
+            assertWindowsPrivatePathRead({
+              bounded: true,
+              identityStable: true,
+              contentValid: !encrypted.includes(plaintext) && !encrypted.includes(tokenPlaintext),
+              authenticatedHomeBinding: true,
+            });
+          }
         } catch {
+          encrypted?.fill(0);
+          plaintext?.fill(0);
+          tokenPlaintext?.fill(0);
           observeFailure("encryption-availability", "storage-failed");
           return { outcome: "refused", reason: "storage-failed" };
         }
@@ -660,6 +824,8 @@ export function createTelegramCredentialVault(
           return { outcome: "refused", reason: "storage-failed" };
         } finally {
           encrypted?.fill(0);
+          plaintext?.fill(0);
+          tokenPlaintext?.fill(0);
         }
       });
     },

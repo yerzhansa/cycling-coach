@@ -1144,6 +1144,60 @@ describe("Telegram credential vault", () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
+  it("keeps Windows DPAPI ciphertext isolated from a corrupt profile and desired state", async () => {
+    const value = await fixture();
+    const backend = vi.fn(() => {
+      throw new TypeError("Linux-only backend probe");
+    });
+    const encryptionPort = { ...encryption(), getSelectedStorageBackend: backend };
+    const synchronizeDirectory = vi.fn(async () => {
+      throw new TypeError("Windows directory sync must stay unavailable");
+    });
+    const synchronizeParentDirectory = vi.fn(async () => {
+      throw new TypeError("Windows parent sync must stay unavailable");
+    });
+    const vault = createTelegramCredentialVault({
+      ...value,
+      platform: "win32",
+      encryption: encryptionPort,
+      createProfileId: () => PROFILE_A,
+      syncDirectory: synchronizeDirectory,
+      syncParentDirectory: synchronizeParentDirectory,
+    });
+
+    await expect(
+      vault.replaceProfile({
+        token: "test-token-placeholder",
+        bot: BOT_A,
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toMatchObject({ outcome: "applied", profileId: PROFILE_A });
+    await expect(vault.setDesiredState(true)).resolves.toEqual({ status: "stored", enabled: true });
+    expect(
+      (await readFile(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).includes(
+        "test-token-placeholder",
+      ),
+    ).toBe(false);
+
+    await chmod(value.root, 0o755);
+    await writeFile(join(value.root, TELEGRAM_PROFILE_FILE_NAME), "corrupt-ciphertext");
+    const reopened = createTelegramCredentialVault({
+      ...value,
+      platform: "win32",
+      encryption: encryptionPort,
+      syncDirectory: synchronizeDirectory,
+      syncParentDirectory: synchronizeParentDirectory,
+    });
+    await expect(reopened.profileStatus()).resolves.toEqual({
+      state: "re-prompt",
+      reason: "storage-failed",
+    });
+    await expect(reopened.desiredState()).resolves.toEqual({ state: "configured", enabled: true });
+    expect(backend).not.toHaveBeenCalled();
+    expect(synchronizeDirectory).not.toHaveBeenCalled();
+    expect(synchronizeParentDirectory).not.toHaveBeenCalled();
+  });
+
   it("serializes plaintext application with profile deletion", async () => {
     const value = await fixture();
     await seedProfile(value);
@@ -1163,5 +1217,33 @@ describe("Telegram credential vault", () => {
 
     await expect(apply).resolves.toMatchObject({ outcome: "applied", profileId: PROFILE_A });
     await expect(deletion).resolves.toEqual({ outcome: "applied", cleanupPending: false });
+  });
+
+  it("refuses a Windows Telegram encryption result containing plaintext", async () => {
+    const value = await fixture();
+    const unsafePort = {
+      ...encryption(),
+      encryptString(contents: string) {
+        const profile = JSON.parse(contents) as TelegramProfileRecord;
+        return Buffer.concat([Buffer.from([0]), Buffer.from(profile.token)]);
+      },
+    };
+    const vault = createTelegramCredentialVault({
+      ...value,
+      platform: "win32",
+      encryption: unsafePort,
+      createProfileId: () => PROFILE_A,
+    });
+
+    await expect(
+      vault.replaceProfile({
+        token: "test-token-placeholder",
+        bot: BOT_A,
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toEqual({ outcome: "refused", reason: "storage-failed" });
+    await expect(lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
