@@ -16,6 +16,7 @@ describe("coach package handoff", () => {
     };
     expect(packageJson.exports).toEqual({
       "./abortable-operation": "./dist/abortable-operation.js",
+      "./account-identity": "./dist/account-identity.js",
       "./runtime": "./dist/runtime.js",
       "./sync": "./dist/sync.js",
       "./backfill": "./dist/backfill.js",
@@ -41,6 +42,7 @@ describe("coach package handoff", () => {
     });
     const entries = [
       "abortable-operation",
+      "account-identity",
       "runtime",
       "sync",
       "backfill",

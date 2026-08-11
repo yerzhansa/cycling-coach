@@ -12,6 +12,7 @@
   },
   "exports": {
     "./abortable-operation": "./dist/abortable-operation.js",
+    "./account-identity": "./dist/account-identity.js",
     "./runtime": "./dist/runtime.js",
     "./sync": "./dist/sync.js",
     "./backfill": "./dist/backfill.js",
