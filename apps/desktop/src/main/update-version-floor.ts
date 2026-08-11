@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { lstat, mkdir, open, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { compareDesktopVersions, isStableDesktopVersion } from "./desktop-version.js";
-import { durableAtomicReplace } from "./durable-atomic-replace.js";
+import { durableAtomicReplace, syncDirectory } from "./durable-atomic-replace.js";
+import { createSafeLog } from "./safe-log.js";
 
 export const DESKTOP_UPDATE_VERSION_FLOOR_FILE_NAME = "highest-desktop-version.json" as const;
 export const DESKTOP_UPDATE_VERSION_FLOOR_DIRECTORY_MODE = 0o700;
@@ -61,34 +61,13 @@ function parseVersionFloor(contents: string): string | undefined {
   return record.version;
 }
 
-async function synchronizeDirectory(root: string): Promise<void> {
-  const directory = await open(root, "r");
-  try {
-    await directory.sync();
-  } finally {
-    await directory.close().catch(() => undefined);
-  }
-}
-
 export function createDesktopUpdateVersionFloor(input: {
   readonly root: string;
-  readonly createId?: () => string;
   readonly log?: (message: string) => void;
 }): DesktopUpdateVersionFloor {
   const target = join(input.root, DESKTOP_UPDATE_VERSION_FLOOR_FILE_NAME);
-  const createId = input.createId ?? randomUUID;
-  const outputLog =
-    input.log ??
-    ((message: string): void => {
-      process.stderr.write(`${message}\n`);
-    });
+  const log = createSafeLog(input.log);
   let pending: Promise<void> = Promise.resolve();
-
-  const log = (message: string): void => {
-    try {
-      outputLog(message);
-    } catch {}
-  };
 
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = pending.then(operation);
@@ -101,8 +80,9 @@ export function createDesktopUpdateVersionFloor(input: {
 
   const prepareRoot = async (): Promise<void> => {
     let created = false;
+    let metadata: Stats;
     try {
-      await lstat(input.root);
+      metadata = await lstat(input.root);
     } catch (error) {
       if (!isMissing(error)) throw error;
       await mkdir(input.root, {
@@ -110,12 +90,13 @@ export function createDesktopUpdateVersionFloor(input: {
         mode: DESKTOP_UPDATE_VERSION_FLOOR_DIRECTORY_MODE,
       });
       created = true;
+      metadata = await lstat(input.root);
     }
-    const metadata = await lstat(input.root);
     if (!metadata.isDirectory()) throw new TypeError("invalid update version floor root");
     assertOwner(metadata, DESKTOP_UPDATE_VERSION_FLOOR_DIRECTORY_MODE);
-    if (created) await synchronizeDirectory(dirname(input.root));
+    if (created) await syncDirectory(dirname(input.root));
     const prefix = `.${DESKTOP_UPDATE_VERSION_FLOOR_FILE_NAME}.`;
+    let removed = false;
     for (const entry of await readdir(input.root)) {
       if (
         entry.startsWith(prefix) &&
@@ -123,9 +104,10 @@ export function createDesktopUpdateVersionFloor(input: {
         /^[A-Za-z0-9-]{1,128}$/.test(entry.slice(prefix.length, -4))
       ) {
         await rm(join(input.root, entry), { force: true });
+        removed = true;
       }
     }
-    await synchronizeDirectory(input.root);
+    if (removed) await syncDirectory(input.root);
   };
 
   const readFloor = async (): Promise<StoredVersionFloor> => {
@@ -167,7 +149,6 @@ export function createDesktopUpdateVersionFloor(input: {
       fileName: DESKTOP_UPDATE_VERSION_FLOOR_FILE_NAME,
       contents: `${JSON.stringify({ schemaVersion: 1, version })}\n`,
       mode: DESKTOP_UPDATE_VERSION_FLOOR_FILE_MODE,
-      createId,
     });
 
   return {

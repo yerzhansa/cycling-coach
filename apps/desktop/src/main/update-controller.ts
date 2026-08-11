@@ -10,6 +10,7 @@ import {
   isDesktopUpdateAvailable,
   isStableDesktopVersion,
 } from "./desktop-version.js";
+import { createSafeLog } from "./safe-log.js";
 import type {
   DesktopUpdateVersionFloor,
   DesktopUpdateVersionFloorResult,
@@ -125,16 +126,7 @@ export function createDesktopUpdateController(input: {
   let installInvoked = false;
   let floorVersion: string | undefined;
   let updaterInitialization: Promise<boolean> | undefined;
-  const outputLog =
-    input.log ??
-    ((message: string): void => {
-      process.stderr.write(`${message}\n`);
-    });
-  const log = (message: string): void => {
-    try {
-      outputLog(message);
-    } catch {}
-  };
+  const log = createSafeLog(input.log);
 
   const publish = (next: DesktopUpdateState): void => {
     if (closed) return;
