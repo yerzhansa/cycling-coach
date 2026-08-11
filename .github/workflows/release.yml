@@ -715,7 +715,8 @@ jobs:
           PACKAGE="$RELEASE_PACKAGE"
           TAG="$RELEASE_TAG"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::notice::Release $TAG already exists (likely created via UI). Leaving it untouched."
+            gh release edit "$TAG" --latest=false
+            echo "::notice::Release $TAG already exists and remains non-latest."
           else
             BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' "packages/$PACKAGE/CHANGELOG.md" | tail -n +2)
             gh release create "$TAG" --latest=false --title "$TAG" --notes "$BODY"
