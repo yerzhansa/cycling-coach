@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  CoachClientTransportUnavailableError,
+  CoachRpcRemoteError,
+} from "@enduragent/coach-client";
 import type {
   ConfigureRuntimeRpcParams,
   LlmProvider,
@@ -9,6 +13,8 @@ import type {
 } from "@enduragent/coach-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyExplicitCredentialToRuntime,
+  createActiveIntervalsCredentialPreflight,
   createConnectionRuntimeAuthority,
   createCredentialRuntimeApplication,
   intervalsAthleteIdForOwnership,
@@ -30,6 +36,7 @@ import {
 } from "../src/main/onboarding-ipc.js";
 
 const roots: string[] = [];
+const VERIFICATION_APPROVAL = "c".repeat(64);
 
 function encryption(): CredentialEncryptionPort {
   return {
@@ -301,6 +308,69 @@ describe("desktop credential runtime precedence", () => {
     });
   });
 
+  it("calls daemon credential preflight with the candidate key and abort signal", async () => {
+    const controller = new AbortController();
+    const call = vi.fn(async () => ({ approval: VERIFICATION_APPROVAL }));
+    const connect = vi.fn(async () => ({
+      handshake: {} as never,
+      call,
+      close: vi.fn(async () => {}),
+    }));
+    const authority = createConnectionRuntimeAuthority(
+      {
+        url: "ws://127.0.0.1:45005/rpc",
+        token: "x".repeat(43),
+        athleteHome: "/synthetic/athlete",
+      },
+      connect as never,
+    );
+
+    await expect(
+      authority.verifyIntervalsCredential("synthetic-intervals-key", controller.signal),
+    ).resolves.toEqual({ approval: VERIFICATION_APPROVAL });
+    expect(call).toHaveBeenCalledWith(
+      "verify_intervals_credential",
+      { api_key: "synthetic-intervals-key" },
+      { signal: controller.signal },
+    );
+    expect(connect).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:45005/rpc",
+      token: "x".repeat(43),
+      expectedAthleteHome: "/synthetic/athlete",
+      signal: controller.signal,
+    });
+  });
+
+  it("falls back only for method absence or a lifecycle that cannot attempt preflight", async () => {
+    const lifecycle = { status: "ready", generation: 1 };
+    const verifyIntervalsCredential = vi.fn(
+      async (_apiKey: string, _signal?: AbortSignal) => ({ approval: VERIFICATION_APPROVAL }),
+    );
+    const binding = { authority: { verifyIntervalsCredential } };
+    const preflight = createActiveIntervalsCredentialPreflight({
+      currentBinding: () => binding,
+      lifecycleSnapshot: () => lifecycle,
+    });
+    const signal = new AbortController().signal;
+
+    verifyIntervalsCredential.mockRejectedValueOnce(
+      new CoachRpcRemoteError(-32601, "synthetic method unavailable"),
+    );
+    await expect(preflight("synthetic-intervals-key", signal)).resolves.toBeUndefined();
+    expect(verifyIntervalsCredential).toHaveBeenCalledOnce();
+
+    verifyIntervalsCredential.mockClear();
+    const transportError = new CoachClientTransportUnavailableError();
+    verifyIntervalsCredential.mockRejectedValueOnce(transportError);
+    await expect(preflight("synthetic-intervals-key", signal)).rejects.toBe(transportError);
+    expect(verifyIntervalsCredential).toHaveBeenCalledOnce();
+
+    verifyIntervalsCredential.mockClear();
+    lifecycle.status = "starting";
+    await expect(preflight("synthetic-intervals-key", signal)).resolves.toBeUndefined();
+    expect(verifyIntervalsCredential).not.toHaveBeenCalled();
+  });
+
   it("does not start a queued runtime mutation after its activation deadline", async () => {
     let release!: () => void;
     let started!: () => void;
@@ -366,6 +436,54 @@ describe("desktop credential runtime precedence", () => {
     expect(configureRuntime).toHaveBeenCalledWith({
       intervals: { api_key: "obviously-fake-intervals-key" },
     });
+  });
+
+  it("adds an approval only to its explicit Intervals activation request", async () => {
+    const configureRuntime = vi.fn(async () => {});
+    const runtime = createCredentialRuntimeApplication({
+      selectedLlmProvider: async () => undefined,
+      configureRuntime,
+    });
+
+    await runtime.applyExplicit(
+      { intervals: { api_key: "synthetic-intervals-key" } },
+      undefined,
+      VERIFICATION_APPROVAL,
+    );
+
+    expect(configureRuntime).toHaveBeenNthCalledWith(
+      1,
+      {
+        intervals: {
+          api_key: "synthetic-intervals-key",
+          verification_approval: VERIFICATION_APPROVAL,
+        },
+      },
+      undefined,
+    );
+
+    await runtime.reapplyStoredCredential("intervals-icu", "synthetic-intervals-key", [
+      "intervals-icu",
+    ]);
+
+    expect(configureRuntime).toHaveBeenNthCalledWith(2, {
+      intervals: { api_key: "synthetic-intervals-key" },
+    });
+    expect(JSON.stringify(configureRuntime.mock.calls[1])).not.toContain(VERIFICATION_APPROVAL);
+  });
+
+  it("keeps legacy activation tokenless and forwards an approval only when present", async () => {
+    const applyExplicit = vi.fn(async () => {});
+    const runtime = { applyExplicit };
+    const request = { intervals: { api_key: "synthetic-intervals-key" } } as const;
+
+    await applyExplicitCredentialToRuntime(runtime, request);
+    await applyExplicitCredentialToRuntime(runtime, request, VERIFICATION_APPROVAL);
+
+    expect(applyExplicit.mock.calls).toEqual([
+      [request],
+      [request, undefined, VERIFICATION_APPROVAL],
+    ]);
   });
 
   it("self-heals a stored provider after the first-run seed outlives a failed apply", async () => {

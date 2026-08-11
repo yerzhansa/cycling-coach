@@ -35,6 +35,8 @@ import {
   ImportFilesRpcParamsSchema,
   ImportFilesRpcResultSchema,
   InspectTelegramCredentialRpcParamsSchema,
+  IntervalsCredentialApprovalSchema,
+  IntervalsCredentialVerificationRefusalReasonSchema,
   OperationProgressEventSchema,
   Protocol11AcceptedServerHandshakeFrameSchema,
   SaveIntakeRpcParamsSchema,
@@ -73,6 +75,8 @@ import {
   ServerHandshakeFrameSchema,
   TurnEventSchema,
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
+  VerifyIntervalsCredentialRpcParamsSchema,
+  VerifyIntervalsCredentialRpcResultSchema,
   compareProtocolVersions,
   createAcceptedServerHandshakeFrame,
   createClientHandshakeFrame,
@@ -122,6 +126,7 @@ function transcriptCursor(): string {
 }
 
 const BOUNDARY_REF = "a".repeat(64);
+const INTERVALS_APPROVAL = "b".repeat(64);
 
 describe("Telegram clipboard credentials", () => {
   it("accepts representative bot-token syntax without claiming provenance or narrowing the wire credential", () => {
@@ -290,6 +295,12 @@ describe("coach request and event projection", () => {
         id: 8,
         method: "configureRuntime",
         params: { llm: { provider: "anthropic", api_key: "placeholder" } },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 37,
+        method: "verify_intervals_credential",
+        params: { api_key: "placeholder" },
       },
       { jsonrpc: "2.0", id: 9, method: "getRuntimeConfig", params: {} },
       { jsonrpc: "2.0", id: 10, method: "getUnitsPreference", params: {} },
@@ -699,6 +710,12 @@ describe("coach request and event projection", () => {
       { llm: { model: "model-only" } },
       { llm: { provider: "anthropic", clear_credential: true } },
       { intervals },
+      {
+        intervals: {
+          api_key: "placeholder",
+          verification_approval: INTERVALS_APPROVAL,
+        },
+      },
       { intervals: { athlete_id: "athlete-a" } },
       { intervals: { clear_credential: true } },
       {
@@ -759,6 +776,9 @@ describe("coach request and event projection", () => {
         session: { timezone: "UTC" },
       },
       { intervals: { api_key: "" } },
+      { intervals: { verification_approval: INTERVALS_APPROVAL } },
+      { intervals: { api_key: "placeholder", verification_approval: "A".repeat(64) } },
+      { intervals: { api_key: "placeholder", verification_approval: "a".repeat(63) } },
       { intervals: { clear_credential: true, athlete_id: "athlete-a" } },
       {
         llm: { provider: "anthropic", clear_credential: true },
@@ -796,6 +816,33 @@ describe("coach request and event projection", () => {
       }).success,
     ).toBe(false);
     expect(JSON.stringify(result)).not.toContain("placeholder");
+    expect(IntervalsCredentialApprovalSchema.parse(INTERVALS_APPROVAL)).toBe(
+      INTERVALS_APPROVAL,
+    );
+    expect(
+      VerifyIntervalsCredentialRpcParamsSchema.parse({ api_key: "placeholder" }),
+    ).toEqual({ api_key: "placeholder" });
+    for (const invalid of [
+      {},
+      { api_key: "" },
+      { api_key: "placeholder", athlete_id: "athlete-a" },
+    ]) {
+      expect(VerifyIntervalsCredentialRpcParamsSchema.safeParse(invalid).success).toBe(false);
+    }
+    expect(
+      VerifyIntervalsCredentialRpcResultSchema.parse({ approval: INTERVALS_APPROVAL }),
+    ).toEqual({ approval: INTERVALS_APPROVAL });
+    for (const reason of IntervalsCredentialVerificationRefusalReasonSchema.options) {
+      expect(VerifyIntervalsCredentialRpcResultSchema.parse({ reason })).toEqual({ reason });
+    }
+    for (const invalid of [
+      { approval: "A".repeat(64) },
+      { approval: INTERVALS_APPROVAL, reason: "credential-rejected" },
+      { reason: "credential-rejected", status: "refused" },
+      { reason: "unknown" },
+    ]) {
+      expect(VerifyIntervalsCredentialRpcResultSchema.safeParse(invalid).success).toBe(false);
+    }
     const snapshot = {
       schemaVersion: 3,
       llm: {
@@ -1001,6 +1048,7 @@ describe("coach request and event projection", () => {
           session: session !== undefined,
         },
       }),
+      verify_intervals_credential: async () => ({ approval: INTERVALS_APPROVAL }),
       getRuntimeConfig: async () => ({
         schemaVersion: 3,
         llm: { provider: "anthropic", model: "model", credential_configured: false },
@@ -1134,6 +1182,12 @@ describe("coach request and event projection", () => {
       wireName: "configureRuntime",
       requestSchema: ConfigureRuntimeRpcParamsSchema,
       responseSchema: ConfigureRuntimeRpcResultSchema,
+      eventSchema: NoRpcEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.verify_intervals_credential).toEqual({
+      wireName: "verify_intervals_credential",
+      requestSchema: VerifyIntervalsCredentialRpcParamsSchema,
+      responseSchema: VerifyIntervalsCredentialRpcResultSchema,
       eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.getRuntimeConfig).toEqual({
@@ -1283,6 +1337,7 @@ describe("coach request and event projection", () => {
       "getAthleteState",
       "saveIntake",
       "configureRuntime",
+      "verify_intervals_credential",
       "getRuntimeConfig",
       "getUnitsPreference",
       "setUnitsPreference",

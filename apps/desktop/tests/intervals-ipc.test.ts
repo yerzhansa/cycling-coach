@@ -4,12 +4,18 @@ import {
   verifyIntervalsCredentialAtPath,
   type IntervalsCredentialVerificationResult,
 } from "@enduragent/coach/backfill";
+import {
+  CoachClientTransportUnavailableError,
+  CoachRpcRemoteError,
+} from "@enduragent/coach-client";
+import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL } from "../src/main/constants.js";
+import { createActiveIntervalsCredentialPreflight } from "../src/main/credential-runtime.js";
 import {
   CredentialRuntimeRefusal,
   createCredentialVault,
@@ -20,11 +26,13 @@ import {
 import {
   createDesktopIntervalsCredentialVerifier,
   installDesktopIntervalsIpc,
+  type DesktopIntervalsCredentialVerificationResult,
   type DesktopIntervalsCredentialStatus,
 } from "../src/main/intervals-ipc.js";
 
 const API_KEY = "synthetic-intervals-api-key";
 const EXISTING_API_KEY = "synthetic-existing-intervals-key";
+const APPROVAL = "a".repeat(64);
 const PRIVATE_DETAIL = `${API_KEY} at /Users/private/id_ed25519 PRIVATE_KEY`;
 
 function deferred<T>() {
@@ -42,15 +50,45 @@ function status(
   return { slot: "intervals-icu", state, runtimeState };
 }
 
+function runtimeSnapshot(athleteId = "synthetic-athlete"): RuntimeConfigSnapshot {
+  return {
+    schemaVersion: 3,
+    llm: {
+      provider: "anthropic",
+      model: "synthetic-model",
+      credential_configured: false,
+    },
+    intervals: {
+      athlete_id: athleteId,
+      credential_configured: true,
+      managedByEnvironment: { athleteId: false },
+    },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "UTC",
+      managedByEnvironment: {
+        historyTokenBudgetRatio: false,
+        idleMinutes: false,
+        dailyResetHour: false,
+        resetArchiveRetentionDays: false,
+        timezone: false,
+      },
+    },
+  };
+}
+
 function setup(
   options: {
     readonly trusted?: boolean;
     readonly current?: DesktopIntervalsCredentialStatus;
-    readonly verification?: IntervalsCredentialVerificationResult;
+    readonly verification?: DesktopIntervalsCredentialVerificationResult;
     readonly verifyCredential?: (
       apiKey: string,
       signal: AbortSignal,
-    ) => Promise<IntervalsCredentialVerificationResult>;
+    ) => Promise<DesktopIntervalsCredentialVerificationResult>;
     readonly writeResult?: CredentialWriteResult;
     readonly vault?: Pick<CredentialVault, "credentialStatuses" | "runExclusiveMutation">;
     readonly clipboardValue?: string;
@@ -298,6 +336,30 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
       { slot: "intervals-icu", value: API_KEY },
       { rollbackOnRuntimeRefusal: true },
     );
+  });
+
+  it("forwards a daemon approval only to activation and never returns it to the renderer", async () => {
+    const runtime = setup({
+      verifyCredential: async (apiKey) => {
+        runtime.trace.push(`preflight:${apiKey}`);
+        return { status: "verified", verificationApproval: APPROVAL };
+      },
+    });
+
+    const result = await runtime.invoke();
+
+    expect(runtime.trace).toEqual([
+      "read",
+      "clear",
+      `preflight:${API_KEY}`,
+      `write:${API_KEY}`,
+    ]);
+    expect(runtime.writeCredential).toHaveBeenCalledWith(
+      { slot: "intervals-icu", value: API_KEY },
+      { rollbackOnRuntimeRefusal: true, verificationApproval: APPROVAL },
+    );
+    expect(result).toEqual({ outcome: "applied", current: status("configured", "active") });
+    expect(JSON.stringify(result)).not.toContain(APPROVAL);
   });
 
   it.each(["", "   ", "a\u0000b", "a\nb", "a\u007fb", "a\u0085b", "x".repeat(257)])(
@@ -796,6 +858,171 @@ describe("Intervals.icu credential verification", () => {
     expect(readRuntimeConfig).toHaveBeenCalledWith(signal);
     expect(JSON.stringify(result)).not.toContain(API_KEY);
     expect(JSON.stringify(result)).not.toContain("PRIVATE_KEY");
+  });
+
+  it("uses daemon preflight without a main-process fetch and preserves refusal mappings", async () => {
+    const readRuntimeConfig = vi.fn(async () => runtimeSnapshot());
+    const accepted = createDesktopIntervalsCredentialVerifier({
+      storePath: "/synthetic/store.db",
+      readRuntimeConfig,
+      verifyWithDaemon: async () => ({ approval: APPROVAL }),
+    });
+
+    await expect(accepted(API_KEY, new AbortController().signal)).resolves.toEqual({
+      status: "verified",
+      verificationApproval: APPROVAL,
+    });
+    expect(readRuntimeConfig).not.toHaveBeenCalled();
+
+    for (const reason of [
+      "credential-rejected",
+      "malformed-athlete-response",
+      "validation-timeout",
+      "validation-aborted",
+      "validation-unavailable",
+      "training-account-mismatch",
+      "owner-unresolved",
+      "store-unavailable",
+    ] as const) {
+      const refused = createDesktopIntervalsCredentialVerifier({
+        storePath: "/synthetic/store.db",
+        readRuntimeConfig,
+        verifyWithDaemon: async () => ({ reason }),
+      });
+      await expect(refused(API_KEY, new AbortController().signal)).resolves.toEqual({
+        status: "refused",
+        reason,
+      });
+    }
+    expect(readRuntimeConfig).not.toHaveBeenCalled();
+  });
+
+  it("uses the legacy tokenless lane when an old daemon has no preflight method", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "intervals-fallback-"));
+    const storePath = join(root, "store.db");
+    const store = new DatabaseSync(storePath);
+    store.exec(
+      "CREATE TABLE store_owner (singleton INTEGER PRIMARY KEY, account_fingerprint TEXT NOT NULL)",
+    );
+    store.close();
+    const readRuntimeConfig = vi.fn(async () => runtimeSnapshot(""));
+    const verifyIntervalsCredential = vi.fn(async () => {
+      throw new CoachRpcRemoteError(-32601, "synthetic method unavailable");
+    });
+    const binding = { authority: { verifyIntervalsCredential } };
+    const verifyWithDaemon = vi.fn(
+      createActiveIntervalsCredentialPreflight({
+        currentBinding: () => binding,
+        lifecycleSnapshot: () => ({ status: "ready", generation: 1 }),
+      }),
+    );
+    const fetch = vi.fn(async () => athleteResponse());
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const verifyCredential = createDesktopIntervalsCredentialVerifier({
+        storePath,
+        readRuntimeConfig,
+        verifyWithDaemon,
+      });
+      const runtime = setup({ verifyCredential });
+
+      await expect(runtime.invoke()).resolves.toEqual({
+        outcome: "applied",
+        current: status("configured", "active"),
+      });
+      expect(verifyWithDaemon).toHaveBeenCalledOnce();
+      expect(verifyWithDaemon).toHaveBeenCalledWith(API_KEY, expect.any(AbortSignal));
+      expect(verifyIntervalsCredential).toHaveBeenCalledOnce();
+      expect(readRuntimeConfig).toHaveBeenCalledOnce();
+      expect(readRuntimeConfig).toHaveBeenCalledWith(expect.any(AbortSignal));
+      expect(readRuntimeConfig.mock.calls[0]?.[0]).toBe(verifyWithDaemon.mock.calls[0]?.[1]);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(runtime.writeCredential).toHaveBeenCalledOnce();
+      expect(runtime.writeCredential.mock.calls[0]?.[1]).toEqual({
+        rollbackOnRuntimeRefusal: true,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses after one transport attempt without reading config or writing the vault", async () => {
+    const readRuntimeConfig = vi.fn(async () => runtimeSnapshot(""));
+    const verifyIntervalsCredential = vi.fn(async () => {
+      throw new CoachClientTransportUnavailableError();
+    });
+    const binding = { authority: { verifyIntervalsCredential } };
+    const verifyWithDaemon = vi.fn(
+      createActiveIntervalsCredentialPreflight({
+        currentBinding: () => binding,
+        lifecycleSnapshot: () => ({ status: "ready", generation: 1 }),
+      }),
+    );
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const verifyCredential = createDesktopIntervalsCredentialVerifier({
+        storePath: "/synthetic/store.db",
+        readRuntimeConfig,
+        verifyWithDaemon,
+      });
+      const runtime = setup({ verifyCredential });
+
+      await expect(runtime.invoke()).resolves.toEqual({
+        outcome: "refused",
+        reason: "validation-unavailable",
+        current: status(),
+      });
+      expect(verifyWithDaemon).toHaveBeenCalledOnce();
+      expect(verifyIntervalsCredential).toHaveBeenCalledOnce();
+      expect(readRuntimeConfig).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(runtime.writeCredential).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the lifecycle-not-ready refusal on the zero-connection legacy lane", async () => {
+    const lifecycle = { status: "starting", generation: 1 };
+    const verifyIntervalsCredential = vi.fn(async () => ({ approval: APPROVAL }));
+    const binding = { authority: { verifyIntervalsCredential } };
+    const configConnection = vi.fn(async () => runtimeSnapshot(""));
+    const verifyWithDaemon = vi.fn(
+      createActiveIntervalsCredentialPreflight({
+        currentBinding: () => binding,
+        lifecycleSnapshot: () => lifecycle,
+      }),
+    );
+    const readRuntimeConfig = vi.fn(async () => {
+      if (lifecycle.status !== "ready") throw new TypeError();
+      return configConnection();
+    });
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const verifyCredential = createDesktopIntervalsCredentialVerifier({
+        storePath: "/synthetic/store.db",
+        readRuntimeConfig,
+        verifyWithDaemon,
+      });
+      const runtime = setup({ verifyCredential });
+
+      await expect(runtime.invoke()).resolves.toEqual({
+        outcome: "refused",
+        reason: "validation-unavailable",
+        current: status(),
+      });
+      expect(verifyWithDaemon).toHaveBeenCalledOnce();
+      expect(readRuntimeConfig).toHaveBeenCalledOnce();
+      expect(verifyIntervalsCredential).not.toHaveBeenCalled();
+      expect(configConnection).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(runtime.writeCredential).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("verifies a valid key before accepting a matching or ownerless store", async () => {

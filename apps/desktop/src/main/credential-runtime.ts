@@ -1,9 +1,14 @@
-import { connectCoachClient, type CoachClient } from "@enduragent/coach-client";
+import {
+  CoachRpcRemoteError,
+  connectCoachClient,
+  type CoachClient,
+} from "@enduragent/coach-client";
 import {
   isKeylessProvider,
   type ConfigureRuntimeRpcParams,
   type LlmProvider,
   type RuntimeConfigSnapshot,
+  type VerifyIntervalsCredentialRpcResult,
 } from "@enduragent/coach-contract";
 import { CHATGPT_PROFILE_NAME } from "./chatgpt-auth.js";
 import {
@@ -21,7 +26,11 @@ export interface LlmProviderSelectionEvidence {
 }
 
 export interface CredentialRuntimeApplication {
-  applyExplicit(request: ConfigureRuntimeRpcParams, signal?: AbortSignal): Promise<void>;
+  applyExplicit(
+    request: ConfigureRuntimeRpcParams,
+    signal?: AbortSignal,
+    verificationApproval?: string,
+  ): Promise<void>;
   applyExistingLlmSelection(
     provider: LlmProvider,
     request: ConfigureRuntimeRpcParams,
@@ -35,6 +44,15 @@ export interface CredentialRuntimeApplication {
   clearCredential(
     credential: DesktopManagedCredential,
   ): Promise<"cleared" | "not-active" | "managed-by-environment">;
+}
+
+export function applyExplicitCredentialToRuntime(
+  runtime: Pick<CredentialRuntimeApplication, "applyExplicit">,
+  request: ConfigureRuntimeRpcParams,
+  verificationApproval?: string,
+): Promise<void> {
+  if (verificationApproval === undefined) return runtime.applyExplicit(request);
+  return runtime.applyExplicit(request, undefined, verificationApproval);
 }
 
 interface CredentialRuntimeApplicationOptions {
@@ -52,10 +70,60 @@ interface CredentialRuntimeApplicationOptions {
 
 export interface RuntimeConfigurationAuthority {
   configureRuntime(request: ConfigureRuntimeRpcParams, signal?: AbortSignal): Promise<void>;
+  verifyIntervalsCredential(
+    apiKey: string,
+    signal?: AbortSignal,
+  ): Promise<VerifyIntervalsCredentialRpcResult>;
   clearCredential(
     credential: DesktopManagedCredential,
   ): Promise<"cleared" | "not-active" | "managed-by-environment">;
   getRuntimeConfig(signal?: AbortSignal): Promise<RuntimeConfigSnapshot>;
+}
+
+export interface ActiveIntervalsCredentialBinding {
+  readonly authority: Pick<RuntimeConfigurationAuthority, "verifyIntervalsCredential">;
+}
+
+export interface ActiveIntervalsCredentialLifecycleSnapshot {
+  readonly status: string;
+  readonly generation?: number;
+}
+
+export function createActiveIntervalsCredentialPreflight(input: {
+  readonly currentBinding: () => ActiveIntervalsCredentialBinding | undefined;
+  readonly lifecycleSnapshot: () => ActiveIntervalsCredentialLifecycleSnapshot | undefined;
+}): (
+  apiKey: string,
+  signal: AbortSignal,
+) => Promise<VerifyIntervalsCredentialRpcResult | undefined> {
+  return async (apiKey, signal) => {
+    const binding = input.currentBinding();
+    const lifecycleState = input.lifecycleSnapshot();
+    if (
+      binding === undefined ||
+      lifecycleState?.status !== "ready" ||
+      typeof lifecycleState.generation !== "number"
+    ) {
+      return undefined;
+    }
+    let result: VerifyIntervalsCredentialRpcResult;
+    try {
+      result = await binding.authority.verifyIntervalsCredential(apiKey, signal);
+    } catch (error) {
+      signal.throwIfAborted();
+      if (error instanceof CoachRpcRemoteError && error.code === -32601) return undefined;
+      throw error;
+    }
+    const currentLifecycleState = input.lifecycleSnapshot();
+    if (
+      input.currentBinding() !== binding ||
+      currentLifecycleState?.status !== "ready" ||
+      currentLifecycleState.generation !== lifecycleState.generation
+    ) {
+      throw new TypeError();
+    }
+    return result;
+  };
 }
 
 export function runtimeConfigurationForCredentialDeletion(
@@ -149,6 +217,15 @@ export function createConnectionRuntimeAuthority(
       }
       return "cleared";
     },
+    verifyIntervalsCredential(apiKey, signal) {
+      return call(
+        (client) =>
+          signal === undefined
+            ? client.call("verify_intervals_credential", { api_key: apiKey })
+            : client.call("verify_intervals_credential", { api_key: apiKey }, { signal }),
+        signal,
+      );
+    },
     getRuntimeConfig(signal) {
       return call(
         (client) =>
@@ -198,10 +275,26 @@ export function createCredentialRuntimeApplication(
   };
 
   return {
-    applyExplicit(request, signal) {
+    applyExplicit(request, signal, verificationApproval) {
       return serialize(() => {
         signal?.throwIfAborted();
-        return options.configureRuntime(request, signal);
+        if (verificationApproval === undefined) return options.configureRuntime(request, signal);
+        if (
+          !/^[0-9a-f]{64}$/.test(verificationApproval) ||
+          request.intervals?.api_key === undefined
+        ) {
+          throw new TypeError();
+        }
+        return options.configureRuntime(
+          {
+            ...request,
+            intervals: {
+              ...request.intervals,
+              verification_approval: verificationApproval,
+            },
+          },
+          signal,
+        );
       });
     },
     applyExistingLlmSelection(provider, request, signal) {

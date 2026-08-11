@@ -161,6 +161,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "getSetupStatus",
   "saveIntake",
   "configureRuntime",
+  "verify_intervals_credential",
   "getRuntimeConfig",
   "getUnitsPreference",
   "setUnitsPreference",
@@ -633,6 +634,7 @@ const RuntimeIntervalsSchema = z
     api_key: z.string().min(1).max(16_384).optional(),
     clear_credential: z.literal(true).optional(),
     athlete_id: z.string().min(1).max(512).optional(),
+    verification_approval: z.string().length(64).regex(/^[0-9a-f]{64}$/).optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -641,6 +643,13 @@ const RuntimeIntervalsSchema = z
         code: "custom",
         path: ["clear_credential"],
         message: "clear_credential must be the only intervals patch field",
+      });
+    }
+    if (value.verification_approval !== undefined && value.api_key === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["verification_approval"],
+        message: "verification_approval requires api_key",
       });
     }
     if (Object.keys(value).length === 0) {
@@ -737,6 +746,43 @@ export const ConfigureRuntimeRpcResultSchema = z.discriminatedUnion("status", [
     .strict(),
 ]);
 export type ConfigureRuntimeRpcResult = z.infer<typeof ConfigureRuntimeRpcResultSchema>;
+
+export const IntervalsCredentialVerificationRefusalReasonSchema = z.enum([
+  "credential-rejected",
+  "malformed-athlete-response",
+  "validation-timeout",
+  "validation-aborted",
+  "validation-unavailable",
+  "training-account-mismatch",
+  "owner-unresolved",
+  "store-unavailable",
+]);
+export type IntervalsCredentialVerificationRefusalReason = z.infer<
+  typeof IntervalsCredentialVerificationRefusalReasonSchema
+>;
+
+export const IntervalsCredentialApprovalSchema = z
+  .string()
+  .length(64)
+  .regex(/^[0-9a-f]{64}$/);
+export type IntervalsCredentialApproval = z.infer<typeof IntervalsCredentialApprovalSchema>;
+
+export const VerifyIntervalsCredentialRpcParamsSchema = z
+  .object({
+    api_key: z.string().min(1).max(16_384),
+  })
+  .strict();
+export type VerifyIntervalsCredentialRpcParams = z.infer<
+  typeof VerifyIntervalsCredentialRpcParamsSchema
+>;
+
+export const VerifyIntervalsCredentialRpcResultSchema = z.union([
+  z.object({ approval: IntervalsCredentialApprovalSchema }).strict(),
+  z.object({ reason: IntervalsCredentialVerificationRefusalReasonSchema }).strict(),
+]);
+export type VerifyIntervalsCredentialRpcResult = z.infer<
+  typeof VerifyIntervalsCredentialRpcResultSchema
+>;
 
 export const RuntimeConfigSnapshotSchema = z
   .object({
@@ -868,6 +914,10 @@ export interface CoachOperations {
     request: ConfigureRuntimeRpcParams,
     signal?: AbortSignal,
   ): Promise<ConfigureRuntimeRpcResult>;
+  verify_intervals_credential?(
+    request: VerifyIntervalsCredentialRpcParams,
+    signal?: AbortSignal,
+  ): Promise<VerifyIntervalsCredentialRpcResult>;
   getRuntimeConfig(request: GetRuntimeConfigRpcParams): Promise<GetRuntimeConfigRpcResult>;
   getUnitsPreference?(request: GetUnitsPreferenceRpcParams): Promise<GetUnitsPreferenceRpcResult>;
   setUnitsPreference?(request: SetUnitsPreferenceRpcParams): Promise<SetUnitsPreferenceRpcResult>;
@@ -1023,6 +1073,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("configureRuntime"),
       params: ConfigureRuntimeRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("verify_intervals_credential"),
+      params: VerifyIntervalsCredentialRpcParamsSchema,
     })
     .strict(),
   z
@@ -1384,6 +1442,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "configureRuntime",
     requestSchema: ConfigureRuntimeRpcParamsSchema,
     responseSchema: ConfigureRuntimeRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  verify_intervals_credential: {
+    wireName: "verify_intervals_credential",
+    requestSchema: VerifyIntervalsCredentialRpcParamsSchema,
+    responseSchema: VerifyIntervalsCredentialRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getRuntimeConfig: {

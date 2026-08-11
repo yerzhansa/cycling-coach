@@ -29,6 +29,8 @@ import {
   installDesktopIntervalsIpc,
 } from "./intervals-ipc.js";
 import {
+  applyExplicitCredentialToRuntime,
+  createActiveIntervalsCredentialPreflight,
   createConnectionRuntimeAuthority,
   createCredentialRuntimeApplication,
   intervalsAthleteIdForOwnership,
@@ -516,6 +518,10 @@ async function runDesktop(): Promise<void> {
       }
       return snapshot;
     };
+    const verifyActiveIntervalsCredential = createActiveIntervalsCredentialPreflight({
+      currentBinding: () => activeRuntimeBinding,
+      lifecycleSnapshot: () => daemonLifecycle?.snapshot(),
+    });
     const readActiveTranscript = async <T>(
       read: (reader: DesktopTranscriptReader) => Promise<T>,
     ): Promise<T> => {
@@ -554,12 +560,15 @@ async function runDesktop(): Promise<void> {
           return canPublish;
         };
       },
-      async applyCredential(slot, value, selection) {
+      async applyCredential(slot, value, selection, verificationApproval) {
         const binding = activeRuntimeBinding!;
         const lifecycleState = daemonLifecycle?.snapshot();
         if (lifecycleState?.status !== "ready") throw new TypeError();
-        await binding.credentials.applyExplicit(
-          runtimeConfigurationForCredential(slot, value, selection),
+        const request = runtimeConfigurationForCredential(slot, value, selection);
+        await applyExplicitCredentialToRuntime(
+          binding.credentials,
+          request,
+          verificationApproval,
         );
         const currentLifecycleState = daemonLifecycle?.snapshot();
         if (
@@ -907,6 +916,7 @@ async function runDesktop(): Promise<void> {
       verifyCredential: createDesktopIntervalsCredentialVerifier({
         storePath: intervalsStorePath,
         readRuntimeConfig: readActiveRuntimeConfig,
+        verifyWithDaemon: verifyActiveIntervalsCredential,
       }),
     });
     disposeTelegramIpc = installDesktopTelegramIpc({

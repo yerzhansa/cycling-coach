@@ -80,6 +80,8 @@ import {
   type ListArchivedConversationsRpcParams,
   type ListArchivedConversationsRpcResult,
   type GetRuntimeConfigRpcResult,
+  type VerifyIntervalsCredentialRpcParams,
+  type VerifyIntervalsCredentialRpcResult,
 } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
@@ -90,6 +92,16 @@ import {
   RuntimeAthleteOwnerRefusal,
   type RuntimeAthleteOwnerClaim,
 } from "./backfill.js";
+import {
+  assertRuntimeAthleteOwnerFromEvidence,
+  readIntervalsStoreOwnerState,
+  verifyIntervalsCredentialAtPathWithEvidence,
+} from "./account-identity.js";
+import {
+  createIntervalsCredentialApprovalStore,
+  digestIntervalsCredential,
+  normalizeIntervalsAthleteSelector,
+} from "./intervals-credential-approval.js";
 import { createCoachEngineAdapter } from "./coach-engine-adapter.js";
 import {
   createStoreRuntime,
@@ -729,6 +741,8 @@ export async function createLocalCoachComposition(
   }
   const now = dependencies.now ?? Date.now;
   const ownerClock = { now, monotonicNow: () => performance.now() };
+  const intervalsCredentialApprovals = createIntervalsCredentialApprovalStore({ now });
+  let intervalsConfigRevision = 0;
   const ownerLookup = (intervals: Config["intervals"]) => ({
     apiKey: intervals.apiKey,
     athleteId: intervals.athleteId.length === 0 ? "0" : intervals.athleteId,
@@ -740,7 +754,30 @@ export async function createLocalCoachComposition(
     candidate: Config["intervals"],
     signal: AbortSignal,
     claimUnownedCandidateWithoutCurrent = false,
+    verificationApproval?: string,
   ): Promise<RuntimeAthleteOwnerClaim | undefined> => {
+    if (verificationApproval !== undefined) {
+      let ownerState: Awaited<ReturnType<typeof readIntervalsStoreOwnerState>> | undefined;
+      try {
+        ownerState = await readIntervalsStoreOwnerState(input.context.store);
+      } catch {}
+      if (ownerState !== undefined) {
+        const evidence = intervalsCredentialApprovals.consume({
+          approval: verificationApproval,
+          credentialDigest: digestIntervalsCredential(candidate.apiKey),
+          athleteSelector: normalizeIntervalsAthleteSelector(candidate.athleteId),
+          ownerState,
+          configRevision: intervalsConfigRevision,
+        });
+        if (evidence !== undefined) {
+          return await assertRuntimeAthleteOwnerFromEvidence(
+            input.context.store,
+            evidence,
+            signal,
+          );
+        }
+      }
+    }
     const approval = await (dependencies.assertRuntimeAthleteOwner ?? assertRuntimeAthleteOwner)(
       input.context.store,
       {
@@ -761,6 +798,33 @@ export async function createLocalCoachComposition(
       intervals: { ...activeConfig.intervals, athleteId: "0" },
     };
   }
+  const verifyIntervalsCredential = async (
+    request: VerifyIntervalsCredentialRpcParams,
+    signal: AbortSignal,
+  ): Promise<VerifyIntervalsCredentialRpcResult> => {
+    const athleteSelector = normalizeIntervalsAthleteSelector(activeConfig.intervals.athleteId);
+    const configRevision = intervalsConfigRevision;
+    const verification = await verifyIntervalsCredentialAtPathWithEvidence(
+      join(input.home.storeDir, "store.db"),
+      {
+        apiKey: request.api_key,
+        athleteId: athleteSelector,
+        historyNewestDate: new Date(now()).toISOString().slice(0, 10),
+        clock: ownerClock,
+        signal,
+      },
+    );
+    if (verification.status === "refused") return { reason: verification.reason };
+    signal.throwIfAborted();
+    return {
+      approval: intervalsCredentialApprovals.issue({
+        apiKey: request.api_key,
+        athleteSelector,
+        evidence: verification.evidence,
+        configRevision,
+      }),
+    };
+  };
   let runtime: LocalStoreRuntime | undefined;
   let reference: LocalReferenceRuntime | undefined;
   let closePromise: Promise<void> | undefined;
@@ -959,6 +1023,9 @@ export async function createLocalCoachComposition(
         (request.intervals?.api_key !== undefined ||
           request.intervals?.clear_credential === true) &&
         candidate.intervals.apiKey !== activeConfig.intervals.apiKey;
+      const intervalsConfigChanged =
+        candidate.intervals.apiKey !== activeConfig.intervals.apiKey ||
+        candidate.intervals.athleteId !== activeConfig.intervals.athleteId;
       let pendingOwnerClaim: RuntimeAthleteOwnerClaim | undefined;
       if (athleteIdChanged || (apiKeyChanged && request.intervals?.clear_credential !== true)) {
         if (
@@ -974,6 +1041,7 @@ export async function createLocalCoachComposition(
             candidate.intervals,
             signal,
             activeConfig.intervals.apiKey.length === 0 && candidate.intervals.apiKey.length > 0,
+            request.intervals?.verification_approval,
           );
         } catch (error) {
           if (!(error instanceof RuntimeAthleteOwnerRefusal)) throw error;
@@ -1024,6 +1092,7 @@ export async function createLocalCoachComposition(
           throw error;
         }
         activeConfig = candidate;
+        if (intervalsConfigChanged) intervalsConfigRevision += 1;
         activeTimezone = replacement.timezone;
         return replacement;
       });
@@ -1116,6 +1185,7 @@ export async function createLocalCoachComposition(
           readArchivedTranscriptPage: (request) =>
             reconfigurable.getArchivedTranscriptPage(request),
           applyRuntimeConfig,
+          verifyIntervalsCredential,
           readRuntimeConfig: () =>
             runtimeConfigSnapshot(input.home.configDir, activeConfig, input.env, activeTimezone),
         },
