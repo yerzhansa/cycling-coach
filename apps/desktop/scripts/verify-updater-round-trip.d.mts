@@ -22,6 +22,31 @@ export interface MacosUpdaterRoundTripContext {
   readonly mode?: string;
 }
 
+export interface MacosUpdaterDownloadedStateProbeContext {
+  readonly candidateVersion: string;
+  readonly observe: () => Promise<{
+    readonly state: unknown;
+    readonly recheckFailures: number;
+  }>;
+  readonly retrigger: () => Promise<void>;
+  readonly now?: () => number;
+}
+
+export interface MacosUpdaterDownloadedStateProbe {
+  readonly probe: () => Promise<unknown>;
+  readonly timeoutFailure: (lastError?: unknown) => Error;
+}
+
+export type MacosUpdaterRoundTripFailureDiagnostic = Readonly<{
+  phase: string;
+  cleanup: string;
+  reason?: string;
+  observedState?: string;
+  recheckAttempts?: number;
+  recheckFailures?: number;
+  lastErrorReason?: string;
+}>;
+
 export interface MacosApplicationProcessObservation {
   readonly bundlePids: readonly number[];
   readonly mainPids: readonly number[];
@@ -172,6 +197,48 @@ export function parseMacosDownloadedUpdateInfo(
   value: unknown,
   expected: { readonly fileName: string; readonly sha512: string },
 ): MacosDownloadedUpdateInfo;
+
+export function sanitizeMacosUpdaterObservedState(value: unknown): string;
+
+export function shouldRetriggerMacosUpdaterCheck(
+  state: unknown,
+  candidateAdvertised: boolean,
+): boolean;
+
+export function createMacosUpdaterDownloadedStateProbe(
+  context: MacosUpdaterDownloadedStateProbeContext,
+): Readonly<MacosUpdaterDownloadedStateProbe>;
+
+export function observeMacosUpdaterState(
+  evaluate: (expression: string) => Promise<unknown>,
+): Promise<{ readonly state: unknown; readonly recheckFailures: number }>;
+
+export function retriggerMacosUpdaterCheck(
+  evaluate: (expression: string) => Promise<unknown>,
+): Promise<void>;
+
+export function waitForMacosUpdaterDownloadedState(
+  evaluate: (expression: string) => Promise<unknown>,
+  candidateVersion: string,
+): Promise<unknown>;
+
+export function waitForMacosUpdaterCondition<T>(
+  description: string,
+  probe: () => Promise<T | false | undefined>,
+  timeoutMs: number,
+  intervalMs?: number,
+  timeoutFailure?: (lastError?: unknown) => Error,
+): Promise<T>;
+
+export function describeMacosUpdaterRoundTripFailure(
+  error: unknown,
+): MacosUpdaterRoundTripFailureDiagnostic;
+
+export function bindMacosUpdaterRoundTripFailureDiagnostic(
+  error: unknown,
+  phase: string,
+  cleanup: string,
+): Error;
 
 export function parseMacosApplicationProcessObservation(
   bytes: Uint8Array,

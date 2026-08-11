@@ -44,6 +44,7 @@ export const MACOS_UPDATER_ROUND_TRIP_FEED_URL =
 const productName = "Enduragent";
 const maximumUpdateInfoBytes = 16_384;
 const downloadTimeoutMs = 10 * 60_000;
+const updateRecheckBackoffMs = 45_000;
 const transitionTimeoutMs = 2 * 60_000;
 const shutdownTimeoutMs = 30_000;
 const cleanupTerminationGraceMs = 2_000;
@@ -57,6 +58,11 @@ const credentialDirectoryName = "credentials-v1";
 const persistenceCredentialSlot = "openrouter";
 const persistenceChatId = "desktop";
 const maximumPersistenceFiles = 20_000;
+const observedStateStringValueLimit = 64;
+const observedStateSerializedLimit = 256;
+const observedStateNonPrimitive = "[non-primitive]";
+const observedStateRedacted = "[redacted]";
+const updateRecheckFailureProperty = "__enduragentUpdaterRoundTripRecheckFailures";
 
 class MacosUpdaterRoundTripError extends Error {
   constructor(message) {
@@ -65,12 +71,22 @@ class MacosUpdaterRoundTripError extends Error {
   }
 }
 
+class MacosUpdaterRoundTripFatalError extends MacosUpdaterRoundTripError {
+  constructor(message) {
+    super(message);
+    this.name = "MacosUpdaterRoundTripFatalError";
+  }
+}
+
 const failureDiagnostics = new WeakMap();
 
 function bindFailureDiagnostic(error, phase, cleanup) {
   const failure =
     error instanceof Error ? error : new MacosUpdaterRoundTripError("round-trip failed");
-  failureDiagnostics.set(failure, Object.freeze({ phase, cleanup }));
+  failureDiagnostics.set(
+    failure,
+    Object.freeze({ ...failureDiagnostics.get(failure), phase, cleanup }),
+  );
   return failure;
 }
 
@@ -78,13 +94,18 @@ function safeFailureDiagnostic(error) {
   if (!(error instanceof Error)) {
     return Object.freeze({ phase: "input-validation", cleanup: "not-started" });
   }
-  const diagnostic =
-    failureDiagnostics.get(error) ??
-    Object.freeze({ phase: "input-validation", cleanup: "not-started" });
+  const diagnostic = Object.freeze({
+    phase: "input-validation",
+    cleanup: "not-started",
+    ...failureDiagnostics.get(error),
+  });
   return error instanceof MacosUpdaterRoundTripError
     ? Object.freeze({ ...diagnostic, reason: error.message })
     : diagnostic;
 }
+
+export { bindFailureDiagnostic as bindMacosUpdaterRoundTripFailureDiagnostic };
+export { safeFailureDiagnostic as describeMacosUpdaterRoundTripFailure };
 
 function fail(message) {
   throw new MacosUpdaterRoundTripError(message);
@@ -102,6 +123,72 @@ function exactKeys(value, expected) {
     actual.length === sortedExpected.length &&
     actual.every((key, index) => key === sortedExpected[index])
   );
+}
+
+export function sanitizeMacosUpdaterObservedState(value) {
+  try {
+    if (!exactObject(value)) return "unavailable";
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return "unavailable";
+    const entries = [];
+    for (const key of Object.keys(value).sort()) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      const candidate =
+        descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+      let sanitized = observedStateNonPrimitive;
+      if (candidate === null || typeof candidate === "boolean") {
+        sanitized = candidate;
+      } else if (typeof candidate === "number" && Number.isFinite(candidate)) {
+        sanitized = candidate;
+      } else if (typeof candidate === "string") {
+        sanitized =
+          candidate.includes("/") || candidate.includes("\\")
+            ? observedStateRedacted
+            : candidate.slice(0, observedStateStringValueLimit);
+      }
+      entries.push(`${JSON.stringify(key)}:${JSON.stringify(sanitized)}`);
+    }
+    return `{${entries.join(",")}}`.slice(0, observedStateSerializedLimit);
+  } catch {
+    return "unavailable";
+  }
+}
+
+export function shouldRetriggerMacosUpdaterCheck(state, candidateAdvertised) {
+  if (
+    exactKeys(state, ["stage", "status"]) &&
+    state.status === "failed" &&
+    ["check", "download"].includes(state.stage)
+  ) {
+    return true;
+  }
+  return (
+    candidateAdvertised === true &&
+    exactKeys(state, ["status"]) &&
+    ["current", "idle"].includes(state.status)
+  );
+}
+
+function createObservedStateFailure(message, state, detail = {}) {
+  const observedState = sanitizeMacosUpdaterObservedState(state);
+  const { recheckAttempts, recheckFailures, lastError, fatal } = detail;
+  const recheckDiagnostic =
+    recheckAttempts === undefined
+      ? ""
+      : `; recheckAttempts=${recheckAttempts}; recheckFailures=${recheckFailures}`;
+  const lastErrorReason =
+    lastError instanceof MacosUpdaterRoundTripError ? lastError.message : undefined;
+  const lastErrorDiagnostic = lastErrorReason === undefined ? "" : `; lastError=${lastErrorReason}`;
+  const text = `${message}; observedState=${observedState}${recheckDiagnostic}${lastErrorDiagnostic}`;
+  const failure =
+    fatal === true
+      ? new MacosUpdaterRoundTripFatalError(text)
+      : new MacosUpdaterRoundTripError(text);
+  failureDiagnostics.set(
+    failure,
+    Object.freeze({ observedState, recheckAttempts, recheckFailures, lastErrorReason }),
+  );
+  return failure;
 }
 
 function olderStableSemVer(left, right) {
@@ -837,7 +924,7 @@ async function debuggerListenerOwner(port, environment) {
   return telegramAcceptanceDebuggerListenerOwner(result);
 }
 
-async function waitUntil(description, probe, timeoutMs, intervalMs = 100) {
+async function waitUntil(description, probe, timeoutMs, intervalMs = 100, timeoutFailure) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
   while (Date.now() < deadline) {
@@ -845,13 +932,17 @@ async function waitUntil(description, probe, timeoutMs, intervalMs = 100) {
       const value = await probe();
       if (value !== false && value !== undefined) return value;
     } catch (error) {
+      if (error instanceof MacosUpdaterRoundTripFatalError) throw error;
       lastError = error;
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, intervalMs));
   }
+  if (timeoutFailure !== undefined) throw timeoutFailure(lastError);
   if (lastError instanceof MacosUpdaterRoundTripError) throw lastError;
   fail(`${description} timed out`);
 }
+
+export { waitUntil as waitForMacosUpdaterCondition };
 
 async function evaluateRenderer(connection, expression, timeoutMs = 5_000) {
   const response = await callAcceptanceCdp(
@@ -1247,23 +1338,113 @@ function exactDownloadedState(value, version) {
   );
 }
 
-async function waitForDownloadedState(connection, candidateVersion) {
-  return waitUntil(
-    "downloaded update state",
-    async () => {
-      const state = await evaluateRenderer(connection, "window.enduragentAuth.getUpdateState()");
-      if (exactDownloadedState(state, candidateVersion)) return state;
-      if (
-        !exactObject(state) ||
-        !["idle", "checking", "downloading"].includes(state.status) ||
-        (state.status === "downloading" && state.version !== candidateVersion)
-      ) {
-        fail("application did not enter the expected downloaded update state");
+export async function observeMacosUpdaterState(evaluate) {
+  const property = JSON.stringify(updateRecheckFailureProperty);
+  const observation = await evaluate(
+    `(async () => ({
+      state: await window.enduragentAuth.getUpdateState(),
+      recheckFailures: window[${property}] ?? 0,
+    }))()`,
+  );
+  if (
+    !exactKeys(observation, ["recheckFailures", "state"]) ||
+    !Number.isSafeInteger(observation.recheckFailures) ||
+    observation.recheckFailures < 0
+  ) {
+    fail("updater state observation failed");
+  }
+  return Object.freeze({
+    state: observation.state,
+    recheckFailures: observation.recheckFailures,
+  });
+}
+
+export async function retriggerMacosUpdaterCheck(evaluate) {
+  const property = JSON.stringify(updateRecheckFailureProperty);
+  const invoked = await evaluate(
+    `(() => {
+      const property = ${property};
+      if (!Number.isSafeInteger(window[property]) || window[property] < 0) window[property] = 0;
+      Promise.resolve()
+        .then(() => window.enduragentAuth.checkForUpdates())
+        .catch(() => {
+          window[property] += 1;
+        });
+      return true;
+    })()`,
+  );
+  if (invoked !== true) fail("updater check re-trigger failed");
+}
+
+export function createMacosUpdaterDownloadedStateProbe(context) {
+  const { candidateVersion, observe, retrigger, now = Date.now } = context;
+  let observedState;
+  let lastRecheckAt = -Infinity;
+  let recheckAttempts = 0;
+  let recheckInvocationFailures = 0;
+  let recheckPromiseFailures = 0;
+  const probe = async () => {
+    const observation = await observe();
+    const state = observation.state;
+    observedState = state;
+    recheckPromiseFailures = observation.recheckFailures;
+    if (exactDownloadedState(state, candidateVersion)) return state;
+    if (shouldRetriggerMacosUpdaterCheck(state, true)) {
+      if (now() - lastRecheckAt >= updateRecheckBackoffMs) {
+        lastRecheckAt = now();
+        recheckAttempts += 1;
+        try {
+          await retrigger();
+        } catch {
+          recheckInvocationFailures += 1;
+        }
       }
       return false;
-    },
-    downloadTimeoutMs,
-    250,
+    }
+    if (
+      (exactKeys(state, ["status"]) && ["idle", "checking"].includes(state.status)) ||
+      (exactKeys(state, ["status", "version"]) &&
+        state.status === "downloading" &&
+        state.version === candidateVersion)
+    ) {
+      return false;
+    }
+    throw createObservedStateFailure(
+      "application did not enter the expected downloaded update state",
+      state,
+      {
+        fatal: true,
+        recheckAttempts,
+        recheckFailures: recheckInvocationFailures + recheckPromiseFailures,
+      },
+    );
+  };
+  const timeoutFailure = (lastError) =>
+    createObservedStateFailure(
+      "application did not enter the expected downloaded update state",
+      observedState,
+      {
+        recheckAttempts,
+        recheckFailures: recheckInvocationFailures + recheckPromiseFailures,
+        lastError,
+      },
+    );
+  return Object.freeze({ probe, timeoutFailure });
+}
+
+export function waitForMacosUpdaterDownloadedState(evaluate, candidateVersion) {
+  const { probe, timeoutFailure } = createMacosUpdaterDownloadedStateProbe({
+    candidateVersion,
+    observe: () => observeMacosUpdaterState(evaluate),
+    retrigger: () => retriggerMacosUpdaterCheck(evaluate),
+  });
+  return waitUntil("downloaded update state", probe, downloadTimeoutMs, 250, timeoutFailure);
+}
+
+async function waitForDownloadedState(connection, candidateVersion) {
+  return waitForMacosUpdaterDownloadedState(
+    (expression) => evaluateRenderer(connection, expression),
+    candidateVersion,
   );
 }
 
@@ -1809,10 +1990,12 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         fail("baseline application did not exit cleanly for update");
       }
       phase = "observe-relaunch";
+      let relaunchedProcessObservation;
       const relaunchedProcesses = await waitUntil(
         "relaunched candidate application",
         async () => {
           const observation = await processObserver.observe();
+          relaunchedProcessObservation = observation;
           if (
             observation.ownedProcesses.some((identity) =>
               initialProcessIdentities.has(processIdentityKey(identity)),
@@ -1826,18 +2009,32 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
         },
         transitionTimeoutMs,
         250,
+        (lastError) =>
+          createObservedStateFailure(
+            "relaunched candidate application timed out",
+            relaunchedProcessObservation,
+            { lastError },
+          ),
       );
       relaunchedPid = relaunchedProcesses.mainPids[0];
       const relaunchedRootIdentity = await processObserver.trackRoot(relaunchedPid);
       phase = "verify-relaunch";
+      let observedRelaunchedIdentity;
       const relaunchedIdentity = await waitUntil(
         "relaunched candidate identity",
         async () => {
           const identity = await inspectApplication(installedApplication);
+          observedRelaunchedIdentity = identity;
           return identity.version === input.candidateVersion ? identity : false;
         },
         transitionTimeoutMs,
         250,
+        (lastError) =>
+          createObservedStateFailure(
+            "relaunched candidate identity timed out",
+            observedRelaunchedIdentity,
+            { lastError },
+          ),
       );
       const identity = verifyMacosUpdaterRoundTripIdentities({
         baselineVersion: input.baselineVersion,
@@ -1860,14 +2057,22 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       if (!(await processObserver.signalIdentity(relaunchedRootIdentity, "SIGTERM"))) {
         fail("relaunched application graceful shutdown signal failed");
       }
+      let finalShutdownObservation;
       await waitUntil(
         "relaunched application graceful shutdown",
         async () => {
           const observation = await processObserver.observe();
+          finalShutdownObservation = observation;
           return observation.ownedPids.length === 0 ? true : false;
         },
         shutdownTimeoutMs,
         100,
+        (lastError) =>
+          createObservedStateFailure(
+            "relaunched application graceful shutdown timed out",
+            finalShutdownObservation,
+            { lastError },
+          ),
       );
       phase = "launch-persistence-verification";
       const verificationPort = await reservePort();
@@ -1911,14 +2116,22 @@ export async function runMacosUpdaterRoundTrip(rawInput, overrides = {}) {
       if (verificationTerminal.code !== 0 || verificationTerminal.signal !== null) {
         fail("candidate persistence verification did not exit cleanly");
       }
+      let verificationCleanupObservation;
       await waitUntil(
         "candidate persistence verification process cleanup",
         async () => {
           const observation = await processObserver.observe();
+          verificationCleanupObservation = observation;
           return observation.ownedPids.length === 0 ? true : false;
         },
         shutdownTimeoutMs,
         100,
+        (lastError) =>
+          createObservedStateFailure(
+            "candidate persistence verification process cleanup timed out",
+            verificationCleanupObservation,
+            { lastError },
+          ),
       );
       phase = "validate-persistence";
       const plaintextCredentialAbsent = await requirePlaintextAbsent(
