@@ -192,13 +192,10 @@ export const TELEGRAM_CREATE_COPY_AFTER_BOTFATHER =
 
 export const TELEGRAM_CREATE_COPY = `Ask @BotFather ${TELEGRAM_CREATE_COPY_AFTER_BOTFATHER}`;
 
-export const TELEGRAM_REPLACEMENT_COPY =
-  "The same bot keeps its pairing and on/off choice. A different bot resets allowed users, turns Telegram off, and must be paired again. An invalid token leaves the current bot unchanged.";
+export const TELEGRAM_DELETE_TITLE = "Delete the Telegram connection?";
 
-export const TELEGRAM_REMOVE_TITLE = "Remove this Telegram bot from this Mac?";
-
-export const TELEGRAM_REMOVE_COPY =
-  "This turns Telegram off and removes the encrypted token and allowed-user access locally. The Telegram bot and chat still exist in Telegram.";
+export const TELEGRAM_DELETE_COPY =
+  "This turns Telegram off and deletes the encrypted token and allowed-user access from this Mac. The Telegram bot and chat remain in Telegram.";
 
 export const RETRY_SAVED_KEYS_LABEL = "Retry saved keys";
 

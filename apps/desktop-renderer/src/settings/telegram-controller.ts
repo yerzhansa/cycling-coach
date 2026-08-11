@@ -207,7 +207,7 @@ function workingCopy(action: TelegramSettingsAction): string {
   if (action === "paste-token") return "Reading and verifying the Telegram token…";
   if (action === "enable") return "Turning Telegram on…";
   if (action === "disable") return "Turning Telegram off…";
-  if (action === "remove") return "Removing this Telegram bot from the Mac…";
+  if (action === "remove") return "Deleting the Telegram connection…";
   if (action === "remove-webhook") return "Removing the bot’s webhook…";
   if (action === "begin-pairing") return "Creating a private pairing code…";
   if (action === "cancel-pairing") return "Cancelling pairing…";
@@ -246,13 +246,21 @@ function mutationFailureCopy(
   }
   if (result.outcome === "uncertain") {
     if (result.reason === "control-uncertain") {
-      return action === "paste-token"
-        ? "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again."
-        : "The Telegram change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check this setting before trying again.";
+      if (action === "paste-token") {
+        return "The Telegram connection may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check Telegram before trying again.";
+      }
+      if (action === "remove") {
+        return "Telegram connection deletion may not have completed. Restart Enduragent and check whether the bot is still connected before trying again.";
+      }
+      return "The Telegram change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check this setting before trying again.";
     }
-    return action === "paste-token"
-      ? "The copied token was not applied to the running bot because storage could not be verified. Restart Enduragent and check Telegram before trying again."
-      : "The change was not applied because storage could not be verified. Restart Enduragent and check this setting before trying again.";
+    if (action === "paste-token") {
+      return "The copied token was not applied because secure storage could not be verified. The current Telegram bot is unchanged. Restart Enduragent and check Telegram before trying again.";
+    }
+    if (action === "remove") {
+      return "Telegram connection deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and check Telegram before trying again.";
+    }
+    return "The change was not applied because storage could not be verified. Restart Enduragent and check this setting before trying again.";
   }
   if (result.reason === "encryption-unavailable") {
     if (action !== "paste-token") {
@@ -264,7 +272,7 @@ function mutationFailureCopy(
   }
   if (result.reason === "unsafe-backend") {
     if (action !== "paste-token") {
-      return "No secure credential backend is available, so Enduragent refused to read or change the saved bot token without encryption. Quit and reopen Enduragent, then choose Check again.";
+      return "No secure credential backend is available, so Enduragent refused to access the saved bot token without encryption. Quit and reopen Enduragent, then choose Check again.";
     }
     return result.current.credentialConfigured
       ? "The current Telegram bot is unchanged because no secure credential backend is available. Enduragent refused to save the copied token without encryption. Quit and reopen Enduragent, copy the bot token again, then retry."
@@ -283,7 +291,9 @@ function mutationFailureCopy(
       case "validation-unavailable":
         return "Telegram could not verify the copied token right now. The current Telegram bot is unchanged.";
       case "webhook-removal-required":
-        return "The copied bot still uses a webhook. Remove that webhook before replacing the current Telegram bot.";
+        return result.current.bot.state === "webhook-removal-required"
+          ? "The copied bot still uses a webhook. Remove the webhook before pairing it with this Mac."
+          : "The copied bot still uses a webhook. Remove the webhook, then delete the current connection and connect this bot.";
       case "storage-failed":
         return "The copied token could not be stored. The current Telegram bot is unchanged.";
       default:
@@ -326,13 +336,13 @@ function channelHealthCopy(status: TelegramControlStatus): string {
     return "Copy a bot token from BotFather, then paste it from the clipboard.";
   }
   if (status.channel.state === "invalid-token") {
-    return "Telegram rejected this token. Copy a fresh token from BotFather and replace it.";
+    return "Telegram rejected this token. Delete the connection, then connect a new bot with a fresh token from BotFather.";
   }
   if (status.channel.state === "conflict") {
     return "Another service is polling this bot. Stop that deployment, then check again.";
   }
   if (status.channel.state === "transfer-required") {
-    return "This bot is still owned by another Desktop installation. Remove it there before retrying here.";
+    return "This bot is still owned by another Desktop installation. Delete the connection there before connecting it here.";
   }
   if (status.channel.state === "offline-retrying") {
     return "Telegram is offline. Enduragent will keep trying while this Mac is awake and online.";
@@ -354,7 +364,7 @@ function resultCopy(action: TelegramSettingsAction, status: TelegramControlStatu
     return "Telegram is paired with its primary user.";
   }
   if (status.channel.state === "disabled" && action === "remove") {
-    return "Telegram was removed from this Mac.";
+    return "Telegram connection deleted from this Mac.";
   }
   return channelHealthCopy(status);
 }
@@ -420,12 +430,15 @@ function pairingFailureCopy(
 function pairingTransitionCopy(
   previous: TelegramControlStatus,
   current: TelegramControlStatus,
+  action?: TelegramSettingsAction,
 ): string | null {
   const previousBot = botUsername(previous.bot);
   const currentBot = botUsername(current.bot);
   if (previousBot !== currentBot) {
-    if (currentBot === null) return "Telegram bot was removed from this Mac.";
-    if (previousBot !== null) return `Telegram bot changed to @${currentBot}. Pairing was reset.`;
+    if (currentBot === null) return "Telegram connection deleted from this Mac.";
+    if (previousBot !== null || action === "paste-token") {
+      return `Telegram connected to @${currentBot}. Pairing needs to be set up.`;
+    }
   }
   if (previous.pairing.state !== "awaiting-code") return null;
   if (current.pairing.state === "awaiting-code") {
@@ -658,7 +671,7 @@ export function createTelegramSettingsController(input: {
           if (!disposed && generation === operationGeneration) {
             const transitionMessage =
               result.outcome === "applied" && previous.telegram !== null
-                ? pairingTransitionCopy(previous.telegram, content.telegram)
+                ? pairingTransitionCopy(previous.telegram, content.telegram, action)
                 : null;
             const message =
               result.outcome === "applied"

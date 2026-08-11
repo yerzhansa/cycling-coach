@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -93,8 +93,65 @@ describe("Telegram settings surface", () => {
     );
     expect(within(section).queryByRole("textbox")).toBeNull();
 
-    await user.click(within(section).getByRole("button", { name: "Paste token from clipboard" }));
+    const firstTimeHeading = within(section).getByRole("heading", {
+      name: "Create a bot with BotFather",
+    });
+    const firstTimePanel = firstTimeHeading.closest<HTMLElement>("#telegram-first-time-panel");
+    expect(firstTimePanel).not.toBeNull();
+    expect(
+      within(firstTimePanel as HTMLElement)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Cancel", "Paste token from clipboard"]);
+
+    await user.click(
+      within(firstTimePanel as HTMLElement).getByRole("button", {
+        name: "Cancel Telegram bot setup",
+      }),
+    );
+    const connect = within(section).getByRole("button", { name: "Connect" });
+    await waitFor(() => expect(connect).toHaveFocus());
+    expect(port.pasteToken).not.toHaveBeenCalled();
+
+    await user.click(connect);
+    const reopenedHeading = within(section).getByRole("heading", {
+      name: "Create a bot with BotFather",
+    });
+    expect(reopenedHeading).toHaveFocus();
+    const reopenedPanel = reopenedHeading.closest<HTMLElement>("#telegram-first-time-panel");
+    expect(reopenedPanel).not.toBeNull();
+    await user.click(
+      within(reopenedPanel as HTMLElement).getByRole("button", {
+        name: "Paste token from clipboard",
+      }),
+    );
     expect(port.pasteToken).toHaveBeenCalledWith();
+  });
+
+  it("keeps clipboard setup closed until the missing identity is authoritative", async () => {
+    const user = userEvent.setup();
+    const port = setup({
+      status: "error",
+      kind: "load",
+      telegram: null,
+      allowedSenders: null,
+      senderLoadFailed: false,
+      announcement: "Telegram settings aren’t available.",
+      healthAnnouncement: "",
+      feedback: null,
+    });
+
+    expect(screen.getByText("Telegram status unavailable")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Paste token from clipboard" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Create a bot with BotFather" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(port.retry).toHaveBeenCalledWith();
+    expect(port.pasteToken).not.toHaveBeenCalled();
+    expect(port.remove).not.toHaveBeenCalled();
   });
 
   it("shows the short-lived pairing code and explicit webhook removal", async () => {
@@ -264,12 +321,12 @@ describe("Telegram settings surface", () => {
     ],
     [
       "telegram-credential-unsafe-backend" as const,
-      /refused to read or change the saved bot token without encryption.*choose Check again/iu,
+      /refused to access the saved bot token without encryption.*choose Check again/iu,
       /macOS|Keychain/iu,
     ],
     [
       "telegram-credential-unavailable" as const,
-      /saved bot token could not be read from secure storage.*choose Check again/iu,
+      /saved bot token could not be read from secure storage.*delete this connection, then connect a new bot/iu,
       /macOS|Keychain/iu,
     ],
   ])("offers actionable recovery for %s", async (errorCode, expected, forbidden) => {
@@ -284,6 +341,110 @@ describe("Telegram settings surface", () => {
     expect(port.reconcile).toHaveBeenCalledWith();
   });
 
+  it("fails closed when a configured credential identity cannot be read", async () => {
+    const user = userEvent.setup();
+    const port = setup(
+      readyState(
+        status({
+          channel: {
+            desiredState: "enabled",
+            state: "failed",
+            errorCode: "telegram-credential-unavailable",
+          },
+          bot: { state: "unconfigured" },
+          credentialConfigured: true,
+        }),
+      ),
+    );
+
+    expect(
+      screen.getByText(/saved bot token could not be read from secure storage/iu),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Paste token from clipboard" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Create a bot with BotFather" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    expect(port.reconcile).toHaveBeenCalledWith();
+    expect(port.pasteToken).not.toHaveBeenCalled();
+    expect(port.remove).not.toHaveBeenCalled();
+
+    act(() => {
+      useEnduragentStore.setState((current) => ({
+        settings: {
+          ...current.settings,
+          telegram: readyState(status()),
+        },
+      }));
+    });
+
+    const firstTimeHeading = await screen.findByRole("heading", {
+      name: "Create a bot with BotFather",
+    });
+    await waitFor(() => expect(firstTimeHeading).toHaveFocus());
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Paste token from clipboard" })).toBeVisible();
+  });
+
+  it("fails closed after an uncertain deletion leaves identity unverified", async () => {
+    const user = userEvent.setup();
+    const port = setup(
+      readyState(
+        status({
+          channel: {
+            desiredState: "disabled",
+            state: "failed",
+            errorCode: "telegram-control-failed",
+          },
+          bot: { state: "unconfigured" },
+          credentialConfigured: false,
+        }),
+      ),
+    );
+
+    expect(
+      screen.getByText(
+        "Telegram could not start. Keep Enduragent open, check the internet connection, then choose Check again.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Paste token from clipboard" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Create a bot with BotFather" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    expect(port.reconcile).toHaveBeenCalledWith();
+    expect(port.pasteToken).not.toHaveBeenCalled();
+    expect(port.remove).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "transfer-required" as const,
+      /delete the connection there, then reconnect it here with a copied token/iu,
+    ],
+    [
+      "invalid-token" as const,
+      /delete this connection, then connect a new bot with a copied token from BotFather/iu,
+    ],
+  ])("uses delete-and-reconnect guidance for %s", (channelState, expected) => {
+    setup(
+      readyState(
+        status({
+          channel: { desiredState: "enabled", state: channelState },
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          credentialConfigured: true,
+        }),
+      ),
+    );
+
+    expect(screen.getByText(expected)).toBeVisible();
+    expect(screen.queryByText(/replace it|paste its token here again/iu)).toBeNull();
+  });
+
   it.each([
     [
       "telegram-credential-encryption-unavailable" as const,
@@ -291,7 +452,7 @@ describe("Telegram settings surface", () => {
     ],
     [
       "telegram-credential-unsafe-backend" as const,
-      /refused to read or change the saved bot token without encryption.*choose Check again/iu,
+      /refused to access the saved bot token without encryption.*choose Check again/iu,
     ],
   ])("keeps the current paired bot visible during %s recovery", (errorCode, expected) => {
     setup(
@@ -313,67 +474,126 @@ describe("Telegram settings surface", () => {
     expect(screen.queryByRole("button", { name: "Paste token from clipboard" })).toBeNull();
   });
 
-  it("requires confirmation before removing the encrypted bot credential", async () => {
+  it("requires confirmation before deleting the encrypted bot credential", async () => {
     const user = userEvent.setup();
-    const port = setup(
-      readyState(
-        status({
-          bot: { state: "ready", username: "desktop_coach_bot" },
-          pairing: { state: "paired" },
-          credentialConfigured: true,
-        }),
-      ),
-    );
+    const connected = status({
+      bot: { state: "ready", username: "desktop_coach_bot" },
+      pairing: { state: "paired" },
+      credentialConfigured: true,
+    });
+    const port = setup(readyState(connected));
 
-    await user.click(screen.getByRole("button", { name: "Remove bot from this Mac" }));
-    expect(screen.getByText("Remove @desktop_coach_bot from this Mac?")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await user.click(screen.getByText("Advanced · allowed users"));
+    await user.type(screen.getByLabelText("Add a Telegram user ID"), "9");
+    await user.click(screen.getByRole("button", { name: "Add user" }));
+    expect(
+      screen.getByText("Enter a numeric Telegram user ID with at least two digits."),
+    ).toBeVisible();
+
+    const deleteTrigger = screen.getByRole("button", { name: "Delete" });
+    expect(deleteTrigger).toHaveClass(
+      "border-[color-mix(in_srgb,var(--danger)_34%,transparent)]",
+      "bg-transparent",
+      "text-danger",
+    );
+    expect(screen.queryByRole("button", { name: "Replace token from clipboard" })).toBeNull();
+
+    await user.click(deleteTrigger);
+    let confirmation = screen.getByRole("group", {
+      name: "Delete @desktop_coach_bot from this Mac?",
+    });
+    expect(confirmation).toHaveAccessibleDescription(
+      /deletes its encrypted token and allowed-user access from this Mac/iu,
+    );
+    let confirmationButtons = within(confirmation).getAllByRole("button");
+    expect(confirmationButtons.map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Delete connection",
+    ]);
+    expect(confirmationButtons[0]).toHaveFocus();
+    expect(confirmationButtons[1]).toHaveClass(
+      "border-[color-mix(in_srgb,var(--danger)_34%,transparent)]",
+      "bg-transparent",
+      "text-danger",
+    );
     expect(port.remove).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Remove Telegram bot" }));
-    expect(port.remove).toHaveBeenCalledWith();
-  });
+    await user.click(confirmationButtons[0]);
+    await waitFor(() => expect(deleteTrigger).toHaveFocus());
 
-  it("supports keyboard replacement confirmation and exposes the reset warning", async () => {
-    const user = userEvent.setup();
-    const port = setup(
-      readyState(
-        status({
-          channel: { desiredState: "enabled", state: "online" },
-          bot: { state: "ready", username: "desktop_coach_bot" },
-          pairing: { state: "paired" },
-          credentialConfigured: true,
-        }),
-      ),
-    );
-
-    const replaceTrigger = screen.getByRole("button", { name: "Replace token from clipboard" });
-    replaceTrigger.focus();
-    await user.keyboard("{Enter}");
-
-    const confirmation = screen.getByRole("group", { name: "Replace @desktop_coach_bot?" });
-    expect(confirmation).toHaveAccessibleDescription(
-      /different bot resets allowed users, turns Telegram off, and must be paired again/iu,
-    );
-    const cancel = within(confirmation).getByRole("button", { name: "Cancel replacement" });
-    expect(cancel).toHaveFocus();
-    expect(port.pasteToken).not.toHaveBeenCalled();
-
-    await user.keyboard(" ");
-    expect(replaceTrigger).toHaveFocus();
-    expect(screen.queryByRole("group", { name: "Replace @desktop_coach_bot?" })).toBeNull();
-
-    await user.keyboard(" ");
-    const reopened = screen.getByRole("group", { name: "Replace @desktop_coach_bot?" });
-    await user.tab();
+    await user.click(deleteTrigger);
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(deleteTrigger).toHaveFocus());
     expect(
-      within(reopened).getByRole("button", { name: "Read and verify clipboard token" }),
-    ).toHaveFocus();
-    await user.keyboard("{Enter}");
-    expect(port.pasteToken).toHaveBeenCalledWith();
+      screen.queryByRole("group", { name: "Delete @desktop_coach_bot from this Mac?" }),
+    ).toBeNull();
+
+    await user.click(deleteTrigger);
+    confirmation = screen.getByRole("group", {
+      name: "Delete @desktop_coach_bot from this Mac?",
+    });
+    confirmationButtons = within(confirmation).getAllByRole("button");
+    await user.click(confirmationButtons[1]);
+    expect(port.remove).toHaveBeenCalledWith();
+    expect(confirmation).toBeVisible();
+
+    act(() => {
+      useEnduragentStore.setState((current) => ({
+        settings: {
+          ...current.settings,
+          telegram: {
+            ...readyState(connected),
+            status: "working",
+            operation: "remove",
+          },
+        },
+      }));
+    });
+    const busyDelete = within(confirmation).getByRole("button", { name: "Delete connection" });
+    expect(busyDelete).toHaveAttribute("aria-disabled", "true");
+    expect(busyDelete).not.toBeDisabled();
+    expect(busyDelete).toHaveFocus();
+
+    act(() => {
+      useEnduragentStore.setState((current) => ({
+        settings: {
+          ...current.settings,
+          telegram: readyState(status()),
+        },
+      }));
+    });
+
+    const firstTimeHeading = await screen.findByRole("heading", {
+      name: "Create a bot with BotFather",
+    });
+    await waitFor(() => expect(firstTimeHeading).toHaveFocus());
+    const firstTimePanel = firstTimeHeading.closest<HTMLElement>("#telegram-first-time-panel");
+    expect(firstTimePanel).not.toBeNull();
+    expect(
+      within(firstTimePanel as HTMLElement)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Cancel", "Paste token from clipboard"]);
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Replace token from clipboard" })).toBeNull();
+
+    act(() => {
+      useEnduragentStore.setState((current) => ({
+        settings: {
+          ...current.settings,
+          telegram: readyState(connected),
+        },
+      }));
+    });
+    await user.click(screen.getByText("Advanced · allowed users"));
+    expect(screen.getByLabelText("Add a Telegram user ID")).toHaveValue("");
+    expect(
+      screen.queryByText("Enter a numeric Telegram user ID with at least two digits."),
+    ).toBeNull();
   });
 
-  it("announces a refused replacement as an alert while keeping online health visible", () => {
+  it("announces a refused deletion as an alert while keeping online health visible", () => {
     const telegram = status({
       channel: { desiredState: "enabled", state: "online" },
       bot: { state: "ready", username: "desktop_coach_bot" },
@@ -382,16 +602,16 @@ describe("Telegram settings surface", () => {
     });
     setup({
       ...readyState(telegram),
-      announcement: "The copied token was not applied. The current Telegram bot is unchanged.",
+      announcement: "The Telegram connection was not deleted. The current bot is unchanged.",
       feedback: {
         tone: "error",
-        message: "The copied token was not applied. The current Telegram bot is unchanged.",
+        message: "The Telegram connection was not deleted. The current bot is unchanged.",
       },
     });
 
     expect(screen.getByText("Online")).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "The copied token was not applied. The current Telegram bot is unchanged.",
+      "The Telegram connection was not deleted. The current bot is unchanged.",
     );
   });
 
@@ -438,9 +658,9 @@ describe("Telegram settings surface", () => {
     expect(screen.getAllByText(message)).toHaveLength(1);
   });
 
-  it("exposes uncertain replacement feedback as a polite live warning", () => {
+  it("exposes uncertain deletion feedback as a polite live warning", () => {
     const message =
-      "The token change could not be confirmed. Telegram needs repair before trying again.";
+      "Telegram removal could not be confirmed. Restart Enduragent and check the connection before trying again.";
     setup({
       ...readyState(
         status({

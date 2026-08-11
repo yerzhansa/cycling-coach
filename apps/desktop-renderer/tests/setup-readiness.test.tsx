@@ -199,16 +199,22 @@ describe("authoritative setup readiness", () => {
     wizard.controller.dispose();
   });
 
-  it("never counts or gates on Telegram in Chat but preserves other and Settings locks", async () => {
-    setTelegramSettings(
-      readyTelegramSettings({
-        channel: { desiredState: "disabled", state: "disabled" },
-        bot: { state: "unconfigured" },
-        pairing: { state: "unpaired" },
-        credentialConfigured: false,
-        gapWarning: { state: "clear" },
-      }),
-    );
+  it("keeps Chat readiness and required controls unchanged while Telegram is deleted", async () => {
+    const configuredTelegram = {
+      channel: { desiredState: "disabled" as const, state: "disabled" as const },
+      bot: { state: "ready" as const, username: "synthetic_coach_bot" },
+      pairing: { state: "unpaired" as const },
+      credentialConfigured: true,
+      gapWarning: { state: "clear" as const },
+    };
+    const unconfiguredTelegram = {
+      channel: { desiredState: "disabled" as const, state: "disabled" as const },
+      bot: { state: "unconfigured" as const },
+      pairing: { state: "unpaired" as const },
+      credentialConfigured: false,
+      gapWarning: { state: "clear" as const },
+    };
+    setTelegramSettings(readyTelegramSettings(configuredTelegram));
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.getSetupStatus = vi.fn(async () => ({
       schemaVersion: 1 as const,
@@ -219,9 +225,44 @@ describe("authoritative setup readiness", () => {
     await wizard.open();
 
     act(() => {
+      const telegram = readyTelegramSettings(configuredTelegram);
       useEnduragentStore.setState({
-        settings: { ...useEnduragentStore.getState().settings, savingOwners: ["telegram"] },
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          telegram: { ...telegram, status: "working", operation: "remove" },
+          savingOwners: ["telegram"],
+        },
       });
+    });
+    expect(useEnduragentStore.getState().onboarding.readiness).toEqual({
+      provider: true,
+      trainingData: true,
+      intake: true,
+    });
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+    expect(screen.getByRole("button", { name: "Start coaching" })).toBeEnabled();
+    expect(document.querySelector('[data-setup-trigger="ai"]')).toBeEnabled();
+    expect(document.querySelector('[data-setup-trigger="training"]')).toBeEnabled();
+    expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeEnabled();
+    expect(control<HTMLSelectElement>("onboarding-clinician-cleared")).toBeEnabled();
+    expect(document.querySelector("[data-setup-readiness]")).toHaveTextContent(
+      "3 of 3 required ready",
+    );
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          telegram: readyTelegramSettings(unconfiguredTelegram),
+          savingOwners: [],
+        },
+      });
+    });
+    await act(async () => wizard.controller.refresh());
+    expect(useEnduragentStore.getState().onboarding.readiness).toEqual({
+      provider: true,
+      trainingData: true,
+      intake: true,
     });
     expect(setupReady(useEnduragentStore.getState())).toBe(true);
     expect(screen.getByRole("button", { name: "Start coaching" })).toBeEnabled();
