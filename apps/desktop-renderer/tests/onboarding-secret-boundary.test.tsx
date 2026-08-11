@@ -1,8 +1,10 @@
 import { waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type {
   CredentialWriteResult,
+  IntervalsCredentialMutationRefusalReason,
+  IntervalsCredentialMutationResult,
   OnboardingCredentialWriteInput,
 } from "../src/onboarding/bridge.js";
 import { handoffCredential } from "../src/onboarding/credentials.js";
@@ -26,10 +28,8 @@ function panelButton(name: string, label: string): HTMLButtonElement {
   return within(host).getByRole("button", { name: label });
 }
 
-async function saveIn(user: UserEvent, name: string): Promise<void> {
-  await user.click(
-    panelButton(name, name === "training" ? "Save Intervals.icu API key" : "Save API key"),
-  );
+async function saveModelKey(user: UserEvent): Promise<void> {
+  await user.click(panelButton("api-key", "Save API key"));
 }
 
 function deferred() {
@@ -44,6 +44,28 @@ interface Transient {
   readonly slot: string;
   readonly value: string;
 }
+
+interface ExpectedIntervalsCredentialStatus {
+  readonly slot: "intervals-icu";
+  readonly state: "missing" | "configured" | "re-prompt";
+  readonly runtimeState: "active" | "stored-inactive" | "failed" | null;
+}
+
+type ExpectedIntervalsCredentialMutationResult =
+  | {
+      readonly outcome: "applied";
+      readonly current: ExpectedIntervalsCredentialStatus;
+    }
+  | {
+      readonly outcome: "refused";
+      readonly reason: IntervalsCredentialMutationRefusalReason;
+      readonly current: ExpectedIntervalsCredentialStatus;
+    }
+  | {
+      readonly outcome: "uncertain";
+      readonly reason: "storage-uncertain" | "runtime-uncertain";
+      readonly current: ExpectedIntervalsCredentialStatus;
+    };
 
 function domSurfaces(extra: Record<string, unknown>): Record<string, unknown> {
   const controls = Array.from(document.querySelectorAll("input, select, textarea"));
@@ -67,44 +89,41 @@ function domSurfaces(extra: Record<string, unknown>): Record<string, unknown> {
 }
 
 describe("onboarding renderer secret boundary", () => {
-  for (const [slot, sentinel] of [
-    ["anthropic", "synthetic-model-secret-sentinel"],
-    ["intervals-icu", "synthetic-intervals-secret-sentinel"],
-  ] as const) {
-    it(`releases the ${slot} password before the pending handoff settles`, async () => {
-      const input = { value: sentinel, dataset: { slot } };
-      const gate = deferred();
-      let transient: Transient | undefined;
-      const write = async (value: OnboardingCredentialWriteInput) => {
-        try {
-          transient = { slot: value.slot, value: value.value };
-          await gate.promise;
-        } finally {
-          transient = undefined;
-        }
-      };
-      const pending = handoffCredential(input, write);
-      expect(input.value).toBe("");
-      expect(transient).toEqual({ slot, value: sentinel });
-      gate.resolve();
-      await pending;
-      expect(input.value).toBe("");
-      expect(transient).toBeUndefined();
-      const capturedSurfaces = {
-        innerHTML: "",
-        outerHTML: '<input type="password">',
-        text: "",
-        attributes: ["type=password"],
-        snapshot: { input: "" },
-        location: "enduragent://app/index.html",
-        console: [],
-        bridgeResult: { slot, status: "configured", runtimeReady: true },
-        rpc: [],
-        browserStorage: [],
-      };
-      expect(JSON.stringify(capturedSurfaces)).not.toContain(sentinel);
-    });
-  }
+  it("releases the anthropic password before the pending handoff settles", async () => {
+    const slot = "anthropic";
+    const sentinel = "synthetic-model-secret-sentinel";
+    const input = { value: sentinel, dataset: { slot } };
+    const gate = deferred();
+    let transient: Transient | undefined;
+    const write = async (value: OnboardingCredentialWriteInput) => {
+      try {
+        transient = { slot: value.slot, value: value.value };
+        await gate.promise;
+      } finally {
+        transient = undefined;
+      }
+    };
+    const pending = handoffCredential(input, write);
+    expect(input.value).toBe("");
+    expect(transient).toEqual({ slot, value: sentinel });
+    gate.resolve();
+    await pending;
+    expect(input.value).toBe("");
+    expect(transient).toBeUndefined();
+    const capturedSurfaces = {
+      innerHTML: "",
+      outerHTML: '<input type="password">',
+      text: "",
+      attributes: ["type=password"],
+      snapshot: { input: "" },
+      location: "enduragent://app/index.html",
+      console: [],
+      bridgeResult: { slot, status: "configured", runtimeReady: true },
+      rpc: [],
+      browserStorage: [],
+    };
+    expect(JSON.stringify(capturedSurfaces)).not.toContain(sentinel);
+  });
 
   it("clears the live control when the privileged handoff rejects", async () => {
     const sentinel = "synthetic-refused-secret-sentinel";
@@ -167,7 +186,7 @@ describe("mounted onboarding secret boundary", () => {
 
     await user.type(passwordInput("anthropic"), sentinel);
     expect(passwordInput("anthropic").value).toBe(sentinel);
-    await saveIn(user, "api-key");
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(transient).toEqual({ slot: "anthropic", value: sentinel });
@@ -186,53 +205,46 @@ describe("mounted onboarding secret boundary", () => {
     wizard.controller.dispose();
   });
 
-  it("releases the training-data password before the pending write settles", async () => {
-    const sentinel = "synthetic-wizard-intervals-secret";
+  it("uses only the closed Intervals clipboard metadata envelope", async () => {
     const user = userEvent.setup();
     const gate = deferred();
     const rpc: unknown[] = [];
-    let transient: Transient | undefined;
-    let bridgeResult: CredentialWriteResult | undefined;
+    expectTypeOf<IntervalsCredentialMutationResult>().toEqualTypeOf<
+      ExpectedIntervalsCredentialMutationResult
+    >();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
-    bridge.credentialStatuses
-      .mockResolvedValueOnce([{ slot: "anthropic", state: "configured", runtimeState: "active" }])
-      .mockResolvedValue([
-        { slot: "anthropic", state: "configured", runtimeState: "active" },
-        { slot: "intervals-icu", state: "configured", runtimeState: "active" },
-      ]);
-    bridge.writeCredential.mockImplementation(async (value) => {
-      rpc.push({ slot: value.slot, selection: value.selection });
-      try {
-        transient = { slot: value.slot, value: value.value };
-        await gate.promise;
-      } finally {
-        transient = undefined;
-      }
-      bridgeResult = { slot: value.slot, status: "configured", runtimeReady: true };
-      return bridgeResult;
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+    ]);
+    bridge.pasteIntervalsApiKeyFromClipboard.mockImplementation(async (...args) => {
+      rpc.push(args);
+      await gate.promise;
+      const result: IntervalsCredentialMutationResult = {
+        outcome: "applied",
+        current: { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+      };
+      return result;
     });
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
     await openTrainingPanel(user);
-    await user.type(passwordInput("intervals-icu"), sentinel);
-    await saveIn(user, "training");
+    const trainingPanel = panel("training");
+    expect(trainingPanel?.querySelector('input[data-slot="intervals-icu"]')).toBeNull();
+    await user.click(panelButton("training", "Use copied API key"));
 
     await waitFor(() => {
-      expect(transient).toEqual({ slot: "intervals-icu", value: sentinel });
+      expect(bridge.pasteIntervalsApiKeyFromClipboard).toHaveBeenCalledOnce();
     });
-    expect(passwordInput("intervals-icu").value).toBe("");
-    expect(JSON.stringify(domSurfaces({ console: consoleCalls, rpc }))).not.toContain(sentinel);
+    expect(bridge.pasteIntervalsApiKeyFromClipboard.mock.calls[0]).toEqual([]);
+    expect(bridge.writeCredential).not.toHaveBeenCalled();
+    expect(rpc).toStrictEqual([[]]);
 
     gate.resolve();
     await waitFor(() => {
       expect(rowState("training")).toBe("ready");
     });
-    expect(transient).toBeUndefined();
-    expect(JSON.stringify(domSurfaces({ console: consoleCalls, rpc, bridgeResult }))).not.toContain(
-      sentinel,
-    );
     wizard.controller.dispose();
   });
 
@@ -248,7 +260,7 @@ describe("mounted onboarding secret boundary", () => {
     await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "openrouter");
 
     await user.type(passwordInput("openrouter"), sentinel);
-    await saveIn(user, "api-key");
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("credential-save-failed");
@@ -280,7 +292,6 @@ describe("mounted onboarding secret boundary", () => {
   it("writes only the selected provider's slot when the model key is saved", async () => {
     const user = userEvent.setup();
     const modelSecret = "synthetic-scoped-model-secret";
-    const trainingSecret = "synthetic-scoped-training-secret";
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
     const wizard = mountWizard({ bridge });
@@ -288,22 +299,21 @@ describe("mounted onboarding secret boundary", () => {
     await openApiKeyPanel(user);
     await openTrainingPanel(user);
     seedSecret("anthropic", modelSecret);
-    seedSecret("intervals-icu", trainingSecret);
 
-    await saveIn(user, "api-key");
+    await saveModelKey(user);
 
     await waitFor(() => {
       expect(bridge.writeCredential).toHaveBeenCalledOnce();
     });
     expect(bridge.writeCredential.mock.calls[0]?.[0]?.slot).toBe("anthropic");
-    expect(passwordInput("intervals-icu").value).toBe(trainingSecret);
+    expect(bridge.pasteIntervalsApiKeyFromClipboard).not.toHaveBeenCalled();
+    expect(document.querySelector('input[data-slot="intervals-icu"]')).toBeNull();
     wizard.controller.dispose();
   });
 
-  it("writes only intervals-icu when the training key is saved", async () => {
+  it("uses only the zero-argument clipboard port for Intervals and preserves the AI draft", async () => {
     const user = userEvent.setup();
     const modelSecret = "synthetic-scoped-model-secret-2";
-    const trainingSecret = "synthetic-scoped-training-secret-2";
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
     const wizard = mountWizard({ bridge });
@@ -311,14 +321,15 @@ describe("mounted onboarding secret boundary", () => {
     await openApiKeyPanel(user);
     await openTrainingPanel(user);
     seedSecret("anthropic", modelSecret);
-    seedSecret("intervals-icu", trainingSecret);
 
-    await saveIn(user, "training");
+    await user.click(panelButton("training", "Use copied API key"));
 
     await waitFor(() => {
-      expect(bridge.writeCredential).toHaveBeenCalledOnce();
+      expect(bridge.pasteIntervalsApiKeyFromClipboard).toHaveBeenCalledOnce();
     });
-    expect(bridge.writeCredential.mock.calls[0]?.[0]?.slot).toBe("intervals-icu");
+    expect(bridge.pasteIntervalsApiKeyFromClipboard.mock.calls[0]).toEqual([]);
+    expect(bridge.writeCredential).not.toHaveBeenCalled();
+    expect(document.querySelector('input[data-slot="intervals-icu"]')).toBeNull();
     expect(passwordInput("anthropic").value).toBe(modelSecret);
     wizard.controller.dispose();
   });

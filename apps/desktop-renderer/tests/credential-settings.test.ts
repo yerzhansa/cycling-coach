@@ -53,6 +53,7 @@ function fakeView() {
         readonly onRequestDelete: (credential: DesktopCredentialId) => void;
         readonly onCancelDelete: () => void;
         readonly onConfirmDelete: () => void;
+        readonly onSetupOpened: (credential: "intervals-icu") => void;
         readonly onOpenSetup: () => void;
       }
     | undefined;
@@ -69,6 +70,7 @@ function fakeView() {
     requestDelete: (credential: DesktopCredentialId) => handlers?.onRequestDelete(credential),
     cancelDelete: () => handlers?.onCancelDelete(),
     confirmDelete: () => handlers?.onConfirmDelete(),
+    setupOpened: (credential: "intervals-icu") => handlers?.onSetupOpened(credential),
     openSetup: () => handlers?.onOpenSetup(),
   };
 }
@@ -121,6 +123,12 @@ function createSubject(input: {
           { ...activeRuntime.llm, credential_configured: false },
           activeRuntime.intervals,
         );
+      }
+      if (credential === "intervals-icu") {
+        activeRuntime = runtime(activeRuntime.llm, {
+          ...activeRuntime.intervals,
+          credential_configured: false,
+        });
       }
     }
     return result;
@@ -278,6 +286,18 @@ describe("credential settings controller", () => {
     expect(claudeCli).not.toHaveBeenCalled();
   });
 
+  it("loads a closed controller before confirming an Intervals deletion from Chat", async () => {
+    const { controller, subject } = createSubject({});
+
+    subject.requestDelete("intervals-icu");
+
+    await vi.waitFor(() => expect(controller.state().status).toBe("confirming"));
+    expect(controller.state()).toMatchObject({
+      confirmation: "intervals-icu",
+      focus: { target: "confirmation-cancel" },
+    });
+  });
+
   it("confirmation-gates active deletion, announces the cutover, and exposes Setup recovery", async () => {
     const openSetup = vi.fn();
     const { controller, subject, deleteCredential } = createSubject({ openSetup });
@@ -311,6 +331,32 @@ describe("credential settings controller", () => {
     subject.openSetup();
     expect(openSetup).toHaveBeenCalledOnce();
     expect(controller.state()).toEqual({ status: "closed" });
+  });
+
+  it("requests the open first-time Intervals panel after deletion and clears the request once handled", async () => {
+    const onDeleted = vi.fn(async () => {});
+    const { controller, subject } = createSubject({ onDeleted });
+    await controller.activate();
+
+    subject.requestDelete("intervals-icu");
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("deleted"));
+
+    expect(onDeleted).toHaveBeenCalledOnce();
+    expect(controller.state()).toMatchObject({
+      status: "deleted",
+      entries: expect.not.arrayContaining([
+        expect.objectContaining({ credential: "intervals-icu" }),
+      ]),
+      recoveryAvailable: true,
+      focus: { target: "setup-open", credential: "intervals-icu" },
+    });
+
+    subject.setupOpened("intervals-icu");
+    expect(controller.state()).toMatchObject({
+      status: "deleted",
+      focus: null,
+    });
   });
 
   it("keeps an externally managed credential listed and announces the fixed refusal", async () => {

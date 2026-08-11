@@ -5,6 +5,8 @@ import {
 } from "../ride-import.js";
 import type {
   CredentialWriteResult,
+  IntervalsCredentialMutationRefusalReason,
+  IntervalsCredentialMutationResult,
   OnboardingBridge,
   OnboardingLlmConfiguration,
   OnboardingLlmEndpointSelection,
@@ -101,7 +103,7 @@ export interface OnboardingView {
 
 export interface OnboardingActions {
   saveModelKey(): void;
-  saveTrainingKey(): void;
+  connectTrainingData(): void;
   finish(): void;
   dismiss(): void;
   retrySavedKeys(): void;
@@ -242,6 +244,26 @@ const CREDENTIAL_WRITE_REFUSAL_ERRORS = {
   "storage-uncertain": "storage-uncertain",
 } as const satisfies Readonly<Record<CredentialWriteFailureReason, OnboardingErrorCode>>;
 
+const INTERVALS_REFUSAL_ERRORS = {
+  "clipboard-unavailable": "intervals-clipboard-unavailable",
+  "clipboard-clear-failed": "intervals-clipboard-clear-failed",
+  "invalid-key-format": "intervals-key-rejected",
+  "credential-rejected": "intervals-key-rejected",
+  "malformed-athlete-response": "intervals-validation-unavailable",
+  "validation-timeout": "intervals-validation-unavailable",
+  "validation-aborted": "intervals-validation-unavailable",
+  "validation-unavailable": "intervals-validation-unavailable",
+  "training-account-mismatch": "training-account-mismatch",
+  "owner-unresolved": "intervals-owner-unavailable",
+  "store-unavailable": "intervals-owner-unavailable",
+  "encryption-unavailable": "encryption-unavailable",
+  "unsafe-backend": "unsafe-backend",
+  "storage-failed": "storage-failed",
+  "runtime-unavailable": "intervals-runtime-unavailable",
+} as const satisfies Readonly<
+  Record<IntervalsCredentialMutationRefusalReason, OnboardingErrorCode>
+>;
+
 const ENDPOINT_MODES: readonly OnboardingLlmEndpointSelection["mode"][] = [
   "automatic",
   "default",
@@ -253,6 +275,20 @@ function credentialWriteRefusalError(reason: unknown): OnboardingErrorCode {
     return CREDENTIAL_WRITE_REFUSAL_ERRORS[reason as CredentialWriteFailureReason];
   }
   return "credential-save-failed";
+}
+
+function intervalsMutationError(
+  result: IntervalsCredentialMutationResult,
+): OnboardingErrorCode | null {
+  if (result.outcome === "applied") {
+    return result.current.state === "configured" && result.current.runtimeState === "active"
+      ? null
+      : "intervals-runtime-unavailable";
+  }
+  if (result.outcome === "refused") return INTERVALS_REFUSAL_ERRORS[result.reason];
+  return result.reason === "storage-uncertain"
+    ? "intervals-storage-uncertain"
+    : "intervals-runtime-uncertain";
 }
 
 export function credentialSlotStatus(
@@ -741,7 +777,7 @@ export function createOnboardingController(
     publish();
   };
 
-  const saveTrainingKey = async (): Promise<void> => {
+  const connectTrainingData = async (): Promise<void> => {
     if (
       disposed ||
       !presenting ||
@@ -757,16 +793,27 @@ export function createOnboardingController(
     actionStatus = null;
     state = withBusy(state, true);
     publish();
-    const saved = await savePasswordControls(submitVisit, ["intervals-icu"]);
+    let result: IntervalsCredentialMutationResult;
+    try {
+      result = await options.bridge.pasteIntervalsApiKeyFromClipboard();
+    } catch {
+      if (visit !== submitVisit || !presenting) return;
+      state = withError(state, "intervals-validation-unavailable");
+      publish();
+      return;
+    }
     if (visit !== submitVisit || !presenting) return;
-    if (saved === null) return;
-    const saveError = saved.error;
+    credentialStatuses = [
+      ...credentialStatuses.filter((entry) => entry.slot !== "intervals-icu"),
+      result.current,
+    ];
+    state = withCredentialStatuses(state, credentialStatuses);
+    const saveError = intervalsMutationError(result);
     state = withBusy(state, false);
     if (saveError !== null) state = withError(state, saveError);
     else if (hasRetryableCredential("intervals-icu")) {
-      state = withError(state, "runtime-unavailable");
+      state = withError(state, "intervals-runtime-unavailable");
     } else if (!hasTrainingData(state)) state = withError(state, "training-data-required");
-    focusTitle();
     publish();
   };
 
@@ -1091,8 +1138,8 @@ export function createOnboardingController(
     saveModelKey(): void {
       void saveModelKey();
     },
-    saveTrainingKey(): void {
-      void saveTrainingKey();
+    connectTrainingData(): void {
+      void connectTrainingData();
     },
     finish(): void {
       void finishSetup();

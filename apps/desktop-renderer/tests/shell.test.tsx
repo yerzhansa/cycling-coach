@@ -66,6 +66,9 @@ describe("shell", () => {
     expect(document.querySelector("div.composer-wrap")).not.toBeNull();
     expect(document.querySelector("textarea#message")).not.toBeNull();
     expect(document.querySelector("button.sync-chip")).not.toBeNull();
+    expect(document.querySelector('[data-sidebar-setup-readiness="ready"]')).toHaveTextContent(
+      "Ready",
+    );
     expect(document.querySelector('[data-view="chat"]')).not.toBeNull();
     expect(document.querySelector('[data-onboarding="settled"]')).not.toBeNull();
   });
@@ -150,7 +153,10 @@ describe("shell", () => {
     expect(await screen.findByRole("region", { name: "Training" })).toBeInTheDocument();
     expect(document.querySelector('[data-view="training"]')).not.toBeNull();
     expect(document.querySelector('[data-view="setup"]')).toBeNull();
-    expect(document.querySelector('[data-setup-host]')).toBeNull();
+    expect(document.querySelector("[data-setup-host]")).toBeNull();
+    expect(document.querySelector('[data-sidebar-setup-readiness="waiting"]')).toHaveTextContent(
+      "Waiting for setup",
+    );
     expect(useEnduragentStore.getState().activeView).toBe("training");
   });
 

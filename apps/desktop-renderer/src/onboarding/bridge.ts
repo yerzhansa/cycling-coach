@@ -67,6 +67,45 @@ export type CredentialDeleteResult =
       readonly reason: "storage-uncertain";
     };
 
+export interface IntervalsCredentialStatus {
+  readonly slot: "intervals-icu";
+  readonly state: "missing" | "configured" | "re-prompt";
+  readonly runtimeState: "active" | "stored-inactive" | "failed" | null;
+}
+
+export type IntervalsCredentialMutationRefusalReason =
+  | "clipboard-unavailable"
+  | "clipboard-clear-failed"
+  | "invalid-key-format"
+  | "credential-rejected"
+  | "malformed-athlete-response"
+  | "validation-timeout"
+  | "validation-aborted"
+  | "validation-unavailable"
+  | "training-account-mismatch"
+  | "owner-unresolved"
+  | "store-unavailable"
+  | "encryption-unavailable"
+  | "unsafe-backend"
+  | "storage-failed"
+  | "runtime-unavailable";
+
+export type IntervalsCredentialMutationResult =
+  | {
+      readonly outcome: "applied";
+      readonly current: IntervalsCredentialStatus;
+    }
+  | {
+      readonly outcome: "refused";
+      readonly reason: IntervalsCredentialMutationRefusalReason;
+      readonly current: IntervalsCredentialStatus;
+    }
+  | {
+      readonly outcome: "uncertain";
+      readonly reason: "storage-uncertain" | "runtime-uncertain";
+      readonly current: IntervalsCredentialStatus;
+    };
+
 export interface OnboardingLlmModelOption {
   readonly value: string;
   readonly label: string;
@@ -123,6 +162,7 @@ export interface OnboardingBridge {
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: OnboardingCredentialWriteInput): Promise<CredentialWriteResult>;
+  pasteIntervalsApiKeyFromClipboard(): Promise<IntervalsCredentialMutationResult>;
   llmConfiguration(): Promise<OnboardingLlmConfiguration>;
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatGptStatus(): Promise<ChatGptStatus>;
@@ -149,6 +189,7 @@ export interface DesktopOnboardingAuth {
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: OnboardingCredentialWriteInput): Promise<CredentialWriteResult>;
+  pasteIntervalsApiKeyFromClipboard(): Promise<IntervalsCredentialMutationResult>;
   llmConfiguration(): Promise<OnboardingLlmConfiguration>;
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatgptStatus(): Promise<ChatGptStatus>;
@@ -210,6 +251,7 @@ export function createOnboardingBridge(
     retryFailedCredentials: () =>
       auth.retryFailedCredentials() as Promise<readonly CredentialSlotStatus[]>,
     writeCredential: (input) => auth.writeCredential(input) as Promise<CredentialWriteResult>,
+    pasteIntervalsApiKeyFromClipboard: () => auth.pasteIntervalsApiKeyFromClipboard(),
     llmConfiguration: () => auth.llmConfiguration(),
     applyLlmSelection: (input) => auth.applyLlmSelection(input),
     chatGptStatus: () => auth.chatgptStatus(),

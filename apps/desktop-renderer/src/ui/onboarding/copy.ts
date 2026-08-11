@@ -1,5 +1,4 @@
 import type { ChatGptLoginRefusalReason } from "../../onboarding/constants.js";
-import { INTERVALS_GUIDANCE } from "../../onboarding/constants.js";
 import type { SetupLane } from "../../onboarding/lanes.js";
 import type { ChatGptUiPhase, OnboardingErrorCode } from "../../onboarding/machine.js";
 
@@ -27,6 +26,22 @@ export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
     "Your provider choice is saved, but it is not active yet. Try activating it again.",
   "training-account-mismatch":
     "That intervals.icu key belongs to a different athlete than the training history already stored. Switching accounts is not supported yet.",
+  "intervals-clipboard-unavailable":
+    "Enduragent couldn’t read an API key from the clipboard. Copy it in Intervals.icu, then try again.",
+  "intervals-clipboard-clear-failed":
+    "The API key wasn’t saved because Enduragent couldn’t safely clear it from the clipboard. Copy it again, then try again.",
+  "intervals-key-rejected":
+    "Intervals.icu didn’t accept the copied API key. Copy a current API key, then try again.",
+  "intervals-validation-unavailable":
+    "Enduragent couldn’t verify the copied API key with Intervals.icu. Check your connection, then try again.",
+  "intervals-owner-unavailable":
+    "Enduragent couldn’t confirm that the copied API key matches the training data on this Mac. Try again when training data is available.",
+  "intervals-storage-uncertain":
+    "Enduragent couldn’t confirm whether the copied API key was saved. Reload credential status before trying again.",
+  "intervals-runtime-unavailable":
+    "The copied API key couldn’t be activated. Copy it in Intervals.icu, then try again.",
+  "intervals-runtime-uncertain":
+    "Enduragent couldn’t confirm whether the copied API key is active. Reload credential status before trying again.",
   "training-data-required": "Connect intervals.icu or import at least one ride file.",
   "intake-incomplete": "Answer the required safety questions to continue.",
   "intake-save-failed": "Your answers could not be saved. Please try again.",
@@ -137,31 +152,29 @@ export const TRAINING_ROW_TITLE = "Intervals.icu";
 
 export const TRAINING_ROW_SUBTITLES = {
   connected: "Connected · where your rides come from",
-  imported: "Ride files imported to this Mac",
-  missing: "Required — where your rides come from",
+  missing: "Required · where your rides come from",
 } as const;
 
 export const TRAINING_ROW_TOOLTIP = {
   label: "About Intervals.icu",
   lead: "Intervals.icu",
-  body: "A free training site that already holds your rides. Enduragent reads them from there instead of talking to your watch or head-unit vendor directly. You need a free account with your watch or head unit connected to it, then paste its API key.",
+  body: "A free training site that already holds your rides. Enduragent reads them from there instead of talking to your watch or head-unit vendor directly. You need a free account with your watch or head unit connected to it, then copy its API key.",
 } as const;
 
 export const TRAINING_TRIGGER_LABELS = {
   disconnected: "Connect Intervals.icu",
-  connected: "Change Intervals.icu",
 } as const;
-
-export const TRAINING_SAVE_LABEL = "Save Intervals.icu API key";
 
 export const TRAINING_CANCEL_LABEL = "Cancel Intervals.icu setup";
 
-export const TRAINING_KEY_LABEL = "Intervals.icu API key";
+export const TRAINING_CONNECT_TITLE = "Connect Intervals.icu";
 
 export const INTERVALS_PANEL_HINT =
-  `On intervals.icu → Settings → Developer Settings. Not your password — a token you can revoke there at any time. ${INTERVALS_GUIDANCE}` as const;
+  "In Intervals.icu, open Settings → Developer Settings, copy the API key, then return here. Enduragent reads it without showing it.";
 
-export const IMPORT_FILES_LABEL = "or import ride files instead";
+export const TRAINING_USE_COPIED_KEY_LABEL = "Use copied API key";
+
+export const IMPORT_FILES_LABEL = "Import ride files instead";
 
 export const TELEGRAM_ROW_TITLE = "Telegram";
 

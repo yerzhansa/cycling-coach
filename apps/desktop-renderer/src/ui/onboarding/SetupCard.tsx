@@ -16,6 +16,8 @@ export const BUTTON_QUIET_SM = `${BUTTON_SM} border-transparent bg-transparent t
 
 export const BUTTON_DANGER_SM = `${BUTTON_SM} border-[color-mix(in_srgb,var(--danger)_34%,transparent)] bg-[color-mix(in_srgb,var(--danger)_5%,transparent)] text-danger shadow-none hover:bg-[color-mix(in_srgb,var(--danger)_11%,transparent)]`;
 
+export const BUTTON_DANGER_LINK_SM = `${BUTTON_SM} border-transparent bg-transparent text-danger shadow-none hover:bg-[color-mix(in_srgb,var(--danger)_11%,transparent)]`;
+
 export const BUTTON_PRIMARY = `${BUTTON_BASE} h-ctl-lg gap-2 px-[14px] text-sm border-ink bg-ink text-bg shadow-[var(--sheen),var(--elev-1)] hover:bg-[color-mix(in_srgb,var(--ink)_90%,var(--bg))]`;
 
 export const SETUP_LINK_BUTTON =

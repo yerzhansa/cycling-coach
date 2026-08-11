@@ -3,6 +3,8 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
+import type { CredentialSettingsPort } from "../src/state/settings-slice.js";
+import { useEnduragentStore } from "../src/state/store.js";
 import {
   API_KEY_PANEL_HINT,
   FOOTER_NOTE,
@@ -94,6 +96,21 @@ function trigger(id: string): HTMLElement {
 
 function buttonNames(host: HTMLElement | null): readonly string[] {
   return Array.from(host?.querySelectorAll("button") ?? [], (entry) => entry.textContent ?? "");
+}
+
+function bindCredentialPort(): CredentialSettingsPort {
+  const port = {
+    retry: vi.fn(),
+    requestDelete: vi.fn(),
+    cancelDelete: vi.fn(),
+    confirmDelete: vi.fn(),
+    setupOpened: vi.fn(),
+    openSetup: vi.fn(),
+  } satisfies CredentialSettingsPort;
+  act(() => {
+    useEnduragentStore.setState({ settingsPorts: { credentials: port } as never });
+  });
+  return port;
 }
 
 async function completeIntake(user: ReturnType<typeof userEvent.setup>): Promise<void> {
@@ -243,7 +260,8 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("keeps completed Chat setup changes quiet and omits deletion controls", async () => {
+  it("keeps AI changes quiet and gives connected Intervals only Delete", async () => {
+    bindCredentialPort();
     const wizard = mountWizard({ bridge: readyEverythingBridge() });
     await wizard.open();
     await waitFor(() => {
@@ -252,8 +270,11 @@ describe("setup card", () => {
     });
 
     expect(trigger("ai").className).toContain("border-transparent");
-    expect(trigger("training").className).toContain("border-transparent");
-    expect(screen.queryByRole("button", { name: /Delete the/u })).toBeNull();
+    expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
+    const remove = screen.getByRole("button", { name: "Delete the Intervals.icu connection" });
+    expect(remove).toHaveTextContent("Delete");
+    expect(remove.className).toContain("border-transparent");
+    expect(setupRow("training").querySelectorAll("button")).toHaveLength(2);
     wizard.controller.dispose();
   });
 
@@ -445,7 +466,7 @@ describe("setup card", () => {
     );
     expect(
       Array.from(chatgpt?.querySelectorAll("button") ?? [], (entry) => entry.textContent),
-    ).toEqual(["Sign in with ChatGPT", "Keep Claude Code"]);
+    ).toEqual(["Keep Claude Code", "Sign in with ChatGPT"]);
 
     await user.click(screen.getByRole("button", { name: "Keep Claude Code" }));
 
@@ -484,7 +505,7 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("edits intervals.icu in place and never opens a menu", async () => {
+  it("connects Intervals.icu from copied metadata without rendering a secret field", async () => {
     const user = userEvent.setup();
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
@@ -493,13 +514,20 @@ describe("setup card", () => {
 
     expect(laneMenu()).toBeNull();
     expect(setupRow("training").nextElementSibling).toBe(panel("training"));
-    expect(screen.getByLabelText("Intervals.icu API key")).toBe(passwordInput("intervals-icu"));
-    expect(panel("training")?.textContent).toContain("Developer Settings");
-    expect(panel("training")?.textContent).toContain("revoke");
+    expect(panel("training")?.querySelectorAll("input")).toHaveLength(0);
+    expect(screen.getByRole("heading", { name: "Connect Intervals.icu" })).toHaveFocus();
+    expect(panel("training")).toHaveTextContent(
+      "In Intervals.icu, open Settings → Developer Settings, copy the API key, then return here. Enduragent reads it without showing it.",
+    );
+    expect(buttonNames(panel("training"))).toEqual([
+      "Cancel",
+      "Use copied API key",
+      "Import ride files instead",
+    ]);
     wizard.controller.dispose();
   });
 
-  it("closes intervals.icu setup after retry activates the saved key", async () => {
+  it("keeps saved-key recovery without exposing clipboard replacement", async () => {
     const user = userEvent.setup();
     const bridge = claudeReadyBridge();
     bridge.credentialStatuses.mockResolvedValue([
@@ -510,7 +538,6 @@ describe("setup card", () => {
     ]);
     const wizard = mountWizard({ bridge });
     await wizard.open();
-    await openTrainingPanel(user);
 
     await user.click(screen.getByRole("button", { name: "Retry saved keys" }));
 
@@ -518,6 +545,7 @@ describe("setup card", () => {
       expect(rowState("training")).toBe("ready");
       expect(panel("training")).toBeNull();
     });
+    expect(screen.queryByRole("button", { name: "Use copied API key" })).toBeNull();
     expect(bridge.retryFailedCredentials).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
@@ -732,7 +760,7 @@ describe("setup card", () => {
       expect(panel("api-key")).not.toBeNull();
     });
     expect(rowState("ai")).toBe("pending");
-    expect(buttonNames(panel("api-key"))).toEqual(["Save", "Cancel"]);
+    expect(buttonNames(panel("api-key"))).toEqual(["Cancel", "Save"]);
 
     await user.click(
       within(panel("api-key") as HTMLElement).getByRole("button", { name: "Cancel API key setup" }),
@@ -867,13 +895,19 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("closes the intervals.icu editor without writing when it is backed out of", async () => {
+  it("puts Cancel first and closes first-time Intervals setup without reading a key", async () => {
     const user = userEvent.setup();
     const bridge = coldBridge();
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openTrainingPanel(user);
-    seedSecret("intervals-icu", randomUUID());
+
+    expect(panel("training")?.querySelector("input")).toBeNull();
+    expect(buttonNames(panel("training"))).toEqual([
+      "Cancel",
+      "Use copied API key",
+      "Import ride files instead",
+    ]);
 
     await user.click(
       within(panel("training") as HTMLElement).getByRole("button", {
@@ -885,25 +919,24 @@ describe("setup card", () => {
       expect(panel("training")).toBeNull();
     });
     expect(bridge.writeCredential).not.toHaveBeenCalled();
+    expect(bridge.pasteIntervalsApiKeyFromClipboard).not.toHaveBeenCalled();
     expect(rowState("training")).toBe("pending");
     expect(trigger("training").textContent).toBe("Connect");
+    expect(trigger("training")).toHaveFocus();
     wizard.controller.dispose();
   });
 
-  it("closes the intervals.icu panel once the saved key comes back connected", async () => {
+  it("uses a copied Intervals API key, closes the panel, and focuses Delete", async () => {
     const user = userEvent.setup();
     const bridge = coldBridge();
+    bindCredentialPort();
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openTrainingPanel(user);
-    seedSecret("intervals-icu", randomUUID());
-    bridge.credentialStatuses.mockResolvedValue([
-      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
-    ]);
 
     await user.click(
       within(panel("training") as HTMLElement).getByRole("button", {
-        name: "Save Intervals.icu API key",
+        name: "Use copied API key",
       }),
     );
 
@@ -913,16 +946,19 @@ describe("setup card", () => {
     await waitFor(() => {
       expect(panel("training")).toBeNull();
     });
-    expect(trigger("training").textContent).toBe("Change");
+    const remove = screen.getByRole("button", { name: "Delete the Intervals.icu connection" });
+    expect(remove).toHaveTextContent("Delete");
+    expect(remove).toHaveFocus();
+    expect(bridge.pasteIntervalsApiKeyFromClipboard).toHaveBeenCalledOnce();
+    expect(bridge.writeCredential).not.toHaveBeenCalled();
     wizard.controller.dispose();
   });
 
-  it("keeps an open intervals.icu draft when the AI row finishes saving", async () => {
+  it("keeps first-time Intervals setup open when the AI row finishes saving", async () => {
     const user = userEvent.setup();
-    const bridge = readyEverythingBridge();
+    const bridge = claudeReadyBridge();
     bridge.credentialStatuses.mockResolvedValue([
       { slot: "anthropic", state: "configured", runtimeState: "active" },
-      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
     ]);
     const wizard = mountWizard({ bridge });
     await wizard.open();
@@ -932,8 +968,6 @@ describe("setup card", () => {
     await openApiKeyPanel(user);
     await openTrainingPanel(user);
     seedSecret("anthropic", randomUUID());
-    const trainingSecret = randomUUID();
-    seedSecret("intervals-icu", trainingSecret);
 
     await user.click(
       within(panel("api-key") as HTMLElement).getByRole("button", { name: "Save API key" }),
@@ -943,11 +977,13 @@ describe("setup card", () => {
       expect(panel("api-key")).toBeNull();
     });
     expect(panel("training")).not.toBeNull();
-    expect(passwordInput("intervals-icu").value).toBe(trainingSecret);
+    expect(panel("training")?.querySelector("input")).toBeNull();
+    expect(screen.getByRole("button", { name: "Use copied API key" })).toBeInTheDocument();
+    expect(bridge.pasteIntervalsApiKeyFromClipboard).not.toHaveBeenCalled();
     wizard.controller.dispose();
   });
 
-  it("keeps an open AI draft when the intervals.icu row finishes saving", async () => {
+  it("keeps an open AI draft when copied Intervals setup finishes", async () => {
     const user = userEvent.setup();
     const bridge = coldBridge();
     bridge.llmConfiguration.mockResolvedValue({
@@ -956,8 +992,8 @@ describe("setup card", () => {
     });
     bridge.credentialStatuses.mockResolvedValue([
       { slot: "anthropic", state: "configured", runtimeState: "active" },
-      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
     ]);
+    bindCredentialPort();
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await waitFor(() => {
@@ -967,11 +1003,10 @@ describe("setup card", () => {
     await openTrainingPanel(user);
     const aiSecret = randomUUID();
     seedSecret("anthropic", aiSecret);
-    seedSecret("intervals-icu", randomUUID());
 
     await user.click(
       within(panel("training") as HTMLElement).getByRole("button", {
-        name: "Save Intervals.icu API key",
+        name: "Use copied API key",
       }),
     );
 
@@ -980,6 +1015,10 @@ describe("setup card", () => {
     });
     expect(panel("api-key")).not.toBeNull();
     expect(passwordInput("anthropic").value).toBe(aiSecret);
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toHaveFocus();
+    expect(bridge.pasteIntervalsApiKeyFromClipboard).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
 
@@ -1013,27 +1052,42 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("names the intervals.icu row by where the rides come from", async () => {
-    const missing = mountWizard({ bridge: coldBridge() });
+  it("keeps durable training ready while showing the exact first-time Intervals row", async () => {
+    const missingBridge = claudeReadyBridge();
+    missingBridge.getSetupStatus = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      intake: null,
+      durableTrainingData: true,
+    }));
+    const missing = mountWizard({ bridge: missingBridge });
     await missing.open();
-    expect(rowSubtitle("training")).toBe("Required — where your rides come from");
+    expect(rowSubtitle("training")).toBe("Required · where your rides come from");
     expect(trigger("training").textContent).toBe("Connect");
     expect(rowState("training")).toBe("pending");
+    expect(useEnduragentStore.getState().onboarding.readiness.trainingData).toBe(true);
+    expect(document.querySelector("[data-setup-readiness]")).toHaveTextContent(
+      "2 of 3 required ready",
+    );
     missing.controller.dispose();
     missing.rendered.unmount();
     resetOnboardingStore();
 
+    bindCredentialPort();
     const connected = mountWizard({ bridge: readyEverythingBridge() });
     await connected.open();
     await waitFor(() => {
-      expect(rowState("training")).toBe("ready");
+      expect(useEnduragentStore.getState().onboarding.readiness.trainingData).toBe(true);
     });
+    expect(rowState("training")).toBe("ready");
     expect(rowSubtitle("training")).toBe("Connected · where your rides come from");
-    expect(trigger("training").textContent).toBe("Change");
+    expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toHaveTextContent("Delete");
     connected.controller.dispose();
   });
 
-  it("names the intervals.icu row after an import replaces the key", async () => {
+  it("keeps the first-time Intervals row after a ride import makes training ready", async () => {
     const bridge = coldBridge();
     bridge.importFiles.mockResolvedValue(importResult({ total: 1, imported: 1, quarantined: 0 }));
     const wizard = mountWizard({ bridge });
@@ -1045,9 +1099,10 @@ describe("setup card", () => {
     });
 
     await waitFor(() => {
-      expect(rowState("training")).toBe("ready");
+      expect(useEnduragentStore.getState().onboarding.readiness.trainingData).toBe(true);
     });
-    expect(rowSubtitle("training")).toBe("Ride files imported to this Mac");
+    expect(rowState("training")).toBe("pending");
+    expect(rowSubtitle("training")).toBe("Required · where your rides come from");
     expect(trigger("training").textContent).toBe("Connect");
     wizard.controller.dispose();
   });
@@ -1103,10 +1158,10 @@ describe("setup card accessibility", () => {
   it("announces errors through a region that is mounted before the error exists", async () => {
     const user = userEvent.setup();
     const bridge = coldBridge();
-    bridge.writeCredential.mockResolvedValue({
-      slot: "intervals-icu",
-      status: "refused",
-      reason: "invalid-input",
+    bridge.pasteIntervalsApiKeyFromClipboard.mockResolvedValue({
+      outcome: "refused",
+      reason: "credential-rejected",
+      current: { slot: "intervals-icu", state: "missing", runtimeState: null },
     });
     const wizard = mountWizard({ bridge });
     await wizard.open();
@@ -1117,18 +1172,19 @@ describe("setup card accessibility", () => {
     expect(announcer?.textContent).toBe("");
 
     await openTrainingPanel(user);
-    seedSecret("intervals-icu", randomUUID());
     await user.click(
       within(panel("training") as HTMLElement).getByRole("button", {
-        name: "Save Intervals.icu API key",
+        name: "Use copied API key",
       }),
     );
 
     await waitFor(() => {
-      expect(wizard.controller.state().fixedError).toBe("invalid-input");
+      expect(wizard.controller.state().fixedError).toBe("intervals-key-rejected");
     });
     expect(errorAnnouncer()).toBe(announcer);
-    expect(announcer?.textContent).toBe("That key was not accepted. Check it and enter it again.");
+    expect(announcer?.textContent).toBe(
+      "Intervals.icu didn’t accept the copied API key. Copy a current API key, then try again.",
+    );
     expect(document.querySelector("#onboarding-error")?.hasAttribute("aria-live")).toBe(false);
     wizard.controller.dispose();
   });
@@ -1232,7 +1288,7 @@ describe("setup card accessibility", () => {
 
   it("gives co-visible controls distinct accessible names", async () => {
     const user = userEvent.setup();
-    const wizard = mountWizard({ bridge: readyEverythingBridge() });
+    const wizard = mountWizard({ bridge: claudeReadyBridge() });
     await wizard.open();
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
@@ -1245,11 +1301,12 @@ describe("setup card accessibility", () => {
     expect(screen.queryAllByRole("button", { name: "Cancel" })).toHaveLength(0);
     for (const name of [
       "Change what powers your coach",
-      "Change Intervals.icu",
-      "Save API key",
-      "Save Intervals.icu API key",
+      "Connect Intervals.icu",
       "Cancel API key setup",
+      "Save API key",
       "Cancel Intervals.icu setup",
+      "Use copied API key",
+      "Import ride files instead",
     ]) {
       expect(screen.getAllByRole("button", { name })).toHaveLength(1);
     }

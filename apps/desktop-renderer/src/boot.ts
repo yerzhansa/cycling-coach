@@ -230,6 +230,8 @@ export function bootRenderer(): Disposer {
     credentialStatuses: () => window.enduragentAuth.credentialStatuses(),
     retryFailedCredentials: () => window.enduragentAuth.retryFailedCredentials(),
     writeCredential: (value) => window.enduragentAuth.writeCredential(value),
+    pasteIntervalsApiKeyFromClipboard: () =>
+      window.enduragentAuth.pasteIntervalsApiKeyFromClipboard(),
     llmConfiguration: () => window.enduragentAuth.llmConfiguration(),
     applyLlmSelection: (value) => window.enduragentAuth.applyLlmSelection(value),
     chatGptStatus: () => window.enduragentAuth.chatgptStatus(),
@@ -342,7 +344,10 @@ export function bootRenderer(): Disposer {
     loadClaudeCliStatus: () => window.enduragentAuth.claudeCliStatus(),
     deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
     openSetup: openSetupFromSettings,
-    onDeleted: () => onboarding.refresh(),
+    onDeleted: async () => {
+      await onboarding.refresh();
+      if (store.getState().onboarding.loadUnavailable) throw new TypeError();
+    },
     onReconciled: async () => {
       await onboarding.refresh();
       if (store.getState().onboarding.loadUnavailable) throw new TypeError();

@@ -93,6 +93,12 @@ function activationBridge(
       status: "configured",
       runtimeReady: true,
     })),
+    pasteIntervalsApiKeyFromClipboard: vi.fn<OnboardingBridge["pasteIntervalsApiKeyFromClipboard"]>(
+      async () => ({
+        outcome: "applied",
+        current: { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+      }),
+    ),
     llmConfiguration: vi.fn<OnboardingBridge["llmConfiguration"]>(
       async () => KEYLESS_CONFIGURATION,
     ),
@@ -642,7 +648,7 @@ describe("onboarding runtime completion gate", () => {
       harness.controller.setCustomEndpoint("https://example.test/v1");
       harness.controller.setIntake("injuryStatus", "none");
       harness.controller.saveModelKey();
-      harness.controller.saveTrainingKey();
+      harness.controller.connectTrainingData();
       harness.controller.retrySavedKeys();
       harness.controller.startChatGptLogin();
       harness.controller.retryChatGptActivation();
@@ -654,6 +660,7 @@ describe("onboarding runtime completion gate", () => {
 
       expect(harness.controller.state()).toBe(stateBeforeMutations);
       expect(bridge.writeCredential).not.toHaveBeenCalled();
+      expect(bridge.pasteIntervalsApiKeyFromClipboard).not.toHaveBeenCalled();
       expect(bridge.retryFailedCredentials).not.toHaveBeenCalled();
       expect(bridge.chatGptLogin).not.toHaveBeenCalled();
       expect(bridge.applyLlmSelection).not.toHaveBeenCalled();

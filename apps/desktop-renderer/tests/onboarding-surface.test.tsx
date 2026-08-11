@@ -2,8 +2,13 @@ import { randomUUID } from "node:crypto";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CredentialWriteResult, OnboardingBridge } from "../src/onboarding/bridge.js";
+import type {
+  CredentialWriteResult,
+  IntervalsCredentialMutationResult,
+  OnboardingBridge,
+} from "../src/onboarding/bridge.js";
 import { createRideImportController } from "../src/ride-import.js";
+import { useEnduragentStore } from "../src/state/store.js";
 import {
   chooseLane,
   control,
@@ -59,12 +64,23 @@ async function saveModelKey(user: UserEvent): Promise<void> {
   await user.click(panelButton("api-key", "Save API key"));
 }
 
-async function saveTrainingKey(user: UserEvent): Promise<void> {
-  await user.click(panelButton("training", "Save Intervals.icu API key"));
-}
-
 async function answerIntake(user: UserEvent): Promise<void> {
   await chooseOption(user, "onboarding-injury-status", "none");
+}
+
+function enableCredentialDeletion(): void {
+  useEnduragentStore.setState({
+    settingsPorts: {
+      credentials: {
+        retry: vi.fn(),
+        requestDelete: vi.fn(),
+        cancelDelete: vi.fn(),
+        confirmDelete: vi.fn(),
+        setupOpened: vi.fn(),
+        openSetup: vi.fn(),
+      },
+    } as never,
+  });
 }
 
 type CredentialWriteRefusalReason = Extract<
@@ -271,17 +287,16 @@ describe("mounted onboarding", () => {
     bridge.credentialStatuses.mockResolvedValue([
       { slot: "anthropic", state: "configured", runtimeState: "active" },
     ]);
-    bridge.writeCredential.mockImplementation(async ({ slot }) => ({
-      slot,
-      status: "refused",
+    bridge.pasteIntervalsApiKeyFromClipboard.mockResolvedValue({
+      outcome: "refused",
       reason: "training-account-mismatch",
-    }));
+      current: { slot: "intervals-icu", state: "missing", runtimeState: null },
+    });
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openTrainingPanel(user);
-    seedSecret("intervals-icu", randomUUID());
 
-    await saveTrainingKey(user);
+    await user.click(panelButton("training", "Use copied API key"));
 
     await waitFor(() => {
       expect(wizard.controller.state().fixedError).toBe("training-account-mismatch");
@@ -290,7 +305,9 @@ describe("mounted onboarding", () => {
       "That intervals.icu key belongs to a different athlete than the training history already stored. Switching accounts is not supported yet.",
     );
     expect(panel("training")?.contains(document.querySelector("#onboarding-error"))).toBe(true);
-    expect(passwordInput("intervals-icu").value).toBe("");
+    expect(bridge.pasteIntervalsApiKeyFromClipboard.mock.calls[0]).toEqual([]);
+    expect(bridge.writeCredential).not.toHaveBeenCalled();
+    expect(document.querySelector('input[data-slot="intervals-icu"]')).toBeNull();
     wizard.controller.dispose();
   });
 
@@ -380,34 +397,32 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("offers intervals.icu recovery in place without rewriting the key", async () => {
+  it("offers intervals.icu activation recovery without reading another copied key", async () => {
     const user = userEvent.setup();
     const failedStatuses = [
       { slot: "intervals-icu", state: "configured", runtimeState: "failed" },
     ] as const;
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
-    bridge.credentialStatuses.mockResolvedValueOnce([]).mockResolvedValue(failedStatuses);
+    bridge.credentialStatuses.mockResolvedValue([]);
     bridge.retryFailedCredentials.mockResolvedValue(failedStatuses);
-    let credentialWriteCount = 0;
-    bridge.writeCredential.mockImplementation(async ({ slot }) => {
-      credentialWriteCount += 1;
-      return { slot, status: "refused", reason: "runtime-unavailable" };
+    bridge.pasteIntervalsApiKeyFromClipboard.mockResolvedValue({
+      outcome: "applied",
+      current: failedStatuses[0],
     });
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openTrainingPanel(user);
-    const intervals = seedSecret("intervals-icu", randomUUID());
 
-    await saveTrainingKey(user);
+    await user.click(panelButton("training", "Use copied API key"));
 
     await waitFor(() => {
-      expect(wizard.controller.state().fixedError).toBe("runtime-unavailable");
+      expect(wizard.controller.state().fixedError).toBe("intervals-runtime-unavailable");
     });
     expect(errorText()).toBe(
-      "That key was saved, but it is not active yet. Choose Retry saved keys to activate it.",
+      "The copied API key couldn’t be activated. Copy it in Intervals.icu, then try again.",
     );
     expect(retryButtons()).toHaveLength(1);
-    expect(intervals.value).toBe("");
+    expect(bridge.writeCredential).not.toHaveBeenCalled();
 
     await user.click(button("Retry saved keys"));
 
@@ -418,7 +433,7 @@ describe("mounted onboarding", () => {
       expect(wizard.controller.state().busy).toBe(false);
     });
     expect(retryButtons()).toHaveLength(1);
-    expect(credentialWriteCount).toBe(1);
+    expect(bridge.pasteIntervalsApiKeyFromClipboard).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
 
@@ -682,21 +697,40 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("saves the training key when Enter is pressed inside its credential field", async () => {
+  it("connects Intervals only through the zero-argument clipboard action and focuses Delete", async () => {
     const user = userEvent.setup();
+    const pending = deferred<IntervalsCredentialMutationResult>();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    bridge.pasteIntervalsApiKeyFromClipboard.mockImplementation(() => pending.promise);
     const wizard = mountWizard({ bridge });
     await wizard.open();
+    enableCredentialDeletion();
     await openTrainingPanel(user);
-    seedSecret("intervals-icu", randomUUID());
+    const trainingPanel = panel("training");
+    if (trainingPanel === null) throw new Error("Training panel did not open");
 
-    expect(fireEvent.keyDown(passwordInput("intervals-icu"), { key: "Enter" })).toBe(false);
+    expect(trainingPanel.querySelector('input[data-slot="intervals-icu"]')).toBeNull();
+    expect(fireEvent.keyDown(trainingPanel, { key: "Enter" })).toBe(true);
+    expect(bridge.pasteIntervalsApiKeyFromClipboard).not.toHaveBeenCalled();
+    await user.click(panelButton("training", "Use copied API key"));
 
     await waitFor(() => {
-      expect(bridge.writeCredential).toHaveBeenCalledOnce();
+      expect(bridge.pasteIntervalsApiKeyFromClipboard).toHaveBeenCalledOnce();
     });
-    expect(bridge.writeCredential.mock.calls[0]?.[0]?.slot).toBe("intervals-icu");
+    expect(bridge.pasteIntervalsApiKeyFromClipboard.mock.calls[0]).toEqual([]);
+    expect(bridge.writeCredential).not.toHaveBeenCalled();
+    pending.resolve({
+      outcome: "applied",
+      current: { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    });
+    await waitFor(() => {
+      expect(rowState("training")).toBe("ready");
+    });
+    await waitFor(() => {
+      expect(button("Delete the Intervals.icu connection")).toHaveFocus();
+    });
+    expect(panel("training")).toBeNull();
     wizard.controller.dispose();
   });
 
@@ -995,35 +1029,36 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("fails training readiness closed when a replacement key status cannot be refreshed", async () => {
+  it("keeps training pending when clipboard metadata reports uncertain storage", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
-    bridge.credentialStatuses
-      .mockResolvedValueOnce([
-        { slot: "anthropic", state: "configured", runtimeState: "active" },
-        { slot: "intervals-icu", state: "configured", runtimeState: "active" },
-      ])
-      .mockRejectedValueOnce(new Error("private status failure"));
-    bridge.writeCredential.mockImplementation(async ({ slot }) => ({
-      slot,
-      status: "refused",
-      reason: "runtime-unavailable",
-    }));
+    bridge.credentialStatuses.mockResolvedValue([
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+    ]);
+    bridge.pasteIntervalsApiKeyFromClipboard.mockResolvedValue({
+      outcome: "uncertain",
+      reason: "storage-uncertain",
+      current: { slot: "intervals-icu", state: "re-prompt", runtimeState: null },
+    });
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await answerIntake(user);
-    expect(primaryButton()).toBeEnabled();
     await openTrainingPanel(user);
-    seedSecret("intervals-icu", randomUUID());
 
-    await saveTrainingKey(user);
+    await user.click(panelButton("training", "Use copied API key"));
 
     await waitFor(() => {
-      expect(wizard.controller.state().fixedError).toBe("credential-status-unavailable");
+      expect(wizard.controller.state().fixedError).toBe("intervals-storage-uncertain");
     });
+    expect(errorText()).toBe(
+      "Enduragent couldn’t confirm whether the copied API key was saved. Reload credential status before trying again.",
+    );
+    expect(panel("training")).not.toBeNull();
     expect(rowState("training")).toBe("pending");
     expect(primaryButton()).toBeDisabled();
-    expect(document.body.textContent).not.toContain("private status failure");
+    expect(bridge.pasteIntervalsApiKeyFromClipboard.mock.calls[0]).toEqual([]);
+    expect(bridge.credentialStatuses).toHaveBeenCalledOnce();
+    expect(bridge.writeCredential).not.toHaveBeenCalled();
     wizard.controller.dispose();
   });
 
@@ -1183,7 +1218,8 @@ describe("mounted onboarding", () => {
     expect(document.body.textContent).toContain(
       "Local library import: 1 ride file imported. 1 ride file quarantined. Coaching access to activities and streams is available.",
     );
-    expect(rowState("training")).toBe("ready");
+    expect(rowState("training")).toBe("pending");
+    expect(useEnduragentStore.getState().onboarding.readiness.trainingData).toBe(true);
 
     act(() => {
       wizard.controller.importDroppedFiles(["/synthetic/quarantined.fit"]);
@@ -1215,7 +1251,10 @@ describe("mounted onboarding", () => {
     await wizard.open();
     await openTrainingPanel(user);
 
-    await user.click(button("or import ride files instead"));
+    expect(panel("training")?.textContent).toContain(
+      "In Intervals.icu, open Settings → Developer Settings, copy the API key, then return here. Enduragent reads it without showing it.",
+    );
+    await user.click(button("Import ride files instead"));
 
     await waitFor(() => {
       expect(bridge.chooseImportFiles).toHaveBeenCalledOnce();
@@ -1426,33 +1465,32 @@ describe("mounted onboarding", () => {
     wizard.controller.dispose();
   });
 
-  it("does not start a dropped import while a credential save is in flight", async () => {
+  it("does not start a dropped import while clipboard connection is in flight", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
-    const pendingWrite = deferred<CredentialWriteResult>();
-    let credentialWriteCount = 0;
-    bridge.writeCredential.mockImplementation(() => {
-      credentialWriteCount += 1;
-      return pendingWrite.promise;
-    });
+    const pendingConnection = deferred<IntervalsCredentialMutationResult>();
+    bridge.pasteIntervalsApiKeyFromClipboard.mockImplementation(() => pendingConnection.promise);
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openTrainingPanel(user);
-    seedSecret("intervals-icu", randomUUID());
 
-    await saveTrainingKey(user);
+    await user.click(panelButton("training", "Use copied API key"));
     await waitFor(() => {
-      expect(credentialWriteCount).toBe(1);
+      expect(bridge.pasteIntervalsApiKeyFromClipboard).toHaveBeenCalledOnce();
     });
     act(() => {
       wizard.controller.importDroppedFiles(["/synthetic/during-submit.fit"]);
     });
     expect(bridge.importFiles).not.toHaveBeenCalled();
 
-    pendingWrite.resolve({ slot: "intervals-icu", status: "configured", runtimeReady: true });
+    pendingConnection.resolve({
+      outcome: "applied",
+      current: { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    });
     await waitFor(() => {
       expect(wizard.controller.state().busy).toBe(false);
     });
+    expect(bridge.writeCredential).not.toHaveBeenCalled();
     wizard.controller.dispose();
   });
 

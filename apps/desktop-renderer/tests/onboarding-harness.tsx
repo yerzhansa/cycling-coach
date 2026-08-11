@@ -319,6 +319,9 @@ export type TestBridge = OnboardingBridge & {
   readonly claudeCliStatus: ReturnType<typeof vi.fn<OnboardingBridge["claudeCliStatus"]>>;
   readonly claudeCliRecheck: ReturnType<typeof vi.fn<OnboardingBridge["claudeCliRecheck"]>>;
   readonly writeCredential: ReturnType<typeof vi.fn<OnboardingBridge["writeCredential"]>>;
+  readonly pasteIntervalsApiKeyFromClipboard: ReturnType<
+    typeof vi.fn<OnboardingBridge["pasteIntervalsApiKeyFromClipboard"]>
+  >;
   readonly importFiles: ReturnType<typeof vi.fn<OnboardingBridge["importFiles"]>>;
   readonly chooseImportFiles: ReturnType<typeof vi.fn<OnboardingBridge["chooseImportFiles"]>>;
   readonly onDroppedImportFiles: ReturnType<typeof vi.fn<OnboardingBridge["onDroppedImportFiles"]>>;
@@ -344,6 +347,12 @@ export function testBridge(login: () => Promise<LegacyChatGptLoginResult>): Test
       status: "configured",
       runtimeReady: true,
     })),
+    pasteIntervalsApiKeyFromClipboard: vi.fn<OnboardingBridge["pasteIntervalsApiKeyFromClipboard"]>(
+      async () => ({
+        outcome: "applied",
+        current: { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+      }),
+    ),
     llmConfiguration: vi.fn<OnboardingBridge["llmConfiguration"]>(
       async () => TEST_LLM_CONFIGURATION,
     ),

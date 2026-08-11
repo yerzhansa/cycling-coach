@@ -21,6 +21,7 @@ interface EnduragentAuth {
     readonly value: string;
     readonly selection?: OnboardingLlmSelection;
   }): Promise<CredentialWriteResult>;
+  pasteIntervalsApiKeyFromClipboard(): Promise<DesktopIntervalsCredentialMutationResult>;
   deleteCredential(input: {
     readonly credential: DesktopCredentialId;
   }): Promise<CredentialDeleteResult>;
@@ -446,6 +447,45 @@ type CredentialDeleteResult =
       readonly slot: DesktopCredentialSlot;
       readonly status: "uncertain";
       readonly reason: "storage-uncertain";
+    };
+
+interface DesktopIntervalsCredentialStatus {
+  readonly slot: "intervals-icu";
+  readonly state: CredentialState;
+  readonly runtimeState: CredentialRuntimeState | null;
+}
+
+type DesktopIntervalsCredentialMutationRefusalReason =
+  | "clipboard-unavailable"
+  | "clipboard-clear-failed"
+  | "invalid-key-format"
+  | "credential-rejected"
+  | "malformed-athlete-response"
+  | "validation-timeout"
+  | "validation-aborted"
+  | "validation-unavailable"
+  | "training-account-mismatch"
+  | "owner-unresolved"
+  | "store-unavailable"
+  | "encryption-unavailable"
+  | "unsafe-backend"
+  | "storage-failed"
+  | "runtime-unavailable";
+
+type DesktopIntervalsCredentialMutationResult =
+  | {
+      readonly outcome: "applied";
+      readonly current: DesktopIntervalsCredentialStatus;
+    }
+  | {
+      readonly outcome: "refused";
+      readonly reason: DesktopIntervalsCredentialMutationRefusalReason;
+      readonly current: DesktopIntervalsCredentialStatus;
+    }
+  | {
+      readonly outcome: "uncertain";
+      readonly reason: "storage-uncertain" | "runtime-uncertain";
+      readonly current: DesktopIntervalsCredentialStatus;
     };
 
 interface Window {

@@ -60,9 +60,7 @@ export function Sidebar(): ReactElement {
               type="button"
               className={active ? `${styles.navItem} ${styles.on}` : styles.navItem}
               aria-current={active ? "page" : undefined}
-              disabled={
-                navigationLocked && view.id !== activeView
-              }
+              disabled={navigationLocked && view.id !== activeView}
               onClick={() => {
                 setActiveView(view.id);
               }}
@@ -76,6 +74,17 @@ export function Sidebar(): ReactElement {
       <div className={styles.railFoot}>
         <UpdateAvailableButton locked={navigationLocked} />
         <SyncChip />
+        <div
+          className="flex min-h-ctl items-center gap-2 px-row text-xs text-ink-2"
+          data-sidebar-setup-readiness={canChat ? "ready" : "waiting"}
+        >
+          <span
+            className={`size-2 rounded-full ${canChat ? "bg-ok" : "bg-warn"}`}
+            data-sidebar-setup-dot={canChat ? "ready" : "waiting"}
+            aria-hidden="true"
+          />
+          <span>{canChat ? "Ready" : "Waiting for setup"}</span>
+        </div>
       </div>
     </aside>
   );

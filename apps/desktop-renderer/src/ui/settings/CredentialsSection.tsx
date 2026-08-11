@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, type ReactElement } from "react";
+import { Fragment, useEffect, useRef, type ReactElement, type RefObject } from "react";
 import type { DesktopCredentialId } from "../../onboarding/bridge.js";
 import { DESKTOP_CREDENTIAL_SLOTS } from "../../onboarding/constants.js";
 import { onboardingCredentialMutationActive } from "../../onboarding/controller.js";
@@ -13,8 +13,9 @@ import {
 } from "../../settings/credential-controller.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
-import { SetupRow, SetupSubPanel } from "../onboarding/SetupRow.js";
-import { BUTTON_QUIET_SM } from "../onboarding/SetupCard.js";
+import { SetupRow } from "../onboarding/SetupRow.js";
+import { BUTTON_DANGER_LINK_SM, BUTTON_QUIET_SM } from "../onboarding/SetupCard.js";
+import { InlineConfirmation } from "../shared/InlineConfirmation.js";
 import { credentialRuntimeLabel } from "./copy.js";
 import styles from "./SettingsView.module.css";
 
@@ -72,6 +73,7 @@ function openCredentialEditor(credential: DesktopCredentialId): void {
 
 export function CredentialDeleteButton(props: {
   readonly credential: DesktopCredentialId;
+  readonly buttonRef?: RefObject<HTMLButtonElement | null>;
 }): ReactElement | null {
   const state = useEnduragentStore((store) => store.settings.credentials);
   const mutating = useEnduragentStore((store) => settingsMutationActive(store.settings));
@@ -80,11 +82,16 @@ export function CredentialDeleteButton(props: {
     onboardingCredentialMutationActive(store.onboarding),
   );
   const port = useEnduragentStore((store) => store.settingsPorts?.credentials ?? null);
-  const button = useRef<HTMLButtonElement>(null);
+  const ownButton = useRef<HTMLButtonElement>(null);
+  const button = props.buttonRef ?? ownButton;
   const entry = entryFor(state, props.credential);
+  const intervalsConnected = useEnduragentStore(
+    (store) => store.onboarding.wizard.credentialStatus["intervals-icu"] === "configured",
+  );
   const target = "focus" in state ? state.focus : null;
   const confirmation = content(state)?.confirmation ?? null;
   const repairRequired = repairRequiredCredential(state) !== null;
+  const intervalsFallback = props.credential === "intervals-icu" && intervalsConnected;
 
   useEffect(() => {
     if (target?.target === "delete" && target.credential === props.credential) {
@@ -92,18 +99,29 @@ export function CredentialDeleteButton(props: {
     }
   }, [props.credential, target]);
 
-  if (entry === null) return null;
+  if (entry === null && !intervalsFallback) return null;
+  const provider = entry?.provider ?? "Intervals.icu";
   return (
     <button
       type="button"
       ref={button}
-      data-setup-delete={entry.credential}
-      className={styles.danger}
+      data-setup-delete={props.credential}
+      className={props.credential === "intervals-icu" ? BUTTON_DANGER_LINK_SM : styles.danger}
       disabled={
-        mutating || setupLoading || onboardingMutating || confirmation !== null || repairRequired
+        port === null ||
+        state.status === "loading" ||
+        mutating ||
+        setupLoading ||
+        onboardingMutating ||
+        confirmation !== null ||
+        repairRequired
       }
-      aria-label={`Delete the ${entry.provider} credential`}
-      onClick={() => port?.requestDelete(entry.credential)}
+      aria-label={
+        props.credential === "intervals-icu"
+          ? "Delete the Intervals.icu connection"
+          : `Delete the ${provider} credential`
+      }
+      onClick={() => port?.requestDelete(props.credential)}
     >
       Delete
     </button>
@@ -119,60 +137,43 @@ export function CredentialDeleteConfirmation(props: {
     onboardingCredentialMutationActive(store.onboarding),
   );
   const port = useEnduragentStore((store) => store.settingsPorts?.credentials ?? null);
-  const cancel = useRef<HTMLButtonElement>(null);
-  const confirm = useRef<HTMLButtonElement>(null);
   const entry = entryFor(state, props.credential);
   const target = "focus" in state ? state.focus : null;
   const confirmation = content(state)?.confirmation ?? null;
   const deleting = state.status === "deleting";
 
-  useEffect(() => {
-    if (confirmation !== props.credential) return;
-    if (target?.target === "confirmation-cancel") cancel.current?.focus();
-    else if (target?.target === "confirmation-delete") confirm.current?.focus();
-  }, [confirmation, props.credential, target]);
-
   if (entry === null || confirmation !== props.credential) return null;
+  const intervals = entry.credential === "intervals-icu";
   return (
-    <SetupSubPanel name={`delete-${entry.credential}`}>
-      <div
-        className={styles.confirmation}
-        role="group"
-        aria-labelledby={`credential-confirm-${entry.credential}`}
-      >
-        <p className={styles.confirmationTitle} id={`credential-confirm-${entry.credential}`}>
-          Delete the {entry.provider} credential?
-        </p>
-        <p className={styles.confirmationCopy}>
-          This removes it from this Mac only. Enduragent will stop using it if it is active. Your
-          provider account is unchanged.
-        </p>
-        <div className={styles.confirmationActions}>
-          <button
-            type="button"
-            ref={cancel}
-            className={styles.button}
-            disabled={mutating}
-            onClick={() => port?.cancelDelete()}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            ref={confirm}
-            className={styles.danger}
-            disabled={deleting ? false : mutating || onboardingMutating}
-            aria-disabled={deleting ? "true" : undefined}
-            aria-label={`Confirm deletion of the ${entry.provider} credential`}
-            onClick={() => {
-              if (!deleting) port?.confirmDelete();
-            }}
-          >
-            Delete credential
-          </button>
-        </div>
-      </div>
-    </SetupSubPanel>
+    <InlineConfirmation
+      name={`delete-${entry.credential}`}
+      title={
+        intervals
+          ? "Delete the Intervals.icu connection?"
+          : `Delete the ${entry.provider} credential?`
+      }
+      copy={
+        intervals
+          ? "Your saved API key and imported connection will be removed. Your synced rides and past chats stay on this Mac."
+          : "This removes it from this Mac only. Enduragent will stop using it if it is active. Your provider account is unchanged."
+      }
+      confirmLabel={intervals ? "Delete connection" : "Delete credential"}
+      {...(intervals
+        ? {}
+        : { confirmAriaLabel: `Confirm deletion of the ${entry.provider} credential` })}
+      focusTarget={
+        target?.target === "confirmation-cancel"
+          ? "cancel"
+          : target?.target === "confirmation-delete"
+            ? "confirm"
+            : null
+      }
+      cancelDisabled={mutating}
+      confirmDisabled={mutating || onboardingMutating}
+      confirmBusy={deleting}
+      onCancel={() => port?.cancelDelete()}
+      onConfirm={() => port?.confirmDelete()}
+    />
   );
 }
 

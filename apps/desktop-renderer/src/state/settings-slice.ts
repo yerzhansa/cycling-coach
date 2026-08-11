@@ -32,6 +32,7 @@ export interface CredentialSettingsPort {
   requestDelete(credential: DesktopCredentialId): void;
   cancelDelete(): void;
   confirmDelete(): void;
+  setupOpened(credential: "intervals-icu"): void;
   openSetup(): void;
 }
 
