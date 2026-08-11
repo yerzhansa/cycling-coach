@@ -11,4 +11,4 @@ Setup now stays in Chat until the coach is ready and remains available at the to
 
 Desktop setup readiness is rechecked from durable runtime state on every launch, and chat actions fail closed until the provider, training data, and saved safety intake are ready.
 
-Chat setup can verify or replace a Telegram bot from a copied BotFather token, remove its local credential safely, and always keeps pairing and access management in Settings.
+Chat setup can connect a Telegram bot from a copied BotFather token and safely delete its connection from this Mac, and always keeps pairing and access management in Settings.
