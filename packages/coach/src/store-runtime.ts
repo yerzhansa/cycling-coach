@@ -70,6 +70,7 @@ export interface StoreRuntimeOptions {
   readonly reference: ReferenceRuntime;
   readonly writerContext?: CoachStoreWriterContext;
   readonly dependencies?: StoreRuntimeDependencies;
+  readonly platform?: NodeJS.Platform;
 }
 
 function sameHome(left: AthleteHome, right: AthleteHome): boolean {
@@ -402,6 +403,9 @@ LIMIT 1`,
                 : { replacesCaptureId: this.snapshotValue.captureId }),
               budget,
               attemptLedger: ledger,
+              ...(this.options.platform === undefined
+                ? {}
+                : { platform: this.options.platform }),
             });
       const legacyPromise = this.options.reference.runScheduledOnce();
       const [captureResult, legacyResult] = await Promise.allSettled([

@@ -69,7 +69,7 @@ export type { LogLine, LogLevel, SubsystemLogger, Subsystem } from "./logging/in
 
 // ─── Memory ───────────────────────────────────────────────────────────
 export type { MemorySnapshot, MemoryStore, MemoryWriteSource } from "./memory.js";
-export { Memory } from "./memory/store.js";
+export { Memory, type MemoryOptions } from "./memory/store.js";
 export type { MemoryJournalEntry } from "./memory/journal.js";
 
 // ─── Secrets ──────────────────────────────────────────────────────────
@@ -325,6 +325,7 @@ export {
   listDesktopAllowedSenders,
   loadAllowedSendersFromFile,
   loadAllowedSendersWithSource,
+  MAX_ALLOWED_SENDERS_FILE_BYTES,
   removeSecondarySender,
   resetDesktopAllowedSenders,
   bindDesktopTelegramAccess,
@@ -332,6 +333,7 @@ export {
 } from "./channels/allowed-senders.js";
 export type {
   AddSecondarySenderResult,
+  AllowedSendersStorageOptions,
   ClaimPrimaryOperatorResult,
   DesktopAllowedSender,
   RemoveSecondarySenderResult,

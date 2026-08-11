@@ -793,6 +793,7 @@ export async function createLocalCoachComposition(
       reference,
       writerContext: input.context,
       dependencies: dependencies.runtimeDependencies,
+      ...(dependencies.platform === undefined ? {} : { platform: dependencies.platform }),
     };
     runtime =
       dependencies.createRuntime === undefined
@@ -832,7 +833,7 @@ export async function createLocalCoachComposition(
               ...config,
               session: { ...config.session, timezone },
             };
-      const memory = new Memory(input.home.root, timezone);
+      const memory = new Memory(input.home.root, timezone, { platform: dependencies.platform });
       const conversationStore = createConversationStore(
         input.home.root,
         config.session.resetArchiveRetentionDays,

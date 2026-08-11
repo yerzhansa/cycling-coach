@@ -95,6 +95,10 @@ function hasLogicalSectionContent(stamped: string): boolean {
 
 type RenameOutcome = "renamed" | "noop" | "merged";
 
+export interface MemoryOptions {
+  readonly platform?: NodeJS.Platform;
+}
+
 /**
  * Apply a single section rename to `parts` IN PLACE. Shared between
  * `renameSection` (one rename + write) and `renameSections` (chain of
@@ -124,15 +128,17 @@ export class Memory implements MemoryStore {
   private plansDir: string;
   private tz: string;
   private provenance: ProvenanceMetadata;
+  private readonly platform: NodeJS.Platform;
   private readonly writeProvenance = new AsyncLocalStorage<SourceProvenance>();
 
-  constructor(dataDir: string, tz: string = "UTC") {
+  constructor(dataDir: string, tz: string = "UTC", options: MemoryOptions = {}) {
     this.memoryDir = join(dataDir, "memory");
     this.plansDir = join(dataDir, "plans");
     this.tz = tz;
+    this.platform = options.platform ?? process.platform;
     mkdirSync(this.memoryDir, { recursive: true, mode: 0o700 });
     mkdirSync(this.plansDir, { recursive: true, mode: 0o700 });
-    this.provenance = new ProvenanceMetadata(this.memoryDir);
+    this.provenance = new ProvenanceMetadata(this.memoryDir, { platform: this.platform });
   }
 
   runWithWriteProvenance<T>(provenance: SourceProvenance, fn: () => T): T {
@@ -244,7 +250,7 @@ export class Memory implements MemoryStore {
     });
 
     if (!existing) {
-      atomicWriteFileSync(path, newBlock);
+      atomicWriteFileSync(path, newBlock, { platform: this.platform });
       return;
     }
 
@@ -253,10 +259,12 @@ export class Memory implements MemoryStore {
 
     if (idx >= 0) {
       parts[idx] = newBlock;
-      atomicWriteFileSync(path, parts.join(""));
+      atomicWriteFileSync(path, parts.join(""), { platform: this.platform });
     } else {
       // Append at end (preserves legacy content not covered by any known section)
-      atomicWriteFileSync(path, existing.trimEnd() + "\n\n" + newBlock);
+      atomicWriteFileSync(path, existing.trimEnd() + "\n\n" + newBlock, {
+        platform: this.platform,
+      });
     }
   }
 
@@ -305,7 +313,7 @@ export class Memory implements MemoryStore {
       newBody: updated,
       source,
     });
-    atomicWriteFileSync(path, updated);
+    atomicWriteFileSync(path, updated, { platform: this.platform });
     return outcome;
   }
 
@@ -338,7 +346,7 @@ export class Memory implements MemoryStore {
         newBody: updated,
         source,
       });
-      atomicWriteFileSync(path, updated);
+      atomicWriteFileSync(path, updated, { platform: this.platform });
     }
     return outcomes;
   }
@@ -414,7 +422,7 @@ export class Memory implements MemoryStore {
       });
     }
     this.provenance.writeMany(metadataWrites);
-    atomicWriteFileSync(path, updated);
+    atomicWriteFileSync(path, updated, { platform: this.platform });
   }
 
   readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }> {
@@ -460,7 +468,7 @@ export class Memory implements MemoryStore {
       newBody,
       source,
     });
-    atomicWriteFileSync(path, newBody);
+    atomicWriteFileSync(path, newBody, { platform: this.platform });
   }
 
   loadPlan(): unknown | null {

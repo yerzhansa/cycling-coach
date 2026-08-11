@@ -4,26 +4,52 @@ import {
   closeSync,
   createReadStream,
   existsSync,
+  fstatSync,
+  ftruncateSync,
   fsyncSync,
   linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { constants as fsConstants } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { TextDecoder } from "node:util";
 import { z } from "zod";
+import {
+  WindowsPrivatePathPolicyError,
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivateFileBinding,
+  assertWindowsPrivateFileMetadata,
+  assertWindowsPrivatePathRead,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathDurability,
+  classifyWindowsPrivatePathFailure,
+  sameWindowsPrivatePathIdentity,
+  windowsPrivatePathIdentity,
+  type WindowsPrivateDirectoryBinding,
+  type WindowsPrivatePathIdentity,
+  type WindowsPrivatePathPolicyStage,
+} from "../io/windows-private-path-policy.js";
 import { enumerateTelegramSessions } from "./telegram-sessions.js";
 
 export type DmPolicy = "pairing" | "allowlist" | "open";
 
 export const ALLOWED_SENDERS_FILE = "allowed-senders.json";
+export const MAX_ALLOWED_SENDERS_FILE_BYTES = 1_048_576;
 const ACCESS_RESET_MARKER = ".telegram-access-reset";
+const STRICT_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+
+export interface AllowedSendersStorageOptions {
+  readonly platform?: NodeJS.Platform;
+}
 
 export interface AllowedSenders {
   version: 1;
@@ -85,7 +111,11 @@ const senderIdSchema = z
   .transform((v) => String(v))
   .refine((s) => SENDER_ID_RE.test(s));
 
-function validateSchema(parsed: unknown, path: string): AllowedSenders | null {
+function validateSchema(
+  parsed: unknown,
+  diagnostic: string,
+  discloseInvalidEntries = true,
+): AllowedSenders | null {
   const schema = z
     .object({
       version: z.literal(1),
@@ -97,7 +127,9 @@ function validateSchema(parsed: unknown, path: string): AllowedSenders | null {
           if (r.success) out.push(r.data);
           else
             console.error(
-              `[security] ${path}: dropped invalid allowFrom entry ${JSON.stringify(item)}.`,
+              discloseInvalidEntries
+                ? `[security] ${diagnostic}: dropped invalid allowFrom entry ${JSON.stringify(item)}.`
+                : `[security] ${diagnostic}: dropped invalid allowFrom entry.`,
             );
         }
         return out;
@@ -113,36 +145,154 @@ function validateSchema(parsed: unknown, path: string): AllowedSenders | null {
   if (!result.success) {
     const issue = result.error.issues[0];
     const field = issue.path.join(".") || "root";
-    console.error(`[security] ${path}: invalid ${field}; falling back to default-pairing.`);
+    console.error(`[security] ${diagnostic}: invalid ${field}; falling back to default-pairing.`);
     return null;
   }
   if (result.data.allowFrom.length === 0 && result.data.dmPolicy === "allowlist") {
     console.error(
-      `[security] ${path}: allowlist mode with no valid allowFrom entries; falling back to default-pairing.`,
+      `[security] ${diagnostic}: allowlist mode with no valid allowFrom entries; falling back to default-pairing.`,
     );
     return null;
   }
   return result.data as AllowedSenders;
 }
 
-function loadFromFile(dataDir: string): AllowedSenders | null {
+function readWindowsAllowedSendersFile(dataDir: string, path: string): string | null {
+  let descriptor: number | undefined;
+  let contents: Buffer | undefined;
+  try {
+    const directory = bindWindowsPrivateDirectory(dirname(dataDir), dataDir);
+    let beforeOpen;
+    try {
+      beforeOpen = lstatSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        assertWindowsPrivateDirectoryStable(directory);
+        return null;
+      }
+      throw error;
+    }
+    assertWindowsPrivateFileMetadata(beforeOpen);
+    assertWindowsPrivatePathRead({
+      bounded:
+        Number.isSafeInteger(beforeOpen.size) && beforeOpen.size <= MAX_ALLOWED_SENDERS_FILE_BYTES,
+      identityStable: true,
+      contentValid: true,
+      authenticatedHomeBinding: true,
+    });
+    const expectedIdentity = windowsPrivatePathIdentity(beforeOpen);
+    assertWindowsPrivateFileBinding(directory, path, expectedIdentity);
+    descriptor = openSync(path, fsConstants.O_RDONLY);
+    const opened = fstatSync(descriptor);
+    assertWindowsPrivateFileMetadata(opened);
+    assertWindowsPrivatePathRead({
+      bounded: Number.isSafeInteger(opened.size) && opened.size <= MAX_ALLOWED_SENDERS_FILE_BYTES,
+      identityStable: sameWindowsPrivatePathIdentity(
+        expectedIdentity,
+        windowsPrivatePathIdentity(opened),
+      ),
+      contentValid: true,
+      authenticatedHomeBinding: true,
+    });
+    assertWindowsPrivateFileBinding(directory, path, windowsPrivatePathIdentity(opened));
+    contents = Buffer.allocUnsafe(opened.size);
+    let offset = 0;
+    while (offset < contents.length) {
+      const bytesRead = readSync(descriptor, contents, offset, contents.length - offset, offset);
+      if (bytesRead <= 0) {
+        throw new WindowsPrivatePathPolicyError("read-check", "corruption");
+      }
+      offset += bytesRead;
+    }
+    const probe = Buffer.allocUnsafe(1);
+    const extraBytes = readSync(descriptor, probe, 0, probe.length, offset);
+    probe.fill(0);
+    const afterRead = fstatSync(descriptor);
+    assertWindowsPrivateFileMetadata(afterRead);
+    const current = assertWindowsPrivateFileBinding(
+      directory,
+      path,
+      windowsPrivatePathIdentity(afterRead),
+    );
+    assertWindowsPrivatePathRead({
+      bounded: true,
+      identityStable:
+        sameWindowsPrivatePathIdentity(
+          expectedIdentity,
+          windowsPrivatePathIdentity(opened),
+        ) &&
+        sameWindowsPrivatePathIdentity(
+          windowsPrivatePathIdentity(opened),
+          windowsPrivatePathIdentity(afterRead),
+        ) &&
+        opened.size === afterRead.size &&
+        opened.size === current.size &&
+        opened.mtimeMs === afterRead.mtimeMs &&
+        opened.mtimeMs === current.mtimeMs &&
+        opened.ctimeMs === afterRead.ctimeMs &&
+        opened.ctimeMs === current.ctimeMs,
+      contentValid: offset === opened.size && extraBytes === 0,
+      authenticatedHomeBinding: true,
+    });
+    assertWindowsPrivateDirectoryStable(directory);
+    closeSync(descriptor);
+    descriptor = undefined;
+    let result: string;
+    try {
+      result = STRICT_UTF8_DECODER.decode(contents);
+    } catch {
+      throw new WindowsPrivatePathPolicyError("read-check", "corruption");
+    }
+    contents.fill(0);
+    contents = undefined;
+    return result;
+  } catch (error) {
+    throw classifyWindowsPrivatePathFailure("read-check", error);
+  } finally {
+    contents?.fill(0);
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {}
+    }
+  }
+}
+
+function loadFromFile(dataDir: string, platform: NodeJS.Platform): AllowedSenders | null {
   const path = join(dataDir, ALLOWED_SENDERS_FILE);
   let raw: string;
-  try {
-    raw = readFileSync(path, "utf-8");
-  } catch {
-    return null;
+  if (platform === "win32") {
+    const windowsRaw = readWindowsAllowedSendersFile(dataDir, path);
+    if (windowsRaw === null) return null;
+    raw = windowsRaw;
+  } else {
+    try {
+      raw = readFileSync(path, "utf-8");
+    } catch {
+      return null;
+    }
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
+    if (platform === "win32") {
+      throw new WindowsPrivatePathPolicyError("read-check", "corruption");
+    }
     console.error(
       `[security] ${path} is not valid JSON (${err instanceof Error ? err.message : String(err)}); falling back to default-pairing.`,
     );
     return null;
   }
-  return validateSchema(parsed, path);
+  const validated = validateSchema(
+    parsed,
+    platform === "win32" ? "Telegram sender authorization" : path,
+    platform !== "win32",
+  );
+  if (validated === null && platform === "win32") {
+    throw new WindowsPrivatePathPolicyError("read-check", "corruption");
+  }
+  return validated;
 }
 
 // Cache parsed AllowedSenders by file identity. The auth middleware calls
@@ -194,14 +344,28 @@ function pathExistsOrIsUninspectable(path: string): boolean {
   }
 }
 
-function accessFenceActive(dataDir: string): boolean {
+function accessFenceActive(dataDir: string, platform: NodeJS.Platform): boolean {
+  const markerPath = join(dataDir, ACCESS_RESET_MARKER);
+  if (platform === "win32" && !uncertainAccessFences.has(dataDir)) {
+    try {
+      lstatSync(markerPath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw classifyWindowsPrivatePathFailure("read-check", error);
+    }
+  }
   return (
     uncertainAccessFences.has(dataDir) ||
-    pathExistsOrIsUninspectable(join(dataDir, ACCESS_RESET_MARKER))
+    pathExistsOrIsUninspectable(markerPath)
   );
 }
 
-function loadFromFileCached(dataDir: string): AllowedSenders | null {
+function loadFromFileCached(dataDir: string, platform: NodeJS.Platform): AllowedSenders | null {
+  if (platform === "win32") {
+    fileCache.delete(dataDir);
+    return loadFromFile(dataDir, platform);
+  }
   const path = join(dataDir, ALLOWED_SENDERS_FILE);
   let identity: AllowedSendersFileIdentity;
   try {
@@ -212,7 +376,7 @@ function loadFromFileCached(dataDir: string): AllowedSenders | null {
   }
   const cached = fileCache.get(dataDir);
   if (cached && sameAllowedSendersFileIdentity(cached.identity, identity)) return cached.value;
-  const fresh = loadFromFile(dataDir);
+  const fresh = loadFromFile(dataDir, platform);
   if (fresh) fileCache.set(dataDir, { identity, value: fresh });
   else fileCache.delete(dataDir);
   return fresh;
@@ -225,11 +389,15 @@ export interface AllowedSendersLoad {
   source: AllowedSendersSource;
 }
 
-export function loadAllowedSendersWithSource(dataDir: string): AllowedSendersLoad {
-  if (accessFenceActive(dataDir)) {
+export function loadAllowedSendersWithSource(
+  dataDir: string,
+  options: AllowedSendersStorageOptions = {},
+): AllowedSendersLoad {
+  const platform = options.platform ?? process.platform;
+  if (accessFenceActive(dataDir, platform)) {
     return { state: defaultPairingState(), source: "default-pairing" };
   }
-  const fromFile = loadFromFileCached(dataDir);
+  const fromFile = loadFromFileCached(dataDir, platform);
   const baseAndSource: AllowedSendersLoad = fromFile
     ? { state: fromFile, source: "file" }
     : (() => {
@@ -249,13 +417,20 @@ export function loadAllowedSendersWithSource(dataDir: string): AllowedSendersLoa
   return baseAndSource;
 }
 
-export function loadAllowedSenders(dataDir: string): AllowedSenders {
-  return loadAllowedSendersWithSource(dataDir).state;
+export function loadAllowedSenders(
+  dataDir: string,
+  options: AllowedSendersStorageOptions = {},
+): AllowedSenders {
+  return loadAllowedSendersWithSource(dataDir, options).state;
 }
 
-export function loadAllowedSendersFromFile(dataDir: string): AllowedSenders {
-  if (accessFenceActive(dataDir)) return defaultPairingState();
-  return loadFromFileCached(dataDir) ?? defaultPairingState();
+export function loadAllowedSendersFromFile(
+  dataDir: string,
+  options: AllowedSendersStorageOptions = {},
+): AllowedSenders {
+  const platform = options.platform ?? process.platform;
+  if (accessFenceActive(dataDir, platform)) return defaultPairingState();
+  return loadFromFileCached(dataDir, platform) ?? defaultPairingState();
 }
 
 export interface DesktopAllowedSender {
@@ -307,16 +482,34 @@ export class LockfileContentionError extends Error {
   }
 }
 
+class WindowsLockfileContentionError extends LockfileContentionError {
+  readonly stage = "binding-check";
+  readonly category = "sharing-violation";
+
+  constructor() {
+    super("Telegram sender authorization lock is held.");
+  }
+}
+
 export class AllowedSendersRecoveryRequiredError extends Error {
-  constructor(dataDir: string) {
-    super(`Telegram sender authorization recovery is required for ${dataDir}.`);
+  constructor(dataDir: string, options: AllowedSendersStorageOptions = {}) {
+    super(
+      (options.platform ?? process.platform) === "win32"
+        ? "Telegram sender authorization recovery is required."
+        : `Telegram sender authorization recovery is required for ${dataDir}.`,
+    );
     this.name = "AllowedSendersRecoveryRequiredError";
   }
 }
 
 export class AllowedSendersCommitUncertainError extends Error {
-  constructor(dataDir: string, cause: unknown) {
-    super(`Telegram sender authorization commit is uncertain for ${dataDir}.`, { cause });
+  constructor(dataDir: string, cause: unknown, options: AllowedSendersStorageOptions = {}) {
+    super(
+      (options.platform ?? process.platform) === "win32"
+        ? "Telegram sender authorization commit is uncertain."
+        : `Telegram sender authorization commit is uncertain for ${dataDir}.`,
+      { cause },
+    );
     this.name = "AllowedSendersCommitUncertainError";
   }
 }
@@ -345,22 +538,81 @@ function lockfileIsStale(lockPath: string): boolean {
   return !isProcessAlive(pid);
 }
 
+function windowsLockfileIsStale(dataDir: string, lockPath: string): boolean {
+  const raw = readWindowsAllowedSendersFile(dataDir, lockPath);
+  if (raw === null) return true;
+  const parts = raw.split("\n");
+  const pid = Number(parts[0]);
+  if (
+    parts.length !== 3 ||
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    !Number.isFinite(Date.parse(parts[1] ?? "")) ||
+    (parts[2]?.length ?? 0) === 0
+  ) {
+    throw new WindowsPrivatePathPolicyError("read-check", "corruption");
+  }
+  return !isProcessAlive(pid);
+}
+
 interface LockfileOwnership {
   path: string;
   content: string;
+  windowsIdentity?: WindowsPrivatePathIdentity;
 }
 
-function prepareLockfileClaim(lockPath: string, content: string, token: string): string {
+interface AllowedSendersStorageContext {
+  readonly platform: NodeJS.Platform;
+  readonly windowsDirectory?: WindowsPrivateDirectoryBinding;
+}
+
+function assertWindowsIdentity(expected: WindowsPrivatePathIdentity, metadata: Stats): void {
+  if (!sameWindowsPrivatePathIdentity(expected, windowsPrivatePathIdentity(metadata))) {
+    throw new WindowsPrivatePathPolicyError("binding-check", "corruption");
+  }
+}
+
+function prepareLockfileClaim(
+  lockPath: string,
+  content: string,
+  token: string,
+  context: AllowedSendersStorageContext,
+): string {
   const tempPath = `${lockPath}.tmp.${token}`;
   let descriptor: number | undefined;
+  let stage: WindowsPrivatePathPolicyStage = "content-write";
   try {
     descriptor = openSync(
       tempPath,
-      fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
+      fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_WRONLY |
+        (context.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW),
       0o600,
     );
+    let windowsIdentity: WindowsPrivatePathIdentity | undefined;
+    if (context.platform === "win32") {
+      const opened = fstatSync(descriptor);
+      assertWindowsPrivateFileMetadata(opened);
+      windowsIdentity = windowsPrivatePathIdentity(opened);
+      assertWindowsPrivateFileBinding(context.windowsDirectory!, tempPath, windowsIdentity);
+    }
     writeFileSync(descriptor, content, "utf8");
+    if (context.platform === "win32") {
+      const written = fstatSync(descriptor);
+      assertWindowsPrivateFileMetadata(written);
+      assertWindowsIdentity(windowsIdentity!, written);
+      assertWindowsPrivateFileBinding(context.windowsDirectory!, tempPath, windowsIdentity!);
+    }
+    stage = "file-flush";
     fsyncSync(descriptor);
+    if (context.platform === "win32") {
+      const flushed = fstatSync(descriptor);
+      assertWindowsPrivateFileMetadata(flushed);
+      assertWindowsIdentity(windowsIdentity!, flushed);
+      assertWindowsPrivateFileBinding(context.windowsDirectory!, tempPath, windowsIdentity!);
+      assertWindowsPrivateDirectoryStable(context.windowsDirectory!);
+    }
     closeSync(descriptor);
     descriptor = undefined;
     return tempPath;
@@ -373,44 +625,109 @@ function prepareLockfileClaim(lockPath: string, content: string, token: string):
     try {
       unlinkSync(tempPath);
     } catch {}
-    throw error;
+    throw context.platform === "win32"
+      ? classifyWindowsPrivatePathFailure(stage, error)
+      : error;
   }
 }
 
-function acquireLockfile(dataDir: string): LockfileOwnership {
+function acquireLockfile(dataDir: string, context: AllowedSendersStorageContext): LockfileOwnership {
   const lockPath = join(dataDir, LOCK_FILE);
   const token = randomUUID();
   const content = `${process.pid}\n${new Date().toISOString()}\n${token}`;
-  const tempPath = prepareLockfileClaim(lockPath, content, token);
+  const tempPath = prepareLockfileClaim(lockPath, content, token, context);
+  let windowsIdentity: WindowsPrivatePathIdentity | undefined;
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         linkSync(tempPath, lockPath);
-        return { path: lockPath, content };
+        if (context.platform === "win32") {
+          const linked = lstatSync(tempPath);
+          assertWindowsPrivateFileMetadata(linked, 2);
+          windowsIdentity = windowsPrivatePathIdentity(linked);
+          assertWindowsPrivateFileBinding(context.windowsDirectory!, tempPath, windowsIdentity, 2);
+          assertWindowsPrivateFileBinding(context.windowsDirectory!, lockPath, windowsIdentity, 2);
+        }
+        return { path: lockPath, content, windowsIdentity };
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-        if (lockfileIsStale(lockPath)) {
+        const stale = context.platform === "win32"
+          ? windowsLockfileIsStale(dataDir, lockPath)
+          : lockfileIsStale(lockPath);
+        if (stale) {
           try {
             unlinkSync(lockPath);
-          } catch {
-            /* race: another process cleaned it */
+            if (context.platform === "win32") {
+              assertWindowsPrivateDirectoryStable(context.windowsDirectory!);
+            }
+          } catch (error) {
+            if (context.platform === "win32" && (error as NodeJS.ErrnoException).code !== "ENOENT") {
+              throw classifyWindowsPrivatePathFailure("rename", error);
+            }
           }
           continue;
         }
+        if (context.platform === "win32") throw new WindowsLockfileContentionError();
         throw new LockfileContentionError(
           `Another ${process.argv[1] ?? "cycling-coach"} process holds ${lockPath}; try again in a moment.`,
         );
       }
     }
+    if (context.platform === "win32") throw new WindowsLockfileContentionError();
     throw new LockfileContentionError(`Failed to acquire ${lockPath} after stale-reclaim retry.`);
+  } catch (error) {
+    throw context.platform === "win32" && !(error instanceof LockfileContentionError)
+      ? classifyWindowsPrivatePathFailure("rename", error)
+      : error;
   } finally {
-    try {
-      unlinkSync(tempPath);
-    } catch {}
+    removeLockfileClaim(tempPath, context);
+    if (context.platform === "win32" && windowsIdentity !== undefined) {
+      assertWindowsPrivateFileBinding(context.windowsDirectory!, lockPath, windowsIdentity);
+    }
   }
 }
 
-function releaseLockfile(ownership: LockfileOwnership): void {
+function removeLockfileClaim(path: string, context: AllowedSendersStorageContext): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (context.platform === "win32" && (error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw classifyWindowsPrivatePathFailure("rename", error);
+    }
+  }
+}
+
+function releaseLockfile(ownership: LockfileOwnership, context: AllowedSendersStorageContext): void {
+  if (context.platform === "win32") {
+    let stage: WindowsPrivatePathPolicyStage = "read-check";
+    try {
+      const metadata = lstatSync(ownership.path);
+      assertWindowsPrivateFileMetadata(metadata);
+      assertWindowsPrivateFileBinding(
+        context.windowsDirectory!,
+        ownership.path,
+        ownership.windowsIdentity!,
+      );
+      const observed = readWindowsAllowedSendersFile(
+        context.windowsDirectory!.path,
+        ownership.path,
+      );
+      if (observed === null || observed !== ownership.content) {
+        throw new WindowsPrivatePathPolicyError("read-check", "corruption");
+      }
+      assertWindowsPrivateFileBinding(
+        context.windowsDirectory!,
+        ownership.path,
+        ownership.windowsIdentity!,
+      );
+      stage = "rename";
+      unlinkSync(ownership.path);
+      assertWindowsPrivateDirectoryStable(context.windowsDirectory!);
+      return;
+    } catch (error) {
+      throw classifyWindowsPrivatePathFailure(stage, error);
+    }
+  }
   try {
     if (readFileSync(ownership.path, "utf8") !== ownership.content) return;
     unlinkSync(ownership.path);
@@ -419,7 +736,18 @@ function releaseLockfile(ownership: LockfileOwnership): void {
   }
 }
 
-export function ensureDataDirSecure(dataDir: string): void {
+function secureDataDir(
+  dataDir: string,
+  platform: NodeJS.Platform,
+): WindowsPrivateDirectoryBinding | undefined {
+  if (platform === "win32") {
+    try {
+      mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+      return bindWindowsPrivateDirectory(dirname(dataDir), dataDir);
+    } catch (error) {
+      throw classifyWindowsPrivatePathFailure("entry-check", error);
+    }
+  }
   // mkdirSync with `mode` is a no-op on existing dirs, so explicit chmod is the
   // only path that tightens upgrade installs that pre-date this enforcement.
   if (existsSync(dataDir)) {
@@ -433,9 +761,21 @@ export function ensureDataDirSecure(dataDir: string): void {
   } else {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   }
+  return undefined;
 }
 
-function syncDirectory(dataDir: string): void {
+export function ensureDataDirSecure(
+  dataDir: string,
+  options: AllowedSendersStorageOptions = {},
+): void {
+  secureDataDir(dataDir, options.platform ?? process.platform);
+}
+
+function syncDirectory(dataDir: string, context: AllowedSendersStorageContext): void {
+  if (context.platform === "win32") {
+    assertWindowsPrivateDirectoryStable(context.windowsDirectory!);
+    if (classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable") return;
+  }
   const descriptor = openSync(
     dataDir,
     fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
@@ -447,7 +787,77 @@ function syncDirectory(dataDir: string): void {
   }
 }
 
-function writeFileDurably(path: string, contents: string): void {
+function writeWindowsFileDurably(
+  path: string,
+  contents: string,
+  directory: WindowsPrivateDirectoryBinding,
+): WindowsPrivatePathIdentity {
+  let descriptor: number | undefined;
+  let identity: WindowsPrivatePathIdentity | undefined;
+  let stage: WindowsPrivatePathPolicyStage = "content-write";
+  try {
+    assertWindowsPrivateDirectoryStable(directory);
+    let beforeOpen;
+    try {
+      beforeOpen = lstatSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (beforeOpen === undefined) {
+      descriptor = openSync(
+        path,
+        fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+        0o600,
+      );
+      const opened = fstatSync(descriptor);
+      assertWindowsPrivateFileMetadata(opened);
+      identity = windowsPrivatePathIdentity(opened);
+    } else {
+      assertWindowsPrivateFileMetadata(beforeOpen);
+      identity = windowsPrivatePathIdentity(beforeOpen);
+      assertWindowsPrivateFileBinding(directory, path, identity);
+      descriptor = openSync(path, fsConstants.O_WRONLY);
+      const opened = fstatSync(descriptor);
+      assertWindowsPrivateFileMetadata(opened);
+      assertWindowsIdentity(identity, opened);
+      assertWindowsPrivateFileBinding(directory, path, identity);
+      ftruncateSync(descriptor, 0);
+    }
+    assertWindowsPrivateFileBinding(directory, path, identity);
+    writeFileSync(descriptor, contents, "utf8");
+    const written = fstatSync(descriptor);
+    assertWindowsPrivateFileMetadata(written);
+    assertWindowsIdentity(identity, written);
+    assertWindowsPrivateFileBinding(directory, path, identity);
+    stage = "file-flush";
+    fsyncSync(descriptor);
+    const flushed = fstatSync(descriptor);
+    assertWindowsPrivateFileMetadata(flushed);
+    assertWindowsIdentity(identity, flushed);
+    assertWindowsPrivateFileBinding(directory, path, identity);
+    assertWindowsPrivateDirectoryStable(directory);
+    closeSync(descriptor);
+    descriptor = undefined;
+    return identity;
+  } catch (error) {
+    throw classifyWindowsPrivatePathFailure(stage, error);
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {}
+    }
+  }
+}
+
+function writeFileDurably(
+  path: string,
+  contents: string,
+  context: AllowedSendersStorageContext,
+): WindowsPrivatePathIdentity | undefined {
+  if (context.platform === "win32") {
+    return writeWindowsFileDurably(path, contents, context.windowsDirectory!);
+  }
   const descriptor = openSync(
     path,
     fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
@@ -459,42 +869,55 @@ function writeFileDurably(path: string, contents: string): void {
   } finally {
     closeSync(descriptor);
   }
+  return undefined;
 }
 
-function withAllowedSendersLock<T>(dataDir: string, operation: () => T): T {
-  ensureDataDirSecure(dataDir);
-  const ownership = acquireLockfile(dataDir);
+function withAllowedSendersLock<T>(
+  dataDir: string,
+  operation: (context: AllowedSendersStorageContext) => T,
+  options: AllowedSendersStorageOptions,
+): T {
+  const platform = options.platform ?? process.platform;
+  const context = { platform, windowsDirectory: secureDataDir(dataDir, platform) };
+  const ownership = acquireLockfile(dataDir, context);
   try {
-    return operation();
+    return operation(context);
   } finally {
-    releaseLockfile(ownership);
+    releaseLockfile(ownership, context);
   }
 }
 
-function publishAccessFenceLocked(dataDir: string): void {
+function publishAccessFenceLocked(dataDir: string, context: AllowedSendersStorageContext): void {
   uncertainAccessFences.add(dataDir);
   fileCache.delete(dataDir);
-  writeFileDurably(join(dataDir, ACCESS_RESET_MARKER), "reset\n");
-  syncDirectory(dataDir);
+  writeFileDurably(join(dataDir, ACCESS_RESET_MARKER), "reset\n", context);
+  syncDirectory(dataDir, context);
 }
 
-function removeAccessFenceLocked(dataDir: string): void {
+function removeAccessFenceLocked(dataDir: string, context: AllowedSendersStorageContext): void {
   const markerPath = join(dataDir, ACCESS_RESET_MARKER);
   let unlinked = false;
   try {
     unlinkSync(markerPath);
     unlinked = true;
-    syncDirectory(dataDir);
+    syncDirectory(dataDir, context);
     uncertainAccessFences.delete(dataDir);
   } catch (error) {
     uncertainAccessFences.add(dataDir);
     if (unlinked) {
-      try {
-        writeFileDurably(markerPath, "reset\n");
-        syncDirectory(dataDir);
-      } catch {}
+      if (context.platform === "win32") {
+        writeFileDurably(markerPath, "reset\n", context);
+        syncDirectory(dataDir, context);
+      } else {
+        try {
+          writeFileDurably(markerPath, "reset\n", context);
+          syncDirectory(dataDir, context);
+        } catch {}
+      }
     }
-    throw error;
+    throw context.platform === "win32"
+      ? classifyWindowsPrivatePathFailure("rename", error)
+      : error;
   }
 }
 
@@ -507,31 +930,47 @@ function refreshAllowedSendersCache(dataDir: string, next: AllowedSenders): void
   }
 }
 
-function replaceAllowedSendersLocked(dataDir: string, next: AllowedSenders): void {
+function replaceAllowedSendersLocked(
+  dataDir: string,
+  next: AllowedSenders,
+  context: AllowedSendersStorageContext,
+): void {
   const path = join(dataDir, ALLOWED_SENDERS_FILE);
   const tmp = `${path}.tmp`;
   let renamed = false;
   try {
-    writeFileDurably(tmp, JSON.stringify(next, null, 2));
+    const windowsIdentity = writeFileDurably(tmp, JSON.stringify(next, null, 2), context);
     renameSync(tmp, path);
     renamed = true;
-    syncDirectory(dataDir);
+    if (context.platform === "win32") {
+      assertWindowsPrivateFileBinding(context.windowsDirectory!, path, windowsIdentity!);
+      assertWindowsPrivateDirectoryStable(context.windowsDirectory!);
+    }
+    syncDirectory(dataDir, context);
   } catch (error) {
     try {
       unlinkSync(tmp);
     } catch {}
+    if (context.platform === "win32") {
+      throw classifyWindowsPrivatePathFailure(renamed ? "binding-check" : "rename", error);
+    }
     if (renamed) throw new AllowedSendersCommitUncertainError(dataDir, error);
     throw error;
   }
 }
 
-function commitAllowedSendersLocked(dataDir: string, next: AllowedSenders): AllowedSenders {
-  publishAccessFenceLocked(dataDir);
+function commitAllowedSendersLocked(
+  dataDir: string,
+  next: AllowedSenders,
+  context: AllowedSendersStorageContext,
+): AllowedSenders {
+  publishAccessFenceLocked(dataDir, context);
   try {
-    replaceAllowedSendersLocked(dataDir, next);
+    replaceAllowedSendersLocked(dataDir, next, context);
     try {
-      removeAccessFenceLocked(dataDir);
+      removeAccessFenceLocked(dataDir, context);
     } catch (error) {
+      if (context.platform === "win32") throw error;
       throw new AllowedSendersCommitUncertainError(dataDir, error);
     }
   } catch (error) {
@@ -554,46 +993,58 @@ function mutateAllowedSenders(
   dataDir: string,
   transform: (current: AllowedSenders | null) => AllowedSenders,
   recoverPendingFence: boolean,
+  options: AllowedSendersStorageOptions,
 ): AllowedSenders {
-  return withAllowedSendersLock(dataDir, () => {
-    let current = loadFromFile(dataDir);
-    if (accessFenceActive(dataDir)) {
-      if (!recoverPendingFence) throw new AllowedSendersRecoveryRequiredError(dataDir);
-      current = commitAllowedSendersLocked(dataDir, recoveryState(current));
+  return withAllowedSendersLock(dataDir, (context) => {
+    let current = loadFromFile(dataDir, context.platform);
+    if (accessFenceActive(dataDir, context.platform)) {
+      if (!recoverPendingFence) {
+        throw new AllowedSendersRecoveryRequiredError(dataDir, { platform: context.platform });
+      }
+      current = commitAllowedSendersLocked(dataDir, recoveryState(current), context);
     }
     const next = transform(current);
     if (next === current) return next;
-    return commitAllowedSendersLocked(dataDir, next);
-  });
+    return commitAllowedSendersLocked(dataDir, next, context);
+  }, options);
 }
 
 export function saveAllowedSenders(
   dataDir: string,
   transform: (current: AllowedSenders | null) => AllowedSenders,
+  options: AllowedSendersStorageOptions = {},
 ): AllowedSenders {
-  return mutateAllowedSenders(dataDir, transform, false);
+  return mutateAllowedSenders(dataDir, transform, false, options);
 }
 
-export function resetDesktopAllowedSenders(dataDir: string): void {
-  withAllowedSendersLock(dataDir, () => {
-    commitAllowedSendersLocked(dataDir, recoveryState(loadFromFile(dataDir)));
-  });
+export function resetDesktopAllowedSenders(
+  dataDir: string,
+  options: AllowedSendersStorageOptions = {},
+): void {
+  withAllowedSendersLock(dataDir, (context) => {
+    commitAllowedSendersLocked(
+      dataDir,
+      recoveryState(loadFromFile(dataDir, context.platform)),
+      context,
+    );
+  }, options);
 }
 
 export function bindDesktopTelegramAccess(
   dataDir: string,
   desktopBotId: string,
+  options: AllowedSendersStorageOptions = {},
 ): "preserved" | "reset" {
   if (!SENDER_ID_RE.test(desktopBotId)) {
     throw new TypeError("invalid Desktop Telegram bot id");
   }
-  return withAllowedSendersLock(dataDir, () => {
-    const pendingReset = accessFenceActive(dataDir);
-    const current = loadFromFile(dataDir);
+  return withAllowedSendersLock(dataDir, (context) => {
+    const pendingReset = accessFenceActive(dataDir, context.platform);
+    const current = loadFromFile(dataDir, context.platform);
     if (!pendingReset && current?.desktopBotId === desktopBotId) return "preserved";
-    commitAllowedSendersLocked(dataDir, { ...defaultPairingState(), desktopBotId });
+    commitAllowedSendersLocked(dataDir, { ...defaultPairingState(), desktopBotId }, context);
     return "reset";
-  });
+  }, options);
 }
 
 function assertSenderId(id: string): void {
@@ -647,13 +1098,22 @@ function exitDesktopMutation<T>(result: T): never {
   throw new DesktopSenderMutationExit(result);
 }
 
-function allowedSendersFileExists(dataDir: string): boolean {
-  return pathExistsOrIsUninspectable(join(dataDir, ALLOWED_SENDERS_FILE));
+function allowedSendersFileExists(dataDir: string, platform: NodeJS.Platform): boolean {
+  const path = join(dataDir, ALLOWED_SENDERS_FILE);
+  if (platform !== "win32") return pathExistsOrIsUninspectable(path);
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw classifyWindowsPrivatePathFailure("read-check", error);
+  }
 }
 
 export function claimPrimaryOperator(
   dataDir: string,
   senderId: string,
+  options: AllowedSendersStorageOptions = {},
 ): ClaimPrimaryOperatorResult {
   assertSenderId(senderId);
   const nowIso = new Date().toISOString();
@@ -661,7 +1121,7 @@ export function claimPrimaryOperator(
 
   try {
     saveAllowedSenders(dataDir, (current) => {
-      if (!current && allowedSendersFileExists(dataDir)) {
+      if (!current && allowedSendersFileExists(dataDir, options.platform ?? process.platform)) {
         return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
       }
 
@@ -689,7 +1149,7 @@ export function claimPrimaryOperator(
       };
       result = { status: "claimed", sender: desktopSender(next, senderId) };
       return next;
-    });
+    }, options);
   } catch (err) {
     if (err instanceof DesktopSenderMutationExit) {
       return err.result as ClaimPrimaryOperatorResult;
@@ -706,14 +1166,18 @@ export function claimPrimaryOperator(
   return result as ClaimPrimaryOperatorResult;
 }
 
-export function addSecondarySender(dataDir: string, senderId: string): AddSecondarySenderResult {
+export function addSecondarySender(
+  dataDir: string,
+  senderId: string,
+  options: AllowedSendersStorageOptions = {},
+): AddSecondarySenderResult {
   assertSenderId(senderId);
   const nowIso = new Date().toISOString();
   let result: AddSecondarySenderResult | undefined;
 
   try {
     saveAllowedSenders(dataDir, (current) => {
-      if (!current && allowedSendersFileExists(dataDir)) {
+      if (!current && allowedSendersFileExists(dataDir, options.platform ?? process.platform)) {
         return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
       }
 
@@ -738,7 +1202,7 @@ export function addSecondarySender(dataDir: string, senderId: string): AddSecond
       };
       result = { status: "added", sender: desktopSender(next, senderId) };
       return next;
-    });
+    }, options);
   } catch (err) {
     if (err instanceof DesktopSenderMutationExit) {
       return err.result as AddSecondarySenderResult;
@@ -758,6 +1222,7 @@ export function addSecondarySender(dataDir: string, senderId: string): AddSecond
 export function removeSecondarySender(
   dataDir: string,
   senderId: string,
+  options: AllowedSendersStorageOptions = {},
 ): RemoveSecondarySenderResult {
   assertSenderId(senderId);
   let result: RemoveSecondarySenderResult | undefined;
@@ -766,7 +1231,7 @@ export function removeSecondarySender(
     mutateAllowedSenders(
       dataDir,
       (current) => {
-        if (!current && allowedSendersFileExists(dataDir)) {
+        if (!current && allowedSendersFileExists(dataDir, options.platform ?? process.platform)) {
           return exitDesktopMutation({ status: "refused", reason: "inconsistent-state" });
         }
 
@@ -793,6 +1258,7 @@ export function removeSecondarySender(
         };
       },
       true,
+      options,
     );
   } catch (err) {
     if (err instanceof DesktopSenderMutationExit) {
@@ -807,12 +1273,19 @@ export function removeSecondarySender(
   return result as RemoveSecondarySenderResult;
 }
 
-export function listDesktopAllowedSenders(dataDir: string): DesktopAllowedSender[] {
-  const state = loadAllowedSendersFromFile(dataDir);
+export function listDesktopAllowedSenders(
+  dataDir: string,
+  options: AllowedSendersStorageOptions = {},
+): DesktopAllowedSender[] {
+  const state = loadAllowedSendersFromFile(dataDir, options);
   return state.allowFrom.map((senderId) => desktopSender(state, senderId));
 }
 
-export function addSender(dataDir: string, senderId: string): void {
+export function addSender(
+  dataDir: string,
+  senderId: string,
+  options: AllowedSendersStorageOptions = {},
+): void {
   assertSenderId(senderId);
   const nowIso = new Date().toISOString();
   saveAllowedSenders(dataDir, (current) => {
@@ -831,7 +1304,7 @@ export function addSender(dataDir: string, senderId: string): void {
       addedAt: { ...base.addedAt, [senderId]: nowIso },
       primaryOperator: base.primaryOperator ?? senderId,
     };
-  });
+  }, options);
 }
 
 interface SessionCandidate {
@@ -871,17 +1344,24 @@ export async function readKnownSessions(dataDir: string): Promise<SessionCandida
   );
 }
 
-export async function listSenders(dataDir: string): Promise<{
+export async function listSenders(
+  dataDir: string,
+  options: AllowedSendersStorageOptions = {},
+): Promise<{
   senders: AllowedSenders;
   sessionCandidates: SessionCandidate[];
 }> {
   return {
-    senders: loadAllowedSenders(dataDir),
+    senders: loadAllowedSenders(dataDir, options),
     sessionCandidates: await readKnownSessions(dataDir),
   };
 }
 
-export function removeSender(dataDir: string, senderId: string): void {
+export function removeSender(
+  dataDir: string,
+  senderId: string,
+  options: AllowedSendersStorageOptions = {},
+): void {
   mutateAllowedSenders(
     dataDir,
     (current) => {
@@ -898,5 +1378,6 @@ export function removeSender(dataDir: string, senderId: string): void {
       };
     },
     true,
+    options,
   );
 }

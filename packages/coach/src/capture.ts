@@ -50,6 +50,7 @@ export interface RunReferenceCaptureOptions {
   readonly budget?: SyncBudget;
   readonly baseFetch?: typeof globalThis.fetch;
   readonly attemptLedger?: PhysicalRequestLedger;
+  readonly platform?: NodeJS.Platform;
 }
 
 export interface RunReferenceCaptureDependencies {
@@ -235,9 +236,15 @@ export async function runReferenceCapture(
     try {
       const committed = await (dependencies.writeSidecars ?? writeReferenceCaptureSidecars)({
         root: home.root, manifest, review, assertReplayable,
+        ...(options.platform === undefined ? {} : { platform: options.platform }),
       });
       if (dependencies.loadSidecars !== undefined) {
-        const loaded = await dependencies.loadSidecars({ root: home.root, captureId, assertReplayable });
+        const loaded = await dependencies.loadSidecars({
+          root: home.root,
+          captureId,
+          assertReplayable,
+          ...(options.platform === undefined ? {} : { platform: options.platform }),
+        });
         return loaded.manifest;
       }
       return committed.manifest;
