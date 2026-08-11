@@ -404,7 +404,14 @@ export function createTelegramBot(input: CreateTelegramChannelInput): TelegramCh
     return { wait: () => waitForSnapshot(snapshot) };
   };
 
-  const stopPolling = (): Promise<void> => ledger.stopCurrentGeneration(() => bot.stop());
+  const stopPolling = (): Promise<void> =>
+    ledger.stopCurrentGeneration(async () => {
+      try {
+        await bot.stop();
+      } catch (error) {
+        if (bot.isRunning()) throw error;
+      }
+    });
 
   const drainPending = async (): Promise<void> => {
     while (true) {

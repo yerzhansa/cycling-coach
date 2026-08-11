@@ -1590,6 +1590,9 @@ export function createTelegramControlCoordinator(
             : await guardedSnapshotCall(checked.active, () =>
                 checked.active.resetTelegramAccess({}),
               );
+        if (reset?.channel.state === "disabled" && reset.pairing.state === "unpaired") {
+          clearPairingLease();
+        }
         const forgotten =
           reset?.channel.state !== "disabled" || reset.pairing.state !== "unpaired"
             ? undefined

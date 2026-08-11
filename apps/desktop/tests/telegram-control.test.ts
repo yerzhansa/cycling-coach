@@ -1895,6 +1895,48 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.binding.drainTelegram).toHaveBeenCalledOnce();
   });
 
+  it("cancels an armed pairing lease after deletion", async () => {
+    const clock = leaseScheduler();
+    const awaiting = snapshot(undefined, {
+      pairing: {
+        state: "awaiting-code",
+        code: "ABCDEF",
+        expiresAt: "2026-08-05T12:01:00.000Z",
+      },
+    });
+    const runtime = harness({
+      enabled: false,
+      pairingLease: clock.port,
+      daemonSnapshot: snapshot(undefined, { pairing: { state: "unpaired" } }),
+    });
+    runtime.setSenders({ senders: [] });
+    vi.mocked(runtime.binding.beginTelegramPairing).mockImplementationOnce(async () => {
+      runtime.setSnapshot(awaiting);
+      return awaiting;
+    });
+
+    await runtime.coordinator.beginPairing();
+    expect(clock.entries).toHaveLength(1);
+    await expect(runtime.coordinator.remove()).resolves.toMatchObject({ outcome: "applied" });
+    expect(runtime.vault.deleteProfile).toHaveBeenCalledOnce();
+    expect(clock.entries[0]?.cancelled).toBe(true);
+
+    vi.mocked(runtime.binding.cancelTelegramPairing).mockClear();
+    vi.mocked(runtime.binding.disableTelegram).mockClear();
+    vi.mocked(runtime.binding.drainTelegram).mockClear();
+    vi.mocked(runtime.binding.enableTelegram).mockClear();
+    vi.mocked(runtime.binding.reconcileTelegram).mockClear();
+    clock.setNow("2026-08-05T12:01:00.000Z");
+    clock.fire(0, true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(runtime.binding.cancelTelegramPairing).not.toHaveBeenCalled();
+    expect(runtime.binding.disableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.drainTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.reconcileTelegram).not.toHaveBeenCalled();
+  });
+
   it("preserves durable enabled truth when a pairing claim wins at lease expiry", async () => {
     const clock = leaseScheduler();
     const awaiting = snapshot(undefined, {
