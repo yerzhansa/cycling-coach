@@ -60,8 +60,9 @@ describe("Windows icon generation", () => {
     expect(builder.win).toEqual({
       icon: "resources/app-icon.ico",
       signExecutable: false,
+      requestedExecutionLevel: "asInvoker",
       files: ["resources/tray.ico"],
-      target: [{ target: "dir", arch: ["x64"] }],
+      target: [{ target: "nsis", arch: ["x64"] }],
     });
   });
 
