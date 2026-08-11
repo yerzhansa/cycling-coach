@@ -1,6 +1,6 @@
 # @enduragent/desktop
 
-## 0.1.2
+## 0.1.3
 
 ### Patch Changes
 
@@ -22,7 +22,6 @@
 
   Invalidate timed-out updater generations, fence late completions, and keep automated and manual checks disabled until process restart after timeouts or updater startup failures because the native macOS updater does not expose a supported instance reset.
 
-- 873adab:
 - da84213: User-facing: Desktop update actions now wait for in-progress Settings changes to finish before restarting the app.
 - 41fe0aa: User-facing: Telegram bot management is now delete-and-reconnect - delete the connection, then connect a new bot with a copied token.
 
