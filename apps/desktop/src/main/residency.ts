@@ -7,6 +7,8 @@ import {
   type MenuItemConstructorOptions,
 } from "electron";
 import {
+  isLoginItemResidencyEnabled,
+  loginItemResidencyMatchesRequest,
   readLoginItemResidency,
   setLoginItemResidency,
   type BackgroundAtLoginPreferenceWriteResult,
@@ -40,6 +42,8 @@ export interface DesktopResidencyInput {
   readonly trayIconPath: string;
   readonly trayPopoverUrl: string;
   readonly trayPreloadPath: string;
+  readonly platform?: NodeJS.Platform;
+  readonly loginItemExecutablePath?: string;
   readonly telegramStatus: () => Promise<TrayTelegramStatus>;
   readonly persistLoginPreference: (
     enabled: boolean,
@@ -70,11 +74,13 @@ export interface TrayTelegramStatus {
 export interface DesktopResidency {
   start(): Promise<void>;
   showMainWindow(): Promise<void>;
+  manageMainWindow(window: BrowserWindow): void;
   quit(): void;
   close(): Promise<void>;
 }
 
 export function createDesktopResidency(input: DesktopResidencyInput): DesktopResidency {
+  const platform = input.platform ?? process.platform;
   let tray: Tray | undefined;
   let popover: TrayPopover | undefined;
   let startPromise: Promise<void> | undefined;
@@ -82,13 +88,24 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
   let closed = false;
   let closePromise: Promise<void> | undefined;
   let loginItemMutation: Promise<void> = Promise.resolve();
+  const managedWindows = new WeakSet<BrowserWindow>();
 
   const hidePopover = (): void => popover?.hide();
+  const manageMainWindow = (window: BrowserWindow): void => {
+    if (platform !== "win32" || managedWindows.has(window)) return;
+    managedWindows.add(window);
+    window.on("close", (event) => {
+      if (closed || quitRequested) return;
+      event.preventDefault();
+      window.hide();
+    });
+  };
   const showMainWindow = async (): Promise<void> => {
     if (closed) return;
     hidePopover();
     try {
-      await input.mainWindow.show();
+      const window = await input.mainWindow.show();
+      manageMainWindow(window);
       if (!closed) input.observe?.({ type: "main-window-shown" });
     } catch {
       if (!closed) input.reportFailure("show-window");
@@ -125,7 +142,10 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
   };
   const readLoginState = (): LoginItemResidencyState | undefined => {
     try {
-      const state = readLoginItemResidency(input.app);
+      const state = readLoginItemResidency(input.app, {
+        platform,
+        executablePath: input.loginItemExecutablePath,
+      });
       input.observe?.({ type: "login-item-read", state });
       return state;
     } catch {
@@ -138,6 +158,7 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
     const mutation = loginItemMutation.then(async () => {
       const previous = readLoginState();
       if (previous === undefined) return;
+      const previousEnabled = isLoginItemResidencyEnabled(previous, platform);
       let stored: BackgroundAtLoginPreferenceWriteResult;
       try {
         stored = await input.persistLoginPreference(openAtLogin);
@@ -151,8 +172,11 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
       }
       let applied: LoginItemResidencyState | undefined;
       try {
-        const state = setLoginItemResidency(input.app, openAtLogin);
-        if (state.openAtLogin !== openAtLogin) throw new TypeError();
+        const state = setLoginItemResidency(input.app, openAtLogin, {
+          platform,
+          executablePath: input.loginItemExecutablePath,
+        });
+        if (!loginItemResidencyMatchesRequest(state, openAtLogin, platform)) throw new TypeError();
         applied = state;
       } catch {}
       if (applied !== undefined) {
@@ -161,7 +185,7 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
       }
       let compensation: BackgroundAtLoginPreferenceWriteResult = { status: "uncertain" };
       try {
-        compensation = await input.persistLoginPreference(previous.openAtLogin);
+        compensation = await input.persistLoginPreference(previousEnabled);
       } catch {}
       let convergenceTarget: boolean | undefined;
       if (compensation.status === "stored") {
@@ -173,8 +197,13 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
       if (convergenceTarget !== undefined) {
         let converged = false;
         try {
-          const state = setLoginItemResidency(input.app, convergenceTarget);
-          if (state.openAtLogin !== convergenceTarget) throw new TypeError();
+          const state = setLoginItemResidency(input.app, convergenceTarget, {
+            platform,
+            executablePath: input.loginItemExecutablePath,
+          });
+          if (!loginItemResidencyMatchesRequest(state, convergenceTarget, platform)) {
+            throw new TypeError();
+          }
           input.observe?.({ type: "login-item-set", state });
           converged = true;
         } catch {}
@@ -201,7 +230,7 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
       {
         label: "Start in background at login",
         type: "checkbox",
-        checked: state?.openAtLogin ?? false,
+        checked: state === undefined ? false : isLoginItemResidencyEnabled(state, platform),
         enabled: state !== undefined,
         click: (menuItem) => setLoginState(menuItem.checked),
       },
@@ -222,10 +251,13 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
           if (closed || tray !== undefined) return;
           const image = nativeImage.createFromPath(input.trayIconPath);
           if (image.isEmpty()) throw new TypeError();
-          image.setTemplateImage(true);
+          if (platform !== "win32") image.setTemplateImage(true);
           tray = new Tray(image);
           tray.setToolTip(TRAY_TOOLTIP);
-          tray.on("click", () => ensurePopover().toggle());
+          tray.on("click", () => {
+            if (platform === "win32") void showMainWindow();
+            else ensurePopover().toggle();
+          });
           tray.on("right-click", showContextMenu);
           input.observe?.({ type: "tray-created" });
         })
@@ -235,6 +267,7 @@ export function createDesktopResidency(input: DesktopResidencyInput): DesktopRes
       return startPromise;
     },
     showMainWindow,
+    manageMainWindow,
     quit() {
       if (quitRequested) return;
       quitRequested = true;

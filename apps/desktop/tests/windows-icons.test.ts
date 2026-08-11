@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { DESKTOP_APP_USER_MODEL_ID } from "../src/main/constants.js";
 
 interface WindowsIconGeneratorModule {
   readonly APPLICATION_ICON_SIZES: readonly number[];
@@ -57,6 +58,7 @@ describe("Windows icon generation", () => {
   it("keeps the Windows builder wired to the committed ICO resources", async () => {
     const builder = parse(await readFile(join(desktopRoot, "electron-builder.yml"), "utf8"));
 
+    expect(builder.appId).toBe(DESKTOP_APP_USER_MODEL_ID);
     expect(builder.win).toEqual({
       icon: "resources/app-icon.ico",
       signExecutable: false,
@@ -64,6 +66,14 @@ describe("Windows icon generation", () => {
       files: ["resources/tray.ico"],
       target: [{ target: "nsis", arch: ["x64"] }],
     });
+  });
+
+  it("keeps the runtime login value name aligned with the uninstall hook", async () => {
+    const installer = await readFile(join(desktopRoot, "build", "installer.nsh"), "utf8");
+
+    expect(installer).toContain(
+      `DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "${DESKTOP_APP_USER_MODEL_ID}"`,
+    );
   });
 
   it.each(["app-icon.ico", "tray.ico"])(

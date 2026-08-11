@@ -61,6 +61,7 @@ const mocks = vi.hoisted(() => {
     commandLine: { getSwitchValue: vi.fn(() => ""), appendSwitch: vi.fn() },
   });
   return {
+    Emitter,
     order,
     image,
     FakeTray,
@@ -124,6 +125,7 @@ import {
   createBackgroundAtLoginPreferenceStore,
   LOGIN_ITEM_PREFERENCE_FILE_MODE,
   shouldStartInBackgroundAtLogin,
+  WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT,
   type BackgroundAtLoginPreferenceWriteResult,
 } from "../src/main/login-item.js";
 
@@ -150,12 +152,20 @@ function loginState(
   return { openAtLogin, executableWillLaunchAtLogin: openAtLogin, status };
 }
 
-function setup() {
+function setup(
+  options: {
+    readonly platform?: NodeJS.Platform;
+    readonly loginItemExecutablePath?: string;
+  } = {},
+) {
   const events: unknown[] = [];
   const reportFailure = vi.fn();
+  const browserWindow = Object.assign(new mocks.Emitter(), {
+    hide: vi.fn(),
+  });
   const mainWindow = {
     current: vi.fn(() => null),
-    show: vi.fn(async () => ({ id: 1 })),
+    show: vi.fn(async () => browserWindow),
   };
   const telegramStatus = vi.fn(async () => ({
     channelState: "online" as const,
@@ -171,6 +181,8 @@ function setup() {
     trayIconPath: "/synthetic/trayTemplate.png",
     trayPopoverUrl: "enduragent://app/tray.html",
     trayPreloadPath: "/synthetic/tray.cjs",
+    platform: options.platform,
+    loginItemExecutablePath: options.loginItemExecutablePath,
     telegramStatus,
     persistLoginPreference,
     reportFailure,
@@ -181,6 +193,7 @@ function setup() {
     events,
     reportFailure,
     mainWindow,
+    browserWindow,
     telegramStatus,
     persistLoginPreference,
   };
@@ -229,6 +242,57 @@ describe("desktop residency", () => {
     expect(mocks.popover.toggle).toHaveBeenCalledTimes(2);
     expect(mocks.app.getLoginItemSettings).not.toHaveBeenCalled();
     expect(events).toContainEqual({ type: "tray-created" });
+  });
+
+  it("uses the Windows tray icon as-is and opens the main window on left click", async () => {
+    const { residency, mainWindow } = setup({ platform: "win32" });
+
+    await residency.start();
+    const tray = mocks.FakeTray.instances[0]!;
+    tray.emit("click");
+    tray.emit("click");
+
+    await vi.waitFor(() => expect(mainWindow.show).toHaveBeenCalledTimes(2));
+    expect(mocks.image.setTemplateImage).not.toHaveBeenCalled();
+    expect(mocks.createTrayPopover).not.toHaveBeenCalled();
+    expect(tray.listenerCount("right-click")).toBe(1);
+  });
+
+  it("hides a Windows main window on close and allows explicit Quit to close it", async () => {
+    const { residency, browserWindow } = setup({ platform: "win32" });
+
+    await residency.showMainWindow();
+    const closeToTray = { preventDefault: vi.fn() };
+    browserWindow.emit("close", closeToTray);
+    expect(closeToTray.preventDefault).toHaveBeenCalledOnce();
+    expect(browserWindow.hide).toHaveBeenCalledOnce();
+
+    residency.quit();
+    const explicitQuit = { preventDefault: vi.fn() };
+    browserWindow.emit("close", explicitQuit);
+    expect(explicitQuit.preventDefault).not.toHaveBeenCalled();
+    expect(browserWindow.hide).toHaveBeenCalledOnce();
+    expect(mocks.app.quit).toHaveBeenCalledOnce();
+  });
+
+  it("uses effective Windows Startup Apps truth in the native menu", async () => {
+    const executablePath = String.raw`C:\Users\Athlete\Enduragent.exe`;
+    const { residency } = setup({ platform: "win32", loginItemExecutablePath: executablePath });
+    mocks.app.getLoginItemSettings.mockReturnValue(loginState("enabled", true) as never);
+    mocks.app.getLoginItemSettings.mockReturnValueOnce({
+      ...loginState("enabled", true),
+      executableWillLaunchAtLogin: false,
+    } as never);
+
+    await residency.start();
+    mocks.FakeTray.instances[0]!.emit("right-click");
+
+    const menu = mocks.buildFromTemplate.mock.calls[0]![0] as Array<Record<string, unknown>>;
+    expect(menu[2]).toMatchObject({ type: "checkbox", checked: false, enabled: true });
+    expect(mocks.app.getLoginItemSettings).toHaveBeenCalledWith({
+      path: executablePath,
+      args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+    });
   });
 
   it("refreshes a redacted Telegram projection whenever the popover is shown", async () => {

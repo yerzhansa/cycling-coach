@@ -14,6 +14,7 @@ import {
   durablyReplaceReversible,
   type ReversibleDurableReplaceOutcome,
 } from "./durable-atomic-replace.js";
+import { DESKTOP_APP_USER_MODEL_ID } from "./constants.js";
 import { assertWindowsPrivateFileAtPath, readWindowsPrivateFile } from "./windows-private-file.js";
 
 export const CLEAN_LOGIN_ITEM_STATUSES = ["not-found", "not-registered"] as const;
@@ -21,6 +22,7 @@ export const BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME = "desktop-preference
 export const BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME = "background-at-login.json" as const;
 export const LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE = 0o700;
 export const LOGIN_ITEM_PREFERENCE_FILE_MODE = 0o600;
+export const WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT = "--enduragent-background-at-login" as const;
 
 const MAX_PREFERENCE_FILE_BYTES = 1_024;
 
@@ -29,11 +31,20 @@ export type CleanLoginItemStatus = (typeof CLEAN_LOGIN_ITEM_STATUSES)[number];
 export interface LoginItemResidencyState {
   readonly openAtLogin: boolean;
   readonly executableWillLaunchAtLogin: boolean;
-  readonly status: LoginItemSettings["status"];
+  readonly status: LoginItemSettings["status"] | undefined;
 }
 
 export type LoginItemAppPort = Pick<App, "getLoginItemSettings" | "setLoginItemSettings">;
 export type LoginLaunchAppPort = Pick<App, "getLoginItemSettings">;
+
+export interface LoginItemResidencyOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly executablePath?: string;
+}
+
+export interface LoginLaunchOptions extends LoginItemResidencyOptions {
+  readonly commandLine?: readonly string[];
+}
 
 export type BackgroundAtLoginPreference =
   | Readonly<{
@@ -418,8 +429,17 @@ export function createBackgroundAtLoginPreferenceStore(
 export async function shouldStartInBackgroundAtLogin(
   app: LoginLaunchAppPort,
   preference: Pick<BackgroundAtLoginPreferenceStore, "read">,
+  options: LoginLaunchOptions = {},
 ): Promise<boolean> {
-  if (app.getLoginItemSettings().wasOpenedAtLogin !== true) return false;
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    const commandLine = options.commandLine ?? process.argv;
+    if (!commandLine.includes(WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT)) return false;
+    const state = readLoginItemResidency(app, options);
+    if (!isLoginItemResidencyEnabled(state, platform)) return false;
+  } else if (app.getLoginItemSettings().wasOpenedAtLogin !== true) {
+    return false;
+  }
   const stored = await preference.read();
   if (stored.state === "uncertain") return true;
   return (
@@ -427,8 +447,18 @@ export async function shouldStartInBackgroundAtLogin(
   );
 }
 
-export function readLoginItemResidency(app: LoginItemAppPort): LoginItemResidencyState {
-  const settings = app.getLoginItemSettings();
+export function readLoginItemResidency(
+  app: LoginLaunchAppPort,
+  options: LoginItemResidencyOptions = {},
+): LoginItemResidencyState {
+  const platform = options.platform ?? process.platform;
+  const settings =
+    platform === "win32"
+      ? app.getLoginItemSettings({
+          path: options.executablePath ?? process.execPath,
+          args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+        })
+      : app.getLoginItemSettings();
   return {
     openAtLogin: settings.openAtLogin,
     executableWillLaunchAtLogin: settings.executableWillLaunchAtLogin,
@@ -439,9 +469,36 @@ export function readLoginItemResidency(app: LoginItemAppPort): LoginItemResidenc
 export function setLoginItemResidency(
   app: LoginItemAppPort,
   openAtLogin: boolean,
+  options: LoginItemResidencyOptions = {},
 ): LoginItemResidencyState {
-  app.setLoginItemSettings({ openAtLogin });
-  return readLoginItemResidency(app);
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    app.setLoginItemSettings({
+      openAtLogin,
+      path: options.executablePath ?? process.execPath,
+      args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+      enabled: openAtLogin,
+      name: DESKTOP_APP_USER_MODEL_ID,
+    });
+  } else {
+    app.setLoginItemSettings({ openAtLogin });
+  }
+  return readLoginItemResidency(app, options);
+}
+
+export function isLoginItemResidencyEnabled(
+  state: LoginItemResidencyState,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return state.openAtLogin && (platform !== "win32" || state.executableWillLaunchAtLogin === true);
+}
+
+export function loginItemResidencyMatchesRequest(
+  state: LoginItemResidencyState,
+  openAtLogin: boolean,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return openAtLogin ? isLoginItemResidencyEnabled(state, platform) : !state.openAtLogin;
 }
 
 export function isCleanUnregisteredLoginItem(

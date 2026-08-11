@@ -715,10 +715,12 @@ describe("Desktop Telegram power lifecycle", () => {
     await chmod(target, 0o644);
     const secondController = controller();
     secondController.status.mockResolvedValue(pollingStatus("online"));
+    secondController.resumePolling.mockResolvedValue(pollingStatus("online"));
+    const secondMonitor = monitor();
     const reopened = createDesktopTelegramPowerLifecycle({
       ...files,
       platform: "win32",
-      powerMonitor: monitor(),
+      powerMonitor: secondMonitor,
       controller: secondController,
       now: () => observedAt,
       createId: () => "windows-power-reopen",
@@ -732,6 +734,14 @@ describe("Desktop Telegram power lifecycle", () => {
     });
     expect(synchronizeDirectory).not.toHaveBeenCalled();
     expect(synchronizeParentDirectory).not.toHaveBeenCalled();
+
+    secondMonitor.emit("suspend");
+    await reopened.warning();
+    expect(secondController.stopPolling).toHaveBeenCalledOnce();
+    secondMonitor.emit("resume");
+    await reopened.warning();
+    expect(secondController.stopPolling).toHaveBeenCalledTimes(2);
+    expect(secondController.resumePolling).toHaveBeenCalledOnce();
     await reopened.close();
   });
 
