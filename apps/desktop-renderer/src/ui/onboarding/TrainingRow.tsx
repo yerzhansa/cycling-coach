@@ -90,13 +90,7 @@ export function TrainingRow(props: {
   }, [repairRequired]);
 
   useLayoutEffect(() => {
-    if (
-      connected ||
-      credentialFocus?.target !== "setup-open" ||
-      credentialFocus.credential !== "intervals-icu"
-    ) {
-      return;
-    }
+    if (connected || credentialFocus?.target !== "setup-open") return;
     focusHeadingAfterOpen.current = "delete";
     setOpen(true);
   }, [connected, credentialFocus]);
@@ -107,7 +101,7 @@ export function TrainingRow(props: {
     headingRef.current?.focus();
     if (reason === "delete") {
       if (credentialPort === null) return;
-      credentialPort.setupOpened("intervals-icu");
+      credentialPort.setupOpened();
     }
     focusHeadingAfterOpen.current = null;
   }, [credentialPort, open]);
@@ -208,20 +202,6 @@ export function TrainingRow(props: {
               </button>
             </div>
           </div>
-          {retryable ? (
-            <button
-              type="button"
-              className={SETUP_LINK_BUTTON}
-              disabled={controlsDisabled || importing}
-              onClick={() => {
-                if (actions === null) return;
-                setConnectPhase("connecting");
-                actions.retrySavedKeys();
-              }}
-            >
-              {RETRY_SAVED_KEYS_LABEL}
-            </button>
-          ) : null}
           <button
             type="button"
             className={SETUP_LINK_BUTTON}

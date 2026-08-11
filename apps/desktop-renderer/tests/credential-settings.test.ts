@@ -53,7 +53,7 @@ function fakeView() {
         readonly onRequestDelete: (credential: DesktopCredentialId) => void;
         readonly onCancelDelete: () => void;
         readonly onConfirmDelete: () => void;
-        readonly onSetupOpened: (credential: "intervals-icu") => void;
+        readonly onSetupOpened: () => void;
         readonly onOpenSetup: () => void;
       }
     | undefined;
@@ -70,7 +70,7 @@ function fakeView() {
     requestDelete: (credential: DesktopCredentialId) => handlers?.onRequestDelete(credential),
     cancelDelete: () => handlers?.onCancelDelete(),
     confirmDelete: () => handlers?.onConfirmDelete(),
-    setupOpened: (credential: "intervals-icu") => handlers?.onSetupOpened(credential),
+    setupOpened: () => handlers?.onSetupOpened(),
     openSetup: () => handlers?.onOpenSetup(),
   };
 }
@@ -349,10 +349,10 @@ describe("credential settings controller", () => {
         expect.objectContaining({ credential: "intervals-icu" }),
       ]),
       recoveryAvailable: true,
-      focus: { target: "setup-open", credential: "intervals-icu" },
+      focus: { target: "setup-open" },
     });
 
-    subject.setupOpened("intervals-icu");
+    subject.setupOpened();
     expect(controller.state()).toMatchObject({
       status: "deleted",
       focus: null,

@@ -337,6 +337,10 @@ export function bootRenderer(): Disposer {
     beginMutation: () => store.getState().beginSettingsMutation("session"),
     view: conversationAdapter.view,
   });
+  const refreshOnboardingCredentials = async (): Promise<void> => {
+    await onboarding.refresh();
+    if (store.getState().onboarding.loadUnavailable) throw new TypeError();
+  };
   const credentialSettingsController = createCredentialSettingsController({
     clients,
     loadStatuses: () => window.enduragentAuth.credentialStatuses(),
@@ -344,14 +348,8 @@ export function bootRenderer(): Disposer {
     loadClaudeCliStatus: () => window.enduragentAuth.claudeCliStatus(),
     deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
     openSetup: openSetupFromSettings,
-    onDeleted: async () => {
-      await onboarding.refresh();
-      if (store.getState().onboarding.loadUnavailable) throw new TypeError();
-    },
-    onReconciled: async () => {
-      await onboarding.refresh();
-      if (store.getState().onboarding.loadUnavailable) throw new TypeError();
-    },
+    onDeleted: refreshOnboardingCredentials,
+    onReconciled: refreshOnboardingCredentials,
     credentialMutationsBlocked: () =>
       onboardingCredentialMutationActive(store.getState().onboarding),
     beginMutation: () => store.getState().beginSettingsMutation("credential"),

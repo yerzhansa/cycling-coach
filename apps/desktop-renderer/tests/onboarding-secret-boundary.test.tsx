@@ -1,4 +1,4 @@
-import { waitFor, within } from "@testing-library/react";
+import { waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type {
@@ -14,23 +14,14 @@ import {
   openApiKeyPanel,
   openTrainingPanel,
   panel,
+  panelButton,
   passwordInput,
   resetOnboardingStore,
   rowState,
+  saveModelKey,
   seedSecret,
   testBridge,
-  type UserEvent,
 } from "./onboarding-harness.js";
-
-function panelButton(name: string, label: string): HTMLButtonElement {
-  const host = panel(name);
-  if (host === null) throw new Error(`panel not open: ${name}`);
-  return within(host).getByRole("button", { name: label });
-}
-
-async function saveModelKey(user: UserEvent): Promise<void> {
-  await user.click(panelButton("api-key", "Save API key"));
-}
 
 function deferred() {
   let resolve!: () => void;

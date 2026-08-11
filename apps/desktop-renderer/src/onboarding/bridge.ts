@@ -17,6 +17,8 @@ import type {
   ChatGptLoginResult,
   ChatGptStatus,
   ClaudeCliStatus,
+  CredentialRuntimeState,
+  CredentialState,
   CredentialSlotStatus,
 } from "./machine.js";
 
@@ -69,8 +71,8 @@ export type CredentialDeleteResult =
 
 export interface IntervalsCredentialStatus {
   readonly slot: "intervals-icu";
-  readonly state: "missing" | "configured" | "re-prompt";
-  readonly runtimeState: "active" | "stored-inactive" | "failed" | null;
+  readonly state: CredentialState;
+  readonly runtimeState: CredentialRuntimeState | null;
 }
 
 export type IntervalsCredentialMutationRefusalReason =
@@ -147,7 +149,7 @@ export type OnboardingLlmSelectionResult =
     };
 
 export interface OnboardingCredentialWriteInput {
-  readonly slot: DesktopCredentialSlot;
+  readonly slot: Exclude<DesktopCredentialSlot, "intervals-icu">;
   readonly value: string;
   readonly selection?: OnboardingLlmSelection;
 }

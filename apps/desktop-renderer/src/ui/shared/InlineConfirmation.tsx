@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactElement } from "react";
+import { BUTTON_COMPACT_QUIET_SM, BUTTON_DANGER_OUTLINE_SM } from "./buttons.js";
 
 export type InlineConfirmationFocus = "cancel" | "confirm" | null;
 
@@ -80,7 +81,7 @@ export function InlineConfirmation(props: {
           <button
             type="button"
             ref={cancel}
-            className="inline-flex h-ctl-sm flex-none items-center justify-center rounded-ctl border border-transparent bg-transparent px-[9px] text-[13px] font-medium whitespace-nowrap text-ink-2 transition-colors hover:bg-[color-mix(in_srgb,var(--ink)_7%,transparent)] hover:text-ink disabled:opacity-50 motion-reduce:transition-none"
+            className={BUTTON_COMPACT_QUIET_SM}
             disabled={props.cancelDisabled}
             onClick={props.onCancel}
           >
@@ -89,7 +90,7 @@ export function InlineConfirmation(props: {
           <button
             type="button"
             ref={confirm}
-            className="inline-flex h-ctl-sm flex-none items-center justify-center rounded-ctl border border-[color-mix(in_srgb,var(--danger)_34%,transparent)] bg-transparent px-[9px] text-[13px] font-medium whitespace-nowrap text-danger transition-colors hover:bg-[color-mix(in_srgb,var(--danger)_11%,transparent)] disabled:opacity-50 aria-disabled:opacity-50 motion-reduce:transition-none"
+            className={`${BUTTON_DANGER_OUTLINE_SM} aria-disabled:opacity-50`}
             disabled={props.confirmBusy ? false : props.confirmDisabled}
             aria-disabled={props.confirmBusy ? "true" : undefined}
             aria-label={props.confirmAriaLabel}

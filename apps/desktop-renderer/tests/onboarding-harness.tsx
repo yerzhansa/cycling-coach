@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, type RenderResult } from "@testing-library/react";
+import { act, render, screen, waitFor, within, type RenderResult } from "@testing-library/react";
 import type userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import type { OnboardingBridge, OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
@@ -177,6 +177,16 @@ export function rowSubtitle(id: string): string {
 
 export function panel(name: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(`[data-setup-panel="${name}"]`);
+}
+
+export function panelButton(name: string, label: string): HTMLButtonElement {
+  const host = panel(name);
+  if (host === null) throw new Error(`panel not open: ${name}`);
+  return within(host).getByRole("button", { name: label });
+}
+
+export async function saveModelKey(user: UserEvent): Promise<void> {
+  await user.click(panelButton("api-key", "Save API key"));
 }
 
 export function laneMenu(): HTMLElement | null {

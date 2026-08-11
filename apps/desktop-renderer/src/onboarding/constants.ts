@@ -80,6 +80,3 @@ export const CLAUDE_CLI_STATES = [
 export type ClaudeCliState = (typeof CLAUDE_CLI_STATES)[number];
 
 export const SUPPORTED_IMPORT_EXTENSIONS = [".fit", ".tcx", ".gpx"] as const;
-
-export const INTERVALS_GUIDANCE =
-  "Connect your device platform to intervals.icu directly, not via Strava." as const;

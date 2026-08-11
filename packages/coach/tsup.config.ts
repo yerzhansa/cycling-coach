@@ -2,6 +2,7 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   entry: {
+    "abortable-operation": "src/abortable-operation.ts",
     runtime: "src/runtime.ts",
     sync: "src/sync.ts",
     backfill: "src/backfill.ts",

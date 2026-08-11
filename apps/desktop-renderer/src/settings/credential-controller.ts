@@ -59,7 +59,7 @@ export type CredentialSettingsFocus =
   | { readonly target: "confirmation-cancel" | "confirmation-delete" }
   | { readonly target: "feedback" }
   | { readonly target: "setup"; readonly credential: DesktopCredentialId }
-  | { readonly target: "setup-open"; readonly credential: "intervals-icu" }
+  | { readonly target: "setup-open" }
   | { readonly target: "delete"; readonly credential: DesktopCredentialId }
   | null;
 
@@ -131,7 +131,7 @@ export interface CredentialSettingsView {
     readonly onRequestDelete: (credential: DesktopCredentialId) => void;
     readonly onCancelDelete: () => void;
     readonly onConfirmDelete: () => void;
-    readonly onSetupOpened: (credential: "intervals-icu") => void;
+    readonly onSetupOpened: () => void;
     readonly onOpenSetup: () => void;
   }): void;
   render(state: Exclude<CredentialSettingsState, { readonly status: "closed" }>): void;
@@ -401,7 +401,7 @@ export function createCredentialSettingsController(input: {
     return pending;
   };
 
-  const contentState = (): CredentialSettingsContent | null => {
+  const contentState = (): Extract<CredentialSettingsState, CredentialSettingsContent> | null => {
     if (
       currentState.status === "ready" ||
       currentState.status === "confirming" ||
@@ -607,7 +607,7 @@ export function createCredentialSettingsController(input: {
         recoveryAvailable,
         focus:
           credential === "intervals-icu"
-            ? { target: "setup-open", credential }
+            ? { target: "setup-open" }
             : recoveryAvailable
               ? { target: "setup", credential }
               : nextDelete === undefined
@@ -629,21 +629,10 @@ export function createCredentialSettingsController(input: {
     input.openSetup();
   };
 
-  const setupOpened = (credential: "intervals-icu"): void => {
-    if (
-      !(
-        currentState.status === "ready" ||
-        currentState.status === "confirming" ||
-        currentState.status === "deleting" ||
-        currentState.status === "deleted" ||
-        (currentState.status === "error" && currentState.kind === "delete")
-      ) ||
-      currentState.focus?.target !== "setup-open" ||
-      currentState.focus.credential !== credential
-    ) {
-      return;
-    }
-    render({ ...currentState, focus: null });
+  const setupOpened = (): void => {
+    const content = contentState();
+    if (content === null || content.focus?.target !== "setup-open") return;
+    render({ ...content, focus: null });
   };
 
   const close = (): void => {

@@ -1,4 +1,3 @@
-import type { DesktopCredentialSlot } from "./constants.js";
 import type { OnboardingCredentialWriteInput, OnboardingLlmSelection } from "./bridge.js";
 
 export interface TransientPasswordInput {
@@ -22,7 +21,7 @@ export async function handoffCredential(
     input.value = "";
     if (secret.trim().length === 0) return false;
     await write({
-      slot: input.dataset.slot as DesktopCredentialSlot,
+      slot: input.dataset.slot as OnboardingCredentialWriteInput["slot"],
       value: secret,
       ...(selection === undefined ? {} : { selection }),
     });

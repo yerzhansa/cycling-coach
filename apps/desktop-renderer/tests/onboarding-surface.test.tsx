@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -18,11 +18,13 @@ import {
   openApiKeyPanel,
   openTrainingPanel,
   panel,
+  panelButton,
   passwordInput,
   primaryButton,
   resetOnboardingStore,
   retryButtons,
   rowState,
+  saveModelKey,
   seedSecret,
   testBridge,
   TEST_LLM_CONFIGURATION,
@@ -52,16 +54,6 @@ async function typeInto(user: UserEvent, id: string, value: string) {
   const element = control<HTMLInputElement>(id);
   await user.clear(element);
   await user.type(element, value);
-}
-
-function panelButton(name: string, label: string): HTMLButtonElement {
-  const host = panel(name);
-  if (host === null) throw new Error(`panel not open: ${name}`);
-  return within(host).getByRole("button", { name: label });
-}
-
-async function saveModelKey(user: UserEvent): Promise<void> {
-  await user.click(panelButton("api-key", "Save API key"));
 }
 
 async function answerIntake(user: UserEvent): Promise<void> {
