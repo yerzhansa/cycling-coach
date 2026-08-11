@@ -1,11 +1,19 @@
-import { describe, expect, it } from "vitest";
-import type { query as sdkQuery, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { EventEmitter } from "node:events";
+import { constants, type Stats } from "node:fs";
+import { win32 } from "node:path";
+import { PassThrough } from "node:stream";
+import { describe, expect, it, vi } from "vitest";
+import type { query as sdkQuery, SDKMessage, SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 
 import type { ClaudeCliRuntime } from "../../src/agent/claude-cli/env.js";
 import {
+  buildClaudeCliSpawnInvocation,
   buildQueryOptions,
+  preflightWindowsMcpConfigTransform,
+  spawnClaudeCliProcess,
   startGeneration,
   type SanitizedQueryOptions,
+  type WindowsMcpConfigFileSystemDeps,
 } from "../../src/agent/claude-cli/session.js";
 
 const SENTINEL = "sk-ant-sentinel-session-0000";
@@ -23,6 +31,114 @@ function baseEnv(): NodeJS.ProcessEnv {
     ANTHROPIC_API_KEY: SENTINEL,
     CLAUDE_CODE_OAUTH_TOKEN: SENTINEL,
   };
+}
+
+function fakeMetadata(kind: "directory" | "file", ino: number): Stats {
+  return {
+    dev: 7,
+    ino,
+    nlink: 1,
+    isDirectory: () => kind === "directory",
+    isFile: () => kind === "file",
+    isSymbolicLink: () => false,
+  } as Stats;
+}
+
+function missingFile(): NodeJS.ErrnoException {
+  return Object.assign(new Error("missing"), { code: "ENOENT" });
+}
+
+interface FakeWindowsMcpFileSystem {
+  readonly deps: WindowsMcpConfigFileSystemDeps;
+  readonly profile: string;
+  readonly root: string;
+  readonly temporary: string;
+  readonly file: string;
+  readonly mkdir: ReturnType<typeof vi.fn>;
+  readonly open: ReturnType<typeof vi.fn>;
+  readonly unlink: ReturnType<typeof vi.fn>;
+  readonly rmdir: ReturnType<typeof vi.fn>;
+  readonly written: string[];
+}
+
+function fakeWindowsMcpFileSystem(
+  failure: "write" | "cleanup" | null = null,
+): FakeWindowsMcpFileSystem {
+  const profile = "C:\\Users\\Rider";
+  const root = win32.join(profile, ".enduragent");
+  const temporary = win32.join(root, "claude-cli-mcp-ABC123");
+  const file = win32.join(temporary, "mcp.json");
+  const entries = new Map<string, Stats>([
+    [win32.dirname(profile), fakeMetadata("directory", 1)],
+    [profile, fakeMetadata("directory", 2)],
+  ]);
+  const written: string[] = [];
+  const mkdir = vi.fn((path: string) => {
+    expect(path).toBe(root);
+    entries.set(root, fakeMetadata("directory", 3));
+    return root;
+  });
+  const open = vi.fn((path: string) => {
+    expect(path).toBe(file);
+    entries.set(file, fakeMetadata("file", 5));
+    return 41;
+  });
+  const unlink = vi.fn((path: string) => {
+    expect(path).toBe(file);
+    if (failure === "cleanup") throw new Error(`private ${path} ${SENTINEL}`);
+    entries.delete(file);
+  });
+  const rmdir = vi.fn((path: string) => {
+    expect(path).toBe(temporary);
+    entries.delete(temporary);
+  });
+  const deps = {
+    mkdirSync: mkdir,
+    mkdtempSync: vi.fn((prefix: string) => {
+      expect(prefix).toBe(win32.join(root, "claude-cli-mcp-"));
+      entries.set(temporary, fakeMetadata("directory", 4));
+      return temporary;
+    }),
+    lstatSync: vi.fn((path: string) => {
+      const metadata = entries.get(path);
+      if (metadata === undefined) throw missingFile();
+      return metadata;
+    }),
+    realpathSync: vi.fn((path: string) => path),
+    openSync: open,
+    fstatSync: vi.fn(() => entries.get(file) ?? fakeMetadata("file", 5)),
+    writeSync: vi.fn((_descriptor: number, buffer: Buffer, offset: number, length: number) => {
+      if (failure === "write") throw new Error(`private ${file} ${SENTINEL}`);
+      written.push(buffer.subarray(offset, offset + length).toString("utf8"));
+      return length;
+    }),
+    fsyncSync: vi.fn(),
+    closeSync: vi.fn(),
+    unlinkSync: unlink,
+    rmdirSync: rmdir,
+  } as unknown as WindowsMcpConfigFileSystemDeps;
+  return { deps, profile, root, temporary, file, mkdir, open, unlink, rmdir, written };
+}
+
+function fakeSpawnedChild(): EventEmitter & {
+  stdin: PassThrough;
+  stdout: PassThrough;
+  killed: boolean;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  kill: () => boolean;
+} {
+  const child = new EventEmitter() as ReturnType<typeof fakeSpawnedChild>;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.killed = false;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    return true;
+  });
+  return child;
 }
 
 function options(overrides: Partial<Parameters<typeof buildQueryOptions>[0]> = {}) {
@@ -169,6 +285,322 @@ describe("buildQueryOptions", () => {
 
   it("refuses both resume and a fresh session id at once", () => {
     expect(() => options({ resume: "a", sessionId: "b" })).toThrow(/resume or sessionId/);
+  });
+
+  it("keeps a Windows .exe on the direct shell-disabled SDK spawn path", () => {
+    const executable = "C:\\Program Files (x86)\\Claude\\claude.exe";
+    const invocation = buildClaudeCliSpawnInvocation({
+      binaryPath: executable,
+      args: ["--version"],
+      env: { SystemRoot: "C:\\Windows" },
+      platform: "win32",
+    });
+    expect(invocation).toEqual({
+      command: executable,
+      args: ["--version"],
+      shell: false,
+      windowsHide: true,
+    });
+
+    const built = options({
+      runtime: { binaryPath: executable, billing: "subscription" },
+      baseEnv: { Path: "C:\\Windows\\System32", userprofile: "C:\\Users\\Rider" },
+      platform: "win32",
+    });
+    expect(built.spawnClaudeCodeProcess).toBeUndefined();
+  });
+
+  it("routes a validated Windows .cmd shim through cmd.exe with explicit quoting", () => {
+    const shim = "C:\\Users\\Rider Name\\AppData\\Roaming\\npm\\claude.cmd";
+    const invocation = buildClaudeCliSpawnInvocation({
+      binaryPath: shim,
+      args: ["--output-format", "stream-json", "--model", "Claude Model", "C:\\Training\\"],
+      env: { systemroot: "C:\\Windows" },
+      platform: "win32",
+    });
+    expect(invocation).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        `""${shim}" "--output-format" "stream-json" "--model" "Claude Model" "C:\\Training\\\\""`,
+      ],
+      shell: false,
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+    });
+
+    const built = options({
+      runtime: {
+        binaryPath: shim,
+        billing: "subscription",
+        configDir: "~\\claude-config",
+      },
+      baseEnv: { SystemRoot: "C:\\Windows", userprofile: "C:\\Users\\Rider Name" },
+      platform: "win32",
+      home: "D:\\Profiles\\Rider",
+    });
+    expect(built.spawnClaudeCodeProcess).toEqual(expect.any(Function));
+    expect(built.env.CLAUDE_CONFIG_DIR).toBe("D:\\Profiles\\Rider\\claude-config");
+  });
+
+  it("writes inline SDK MCP JSON privately and launches the .cmd shim with its file path", () => {
+    const fileSystem = fakeWindowsMcpFileSystem();
+    const child = fakeSpawnedChild();
+    const launch = vi.fn((_command: string, _args: readonly string[], _options: object) => child);
+    const shim = "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd";
+    const inline = JSON.stringify({
+      mcpServers: {
+        coach: {
+          type: "stdio",
+          command: "node",
+          args: ["server.mjs"],
+          env: { PRIVATE_TOKEN: SENTINEL },
+        },
+      },
+    });
+    const controller = new AbortController();
+
+    const spawned = spawnClaudeCliProcess(
+      {
+        command: shim,
+        args: ["--output-format", "stream-json", "--mcp-config", inline, "--strict-mcp-config"],
+        env: { SystemRoot: "C:\\Windows", USERPROFILE: fileSystem.profile },
+        signal: controller.signal,
+      },
+      {
+        platform: "win32",
+        spawn: launch as unknown as typeof import("node:child_process").spawn,
+        windowsMcpConfigFileSystem: fileSystem.deps,
+      },
+    );
+
+    expect(spawned).toBe(child);
+    expect(fileSystem.mkdir).toHaveBeenCalledWith(fileSystem.root, {
+      recursive: true,
+      mode: 0o700,
+    });
+    expect(fileSystem.open).toHaveBeenCalledWith(
+      fileSystem.file,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+      0o600,
+    );
+    expect(fileSystem.written.join("")).toBe(inline);
+    const spawnedArguments = launch.mock.calls[0]?.[1] as string[] | undefined;
+    const commandLine = spawnedArguments?.[3] ?? "";
+    expect(commandLine).toContain(`"--mcp-config" "${fileSystem.file.replaceAll("\\", "/")}"`);
+    expect(commandLine).not.toContain(inline);
+    expect(commandLine).not.toContain(SENTINEL);
+    expect(commandLine).not.toContain("{");
+    expect(launch).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\cmd.exe",
+      expect.any(Array),
+      expect.objectContaining({
+        shell: false,
+        windowsVerbatimArguments: true,
+      }),
+    );
+
+    child.emit("exit", 0, null);
+    expect(fileSystem.unlink).toHaveBeenCalledOnce();
+    expect(fileSystem.rmdir).toHaveBeenCalledOnce();
+  });
+
+  it("preflights a representative non-empty MCP config through the same private transform", () => {
+    const fileSystem = fakeWindowsMcpFileSystem();
+
+    preflightWindowsMcpConfigTransform({
+      binaryPath: "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd",
+      env: { SystemRoot: "C:\\Windows", USERPROFILE: fileSystem.profile },
+      platform: "win32",
+      fileSystem: fileSystem.deps,
+    });
+
+    const serialized = JSON.parse(fileSystem.written.join("")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(Object.keys(serialized.mcpServers ?? {})).toEqual(["enduragent-readiness"]);
+    expect(fileSystem.unlink).toHaveBeenCalledOnce();
+    expect(fileSystem.rmdir).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed with a private stage-coded error when the MCP file write fails", () => {
+    const fileSystem = fakeWindowsMcpFileSystem("write");
+    const launch = vi.fn();
+    const inline = JSON.stringify({
+      mcpServers: { coach: { type: "stdio", command: "node", env: { TOKEN: SENTINEL } } },
+    });
+
+    const failure = (() => {
+      try {
+        spawnClaudeCliProcess(
+          {
+            command: "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd",
+            args: ["--mcp-config", inline],
+            env: { SystemRoot: "C:\\Windows", USERPROFILE: fileSystem.profile },
+            signal: new AbortController().signal,
+          },
+          {
+            platform: "win32",
+            spawn: launch as unknown as typeof import("node:child_process").spawn,
+            windowsMcpConfigFileSystem: fileSystem.deps,
+          },
+        );
+        return null;
+      } catch (error) {
+        return error;
+      }
+    })();
+
+    expect(failure).toMatchObject({
+      kind: "windows-mcp-config-write",
+      stage: "content-write",
+    });
+    expect((failure as Error).message).not.toContain(fileSystem.file);
+    expect((failure as Error).message).not.toContain(SENTINEL);
+    expect(launch).not.toHaveBeenCalled();
+    expect(fileSystem.unlink).toHaveBeenCalledOnce();
+    expect(fileSystem.rmdir).toHaveBeenCalledOnce();
+  });
+
+  it("classifies cleanup failure without suppressing the child process exit", () => {
+    const fileSystem = fakeWindowsMcpFileSystem("cleanup");
+    const child = fakeSpawnedChild();
+    const cleanupFailures = vi.fn();
+    const inline = JSON.stringify({
+      mcpServers: { coach: { type: "stdio", command: "node" } },
+    });
+    const spawned = spawnClaudeCliProcess(
+      {
+        command: "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd",
+        args: ["--mcp-config", inline],
+        env: { SystemRoot: "C:\\Windows", USERPROFILE: fileSystem.profile },
+        signal: new AbortController().signal,
+      },
+      {
+        platform: "win32",
+        spawn: vi.fn(() => child) as unknown as typeof import("node:child_process").spawn,
+        windowsMcpConfigFileSystem: fileSystem.deps,
+        onWindowsMcpConfigCleanupFailure: cleanupFailures,
+      },
+    );
+    const exit = vi.fn();
+    spawned.on("exit", exit);
+
+    child.emit("exit", 23, null);
+
+    expect(exit).toHaveBeenCalledWith(23, null);
+    expect(cleanupFailures).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "windows-mcp-config-cleanup", stage: "cleanup" }),
+    );
+    const cleanupFailure = cleanupFailures.mock.calls[0]?.[0] as Error;
+    expect(cleanupFailure.message).not.toContain(fileSystem.file);
+    expect(cleanupFailure.message).not.toContain(SENTINEL);
+  });
+
+  it.each([
+    "C:\\Users\\Rider&Other\\npm\\claude.cmd",
+    "C:\\Users\\Rider%TEMP%\\npm\\claude.cmd",
+    "C:\\Program Files (x86)\\npm\\claude.cmd",
+    'C:\\Users\\Rider"Other\\npm\\claude.cmd',
+  ])("rejects an unsafe Windows .cmd path without echoing it: %s", (shim) => {
+    const failure = (() => {
+      try {
+        buildClaudeCliSpawnInvocation({
+          binaryPath: shim,
+          args: ["--version"],
+          env: { SystemRoot: "C:\\Windows" },
+          platform: "win32",
+        });
+        return null;
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(failure).toMatchObject({ kind: "unsafe-windows-command-shim" });
+    expect((failure as Error).message).not.toContain(shim);
+  });
+
+  it("rejects shell metacharacters in Windows .cmd arguments before launch", () => {
+    expect(() =>
+      buildClaudeCliSpawnInvocation({
+        binaryPath: "C:\\Users\\Rider\\npm\\claude.cmd",
+        args: ["--model", "sonnet&whoami"],
+        env: { SystemRoot: "C:\\Windows" },
+        platform: "win32",
+      }),
+    ).toThrow(expect.objectContaining({ kind: "unsafe-windows-command-shim" }));
+  });
+
+  it("rejects Windows executable types other than .exe and .cmd", () => {
+    expect(() =>
+      buildClaudeCliSpawnInvocation({
+        binaryPath: "C:\\Tools\\claude.bat",
+        args: [],
+        env: { SystemRoot: "C:\\Windows" },
+        platform: "win32",
+      }),
+    ).toThrow(expect.objectContaining({ kind: "unsupported-windows-executable" }));
+  });
+
+  it("forwards cancellation, kill, and exit status through the Windows cmd child", () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdin: PassThrough;
+      stdout: PassThrough;
+      killed: boolean;
+      exitCode: number | null;
+      signalCode: NodeJS.Signals | null;
+      kill: () => boolean;
+    };
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.killed = false;
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => {
+      child.killed = true;
+      return true;
+    });
+    const launch = vi.fn((_command: string, _args: readonly string[], spawnOptions: object) => {
+      const signal = (spawnOptions as { signal: AbortSignal }).signal;
+      signal.addEventListener("abort", () => child.kill());
+      return child;
+    });
+    const controller = new AbortController();
+    const shim = "C:\\Users\\Rider Name\\AppData\\Roaming\\npm\\claude.cmd";
+    const spawnOptions: SpawnOptions = {
+      command: shim,
+      args: ["--output-format", "stream-json"],
+      cwd: "C:\\Training",
+      env: { SystemRoot: "C:\\Windows" },
+      signal: controller.signal,
+    };
+
+    const spawned = spawnClaudeCliProcess(spawnOptions, {
+      platform: "win32",
+      spawn: launch as unknown as typeof import("node:child_process").spawn,
+    });
+    expect(spawned).toBe(child);
+    expect(launch).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\cmd.exe",
+      ["/d", "/s", "/c", `""${shim}" "--output-format" "stream-json""`],
+      expect.objectContaining({
+        cwd: "C:\\Training",
+        shell: false,
+        signal: controller.signal,
+        stdio: ["pipe", "pipe", "ignore"],
+        windowsVerbatimArguments: true,
+      }),
+    );
+
+    const onExit = vi.fn();
+    spawned.on("exit", onExit);
+    child.emit("exit", 23, null);
+    expect(onExit).toHaveBeenCalledWith(23, null);
+
+    controller.abort();
+    expect(child.kill).toHaveBeenCalledOnce();
   });
 });
 

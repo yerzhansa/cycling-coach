@@ -2,10 +2,11 @@ import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join, resolve as resolvePath } from "node:path";
+import { delimiter, isAbsolute, join, resolve as resolvePath, win32 } from "node:path";
 
-import { buildChildEnv, expandTilde, type ClaudeCliRuntime } from "./env.js";
+import { buildChildEnv, expandTilde, readEnvironmentValue, type ClaudeCliRuntime } from "./env.js";
 import { ClaudeCliConfigError, binaryMissingError, versionBelowFloorError } from "./errors.js";
+import { buildClaudeCliSpawnInvocation } from "./session.js";
 
 export const CLAUDE_CLI_VERSION_FLOOR = "2.1.220";
 
@@ -13,7 +14,28 @@ const VERSION_PROBE_TIMEOUT_MS = 15_000;
 const VERSION_PROBE_MAX_BYTES = 64 * 1024;
 const VERSION_PATTERN = /(\d+)\.(\d+)\.(\d+)/;
 
-export function wellKnownClaudePaths(home: string): string[] {
+export interface WellKnownClaudePathsOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly env?: NodeJS.ProcessEnv;
+}
+
+export function wellKnownClaudePaths(
+  home: string,
+  options: WellKnownClaudePathsOptions = {},
+): string[] {
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    const env = options.env ?? process.env;
+    const appData =
+      readEnvironmentValue(env, "APPDATA", platform) ?? win32.join(home, "AppData", "Roaming");
+    const localAppData =
+      readEnvironmentValue(env, "LOCALAPPDATA", platform) ?? win32.join(home, "AppData", "Local");
+    return [
+      win32.join(home, ".local", "bin", "claude.exe"),
+      win32.join(localAppData, "Microsoft", "WinGet", "Links", "claude.exe"),
+      win32.join(appData, "npm", "claude.cmd"),
+    ];
+  }
   return [
     "/opt/homebrew/bin/claude",
     "/usr/local/bin/claude",
@@ -22,9 +44,15 @@ export function wellKnownClaudePaths(home: string): string[] {
   ];
 }
 
-async function defaultIsExecutable(candidate: string): Promise<boolean> {
+export function hasSupportedWindowsClaudeExtension(candidate: string): boolean {
+  const extension = win32.extname(candidate).toLowerCase();
+  return extension === ".exe" || extension === ".cmd";
+}
+
+async function defaultIsExecutable(candidate: string, platform: NodeJS.Platform): Promise<boolean> {
+  if (platform === "win32" && !hasSupportedWindowsClaudeExtension(candidate)) return false;
   try {
-    await access(candidate, fsConstants.X_OK);
+    await access(candidate, platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
     return true;
   } catch {
     return false;
@@ -35,31 +63,56 @@ export interface ResolveClaudeBinaryOptions {
   explicitPath?: string;
   env?: NodeJS.ProcessEnv;
   home?: string;
+  platform?: NodeJS.Platform;
   isExecutable?: (candidate: string) => Promise<boolean>;
 }
 
 export async function resolveClaudeBinary(
   options: ResolveClaudeBinaryOptions = {},
 ): Promise<string | null> {
+  const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  const home = options.home ?? env.HOME ?? homedir();
-  const isExecutable = options.isExecutable ?? defaultIsExecutable;
+  const home =
+    options.home ??
+    (platform === "win32" ? readEnvironmentValue(env, "USERPROFILE", platform) : env.HOME) ??
+    homedir();
+  const isExecutable =
+    options.isExecutable ?? ((candidate: string) => defaultIsExecutable(candidate, platform));
+  const canUse = async (candidate: string): Promise<boolean> => {
+    if (platform === "win32" && !hasSupportedWindowsClaudeExtension(candidate)) return false;
+    return await isExecutable(candidate);
+  };
 
   const explicit = options.explicitPath;
   if (explicit !== undefined && explicit !== "") {
-    const expanded = expandTilde(explicit);
-    return isAbsolute(expanded) ? expanded : resolvePath(expanded);
+    const expanded =
+      platform === "win32" ? expandTilde(explicit, { platform, env, home }) : expandTilde(explicit);
+    const resolved =
+      platform === "win32"
+        ? win32.isAbsolute(expanded)
+          ? expanded
+          : win32.resolve(expanded)
+        : isAbsolute(expanded)
+          ? expanded
+          : resolvePath(expanded);
+    if (platform !== "win32") return resolved;
+    return (await canUse(resolved)) ? resolved : null;
   }
 
-  const pathValue = env.PATH ?? "";
-  for (const entry of pathValue.split(delimiter)) {
+  const pathValue = readEnvironmentValue(env, "PATH", platform) ?? "";
+  const pathDelimiter = platform === "win32" ? win32.delimiter : delimiter;
+  const pathJoin = platform === "win32" ? win32.join : join;
+  const executableNames = platform === "win32" ? ["claude.exe", "claude.cmd"] : ["claude"];
+  for (const entry of pathValue.split(pathDelimiter)) {
     if (entry === "") continue;
-    const candidate = join(entry, "claude");
-    if (await isExecutable(candidate)) return candidate;
+    for (const name of executableNames) {
+      const candidate = pathJoin(entry, name);
+      if (await canUse(candidate)) return candidate;
+    }
   }
 
-  for (const candidate of wellKnownClaudePaths(home)) {
-    if (await isExecutable(candidate)) return candidate;
+  for (const candidate of wellKnownClaudePaths(home, { platform, env })) {
+    if (await canUse(candidate)) return candidate;
   }
 
   return null;
@@ -68,8 +121,11 @@ export async function resolveClaudeBinary(
 export interface ProbeVersionOptions {
   runtime?: ClaudeCliRuntime;
   baseEnv?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  home?: string;
   timeoutMs?: number;
   maxBytes?: number;
+  spawn?: typeof spawn;
 }
 
 export function parseClaudeVersion(output: string): string | null {
@@ -89,27 +145,45 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-export function assertVersionAtLeast(version: string, floor = CLAUDE_CLI_VERSION_FLOOR): void {
-  if (compareVersions(version, floor) < 0) throw versionBelowFloorError(version, floor);
+export function assertVersionAtLeast(
+  version: string,
+  floor = CLAUDE_CLI_VERSION_FLOOR,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (compareVersions(version, floor) < 0) {
+    throw versionBelowFloorError(version, floor, platform);
+  }
 }
 
 export async function probeVersion(
   binaryPath: string,
   options: ProbeVersionOptions = {},
 ): Promise<string> {
+  const platform = options.platform ?? process.platform;
   const timeoutMs = options.timeoutMs ?? VERSION_PROBE_TIMEOUT_MS;
   const maxBytes = options.maxBytes ?? VERSION_PROBE_MAX_BYTES;
   const runtime: ClaudeCliRuntime = options.runtime ?? {
     binaryPath,
     billing: "subscription",
   };
-  const env = buildChildEnv(options.baseEnv ?? process.env, runtime);
+  const env = buildChildEnv(options.baseEnv ?? process.env, runtime, {
+    platform,
+    ...(options.home === undefined ? {} : { home: options.home }),
+  });
+  const invocation = buildClaudeCliSpawnInvocation({
+    binaryPath,
+    args: ["--version"],
+    env,
+    platform,
+  });
+  const launch = options.spawn ?? spawn;
 
   const raw = await new Promise<string>((resolve, reject) => {
-    const child = spawn(binaryPath, ["--version"], {
-      shell: false,
+    const child = launch(invocation.command, [...invocation.args], {
+      shell: invocation.shell,
       stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
+      windowsHide: invocation.windowsHide,
+      ...(invocation.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
       env,
     });
 
@@ -157,7 +231,11 @@ export async function probeVersion(
       settled = true;
       clearTimeout(timer);
       if (err.code === "ENOENT") {
-        reject(binaryMissingError(binaryPath));
+        reject(binaryMissingError(binaryPath, platform));
+        return;
+      }
+      if (platform === "win32") {
+        reject(binaryMissingError(binaryPath, platform));
         return;
       }
       reject(
@@ -195,6 +273,15 @@ export async function probeVersion(
         return;
       }
       if (code !== 0) {
+        if (platform === "win32") {
+          reject(
+            new ClaudeCliConfigError(
+              "binary-missing",
+              `Claude Code CLI version probe exited with code ${code}. ${binaryMissingError(binaryPath, platform).message}`,
+            ),
+          );
+          return;
+        }
         const tail = stderr.slice(-200).trim();
         reject(
           new ClaudeCliConfigError(
@@ -210,6 +297,12 @@ export async function probeVersion(
 
   const version = parseClaudeVersion(raw);
   if (version === null) {
+    if (platform === "win32") {
+      throw new ClaudeCliConfigError(
+        "binary-missing",
+        `Claude Code CLI did not report a version. ${binaryMissingError(binaryPath, platform).message}`,
+      );
+    }
     throw new ClaudeCliConfigError(
       "binary-missing",
       `Claude Code CLI at ${binaryPath} did not report a version: ${raw.slice(0, 200).trim()}`,

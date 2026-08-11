@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { win32 } from "node:path";
 import type { AccountInfo, query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
 import type { ClaudeCliRuntime } from "../../src/agent/claude-cli/env.js";
-import { ClaudeCliConfigError } from "../../src/agent/claude-cli/errors.js";
+import { ClaudeCliConfigError, windowsMcpConfigError } from "../../src/agent/claude-cli/errors.js";
 import {
   ACCOUNT_PROBE_CACHE_TTL_MS,
   API_KEY_BILLING_IDENTITY_LINE,
@@ -188,6 +189,20 @@ describe("readFallbackEmail", () => {
       readFallbackEmail("/tmp/cfg", { readFile: async () => "{not json" }),
     ).resolves.toBeUndefined();
   });
+
+  it("uses USERPROFILE for the default Windows config path with case-insensitive keys", async () => {
+    const paths: string[] = [];
+    const email = await readFallbackEmail(undefined, {
+      platform: "win32",
+      env: { userprofile: "C:\\Users\\Rider" },
+      readFile: async (path) => {
+        paths.push(path);
+        return JSON.stringify({ oauthAccount: { emailAddress: "rider@example.test" } });
+      },
+    });
+    expect(email).toBe("rider@example.test");
+    expect(paths).toEqual([win32.join("C:\\Users\\Rider", ".claude.json")]);
+  });
 });
 
 describe("probeClaudeAccount", () => {
@@ -301,6 +316,55 @@ describe("probeClaudeAccount", () => {
     );
     expect(result.email).toBe("fallback@example.test");
     expect(result.accountClass).toBe("subscription");
+  });
+
+  it("builds the real Windows .cmd account probe with the validated custom spawner", async () => {
+    const { fn, state } = makeQuery({
+      email: "rider@example.test",
+      subscriptionType: "Claude Max",
+      apiProvider: "firstParty",
+    });
+    const shim = "C:\\Users\\Rider Name\\AppData\\Roaming\\npm\\claude.cmd";
+    await expect(
+      probeClaudeAccount(
+        {
+          runtime: { binaryPath: shim, billing: "subscription" },
+          platform: "win32",
+          baseEnv: {
+            Path: "C:\\Windows\\System32",
+            userprofile: "C:\\Users\\Rider Name",
+            SystemRoot: "C:\\Windows",
+          },
+        },
+        { query: fn },
+      ),
+    ).resolves.toMatchObject({ verified: true, accountClass: "subscription" });
+    expect(state.lastOptions?.pathToClaudeCodeExecutable).toBe(shim);
+    expect(state.lastOptions?.spawnClaudeCodeProcess).toEqual(expect.any(Function));
+    expect(state.lastOptions?.env).toMatchObject({
+      PATH: "C:\\Windows\\System32",
+      USERPROFILE: "C:\\Users\\Rider Name",
+      SYSTEMROOT: "C:\\Windows",
+    });
+  });
+
+  it("preserves an unsafe Windows .cmd refusal instead of collapsing it to signed-out", async () => {
+    const { fn, state } = makeQuery({
+      subscriptionType: "Claude Max",
+      apiProvider: "firstParty",
+    });
+    const unsafe = "C:\\Users\\Rider&Other\\npm\\claude.cmd";
+    const failure = await probeClaudeAccount(
+      {
+        runtime: { binaryPath: unsafe, billing: "subscription" },
+        platform: "win32",
+        baseEnv: { SystemRoot: "C:\\Windows" },
+      },
+      { query: fn },
+    ).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ kind: "unsafe-windows-command-shim" });
+    expect((failure as Error).message).not.toContain(unsafe);
+    expect(state.calls).toBe(0);
   });
 });
 
@@ -615,5 +679,103 @@ describe("ensureClaudeCliReady", () => {
     ).catch((err: unknown) => err);
     expect(failure).toBeInstanceOf(ClaudeCliConfigError);
     expect((failure as ClaudeCliConfigError).kind).toBe("unrecognized-auth-source");
+  });
+
+  it("threads the injected Windows platform, environment, and home through real readiness", async () => {
+    const windowsEnv = {
+      Path: "C:\\Windows\\System32",
+      userprofile: "C:\\Users\\Rider",
+      appdata: "C:\\Users\\Rider\\AppData\\Roaming",
+    };
+    const shim = "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd";
+    const resolveBinary = vi.fn(async () => shim);
+    const probeVersion = vi.fn(async () => "2.1.220");
+    const preflightMcpConfigTransform = vi.fn();
+    const probeAccount = vi.fn(async () => ({
+      verified: true as const,
+      accountClass: "subscription" as const,
+      email: "rider@example.test",
+      plan: "Max",
+    }));
+
+    await expect(
+      ensureClaudeCliReady(
+        {
+          baseEnv: windowsEnv,
+          platform: "win32",
+          home: "D:\\Profiles\\Rider",
+          configDir: "~\\claude-config",
+        },
+        { resolveBinary, probeVersion, preflightMcpConfigTransform, probeAccount },
+      ),
+    ).resolves.toMatchObject({ binaryPath: shim, version: "2.1.220" });
+    expect(resolveBinary).toHaveBeenCalledWith({
+      env: windowsEnv,
+      platform: "win32",
+      home: "D:\\Profiles\\Rider",
+    });
+    expect(probeVersion).toHaveBeenCalledWith(
+      shim,
+      expect.objectContaining({
+        baseEnv: windowsEnv,
+        platform: "win32",
+        home: "D:\\Profiles\\Rider",
+      }),
+    );
+    expect(preflightMcpConfigTransform).toHaveBeenCalledWith({
+      binaryPath: shim,
+      env: expect.objectContaining({
+        PATH: "C:\\Windows\\System32",
+        USERPROFILE: "C:\\Users\\Rider",
+      }),
+      platform: "win32",
+    });
+    expect(probeAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseEnv: windowsEnv,
+        platform: "win32",
+        home: "D:\\Profiles\\Rider",
+        runtime: {
+          binaryPath: shim,
+          billing: "subscription",
+          configDir: "~\\claude-config",
+        },
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("refuses readiness when the Windows .cmd MCP transform preflight cannot write", async () => {
+    const shim = "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd";
+    const probeAccount = vi.fn(async () => ({
+      verified: true as const,
+      accountClass: "subscription" as const,
+    }));
+    const preflightMcpConfigTransform = vi.fn(() => {
+      throw windowsMcpConfigError("content-write");
+    });
+
+    await expect(
+      ensureClaudeCliReady(
+        {
+          baseEnv: {
+            Path: "C:\\Windows\\System32",
+            userprofile: "C:\\Users\\Rider",
+          },
+          platform: "win32",
+        },
+        {
+          resolveBinary: async () => shim,
+          probeVersion: async () => "2.1.220",
+          preflightMcpConfigTransform,
+          probeAccount,
+        },
+      ),
+    ).rejects.toMatchObject({
+      kind: "windows-mcp-config-write",
+      stage: "content-write",
+    });
+    expect(preflightMcpConfigTransform).toHaveBeenCalledOnce();
+    expect(probeAccount).not.toHaveBeenCalled();
   });
 });

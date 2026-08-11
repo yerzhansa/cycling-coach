@@ -52,7 +52,11 @@ export interface ClaudeCliStatusController {
 
 export type ClaudeCliStatusDependencies = Pick<
   EnsureClaudeCliReadyDeps,
-  "resolveBinary" | "probeVersion" | "probeAccount"
+  | "resolveBinary"
+  | "probeVersion"
+  | "probeAccount"
+  | "preflightMcpConfigTransform"
+  | "windowsMcpConfigFileSystem"
 > & {
   readonly ensureReady?: typeof ensureClaudeCliReady;
   readonly invalidateProbeCache?: () => void;
@@ -61,6 +65,7 @@ export type ClaudeCliStatusDependencies = Pick<
 export interface CreateClaudeCliStatusOptions {
   readonly settings: () => ClaudeCliSettings | Promise<ClaudeCliSettings>;
   readonly environment?: () => Readonly<Record<string, string | undefined>>;
+  readonly platform?: NodeJS.Platform;
   readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
   readonly dependencies?: ClaudeCliStatusDependencies;
 }
@@ -121,6 +126,10 @@ function stateForFailure(error: unknown): ClaudeCliStatusState {
   switch (error.kind) {
     case "binary-missing":
     case "version-below-floor":
+    case "unsupported-windows-executable":
+    case "unsafe-windows-command-shim":
+    case "windows-mcp-config-write":
+    case "windows-mcp-config-cleanup":
       return "absent-binary";
     case "api-key-identity":
     case "api-key-unapproved":
@@ -138,6 +147,7 @@ export function createClaudeCliStatus(
   const invalidate =
     options.dependencies?.invalidateProbeCache ?? invalidateClaudeAccountProbeCache;
   const environment = options.environment ?? (() => process.env);
+  const platform = options.platform ?? process.platform;
   const probeDependencies: EnsureClaudeCliReadyDeps = {
     ...(options.dependencies?.resolveBinary === undefined
       ? {}
@@ -148,6 +158,12 @@ export function createClaudeCliStatus(
     ...(options.dependencies?.probeAccount === undefined
       ? {}
       : { probeAccount: options.dependencies.probeAccount }),
+    ...(options.dependencies?.preflightMcpConfigTransform === undefined
+      ? {}
+      : { preflightMcpConfigTransform: options.dependencies.preflightMcpConfigTransform }),
+    ...(options.dependencies?.windowsMcpConfigFileSystem === undefined
+      ? {}
+      : { windowsMcpConfigFileSystem: options.dependencies.windowsMcpConfigFileSystem }),
   };
 
   const read = async (forceRecheck: boolean): Promise<ClaudeCliStatus> => {
@@ -157,7 +173,8 @@ export function createClaudeCliStatus(
     } catch {
       return { state: "not-logged-in" };
     }
-    if (!isClaudeCliLaneEligible({ environment: environment(), enabled: settings.enabled })) {
+    const baseEnv = { ...environment() };
+    if (!isClaudeCliLaneEligible({ environment: baseEnv, enabled: settings.enabled })) {
       return { state: "disabled" };
     }
     try {
@@ -167,6 +184,8 @@ export function createClaudeCliStatus(
             ...(settings.binaryPath === undefined ? {} : { binaryPath: settings.binaryPath }),
             ...(settings.configDir === undefined ? {} : { configDir: settings.configDir }),
             billing: settings.billing,
+            baseEnv,
+            platform,
             ...(forceRecheck ? { forceRecheck: true } : {}),
           },
           probeDependencies,

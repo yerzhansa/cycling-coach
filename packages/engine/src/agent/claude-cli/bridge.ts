@@ -552,9 +552,7 @@ async function runGeneration(
     ? [{ role: "user", content: opts.prompt }]
     : (opts.messages ?? []);
   const surface =
-    plan.mode === "stateless" ||
-    opts.tools === undefined ||
-    Object.keys(opts.tools).length === 0
+    plan.mode === "stateless" || opts.tools === undefined || Object.keys(opts.tools).length === 0
       ? null
       : buildCoachToolSurface(opts.tools, {
           messages: initialMessages,
@@ -572,6 +570,7 @@ async function runGeneration(
     streamed: false,
     compactBoundary: false,
   };
+  let iterationFailure: unknown;
   try {
     const iterator = generation.frames()[Symbol.asyncIterator]();
     for (;;) {
@@ -585,32 +584,44 @@ async function runGeneration(
       });
     }
   } catch (err) {
-    if (generation.lastResult() === null) {
-      const normalized = normalizeClaudeCliError(err, { retryAfterMs: collector.retryAfterMs });
-      const carrier = normalized as Error & { retryAfterMs?: number };
-      if (carrier.retryAfterMs === undefined && collector.retryAfterMs !== undefined) {
-        carrier.retryAfterMs = collector.retryAfterMs;
-      }
-      throw normalized;
-    }
+    iterationFailure = err;
   } finally {
     release();
     await generation.close();
   }
 
   const result = generation.lastResult();
+  const cleanupFailure = generation.cleanupError();
   if (result === null) {
-    throw normalizeClaudeCliError(new Error("Claude Code CLI ended without a result frame"), {
-      retryAfterMs: collector.retryAfterMs,
-    });
+    const normalized = normalizeClaudeCliError(
+      iterationFailure ?? new Error("Claude Code CLI ended without a result frame"),
+      { retryAfterMs: collector.retryAfterMs },
+    );
+    const carrier = normalized as Error & {
+      retryAfterMs?: number;
+      cleanupFailure?: ClaudeCliConfigError;
+    };
+    if (carrier.retryAfterMs === undefined && collector.retryAfterMs !== undefined) {
+      carrier.retryAfterMs = collector.retryAfterMs;
+    }
+    if (cleanupFailure !== null && cleanupFailure !== normalized) {
+      carrier.cleanupFailure = cleanupFailure;
+    }
+    throw normalized;
   }
 
   if (result.is_error === true && result.subtype !== "error_max_turns") {
     const failure = new Error(resultErrorMessage(result)) as Error & { httpStatus?: number };
     const status = (result as { api_error_status?: unknown }).api_error_status;
     if (validToken(status)) failure.httpStatus = status;
-    throw normalizeClaudeCliError(failure, { retryAfterMs: collector.retryAfterMs });
+    const normalized = normalizeClaudeCliError(failure, {
+      retryAfterMs: collector.retryAfterMs,
+    }) as Error & { cleanupFailure?: ClaudeCliConfigError };
+    if (cleanupFailure !== null) normalized.cleanupFailure = cleanupFailure;
+    throw normalized;
   }
+
+  if (cleanupFailure !== null) throw cleanupFailure;
 
   const text = result.subtype === "success" ? result.result : collector.text;
   const usage = mapUsage(tokenTotalsFromResult(result));

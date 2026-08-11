@@ -3,6 +3,10 @@ import { markProviderAuthFailure } from "../../provider-auth-failure.js";
 export type ClaudeCliConfigErrorKind =
   | "binary-missing"
   | "version-below-floor"
+  | "unsupported-windows-executable"
+  | "unsafe-windows-command-shim"
+  | "windows-mcp-config-write"
+  | "windows-mcp-config-cleanup"
   | "not-signed-in"
   | "probe-timeout"
   | "api-key-identity"
@@ -19,8 +23,34 @@ export class ClaudeCliConfigError extends Error {
   }
 }
 
+export type ClaudeCliWindowsMcpConfigStage = "private-path" | "content-write" | "cleanup";
+
+export class ClaudeCliWindowsMcpConfigError extends ClaudeCliConfigError {
+  readonly stage: ClaudeCliWindowsMcpConfigStage;
+  readonly cleanupFailure?: ClaudeCliWindowsMcpConfigError;
+
+  constructor(
+    kind: Extract<
+      ClaudeCliConfigErrorKind,
+      "windows-mcp-config-write" | "windows-mcp-config-cleanup"
+    >,
+    stage: ClaudeCliWindowsMcpConfigStage,
+    message: string,
+    cleanupFailure?: ClaudeCliWindowsMcpConfigError,
+  ) {
+    super(kind, message);
+    this.name = "ClaudeCliWindowsMcpConfigError";
+    this.stage = stage;
+    if (cleanupFailure !== undefined) this.cleanupFailure = cleanupFailure;
+  }
+}
+
 const LAUNCHD_PATH_HINT =
   "(Mac launchd users: set an absolute path like '/opt/homebrew/bin/claude'.)";
+
+export const WINDOWS_CLAUDE_INSTALL_COMMAND = "irm https://claude.ai/install.ps1 | iex";
+
+const WINDOWS_INSTALL_AND_PATH_HINT = `Open PowerShell and run: ${WINDOWS_CLAUDE_INSTALL_COMMAND}. Then restart Enduragent so it reads the updated PATH, or set llm.claude_cli.binary_path to an absolute claude.exe or claude.cmd path.`;
 
 export const NOT_SIGNED_IN_MESSAGE =
   "Claude Code CLI is not signed in. Open a terminal, run claude, and sign in with your Claude subscription. Enduragent never signs in for you.";
@@ -34,30 +64,89 @@ export const API_KEY_IDENTITY_MESSAGE =
 export const API_KEY_UNAPPROVED_MESSAGE =
   "Your API key is not approved in the Claude CLI — run claude once with it and approve, or set llm.claude_cli.billing: subscription.";
 
-export function binaryMissingMessage(binaryPath: string): string {
+export function binaryMissingMessage(
+  binaryPath: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    return `Claude Code CLI was not found on Windows. ${WINDOWS_INSTALL_AND_PATH_HINT}`;
+  }
   return `Claude Code CLI not found at ${binaryPath}. Install it (https://claude.com/claude-code) or set llm.claude_cli.binary_path. ${LAUNCHD_PATH_HINT}`;
 }
 
-export function versionBelowFloorMessage(version: string, floor: string): string {
+export function versionBelowFloorMessage(
+  version: string,
+  floor: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    return `Claude Code CLI ${version} is older than the minimum supported ${floor}. ${WINDOWS_INSTALL_AND_PATH_HINT}`;
+  }
   return `Claude Code CLI ${version} is older than the minimum supported ${floor}. Run: claude update`;
+}
+
+export function unsupportedWindowsExecutableMessage(): string {
+  return `Claude Code CLI on Windows requires an absolute .exe or .cmd path. ${WINDOWS_INSTALL_AND_PATH_HINT}`;
+}
+
+export function unsafeWindowsCommandShimMessage(): string {
+  return `Enduragent refused the Claude Code .cmd shim because its path or arguments cannot be quoted safely. ${WINDOWS_INSTALL_AND_PATH_HINT}`;
+}
+
+export function windowsMcpConfigMessage(stage: ClaudeCliWindowsMcpConfigStage): string {
+  if (stage === "cleanup") {
+    return "Enduragent could not remove the private Claude Code tool configuration on Windows (stage: cleanup).";
+  }
+  return `Enduragent could not prepare the private Claude Code tool configuration on Windows (stage: ${stage}). ${WINDOWS_INSTALL_AND_PATH_HINT}`;
 }
 
 export function unrecognizedAuthSourceMessage(raw: string): string {
   return `Unrecognized Claude CLI auth source '${raw}' — update enduragent, or opt in with llm.claude_cli.billing: api-key.`;
 }
 
-export function binaryMissingError(binaryPath: string): ClaudeCliConfigError {
-  return new ClaudeCliConfigError("binary-missing", binaryMissingMessage(binaryPath));
+export function binaryMissingError(
+  binaryPath: string,
+  platform: NodeJS.Platform = process.platform,
+): ClaudeCliConfigError {
+  return new ClaudeCliConfigError("binary-missing", binaryMissingMessage(binaryPath, platform));
 }
 
-export function versionBelowFloorError(version: string, floor: string): ClaudeCliConfigError {
-  return new ClaudeCliConfigError("version-below-floor", versionBelowFloorMessage(version, floor));
+export function versionBelowFloorError(
+  version: string,
+  floor: string,
+  platform: NodeJS.Platform = process.platform,
+): ClaudeCliConfigError {
+  return new ClaudeCliConfigError(
+    "version-below-floor",
+    versionBelowFloorMessage(version, floor, platform),
+  );
+}
+
+export function unsupportedWindowsExecutableError(): ClaudeCliConfigError {
+  return new ClaudeCliConfigError(
+    "unsupported-windows-executable",
+    unsupportedWindowsExecutableMessage(),
+  );
+}
+
+export function unsafeWindowsCommandShimError(): ClaudeCliConfigError {
+  return new ClaudeCliConfigError("unsafe-windows-command-shim", unsafeWindowsCommandShimMessage());
+}
+
+export function windowsMcpConfigError(
+  stage: ClaudeCliWindowsMcpConfigStage,
+  cleanupFailure?: ClaudeCliWindowsMcpConfigError,
+): ClaudeCliWindowsMcpConfigError {
+  return new ClaudeCliWindowsMcpConfigError(
+    stage === "cleanup" ? "windows-mcp-config-cleanup" : "windows-mcp-config-write",
+    stage,
+    windowsMcpConfigMessage(stage),
+    cleanupFailure,
+  );
 }
 
 export function notSignedInError(): ClaudeCliConfigError {
-  return markProviderAuthFailure(
-    new ClaudeCliConfigError("not-signed-in", NOT_SIGNED_IN_MESSAGE),
-  );
+  return markProviderAuthFailure(new ClaudeCliConfigError("not-signed-in", NOT_SIGNED_IN_MESSAGE));
 }
 
 export function probeTimeoutError(): ClaudeCliConfigError {

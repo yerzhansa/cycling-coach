@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ClaudeAccountProbeResult } from "@enduragent/core";
+import { ClaudeCliConfigError, type ClaudeAccountProbeResult } from "@enduragent/core";
 import {
   createClaudeCliStatus,
   readClaudeCliSettings,
@@ -32,23 +32,28 @@ function harness(input: {
   readonly binary?: string | null;
   readonly version?: string;
   readonly environment?: Record<string, string | undefined>;
+  readonly platform?: NodeJS.Platform;
+  readonly preflightMcpConfigTransform?: () => void;
   readonly applyRuntimeConfig?: (request: unknown) => Promise<void>;
 }) {
   const resolveBinary = vi.fn(async () => (input.binary === undefined ? BINARY : input.binary));
   const probeVersion = vi.fn(async () => input.version ?? "2.9.0");
   const probeAccount = vi.fn(async () => input.probe ?? subscriptionProbe());
+  const preflightMcpConfigTransform = vi.fn(input.preflightMcpConfigTransform ?? (() => {}));
   const invalidateProbeCache = vi.fn();
   const applyRuntimeConfig = vi.fn(input.applyRuntimeConfig ?? (async () => {}));
   const dependencies: ClaudeCliStatusDependencies = {
     resolveBinary,
     probeVersion,
     probeAccount,
+    preflightMcpConfigTransform,
     invalidateProbeCache,
   };
   const readSettings = vi.fn(async () => input.settings ?? settings());
   const controller = createClaudeCliStatus({
     settings: readSettings,
     environment: () => input.environment ?? {},
+    ...(input.platform === undefined ? {} : { platform: input.platform }),
     applyRuntimeConfig,
     dependencies,
   });
@@ -57,6 +62,7 @@ function harness(input: {
     resolveBinary,
     probeVersion,
     probeAccount,
+    preflightMcpConfigTransform,
     invalidateProbeCache,
     applyRuntimeConfig,
     readSettings,
@@ -147,6 +153,59 @@ describe("desktop claude-cli status controller", () => {
     const subject = harness({ version: "1.0.0" });
 
     await expect(subject.controller.status()).resolves.toEqual({ state: "absent-binary" });
+    expect(subject.probeAccount).not.toHaveBeenCalled();
+  });
+
+  it("runs Windows readiness against the desktop environment and resolved .cmd shim", async () => {
+    const environment = {
+      Path: "C:\\Windows\\System32",
+      userprofile: "C:\\Users\\Rider",
+      appdata: "C:\\Users\\Rider\\AppData\\Roaming",
+      SystemRoot: "C:\\Windows",
+    };
+    const shim = "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd";
+    const subject = harness({
+      platform: "win32",
+      environment,
+      binary: shim,
+      version: "2.1.220",
+    });
+
+    await expect(subject.controller.status()).resolves.toMatchObject({
+      state: "ready",
+      version: "2.1.220",
+    });
+    expect(subject.resolveBinary).toHaveBeenCalledWith(
+      expect.objectContaining({ env: environment, platform: "win32" }),
+    );
+    expect(subject.probeVersion).toHaveBeenCalledWith(
+      shim,
+      expect.objectContaining({ baseEnv: environment, platform: "win32" }),
+    );
+    expect(subject.probeAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ baseEnv: environment, platform: "win32" }),
+      expect.any(Object),
+    );
+    expect(subject.preflightMcpConfigTransform).toHaveBeenCalledOnce();
+  });
+
+  it("does not report ready when the Windows .cmd MCP transform preflight fails", async () => {
+    const subject = harness({
+      platform: "win32",
+      environment: {
+        Path: "C:\\Windows\\System32",
+        userprofile: "C:\\Users\\Rider",
+        SystemRoot: "C:\\Windows",
+      },
+      binary: "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd",
+      version: "2.1.220",
+      preflightMcpConfigTransform: () => {
+        throw new ClaudeCliConfigError("windows-mcp-config-write", "synthetic transform refusal");
+      },
+    });
+
+    await expect(subject.controller.status()).resolves.toEqual({ state: "absent-binary" });
+    expect(subject.preflightMcpConfigTransform).toHaveBeenCalledOnce();
     expect(subject.probeAccount).not.toHaveBeenCalled();
   });
 

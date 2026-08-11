@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 import {
   CHILD_ENV_ALLOWLIST,
   FORBIDDEN_ENV_KEYS,
   ForbiddenChildEnvKeyError,
+  WINDOWS_CHILD_ENV_ALLOWLIST,
   assertNoForbiddenChildEnv,
   buildChildEnv,
   type ClaudeCliRuntime,
@@ -115,11 +116,48 @@ describe("buildChildEnv allowlist", () => {
 
   it("keeps every allowlist entry unique", () => {
     expect(new Set(CHILD_ENV_ALLOWLIST).size).toBe(CHILD_ENV_ALLOWLIST.length);
+    expect(new Set(WINDOWS_CHILD_ENV_ALLOWLIST).size).toBe(WINDOWS_CHILD_ENV_ALLOWLIST.length);
   });
 
   it("never sets or modifies HOME", () => {
     const env = buildChildEnv(pollutedBase(), { ...SUBSCRIPTION, configDir: "/custom/claude" });
     expect(env.HOME).toBe("/Users/tester");
+  });
+
+  it("canonicalizes case-insensitive Windows keys and carries Windows process plumbing", () => {
+    const env = buildChildEnv(
+      {
+        Path: "C:\\Windows\\System32;C:\\Tools",
+        userprofile: "C:\\Users\\Rider",
+        appdata: "C:\\Users\\Rider\\AppData\\Roaming",
+        LocalAppData: "C:\\Users\\Rider\\AppData\\Local",
+        PathExt: ".COM;.EXE;.CMD",
+        SystemRoot: "C:\\Windows",
+        ComSpec: "C:\\Windows\\System32\\cmd.exe",
+        http_proxy: "http://proxy:3128",
+        claude_config_dir: "C:\\ClaudeConfig",
+        anthropic_api_key: SENTINEL,
+        claude_code_oauth_token: SENTINEL,
+      },
+      { ...API_KEY_MODE, binaryPath: "C:\\Tools\\claude.exe" },
+      { platform: "win32" },
+    );
+
+    expect(env).toMatchObject({
+      PATH: "C:\\Windows\\System32;C:\\Tools",
+      USERPROFILE: "C:\\Users\\Rider",
+      APPDATA: "C:\\Users\\Rider\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\Rider\\AppData\\Local",
+      PATHEXT: ".COM;.EXE;.CMD",
+      SYSTEMROOT: "C:\\Windows",
+      COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+      HTTP_PROXY: "http://proxy:3128",
+      CLAUDE_CONFIG_DIR: "C:\\ClaudeConfig",
+      ANTHROPIC_API_KEY: SENTINEL,
+    });
+    expect(env.Path).toBeUndefined();
+    expect(env.http_proxy).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 });
 
@@ -195,6 +233,13 @@ describe("assertNoForbiddenChildEnv", () => {
     const env = assertNoForbiddenChildEnv({ ANTHROPIC_API_KEY: SENTINEL }, ["ANTHROPIC_API_KEY"]);
     expect(env.ANTHROPIC_API_KEY).toBe(SENTINEL);
   });
+
+  it("treats forbidden Windows environment keys case-insensitively", () => {
+    process.env.NODE_ENV = "test";
+    expect(() =>
+      assertNoForbiddenChildEnv({ anthropic_auth_token: SENTINEL }, [], "win32"),
+    ).toThrow(ForbiddenChildEnvKeyError);
+  });
 });
 
 describe("CLAUDE_CONFIG_DIR matrix", () => {
@@ -230,5 +275,18 @@ describe("CLAUDE_CONFIG_DIR matrix", () => {
     const env = buildChildEnv(pollutedBase(), { ...SUBSCRIPTION, configDir: "relative/claude" });
     expect(env.CLAUDE_CONFIG_DIR?.startsWith("/")).toBe(true);
     expect(env.CLAUDE_CONFIG_DIR?.endsWith("relative/claude")).toBe(true);
+  });
+
+  it("expands a Windows tilde from USERPROFILE regardless of environment-key casing", () => {
+    const env = buildChildEnv(
+      { userprofile: "C:\\Users\\Rider" },
+      {
+        ...SUBSCRIPTION,
+        binaryPath: "C:\\Users\\Rider\\.local\\bin\\claude.exe",
+        configDir: "~\\claude-alt",
+      },
+      { platform: "win32" },
+    );
+    expect(env.CLAUDE_CONFIG_DIR).toBe(win32.join("C:\\Users\\Rider", "claude-alt"));
   });
 });
