@@ -1,4 +1,5 @@
 export const DESKTOP_SCHEME = "enduragent" as const;
+export const DESKTOP_APP_USER_MODEL_ID = "icu.enduragent.desktop" as const;
 export const DESKTOP_HOST = "app" as const;
 export const DESKTOP_RENDERER_ORIGIN = "enduragent://app" as const;
 export const DESKTOP_RENDERER_URL = "enduragent://app/index.html" as const;

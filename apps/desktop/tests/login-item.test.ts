@@ -13,15 +13,19 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DESKTOP_APP_USER_MODEL_ID } from "../src/main/constants.js";
 import {
   BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME,
   createBackgroundAtLoginPreferenceStore,
   isCleanUnregisteredLoginItem,
   LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE,
   LOGIN_ITEM_PREFERENCE_FILE_MODE,
+  isLoginItemResidencyEnabled,
+  loginItemResidencyMatchesRequest,
   readLoginItemResidency,
   setLoginItemResidency,
   shouldStartInBackgroundAtLogin,
+  WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT,
   type LoginItemAppPort,
   type LoginItemResidencyState,
 } from "../src/main/login-item.js";
@@ -132,6 +136,60 @@ describe("login-item residency", () => {
     expect(() => readLoginItemResidency(getApp)).toThrow(getterError);
     expect(() => setLoginItemResidency(setApp, true)).toThrow(setterError);
     expect(setApp.getLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("reads the exact argument-marked Windows registration", () => {
+    const executablePath = String.raw`C:\Users\Athlete\AppData\Local\Programs\Enduragent\Enduragent.exe`;
+    const getLoginItemSettings = vi.fn(() => state("enabled", true, true));
+    const app = { getLoginItemSettings } as never;
+
+    expect(readLoginItemResidency(app, { platform: "win32", executablePath })).toEqual({
+      openAtLogin: true,
+      executableWillLaunchAtLogin: true,
+      status: "enabled",
+    });
+    expect(getLoginItemSettings).toHaveBeenCalledWith({
+      path: executablePath,
+      args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+    });
+  });
+
+  it.each([true, false])(
+    "writes and verifies the named per-user Windows registration when enabled=%s",
+    (openAtLogin) => {
+      const executablePath = String.raw`C:\Program Files\Enduragent\Enduragent.exe`;
+      const setLoginItemSettings = vi.fn();
+      const getLoginItemSettings = vi.fn(() =>
+        state(openAtLogin ? "enabled" : "not-registered", openAtLogin, openAtLogin),
+      );
+      const app = { getLoginItemSettings, setLoginItemSettings } as never;
+
+      const observed = setLoginItemResidency(app, openAtLogin, {
+        platform: "win32",
+        executablePath,
+      });
+
+      expect(setLoginItemSettings).toHaveBeenCalledWith({
+        openAtLogin,
+        path: executablePath,
+        args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+        enabled: openAtLogin,
+        name: DESKTOP_APP_USER_MODEL_ID,
+      });
+      expect(getLoginItemSettings).toHaveBeenCalledWith({
+        path: executablePath,
+        args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+      });
+      expect(loginItemResidencyMatchesRequest(observed, openAtLogin, "win32")).toBe(true);
+    },
+  );
+
+  it("treats an OS-disabled Windows startup entry as off without hiding its registration", () => {
+    const disabled = state("enabled", true, false) as never;
+
+    expect(isLoginItemResidencyEnabled(disabled, "win32")).toBe(false);
+    expect(loginItemResidencyMatchesRequest(disabled, true, "win32")).toBe(false);
+    expect(loginItemResidencyMatchesRequest(disabled, false, "win32")).toBe(false);
   });
 });
 
@@ -383,6 +441,58 @@ describe("background-at-login preference", () => {
     await expect(shouldStartInBackgroundAtLogin(loginLaunch as never, { read })).resolves.toBe(
       true,
     );
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("starts in the Windows background only for the exact enabled login invocation", async () => {
+    const executablePath = String.raw`C:\Users\Athlete\Enduragent.exe`;
+    const read = vi.fn(async () => ({ state: "configured", enabled: true }) as const);
+    const getLoginItemSettings = vi.fn(() => state("enabled", true, true));
+    const app = { getLoginItemSettings } as never;
+
+    await expect(
+      shouldStartInBackgroundAtLogin(
+        app,
+        { read },
+        {
+          platform: "win32",
+          executablePath,
+          commandLine: [executablePath],
+        },
+      ),
+    ).resolves.toBe(false);
+    expect(getLoginItemSettings).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+
+    await expect(
+      shouldStartInBackgroundAtLogin(
+        app,
+        { read },
+        {
+          platform: "win32",
+          executablePath,
+          commandLine: [executablePath, WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+        },
+      ),
+    ).resolves.toBe(true);
+    expect(getLoginItemSettings).toHaveBeenCalledWith({
+      path: executablePath,
+      args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+    });
+    expect(read).toHaveBeenCalledOnce();
+
+    getLoginItemSettings.mockReturnValueOnce(state("enabled", true, false));
+    await expect(
+      shouldStartInBackgroundAtLogin(
+        app,
+        { read },
+        {
+          platform: "win32",
+          executablePath,
+          commandLine: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+        },
+      ),
+    ).resolves.toBe(false);
     expect(read).toHaveBeenCalledOnce();
   });
 

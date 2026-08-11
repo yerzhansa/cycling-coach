@@ -21,6 +21,7 @@ import {
 import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
 import { createClaudeCliStatus, readClaudeCliSettings } from "./claude-cli-status.js";
 import { installDesktopConnectionIpc } from "./connection-ipc.js";
+import { bindDesktopAppUserModelId, createDesktopActivationRelay } from "./desktop-lifecycle.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import {
@@ -113,6 +114,7 @@ import {
   type DesktopTrainingExporter,
 } from "./training-export-ipc.js";
 
+bindDesktopAppUserModelId(app);
 bindWindowsUserData(app);
 registerDesktopScheme();
 
@@ -156,11 +158,14 @@ async function runDesktop(): Promise<void> {
   const securitySmokeMode = process.argv.includes("--desktop-security-smoke");
   const rendererConsoleCapture = createDesktopRendererConsoleCapture(securitySmokeMode);
   let residency: DesktopResidency | undefined;
+  const activation = createDesktopActivationRelay();
   app.on("second-instance", () => {
-    void residency?.showMainWindow();
+    if (process.platform === "win32") activation.request();
+    else void residency?.showMainWindow();
   });
   app.on("activate", () => {
-    void residency?.showMainWindow();
+    if (process.platform === "win32") activation.request();
+    else void residency?.showMainWindow();
   });
   app.on("window-all-closed", () => {});
   await app.whenReady();
@@ -225,7 +230,9 @@ async function runDesktop(): Promise<void> {
   });
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
-      const residencyClose = residency?.close();
+      const closingResidency = residency;
+      const residencyClose = closingResidency?.close();
+      if (closingResidency !== undefined) activation.unbind(closingResidency);
       residency = undefined;
       const intervalsIpcClose = disposeIntervalsIpc?.();
       disposeIntervalsIpc = undefined;
@@ -771,6 +778,7 @@ async function runDesktop(): Promise<void> {
           }
           const created = new BrowserWindow(windowOptions);
           window = created;
+          residency?.manageMainWindow(created);
           rendererConsoleCapture.attach(created.webContents);
           hardenDesktopWindow(created);
           disposeOnboarding?.();
@@ -913,6 +921,8 @@ async function runDesktop(): Promise<void> {
       ),
       trayPopoverUrl: rendererSource.trayPopoverUrl,
       trayPreloadPath: resolve(mainDirectory, "../preload/tray.cjs"),
+      platform: process.platform,
+      loginItemExecutablePath: process.execPath,
       persistLoginPreference: (enabled) => backgroundAtLoginPreference.set(enabled),
       telegramStatus: async () => {
         const snapshot = await telegramCoordinator.status();
@@ -926,6 +936,7 @@ async function runDesktop(): Promise<void> {
         process.stderr.write(`desktop-residency-failure ${operation}\n`);
       },
     });
+    if (process.platform === "win32") await activation.bind(residency);
     await residency.start();
     const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();
     void updateController.start();
