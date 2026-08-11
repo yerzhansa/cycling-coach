@@ -14,6 +14,8 @@ describe("desktop platform projection", () => {
           "macOS encryption is unavailable. Make sure Keychain is available, then try again.",
         credentialRecoveryAction: "unlock or approve Keychain access",
         restartComputer: "restart your Mac",
+        rideImportDescription:
+          "Add FIT, TCX or GPX files from this Mac. You can also drop them onto the window.",
       },
     });
   });
@@ -31,6 +33,8 @@ describe("desktop platform projection", () => {
           "Windows credential encryption (DPAPI) is unavailable. Quit and reopen Enduragent, then try again.",
         credentialRecoveryAction: "make sure Windows credential encryption (DPAPI) is available",
         restartComputer: "restart your PC",
+        rideImportDescription:
+          "Add FIT, TCX or GPX files from this PC. You can also drop them onto the window.",
       },
     });
     expect(JSON.stringify(projection)).not.toMatch(/[\\/](?:Users|home|tmp)[\\/]/u);

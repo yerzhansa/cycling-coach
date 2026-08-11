@@ -62,7 +62,7 @@ async function expectStage(
 }
 
 describe("Windows parity scenario manifests", () => {
-  it("loads the frozen Chat and Settings manifest with unique tested deterministic rows", async () => {
+  it("loads the frozen Chat, Settings and Training manifests with tested deterministic rows", async () => {
     const collection = await loadWindowsParityScenarios();
 
     expect(collection.schemaVersion).toBe(1);
@@ -73,7 +73,7 @@ describe("Windows parity scenario manifests", () => {
         (scenario) => scenario.automation === "deterministic",
       ).length,
       vmOnly: collection.scenarios.filter((scenario) => scenario.automation === "vm-only").length,
-    }).toEqual({ total: 43, deterministic: 40, vmOnly: 3 });
+    }).toEqual({ total: 77, deterministic: 71, vmOnly: 6 });
     expect(new Set(collection.scenarios.map((scenario) => scenario.id)).size).toBe(
       collection.scenarios.length,
     );
@@ -103,6 +103,33 @@ describe("Windows parity scenario manifests", () => {
       "settings.providers.chatgpt-sign-in",
       "settings.providers.chatgpt-refusals",
       "settings.providers.claude-readiness",
+      "training.setup.intervals-clipboard-connect",
+      "training.setup.intervals-verification",
+      "training.setup.intervals-delete-only",
+      "training.setup.readiness-sources",
+      "training.setup.readiness-recovery",
+      "training.setup.file-import-fallback",
+      "training.first-sync.provider-backfill",
+      "training.first-sync.file-only",
+      "training.first-sync.failure-recovery",
+      "training.import.picker",
+      "training.import.drop-routing",
+      "training.import.progress-results",
+      "training.view.panel-inventory",
+      "training.view.readiness-states",
+      "training.view.context-recovery",
+      "training.ride-review.navigation",
+      "training.ride-review.local-analysis",
+      "training.ride-review.analysis-recovery",
+      "training.view.anchor-load-plan-adherence",
+      "training.export.activity-formats",
+      "training.export.workout-formats",
+      "training.export.cancellation-failures",
+      "training.sync.lifecycle",
+      "training.sync.retryable-recovery",
+      "training.sync.protocol-failure",
+      "training.ride-review.temporary-failure",
+      "training.sidebar.sync-chip",
     ]);
     expect(Object.isFrozen(collection)).toBe(true);
     expect(Object.isFrozen(collection.manifests)).toBe(true);
@@ -112,7 +139,10 @@ describe("Windows parity scenario manifests", () => {
 
   it("loads exact multiple deterministic citations and freezes nested evidence", async () => {
     const collection = await loadWindowsParityScenarios(
-      { directory: "/synthetic/windows-parity" },
+      {
+        directory: "/synthetic/windows-parity",
+        manifestNames: ["chat-settings.scenarios.json"],
+      },
       {
         readFile: reader({
           "chat-settings.scenarios.json": manifest([deterministicWithTests()]),

@@ -9,6 +9,7 @@ export interface DesktopPlatformProjection {
     readonly credentialEncryptionUnavailable: string;
     readonly credentialRecoveryAction: string;
     readonly restartComputer: "restart your Mac" | "restart your PC";
+    readonly rideImportDescription: string;
   };
 }
 
@@ -22,6 +23,8 @@ const DARWIN_FALLBACK: DesktopPlatformProjection = Object.freeze({
       "macOS encryption is unavailable. Make sure Keychain is available, then try again.",
     credentialRecoveryAction: "unlock or approve Keychain access",
     restartComputer: "restart your Mac",
+    rideImportDescription:
+      "Add FIT, TCX or GPX files from this Mac. You can also drop them onto the window.",
   }),
 });
 
