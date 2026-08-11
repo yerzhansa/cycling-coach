@@ -7,6 +7,7 @@ import type {
   PowerProgressUnavailableReason,
   TrainingContextUnknownReason,
 } from "@enduragent/coach-contract";
+import { PLATFORM_COPY } from "../../platform-copy.js";
 import type { TrainingContextStatus } from "../../training-context/controller.js";
 
 export const MAX_VISIBLE_PLAN_ITEMS = 7;
@@ -64,8 +65,7 @@ export const POWER_PROGRESS_FRESHNESS_COPY: Readonly<
   critical: "Very stale",
 };
 
-export const RIDE_IMPORT_DESCRIPTION =
-  "Add FIT, TCX or GPX files from this Mac. You can also drop them onto the window.";
+export const RIDE_IMPORT_DESCRIPTION = PLATFORM_COPY.rideImportDescription;
 
 export function analysisUnavailableCopy(reason: AnalysisUnavailableReason): string {
   switch (reason) {

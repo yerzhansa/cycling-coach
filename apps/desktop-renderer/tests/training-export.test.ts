@@ -57,6 +57,9 @@ describe("training export controller", () => {
       status: "cancelled",
       target: "workout-archive",
     });
+    expect(trainingExportStatusCopy(cancelled.states.at(-1)!)).toBe(
+      "Export cancelled. No file was changed.",
+    );
 
     const refused = subject(
       vi.fn(async () => ({ status: "refused" as const, reason: "rate-limited" as const })),

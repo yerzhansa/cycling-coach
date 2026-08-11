@@ -312,6 +312,11 @@ describe("training page", () => {
     expect(screen.getByText("2 cycling activities have no platform Load")).toBeInTheDocument();
     expect(screen.getByText("80%")).toBeInTheDocument();
     expect(screen.getByText("4/5 planned days matched")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Add FIT, TCX or GPX files from this Mac. You can also drop them onto the window.",
+      ),
+    ).toBeInTheDocument();
     expect(document.querySelector(".training-status")).toHaveProperty("hidden", true);
   });
 
@@ -341,7 +346,7 @@ describe("training page", () => {
     ).toHaveFocus();
   });
 
-  it("exports a ride through the bound desktop action without rendering its canonical ID", async () => {
+  it("offers FIT and GPX and exports a ride without rendering its canonical ID", async () => {
     const user = userEvent.setup();
     const exportActivity = vi.fn(async () => {});
     const exportWorkoutArchive = vi.fn(async () => {});
@@ -356,6 +361,17 @@ describe("training page", () => {
     );
 
     const panel = screen.getByRole("region", { name: "Export ride" });
+    expect(
+      within(panel)
+        .getAllByRole("option")
+        .map((option) => ({
+          label: option.textContent,
+          value: (option as HTMLOptionElement).value,
+        })),
+    ).toEqual([
+      { label: "FIT", value: "fit" },
+      { label: "GPX", value: "gpx" },
+    ]);
     await user.selectOptions(within(panel).getByRole("combobox", { name: "File format" }), "gpx");
     await user.click(within(panel).getByRole("button", { name: "Export ride" }));
     expect(exportActivity).toHaveBeenCalledWith({
@@ -873,7 +889,7 @@ describe("training page", () => {
     expect(plan.queryByText("Endurance ride 8")).toBeNull();
   });
 
-  it("exports exactly the visible planned-workout date range", async () => {
+  it("offers every workout format and exports exactly the visible planned-workout date range", async () => {
     const user = userEvent.setup();
     const exportWorkoutArchive = vi.fn(async () => {});
     useEnduragentStore.setState({
@@ -882,6 +898,19 @@ describe("training page", () => {
     render(<TrainingView />);
 
     const plan = screen.getByRole("region", { name: "Plan" });
+    expect(
+      within(plan)
+        .getAllByRole("option")
+        .map((option) => ({
+          label: option.textContent,
+          value: (option as HTMLOptionElement).value,
+        })),
+    ).toEqual([
+      { label: "ZWO", value: "zwo" },
+      { label: "MRC", value: "mrc" },
+      { label: "ERG", value: "erg" },
+      { label: "FIT", value: "fit" },
+    ]);
     await user.selectOptions(within(plan).getByRole("combobox", { name: "Workout format" }), "fit");
     await user.click(within(plan).getByRole("button", { name: "Export workouts" }));
     expect(exportWorkoutArchive).toHaveBeenCalledWith({
@@ -904,7 +933,7 @@ describe("training page", () => {
     expect(within(wellness).getAllByText("No readings")).toHaveLength(2);
   });
 
-  it("explains every unknown panel and announces the loading status", () => {
+  it("explains every unknown panel and announces loading and unavailable status", () => {
     useEnduragentStore.setState({
       training: ready({ status: "loading", metadata: null, trainingContext: unknownContext }),
     });
@@ -924,6 +953,22 @@ describe("training page", () => {
       expect(screen.getByText(copy)).toBeInTheDocument();
     }
     expect(document.querySelector(".training-metadata")?.children).toHaveLength(0);
+
+    update({
+      training: ready({ status: "unavailable", metadata: null, trainingContext: unknownContext }),
+    });
+    expect(screen.getByText("Training data unavailable")).toBeVisible();
+    expect(screen.getByRole("region", { name: "Training" })).not.toHaveAttribute("aria-busy");
+
+    update({
+      training: ready({
+        status: "refresh-unavailable",
+        metadata: null,
+        trainingContext: unknownContext,
+      }),
+    });
+    expect(screen.getByText("Refresh unavailable")).toBeVisible();
+    expect(screen.getByRole("region", { name: "Training" })).not.toHaveAttribute("aria-busy");
   });
 });
 
@@ -978,7 +1023,7 @@ describe("training page sync", () => {
     expect(request).toHaveBeenNthCalledWith(2, "keyboard");
   });
 
-  it("walks the queued, running and terminal sync states", () => {
+  it("walks queued, running, success, retryable failure and protocol sync states", () => {
     useEnduragentStore.setState({ syncActions: { request: vi.fn() } });
     render(<TrainingView />);
 
@@ -1002,6 +1047,32 @@ describe("training page sync", () => {
     expect(settled).toBeEnabled();
     expect(settled).not.toHaveAttribute("aria-busy");
     expect(message).toHaveTextContent("Local training-data processing completed.");
+
+    update({
+      sync: toManualSyncViewState({
+        status: "failed",
+        operation: 1,
+        kind: "partial",
+        retryable: true,
+      }),
+    });
+    expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+    expect(message).toHaveTextContent(
+      "Training-data processing partially completed. Try again to finish.",
+    );
+
+    update({
+      sync: toManualSyncViewState({
+        status: "failed",
+        operation: 1,
+        kind: "indeterminate",
+        retryable: true,
+      }),
+    });
+    expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+    expect(message).toHaveTextContent(
+      "Connection interrupted. The sync may still be finishing. Enduragent won’t retry it automatically.",
+    );
 
     update({
       sync: toManualSyncViewState({
