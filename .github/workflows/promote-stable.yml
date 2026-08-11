@@ -64,7 +64,9 @@ jobs:
           deadline=$((SECONDS + max_wait_seconds))
           seen_run=false
 
-          fetch_runs() {
+          fetch_api() {
+            local label=$1 jq_program=$2
+            shift 2
             local attempt response remaining_seconds request_timeout retry_delay
 
             for ((attempt = 1; attempt <= api_max_attempts; attempt++)); do
@@ -78,11 +80,7 @@ jobs:
                 request_timeout=$remaining_seconds
               fi
 
-              if response=$(timeout "${request_timeout}s" gh api --method GET \
-                "repos/${REPOSITORY}/actions/workflows/publish-image.yml/runs" \
-                -f "head_sha=${HEAD_SHA}" \
-                -f "per_page=100" | \
-                jq -ce '.workflow_runs | if type == "array" then . else error("missing workflow_runs array") end'); then
+              if response=$(timeout "${request_timeout}s" gh api --method GET "$@" | jq -cer "$jq_program"); then
                 printf '%s\n' "$response"
                 return 0
               fi
@@ -97,7 +95,7 @@ jobs:
                 if ((retry_delay > remaining_seconds)); then
                   retry_delay=$remaining_seconds
                 fi
-                echo "::warning::GitHub Actions API request failed (attempt ${attempt}/${api_max_attempts}); retrying in ${retry_delay}s." >&2
+                echo "::warning::${label} request failed (attempt ${attempt}/${api_max_attempts}); retrying in ${retry_delay}s." >&2
                 sleep "$retry_delay"
               fi
             done
@@ -106,8 +104,20 @@ jobs:
               return 124
             fi
 
-            echo "::error::GitHub Actions API request or response validation failed after ${api_max_attempts} attempts." >&2
+            echo "::error::${label} request or response validation failed after ${api_max_attempts} attempts." >&2
             return 1
+          }
+
+          fetch_runs() {
+            fetch_api "GitHub Actions API" \
+              '.workflow_runs | if type == "array" then . else error("missing workflow_runs array") end' \
+              "repos/${REPOSITORY}/actions/workflows/publish-image.yml/runs" \
+              -f "head_sha=${HEAD_SHA}" \
+              -f "per_page=100"
+          }
+
+          fetch_main_tip() {
+            fetch_api "GitHub commits API" '.object.sha' "repos/${REPOSITORY}/git/ref/heads/main"
           }
 
           while true; do
@@ -157,6 +167,21 @@ jobs:
                   echo "publish-image.yml run #${run_number} (${run_id}) succeeded."
                   echo "ready=true" >> "$GITHUB_OUTPUT"
                   exit 0
+                fi
+
+                if [[ "$conclusion" == "cancelled" ]]; then
+                  if tip_sha=$(fetch_main_tip); then
+                    :
+                  else
+                    echo "::error::Could not determine the current main branch tip after publish-image.yml run #${run_number} (${run_id}) was cancelled; stable was not promoted."
+                    exit 1
+                  fi
+
+                  if [[ "$HEAD_SHA" != "$tip_sha" ]]; then
+                    echo "::notice::publish-image.yml run #${run_number} (${run_id}) for ${HEAD_SHA} was cancelled after main advanced to ${tip_sha}; a newer commit's promotion will set stable."
+                    echo "ready=false" >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
                 fi
 
                 echo "::error::publish-image.yml run #${run_number} (${run_id}) concluded '${conclusion:-unknown}'; stable was not promoted."
