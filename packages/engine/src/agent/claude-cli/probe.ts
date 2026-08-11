@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 import {
   query as sdkQuery,
@@ -9,15 +9,20 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
-import type { ClaudeCliBilling, ClaudeCliRuntime } from "./env.js";
+import {
+  expandTilde,
+  readEnvironmentValue,
+  type ClaudeCliBilling,
+  type ClaudeCliRuntime,
+} from "./env.js";
 import {
   apiKeyIdentityError,
   apiKeyUnapprovedError,
   binaryMissingError,
+  ClaudeCliConfigError,
   notSignedInError,
   probeTimeoutError,
   unrecognizedAuthSourceError,
-  type ClaudeCliConfigError,
 } from "./errors.js";
 import {
   assertVersionAtLeast,
@@ -25,7 +30,11 @@ import {
   resolveClaudeBinary,
   CLAUDE_CLI_VERSION_FLOOR,
 } from "./executable.js";
-import { buildQueryOptions } from "./session.js";
+import {
+  buildQueryOptions,
+  preflightWindowsMcpConfigTransform,
+  type WindowsMcpConfigFileSystemDeps,
+} from "./session.js";
 
 export const ACCOUNT_PROBE_TIMEOUT_MS = 25_000;
 export const ACCOUNT_PROBE_RETRY_DELAY_MS = 750;
@@ -109,17 +118,34 @@ export function classifyAccountInfo(account: AccountInfo | null | undefined): {
 export interface ReadFallbackEmailDeps {
   readFile?: (path: string) => Promise<string>;
   home?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }
 
 export async function readFallbackEmail(
   configDir: string | undefined,
   deps: ReadFallbackEmailDeps = {},
 ): Promise<string | undefined> {
+  const platform = deps.platform ?? process.platform;
+  const env = deps.env ?? process.env;
   const read = deps.readFile ?? ((path: string) => readFile(path, "utf8"));
-  const dir = configDir !== undefined && configDir !== "" ? configDir : (deps.home ?? homedir());
+  const home =
+    deps.home ??
+    (platform === "win32" ? readEnvironmentValue(env, "USERPROFILE", platform) : undefined) ??
+    homedir();
+  const configured =
+    configDir !== undefined && configDir !== ""
+      ? platform === "win32"
+        ? expandTilde(configDir, { platform, env, home })
+        : configDir
+      : home;
+  const path =
+    platform === "win32"
+      ? win32.join(configured, ".claude.json")
+      : join(configured, ".claude.json");
   let raw: string;
   try {
-    raw = await read(join(dir, ".claude.json"));
+    raw = await read(path);
   } catch {
     return undefined;
   }
@@ -162,6 +188,8 @@ function withTimeout<T>(
 export interface ProbeClaudeAccountInput {
   runtime: ClaudeCliRuntime;
   baseEnv?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  home?: string;
   model?: string;
   cwd?: string;
   timeoutMs?: number;
@@ -171,6 +199,7 @@ export interface ProbeClaudeAccountDeps {
   query?: typeof sdkQuery;
   sleep?: (ms: number) => Promise<void>;
   readFallbackEmail?: typeof readFallbackEmail;
+  windowsMcpConfigFileSystem?: WindowsMcpConfigFileSystemDeps;
 }
 
 async function accountFromQuery(active: Query): Promise<AccountInfo | null> {
@@ -202,12 +231,17 @@ async function probeOnce(
     const options = buildQueryOptions({
       runtime: input.runtime,
       baseEnv: input.baseEnv ?? process.env,
+      platform: input.platform ?? process.platform,
+      ...(input.home === undefined ? {} : { home: input.home }),
       model: input.model ?? ACCOUNT_PROBE_MODEL,
       allowedTools: [],
       mcpServers: {},
       persistSession: false,
       abortController,
       stderr: () => {},
+      ...(deps.windowsMcpConfigFileSystem === undefined
+        ? {}
+        : { windowsMcpConfigFileSystem: deps.windowsMcpConfigFileSystem }),
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
     });
     active = run({ prompt: pendingPrompt(abortController.signal), options });
@@ -216,7 +250,10 @@ async function probeOnce(
       input.timeoutMs ?? ACCOUNT_PROBE_TIMEOUT_MS,
       sleep,
     );
-  } catch {
+  } catch (error) {
+    if ((input.platform ?? process.platform) === "win32" && error instanceof ClaudeCliConfigError) {
+      throw error;
+    }
     return null;
   } finally {
     abortController.abort();
@@ -267,7 +304,13 @@ export async function probeClaudeAccount(
   }
 
   const readEmail = deps.readFallbackEmail ?? readFallbackEmail;
-  const email = classified.email ?? (await readEmail(input.runtime.configDir));
+  const email =
+    classified.email ??
+    (await readEmail(input.runtime.configDir, {
+      platform: input.platform ?? process.platform,
+      env: input.baseEnv ?? process.env,
+      ...(input.home === undefined ? {} : { home: input.home }),
+    }));
 
   return {
     verified: true,
@@ -363,6 +406,8 @@ export interface EnsureClaudeCliReadyInput {
   configDir?: string;
   billing?: ClaudeCliBilling;
   baseEnv?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  home?: string;
   model?: string;
   cwd?: string;
   timeoutMs?: number;
@@ -373,16 +418,19 @@ export interface EnsureClaudeCliReadyDeps extends CachedProbeDeps {
   resolveBinary?: typeof resolveClaudeBinary;
   probeVersion?: typeof probeVersion;
   probeAccount?: typeof probeClaudeAccount;
+  preflightMcpConfigTransform?: typeof preflightWindowsMcpConfigTransform;
 }
 
 export async function ensureClaudeCliReady(
   input: EnsureClaudeCliReadyInput = {},
   deps: EnsureClaudeCliReadyDeps = {},
 ): Promise<ClaudeCliReadiness> {
+  const platform = input.platform ?? process.platform;
   const billing = input.billing ?? "subscription";
   const baseEnv = input.baseEnv ?? process.env;
   const resolveBinary = deps.resolveBinary ?? resolveClaudeBinary;
   const readVersion = deps.probeVersion ?? probeVersion;
+  const preflightMcpConfig = deps.preflightMcpConfigTransform ?? preflightWindowsMcpConfigTransform;
   const probeAccount =
     deps.probeAccount ??
     (input.forceRecheck === true ? recheckClaudeAccount : probeClaudeAccountCached);
@@ -390,8 +438,10 @@ export async function ensureClaudeCliReady(
   const resolved = await resolveBinary({
     ...(input.binaryPath === undefined ? {} : { explicitPath: input.binaryPath }),
     env: baseEnv,
+    platform,
+    ...(input.home === undefined ? {} : { home: input.home }),
   });
-  if (resolved === null) throw binaryMissingError(input.binaryPath ?? "claude");
+  if (resolved === null) throw binaryMissingError(input.binaryPath ?? "claude", platform);
 
   const runtime: ClaudeCliRuntime = {
     binaryPath: resolved,
@@ -399,13 +449,44 @@ export async function ensureClaudeCliReady(
     ...(input.configDir === undefined ? {} : { configDir: input.configDir }),
   };
 
-  const version = await readVersion(resolved, { runtime, baseEnv });
-  assertVersionAtLeast(version, CLAUDE_CLI_VERSION_FLOOR);
+  const version = await readVersion(resolved, {
+    runtime,
+    baseEnv,
+    platform,
+    ...(input.home === undefined ? {} : { home: input.home }),
+  });
+  assertVersionAtLeast(version, CLAUDE_CLI_VERSION_FLOOR, platform);
+
+  if (platform === "win32" && win32.extname(resolved).toLowerCase() === ".cmd") {
+    const preflightOptions = buildQueryOptions({
+      runtime,
+      baseEnv,
+      platform,
+      ...(input.home === undefined ? {} : { home: input.home }),
+      model: input.model ?? ACCOUNT_PROBE_MODEL,
+      allowedTools: [],
+      mcpServers: {},
+      persistSession: false,
+      ...(deps.windowsMcpConfigFileSystem === undefined
+        ? {}
+        : { windowsMcpConfigFileSystem: deps.windowsMcpConfigFileSystem }),
+    });
+    preflightMcpConfig({
+      binaryPath: resolved,
+      env: preflightOptions.env,
+      platform,
+      ...(deps.windowsMcpConfigFileSystem === undefined
+        ? {}
+        : { fileSystem: deps.windowsMcpConfigFileSystem }),
+    });
+  }
 
   const result = await probeAccount(
     {
       runtime,
       baseEnv,
+      platform,
+      ...(input.home === undefined ? {} : { home: input.home }),
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),

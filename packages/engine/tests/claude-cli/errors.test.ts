@@ -6,6 +6,7 @@ import {
   ClaudeCliConfigError,
   NOT_SIGNED_IN_MESSAGE,
   PROBE_TIMEOUT_MESSAGE,
+  WINDOWS_CLAUDE_INSTALL_COMMAND,
   apiKeyIdentityError,
   apiKeyUnapprovedError,
   binaryMissingError,
@@ -13,7 +14,10 @@ import {
   notSignedInError,
   probeTimeoutError,
   unrecognizedAuthSourceError,
+  unsafeWindowsCommandShimError,
+  unsupportedWindowsExecutableError,
   versionBelowFloorError,
+  windowsMcpConfigError,
 } from "../../src/agent/claude-cli/errors.js";
 import { isProviderAuthFailure } from "../../src/provider-auth-failure.js";
 
@@ -30,6 +34,49 @@ describe("user-facing configuration messages", () => {
     expect(versionBelowFloorError("2.0.1", "2.1.220").message).toBe(
       "Claude Code CLI 2.0.1 is older than the minimum supported 2.1.220. Run: claude update",
     );
+  });
+
+  it("gives Windows users an install command and a PATH recovery without leaking a path", () => {
+    const privatePath = "C:\\Users\\Private Rider\\Secret\\claude.exe";
+    const missing = binaryMissingError(privatePath, "win32");
+    const belowFloor = versionBelowFloorError("2.0.1", "2.1.220", "win32");
+
+    for (const error of [missing, belowFloor]) {
+      expect(error.message).toContain(WINDOWS_CLAUDE_INSTALL_COMMAND);
+      expect(error.message).toContain("updated PATH");
+      expect(error.message).toContain("claude.exe or claude.cmd");
+      expect(error.message).not.toContain(privatePath);
+      expect(error.message).not.toContain("launchd");
+    }
+  });
+
+  it("uses stage-coded, actionable refusals for unsafe Windows launch targets", () => {
+    const unsupported = unsupportedWindowsExecutableError();
+    const unsafe = unsafeWindowsCommandShimError();
+
+    expect(unsupported.kind).toBe("unsupported-windows-executable");
+    expect(unsafe.kind).toBe("unsafe-windows-command-shim");
+    for (const error of [unsupported, unsafe]) {
+      expect(error.message).toContain(WINDOWS_CLAUDE_INSTALL_COMMAND);
+      expect(error.message).toContain("llm.claude_cli.binary_path");
+    }
+  });
+
+  it("keeps Windows MCP file failures stage-coded, path-free, and credential-free", () => {
+    const privatePath = "C:\\Users\\Private Rider\\.enduragent\\mcp.json";
+    const credential = "synthetic-private-token";
+    const write = windowsMcpConfigError("content-write");
+    const cleanup = windowsMcpConfigError("cleanup");
+
+    expect(write).toMatchObject({ kind: "windows-mcp-config-write", stage: "content-write" });
+    expect(cleanup).toMatchObject({
+      kind: "windows-mcp-config-cleanup",
+      stage: "cleanup",
+    });
+    for (const error of [write, cleanup]) {
+      expect(error.message).not.toContain(privatePath);
+      expect(error.message).not.toContain(credential);
+    }
   });
 
   it("never offers to sign the athlete in", () => {
@@ -101,6 +148,10 @@ describe("normalizeClaudeCliError", () => {
       apiKeyIdentityError(),
       apiKeyUnapprovedError(),
       unrecognizedAuthSourceError("quantumToken"),
+      unsupportedWindowsExecutableError(),
+      unsafeWindowsCommandShimError(),
+      windowsMcpConfigError("content-write"),
+      windowsMcpConfigError("cleanup"),
       normalizeClaudeCliError(new Error("usage limit reached")),
       normalizeClaudeCliError(new Error("prompt is too long")),
     ]) {

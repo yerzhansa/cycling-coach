@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
+import { PassThrough } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HANG_VERSION, createFakeClaude, type FakeClaude } from "./helpers/fake-claude.js";
 import {
@@ -41,6 +43,29 @@ function baseEnvWithSecrets(): NodeJS.ProcessEnv {
 
 function onlyExecutable(match: string) {
   return async (candidate: string) => candidate === match;
+}
+
+function fakeVersionSpawn(stdoutText: string, exitCode: number, stderrText = "") {
+  const launch = vi.fn((_command: string, _args: readonly string[], _options: object) => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough;
+      stderr: PassThrough;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = vi.fn(() => true);
+    queueMicrotask(() => {
+      child.stdout.end(stdoutText);
+      child.stderr.end(stderrText);
+      child.emit("close", exitCode, null);
+    });
+    return child;
+  });
+  return {
+    launch,
+    spawn: launch as unknown as typeof import("node:child_process").spawn,
+  };
 }
 
 describe("resolveClaudeBinary", () => {
@@ -89,6 +114,66 @@ describe("resolveClaudeBinary", () => {
       isExecutable: async () => false,
     });
     expect(resolved).toBeNull();
+  });
+
+  it("probes Windows PATH entries in order with .exe before .cmd and never probes a bare name", async () => {
+    const seen: string[] = [];
+    const expected = "D:\\Second\\claude.exe";
+    const resolved = await resolveClaudeBinary({
+      platform: "win32",
+      env: { Path: "C:\\First;D:\\Second", userprofile: "C:\\Users\\Rider" },
+      isExecutable: async (candidate) => {
+        seen.push(candidate);
+        return candidate === expected;
+      },
+    });
+
+    expect(resolved).toBe(expected);
+    expect(seen).toEqual([
+      "C:\\First\\claude.exe",
+      "C:\\First\\claude.cmd",
+      "D:\\Second\\claude.exe",
+    ]);
+    expect(seen).not.toContain("C:\\First\\claude");
+  });
+
+  it("uses explicit current Windows native, WinGet, and npm-shim locations", () => {
+    expect(
+      wellKnownClaudePaths("C:\\Users\\Rider", {
+        platform: "win32",
+        env: {
+          LocalAppData: "D:\\Profiles\\Rider\\Local",
+          appdata: "D:\\Profiles\\Rider\\Roaming",
+        },
+      }),
+    ).toEqual([
+      "C:\\Users\\Rider\\.local\\bin\\claude.exe",
+      "D:\\Profiles\\Rider\\Local\\Microsoft\\WinGet\\Links\\claude.exe",
+      "D:\\Profiles\\Rider\\Roaming\\npm\\claude.cmd",
+    ]);
+  });
+
+  it("honors USERPROFILE and enforces existence plus .exe-or-.cmd for explicit Windows paths", async () => {
+    const checker = vi.fn(async () => true);
+    const resolved = await resolveClaudeBinary({
+      explicitPath: "~\\bin\\claude.cmd",
+      platform: "win32",
+      env: { userprofile: "C:\\Users\\Rider", Path: "" },
+      isExecutable: checker,
+    });
+    expect(resolved).toBe(win32.join("C:\\Users\\Rider", "bin", "claude.cmd"));
+    expect(checker).toHaveBeenCalledOnce();
+
+    checker.mockClear();
+    await expect(
+      resolveClaudeBinary({
+        explicitPath: "C:\\Tools\\claude.ps1",
+        platform: "win32",
+        env: { userprofile: "C:\\Users\\Rider", Path: "" },
+        isExecutable: checker,
+      }),
+    ).resolves.toBeNull();
+    expect(checker).not.toHaveBeenCalled();
   });
 });
 
@@ -205,5 +290,43 @@ describe("probeVersion", () => {
     await expect(probeVersion(silent, { baseEnv: baseEnvWithSecrets() })).rejects.toThrow(
       /did not report a version/,
     );
+  });
+
+  it("probes a Windows .cmd shim through cmd.exe with shell disabled", async () => {
+    const shim = "C:\\Users\\Rider Name\\AppData\\Roaming\\npm\\claude.cmd";
+    const fakeSpawn = fakeVersionSpawn("2.1.220 (Claude Code)\n", 0);
+
+    await expect(
+      probeVersion(shim, {
+        platform: "win32",
+        baseEnv: { Path: "C:\\Windows\\System32", SystemRoot: "C:\\Windows" },
+        spawn: fakeSpawn.spawn,
+      }),
+    ).resolves.toBe("2.1.220");
+    expect(fakeSpawn.launch).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\cmd.exe",
+      ["/d", "/s", "/c", `""${shim}" "--version""`],
+      expect.objectContaining({
+        shell: false,
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+      }),
+    );
+  });
+
+  it("maps a non-zero Windows cmd exit without exposing paths or stderr", async () => {
+    const shim = "C:\\Users\\Private Rider\\AppData\\Roaming\\npm\\claude.cmd";
+    const privateDiagnostic = "C:\\Users\\Private Rider\\token-store";
+    const fakeSpawn = fakeVersionSpawn("", 7, privateDiagnostic);
+
+    const failure = await probeVersion(shim, {
+      platform: "win32",
+      baseEnv: { SystemRoot: "C:\\Windows" },
+      spawn: fakeSpawn.spawn,
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ kind: "binary-missing" });
+    expect((failure as Error).message).toContain("exited with code 7");
+    expect((failure as Error).message).not.toContain(shim);
+    expect((failure as Error).message).not.toContain(privateDiagnostic);
   });
 });
