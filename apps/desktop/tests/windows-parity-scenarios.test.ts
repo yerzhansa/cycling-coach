@@ -62,7 +62,7 @@ async function expectStage(
 }
 
 describe("Windows parity scenario manifests", () => {
-  it("loads the frozen Chat, Settings, Training and Telegram manifests with tested deterministic rows", async () => {
+  it("loads the frozen Chat, Settings, Training, Telegram and Shell/Lifecycle manifests with tested deterministic rows", async () => {
     const collection = await loadWindowsParityScenarios();
 
     expect(collection.schemaVersion).toBe(1);
@@ -73,7 +73,7 @@ describe("Windows parity scenario manifests", () => {
         (scenario) => scenario.automation === "deterministic",
       ).length,
       vmOnly: collection.scenarios.filter((scenario) => scenario.automation === "vm-only").length,
-    }).toEqual({ total: 100, deterministic: 89, vmOnly: 11 });
+    }).toEqual({ total: 140, deterministic: 112, vmOnly: 28 });
     expect(new Set(collection.scenarios.map((scenario) => scenario.id)).size).toBe(
       collection.scenarios.length,
     );
@@ -148,6 +148,29 @@ describe("Windows parity scenario manifests", () => {
       "telegram.storage.diagnostics",
       "telegram.tray.status-projection",
       "telegram.release-chain.shutdown-drain",
+      "shell.bootstrap.user-data",
+      "shell.bootstrap.app-identity",
+      "shell.single-instance.activation",
+      "shell.tray.window-residency",
+      "shell.tray.native-menu",
+      "shell.login.registration",
+      "shell.login.background-launch",
+      "upgrade-fence.transport.admission",
+      "upgrade-fence.transport.contention",
+      "upgrade-fence.transport.stale-claim",
+      "daemon.supervision.windows-ownership",
+      "daemon.supervision.start-stop",
+      "daemon.supervision.crash-restart",
+      "daemon.shutdown.quit-drain",
+      "package.startup.mode",
+      "package.process.safety",
+      "package.nsis.install-plan",
+      "package.nsis.runtime-layout",
+      "package.nsis.verification",
+      "updater.unsigned.package-truth",
+      "updater.unsigned.version-floor",
+      "storage.first-run.configuration",
+      "storage.windows.durable-writes",
     ]);
     expect(Object.isFrozen(collection)).toBe(true);
     expect(Object.isFrozen(collection.manifests)).toBe(true);
