@@ -4,6 +4,7 @@ import type {
   TelegramSettingsFeedback,
   TelegramSettingsState,
 } from "../../settings/telegram-controller.js";
+import { PLATFORM_COPY } from "../../platform-copy.js";
 import { settingsMutationActive, type TelegramSettingsPort } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import {
@@ -73,7 +74,7 @@ function fallbackFeedback(action: TelegramAction): TelegramSettingsFeedback {
     message:
       action === "paste-token"
         ? "The copied token was not applied. The current Telegram bot is unchanged."
-        : "The Telegram connection was not deleted from this Mac.",
+        : `The Telegram connection was not deleted from ${PLATFORM_COPY.computer}.`,
   };
 }
 

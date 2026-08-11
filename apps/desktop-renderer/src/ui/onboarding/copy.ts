@@ -1,13 +1,13 @@
 import type { ChatGptLoginRefusalReason } from "../../onboarding/constants.js";
 import type { SetupLane } from "../../onboarding/lanes.js";
 import type { ChatGptUiPhase, OnboardingErrorCode } from "../../onboarding/machine.js";
+import { PLATFORM_COPY } from "../../platform-copy.js";
 
 export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "credential-required": "Sign in with ChatGPT or add at least one model key to continue.",
   "credential-save-failed": "That key could not be saved. Try entering it again.",
   "invalid-input": "That key was not accepted. Check it and enter it again.",
-  "encryption-unavailable":
-    "macOS encryption is unavailable. Make sure Keychain is available, then try again.",
+  "encryption-unavailable": PLATFORM_COPY.credentialEncryptionUnavailable,
   "unsafe-backend": "The app cannot safely store that key with the current storage backend.",
   "storage-failed":
     "The app could not confirm that key was saved securely. Check that secure storage is available and try again.",
@@ -34,8 +34,7 @@ export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
     "Intervals.icu didn’t accept the copied API key. Copy a current API key, then try again.",
   "intervals-validation-unavailable":
     "Enduragent couldn’t verify the copied API key with Intervals.icu. Check your connection, then try again.",
-  "intervals-owner-unavailable":
-    "Enduragent couldn’t confirm that the copied API key matches the training data on this Mac. Try again when training data is available.",
+  "intervals-owner-unavailable": `Enduragent couldn’t confirm that the copied API key matches the training data on ${PLATFORM_COPY.computer}. Try again when training data is available.`,
   "intervals-storage-uncertain":
     "Enduragent couldn’t confirm whether the copied API key was saved. Reload credential status before trying again.",
   "intervals-runtime-unavailable":
@@ -47,8 +46,7 @@ export const ERROR_COPY: Readonly<Record<OnboardingErrorCode, string>> = {
   "intake-save-failed": "Your answers could not be saved. Please try again.",
 };
 
-export const CLAUDE_CLI_LANE_COPY =
-  "Uses the Claude Code CLI already installed and signed in on this Mac. No API key needed.";
+export const CLAUDE_CLI_LANE_COPY = `Uses the Claude Code CLI already installed and signed in on ${PLATFORM_COPY.computer}. No API key needed.`;
 
 export const CLAUDE_CLI_RECHECK_LABEL = "Check again";
 
@@ -83,7 +81,7 @@ export const SETUP_LANE_LABELS = {
 } as const satisfies Readonly<Record<SetupLane, string>>;
 
 export const SETUP_LANE_MENU_HINTS = {
-  "claude-cli": "Detected on this Mac",
+  "claude-cli": `Detected on ${PLATFORM_COPY.computer}`,
   "openai-codex": "Use the plan you already pay for",
   "api-key": "9 providers · pay per use",
 } as const satisfies Readonly<Record<SetupLane, string>>;
@@ -120,7 +118,7 @@ export const AI_PANEL_ANNOUNCEMENTS = {
 export const AI_ROW_TOOLTIP = {
   label: "About the AI that powers your coach",
   lead: "Enduragent has no AI of its own",
-  body: "It runs on a ChatGPT subscription, a Claude Code sign-in, or an API key you supply. Whichever you pick stays on this Mac.",
+  body: `It runs on a ChatGPT subscription, a Claude Code sign-in, or an API key you supply. Whichever you pick stays on ${PLATFORM_COPY.computer}.`,
 } as const;
 
 export const CHATGPT_SIGN_IN_LABEL = "Sign in with ChatGPT";
@@ -180,8 +178,7 @@ export const TELEGRAM_ROW_TITLE = "Telegram";
 
 export const TELEGRAM_OPTIONAL_LABEL = "Optional";
 
-export const TELEGRAM_AVAILABILITY_COPY =
-  "Telegram works while Enduragent is running and this Mac is awake and online.";
+export const TELEGRAM_AVAILABILITY_COPY = `Telegram works while Enduragent is running and ${PLATFORM_COPY.computer} is awake and online.`;
 
 export const TELEGRAM_VERIFIED_PREFIX = "Bot verified";
 
@@ -194,14 +191,13 @@ export const TELEGRAM_CREATE_COPY = `Ask @BotFather ${TELEGRAM_CREATE_COPY_AFTER
 
 export const TELEGRAM_DELETE_TITLE = "Delete the Telegram connection?";
 
-export const TELEGRAM_DELETE_COPY =
-  "This turns Telegram off and deletes the encrypted token and allowed-user access from this Mac. The Telegram bot and chat remain in Telegram.";
+export const TELEGRAM_DELETE_COPY = `This turns Telegram off and deletes the encrypted token and allowed-user access from ${PLATFORM_COPY.computer}. The Telegram bot and chat remain in Telegram.`;
 
 export const RETRY_SAVED_KEYS_LABEL = "Retry saved keys";
 
 export const RETRY_INTAKE_SAVE_LABEL = "Retry saving answers";
 
-export const FOOTER_NOTE = "Everything stays on this Mac.";
+export const FOOTER_NOTE = `Everything stays on ${PLATFORM_COPY.computer}.`;
 
 export const OUTSTANDING_NOTE = {
   coach: "Choose what powers your coach to finish.",

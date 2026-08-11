@@ -81,8 +81,15 @@ export function CoachSection(): ReactElement {
   const feedback = feedbackCopy(state);
   const routeSummary = editable === null ? null : routeLabel(editable);
   const route = routeSummary ?? "Not configured";
+  const providerChangeRequired = editable?.providerChangeRequired === true;
   const routeState =
-    routeSummary === null ? "Not active" : editable?.dirty === true ? "Unsaved" : "Active";
+    routeSummary === null
+      ? "Not active"
+      : providerChangeRequired
+        ? "Change required"
+        : editable?.dirty === true
+          ? "Unsaved"
+          : "Active";
   const validation =
     editable?.validationError == null ? "" : COACH_VALIDATION_COPY[editable.validationError];
 
@@ -95,12 +102,22 @@ export function CoachSection(): ReactElement {
             <div className={styles.rowTitle}>Coach route</div>
             <div className={styles.rowDetail}>{route}</div>
           </div>
-          <span className={styles.runtime} data-state={routeSummary === null ? "failed" : "active"}>
+          <span
+            className={styles.runtime}
+            data-state={routeSummary === null || providerChangeRequired ? "failed" : "active"}
+          >
             {routeState}
           </span>
         </div>
         {editable === null ? null : (
           <>
+            {providerChangeRequired ? (
+              <p className={styles.feedback} role="alert">
+                Codex agent isn’t supported on Windows. Choose Claude subscription or an API-key
+                provider, then save the coach route. Your credentials, athlete data, conversations,
+                and other settings stay unchanged.
+              </p>
+            ) : null}
             <div className={styles.row}>
               <label className={styles.label} htmlFor="coach-provider">
                 <span className={styles.rowTitle}>Provider</span>

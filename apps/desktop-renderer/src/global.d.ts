@@ -1,4 +1,5 @@
 interface EnduragentAuth {
+  readonly platform: DesktopPlatformProjection;
   getDaemonConnection(failedGeneration?: number): Promise<{
     readonly url: `ws://127.0.0.1:${number}/rpc`;
     readonly rendererCapability: string;
@@ -59,6 +60,8 @@ interface EnduragentAuth {
   restartToUpdate(): Promise<DesktopUpdateState>;
   onUpdateState(listener: (state: DesktopUpdateState) => void): () => void;
 }
+
+type DesktopPlatformProjection = import("./platform-copy").DesktopPlatformProjection;
 
 type DesktopTrainingExportRequest =
   | {

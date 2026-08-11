@@ -1,5 +1,6 @@
 import type { ClaudeCliState } from "./constants.js";
 import type { ClaudeCliStatus, CredentialSlotStatus } from "./machine.js";
+import { PLATFORM_COPY } from "../platform-copy.js";
 
 export const CLAUDE_CLI_API_KEY_IDENTITY =
   "Using Anthropic API key billing - usage is charged to your API account.";
@@ -34,14 +35,14 @@ const CLAUDE_CLI_PRESENTATION: Readonly<Record<ClaudeCliState, ClaudeCliPresenta
   disabled: {
     runtimeState: "stored-inactive",
     badge: "Turned off",
-    detail: "The Claude subscription lane is turned off on this Mac. Choose another provider.",
+    detail: `The Claude subscription lane is turned off on ${PLATFORM_COPY.computer}. Choose another provider.`,
   },
 };
 
 const CLAUDE_CLI_UNKNOWN_PRESENTATION: ClaudeCliPresentation = {
   runtimeState: "stored-inactive",
   badge: "Checking",
-  detail: "Checking the Claude Code CLI sign-in on this Mac…",
+  detail: `Checking the Claude Code CLI sign-in on ${PLATFORM_COPY.computer}…`,
 };
 
 export function claudeCliPresentation(state: ClaudeCliState | null): ClaudeCliPresentation {

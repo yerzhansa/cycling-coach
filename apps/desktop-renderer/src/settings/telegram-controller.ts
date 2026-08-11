@@ -1,3 +1,5 @@
+import { PLATFORM_COPY } from "../platform-copy.js";
+
 export type TelegramControlErrorCode =
   | "telegram-invalid-token"
   | "telegram-polling-conflict"
@@ -264,11 +266,11 @@ function mutationFailureCopy(
   }
   if (result.reason === "encryption-unavailable") {
     if (action !== "paste-token") {
-      return "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again.";
+      return `Secure token storage is unavailable. Quit and reopen Enduragent, ${PLATFORM_COPY.credentialRecoveryAction}, then choose Check again.`;
     }
     return result.current.credentialConfigured
-      ? "The current Telegram bot is unchanged because secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, copy the bot token again, then retry."
-      : "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, copy the bot token again, then retry.";
+      ? `The current Telegram bot is unchanged because secure token storage is unavailable. Quit and reopen Enduragent, ${PLATFORM_COPY.credentialRecoveryAction}, copy the bot token again, then retry.`
+      : `Secure token storage is unavailable. Quit and reopen Enduragent, ${PLATFORM_COPY.credentialRecoveryAction}, copy the bot token again, then retry.`;
   }
   if (result.reason === "unsafe-backend") {
     if (action !== "paste-token") {
@@ -292,7 +294,7 @@ function mutationFailureCopy(
         return "Telegram could not verify the copied token right now. The current Telegram bot is unchanged.";
       case "webhook-removal-required":
         return result.current.bot.state === "webhook-removal-required"
-          ? "The copied bot still uses a webhook. Remove the webhook before pairing it with this Mac."
+          ? `The copied bot still uses a webhook. Remove the webhook before pairing it with ${PLATFORM_COPY.computer}.`
           : "The copied bot still uses a webhook. Remove the webhook, then delete the current connection and connect this bot.";
       case "storage-failed":
         return "The copied token could not be stored. The current Telegram bot is unchanged.";
@@ -329,7 +331,7 @@ function channelHealthCopy(status: TelegramControlStatus): string {
   if (status.channel.state === "online") return "Telegram is online.";
   if (status.channel.state === "starting") return "Telegram is connecting.";
   if (status.channel.state === "suspended") {
-    return "Telegram polling is paused while this Mac sleeps.";
+    return `Telegram polling is paused while ${PLATFORM_COPY.computer} sleeps.`;
   }
   if (status.channel.state === "disabled") return "Telegram is off.";
   if (status.channel.state === "waiting-for-credential") {
@@ -345,7 +347,7 @@ function channelHealthCopy(status: TelegramControlStatus): string {
     return "This bot is still owned by another Desktop installation. Delete the connection there before connecting it here.";
   }
   if (status.channel.state === "offline-retrying") {
-    return "Telegram is offline. Enduragent will keep trying while this Mac is awake and online.";
+    return `Telegram is offline. Enduragent will keep trying while ${PLATFORM_COPY.computer} is awake and online.`;
   }
   return "Telegram needs attention. Keep the app open, check the connection, and try again.";
 }
@@ -355,7 +357,7 @@ function resultCopy(action: TelegramSettingsAction, status: TelegramControlStatu
     return "Telegram reconnected after a long gap. Some messages may not have arrived.";
   }
   if (status.bot.state === "webhook-removal-required") {
-    return "Bot verified. Remove its webhook before pairing it with this Mac.";
+    return `Bot verified. Remove its webhook before pairing it with ${PLATFORM_COPY.computer}.`;
   }
   if (hasActiveTelegramPairingCode(status)) {
     return "Pairing code ready. Send it to the bot in Telegram.";
@@ -364,7 +366,7 @@ function resultCopy(action: TelegramSettingsAction, status: TelegramControlStatu
     return "Telegram is paired with its primary user.";
   }
   if (status.channel.state === "disabled" && action === "remove") {
-    return "Telegram connection deleted from this Mac.";
+    return `Telegram connection deleted from ${PLATFORM_COPY.computer}.`;
   }
   return channelHealthCopy(status);
 }
@@ -435,7 +437,7 @@ function pairingTransitionCopy(
   const previousBot = botUsername(previous.bot);
   const currentBot = botUsername(current.bot);
   if (previousBot !== currentBot) {
-    if (currentBot === null) return "Telegram connection deleted from this Mac.";
+    if (currentBot === null) return `Telegram connection deleted from ${PLATFORM_COPY.computer}.`;
     if (previousBot !== null || action === "paste-token") {
       return `Telegram connected to @${currentBot}. Pairing needs to be set up.`;
     }

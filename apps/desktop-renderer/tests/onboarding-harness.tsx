@@ -91,6 +91,7 @@ export function mountWizard(input: {
   readonly createOperationId?: () => string;
   readonly afterPaint?: (callback: () => void) => () => void;
   readonly placement?: "chat" | "settings";
+  readonly codexAgentSupported?: boolean;
 }): MountedWizard {
   const focusOpener = vi.fn<() => void>();
   const adapter = createOnboardingViewAdapter({
@@ -113,6 +114,9 @@ export function mountWizard(input: {
       ? {}
       : { createOperationId: input.createOperationId }),
     ...(input.afterPaint === undefined ? {} : { afterPaint: input.afterPaint }),
+    ...(input.codexAgentSupported === undefined
+      ? {}
+      : { codexAgentSupported: input.codexAgentSupported }),
   });
   useEnduragentStore.getState().bindOnboardingActions(controller);
   const rendered = render(

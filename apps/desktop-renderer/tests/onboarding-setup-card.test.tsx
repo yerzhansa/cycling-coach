@@ -211,6 +211,26 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
+  it("does not treat an active Codex-agent profile as ready when Windows excludes it", async () => {
+    const bridge = readyEverythingBridge();
+    bridge.llmConfiguration.mockResolvedValue({
+      ...CLAUDE_CONFIGURATION,
+      active: { provider: "codex-agent", model: "synthetic-codex" },
+    });
+    const wizard = mountWizard({
+      bridge,
+      placement: "settings",
+      codexAgentSupported: false,
+    });
+    await wizard.open();
+
+    expect(rowState("ai")).toBe("pending");
+    expect(useEnduragentStore.getState().onboarding.readiness.provider).toBe(false);
+    expect(setupRow("ai").textContent).toContain("Required — Enduragent doesn't include one");
+    expect(screen.getByRole("button", { name: "Choose what powers your coach" })).toBeEnabled();
+    wizard.controller.dispose();
+  });
+
   it("keeps the completion footer in Chat and omits it from Settings", async () => {
     const chat = mountWizard({ bridge: readyEverythingBridge() });
     await chat.open();

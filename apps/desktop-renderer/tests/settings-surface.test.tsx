@@ -180,6 +180,7 @@ interface HarnessOptions {
   readonly updateState?: DesktopUpdateState;
   readonly spend?: () => Promise<SpendSummary>;
   readonly telegram?: TelegramControlStatus;
+  readonly codexAgentSupported?: boolean;
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -303,6 +304,9 @@ function createHarness(options: HarnessOptions = {}) {
     apply: applyLlmSelection,
     openSetup,
     beginMutation: () => store.getState().beginSettingsMutation("provider-model"),
+    ...(options.codexAgentSupported === undefined
+      ? {}
+      : { codexAgentSupported: options.codexAgentSupported }),
     view: coachAdapter.view,
   });
   const appliedTelegram = (current: TelegramControlStatus) =>
@@ -519,9 +523,7 @@ describe("settings setup inventory", () => {
       async (): Promise<readonly CredentialSlotStatus[]> => [
         { slot: "anthropic", state: "configured", runtimeState: "active" },
         ...(intervalsConnected
-          ? ([
-              { slot: "intervals-icu", state: "configured", runtimeState: "active" },
-            ] as const)
+          ? ([{ slot: "intervals-icu", state: "configured", runtimeState: "active" }] as const)
           : []),
       ],
     );
@@ -1555,6 +1557,37 @@ describe("coach route", () => {
       coach.getByText("Currently active: Codex agent (experimental) · synthetic-codex"),
     ).toBeInTheDocument();
     expect(coach.queryByText("Not configured")).toBeNull();
+  });
+
+  it("requires a supported provider change for an active Windows Codex-agent profile", async () => {
+    const user = userEvent.setup();
+    const subject = await renderSettings({
+      codexAgentSupported: false,
+      llm: () => ({
+        ...llmConfiguration(),
+        active: { provider: "codex-agent", model: "synthetic-codex" },
+      }),
+    });
+
+    const coach = within(screen.getByRole("region", { name: "Coach" }));
+    expect(coach.getByText("Change required")).toHaveAttribute("data-state", "failed");
+    expect(coach.getByRole("alert")).toHaveTextContent("Codex agent isn’t supported on Windows");
+    expect(coach.getByRole("alert")).toHaveTextContent(
+      "credentials, athlete data, conversations, and other settings stay unchanged",
+    );
+
+    await user.selectOptions(coach.getByRole("combobox", { name: /Provider/u }), "anthropic");
+    await user.click(coach.getByRole("button", { name: "Save coach route" }));
+    await screen.findByText("Coach settings saved.");
+
+    expect(subject.applyLlmSelection).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "synthetic-model",
+      endpoint: { mode: "automatic" },
+    });
+    expect(subject.deleteCredential).not.toHaveBeenCalled();
+    expect(coach.getByText("Active")).toHaveAttribute("data-state", "active");
+    expect(coach.queryByText("Change required")).toBeNull();
   });
 
   it("marks the route not configured when no provider is active", async () => {

@@ -1,12 +1,12 @@
 import { useLayoutEffect, useRef, type ReactElement } from "react";
+import { PLATFORM_COPY } from "../../platform-copy.js";
 import { focusNewConversationOpener } from "../../state/new-conversation-opener.js";
 import { useEnduragentStore } from "../../state/store.js";
 import styles from "./NewConversationDialog.module.css";
 
 const BASE_COPY =
   "Your visible conversation will be cleared. Your training data and saved coach memory will remain.";
-const HYDRATED_COPY =
-  "Your visible conversation and the earlier messages restored on this Mac will be cleared. Your training data and saved coach memory will remain.";
+const HYDRATED_COPY = `Your visible conversation and the earlier messages restored on ${PLATFORM_COPY.computer} will be cleared. Your training data and saved coach memory will remain.`;
 
 export function NewConversationDialog(props: {
   readonly onComposerReset: () => void;

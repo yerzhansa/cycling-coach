@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { desktopPlatformProjection } from "../main/platform-copy.js";
 import {
   DESKTOP_CONNECTION_CHANNEL,
   DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
@@ -1424,6 +1425,7 @@ ipcRenderer.on(DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL, (_event, value: unknown) 
 contextBridge.exposeInMainWorld(
   "enduragentAuth",
   Object.freeze({
+    platform: desktopPlatformProjection(),
     getDaemonConnection: (failedGeneration?: number) => {
       if (
         failedGeneration !== undefined &&
