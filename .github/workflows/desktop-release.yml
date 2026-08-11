@@ -1,41 +1,7 @@
 name: Desktop release
-run-name: Desktop release ${{ inputs.tag }} via ${{ github.run_id }}.${{ github.run_attempt }} binding ${{ inputs.tooling_commit }}
+run-name: Desktop release ${{ inputs.tag }} via ${{ github.run_id }}.${{ github.run_attempt }}
 
 on:
-  workflow_call:
-    inputs:
-      tag:
-        description: Exact enduragent-desktop release tag
-        required: true
-        type: string
-      desktop_version:
-        description: Frozen desktop SemVer
-        required: true
-        type: string
-      commit:
-        description: Exact tagged source commit
-        required: true
-        type: string
-      tooling_commit:
-        description: Exact commit supplying audited release-only tooling
-        required: true
-        type: string
-      draft_id:
-        description: Bound unpublished GitHub Release id
-        required: true
-        type: string
-      draft_body_sha256:
-        description: Bound draft release-notes digest
-        required: true
-        type: string
-      baseline_tag:
-        description: Prior signed desktop release tag or none
-        required: true
-        type: string
-      source_run_id:
-        description: Failed source run id or none
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -50,10 +16,6 @@ on:
         description: Exact tagged source commit
         required: true
         type: string
-      tooling_commit:
-        description: Exact commit supplying audited release-only tooling
-        required: true
-        type: string
       draft_id:
         description: Bound unpublished GitHub Release id
         required: true
@@ -64,54 +26,40 @@ on:
         type: string
       baseline_tag:
         description: Prior signed desktop release tag or none
-        required: true
-        type: string
-      source_run_id:
-        description: Failed source run id or none
-        required: true
+        required: false
+        default: none
         type: string
 permissions:
   actions: read
   contents: read
 
 concurrency:
-  group: ${{ github.workflow_ref == format('{0}/.github/workflows/desktop-release.yml@{1}', github.repository, github.ref) && 'stable-desktop' || format('stable-desktop-child-{0}', github.run_id) }}
+  group: stable-desktop
   cancel-in-progress: false
   queue: max
 
 jobs:
-  authorize-coordinator:
+  authorize-release:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       actions: read
       contents: write
-    outputs:
-      source_run_id: ${{ steps.authorize.outputs.source_run_id }}
-      source_run_attempt: ${{ steps.authorize.outputs.source_run_attempt }}
-      artifact_name: ${{ steps.authorize.outputs.artifact_name }}
-      artifact_id: ${{ steps.authorize.outputs.artifact_id }}
-      artifact_digest: ${{ steps.authorize.outputs.artifact_digest }}
-      baseline_artifact_name: ${{ steps.authorize.outputs.baseline_artifact_name }}
-      baseline_artifact_id: ${{ steps.authorize.outputs.baseline_artifact_id }}
-      baseline_artifact_digest: ${{ steps.authorize.outputs.baseline_artifact_digest }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Bind call to the active release coordinator
+      - name: Authorize release dispatch
         id: authorize
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
           RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
           DESKTOP_ENABLED: ${{ vars.ENABLE_DESKTOP_MACOS_RELEASE }}
           WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_REF_NAME: ${{ github.ref_name }}
@@ -121,10 +69,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          CALLED_WORKFLOW_REF: ${{ job.workflow_ref }}
-          CALLED_WORKFLOW_SHA: ${{ job.workflow_sha }}
-          CALLED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          CALLED_WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
           REPOSITORY_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
@@ -133,7 +77,6 @@ jobs:
           printf '%s' "$DESKTOP_VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
           printf '%s' "$RELEASE_DRAFT_ID" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$RELEASE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-          printf '%s' "$RELEASE_TOOLING_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$RELEASE_BODY_SHA256" | grep -Eq '^[0-9a-f]{64}$'
           test "$EVENT_NAME" = 'workflow_dispatch'
           test "$DESKTOP_ENABLED" = 'true'
@@ -156,40 +99,12 @@ jobs:
           EXPECTED_BODY_SHA256=$(printf '%s' "$EXPECTED_BODY" | shasum -a 256 | awk '{print $1}')
           test "$EXPECTED_BODY_SHA256" = "$RELEASE_BODY_SHA256"
           git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main
-          test "$RELEASE_TOOLING_COMMIT" = "$WORKFLOW_COMMIT"
-          CURRENT_RECOVERY_REVISION=none
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"
-            test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"
-          else
-            CURRENT_RECOVERY_REVISION="${WORKFLOW_REF_NAME#"${RELEASE_TAG}-recovery."}"
-            printf '%s' "$CURRENT_RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$'
-            test "$WORKFLOW_REF_NAME" = "${RELEASE_TAG}-recovery.${CURRENT_RECOVERY_REVISION}"
-            test "$WORKFLOW_REF" = "refs/tags/$WORKFLOW_REF_NAME"
-            git fetch --force --no-tags origin \
-              "refs/tags/$WORKFLOW_REF_NAME:refs/tags/$WORKFLOW_REF_NAME"
-            test "$(git rev-parse "refs/tags/$WORKFLOW_REF_NAME^{commit}")" = "$RELEASE_TOOLING_COMMIT"
-            git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"
-            git merge-base --is-ancestor "$RELEASE_TOOLING_COMMIT" refs/remotes/origin/main
-          fi
-          COORDINATOR_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/desktop-release-coordinator.yml@$WORKFLOW_REF"
+          test "$WORKFLOW_COMMIT" = "$RELEASE_COMMIT"
+          test "$WORKFLOW_REF" = "refs/tags/$RELEASE_TAG"
+          test "$WORKFLOW_REF_NAME" = "$RELEASE_TAG"
           DIRECT_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/desktop-release.yml@$WORKFLOW_REF"
-          case "$CALLER_WORKFLOW_REF" in
-            "$COORDINATOR_WORKFLOW_REF")
-              test "$CALLER_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
-              test "$CALLED_WORKFLOW_REF" = "$DIRECT_WORKFLOW_REF"
-              test "$CALLED_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
-              test "$CALLED_WORKFLOW_REPOSITORY" = "$GITHUB_REPOSITORY"
-              test "$CALLED_WORKFLOW_FILE_PATH" = '.github/workflows/desktop-release.yml'
-              ;;
-            "$DIRECT_WORKFLOW_REF")
-              test "$CALLER_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
-              ;;
-            *)
-              echo '::error::Desktop release invocation used an unauthorized workflow identity'
-              exit 1
-              ;;
-          esac
+          test "$CALLER_WORKFLOW_REF" = "$DIRECT_WORKFLOW_REF"
+          test "$CALLER_WORKFLOW_SHA" = "$WORKFLOW_COMMIT"
           if [ "$RELEASE_BASELINE_TAG" != 'none' ] && \
              [ "$RELEASE_BASELINE_TAG" != 'cycling-coach@2026.8.8' ] && \
              ! printf '%s' "$RELEASE_BASELINE_TAG" | grep -Eq '^enduragent-desktop@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
@@ -200,139 +115,14 @@ jobs:
           test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
           test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
           test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.prerelease')" = 'false'
-          if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.draft')" = 'true' ]; then
-            CANDIDATE_BODY_SHA256=$(printf '%s' "$CANDIDATE_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
-            test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"
-          else
-            test "$SOURCE_RUN_ID" != 'none'
-            if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.body')" != 'Desktop update validation is in progress. This release is not yet generally available.' ]; then
-              CANDIDATE_BODY_SHA256=$(printf '%s' "$CANDIDATE_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
-              test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"
-              LATEST_RELEASE=$(gh api -H 'Cache-Control: no-cache' "repos/$GITHUB_REPOSITORY/releases/latest")
-              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
-              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
-            fi
-          fi
-          if [ "$SOURCE_RUN_ID" = 'none' ]; then
-            for output in source_run_id source_run_attempt artifact_name artifact_id artifact_digest baseline_artifact_name baseline_artifact_id baseline_artifact_digest; do
-              echo "$output=none" >> "$GITHUB_OUTPUT"
-            done
-            exit 0
-          fi
-          printf '%s' "$SOURCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          test "$SOURCE_RUN_ID" != "$GITHUB_RUN_ID"
-          test "$RELEASE_TOOLING_COMMIT" != "$RELEASE_COMMIT"
-          test "$CURRENT_RECOVERY_REVISION" != 'none'
-          SOURCE=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")
-          test "$(printf '%s' "$SOURCE" | jq -r '.repository.full_name')" = "$GITHUB_REPOSITORY"
-          test "$(printf '%s' "$SOURCE" | jq -r '.head_repository.full_name')" = "$GITHUB_REPOSITORY"
-          SOURCE_WORKFLOW_PATH_RAW=$(printf '%s' "$SOURCE" | jq -er '.path')
-          SOURCE_WORKFLOW_PATH="${SOURCE_WORKFLOW_PATH_RAW%%@*}"
-          case "$SOURCE_WORKFLOW_PATH" in
-            .github/workflows/desktop-release.yml)
-              test "$(printf '%s' "$SOURCE" | jq -r '.actor.login')" = 'github-actions[bot]'
-              test "$(printf '%s' "$SOURCE" | jq -r '.triggering_actor.login')" = 'github-actions[bot]'
-              ;;
-            .github/workflows/desktop-release-coordinator.yml)
-              ;;
-            *)
-              echo '::error::Recovery source run used an untrusted workflow'
-              exit 1
-              ;;
-          esac
-          test "$(printf '%s' "$SOURCE" | jq -r '.event')" = 'workflow_dispatch'
-          test "$(printf '%s' "$SOURCE" | jq -r '.status')" = 'completed'
-          test "$(printf '%s' "$SOURCE" | jq -r '.conclusion')" = 'failure'
-          SOURCE_RUN_ATTEMPT=$(printf '%s' "$SOURCE" | jq -er '.run_attempt | tostring')
-          printf '%s' "$SOURCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
-          SOURCE_HEAD_BRANCH=$(printf '%s' "$SOURCE" | jq -er '.head_branch')
-          SOURCE_HEAD_SHA=$(printf '%s' "$SOURCE" | jq -er '.head_sha')
-          printf '%s' "$SOURCE_HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'
-          case "$SOURCE_WORKFLOW_PATH_RAW" in
-            "$SOURCE_WORKFLOW_PATH"|"$SOURCE_WORKFLOW_PATH@$SOURCE_HEAD_BRANCH"|"$SOURCE_WORKFLOW_PATH@refs/tags/$SOURCE_HEAD_BRANCH")
-              ;;
-            *)
-              echo '::error::Recovery source workflow path used an unexpected ref suffix'
-              exit 1
-              ;;
-          esac
-          if [ "$SOURCE_HEAD_BRANCH" = "$RELEASE_TAG" ]; then
-            test "$SOURCE_HEAD_SHA" = "$RELEASE_COMMIT"
-          else
-            SOURCE_RECOVERY_REVISION="${SOURCE_HEAD_BRANCH#"${RELEASE_TAG}-recovery."}"
-            printf '%s' "$SOURCE_RECOVERY_REVISION" | grep -Eq '^[1-9][0-9]*$'
-            test "$SOURCE_HEAD_BRANCH" = "${RELEASE_TAG}-recovery.${SOURCE_RECOVERY_REVISION}"
-            test "$SOURCE_RECOVERY_REVISION" -lt "$CURRENT_RECOVERY_REVISION"
-          fi
-          git fetch --force --no-tags origin \
-            "refs/tags/$SOURCE_HEAD_BRANCH:refs/tags/$SOURCE_HEAD_BRANCH" \
-            main:refs/remotes/origin/main
-          test "$(git rev-parse "refs/tags/$SOURCE_HEAD_BRANCH^{commit}")" = "$SOURCE_HEAD_SHA"
-          git merge-base --is-ancestor "$RELEASE_COMMIT" "$SOURCE_HEAD_SHA"
-          git merge-base --is-ancestor "$SOURCE_HEAD_SHA" "$RELEASE_TOOLING_COMMIT"
-          git merge-base --is-ancestor "$SOURCE_HEAD_SHA" refs/remotes/origin/main
-          SOURCE_JOBS=$(gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/attempts/$SOURCE_RUN_ATTEMPT/jobs?per_page=100")
-          printf '%s' "$SOURCE_JOBS" | jq -e \
-            'type == "array" and length > 0 and ([.[].jobs[]] | length) == .[0].total_count' >/dev/null
-          for job_name in sign-macos verify-macos-envelope stage-private-draft publish-assets; do
-            printf '%s' "$SOURCE_JOBS" | jq -e --arg job "$job_name" '
-              [.[].jobs[] | select((.name | split(" / ") | last) == $job)] as $matches |
-              ($matches | length) == 1 and
-              $matches[0].status == "completed" and
-              $matches[0].conclusion == "success"
-            ' >/dev/null
-          done
-          printf '%s' "$SOURCE_JOBS" | jq -e '
-            [.[].jobs[] | select((.name | split(" / ") | last) == "activate-release")] as $matches |
-            ($matches | length) == 1 and
-            $matches[0].status == "completed" and
-            $matches[0].conclusion != "success"
-          ' >/dev/null
-          SOURCE_ARTIFACTS=$(gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100")
-          printf '%s' "$SOURCE_ARTIFACTS" | jq -e \
-            'type == "array" and length > 0 and ([.[].artifacts[]] | length) == .[0].total_count' >/dev/null
-          ARTIFACT_NAME="desktop-release-$SOURCE_RUN_ID-$SOURCE_RUN_ATTEMPT"
-          BASELINE_ARTIFACT_NAME="desktop-baseline-$SOURCE_RUN_ID-$SOURCE_RUN_ATTEMPT"
-          ARTIFACT=$(printf '%s' "$SOURCE_ARTIFACTS" | jq -cer --arg name "$ARTIFACT_NAME" \
-            '[.[].artifacts[] | select(.name == $name)] | select(length == 1) | .[0]')
-          BASELINE_ARTIFACT=$(printf '%s' "$SOURCE_ARTIFACTS" | jq -cer --arg name "$BASELINE_ARTIFACT_NAME" \
-            '[.[].artifacts[] | select(.name == $name)] | select(length == 1) | .[0]')
-          for artifact in "$ARTIFACT" "$BASELINE_ARTIFACT"; do
-            printf '%s' "$artifact" | jq -e \
-              --arg run "$SOURCE_RUN_ID" \
-              --arg repo "$REPOSITORY_ID" \
-              --arg branch "$SOURCE_HEAD_BRANCH" \
-              --arg sha "$SOURCE_HEAD_SHA" '
-              (.id | type) == "number" and .id > 0 and
-              .expired == false and
-              (.size_in_bytes | type) == "number" and .size_in_bytes > 0 and
-              (.digest | type) == "string" and (.digest | test("^sha256:[0-9a-f]{64}$")) and
-              (.workflow_run.id | tostring) == $run and
-              (.workflow_run.repository_id | tostring) == $repo and
-              (.workflow_run.head_repository_id | tostring) == $repo and
-              .workflow_run.head_branch == $branch and
-              .workflow_run.head_sha == $sha
-            ' >/dev/null
-          done
-          ARTIFACT_ID=$(printf '%s' "$ARTIFACT" | jq -er '.id | tostring')
-          ARTIFACT_DIGEST=$(printf '%s' "$ARTIFACT" | jq -er '.digest | sub("^sha256:"; "")')
-          BASELINE_ARTIFACT_ID=$(printf '%s' "$BASELINE_ARTIFACT" | jq -er '.id | tostring')
-          BASELINE_ARTIFACT_DIGEST=$(printf '%s' "$BASELINE_ARTIFACT" | jq -er '.digest | sub("^sha256:"; "")')
-          echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "source_run_attempt=$SOURCE_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-          echo "artifact_id=$ARTIFACT_ID" >> "$GITHUB_OUTPUT"
-          echo "artifact_digest=$ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "baseline_artifact_name=$BASELINE_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-          echo "baseline_artifact_id=$BASELINE_ARTIFACT_ID" >> "$GITHUB_OUTPUT"
-          echo "baseline_artifact_digest=$BASELINE_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.draft')" = 'true'
+          CANDIDATE_BODY_SHA256=$(printf '%s' "$CANDIDATE_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
+          test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"
 
   sign-macos:
     runs-on: macos-15
     timeout-minutes: 120
-    needs: authorize-coordinator
+    needs: authorize-release
     environment: desktop-macos-signing
     permissions:
       actions: read
@@ -363,26 +153,11 @@ jobs:
           ref: ${{ inputs.commit }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Bind recovery release tooling
+      - name: Bind release source
         env:
           RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            exit 0
-          fi
-          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
-          git merge-base --is-ancestor "$RELEASE_COMMIT" "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
-            apps/desktop/scripts/macos-release-cli.mjs \
-            apps/desktop/scripts/macos-release-plan.mjs \
-            tools/desktop-release-transaction.ts
-          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/macos-release-cli.mjs\napps/desktop/scripts/macos-release-plan.mjs\ntools/desktop-release-transaction.ts'
-          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -390,10 +165,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - if: ${{ inputs.source_run_id == 'none' }}
-        run: pnpm -r build
+      - run: pnpm -r build
       - name: Resolve signed baseline
-        if: ${{ inputs.source_run_id == 'none' }}
         id: baseline
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -427,7 +200,6 @@ jobs:
           echo "baseline_signing_identity=$BASELINE_IDENTITY" >> "$GITHUB_OUTPUT"
           echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
       - name: Build signed and notarized macOS envelope
-        if: ${{ inputs.source_run_id == 'none' }}
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -451,7 +223,6 @@ jobs:
           chmod 600 "$APPLE_API_KEY"
           pnpm --filter @enduragent/desktop package:mac
       - name: Bind candidate signing evidence
-        if: ${{ inputs.source_run_id == 'none' }}
         id: signing-evidence
         run: |
           set -euo pipefail
@@ -469,10 +240,9 @@ jobs:
           echo "code_directory_sha256=$CODE_DIRECTORY_SHA256" >> "$GITHUB_OUTPUT"
           echo "signing_identity=$SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
       - name: Remove temporary notarization key
-        if: ${{ always() && inputs.source_run_id == 'none' }}
+        if: ${{ always() }}
         run: rm -f "$RUNNER_TEMP/AuthKey.p8"
       - name: Seal digest-bound release manifest
-        if: ${{ inputs.source_run_id == 'none' }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           DESKTOP_VERSION: ${{ inputs.desktop_version }}
@@ -511,7 +281,6 @@ jobs:
             --baseline-signing-identity "$BASELINE_SIGNING_IDENTITY" \
             --baseline-cdhash "$BASELINE_CDHASH"
       - name: Upload sealed macOS transaction artifact
-        if: ${{ inputs.source_run_id == 'none' }}
         id: sealed-artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -521,7 +290,6 @@ jobs:
           compression-level: 0
           retention-days: 90
       - name: Upload sealed baseline updater envelope
-        if: ${{ inputs.source_run_id == 'none' }}
         id: baseline-artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -530,147 +298,9 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 90
-      - name: Download resumed sealed macOS transaction artifact
-        if: ${{ inputs.source_run_id != 'none' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.authorize-coordinator.outputs.artifact_id }}
-          path: ${{ runner.temp }}/desktop-release
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ needs.authorize-coordinator.outputs.source_run_id }}
-          digest-mismatch: error
-      - name: Download resumed sealed baseline updater envelope
-        if: ${{ inputs.source_run_id != 'none' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.authorize-coordinator.outputs.baseline_artifact_id }}
-          path: ${{ runner.temp }}/desktop-baseline
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ needs.authorize-coordinator.outputs.source_run_id }}
-          digest-mismatch: error
-      - name: Verify resumed artifact and manifest bindings
-        if: ${{ inputs.source_run_id != 'none' }}
-        id: resumed-evidence
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-          DESKTOP_VERSION: ${{ inputs.desktop_version }}
-          RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
-          RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
-          RELEASE_BASELINE_TAG: ${{ inputs.baseline_tag }}
-          SOURCE_RUN_ID: ${{ needs.authorize-coordinator.outputs.source_run_id }}
-          SOURCE_RUN_ATTEMPT: ${{ needs.authorize-coordinator.outputs.source_run_attempt }}
-          ARTIFACT_NAME: ${{ needs.authorize-coordinator.outputs.artifact_name }}
-          ARTIFACT_ID: ${{ needs.authorize-coordinator.outputs.artifact_id }}
-          ARTIFACT_DIGEST: ${{ needs.authorize-coordinator.outputs.artifact_digest }}
-          BASELINE_ARTIFACT_NAME: ${{ needs.authorize-coordinator.outputs.baseline_artifact_name }}
-          BASELINE_ARTIFACT_ID: ${{ needs.authorize-coordinator.outputs.baseline_artifact_id }}
-          BASELINE_ARTIFACT_DIGEST: ${{ needs.authorize-coordinator.outputs.baseline_artifact_digest }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$SOURCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$SOURCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$BASELINE_ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$BASELINE_ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          test "$ARTIFACT_NAME" = "desktop-release-$SOURCE_RUN_ID-$SOURCE_RUN_ATTEMPT"
-          test "$BASELINE_ARTIFACT_NAME" = "desktop-baseline-$SOURCE_RUN_ID-$SOURCE_RUN_ATTEMPT"
-          MANIFEST="$RUNNER_TEMP/desktop-release/desktop-release-manifest.json"
-          test -f "$MANIFEST"
-          test ! -L "$MANIFEST"
-          test "$(jq -er '.schemaVersion' "$MANIFEST")" = '3'
-          test "$(jq -er '.tag' "$MANIFEST")" = "$RELEASE_TAG"
-          test "$(jq -er '.desktopVersion' "$MANIFEST")" = "$DESKTOP_VERSION"
-          test "$(jq -er '.commit' "$MANIFEST")" = "$RELEASE_COMMIT"
-          test "$(jq -er '.draftId' "$MANIFEST")" = "$RELEASE_DRAFT_ID"
-          test "$(jq -er '.mode' "$MANIFEST")" = 'steady'
-          test "$(jq -er '.workflowRunId' "$MANIFEST")" = "$SOURCE_RUN_ID"
-          test "$(jq -er '.workflowRunAttempt' "$MANIFEST")" = "$SOURCE_RUN_ATTEMPT"
-          test "$(jq -er '.draftBodySha256' "$MANIFEST")" = "$RELEASE_BODY_SHA256"
-          SIGNING_IDENTITY=$(jq -er '.signingIdentity' "$MANIFEST")
-          CANDIDATE_CDHASH=$(jq -er '.candidateCdHash' "$MANIFEST")
-          CANDIDATE_CODE_DIRECTORY_SHA256=$(jq -er '.candidateCodeDirectorySha256' "$MANIFEST")
-          BASELINE_TAG=$(jq -er '.baselineTag' "$MANIFEST")
-          BASELINE_RELEASE_ID=$(jq -er '.baselineReleaseId' "$MANIFEST")
-          BASELINE_COMMIT=$(jq -er '.baselineCommit' "$MANIFEST")
-          BASELINE_ZIP_SHA256=$(jq -er '.baselineZipSha256' "$MANIFEST")
-          BASELINE_SIGNING_IDENTITY=$(jq -er '.baselineSigningIdentity' "$MANIFEST")
-          BASELINE_CDHASH=$(jq -er '.baselineCdHash' "$MANIFEST")
-          printf '%s' "$SIGNING_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
-          printf '%s' "$CANDIDATE_CDHASH" | grep -Eq '^[0-9a-f]{40}$'
-          printf '%s' "$CANDIDATE_CODE_DIRECTORY_SHA256" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$BASELINE_RELEASE_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$BASELINE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
-          printf '%s' "$BASELINE_ZIP_SHA256" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$BASELINE_SIGNING_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
-          printf '%s' "$BASELINE_CDHASH" | grep -Eq '^[0-9a-f]{40}$'
-          if [ "$RELEASE_BASELINE_TAG" != 'none' ]; then
-            test "$BASELINE_TAG" = "$RELEASE_BASELINE_TAG"
-          fi
-          if [ "$BASELINE_TAG" = 'cycling-coach@2026.8.8' ]; then
-            BASELINE_VERSION=0.1.0
-          else
-            BASELINE_VERSION="${BASELINE_TAG#enduragent-desktop@}"
-            printf '%s' "$BASELINE_VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-            test "$BASELINE_TAG" = "enduragent-desktop@$BASELINE_VERSION"
-          fi
-          pnpm desktop-release:transaction verify \
-            --directory "$RUNNER_TEMP/desktop-release" \
-            --tag "$RELEASE_TAG" \
-            --desktop-version "$DESKTOP_VERSION" \
-            --commit "$RELEASE_COMMIT" \
-            --draft-id "$RELEASE_DRAFT_ID" \
-            --mode steady \
-            --workflow-run-id "$SOURCE_RUN_ID" \
-            --workflow-run-attempt "$SOURCE_RUN_ATTEMPT" \
-            --draft-body-sha256 "$RELEASE_BODY_SHA256" \
-            --signing-identity "$SIGNING_IDENTITY" \
-            --candidate-cdhash "$CANDIDATE_CDHASH" \
-            --candidate-code-directory-sha256 "$CANDIDATE_CODE_DIRECTORY_SHA256" \
-            --baseline-tag "$BASELINE_TAG" \
-            --baseline-release-id "$BASELINE_RELEASE_ID" \
-            --baseline-commit "$BASELINE_COMMIT" \
-            --baseline-zip-sha256 "$BASELINE_ZIP_SHA256" \
-            --baseline-signing-identity "$BASELINE_SIGNING_IDENTITY" \
-            --baseline-cdhash "$BASELINE_CDHASH"
-          EXPECTED_BASELINE_FILES=$(printf '%s\n' \
-            "Enduragent-$BASELINE_VERSION-arm64.dmg" \
-            "Enduragent-$BASELINE_VERSION-arm64.zip" \
-            "Enduragent-$BASELINE_VERSION-arm64.zip.blockmap" \
-            latest-mac.yml | LC_ALL=C sort)
-          ACTUAL_BASELINE_FILES=$(find "$RUNNER_TEMP/desktop-baseline" -mindepth 1 -maxdepth 1 -type f \
-            -exec basename {} \; | LC_ALL=C sort)
-          BASELINE_ENTRY_COUNT=$(find "$RUNNER_TEMP/desktop-baseline" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d '[:space:]')
-          test "$BASELINE_ENTRY_COUNT" = '4'
-          test "$ACTUAL_BASELINE_FILES" = "$EXPECTED_BASELINE_FILES"
-          test "$(shasum -a 256 "$RUNNER_TEMP/desktop-baseline/Enduragent-$BASELINE_VERSION-arm64.zip" | awk '{print $1}')" = "$BASELINE_ZIP_SHA256"
-          BASELINE_METADATA_SHA256=$(shasum -a 256 "$RUNNER_TEMP/desktop-baseline/latest-mac.yml" | awk '{print $1}')
-          printf '%s' "$BASELINE_METADATA_SHA256" | grep -Eq '^[0-9a-f]{64}$'
-          echo "baseline_tag=$BASELINE_TAG" >> "$GITHUB_OUTPUT"
-          echo "baseline_version=$BASELINE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "baseline_release_id=$BASELINE_RELEASE_ID" >> "$GITHUB_OUTPUT"
-          echo "baseline_commit=$BASELINE_COMMIT" >> "$GITHUB_OUTPUT"
-          echo "baseline_zip_sha256=$BASELINE_ZIP_SHA256" >> "$GITHUB_OUTPUT"
-          echo "baseline_metadata_sha256=$BASELINE_METADATA_SHA256" >> "$GITHUB_OUTPUT"
-          echo "baseline_signing_identity=$BASELINE_SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
-          echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
-          echo "cdhash=$CANDIDATE_CDHASH" >> "$GITHUB_OUTPUT"
-          echo "code_directory_sha256=$CANDIDATE_CODE_DIRECTORY_SHA256" >> "$GITHUB_OUTPUT"
-          echo "signing_identity=$SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
       - name: Normalize immutable signing and artifact evidence
         id: normalized-evidence
         env:
-          SOURCE_RUN_ID: ${{ needs.authorize-coordinator.outputs.source_run_id }}
-          SOURCE_RUN_ATTEMPT: ${{ needs.authorize-coordinator.outputs.source_run_attempt }}
-          SOURCE_ARTIFACT_NAME: ${{ needs.authorize-coordinator.outputs.artifact_name }}
-          SOURCE_ARTIFACT_ID: ${{ needs.authorize-coordinator.outputs.artifact_id }}
-          SOURCE_ARTIFACT_DIGEST: ${{ needs.authorize-coordinator.outputs.artifact_digest }}
-          SOURCE_BASELINE_ARTIFACT_NAME: ${{ needs.authorize-coordinator.outputs.baseline_artifact_name }}
-          SOURCE_BASELINE_ARTIFACT_ID: ${{ needs.authorize-coordinator.outputs.baseline_artifact_id }}
-          SOURCE_BASELINE_ARTIFACT_DIGEST: ${{ needs.authorize-coordinator.outputs.baseline_artifact_digest }}
           FRESH_ARTIFACT_ID: ${{ steps.sealed-artifact.outputs.artifact-id }}
           FRESH_ARTIFACT_DIGEST: ${{ steps.sealed-artifact.outputs.artifact-digest }}
           FRESH_BASELINE_ARTIFACT_ID: ${{ steps.baseline-artifact.outputs.artifact-id }}
@@ -686,86 +316,40 @@ jobs:
           FRESH_CDHASH: ${{ steps.signing-evidence.outputs.cdhash }}
           FRESH_CODE_DIRECTORY_SHA256: ${{ steps.signing-evidence.outputs.code_directory_sha256 }}
           FRESH_SIGNING_IDENTITY: ${{ steps.signing-evidence.outputs.signing_identity }}
-          RESUMED_BASELINE_TAG: ${{ steps.resumed-evidence.outputs.baseline_tag }}
-          RESUMED_BASELINE_VERSION: ${{ steps.resumed-evidence.outputs.baseline_version }}
-          RESUMED_BASELINE_RELEASE_ID: ${{ steps.resumed-evidence.outputs.baseline_release_id }}
-          RESUMED_BASELINE_COMMIT: ${{ steps.resumed-evidence.outputs.baseline_commit }}
-          RESUMED_BASELINE_ZIP_SHA256: ${{ steps.resumed-evidence.outputs.baseline_zip_sha256 }}
-          RESUMED_BASELINE_METADATA_SHA256: ${{ steps.resumed-evidence.outputs.baseline_metadata_sha256 }}
-          RESUMED_BASELINE_SIGNING_IDENTITY: ${{ steps.resumed-evidence.outputs.baseline_signing_identity }}
-          RESUMED_BASELINE_CDHASH: ${{ steps.resumed-evidence.outputs.baseline_cdhash }}
-          RESUMED_CDHASH: ${{ steps.resumed-evidence.outputs.cdhash }}
-          RESUMED_CODE_DIRECTORY_SHA256: ${{ steps.resumed-evidence.outputs.code_directory_sha256 }}
-          RESUMED_SIGNING_IDENTITY: ${{ steps.resumed-evidence.outputs.signing_identity }}
         run: |
           set -euo pipefail
-          if [ "$SOURCE_RUN_ID" = 'none' ]; then
-            EVIDENCE_RUN_ID="$GITHUB_RUN_ID"
-            EVIDENCE_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT"
-            ARTIFACT_NAME="desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-            ARTIFACT_ID="$FRESH_ARTIFACT_ID"
-            ARTIFACT_DIGEST="${FRESH_ARTIFACT_DIGEST#sha256:}"
-            BASELINE_TAG="$FRESH_BASELINE_TAG"
-            BASELINE_VERSION="$FRESH_BASELINE_VERSION"
-            BASELINE_RELEASE_ID="$FRESH_BASELINE_RELEASE_ID"
-            BASELINE_COMMIT="$FRESH_BASELINE_COMMIT"
-            BASELINE_ZIP_SHA256="$FRESH_BASELINE_ZIP_SHA256"
-            BASELINE_METADATA_SHA256="$FRESH_BASELINE_METADATA_SHA256"
-            BASELINE_SIGNING_IDENTITY="$FRESH_BASELINE_SIGNING_IDENTITY"
-            BASELINE_CDHASH="$FRESH_BASELINE_CDHASH"
-            CDHASH="$FRESH_CDHASH"
-            CODE_DIRECTORY_SHA256="$FRESH_CODE_DIRECTORY_SHA256"
-            SIGNING_IDENTITY="$FRESH_SIGNING_IDENTITY"
-            BASELINE_ARTIFACT_NAME="desktop-baseline-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-            BASELINE_ARTIFACT_ID="$FRESH_BASELINE_ARTIFACT_ID"
-            BASELINE_ARTIFACT_DIGEST="${FRESH_BASELINE_ARTIFACT_DIGEST#sha256:}"
-          else
-            EVIDENCE_RUN_ID="$SOURCE_RUN_ID"
-            EVIDENCE_RUN_ATTEMPT="$SOURCE_RUN_ATTEMPT"
-            ARTIFACT_NAME="$SOURCE_ARTIFACT_NAME"
-            ARTIFACT_ID="$SOURCE_ARTIFACT_ID"
-            ARTIFACT_DIGEST="$SOURCE_ARTIFACT_DIGEST"
-            BASELINE_ARTIFACT_NAME="$SOURCE_BASELINE_ARTIFACT_NAME"
-            BASELINE_ARTIFACT_ID="$SOURCE_BASELINE_ARTIFACT_ID"
-            BASELINE_ARTIFACT_DIGEST="$SOURCE_BASELINE_ARTIFACT_DIGEST"
-            BASELINE_TAG="$RESUMED_BASELINE_TAG"
-            BASELINE_VERSION="$RESUMED_BASELINE_VERSION"
-            BASELINE_RELEASE_ID="$RESUMED_BASELINE_RELEASE_ID"
-            BASELINE_COMMIT="$RESUMED_BASELINE_COMMIT"
-            BASELINE_ZIP_SHA256="$RESUMED_BASELINE_ZIP_SHA256"
-            BASELINE_METADATA_SHA256="$RESUMED_BASELINE_METADATA_SHA256"
-            BASELINE_SIGNING_IDENTITY="$RESUMED_BASELINE_SIGNING_IDENTITY"
-            BASELINE_CDHASH="$RESUMED_BASELINE_CDHASH"
-            CDHASH="$RESUMED_CDHASH"
-            CODE_DIRECTORY_SHA256="$RESUMED_CODE_DIRECTORY_SHA256"
-            SIGNING_IDENTITY="$RESUMED_SIGNING_IDENTITY"
-          fi
+          EVIDENCE_RUN_ID="$GITHUB_RUN_ID"
+          EVIDENCE_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT"
+          ARTIFACT_NAME="desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
+          ARTIFACT_ID="$FRESH_ARTIFACT_ID"
+          ARTIFACT_DIGEST="${FRESH_ARTIFACT_DIGEST#sha256:}"
+          BASELINE_ARTIFACT_NAME="desktop-baseline-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
+          BASELINE_ARTIFACT_ID="$FRESH_BASELINE_ARTIFACT_ID"
+          BASELINE_ARTIFACT_DIGEST="${FRESH_BASELINE_ARTIFACT_DIGEST#sha256:}"
           printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-          printf '%s' "$CDHASH" | grep -Eq '^[0-9a-f]{40}$'
-          printf '%s' "$CODE_DIRECTORY_SHA256" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$SIGNING_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
+          printf '%s' "$FRESH_CDHASH" | grep -Eq '^[0-9a-f]{40}$'
+          printf '%s' "$FRESH_CODE_DIRECTORY_SHA256" | grep -Eq '^[0-9a-f]{64}$'
+          printf '%s' "$FRESH_SIGNING_IDENTITY" | grep -Eq '^Developer ID Application: .+ \(FA494ACVTF\)$'
           printf '%s' "$BASELINE_ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
           printf '%s' "$BASELINE_ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          test "$BASELINE_ARTIFACT_NAME" = "desktop-baseline-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-          printf '%s' "$BASELINE_METADATA_SHA256" | grep -Eq '^[0-9a-f]{64}$'
-          echo "baseline_tag=$BASELINE_TAG" >> "$GITHUB_OUTPUT"
-          echo "baseline_version=$BASELINE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "baseline_release_id=$BASELINE_RELEASE_ID" >> "$GITHUB_OUTPUT"
-          echo "baseline_commit=$BASELINE_COMMIT" >> "$GITHUB_OUTPUT"
-          echo "baseline_zip_sha256=$BASELINE_ZIP_SHA256" >> "$GITHUB_OUTPUT"
-          echo "baseline_metadata_sha256=$BASELINE_METADATA_SHA256" >> "$GITHUB_OUTPUT"
-          echo "baseline_signing_identity=$BASELINE_SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
-          echo "baseline_cdhash=$BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
+          printf '%s' "$FRESH_BASELINE_METADATA_SHA256" | grep -Eq '^[0-9a-f]{64}$'
+          echo "baseline_tag=$FRESH_BASELINE_TAG" >> "$GITHUB_OUTPUT"
+          echo "baseline_version=$FRESH_BASELINE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "baseline_release_id=$FRESH_BASELINE_RELEASE_ID" >> "$GITHUB_OUTPUT"
+          echo "baseline_commit=$FRESH_BASELINE_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "baseline_zip_sha256=$FRESH_BASELINE_ZIP_SHA256" >> "$GITHUB_OUTPUT"
+          echo "baseline_metadata_sha256=$FRESH_BASELINE_METADATA_SHA256" >> "$GITHUB_OUTPUT"
+          echo "baseline_signing_identity=$FRESH_BASELINE_SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "baseline_cdhash=$FRESH_BASELINE_CDHASH" >> "$GITHUB_OUTPUT"
           echo "baseline_artifact_name=$BASELINE_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "baseline_artifact_id=$BASELINE_ARTIFACT_ID" >> "$GITHUB_OUTPUT"
           echo "baseline_artifact_digest=$BASELINE_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "cdhash=$CDHASH" >> "$GITHUB_OUTPUT"
-          echo "code_directory_sha256=$CODE_DIRECTORY_SHA256" >> "$GITHUB_OUTPUT"
-          echo "signing_identity=$SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "cdhash=$FRESH_CDHASH" >> "$GITHUB_OUTPUT"
+          echo "code_directory_sha256=$FRESH_CODE_DIRECTORY_SHA256" >> "$GITHUB_OUTPUT"
+          echo "signing_identity=$FRESH_SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
           echo "evidence_run_id=$EVIDENCE_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "evidence_run_attempt=$EVIDENCE_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
@@ -784,22 +368,11 @@ jobs:
         with:
           ref: ${{ inputs.commit }}
           persist-credentials: false
-      - name: Bind recovery transaction tooling
+      - name: Bind release source
         env:
           RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            exit 0
-          fi
-          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
-            tools/desktop-release-transaction.ts
-          test "$(git diff --cached --name-only)" = 'tools/desktop-release-transaction.ts'
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -958,11 +531,10 @@ jobs:
           spctl --assess --type execute --verbose \
             "$RUNNER_TEMP/desktop-release-dmg/Enduragent.app"
 
-  stage-private-draft:
+  publish-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     needs: [sign-macos, verify-macos-envelope]
-    environment: desktop-macos-publication
     permissions:
       actions: read
       contents: write
@@ -971,23 +543,6 @@ jobs:
         with:
           ref: ${{ inputs.commit }}
           persist-credentials: false
-      - name: Bind recovery transaction tooling
-        env:
-          RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            exit 0
-          fi
-          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
-            tools/desktop-release-transaction.ts
-          test "$(git diff --cached --name-only)" = 'tools/desktop-release-transaction.ts'
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -1002,565 +557,61 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}
           digest-mismatch: error
-      - name: Bind immutable Actions artifact evidence
-        env:
-          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
-          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
-          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
-          EVIDENCE_RUN_ID: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          EVIDENCE_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.evidence_run_attempt }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
-          test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-      - name: Revalidate recoverable candidate state
+      - name: Publish release assets and promote latest
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
+          DESKTOP_VERSION: ${{ inputs.desktop_version }}
           RELEASE_DRAFT_ID: ${{ inputs.draft_id }}
           RELEASE_BODY_SHA256: ${{ inputs.draft_body_sha256 }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
         run: |
           set -euo pipefail
           CANDIDATE_RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")
           test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
           test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
+          test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.draft')" = 'true'
           test "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.prerelease')" = 'false'
-          if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.draft')" = 'false' ]; then
-            test "$SOURCE_RUN_ID" != 'none'
-            if [ "$(printf '%s' "$CANDIDATE_RELEASE" | jq -r '.body')" != 'Desktop update validation is in progress. This release is not yet generally available.' ]; then
-              CANDIDATE_BODY_SHA256=$(printf '%s' "$CANDIDATE_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
-              test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"
-              LATEST_RELEASE=$(gh api -H 'Cache-Control: no-cache' "repos/$GITHUB_REPOSITORY/releases/latest")
-              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
-              test "$(printf '%s' "$LATEST_RELEASE" | jq -r '.tag_name')" = "$RELEASE_TAG"
-            fi
-          fi
-      - name: Upload updater envelope to the private draft
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm desktop-release:transaction stage --directory "$RUNNER_TEMP/desktop-release"
-
-  publish-assets:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: [sign-macos, stage-private-draft]
-    environment: desktop-macos-publication
-    permissions:
-      actions: read
-      contents: write
-    outputs:
-      latest_id: ${{ steps.observe.outputs.latest_id }}
-      latest_tag: ${{ steps.observe.outputs.latest_tag }}
-      latest_metadata_sha256: ${{ steps.observe.outputs.latest_metadata_sha256 }}
-      rollback_latest_id: ${{ steps.observe.outputs.rollback_latest_id }}
-      rollback_latest_tag: ${{ steps.observe.outputs.rollback_latest_tag }}
-      rollback_latest_metadata_sha256: ${{ steps.observe.outputs.rollback_latest_metadata_sha256 }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ inputs.commit }}
-          persist-credentials: false
-      - name: Bind recovery transaction tooling
-        env:
-          RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            exit 0
-          fi
-          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
-            tools/desktop-release-transaction.ts
-          test "$(git diff --cached --name-only)" = 'tools/desktop-release-transaction.ts'
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
-          path: ${{ runner.temp }}/desktop-release
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          digest-mismatch: error
-      - name: Bind immutable Actions artifact evidence
-        env:
-          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
-          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
-          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
-          EVIDENCE_RUN_ID: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          EVIDENCE_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.evidence_run_attempt }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
-          test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-      - name: Bind latest before public mutation
-        id: observe
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          BASELINE_METADATA_SHA256: ${{ needs.sign-macos.outputs.baseline_metadata_sha256 }}
-        run: |
-          pnpm desktop-release:transaction observe \
-            --directory "$RUNNER_TEMP/desktop-release" \
-            --baseline-metadata-sha256 "$BASELINE_METADATA_SHA256" \
-            --github-output "$GITHUB_OUTPUT"
-      - name: Publish verified release without changing latest
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          EXPECTED_LATEST_ID: ${{ steps.observe.outputs.latest_id }}
-          EXPECTED_LATEST_TAG: ${{ steps.observe.outputs.latest_tag }}
-          EXPECTED_LATEST_METADATA_SHA256: ${{ steps.observe.outputs.latest_metadata_sha256 }}
-        run: |
-          pnpm desktop-release:transaction publish \
-            --directory "$RUNNER_TEMP/desktop-release" \
-            --expected-latest-id "$EXPECTED_LATEST_ID" \
-            --expected-latest-tag "$EXPECTED_LATEST_TAG" \
-            --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"
-
-  request-latest:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: [sign-macos, publish-assets]
-    outputs:
-      promotion_outcome: ${{ steps.promote.outputs.promotion_outcome }}
-    environment: desktop-macos-latest
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - name: Reserve latest mutation reconciliation window
-        id: latest-deadline
-        run: |
-          set -euo pipefail
-          DEADLINE_SECONDS=$(( $(date -u +%s) + 42 * 60 ))
-          printf 'deadline_ms=%s000\n' "$DEADLINE_SECONDS" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ inputs.commit }}
-          persist-credentials: false
-      - name: Bind recovery transaction tooling
-        env:
-          RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            exit 0
-          fi
-          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
-            tools/desktop-release-transaction.ts
-          test "$(git diff --cached --name-only)" = 'tools/desktop-release-transaction.ts'
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
-          path: ${{ runner.temp }}/desktop-release
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          digest-mismatch: error
-      - name: Bind immutable Actions artifact evidence
-        env:
-          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
-          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
-          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
-          EVIDENCE_RUN_ID: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          EVIDENCE_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.evidence_run_attempt }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
-          test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-      - name: Compare-and-swap repository latest
-        id: promote
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          TRANSACTION_DEADLINE_MS: ${{ steps.latest-deadline.outputs.deadline_ms }}
-          EXPECTED_LATEST_ID: ${{ needs.publish-assets.outputs.latest_id }}
-          EXPECTED_LATEST_TAG: ${{ needs.publish-assets.outputs.latest_tag }}
-          EXPECTED_LATEST_METADATA_SHA256: ${{ needs.publish-assets.outputs.latest_metadata_sha256 }}
-        run: |
-          pnpm desktop-release:transaction promote \
-            --directory "$RUNNER_TEMP/desktop-release" \
-            --github-output "$GITHUB_OUTPUT" \
-            --transaction-deadline-ms "$TRANSACTION_DEADLINE_MS" \
-            --expected-latest-id "$EXPECTED_LATEST_ID" \
-            --expected-latest-tag "$EXPECTED_LATEST_TAG" \
-            --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"
-
-  reconcile-latest:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: [sign-macos, publish-assets, request-latest]
-    if: >-
-      ${{ always() && needs.sign-macos.result == 'success' &&
-          needs.publish-assets.result == 'success' }}
-    environment: desktop-macos-latest
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ inputs.commit }}
-          persist-credentials: false
-      - name: Bind recovery transaction tooling
-        env:
-          RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            exit 0
-          fi
-          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
-            tools/desktop-release-transaction.ts
-          test "$(git diff --cached --name-only)" = 'tools/desktop-release-transaction.ts'
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
-          path: ${{ runner.temp }}/desktop-release
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          digest-mismatch: error
-      - name: Bind immutable Actions artifact evidence
-        env:
-          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
-          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
-          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
-          EVIDENCE_RUN_ID: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          EVIDENCE_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.evidence_run_attempt }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
-          test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-      - name: Reconcile repository latest read-only
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PROMOTION_OUTCOME: ${{ needs.request-latest.outputs.promotion_outcome }}
-        run: |
-          set -euo pipefail
-          case "$PROMOTION_OUTCOME" in
-            ''|applied|unknown)
-              ;;
-            foreign|unapplied)
-              echo "::error::Latest promotion reached a terminal $PROMOTION_OUTCOME outcome"
-              exit 1
-              ;;
-            *)
-              echo "::error::Latest promotion outcome is invalid"
-              exit 1
-              ;;
-          esac
-          pnpm desktop-release:transaction reconcile --directory "$RUNNER_TEMP/desktop-release"
-
-  verify-production-update:
-    runs-on: macos-15
-    timeout-minutes: 30
-    needs: [sign-macos, reconcile-latest]
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ inputs.commit }}
-          persist-credentials: false
-      - name: Bind recovery release tooling
-        env:
-          RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            exit 0
-          fi
-          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
-            apps/desktop/scripts/development-package-plan.mjs \
-            apps/desktop/scripts/macos-release-plan.mjs \
-            apps/desktop/scripts/package-inventory.mjs \
-            apps/desktop/scripts/package-plan.mjs \
-            apps/desktop/scripts/support/ \
-            apps/desktop/scripts/verify-macos-release.mjs \
-            apps/desktop/scripts/verify-package-layout.mjs \
-            apps/desktop/scripts/verify-updater-round-trip.mjs \
-            tools/desktop-release-transaction.ts
-          EXPECTED_RECOVERY_DIFF=$'apps/desktop/scripts/development-package-plan.mjs\napps/desktop/scripts/macos-release-plan.mjs\napps/desktop/scripts/package-inventory.mjs\napps/desktop/scripts/package-plan.mjs\napps/desktop/scripts/support/desktop-cdp.ts\napps/desktop/scripts/support/packaged-telegram/acceptance-deadline.ts\napps/desktop/scripts/support/packaged-telegram/daemon-utility.ts\napps/desktop/scripts/support/packaged-telegram/disposable-keychain.ts\napps/desktop/scripts/support/packaged-telegram/main-entry.ts\napps/desktop/scripts/support/packaged-telegram/package-acceptance.d.mts\napps/desktop/scripts/support/packaged-telegram/package-acceptance.mjs\napps/desktop/scripts/support/packaged-telegram/process-safety.ts\napps/desktop/scripts/support/packaged-telegram/startup-mode.ts\napps/desktop/scripts/support/packaged-telegram/telegram-fetch-route.ts\napps/desktop/scripts/verify-macos-release.mjs\napps/desktop/scripts/verify-package-layout.mjs\napps/desktop/scripts/verify-updater-round-trip.mjs\ntools/desktop-release-transaction.ts'
-          test "$(git diff --cached --name-only)" = "$EXPECTED_RECOVERY_DIFF"
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Build updater acceptance dependencies
-        run: pnpm --filter '@enduragent/desktop^...' build
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
-          path: ${{ runner.temp }}/desktop-release
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          digest-mismatch: error
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.sign-macos.outputs.baseline_artifact_id }}
-          path: ${{ runner.temp }}/desktop-baseline
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          digest-mismatch: error
-      - name: Bind immutable candidate and baseline artifacts
-        env:
-          CANDIDATE_ID: ${{ needs.sign-macos.outputs.artifact_id }}
-          CANDIDATE_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
-          CANDIDATE_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
-          BASELINE_ID: ${{ needs.sign-macos.outputs.baseline_artifact_id }}
-          BASELINE_DIGEST: ${{ needs.sign-macos.outputs.baseline_artifact_digest }}
-          BASELINE_NAME: ${{ needs.sign-macos.outputs.baseline_artifact_name }}
-          EVIDENCE_RUN_ID: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          EVIDENCE_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.evidence_run_attempt }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$CANDIDATE_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$CANDIDATE_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$BASELINE_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$BASELINE_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
-          test "$CANDIDATE_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-          test "$BASELINE_NAME" = "desktop-baseline-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-      - name: Exercise native production-feed update
-        env:
-          ENDURAGENT_MACOS_UPDATE_ROUNDTRIP_MODE: steady
-          BASELINE_VERSION: ${{ needs.sign-macos.outputs.baseline_version }}
-          CANDIDATE_VERSION: ${{ inputs.desktop_version }}
-        run: |
-          set -euo pipefail
-          CANDIDATE_ENVELOPE="$RUNNER_TEMP/desktop-public-envelope"
-          EVIDENCE="$RUNNER_TEMP/macos-update-roundtrip.json"
+          CANDIDATE_BODY_SHA256=$(printf '%s' "$CANDIDATE_RELEASE" | jq -j '.body' | shasum -a 256 | awk '{print $1}')
+          test "$CANDIDATE_BODY_SHA256" = "$RELEASE_BODY_SHA256"
+          PUBLIC_ENVELOPE="$RUNNER_TEMP/desktop-public-envelope"
           pnpm desktop-release:transaction public-envelope \
             --directory "$RUNNER_TEMP/desktop-release" \
-            --output "$CANDIDATE_ENVELOPE"
-          pnpm --filter @enduragent/desktop test:macos-update-roundtrip \
-            "$BASELINE_VERSION" \
-            "$CANDIDATE_VERSION" \
-            "$RUNNER_TEMP/desktop-baseline" \
-            "$CANDIDATE_ENVELOPE" \
-            "$EVIDENCE"
-      - name: Upload updater round-trip evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-update-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/macos-update-roundtrip.json
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 90
-
-  activate-release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: [sign-macos, publish-assets, request-latest, reconcile-latest, verify-production-update]
-    if: >-
-      ${{ always() && needs.publish-assets.result == 'success' &&
-          needs.reconcile-latest.result == 'success' &&
-          needs.verify-production-update.result == 'success' }}
-    environment: desktop-macos-latest
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ inputs.commit }}
-          persist-credentials: false
-      - name: Bind recovery transaction tooling
+            --output "$PUBLIC_ENVELOPE"
+          EXPECTED_FILES=$(printf '%s\n' \
+            "Enduragent-$DESKTOP_VERSION-arm64.dmg" \
+            "Enduragent-$DESKTOP_VERSION-arm64.zip" \
+            "Enduragent-$DESKTOP_VERSION-arm64.zip.blockmap" \
+            latest-mac.yml | LC_ALL=C sort)
+          ACTUAL_FILES=$(find "$PUBLIC_ENVELOPE" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)
+          test "$ACTUAL_FILES" = "$EXPECTED_FILES"
+          test "$(grep -c '^version:' "$PUBLIC_ENVELOPE/latest-mac.yml")" = '1'
+          grep -q "^version: $DESKTOP_VERSION\$" "$PUBLIC_ENVELOPE/latest-mac.yml"
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$PUBLIC_ENVELOPE/Enduragent-$DESKTOP_VERSION-arm64.dmg" \
+            "$PUBLIC_ENVELOPE/Enduragent-$DESKTOP_VERSION-arm64.zip" \
+            "$PUBLIC_ENVELOPE/Enduragent-$DESKTOP_VERSION-arm64.zip.blockmap" \
+            "$PUBLIC_ENVELOPE/latest-mac.yml"
+          ASSET_COUNT=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID" --jq '.assets | length')
+          test "$ASSET_COUNT" = '4'
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID" \
+            -F draft=false --jq '.draft' | grep -q '^false$'
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID" \
+            -f make_latest=true --jq '.id' >/dev/null
+          LATEST=$(gh api -H 'Cache-Control: no-cache' "repos/$GITHUB_REPOSITORY/releases/latest")
+          test "$(printf '%s' "$LATEST" | jq -r '.id | tostring')" = "$RELEASE_DRAFT_ID"
+          test "$(printf '%s' "$LATEST" | jq -r '.tag_name')" = "$RELEASE_TAG"
+      - name: Confirm production feed serves the release
         env:
-          RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
+          DESKTOP_VERSION: ${{ inputs.desktop_version }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            exit 0
-          fi
-          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
-            tools/desktop-release-transaction.ts
-          test "$(git diff --cached --name-only)" = 'tools/desktop-release-transaction.ts'
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
-          path: ${{ runner.temp }}/desktop-release
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          digest-mismatch: error
-      - name: Bind immutable Actions artifact evidence
-        env:
-          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
-          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
-          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
-          EVIDENCE_RUN_ID: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          EVIDENCE_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.evidence_run_attempt }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
-          test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-      - name: Activate bound general-availability body
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' apps/desktop/CHANGELOG.md | tail -n +2)
-          printf '%s' "$BODY" > "$RUNNER_TEMP/desktop-release-body.md"
-          pnpm desktop-release:transaction activate \
-            --directory "$RUNNER_TEMP/desktop-release" \
-            --body-file "$RUNNER_TEMP/desktop-release-body.md"
-
-  compensate-publication:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs:
-      [
-        sign-macos,
-        publish-assets,
-        request-latest,
-        reconcile-latest,
-        verify-production-update,
-        activate-release,
-      ]
-    if: >-
-      ${{ always() && needs.publish-assets.outputs.latest_id != '' &&
-          needs.reconcile-latest.result == 'success' &&
-          needs.activate-release.result != 'success' }}
-    environment: desktop-macos-latest
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ inputs.commit }}
-          persist-credentials: false
-      - name: Bind recovery transaction tooling
-        env:
-          RELEASE_COMMIT: ${{ inputs.commit }}
-          RELEASE_TOOLING_COMMIT: ${{ inputs.tooling_commit }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          if [ "$RELEASE_TOOLING_COMMIT" = "$RELEASE_COMMIT" ]; then
-            exit 0
-          fi
-          git fetch --no-tags origin "$RELEASE_TOOLING_COMMIT"
-          git restore --source="$RELEASE_TOOLING_COMMIT" --staged --worktree -- \
-            tools/desktop-release-transaction.ts
-          test "$(git diff --cached --name-only)" = 'tools/desktop-release-transaction.ts'
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
-          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          artifact-ids: ${{ needs.sign-macos.outputs.artifact_id }}
-          path: ${{ runner.temp }}/desktop-release
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          digest-mismatch: error
-      - name: Bind immutable Actions artifact evidence
-        env:
-          ARTIFACT_ID: ${{ needs.sign-macos.outputs.artifact_id }}
-          ARTIFACT_DIGEST: ${{ needs.sign-macos.outputs.artifact_digest }}
-          ARTIFACT_NAME: ${{ needs.sign-macos.outputs.artifact_name }}
-          EVIDENCE_RUN_ID: ${{ needs.sign-macos.outputs.evidence_run_id }}
-          EVIDENCE_RUN_ATTEMPT: ${{ needs.sign-macos.outputs.evidence_run_attempt }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-          printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          printf '%s' "$EVIDENCE_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
-          test "$ARTIFACT_NAME" = "desktop-release-$EVIDENCE_RUN_ID-$EVIDENCE_RUN_ATTEMPT"
-      - name: Restore prior latest and withdraw candidate
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          EXPECTED_LATEST_ID: ${{ needs.publish-assets.outputs.rollback_latest_id }}
-          EXPECTED_LATEST_TAG: ${{ needs.publish-assets.outputs.rollback_latest_tag }}
-          EXPECTED_LATEST_METADATA_SHA256: ${{ needs.publish-assets.outputs.rollback_latest_metadata_sha256 }}
-        run: |
-          set -euo pipefail
-          BODY=$(awk '/^## /{i++} i==1{print} i==2{exit}' apps/desktop/CHANGELOG.md | tail -n +2)
-          printf '%s' "$BODY" > "$RUNNER_TEMP/desktop-release-body.md"
-          pnpm desktop-release:transaction compensate \
-            --directory "$RUNNER_TEMP/desktop-release" \
-            --body-file "$RUNNER_TEMP/desktop-release-body.md" \
-            --expected-latest-id "$EXPECTED_LATEST_ID" \
-            --expected-latest-tag "$EXPECTED_LATEST_TAG" \
-            --expected-latest-metadata-sha256 "$EXPECTED_LATEST_METADATA_SHA256"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            SERVED=$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest-mac.yml" | sed -n 's/^version: //p' | head -1) || SERVED=''
+            if [ "$SERVED" = "$DESKTOP_VERSION" ]; then
+              echo "Production feed serves $SERVED"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::Production feed did not serve $DESKTOP_VERSION within 5 minutes"
+          exit 1
