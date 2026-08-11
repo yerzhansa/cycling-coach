@@ -36,8 +36,26 @@ mac:
 win:
   icon: resources/app-icon.ico
   signExecutable: false
+  requestedExecutionLevel: asInvoker
   files:
     - resources/tray.ico
   target:
-    - target: dir
+    - target: nsis
       arch: [x64]
+nsis:
+  artifactName: Enduragent-${version}-x64.${ext}
+  guid: 80611707-2ddf-50e5-b3ec-95f38ab4a6fa
+  oneClick: true
+  perMachine: false
+  packElevateHelper: false
+  createStartMenuShortcut: true
+  createDesktopShortcut: false
+  deleteAppDataOnUninstall: false
+  installerLanguages:
+    - en_US
+  language: "1033"
+  multiLanguageInstaller: false
+  displayLanguageSelector: false
+  differentialPackage: false
+  buildUniversalInstaller: false
+  include: build/installer.nsh
