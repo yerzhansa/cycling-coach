@@ -1,5 +1,24 @@
 # @enduragent/desktop-renderer
 
+## 0.0.4
+
+### Patch Changes
+
+- 3e8fbe5: User-facing: Added optional Telegram bot setup directly to the desktop Chat setup screen.
+  User-facing: Moved required desktop setup into Chat and kept it available in Settings for recovery.
+
+  Setup now stays in Chat until the coach is ready and remains available at the top of Settings for credential and training-data recovery.
+
+  Desktop setup readiness is rechecked from durable runtime state on every launch, and chat actions fail closed until the provider, training data, and saved safety intake are ready.
+
+  Chat setup can connect a Telegram bot from a copied BotFather token and safely delete its connection from this Mac, and always keeps pairing and access management in Settings.
+
+- a6a2cf4: User-facing: Desktop now asks you to quit and reopen the app when an update check cannot safely continue, instead of offering a retry that cannot run.
+
+  Invalidate timed-out updater generations, fence late completions, and keep automated and manual checks disabled until process restart after timeouts or updater startup failures because the native macOS updater does not expose a supported instance reset.
+
+- da84213: User-facing: Desktop update actions now wait for in-progress Settings changes to finish before restarting the app.
+
 ## 0.0.3
 
 ### Patch Changes

@@ -1,5 +1,31 @@
 # @enduragent/desktop
 
+## 0.1.2
+
+### Patch Changes
+
+- 00402f8: User-facing: Desktop update checks now recover from stalled network requests instead of remaining stuck indefinitely.
+- 3e8fbe5: User-facing: Added optional Telegram bot setup directly to the desktop Chat setup screen.
+  User-facing: Moved required desktop setup into Chat and kept it available in Settings for recovery.
+
+  Setup now stays in Chat until the coach is ready and remains available at the top of Settings for credential and training-data recovery.
+
+  Desktop setup readiness is rechecked from durable runtime state on every launch, and chat actions fail closed until the provider, training data, and saved safety intake are ready.
+
+  Chat setup can connect a Telegram bot from a copied BotFather token and safely delete its connection from this Mac, and always keeps pairing and access management in Settings.
+
+- a45d3bb: User-facing: Enduragent now exits safely instead of hanging indefinitely when background cleanup cannot finish.
+- d020f92: User-facing: Connect Intervals.icu by copying your API key - no typing it into the app.
+- 9eadc87: User-facing: Delete your Intervals.icu connection from Chat or Settings, and reconnect any time with a copied API key.
+- e1c4786: User-facing: Desktop now checks for updates every six hours while running, in addition to checking at startup.
+- a6a2cf4: User-facing: Desktop now asks you to quit and reopen the app when an update check cannot safely continue, instead of offering a retry that cannot run.
+
+  Invalidate timed-out updater generations, fence late completions, and keep automated and manual checks disabled until process restart after timeouts or updater startup failures because the native macOS updater does not expose a supported instance reset.
+
+- 873adab:
+- da84213: User-facing: Desktop update actions now wait for in-progress Settings changes to finish before restarting the app.
+- 41fe0aa: User-facing: Telegram bot management is now delete-and-reconnect - delete the connection, then connect a new bot with a copied token.
+
 ## 0.1.1
 
 ### Patch Changes
