@@ -62,7 +62,7 @@ async function expectStage(
 }
 
 describe("Windows parity scenario manifests", () => {
-  it("loads the frozen Chat, Settings and Training manifests with tested deterministic rows", async () => {
+  it("loads the frozen Chat, Settings, Training and Telegram manifests with tested deterministic rows", async () => {
     const collection = await loadWindowsParityScenarios();
 
     expect(collection.schemaVersion).toBe(1);
@@ -73,7 +73,7 @@ describe("Windows parity scenario manifests", () => {
         (scenario) => scenario.automation === "deterministic",
       ).length,
       vmOnly: collection.scenarios.filter((scenario) => scenario.automation === "vm-only").length,
-    }).toEqual({ total: 77, deterministic: 71, vmOnly: 6 });
+    }).toEqual({ total: 100, deterministic: 89, vmOnly: 11 });
     expect(new Set(collection.scenarios.map((scenario) => scenario.id)).size).toBe(
       collection.scenarios.length,
     );
@@ -130,6 +130,24 @@ describe("Windows parity scenario manifests", () => {
       "training.sync.protocol-failure",
       "training.ride-review.temporary-failure",
       "training.sidebar.sync-chip",
+      "telegram.setup.clipboard-connect",
+      "telegram.setup.refusal-recovery",
+      "telegram.connection.delete-only",
+      "telegram.pairing.webhook-removal",
+      "telegram.pairing.primary-user",
+      "telegram.allowed-senders.management",
+      "telegram.allowed-senders.recovery",
+      "telegram.status.redacted-projection",
+      "telegram.lifecycle.daemon-binding",
+      "telegram.lifecycle.turn-off-on",
+      "telegram.lifecycle.conflict-rejection",
+      "telegram.power.sleep-wake",
+      "telegram.power.delivery-gap",
+      "telegram.storage.encrypted-profile",
+      "telegram.storage.failure-truth",
+      "telegram.storage.diagnostics",
+      "telegram.tray.status-projection",
+      "telegram.release-chain.shutdown-drain",
     ]);
     expect(Object.isFrozen(collection)).toBe(true);
     expect(Object.isFrozen(collection.manifests)).toBe(true);

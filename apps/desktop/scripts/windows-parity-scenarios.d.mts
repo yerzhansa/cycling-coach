@@ -52,6 +52,7 @@ export const WINDOWS_PARITY_SCENARIO_MANIFEST_MAX_BYTES: 1048576;
 export const DEFAULT_WINDOWS_PARITY_SCENARIO_MANIFESTS: readonly [
   "chat-settings.scenarios.json",
   "training.scenarios.json",
+  "telegram.scenarios.json",
 ];
 
 export function loadWindowsParityScenarios(
