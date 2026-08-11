@@ -3,6 +3,7 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: {
     "abortable-operation": "src/abortable-operation.ts",
+    "account-identity": "src/account-identity.ts",
     runtime: "src/runtime.ts",
     sync: "src/sync.ts",
     backfill: "src/backfill.ts",

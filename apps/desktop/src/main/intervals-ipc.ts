@@ -3,7 +3,7 @@ import {
   verifyIntervalsCredentialAtPath,
   type IntervalsCredentialVerificationRefusalReason,
   type IntervalsCredentialVerificationResult,
-} from "@enduragent/coach/backfill";
+} from "@enduragent/coach/account-identity";
 import { awaitWithSignal } from "@enduragent/coach/abortable-operation";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import type { Clipboard, IpcMain, IpcMainInvokeEvent } from "electron";

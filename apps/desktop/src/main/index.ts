@@ -3,7 +3,7 @@ import { realpath, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "@enduragent/coach-client";
-import { checkIntervalsStoreOwnerAtPath } from "@enduragent/coach/backfill";
+import { checkIntervalsStoreOwnerAtPath } from "@enduragent/coach/account-identity";
 import { prepareDesktopAthleteHome } from "@enduragent/coach/enduragent";
 import { AthleteHomeIdentitySchema } from "@enduragent/coach-contract";
 import {
