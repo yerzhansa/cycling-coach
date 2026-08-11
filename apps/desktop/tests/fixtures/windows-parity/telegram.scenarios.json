@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "telegram.setup.clipboard-connect",
+      "surface": "telegram-setup",
+      "expected": "Telegram is optional in Chat setup, directs the athlete to BotFather, renders no token field, reads and clears a copied token before credential work, and shows a verified bot only after the controller reports an applied result.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop-renderer/tests/onboarding-telegram-row.test.tsx > sits after Training only in Chat and uses the approved logo-free clipboard flow",
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > explains the dedicated-bot boundary and accepts a token only from the clipboard",
+        "apps/desktop/tests/telegram-ipc.test.ts > reads and clears the clipboard synchronously before any credential await",
+        "apps/desktop-renderer/tests/onboarding-telegram-row.test.tsx > shows generic progress and closes only after the controller reports applied verification"
+      ]
+    },
+    {
+      "id": "telegram.setup.refusal-recovery",
+      "surface": "telegram-setup",
+      "expected": "Clipboard read, clear, format, token, storage, and control failures never infer success from channel health or change the current bot; an uncertain setup requires one authoritative Check again before another token mutation.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-ipc.test.ts > does not use clipboard contents when read, validation, or clear fails",
+        "apps/desktop/tests/telegram-ipc.test.ts > passes through refused and uncertain credential outcomes without inferring success from health",
+        "apps/desktop-renderer/tests/telegram-settings.test.ts > keeps the connected bot online while reporting a refused clipboard token",
+        "apps/desktop-renderer/tests/onboarding-telegram-row.test.tsx > offers one retry and restores Create focus when uncertain setup resolves as missing"
+      ]
+    },
+    {
+      "id": "telegram.connection.delete-only",
+      "surface": "telegram-settings",
+      "expected": "A configured bot offers Delete and no token replacement, requires confirmation, turns off and forgets the daemon credential and allowed-user access before deleting the durable encrypted profile, leaves the Telegram bot and chat in Telegram, and returns to first-time setup after authoritative success.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop-renderer/tests/onboarding-telegram-row.test.tsx > confirms deletion, restores focus on dismissal, and opens first-time setup after apply",
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > requires confirmation before deleting the encrypted bot credential",
+        "apps/desktop/tests/telegram-control.test.ts > forgets the released daemon profile before deleting the coherent vault profile",
+        "apps/desktop/tests/telegram-credential-vault.test.ts > deletes through a durable tombstone and cleans deferred ciphertext later"
+      ]
+    },
+    {
+      "id": "telegram.pairing.webhook-removal",
+      "surface": "telegram-pairing",
+      "expected": "A verified bot that still uses a webhook is stored with Telegram off without claiming setup success, and Settings exposes the explicit webhook-removal action before pairing.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop-renderer/tests/telegram-settings.test.ts > guides first-time webhook removal without asking for another reconnect",
+        "apps/desktop/tests/telegram-control.test.ts > stores an initial webhook-blocked profile disabled without claiming configure applied",
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > shows the short-lived pairing code and explicit webhook removal"
+      ]
+    },
+    {
+      "id": "telegram.pairing.primary-user",
+      "surface": "telegram-pairing",
+      "expected": "Starting pairing turns Telegram on, presents a one-minute code only while the verified bot can poll, makes the first claimant the required primary user, replaces the instruction when the claim lands, and expires an unused app-owned code without renderer polling.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > shows the short-lived pairing code and explicit webhook removal",
+        "apps/desktop/tests/telegram-control.test.ts > keeps a live pairing attempt durably enabled",
+        "apps/desktop-renderer/tests/telegram-settings.test.ts > replaces pairing instructions when the primary user claims the bot",
+        "apps/desktop/tests/telegram-control.test.ts > expires a live app-owned pairing lease without renderer polling"
+      ]
+    },
+    {
+      "id": "telegram.allowed-senders.management",
+      "surface": "telegram-allowed-senders",
+      "expected": "Paired Settings lists the primary and additional allowed Telegram users, never offers removal for the required primary user, validates the numeric user ID entry, and routes additional-user add and remove operations through strict authoritative lists.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > manages paired users without offering removal for the primary user",
+        "apps/desktop-renderer/tests/telegram-settings.test.ts > publishes the short-lived pairing code and manages additional senders",
+        "apps/desktop/tests/telegram-control.test.ts > returns only schema-valid allowed-sender lists, including an authoritative empty list",
+        "apps/desktop/tests/telegram-ipc.test.ts > accepts exactly one strict senderId object for add and remove"
+      ]
+    },
+    {
+      "id": "telegram.allowed-senders.recovery",
+      "surface": "telegram-allowed-senders",
+      "expected": "A failed allowed-user load is labeled for automatic retry, while refused or uncertain add and remove results retain the last trusted list and distinguish definite failure from storage or control uncertainty.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > truthfully explains automatic recovery when paired-user loading fails",
+        "apps/desktop-renderer/tests/telegram-settings.test.ts > warns without projecting an untrusted sender list when %s is %s",
+        "apps/desktop/tests/telegram-control.test.ts > propagates sender storage uncertainty without projecting a list",
+        "apps/desktop/tests/telegram-ipc.test.ts > returns control uncertainty after a side-effecting allowed-sender IPC rejects"
+      ]
+    },
+    {
+      "id": "telegram.status.redacted-projection",
+      "surface": "telegram-status",
+      "expected": "The renderer receives only the strict redacted Telegram channel, bot username, pairing, credential-presence, and delivery-gap snapshot; malformed or untrusted requests fail closed without copying tokens, paths, or dependency details.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-ipc.test.ts > returns only the strict redacted snapshot shape",
+        "apps/desktop/tests/telegram-ipc.test.ts > closes malformed coordinator mutation envelopes instead of copying private fields",
+        "apps/desktop/tests/telegram-ipc.test.ts > rejects untrusted and malformed calls before clipboard or coordinator access"
+      ]
+    },
+    {
+      "id": "telegram.lifecycle.daemon-binding",
+      "surface": "telegram-lifecycle",
+      "expected": "Every privileged Telegram operation is bound to one authenticated daemon generation and athlete home, closes its short-lived client after success or rejection, and refuses a mismatched home before connecting.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-daemon-binding.test.ts > binds every privileged Telegram method to one authenticated generation",
+        "apps/desktop/tests/telegram-daemon-binding.test.ts > closes the privileged client when a daemon RPC rejects",
+        "apps/desktop/tests/telegram-daemon-binding.test.ts > rejects a different authenticated home before connecting"
+      ]
+    },
+    {
+      "id": "telegram.lifecycle.turn-off-on",
+      "surface": "telegram-lifecycle",
+      "expected": "Turn off durably stops an app-supervised paired bot while retaining its encrypted identity, allowed-user access, and disabled intent across status reads, reconciliation, and coordinator reconstruction; Turn on resumes the same bot and access.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-control.test.ts > persists disabled intent and permanently disables the app-supervised daemon",
+        "apps/desktop/tests/telegram-control.test.ts > keeps a paired bot durably disabled across repeated status polls",
+        "apps/desktop/tests/telegram-control.test.ts > preserves durable disabled intent after coordinator reconstruction",
+        "apps/desktop/tests/desktop-telegram-release-chain.integration.test.ts > keeps paired identity durably off across polling and coordinator reconstruction"
+      ]
+    },
+    {
+      "id": "telegram.lifecycle.conflict-rejection",
+      "surface": "telegram-lifecycle",
+      "expected": "A polling conflict during Turn on restores the prior disabled durable and runtime truth, an attached owner requires transfer without changing local intent, and rejected bot identity directs delete-and-reconnect while leaving a coherent current bot online.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-control.test.ts > restores disabled intent and runtime before refusing an enable conflict",
+        "apps/desktop/tests/telegram-control.test.ts > refuses attached enablement before changing durable desired intent",
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > uses delete-and-reconnect guidance for %s",
+        "apps/desktop/tests/desktop-telegram-release-chain.integration.test.ts > refuses invalid token B while coherent token A stays stored and online"
+      ]
+    },
+    {
+      "id": "telegram.power.sleep-wake",
+      "surface": "telegram-power",
+      "expected": "Suspend durably records the polling gap before stopping Telegram, renders the channel as temporarily paused rather than off or connecting, and resume reconciles polling without changing the bot identity, desired state, pairing, or allowed users.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-power.test.ts > durably records suspend before stopping and reconciles after a short resume",
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > renders transient sleep suspension without calling it disabled or connecting",
+        "apps/desktop/tests/desktop-telegram-release-chain.integration.test.ts > keeps app-supervised sleep and wake transient without changing identity or access"
+      ]
+    },
+    {
+      "id": "telegram.power.delivery-gap",
+      "surface": "telegram-power",
+      "expected": "An uninterrupted polling-health gap warns at exactly 24 hours but not one minute earlier, survives process restart until acknowledged, and acknowledgement clears the warning and starts a fresh warning window.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-power.test.ts > warns after an exact-24-hour awake polling-health gap",
+        "apps/desktop/tests/telegram-power.test.ts > does not warn after a 23-hour-59-minute awake polling-health gap",
+        "apps/desktop/tests/telegram-power.test.ts > persists an exact-24-hour warning across process restart until acknowledgement",
+        "apps/desktop/tests/telegram-power.test.ts > starts a fresh warning window when an open gap is acknowledged",
+        "apps/desktop-renderer/tests/telegram-settings.test.ts > acknowledges the durable delivery-gap warning"
+      ]
+    },
+    {
+      "id": "telegram.storage.encrypted-profile",
+      "surface": "telegram-storage",
+      "expected": "Telegram stores one strict athlete-bound ciphertext profile without plaintext token or metadata authority; on Windows the safe-storage path avoids POSIX-only backend and directory-sync probes, isolates corrupt profile ciphertext from desired state, and rejects any encryption result containing plaintext.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-credential-vault.test.ts > publishes and reopens one strict owner-only ciphertext profile with no metadata authority",
+        "apps/desktop/tests/telegram-credential-vault.test.ts > keeps Windows DPAPI ciphertext isolated from a corrupt profile and desired state",
+        "apps/desktop/tests/telegram-credential-vault.test.ts > refuses a Windows Telegram encryption result containing plaintext"
+      ]
+    },
+    {
+      "id": "telegram.storage.failure-truth",
+      "surface": "telegram-storage",
+      "expected": "Unavailable encryption, an unsafe plaintext backend, unreadable credentials, and uncertain storage remain distinct closed states; first-time setup stays unconfigured, an existing bot stays visible when its identity is authoritative, and Settings offers the matching recovery without claiming success.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-credential-vault.test.ts > preserves %s as a closed status reason after reopen",
+        "apps/desktop/tests/telegram-control.test.ts > keeps initial setup unchanged when secure encryption is unavailable",
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > offers actionable recovery for %s",
+        "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > keeps the current paired bot visible during %s recovery"
+      ]
+    },
+    {
+      "id": "telegram.storage.diagnostics",
+      "surface": "telegram-diagnostics",
+      "expected": "Secure-storage diagnostics emit only the frozen vault or daemon stage and closed reason vocabulary, never tokens, paths, or dependency errors, isolate rejecting observers, and use one production observer across the vault and coordinator lifetimes.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-secure-storage-diagnostics.test.ts > writes only the closed stage and reason vocabulary",
+        "apps/desktop/tests/telegram-secure-storage-diagnostics.test.ts > isolates asynchronously rejecting observers",
+        "apps/desktop/tests/telegram-secure-storage-diagnostics.test.ts > wires one production diagnostic into the vault and both coordinator lifetimes",
+        "apps/desktop/tests/telegram-credential-vault.test.ts > emits only the exact closed stages at their vault boundaries"
+      ]
+    },
+    {
+      "id": "telegram.tray.status-projection",
+      "surface": "telegram-tray",
+      "expected": "The tray popover receives only one-way redacted channel and delivery-gap truth after its isolated renderer loads, maps online, reconnecting, conflict, rejected-token, transfer, and failure states, and gives a possible missed-message warning precedence over channel health.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/tray-popover.test.ts > publishes only after the isolated tray renderer finishes loading",
+        "apps/desktop/tests/tray-preload.test.ts > exposes only a one-way redacted status listener",
+        "apps/desktop-renderer/tests/tray-status.test.ts > projects %s",
+        "apps/desktop-renderer/tests/tray-status.test.ts > gives a possible delivery gap precedence over channel health"
+      ]
+    },
+    {
+      "id": "telegram.release-chain.shutdown-drain",
+      "surface": "telegram-lifecycle",
+      "expected": "Once desktop shutdown begins, new Telegram work is fenced, an already accepted connection deletion drains before daemon and process teardown, and later process quiescence prevents stale timeout recovery from reopening admission.",
+      "automation": "deterministic",
+      "tests": [
+        "apps/desktop/tests/telegram-ipc.test.ts > fences new requests synchronously and drains an accepted removal before shutdown advances",
+        "apps/desktop/tests/telegram-control.test.ts > fences new work, clears pairing timers, and drains an accepted removal on close",
+        "apps/desktop/tests/desktop-telegram-release-chain.integration.test.ts > lets later process quiesce seal admission before timeout and defeat pending refusal recovery"
+      ]
+    },
+    {
+      "id": "telegram.windows.setup-copy-storage",
+      "surface": "telegram-setup",
+      "expected": "The installed Windows setup and Settings surfaces use this PC and DPAPI recovery wording instead of Mac or Keychain wording, accept the token only through the native clipboard lane, and persist only encrypted credential bytes.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "telegram.windows.power-events",
+      "surface": "telegram-power",
+      "expected": "Real Windows suspend and resume events pause and restore Telegram polling without changing durable on or off intent, and a sufficiently long gap produces the shipped possible-message-loss warning with PC wording.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "telegram.windows.tray-residency",
+      "surface": "telegram-tray",
+      "expected": "The installed Windows tray opens the main window on left click and its native right-click menu does not expose the macOS Telegram popover; Telegram status and actions remain available in the main window without Mac wording.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "telegram.windows.packaged-connectivity",
+      "surface": "telegram-packaged",
+      "expected": "The installed Windows package can verify a copied BotFather token, remove an existing webhook, pair the primary user, poll Telegram, and send and receive a coach reply through its packaged production dependencies.",
+      "automation": "vm-only"
+    },
+    {
+      "id": "telegram.windows.packaged-lifecycle",
+      "surface": "telegram-packaged",
+      "expected": "The installed Windows package keeps Telegram identity and allowed-user access through Turn off, Turn on, relaunch, and sleep or wake, then Delete removes only local connection state without elevation or native add-ons.",
+      "automation": "vm-only"
+    }
+  ]
+}

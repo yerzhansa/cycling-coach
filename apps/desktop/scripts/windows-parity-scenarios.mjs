@@ -12,6 +12,7 @@ export const WINDOWS_PARITY_SCENARIO_MANIFEST_MAX_BYTES = 1_048_576;
 export const DEFAULT_WINDOWS_PARITY_SCENARIO_MANIFESTS = Object.freeze([
   "chat-settings.scenarios.json",
   "training.scenarios.json",
+  "telegram.scenarios.json",
 ]);
 
 export class WindowsParityScenarioManifestError extends Error {
