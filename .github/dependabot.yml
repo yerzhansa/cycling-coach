@@ -4,6 +4,22 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # Dependabot discovers pnpm workspace members from pnpm-workspace.yaml, so one root entry covers their manifests.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "fit-file-parser"
+    # Bundle compatible routine updates to keep PR volume manageable; major
+    # upgrades remain separate so their migration risk can be reviewed alone.
+    groups:
+      routine-updates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: docker
     directory: /packages/cycling-coach
     schedule:
