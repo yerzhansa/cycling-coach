@@ -743,10 +743,13 @@ async function cdpPage(port: number, authority: DebuggerAuthority) {
         "document.querySelector('section[aria-label=\"Telegram\"]')?.innerText ?? ''",
       );
     },
-    async clickButton(label: string): Promise<void> {
+    async clickButton(label: string, scopeSelector?: string): Promise<void> {
       const clicked = await evaluate<boolean>(`(() => {
         const label = ${JSON.stringify(label)};
-        const button = [...document.querySelectorAll("button")].find((candidate) =>
+        const scopeSelector = ${JSON.stringify(scopeSelector)};
+        const scope = scopeSelector === undefined ? document : document.querySelector(scopeSelector);
+        if (scope === null) return false;
+        const button = [...scope.querySelectorAll("button")].find((candidate) =>
           candidate.textContent?.trim() === label && !candidate.disabled
         );
         if (!(button instanceof HTMLButtonElement)) return false;
@@ -1501,9 +1504,16 @@ async function main(): Promise<void> {
     );
 
     reportPhase("removal");
-    await page.clickButton("Remove bot from this Mac");
-    await waitForButton(page, "Remove Telegram bot");
-    await page.clickButton("Remove Telegram bot");
+    await page.clickButton("Delete", 'section[aria-label="Telegram"]');
+    await waitUntil("Telegram delete confirmation", () =>
+      page.evaluate<boolean>(
+        `document.querySelector('[data-inline-confirmation="delete-telegram"]') !== null`,
+      ),
+    );
+    await page.clickButton(
+      "Delete connection",
+      '[data-inline-confirmation="delete-telegram"]',
+    );
     await waitForButton(page, "Paste token from clipboard");
     await waitUntil("Telegram polling stop after removal", () => telegram?.activePollCount() === 0);
     assert(!existsSync(profilePath), "Telegram profile remained after removal");

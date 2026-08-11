@@ -10,17 +10,17 @@ import {
   TELEGRAM_AVAILABILITY_COPY,
   TELEGRAM_CREATE_COPY_AFTER_BOTFATHER,
   TELEGRAM_CREATE_TITLE,
+  TELEGRAM_DELETE_COPY,
+  TELEGRAM_DELETE_TITLE,
   TELEGRAM_OPTIONAL_LABEL,
-  TELEGRAM_REMOVE_COPY,
-  TELEGRAM_REMOVE_TITLE,
-  TELEGRAM_REPLACEMENT_COPY,
   TELEGRAM_ROW_TITLE,
   TELEGRAM_VERIFIED_PREFIX,
 } from "./copy.js";
-import { BUTTON_DANGER_SM, BUTTON_QUIET_SM, BUTTON_SOLID_SM } from "./SetupCard.js";
+import { BUTTON_DANGER_OUTLINE_SM, BUTTON_QUIET_SM, BUTTON_SOLID_SM } from "../shared/buttons.js";
+import { InlineConfirmation, type InlineConfirmationFocus } from "../shared/InlineConfirmation.js";
 import { SetupRow, SetupSubPanel } from "./SetupRow.js";
 
-type TelegramPanel = "closed" | "token" | "remove";
+type TelegramPanel = "closed" | "token" | "delete";
 type TelegramAction = "paste-token" | "remove";
 type TelegramAttemptPhase = "requested" | "working" | "settled";
 
@@ -73,7 +73,7 @@ function fallbackFeedback(action: TelegramAction): TelegramSettingsFeedback {
     message:
       action === "paste-token"
         ? "The copied token was not applied. The current Telegram bot is unchanged."
-        : "The Telegram bot was not removed from this Mac.",
+        : "The Telegram connection was not deleted from this Mac.",
   };
 }
 
@@ -129,14 +129,16 @@ function restoreAttempt(
   }
   if (attempt.phase === "settled") {
     if (sameFeedback(feedback, attempt.feedback)) return attempt;
-    return identity(current?.telegram ?? null).kind === "unknown"
-      ? attempt
-      : persistAttempt(port, null);
+    const currentIdentity = identity(current?.telegram ?? null);
+    if (attempt.action === "remove" && currentIdentity.kind === "missing") return attempt;
+    return currentIdentity.kind === "unknown" ? attempt : persistAttempt(port, null);
   }
   if (attempt.phase === "requested" && sameFeedback(feedback, attempt.feedbackBefore)) {
     return persistAttempt(port, null);
   }
-  if (applied(attempt, state)) return persistAttempt(port, null);
+  if (applied(attempt, state)) {
+    return attempt.action === "remove" ? attempt : persistAttempt(port, null);
+  }
   attempt = {
     ...attempt,
     feedback: feedback ?? fallbackFeedback(attempt.action),
@@ -148,27 +150,39 @@ function restoreAttempt(
 export function TelegramRow(): ReactElement {
   const state = useEnduragentStore((store) => store.settings.telegram);
   const settings = useEnduragentStore((store) => store.settings);
+  const setupReadyForFocus = useEnduragentStore(
+    (store) => store.onboarding.open && !store.onboarding.loading,
+  );
   const port = useEnduragentStore((store) => store.settingsPorts?.telegram ?? null);
   const [restoredAttempt] = useState(() => restoreAttempt(port, state));
   const [panel, setPanel] = useState<TelegramPanel>(() => {
     if (restoredAttempt?.panelDismissed === true) return "closed";
-    if (restoredAttempt?.action === "remove") return "remove";
+    if (restoredAttempt?.action === "remove") return "delete";
     return restoredAttempt === null ? "closed" : "token";
   });
   const [attempt, setAttempt] = useState<TelegramAttempt | null>(restoredAttempt);
   const [panelFeedback, setPanelFeedback] = useState<TelegramSettingsFeedback | null>(
     restoredAttempt?.phase === "settled" ? restoredAttempt.feedback : null,
   );
+  const [confirmationFocus, setConfirmationFocus] = useState<InlineConfirmationFocus>(() =>
+    restoredAttempt?.action === "remove" && restoredAttempt.phase === "working" ? "confirm" : null,
+  );
+  const [confirmationVersion, setConfirmationVersion] = useState(0);
   const trigger = useRef<HTMLButtonElement>(null);
   const tokenAction = useRef<HTMLButtonElement>(null);
   const retryAction = useRef<HTMLButtonElement>(null);
-  const removeTrigger = useRef<HTMLButtonElement>(null);
-  const removeCancel = useRef<HTMLButtonElement>(null);
-  const removeConfirm = useRef<HTMLButtonElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const focusHeadingAfterOpen = useRef(false);
+  const focusRestoredConfirmationAfterOpen = useRef(
+    restoredAttempt?.action === "remove" && restoredAttempt.phase === "working",
+  );
   const current = content(state);
   const telegram = current?.telegram ?? null;
   const feedback = current?.feedback ?? null;
   const currentIdentity = identity(telegram);
+  const authoritativeIdentity = useRef<"verified" | "missing" | null>(
+    currentIdentity.kind === "unknown" ? null : currentIdentity.kind,
+  );
   const verifiedUsername = currentIdentity.kind === "verified" ? currentIdentity.username : null;
   const username = verifiedUsername ?? attempt?.verifiedUsernameBefore ?? null;
   const configured = username !== null;
@@ -178,12 +192,6 @@ export function TelegramRow(): ReactElement {
   const activeAttempt = attempt !== null && attempt.phase !== "settled";
   const connecting = activeAttempt && attempt.action === "paste-token";
   const removing = activeAttempt && attempt.action === "remove";
-  const copiedTokenRejected =
-    attempt?.action === "paste-token" &&
-    attempt.phase === "settled" &&
-    panelFeedback?.tone === "error" &&
-    panelFeedback.message ===
-      "Telegram rejected the copied token. The current Telegram bot is unchanged.";
   const authoritativeCheckRequired =
     attempt?.phase === "settled" &&
     attempt.feedback?.tone === "warning" &&
@@ -192,8 +200,44 @@ export function TelegramRow(): ReactElement {
   const panelId = "onboarding-telegram-panel";
 
   useEffect(() => {
-    if (panel === "remove") removeCancel.current?.focus();
-  }, [panel]);
+    if (!setupReadyForFocus || panel !== "token" || !focusHeadingAfterOpen.current) return;
+    queueMicrotask(() => {
+      if (!focusHeadingAfterOpen.current) return;
+      heading.current?.focus();
+      focusHeadingAfterOpen.current = false;
+    });
+  }, [panel, setupReadyForFocus]);
+
+  useEffect(() => {
+    if (currentIdentity.kind === "unknown") return;
+    const previous = authoritativeIdentity.current;
+    authoritativeIdentity.current = currentIdentity.kind;
+    if (previous === currentIdentity.kind) return;
+    if (attempt !== null) return;
+    if (currentIdentity.kind === "verified" && panel === "token") {
+      persistAttempt(port, null);
+      setAttempt(null);
+      setPanelFeedback(null);
+      setPanel("closed");
+      queueMicrotask(() => trigger.current?.focus());
+      return;
+    }
+    if (previous !== "verified" || currentIdentity.kind !== "missing") return;
+    persistAttempt(port, null);
+    setAttempt(null);
+    setPanelFeedback(null);
+    focusHeadingAfterOpen.current = true;
+    setPanel("token");
+  }, [attempt, currentIdentity.kind, panel, port]);
+
+  useEffect(() => {
+    if (!setupReadyForFocus || panel !== "delete" || !focusRestoredConfirmationAfterOpen.current) {
+      return;
+    }
+    focusRestoredConfirmationAfterOpen.current = false;
+    setConfirmationFocus("confirm");
+    setConfirmationVersion((version) => version + 1);
+  }, [panel, setupReadyForFocus]);
 
   useEffect(() => {
     if (attempt === null) return;
@@ -219,21 +263,32 @@ export function TelegramRow(): ReactElement {
       if (recoveredFromUncertain) {
         persistAttempt(port, null);
         setAttempt(null);
-        setPanel("closed");
         setPanelFeedback(null);
-        queueMicrotask(() => trigger.current?.focus());
+        if (attempt.action === "remove") {
+          focusHeadingAfterOpen.current = true;
+          setPanel("token");
+        } else {
+          setPanel("closed");
+          queueMicrotask(() => trigger.current?.focus());
+        }
         return;
       }
       if (feedbackChanged && currentIdentity.kind !== "unknown") {
         persistAttempt(port, null);
         setAttempt(null);
         setPanelFeedback(null);
-        queueMicrotask(() => {
-          if (attempt.action === "remove") {
-            if (panel === "remove") removeConfirm.current?.focus();
-            else removeTrigger.current?.focus();
-          } else tokenAction.current?.focus();
-        });
+        if (attempt.action === "remove" && currentIdentity.kind === "missing") {
+          focusHeadingAfterOpen.current = true;
+          setPanel("token");
+        } else if (attempt.action === "remove" && panel === "delete") {
+          setConfirmationFocus("confirm");
+          setConfirmationVersion((version) => version + 1);
+        } else {
+          queueMicrotask(() => {
+            if (attempt.action === "remove") trigger.current?.focus();
+            else tokenAction.current?.focus();
+          });
+        }
       }
       return;
     }
@@ -248,9 +303,14 @@ export function TelegramRow(): ReactElement {
     if (applied(attempt, state)) {
       persistAttempt(port, null);
       setAttempt(null);
-      setPanel("closed");
       setPanelFeedback(null);
-      queueMicrotask(() => trigger.current?.focus());
+      if (attempt.action === "remove") {
+        focusHeadingAfterOpen.current = true;
+        setPanel("token");
+      } else {
+        setPanel("closed");
+        queueMicrotask(() => trigger.current?.focus());
+      }
     } else {
       const settledFeedback = feedback ?? fallbackFeedback(attempt.action);
       const settledAttempt = persistAttempt(port, {
@@ -310,6 +370,7 @@ export function TelegramRow(): ReactElement {
       setAttempt(reopenedAttempt);
       setPanelFeedback(reopenedAttempt?.feedback ?? null);
     }
+    focusHeadingAfterOpen.current = true;
     setPanel("token");
   };
 
@@ -320,19 +381,34 @@ export function TelegramRow(): ReactElement {
     queueMicrotask(() => trigger.current?.focus());
   };
 
-  const cancelRemovePanel = (): void => {
-    if (attempt?.phase === "settled" && attempt.feedback?.tone === "warning") {
-      const recoveryAttempt = persistAttempt(port, { ...attempt, panelDismissed: false });
-      setAttempt(recoveryAttempt);
-      setPanel("token");
-      setPanelFeedback(recoveryAttempt?.feedback ?? null);
-      queueMicrotask(() => retryAction.current?.focus());
-      return;
+  const openDeletePanel = (): void => {
+    if (attempt?.action === "remove" && attempt.phase === "settled") {
+      const reopenedAttempt = persistAttempt(port, { ...attempt, panelDismissed: false });
+      setAttempt(reopenedAttempt);
+      setPanelFeedback(reopenedAttempt?.feedback ?? null);
+    } else {
+      clearAttempt();
+      setPanelFeedback(null);
     }
-    clearAttempt();
-    setPanel("token");
+    setConfirmationFocus("cancel");
+    setConfirmationVersion((version) => version + 1);
+    setPanel("delete");
+  };
+
+  const cancelDeletePanel = (): void => {
+    if (
+      attempt?.action === "remove" &&
+      attempt.phase === "settled" &&
+      attempt.feedback?.tone === "warning"
+    ) {
+      setAttempt(persistAttempt(port, { ...attempt, panelDismissed: true }));
+    } else {
+      clearAttempt();
+    }
+    setPanel("closed");
     setPanelFeedback(null);
-    queueMicrotask(() => removeTrigger.current?.focus());
+    setConfirmationFocus(null);
+    queueMicrotask(() => trigger.current?.focus());
   };
 
   const feedbackNode =
@@ -384,6 +460,19 @@ export function TelegramRow(): ReactElement {
             >
               Check again
             </button>
+          ) : configured ? (
+            <button
+              ref={trigger}
+              type="button"
+              className={BUTTON_DANGER_OUTLINE_SM}
+              data-setup-delete="telegram"
+              disabled={busy || (authoritativeCheckRequired && attempt?.action === "paste-token")}
+              aria-expanded={panel === "delete"}
+              aria-label="Delete the Telegram connection"
+              onClick={openDeletePanel}
+            >
+              Delete
+            </button>
           ) : (
             <button
               ref={trigger}
@@ -391,162 +480,53 @@ export function TelegramRow(): ReactElement {
               className={BUTTON_QUIET_SM}
               data-setup-trigger="telegram"
               disabled={busy}
-              aria-expanded={panel !== "closed"}
-              aria-label={configured ? "Change Telegram bot" : "Create Telegram bot"}
+              aria-expanded={panel === "token"}
+              aria-label="Create Telegram bot"
               {...(panel === "closed" ? {} : { "aria-controls": panelId })}
               onClick={openTokenPanel}
             >
-              {configured ? "Change" : "Create"}
+              Create
             </button>
           )
         }
       />
-      {panel === "token" ? (
+      {panel === "token" && currentIdentity.kind !== "verified" ? (
         <SetupSubPanel name="telegram" id={panelId}>
-          {configured ? (
-            <div role="group" aria-labelledby="onboarding-telegram-replace-title">
-              <h3
-                id="onboarding-telegram-replace-title"
-                className="m-0 text-sm font-semibold tracking-tight"
-              >
-                {copiedTokenRejected
-                  ? "Telegram rejected the copied token"
-                  : `Replace @${username}?`}
-              </h3>
-              {copiedTokenRejected ? null : (
-                <p className="mt-1 mb-0 max-w-[650px] text-[12.5px] text-ink-2">
-                  {TELEGRAM_REPLACEMENT_COPY}
-                </p>
-              )}
-              {feedbackNode}
-              <div className="mt-3.5 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className={BUTTON_QUIET_SM}
-                  disabled={busy}
-                  aria-label="Cancel Telegram bot replacement"
-                  onClick={closeTokenPanel}
-                >
-                  Cancel
-                </button>
-                <button
-                  ref={tokenAction}
-                  type="button"
-                  className={BUTTON_SOLID_SM}
-                  data-telegram-action="use-token"
-                  disabled={busy || mutationUnsafe}
-                  onClick={() => begin("paste-token")}
-                >
-                  {connecting ? "Connecting…" : "Use copied token"}
-                </button>
-                {mutationUnsafe ? (
-                  <button
-                    ref={retryAction}
-                    type="button"
-                    className={BUTTON_QUIET_SM}
-                    disabled={busy}
-                    onClick={checkAgain}
-                  >
-                    Check again
-                  </button>
-                ) : null}
-                <button
-                  ref={removeTrigger}
-                  type="button"
-                  className={`${BUTTON_DANGER_SM} ml-auto`}
-                  disabled={busy || mutationUnsafe}
-                  onClick={() => {
-                    clearAttempt();
-                    setPanelFeedback(null);
-                    setPanel("remove");
-                  }}
-                >
-                  Remove bot from this Mac
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div
-              className="flex flex-wrap items-center gap-4 sm:flex-nowrap sm:gap-6"
-              role="group"
-              aria-labelledby="onboarding-telegram-create-title"
-            >
-              <div className="min-w-0 flex-1">
-                <h3
-                  id="onboarding-telegram-create-title"
-                  className="m-0 text-sm font-semibold tracking-tight"
-                >
-                  {TELEGRAM_CREATE_TITLE}
-                </h3>
-                <p className="mt-1 mb-0 max-w-[525px] text-[12.5px] text-ink-2">
-                  Ask{" "}
-                  <a
-                    className="font-medium underline underline-offset-[3px] hover:text-ink"
-                    href="https://t.me/BotFather"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    @BotFather
-                  </a>{" "}
-                  {TELEGRAM_CREATE_COPY_AFTER_BOTFATHER}
-                </p>
-                {feedbackNode}
-              </div>
-              <button
-                ref={tokenAction}
-                type="button"
-                className={BUTTON_SOLID_SM}
-                data-telegram-action="use-token"
-                disabled={busy || mutationUnsafe}
-                onClick={() => begin("paste-token")}
-              >
-                {connecting ? "Connecting…" : "Use copied token"}
-              </button>
-              {mutationUnsafe ? (
-                <button
-                  ref={retryAction}
-                  type="button"
-                  className={BUTTON_QUIET_SM}
-                  disabled={busy}
-                  onClick={checkAgain}
-                >
-                  Check again
-                </button>
-              ) : null}
-            </div>
-          )}
-          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-            {connecting ? "Connecting…" : removing ? "Removing…" : ""}
-          </span>
-        </SetupSubPanel>
-      ) : null}
-      {panel === "remove" ? (
-        <SetupSubPanel name="telegram-remove" id={panelId}>
           <div
+            className="flex flex-wrap items-center gap-4 sm:flex-nowrap sm:gap-6"
             role="group"
-            aria-labelledby="onboarding-telegram-remove-title"
-            aria-describedby="onboarding-telegram-remove-copy"
+            aria-labelledby="onboarding-telegram-create-title"
           >
-            <h3
-              id="onboarding-telegram-remove-title"
-              className="m-0 text-sm font-semibold tracking-tight"
-            >
-              {TELEGRAM_REMOVE_TITLE}
-            </h3>
-            <p
-              id="onboarding-telegram-remove-copy"
-              className="mt-1 mb-0 max-w-[650px] text-[12.5px] text-ink-2"
-            >
-              {TELEGRAM_REMOVE_COPY}
-            </p>
-            {feedbackNode}
-            <div className="mt-3.5 flex flex-wrap items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <h3
+                ref={heading}
+                id="onboarding-telegram-create-title"
+                tabIndex={-1}
+                className="m-0 text-[13.5px] font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
+              >
+                {TELEGRAM_CREATE_TITLE}
+              </h3>
+              <p className="mt-1 mb-0 max-w-[525px] text-[12.5px] text-ink-2">
+                Ask{" "}
+                <a
+                  className="font-medium underline underline-offset-[3px] hover:text-ink"
+                  href="https://t.me/BotFather"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  @BotFather
+                </a>{" "}
+                {TELEGRAM_CREATE_COPY_AFTER_BOTFATHER}
+              </p>
+              {feedbackNode}
+            </div>
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               <button
-                ref={removeCancel}
                 type="button"
                 className={BUTTON_QUIET_SM}
                 disabled={busy}
-                onClick={cancelRemovePanel}
+                aria-label="Cancel Telegram bot setup"
+                onClick={closeTokenPanel}
               >
                 Cancel
               </button>
@@ -562,17 +542,76 @@ export function TelegramRow(): ReactElement {
                 </button>
               ) : null}
               <button
-                ref={removeConfirm}
+                ref={tokenAction}
                 type="button"
-                className={BUTTON_DANGER_SM}
+                className={BUTTON_SOLID_SM}
+                data-telegram-action="use-token"
                 disabled={busy || mutationUnsafe}
-                onClick={() => begin("remove")}
+                onClick={() => begin("paste-token")}
               >
-                {removing ? "Removing…" : "Remove bot"}
+                {connecting ? "Connecting…" : "Use copied token"}
               </button>
             </div>
           </div>
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {connecting ? "Connecting…" : ""}
+          </span>
         </SetupSubPanel>
+      ) : null}
+      {panel === "token" &&
+      currentIdentity.kind === "verified" &&
+      attempt?.action === "paste-token" &&
+      attempt.phase === "settled" ? (
+        <SetupSubPanel name="telegram-connect-recovery">
+          {feedbackNode}
+          {mutationUnsafe ? (
+            <button
+              ref={retryAction}
+              type="button"
+              className={`${BUTTON_QUIET_SM} mt-2`}
+              disabled={busy}
+              onClick={checkAgain}
+            >
+              Check again
+            </button>
+          ) : null}
+        </SetupSubPanel>
+      ) : null}
+      {panel === "delete" && configured ? (
+        <>
+          <InlineConfirmation
+            key={confirmationVersion}
+            name="delete-telegram"
+            title={TELEGRAM_DELETE_TITLE}
+            copy={TELEGRAM_DELETE_COPY}
+            confirmLabel="Delete connection"
+            focusTarget={confirmationFocus}
+            cancelDisabled={busy}
+            confirmDisabled={busy || mutationUnsafe}
+            confirmBusy={removing}
+            onCancel={cancelDeletePanel}
+            onConfirm={() => begin("remove")}
+          />
+          {panelFeedback === null ? null : (
+            <SetupSubPanel name="telegram-delete-recovery">
+              {feedbackNode}
+              {mutationUnsafe ? (
+                <button
+                  ref={retryAction}
+                  type="button"
+                  className={`${BUTTON_QUIET_SM} mt-2`}
+                  disabled={busy}
+                  onClick={checkAgain}
+                >
+                  Check again
+                </button>
+              ) : null}
+            </SetupSubPanel>
+          )}
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {removing ? "Deleting…" : ""}
+          </span>
+        </>
       ) : null}
     </>
   );

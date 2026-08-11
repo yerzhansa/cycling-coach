@@ -10,9 +10,10 @@ import { useEnduragentStore } from "../src/state/store.js";
 import {
   TELEGRAM_AVAILABILITY_COPY,
   TELEGRAM_CREATE_COPY,
-  TELEGRAM_REMOVE_COPY,
-  TELEGRAM_REPLACEMENT_COPY,
+  TELEGRAM_CREATE_TITLE,
+  TELEGRAM_DELETE_COPY,
 } from "../src/ui/onboarding/copy.js";
+import { BUTTON_DANGER_OUTLINE_SM } from "../src/ui/shared/buttons.js";
 import {
   mountWizard,
   panel,
@@ -40,11 +41,6 @@ const VERIFIED: TelegramControlStatus = {
   gapWarning: { state: "clear" },
 };
 
-const REPLACEMENT: TelegramControlStatus = {
-  ...VERIFIED,
-  bot: { state: "ready", username: "replacement_coach_bot" },
-};
-
 const CLOSED_UNCONFIGURED: TelegramControlStatus = {
   channel: {
     desiredState: "disabled",
@@ -68,6 +64,15 @@ const REDACTED_CONFIGURED: TelegramControlStatus = {
   credentialConfigured: true,
   gapWarning: { state: "clear" },
 };
+
+const UNCERTAIN_CONNECTION_COPY =
+  "The Telegram connection may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check Telegram before trying again.";
+
+const UNCERTAIN_DELETION_COPY =
+  "Telegram connection deletion may not have completed. Restart Enduragent and check whether the bot is still connected before trying again.";
+
+const UNCERTAIN_STORAGE_DELETION_COPY =
+  "Telegram connection deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and check Telegram before trying again.";
 
 function workingTelegramSettings(
   operation: TelegramSettingsAction,
@@ -96,6 +101,14 @@ function publishTelegram(state: TelegramSettingsState, saving = false): void {
       },
     });
   });
+}
+
+function deleteConfirmation(): HTMLElement {
+  const confirmation = document.querySelector<HTMLElement>(
+    '[data-inline-confirmation="delete-telegram"]',
+  );
+  if (confirmation === null) throw new TypeError("Telegram delete confirmation missing");
+  return confirmation;
 }
 
 describe("Chat Telegram setup row", () => {
@@ -134,6 +147,16 @@ describe("Chat Telegram setup row", () => {
       within(telegramPanel as HTMLElement).getByRole("link", { name: "@BotFather" }),
     ).toHaveAttribute("href", "https://t.me/BotFather");
     expect(telegramPanel?.querySelector("img, input, textarea")).toBeNull();
+    expect(
+      within(telegramPanel as HTMLElement)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Cancel", "Use copied token"]);
+    expect(
+      within(telegramPanel as HTMLElement).getByRole("heading", {
+        name: TELEGRAM_CREATE_TITLE,
+      }),
+    ).toHaveFocus();
 
     const useToken = within(telegramPanel as HTMLElement).getByRole("button", {
       name: "Use copied token",
@@ -158,6 +181,44 @@ describe("Chat Telegram setup row", () => {
     settingsWizard.controller.dispose();
   });
 
+  it("keeps the open panel aligned with authoritative identity changes from another surface", async () => {
+    const user = userEvent.setup();
+    setTelegramSettings(readyTelegramSettings(UNCONFIGURED));
+    const wizard = mountWizard({
+      bridge: testBridge(async () => ({ status: "refused", reason: "cancelled" })),
+    });
+    await wizard.open();
+
+    await user.click(screen.getByRole("button", { name: "Create Telegram bot" }));
+    expect(panel("telegram")).not.toBeNull();
+    publishTelegram(readyTelegramSettings(VERIFIED));
+
+    await waitFor(() => expect(panel("telegram")).toBeNull());
+    const deleteButton = screen.getByRole("button", {
+      name: "Delete the Telegram connection",
+    });
+    expect(deleteButton).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Use copied token" })).toBeNull();
+
+    await user.click(deleteButton);
+    expect(deleteConfirmation()).toBeVisible();
+    publishTelegram(readyTelegramSettings(UNCONFIGURED));
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-inline-confirmation="delete-telegram"]')).toBeNull();
+      expect(panel("telegram")).not.toBeNull();
+    });
+    const firstTimePanel = panel("telegram") as HTMLElement;
+    expect(
+      within(firstTimePanel).getByRole("heading", { name: TELEGRAM_CREATE_TITLE }),
+    ).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Create Telegram bot" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    wizard.controller.dispose();
+  });
+
   it("shows generic progress and closes only after the controller reports applied verification", async () => {
     const user = userEvent.setup();
     const port = setTelegramSettings(readyTelegramSettings(UNCONFIGURED));
@@ -175,7 +236,7 @@ describe("Chat Telegram setup row", () => {
     publishTelegram(
       readyTelegramSettings(UNCONFIGURED, {
         tone: "error",
-        message: "Telegram rejected the copied token. No Telegram bot was changed.",
+        message: "Telegram rejected the copied token. No Telegram bot was connected.",
       }),
     );
     await waitFor(() => {
@@ -198,8 +259,16 @@ describe("Chat Telegram setup row", () => {
     });
     expect(setupRow("telegram").dataset.state).toBe("ready");
     expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
-    expect(screen.getByRole("button", { name: "Change Telegram bot" })).toHaveTextContent("Change");
-    expect(screen.getByRole("button", { name: "Change Telegram bot" })).toHaveFocus();
+    const rowButtons = within(setupRow("telegram")).getAllByRole("button");
+    expect(rowButtons.map((button) => button.textContent)).toEqual(["Delete"]);
+    const deleteButton = within(setupRow("telegram")).getByRole("button", {
+      name: "Delete the Telegram connection",
+    });
+    expect(deleteButton.className).toBe(BUTTON_DANGER_OUTLINE_SM);
+    expect(deleteButton).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Change Telegram bot" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use copied token" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
     expect(port.pasteToken).toHaveBeenCalledTimes(2);
     wizard.controller.dispose();
   });
@@ -217,8 +286,7 @@ describe("Chat Telegram setup row", () => {
     publishTelegram(
       readyTelegramSettings(CLOSED_UNCONFIGURED, {
         tone: "warning",
-        message:
-          "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again.",
+        message: UNCERTAIN_CONNECTION_COPY,
       }),
     );
 
@@ -241,45 +309,41 @@ describe("Chat Telegram setup row", () => {
     wizard.controller.dispose();
   });
 
-  it("keeps a known-current uncertain replacement visible until an authoritative retry", async () => {
+  it("keeps verified uncertain setup recovery without exposing a connected token action", async () => {
     const user = userEvent.setup();
-    const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
+    const port = setTelegramSettings(readyTelegramSettings(UNCONFIGURED));
     const wizard = mountWizard({
       bridge: testBridge(async () => ({ status: "refused", reason: "cancelled" })),
     });
     await wizard.open();
-    await user.click(screen.getByRole("button", { name: "Change Telegram bot" }));
+    await user.click(screen.getByRole("button", { name: "Create Telegram bot" }));
     await user.click(screen.getByRole("button", { name: "Use copied token" }));
-    publishTelegram(workingTelegramSettings("paste-token", VERIFIED), true);
+    publishTelegram(workingTelegramSettings("paste-token", UNCONFIGURED), true);
     publishTelegram(
       readyTelegramSettings(VERIFIED, {
         tone: "warning",
-        message:
-          "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again.",
+        message: UNCERTAIN_CONNECTION_COPY,
       }),
     );
 
     await waitFor(() => {
       expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
-        "could not confirm whether it finished",
+        UNCERTAIN_CONNECTION_COPY,
       );
     });
-    expect(panel("telegram")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Use copied token" })).toBeDisabled();
+    const deleteButton = screen.getByRole("button", { name: "Delete the Telegram connection" });
+    expect(deleteButton).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Use copied token" })).toBeNull();
     expect(screen.getAllByRole("button", { name: "Check again" })).toHaveLength(1);
-    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
 
     await user.click(screen.getByRole("button", { name: "Check again" }));
     expect(port.retry).toHaveBeenCalledOnce();
-    publishTelegram(readyTelegramSettings(REPLACEMENT));
+    publishTelegram(readyTelegramSettings(VERIFIED));
 
-    await waitFor(() => {
-      expect(panel("telegram")).toBeNull();
-    });
-    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @replacement_coach_bot");
-    expect(screen.getByRole("button", { name: "Change Telegram bot" })).toHaveFocus();
+    await waitFor(() => expect(deleteButton).toBeEnabled());
+    expect(deleteButton).toHaveFocus();
+    expect(panel("telegram-connect-recovery")).toBeNull();
     expect(document.querySelector("[data-telegram-feedback]")).toBeNull();
-    expect(port.pasteToken).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
 
@@ -295,7 +359,7 @@ describe("Chat Telegram setup row", () => {
     await wizard.open();
 
     expect(screen.queryByRole("button", { name: "Create Telegram bot" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Change Telegram bot" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete the Telegram connection" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Use copied token" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Check again" }));
     expect(port.retry).toHaveBeenCalledOnce();
@@ -306,233 +370,168 @@ describe("Chat Telegram setup row", () => {
     wizard.controller.dispose();
   });
 
-  it("restores a replacement that settles while the Chat setup row is unmounted", async () => {
-    const user = userEvent.setup();
-    const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
-    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
-    const first = mountWizard({ bridge });
-    await first.open();
-    await user.click(screen.getByRole("button", { name: "Change Telegram bot" }));
-    await user.click(screen.getByRole("button", { name: "Use copied token" }));
-    publishTelegram(workingTelegramSettings("paste-token", VERIFIED), true);
-    expect(screen.getByRole("button", { name: "Connecting…" })).toBeDisabled();
-
-    first.controller.dispose();
-    first.rendered.unmount();
-    const working = mountWizard({ bridge });
-    await working.open();
-    expect(panel("telegram")?.textContent).toContain("Replace @synthetic_coach_bot?");
-    expect(screen.getByRole("button", { name: "Connecting…" })).toBeDisabled();
-    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
-    working.controller.dispose();
-    working.rendered.unmount();
-    publishTelegram(
-      readyTelegramSettings(VERIFIED, {
-        tone: "error",
-        message: "Telegram rejected the copied token. The current Telegram bot is unchanged.",
-      }),
-    );
-
-    const refused = mountWizard({ bridge });
-    await refused.open();
-    expect(
-      within(panel("telegram") as HTMLElement).getByRole("heading", {
-        name: "Telegram rejected the copied token",
-      }),
-    ).toBeVisible();
-    expect(panel("telegram")?.textContent).not.toContain(TELEGRAM_REPLACEMENT_COPY);
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Telegram rejected the copied token. The current Telegram bot is unchanged.",
-    );
-    const retry = screen.getByRole("button", { name: "Use copied token" });
-    expect(retry).toBeEnabled();
-    expect(retry).toHaveAttribute("data-telegram-action", "use-token");
-
-    await user.click(retry);
-    publishTelegram(workingTelegramSettings("paste-token", VERIFIED), true);
-    refused.controller.dispose();
-    refused.rendered.unmount();
-    publishTelegram(
-      readyTelegramSettings(REPLACEMENT, {
-        tone: "success",
-        message: "Telegram is off.",
-      }),
-    );
-
-    const succeeded = mountWizard({ bridge });
-    await succeeded.open();
-    expect(panel("telegram")).toBeNull();
-    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @replacement_coach_bot");
-    expect(screen.getByRole("button", { name: "Change Telegram bot" })).toBeVisible();
-    expect(port.pasteToken).toHaveBeenCalledTimes(2);
-    succeeded.controller.dispose();
-  });
-
-  it("keeps the verified bot and replacement panel after refused or uncertain changes", async () => {
-    const user = userEvent.setup();
-    const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
-    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
-    const wizard = mountWizard({ bridge });
-    await wizard.open();
-    const change = screen.getByRole("button", { name: "Change Telegram bot" });
-    await user.click(change);
-
-    expect(panel("telegram")?.textContent).toContain(TELEGRAM_REPLACEMENT_COPY);
-    await user.click(screen.getByRole("button", { name: "Use copied token" }));
-    publishTelegram(workingTelegramSettings("paste-token", VERIFIED), true);
-    publishTelegram(
-      readyTelegramSettings(VERIFIED, {
-        tone: "error",
-        message: "Telegram rejected the copied token. The current Telegram bot is unchanged.",
-      }),
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent("current Telegram bot is unchanged");
-    });
-    expect(
-      within(panel("telegram") as HTMLElement).getByRole("heading", {
-        name: "Telegram rejected the copied token",
-      }),
-    ).toBeVisible();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Telegram rejected the copied token. The current Telegram bot is unchanged.",
-    );
-    expect(panel("telegram")?.textContent).not.toContain(TELEGRAM_REPLACEMENT_COPY);
-    expect(panel("telegram")).not.toBeNull();
-    expect(setupRow("telegram")).toHaveTextContent("@synthetic_coach_bot");
-
-    await user.click(screen.getByRole("button", { name: "Use copied token" }));
-    publishTelegram(workingTelegramSettings("paste-token", VERIFIED), true);
-    publishTelegram(
-      readyTelegramSettings(CLOSED_UNCONFIGURED, {
-        tone: "warning",
-        message:
-          "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again.",
-      }),
-    );
-
-    await waitFor(() => {
-      expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
-        "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again.",
-      );
-    });
-    expect(panel("telegram")).not.toBeNull();
-    expect(panel("telegram")?.textContent).toContain("Replace @synthetic_coach_bot?");
-    expect(panel("telegram")?.textContent).toContain(TELEGRAM_REPLACEMENT_COPY);
-    expect(screen.getByRole("button", { name: "Use copied token" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Check again" }));
-    expect(port.retry).toHaveBeenCalledOnce();
-    publishTelegram(readyTelegramSettings(CLOSED_UNCONFIGURED));
-    expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
-      "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again.",
-    );
-    expect(screen.getByRole("button", { name: "Use copied token" })).toBeDisabled();
-    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
-    expect(port.pasteToken).toHaveBeenCalledTimes(2);
-
-    wizard.controller.dispose();
-    wizard.rendered.unmount();
-    const reopened = mountWizard({ bridge });
-    await reopened.open();
-    expect(panel("telegram")?.textContent).toContain("Replace @synthetic_coach_bot?");
-    expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
-      "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again.",
-    );
-    expect(screen.getByRole("button", { name: "Use copied token" })).toBeDisabled();
-    const reopenedChange = screen.getByRole("button", { name: "Change Telegram bot" });
-    await user.click(screen.getByRole("button", { name: "Cancel Telegram bot replacement" }));
-    await waitFor(() => expect(reopenedChange).toHaveFocus());
-    expect(panel("telegram")).toBeNull();
-    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
-    reopened.controller.dispose();
-    reopened.rendered.unmount();
-
-    const collapsed = mountWizard({ bridge });
-    await collapsed.open();
-    expect(panel("telegram")).toBeNull();
-    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
-    const collapsedChange = screen.getByRole("button", { name: "Change Telegram bot" });
-    await user.click(collapsedChange);
-    expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
-      "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again.",
-    );
-    await user.click(collapsedChange);
-    expect(panel("telegram")).toBeNull();
-    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
-    collapsed.controller.dispose();
-    collapsed.rendered.unmount();
-
-    const toggledClosed = mountWizard({ bridge });
-    await toggledClosed.open();
-    expect(panel("telegram")).toBeNull();
-    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
-    expect(screen.getByRole("button", { name: "Change Telegram bot" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Change Telegram bot" }));
-    await user.click(screen.getByRole("button", { name: "Check again" }));
-    publishTelegram(readyTelegramSettings(REPLACEMENT));
-    await waitFor(() => {
-      expect(setupRow("telegram")).toHaveTextContent("Bot verified · @replacement_coach_bot");
-    });
-    await waitFor(() => {
-      expect(panel("telegram")).toBeNull();
-    });
-    expect(document.querySelector("[data-telegram-feedback]")).toBeNull();
-    expect(screen.getByRole("button", { name: "Change Telegram bot" })).toHaveFocus();
-    toggledClosed.controller.dispose();
-  });
-
-  it("confirms local removal, restores focus on cancellation, and returns to Create after apply", async () => {
+  it("confirms deletion, restores focus on dismissal, and opens first-time setup after apply", async () => {
     const user = userEvent.setup();
     const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
     const wizard = mountWizard({
       bridge: testBridge(async () => ({ status: "refused", reason: "cancelled" })),
     });
     await wizard.open();
-    await user.click(screen.getByRole("button", { name: "Change Telegram bot" }));
 
-    const removeFromMac = screen.getByRole("button", { name: "Remove bot from this Mac" });
-    expect(removeFromMac.className).toContain("text-danger");
-    await user.click(removeFromMac);
-
-    expect(panel("telegram-remove")?.textContent).toContain(TELEGRAM_REMOVE_COPY);
-    const cancel = screen.getByRole("button", { name: "Cancel" });
-    expect(cancel).toHaveFocus();
-    await user.click(cancel);
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Remove bot from this Mac" })).toHaveFocus();
+    const rowButtons = within(setupRow("telegram")).getAllByRole("button");
+    expect(rowButtons.map((button) => button.textContent)).toEqual(["Delete"]);
+    const deleteButton = within(setupRow("telegram")).getByRole("button", {
+      name: "Delete the Telegram connection",
     });
+    expect(deleteButton.className).toBe(BUTTON_DANGER_OUTLINE_SM);
+    expect(screen.queryByRole("button", { name: "Change Telegram bot" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use copied token" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    await user.click(deleteButton);
 
-    await user.click(screen.getByRole("button", { name: "Remove bot from this Mac" }));
-    await user.click(screen.getByRole("button", { name: "Remove bot" }));
+    let confirmation = deleteConfirmation();
+    expect(confirmation).toHaveTextContent(TELEGRAM_DELETE_COPY);
+    let confirmationButtons = within(confirmation).getAllByRole("button");
+    expect(confirmationButtons.map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Delete connection",
+    ]);
+    expect(confirmationButtons[0]).toHaveFocus();
+    expect(confirmationButtons[1]).toHaveClass(
+      "border-[color-mix(in_srgb,var(--danger)_34%,transparent)]",
+      "bg-transparent",
+      "text-danger",
+    );
+    expect(port.remove).not.toHaveBeenCalled();
+
+    await user.click(confirmationButtons[0] as HTMLButtonElement);
+    await waitFor(() => expect(deleteButton).toHaveFocus());
+    expect(document.querySelector('[data-inline-confirmation="delete-telegram"]')).toBeNull();
+
+    await user.click(deleteButton);
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(deleteButton).toHaveFocus());
+    expect(document.querySelector('[data-inline-confirmation="delete-telegram"]')).toBeNull();
+
+    await user.click(deleteButton);
+    confirmation = deleteConfirmation();
+    confirmationButtons = within(confirmation).getAllByRole("button");
+    await user.click(confirmationButtons[1] as HTMLButtonElement);
     expect(port.remove).toHaveBeenCalledOnce();
     publishTelegram(workingTelegramSettings("remove", VERIFIED), true);
-    expect(screen.getByRole("button", { name: "Removing…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete connection" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByText("Deleting…")).toBeVisible();
     publishTelegram(
       readyTelegramSettings(UNCONFIGURED, {
         tone: "success",
-        message: "Telegram was removed from this Mac.",
+        message: "Telegram connection deleted from this Mac.",
       }),
     );
 
     await waitFor(() => {
-      expect(panel("telegram-remove")).toBeNull();
+      expect(document.querySelector('[data-inline-confirmation="delete-telegram"]')).toBeNull();
+      expect(panel("telegram")).not.toBeNull();
     });
+    const firstTimePanel = panel("telegram") as HTMLElement;
+    const heading = within(firstTimePanel).getByRole("heading", { name: TELEGRAM_CREATE_TITLE });
+    expect(heading).toHaveFocus();
     expect(setupRow("telegram").dataset.state).toBe("pending");
-    expect(screen.getByRole("button", { name: "Create Telegram bot" })).toHaveTextContent("Create");
-    expect(screen.getByRole("button", { name: "Create Telegram bot" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Create Telegram bot" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(
+      within(firstTimePanel)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Cancel", "Use copied token"]);
     wizard.controller.dispose();
   });
 
-  it("fails closed and offers an authoritative retry after uncertain removal across remount", async () => {
+  it("opens first-time setup when deletion settles while the Chat setup row is unmounted", async () => {
+    const user = userEvent.setup();
+    setTelegramSettings(readyTelegramSettings(VERIFIED));
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    const first = mountWizard({ bridge });
+    await first.open();
+    await user.click(screen.getByRole("button", { name: "Delete the Telegram connection" }));
+    await user.click(screen.getByRole("button", { name: "Delete connection" }));
+    publishTelegram(workingTelegramSettings("remove", VERIFIED), true);
+
+    first.controller.dispose();
+    first.rendered.unmount();
+    publishTelegram(
+      readyTelegramSettings(UNCONFIGURED, {
+        tone: "success",
+        message: "Telegram connection deleted from this Mac.",
+      }),
+    );
+
+    const reopened = mountWizard({ bridge });
+    await reopened.open();
+
+    await waitFor(() => expect(panel("telegram")).not.toBeNull());
+    const firstTimePanel = panel("telegram") as HTMLElement;
+    expect(setupRow("telegram").dataset.state).toBe("pending");
+    expect(screen.getByRole("button", { name: "Create Telegram bot" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(
+      within(firstTimePanel).getByRole("heading", { name: TELEGRAM_CREATE_TITLE }),
+    ).toHaveFocus();
+    reopened.controller.dispose();
+  });
+
+  it("restores busy deletion focus before an uncertain result after remount", async () => {
+    const user = userEvent.setup();
+    setTelegramSettings(readyTelegramSettings(VERIFIED));
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    const first = mountWizard({ bridge });
+    await first.open();
+    await user.click(screen.getByRole("button", { name: "Delete the Telegram connection" }));
+    await user.click(screen.getByRole("button", { name: "Delete connection" }));
+    publishTelegram(workingTelegramSettings("remove", VERIFIED), true);
+
+    first.controller.dispose();
+    first.rendered.unmount();
+
+    const reopened = mountWizard({ bridge });
+    await reopened.open();
+
+    const busyDelete = screen.getByRole("button", { name: "Delete connection" });
+    expect(busyDelete).toHaveAttribute("aria-disabled", "true");
+    expect(busyDelete).toHaveFocus();
+
+    publishTelegram(
+      readyTelegramSettings(VERIFIED, {
+        tone: "warning",
+        message: UNCERTAIN_DELETION_COPY,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
+        UNCERTAIN_DELETION_COPY,
+      );
+    });
+    expect(screen.getByRole("button", { name: "Delete connection" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Check again" })).toHaveLength(1);
+    reopened.controller.dispose();
+  });
+
+  it("fails closed and offers an authoritative retry after uncertain deletion across remount", async () => {
     const user = userEvent.setup();
     const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const first = mountWizard({ bridge });
     await first.open();
-    await user.click(screen.getByRole("button", { name: "Change Telegram bot" }));
-    await user.click(screen.getByRole("button", { name: "Remove bot from this Mac" }));
-    await user.click(screen.getByRole("button", { name: "Remove bot" }));
+    await user.click(screen.getByRole("button", { name: "Delete the Telegram connection" }));
+    await user.click(screen.getByRole("button", { name: "Delete connection" }));
     publishTelegram(workingTelegramSettings("remove", VERIFIED), true);
 
     first.controller.dispose();
@@ -540,61 +539,19 @@ describe("Chat Telegram setup row", () => {
     publishTelegram(
       readyTelegramSettings(CLOSED_UNCONFIGURED, {
         tone: "warning",
-        message:
-          "The Telegram change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check this setting before trying again.",
+        message: UNCERTAIN_DELETION_COPY,
       }),
     );
 
     const reopened = mountWizard({ bridge });
     await reopened.open();
 
-    expect(panel("telegram-remove")).not.toBeNull();
+    expect(deleteConfirmation()).toHaveTextContent(TELEGRAM_DELETE_COPY);
     expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
     expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
-      "could not confirm whether it finished",
+      UNCERTAIN_DELETION_COPY,
     );
-    expect(screen.getByRole("button", { name: "Remove bot" })).toBeDisabled();
-    expect(port.remove).toHaveBeenCalledOnce();
-
-    await user.click(screen.getByRole("button", { name: "Check again" }));
-    expect(port.retry).toHaveBeenCalledOnce();
-    publishTelegram(readyTelegramSettings(VERIFIED));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Remove bot" })).toBeEnabled();
-    });
-    expect(screen.getByRole("button", { name: "Remove bot" })).toHaveFocus();
-    expect(document.querySelector("[data-telegram-feedback]")).toBeNull();
-    expect(port.remove).toHaveBeenCalledOnce();
-    reopened.controller.dispose();
-  });
-
-  it("keeps a known-current uncertain removal visible until retry and restores action focus", async () => {
-    const user = userEvent.setup();
-    const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
-    const wizard = mountWizard({
-      bridge: testBridge(async () => ({ status: "refused", reason: "cancelled" })),
-    });
-    await wizard.open();
-    await user.click(screen.getByRole("button", { name: "Change Telegram bot" }));
-    await user.click(screen.getByRole("button", { name: "Remove bot from this Mac" }));
-    await user.click(screen.getByRole("button", { name: "Remove bot" }));
-    publishTelegram(workingTelegramSettings("remove", VERIFIED), true);
-    publishTelegram(
-      readyTelegramSettings(VERIFIED, {
-        tone: "warning",
-        message:
-          "The Telegram change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check this setting before trying again.",
-      }),
-    );
-
-    await waitFor(() => {
-      expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
-        "could not confirm whether it finished",
-      );
-    });
-    expect(panel("telegram-remove")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Remove bot" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete connection" })).toBeDisabled();
     expect(screen.getAllByRole("button", { name: "Check again" })).toHaveLength(1);
     expect(port.remove).toHaveBeenCalledOnce();
 
@@ -603,94 +560,179 @@ describe("Chat Telegram setup row", () => {
     publishTelegram(readyTelegramSettings(VERIFIED));
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Remove bot" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Delete connection" })).toBeEnabled();
     });
-    expect(panel("telegram-remove")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Remove bot" })).toHaveFocus();
+    expect(deleteConfirmation()).toBeVisible();
+    expect(screen.getByRole("button", { name: "Delete connection" })).toHaveFocus();
     expect(document.querySelector("[data-telegram-feedback]")).toBeNull();
     expect(port.remove).toHaveBeenCalledOnce();
-    wizard.controller.dispose();
+    reopened.controller.dispose();
   });
 
-  it("preserves uncertain removal through Cancel and keeps retry focus coherent", async () => {
+  it("keeps a known-current uncertain deletion visible until retry and restores action focus", async () => {
     const user = userEvent.setup();
     const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
     const wizard = mountWizard({
       bridge: testBridge(async () => ({ status: "refused", reason: "cancelled" })),
     });
     await wizard.open();
-    await user.click(screen.getByRole("button", { name: "Change Telegram bot" }));
-    await user.click(screen.getByRole("button", { name: "Remove bot from this Mac" }));
-    await user.click(screen.getByRole("button", { name: "Remove bot" }));
+    await user.click(screen.getByRole("button", { name: "Delete the Telegram connection" }));
+    await user.click(screen.getByRole("button", { name: "Delete connection" }));
     publishTelegram(workingTelegramSettings("remove", VERIFIED), true);
     publishTelegram(
       readyTelegramSettings(VERIFIED, {
         tone: "warning",
-        message:
-          "The Telegram change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check this setting before trying again.",
+        message: UNCERTAIN_DELETION_COPY,
       }),
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Remove bot" })).toBeDisabled();
+      expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
+        UNCERTAIN_DELETION_COPY,
+      );
     });
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-
-    expect(panel("telegram-remove")).toBeNull();
-    expect(panel("telegram")).not.toBeNull();
-    expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
-      "could not confirm whether it finished",
-    );
-    expect(screen.getByRole("button", { name: "Use copied token" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Remove bot from this Mac" })).toBeDisabled();
-    const retry = screen.getByRole("button", { name: "Check again" });
-    expect(retry).toHaveFocus();
+    expect(deleteConfirmation()).toBeVisible();
+    expect(screen.getByRole("button", { name: "Delete connection" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Check again" })).toHaveLength(1);
     expect(port.remove).toHaveBeenCalledOnce();
 
-    await user.click(retry);
+    await user.click(screen.getByRole("button", { name: "Check again" }));
     expect(port.retry).toHaveBeenCalledOnce();
     publishTelegram(readyTelegramSettings(VERIFIED));
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Remove bot from this Mac" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Delete connection" })).toBeEnabled();
     });
-    expect(screen.getByRole("button", { name: "Remove bot from this Mac" })).toHaveFocus();
+    expect(deleteConfirmation()).toBeVisible();
+    expect(screen.getByRole("button", { name: "Delete connection" })).toHaveFocus();
     expect(document.querySelector("[data-telegram-feedback]")).toBeNull();
     expect(port.remove).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
 
-  it("closes stale removal recovery when retry confirms the bot is already gone", async () => {
+  it("preserves uncertain deletion through Cancel and restores Delete focus", async () => {
+    const user = userEvent.setup();
+    const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
+    const wizard = mountWizard({
+      bridge: testBridge(async () => ({ status: "refused", reason: "cancelled" })),
+    });
+    await wizard.open();
+    const deleteButton = screen.getByRole("button", { name: "Delete the Telegram connection" });
+    await user.click(deleteButton);
+    await user.click(screen.getByRole("button", { name: "Delete connection" }));
+    publishTelegram(workingTelegramSettings("remove", VERIFIED), true);
+    publishTelegram(
+      readyTelegramSettings(VERIFIED, {
+        tone: "warning",
+        message: UNCERTAIN_DELETION_COPY,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Delete connection" })).toBeDisabled();
+    });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(deleteButton).toHaveFocus());
+    expect(document.querySelector('[data-inline-confirmation="delete-telegram"]')).toBeNull();
+    expect(panel("telegram-delete-recovery")).toBeNull();
+    expect(document.querySelector("[data-telegram-feedback]")).toBeNull();
+    expect(port.remove).toHaveBeenCalledOnce();
+
+    await user.click(deleteButton);
+    expect(deleteConfirmation()).toBeVisible();
+    expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
+      UNCERTAIN_DELETION_COPY,
+    );
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    const retry = screen.getByRole("button", { name: "Check again" });
+    await user.click(retry);
+    expect(port.retry).toHaveBeenCalledOnce();
+    publishTelegram(readyTelegramSettings(VERIFIED));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Delete connection" })).toBeEnabled();
+    });
+    expect(screen.getByRole("button", { name: "Delete connection" })).toHaveFocus();
+    expect(document.querySelector("[data-telegram-feedback]")).toBeNull();
+    expect(port.remove).toHaveBeenCalledOnce();
+    wizard.controller.dispose();
+  });
+
+  it("opens first-time setup when retry confirms the bot is already gone", async () => {
     const user = userEvent.setup();
     const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
-    await user.click(screen.getByRole("button", { name: "Change Telegram bot" }));
-    await user.click(screen.getByRole("button", { name: "Remove bot from this Mac" }));
-    await user.click(screen.getByRole("button", { name: "Remove bot" }));
+    await user.click(screen.getByRole("button", { name: "Delete the Telegram connection" }));
+    await user.click(screen.getByRole("button", { name: "Delete connection" }));
     publishTelegram(workingTelegramSettings("remove", VERIFIED), true);
     publishTelegram(
       readyTelegramSettings(CLOSED_UNCONFIGURED, {
         tone: "warning",
-        message:
-          "The Telegram change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check this setting before trying again.",
+        message: UNCERTAIN_DELETION_COPY,
       }),
     );
 
-    expect(screen.getByRole("button", { name: "Remove bot" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete connection" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Check again" }));
     expect(port.retry).toHaveBeenCalledOnce();
     publishTelegram(readyTelegramSettings(UNCONFIGURED));
 
     await waitFor(() => {
-      expect(panel("telegram-remove")).toBeNull();
+      expect(document.querySelector('[data-inline-confirmation="delete-telegram"]')).toBeNull();
+      expect(panel("telegram")).not.toBeNull();
     });
+    const firstTimePanel = panel("telegram") as HTMLElement;
     const create = screen.getByRole("button", { name: "Create Telegram bot" });
     expect(setupRow("telegram").dataset.state).toBe("pending");
-    expect(create).toHaveFocus();
+    expect(create).toHaveAttribute("aria-expanded", "true");
+    expect(
+      within(firstTimePanel).getByRole("heading", { name: TELEGRAM_CREATE_TITLE }),
+    ).toHaveFocus();
     expect(document.querySelector("[data-telegram-feedback]")).toBeNull();
     expect(port.remove).toHaveBeenCalledOnce();
+    wizard.controller.dispose();
+  });
+
+  it("keeps an unconfigured snapshot unresolved until secure-storage deletion is retried", async () => {
+    const user = userEvent.setup();
+    const port = setTelegramSettings(readyTelegramSettings(VERIFIED));
+    const wizard = mountWizard({
+      bridge: testBridge(async () => ({ status: "refused", reason: "cancelled" })),
+    });
+    await wizard.open();
+    await user.click(screen.getByRole("button", { name: "Delete the Telegram connection" }));
+    await user.click(screen.getByRole("button", { name: "Delete connection" }));
+    publishTelegram(workingTelegramSettings("remove", VERIFIED), true);
+    publishTelegram(
+      readyTelegramSettings(UNCONFIGURED, {
+        tone: "warning",
+        message: UNCERTAIN_STORAGE_DELETION_COPY,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-telegram-feedback="warning"]')).toHaveTextContent(
+        UNCERTAIN_STORAGE_DELETION_COPY,
+      );
+    });
+    expect(deleteConfirmation()).toBeVisible();
+    expect(setupRow("telegram")).toHaveTextContent("Bot verified · @synthetic_coach_bot");
+    expect(screen.getByRole("button", { name: "Delete connection" })).toBeDisabled();
+    expect(panel("telegram")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    expect(port.retry).toHaveBeenCalledOnce();
+    publishTelegram(readyTelegramSettings(UNCONFIGURED));
+
+    await waitFor(() => expect(panel("telegram")).not.toBeNull());
+    expect(
+      within(panel("telegram") as HTMLElement).getByRole("heading", {
+        name: TELEGRAM_CREATE_TITLE,
+      }),
+    ).toHaveFocus();
     wizard.controller.dispose();
   });
 });

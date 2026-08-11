@@ -249,6 +249,53 @@ describe("Telegram settings controller", () => {
     });
   });
 
+  it("announces a fresh clipboard connection with the connected bot", async () => {
+    const runtime = setup();
+    await runtime.controller.activate();
+
+    runtime.handlers.onPasteToken();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        status: "ready",
+        telegram: { credentialConfigured: true, bot: { username: "synthetic_bot" } },
+        announcement: "Telegram connected to @synthetic_bot. Pairing needs to be set up.",
+        feedback: {
+          tone: "success",
+          message: "Telegram connected to @synthetic_bot. Pairing needs to be set up.",
+        },
+      }),
+    );
+  });
+
+  it("guides first-time webhook removal without asking for another reconnect", async () => {
+    const runtime = setup();
+    await runtime.controller.activate();
+    const webhookRequired = {
+      ...DISABLED,
+      bot: { state: "webhook-removal-required" as const, username: "synthetic_bot" },
+      credentialConfigured: true,
+    };
+    runtime.bridge.pasteTokenFromClipboard.mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "webhook-removal-required",
+      current: webhookRequired,
+    });
+
+    runtime.handlers.onPasteToken();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        telegram: webhookRequired,
+        feedback: {
+          tone: "error",
+          message:
+            "The copied bot still uses a webhook. Remove the webhook before pairing it with this Mac.",
+        },
+      }),
+    );
+  });
+
   it("gives actionable Keychain recovery when secure storage is unavailable during setup", async () => {
     const runtime = setup();
     await runtime.controller.activate();
@@ -296,7 +343,77 @@ describe("Telegram settings controller", () => {
     expect(JSON.stringify(runtime.controller.state())).not.toContain("Keychain");
   });
 
-  it("keeps the old bot online while reporting a refused replacement across status polls", async () => {
+  it("directs a rejected saved token through delete and reconnect", async () => {
+    const runtime = setup();
+    runtime.bridge.status.mockResolvedValueOnce({
+      ...PAIRED,
+      channel: { desiredState: "enabled", state: "invalid-token" },
+    });
+
+    await runtime.controller.activate();
+
+    expect(runtime.controller.state()).toMatchObject({
+      status: "ready",
+      telegram: { channel: { state: "invalid-token" } },
+      announcement:
+        "Telegram rejected this token. Delete the connection, then connect a new bot with a fresh token from BotFather.",
+    });
+  });
+
+  it("deletes the Telegram connection with delete vocabulary", async () => {
+    const runtime = setup();
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
+    await runtime.controller.activate();
+
+    runtime.handlers.onRemove();
+
+    expect(runtime.states.at(-1)).toMatchObject({
+      status: "working",
+      operation: "remove",
+      announcement: "Deleting the Telegram connection…",
+      feedback: { tone: "status", message: "Deleting the Telegram connection…" },
+    });
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        status: "ready",
+        telegram: DISABLED,
+        announcement: "Telegram connection deleted from this Mac.",
+        feedback: {
+          tone: "success",
+          message: "Telegram connection deleted from this Mac.",
+        },
+      }),
+    );
+    expect(runtime.bridge.remove).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      "control-uncertain",
+      "Telegram connection deletion may not have completed. Restart Enduragent and check whether the bot is still connected before trying again.",
+    ],
+    [
+      "storage-uncertain",
+      "Telegram connection deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and check Telegram before trying again.",
+    ],
+  ] as const)("reports %s deletion uncertainty", async (reason, message) => {
+    const runtime = setup();
+    runtime.bridge.status.mockResolvedValueOnce(PAIRED);
+    await runtime.controller.activate();
+    runtime.bridge.remove.mockResolvedValueOnce({ outcome: "uncertain", reason, current: PAIRED });
+
+    runtime.handlers.onRemove();
+
+    await vi.waitFor(() =>
+      expect(runtime.controller.state()).toMatchObject({
+        status: "ready",
+        telegram: PAIRED,
+        feedback: { tone: "warning", message },
+      }),
+    );
+  });
+
+  it("keeps the connected bot online while reporting a refused clipboard token", async () => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);
     await runtime.controller.activate();
@@ -393,7 +510,7 @@ describe("Telegram settings controller", () => {
     );
   });
 
-  it("reports an uncertain replacement as repair-required without claiming refusal", async () => {
+  it("reports uncertain clipboard-token storage without claiming refusal", async () => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);
     await runtime.controller.activate();
@@ -412,13 +529,13 @@ describe("Telegram settings controller", () => {
         feedback: {
           tone: "warning",
           message:
-            "The copied token was not applied to the running bot because storage could not be verified. Restart Enduragent and check Telegram before trying again.",
+            "The copied token was not applied because secure storage could not be verified. The current Telegram bot is unchanged. Restart Enduragent and check Telegram before trying again.",
         },
       }),
     );
   });
 
-  it("uses neutral copy when replacement completion cannot be confirmed", async () => {
+  it("uses neutral copy when a clipboard-token connection cannot be confirmed", async () => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);
     await runtime.controller.activate();
@@ -436,14 +553,14 @@ describe("Telegram settings controller", () => {
         feedback: {
           tone: "warning",
           message:
-            "The Telegram bot change may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check the current bot before trying again.",
+            "The Telegram connection may have started, but Enduragent could not confirm whether it finished. Restart Enduragent and check Telegram before trying again.",
         },
       }),
     );
     expect(JSON.stringify(runtime.controller.state())).not.toContain("was not applied");
   });
 
-  it("preserves uncertain replacement warnings across health transitions", async () => {
+  it("preserves uncertain clipboard-token warnings across health transitions", async () => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);
     await runtime.controller.activate();
@@ -468,7 +585,7 @@ describe("Telegram settings controller", () => {
         feedback: {
           tone: "warning",
           message:
-            "The copied token was not applied to the running bot because storage could not be verified. Restart Enduragent and check Telegram before trying again.",
+            "The copied token was not applied because secure storage could not be verified. The current Telegram bot is unchanged. Restart Enduragent and check Telegram before trying again.",
         },
       }),
     );
@@ -490,7 +607,7 @@ describe("Telegram settings controller", () => {
     ],
     [
       "webhook-removal-required",
-      "The copied bot still uses a webhook. Remove that webhook before replacing the current Telegram bot.",
+      "The copied bot still uses a webhook. Remove the webhook, then delete the current connection and connect this bot.",
     ],
     [
       "encryption-unavailable",
@@ -500,7 +617,7 @@ describe("Telegram settings controller", () => {
       "unsafe-backend",
       "The current Telegram bot is unchanged because no secure credential backend is available. Enduragent refused to save the copied token without encryption. Quit and reopen Enduragent, copy the bot token again, then retry.",
     ],
-  ] as const)("reports the closed %s replacement refusal", async (reason, message) => {
+  ] as const)("reports %s without changing the connected bot", async (reason, message) => {
     const runtime = setup();
     runtime.bridge.status.mockResolvedValueOnce(PAIRED);
     await runtime.controller.activate();
@@ -524,28 +641,31 @@ describe("Telegram settings controller", () => {
     [
       {
         ...DISABLED,
-        bot: { state: "ready" as const, username: "replacement_bot" },
+        bot: { state: "ready" as const, username: "connected_bot" },
         credentialConfigured: true,
       },
-      "Telegram bot changed to @replacement_bot. Pairing was reset.",
+      "Telegram connected to @connected_bot. Pairing needs to be set up.",
     ],
-    [DISABLED, "Telegram bot was removed from this Mac."],
-  ])("invalidates pairing instructions when the configured bot changes", async (next, message) => {
-    const runtime = setup();
-    await runtime.controller.activate();
-    await beginPairing(runtime);
+    [DISABLED, "Telegram connection deleted from this Mac."],
+  ])(
+    "invalidates pairing instructions when the bot is deleted or reconnected",
+    async (next, message) => {
+      const runtime = setup();
+      await runtime.controller.activate();
+      await beginPairing(runtime);
 
-    runtime.bridge.status.mockResolvedValueOnce(next);
-    runtime.poll?.();
+      runtime.bridge.status.mockResolvedValueOnce(next);
+      runtime.poll?.();
 
-    await vi.waitFor(() =>
-      expect(runtime.controller.state()).toMatchObject({
-        telegram: next,
-        healthAnnouncement: message,
-        feedback: null,
-      }),
-    );
-  });
+      await vi.waitFor(() =>
+        expect(runtime.controller.state()).toMatchObject({
+          telegram: next,
+          healthAnnouncement: message,
+          feedback: null,
+        }),
+      );
+    },
+  );
 
   it.each([
     [
@@ -556,7 +676,7 @@ describe("Telegram settings controller", () => {
     [
       "remove-webhook" as const,
       "unsafe-backend" as const,
-      "No secure credential backend is available, so Enduragent refused to read or change the saved bot token without encryption. Quit and reopen Enduragent, then choose Check again.",
+      "No secure credential backend is available, so Enduragent refused to access the saved bot token without encryption. Quit and reopen Enduragent, then choose Check again.",
     ],
   ])("gives %s an actionable %s recovery", async (action, reason, message) => {
     const runtime = setup();
@@ -783,7 +903,7 @@ describe("Telegram settings controller", () => {
         ...AWAITING,
         channel: { desiredState: "enabled" as const, state: "transfer-required" as const },
       },
-      "This bot is still owned by another Desktop installation. Remove it there before retrying here.",
+      "This bot is still owned by another Desktop installation. Delete the connection there before connecting it here.",
     ],
     ["missing credential", { ...AWAITING, credentialConfigured: false }, ""],
   ])("removes pairing instructions after %s", async (_reason, next, healthAnnouncement) => {
@@ -873,13 +993,13 @@ describe("Telegram settings controller", () => {
       "Telegram pairing was cancelled.",
     ],
     [
-      "replacement bot",
+      "new bot connection",
       {
         ...DISABLED,
-        bot: { state: "ready" as const, username: "replacement_bot" },
+        bot: { state: "ready" as const, username: "connected_bot" },
         credentialConfigured: true,
       },
-      "Telegram bot changed to @replacement_bot. Pairing was reset.",
+      "Telegram connected to @connected_bot. Pairing needs to be set up.",
     ],
   ])("announces an action-returned %s transition once", async (_transition, next, message) => {
     const runtime = setup();
