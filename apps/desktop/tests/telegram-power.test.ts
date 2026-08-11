@@ -686,6 +686,55 @@ describe("Desktop Telegram power lifecycle", () => {
     expect(failures).toContain("read-state");
   });
 
+  it("reopens Windows power state without POSIX ownership or directory sync", async () => {
+    const files = await fixture();
+    const observedAt = Date.parse("2026-08-01T00:00:00.000Z");
+    const synchronizeDirectory = vi.fn(async () => {
+      throw new TypeError("Windows directory sync must stay unavailable");
+    });
+    const synchronizeParentDirectory = vi.fn(async () => {
+      throw new TypeError("Windows parent sync must stay unavailable");
+    });
+    const firstController = controller();
+    firstController.status.mockResolvedValue(pollingStatus("online"));
+    const lifecycle = createDesktopTelegramPowerLifecycle({
+      ...files,
+      platform: "win32",
+      powerMonitor: monitor(),
+      controller: firstController,
+      now: () => observedAt,
+      createId: () => "windows-power-state",
+      syncDirectory: synchronizeDirectory,
+      syncParentDirectory: synchronizeParentDirectory,
+    });
+
+    await expect(lifecycle.start()).resolves.toEqual({ state: "clear" });
+    await lifecycle.close();
+    const target = join(files.root, TELEGRAM_POWER_STATE_FILE_NAME);
+    await chmod(files.root, 0o755);
+    await chmod(target, 0o644);
+    const secondController = controller();
+    secondController.status.mockResolvedValue(pollingStatus("online"));
+    const reopened = createDesktopTelegramPowerLifecycle({
+      ...files,
+      platform: "win32",
+      powerMonitor: monitor(),
+      controller: secondController,
+      now: () => observedAt,
+      createId: () => "windows-power-reopen",
+      syncDirectory: synchronizeDirectory,
+      syncParentDirectory: synchronizeParentDirectory,
+    });
+    await expect(reopened.start()).resolves.toEqual({ state: "clear" });
+    expect(JSON.parse(await readFile(target, "utf8"))).toMatchObject({
+      schemaVersion: 2,
+      athleteHome: files.athleteHome,
+    });
+    expect(synchronizeDirectory).not.toHaveBeenCalled();
+    expect(synchronizeParentDirectory).not.toHaveBeenCalled();
+    await reopened.close();
+  });
+
   it("does not block suspend and still reconciles when stopping a stale poll fails", async () => {
     const files = await fixture();
     const powerMonitor = monitor();

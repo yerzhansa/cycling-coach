@@ -325,6 +325,44 @@ describe("background-at-login preference", () => {
     expect((await lstat(owned)).isFile()).toBe(true);
   });
 
+  it("persists the Windows preference without POSIX ownership or directory sync", async () => {
+    const root = join(await scratch(), "preferences");
+    const synchronizeDirectory = vi.fn(async () => {
+      throw new TypeError("Windows directory sync must stay unavailable");
+    });
+    const synchronizeParentDirectory = vi.fn(async () => {
+      throw new TypeError("Windows parent sync must stay unavailable");
+    });
+    const store = createBackgroundAtLoginPreferenceStore({
+      root,
+      platform: "win32",
+      createId: () => "windows-preference",
+      syncDirectory: synchronizeDirectory,
+      syncParentDirectory: synchronizeParentDirectory,
+    });
+
+    await expect(store.set(true)).resolves.toEqual({ status: "stored", enabled: true });
+    const target = join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME);
+    await chmod(root, 0o755);
+    await chmod(target, 0o644);
+    const reopened = createBackgroundAtLoginPreferenceStore({
+      root,
+      platform: "win32",
+      syncDirectory: synchronizeDirectory,
+      syncParentDirectory: synchronizeParentDirectory,
+    });
+    await expect(reopened.read()).resolves.toEqual({
+      state: "configured",
+      enabled: true,
+      loginLaunchBehavior: "background",
+    });
+    expect(synchronizeDirectory).not.toHaveBeenCalled();
+    expect(synchronizeParentDirectory).not.toHaveBeenCalled();
+
+    await writeFile(target, '{"schemaVersion":2}\n');
+    await expect(reopened.read()).resolves.toEqual({ state: "unavailable", enabled: false });
+  });
+
   it("starts in background only for an OS-login launch with the preference enabled", async () => {
     const read = vi.fn(async () => ({ state: "configured", enabled: true }) as const);
     const manualLaunch = {

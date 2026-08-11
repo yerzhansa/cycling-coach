@@ -148,6 +148,7 @@ export {
   assertWindowsPrivateFileMetadata,
   assertWindowsPrivatePathRead,
   bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathDurability,
   classifyWindowsPrivatePathFailure,
   sameWindowsPrivatePathIdentity,
   windowsPrivatePathIdentity,

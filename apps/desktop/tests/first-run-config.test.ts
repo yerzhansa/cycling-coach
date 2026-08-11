@@ -1,8 +1,10 @@
 import {
+  chmod,
   lstat as fileLstat,
   link as fileLink,
   mkdir as fileMkdir,
   mkdtemp,
+  open as fileOpen,
   readFile,
   realpath,
   readdir,
@@ -11,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { WindowsPrivatePathPolicyError } from "@enduragent/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
@@ -183,6 +186,84 @@ describe("desktop first-run configuration", () => {
       session: { timezone: string };
     };
     expect(parsed.session.timezone).toBe("UTC");
+  });
+
+  it("seeds and reopens a Windows configuration without POSIX mode assertions", async () => {
+    const home = await temporaryHome();
+    const timezone = vi.fn(() => "Asia/Almaty");
+
+    await expect(
+      seedFirstRunConfig({
+        env: { ENDURAGENT_HOME: home },
+        platform: "win32",
+        dependencies: { timezone, createId: () => "windows-seed" },
+      }),
+    ).resolves.toBe("seeded");
+
+    const configDirectory = join(home, "config");
+    const configPath = join(configDirectory, "config.yaml");
+    expect((await fileLstat(configPath)).nlink).toBe(1);
+    expect(parseYaml(await readFile(configPath, "utf8"))).toMatchObject({
+      data_dir: resolve(home),
+      session: { timezone: "Asia/Almaty" },
+    });
+    await chmod(configDirectory, 0o755);
+    await chmod(configPath, 0o644);
+    const existingTimezone = vi.fn(() => "UTC");
+    await expect(
+      seedFirstRunConfig({
+        env: { ENDURAGENT_HOME: home },
+        platform: "win32",
+        dependencies: { timezone: existingTimezone },
+      }),
+    ).resolves.toBe("existing");
+    expect(existingTimezone).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a path-free Windows first-run file-flush failure", async () => {
+    const home = await temporaryHome();
+    let observed: unknown;
+
+    try {
+      await seedFirstRunConfig({
+        env: { ENDURAGENT_HOME: home },
+        platform: "win32",
+        dependencies: {
+          timezone: () => "UTC",
+          createId: () => "windows-flush-failure",
+          openFile: (async (path, flags, mode) => {
+            const handle = await fileOpen(path, flags, mode);
+            return new Proxy(handle, {
+              get(target, property) {
+                if (property === "sync") {
+                  return async () => {
+                    throw Object.assign(new Error(`${home} synthetic-private-value`), {
+                      code: "EIO",
+                    });
+                  };
+                }
+                const value = Reflect.get(target, property);
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
+          }) as typeof fileOpen,
+        },
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(observed).toMatchObject({
+      message: "Windows private path policy failed",
+      stage: "file-flush",
+      category: "io-failure",
+    });
+    expect(JSON.stringify(observed)).not.toContain(home);
+    expect(JSON.stringify(observed)).not.toContain("synthetic-private-value");
+    await expect(fileLstat(join(home, "config", "config.yaml"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("prepares the home before seeding and constructing the daemon supervisor", async () => {

@@ -1,6 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { open, readFile, rename, rm } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { lstat, open, readFile, rename, rm } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import {
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivateFileBinding,
+  assertWindowsPrivateFileMetadata,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathDurability,
+  classifyWindowsPrivatePathFailure,
+  sameWindowsPrivatePathIdentity,
+  windowsPrivatePathIdentity,
+  WindowsPrivatePathPolicyError,
+  type WindowsPrivateDirectoryBinding,
+  type WindowsPrivatePathIdentity,
+  type WindowsPrivatePathPolicyStage,
+} from "@enduragent/core";
 
 export type DurableReplaceOutcome =
   | Readonly<{ state: "not-committed" }>
@@ -12,6 +26,7 @@ export interface DurableAtomicReplaceInput {
   readonly fileName: string;
   readonly contents: string | Buffer;
   readonly mode: number;
+  readonly platform?: NodeJS.Platform;
   readonly createId?: () => string;
   readonly openFile?: typeof open;
   readonly openDirectory?: typeof open;
@@ -51,8 +66,17 @@ export async function durableAtomicReplace(
   ) {
     throw new TypeError("invalid durable replacement target");
   }
+  const platform = input.platform ?? process.platform;
   const createId = input.createId ?? randomUUID;
-  const id = createId();
+  let id: string;
+  try {
+    id = createId();
+  } catch (error) {
+    if (platform === "win32") {
+      throw classifyWindowsPrivatePathFailure("content-write", error);
+    }
+    throw error;
+  }
   if (!/^[A-Za-z0-9-]{1,128}$/.test(id)) {
     throw new TypeError("invalid durable replacement temporary id");
   }
@@ -69,18 +93,70 @@ export async function durableAtomicReplace(
     : Buffer.from(input.contents, "utf8");
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   let renamed = false;
+  let stage: WindowsPrivatePathPolicyStage = "content-write";
+  let windowsDirectory: WindowsPrivateDirectoryBinding | undefined;
+  let windowsTemporaryIdentity: WindowsPrivatePathIdentity | undefined;
   try {
+    if (platform === "win32") {
+      windowsDirectory = bindWindowsPrivateDirectory(dirname(input.root), input.root);
+    }
     handle = await openFile(temporary, "wx", input.mode);
+    if (platform === "win32") {
+      const opened = await handle.stat();
+      assertWindowsPrivateFileMetadata(opened);
+      windowsTemporaryIdentity = windowsPrivatePathIdentity(opened);
+      assertWindowsPrivateFileBinding(windowsDirectory!, temporary, windowsTemporaryIdentity);
+    }
     await handle.writeFile(contents);
-    await handle.chmod(input.mode);
+    if (platform === "win32") {
+      const written = await handle.stat();
+      assertWindowsPrivateFileMetadata(written);
+      if (
+        !sameWindowsPrivatePathIdentity(
+          windowsTemporaryIdentity!,
+          windowsPrivatePathIdentity(written),
+        )
+      ) {
+        throw new WindowsPrivatePathPolicyError("binding-check", "corruption");
+      }
+      assertWindowsPrivateFileBinding(windowsDirectory!, temporary, windowsTemporaryIdentity!);
+    } else {
+      await handle.chmod(input.mode);
+    }
+    stage = "file-flush";
     await handle.sync();
+    if (platform === "win32") {
+      const flushed = await handle.stat();
+      assertWindowsPrivateFileMetadata(flushed);
+      if (
+        !sameWindowsPrivatePathIdentity(
+          windowsTemporaryIdentity!,
+          windowsPrivatePathIdentity(flushed),
+        )
+      ) {
+        throw new WindowsPrivatePathPolicyError("binding-check", "corruption");
+      }
+      assertWindowsPrivateFileBinding(windowsDirectory!, temporary, windowsTemporaryIdentity!);
+      assertWindowsPrivateDirectoryStable(windowsDirectory!);
+    }
     await handle.close();
     handle = undefined;
+    stage = "rename";
     await renameFile(temporary, target);
     renamed = true;
+    if (platform === "win32") {
+      assertWindowsPrivateFileBinding(windowsDirectory!, target, windowsTemporaryIdentity!);
+      assertWindowsPrivateDirectoryStable(windowsDirectory!);
+      if (classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable") {
+        return { state: "durably-committed" };
+      }
+    }
     await sync(input.root);
     return { state: "durably-committed" };
-  } catch {
+  } catch (error) {
+    if (platform === "win32" && !renamed) {
+      throw classifyWindowsPrivatePathFailure(stage, error);
+    }
     return { state: renamed ? "commit-uncertain" : "not-committed" };
   } finally {
     contents.fill(0);
@@ -94,6 +170,7 @@ export async function durableAtomicReplace(
 interface DurableAtomicRemoveInput {
   readonly root: string;
   readonly fileName: string;
+  readonly platform?: NodeJS.Platform;
   readonly createId?: () => string;
   readonly openDirectory?: typeof open;
   readonly renameFile?: typeof rename;
@@ -104,8 +181,17 @@ interface DurableAtomicRemoveInput {
 async function durableAtomicRemove(
   input: DurableAtomicRemoveInput,
 ): Promise<DurableReplaceOutcome> {
+  const platform = input.platform ?? process.platform;
   const createId = input.createId ?? randomUUID;
-  const id = createId();
+  let id: string;
+  try {
+    id = createId();
+  } catch (error) {
+    if (platform === "win32") {
+      throw classifyWindowsPrivatePathFailure("content-write", error);
+    }
+    throw error;
+  }
   if (!/^[A-Za-z0-9-]{1,128}$/.test(id)) {
     throw new TypeError("invalid durable removal temporary id");
   }
@@ -116,20 +202,46 @@ async function durableAtomicRemove(
     ((root: string): Promise<void> => syncDirectory(root, input.openDirectory ?? open));
   const target = join(input.root, input.fileName);
   const tombstone = join(input.root, `.${input.fileName}.${id}.deleted`);
+  let windowsDirectory: WindowsPrivateDirectoryBinding | undefined;
+  let windowsTargetIdentity: WindowsPrivatePathIdentity | undefined;
   try {
+    if (platform === "win32") {
+      windowsDirectory = bindWindowsPrivateDirectory(dirname(input.root), input.root);
+      const targetMetadata = await lstat(target);
+      assertWindowsPrivateFileMetadata(targetMetadata);
+      windowsTargetIdentity = windowsPrivatePathIdentity(targetMetadata);
+      assertWindowsPrivateFileBinding(windowsDirectory, target, windowsTargetIdentity);
+    }
     await renameFile(target, tombstone);
+    if (platform === "win32") {
+      assertWindowsPrivateFileBinding(windowsDirectory!, tombstone, windowsTargetIdentity!);
+      assertWindowsPrivateDirectoryStable(windowsDirectory!);
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      if (platform === "win32") {
+        throw classifyWindowsPrivatePathFailure("rename", error);
+      }
       return { state: "not-committed" };
     }
   }
-  try {
-    await sync(input.root);
-  } catch {
-    return { state: "commit-uncertain" };
+  if (
+    platform !== "win32" ||
+    classifyWindowsPrivatePathDurability("directory-sync").kind !== "unavailable"
+  ) {
+    try {
+      await sync(input.root);
+    } catch {
+      return { state: "commit-uncertain" };
+    }
   }
   await removeFile(tombstone, { force: true }).catch(() => undefined);
-  await sync(input.root).catch(() => undefined);
+  if (
+    platform !== "win32" ||
+    classifyWindowsPrivatePathDurability("directory-sync").kind !== "unavailable"
+  ) {
+    await sync(input.root).catch(() => undefined);
+  }
   return { state: "durably-committed" };
 }
 

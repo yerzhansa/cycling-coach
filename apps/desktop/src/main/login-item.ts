@@ -4,9 +4,17 @@ import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { App, LoginItemSettings } from "electron";
 import {
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivatePathRead,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathDurability,
+  type WindowsPrivateDirectoryBinding,
+} from "@enduragent/core";
+import {
   durablyReplaceReversible,
   type ReversibleDurableReplaceOutcome,
 } from "./durable-atomic-replace.js";
+import { assertWindowsPrivateFileAtPath, readWindowsPrivateFile } from "./windows-private-file.js";
 
 export const CLEAN_LOGIN_ITEM_STATUSES = ["not-found", "not-registered"] as const;
 export const BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME = "desktop-preferences-v1" as const;
@@ -52,6 +60,8 @@ export interface CreateBackgroundAtLoginPreferenceStoreInput {
   readonly removeFile?: typeof rm;
   readonly syncDirectory?: (root: string) => Promise<void>;
   readonly syncParentDirectory?: (root: string) => Promise<void>;
+  readonly platform?: NodeJS.Platform;
+  readonly openFile?: typeof open;
 }
 
 interface LegacyBackgroundAtLoginPreferenceRecord {
@@ -129,6 +139,7 @@ function parsePreference(contents: string): StoredBackgroundAtLoginPreferenceRec
 export function createBackgroundAtLoginPreferenceStore(
   input: CreateBackgroundAtLoginPreferenceStoreInput,
 ): BackgroundAtLoginPreferenceStore {
+  const platform = input.platform ?? process.platform;
   const target = join(input.root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME);
   const createId = input.createId ?? randomUUID;
   let namespaceState: "pending" | "verified" | "uncertain" = "pending";
@@ -153,8 +164,35 @@ export function createBackgroundAtLoginPreferenceStore(
     }
     await directory.close().catch(() => undefined);
   };
-  const synchronizeDirectory = input.syncDirectory ?? defaultSynchronizeDirectory;
-  const synchronizeParentDirectory = input.syncParentDirectory ?? defaultSynchronizeDirectory;
+  const rawSynchronizeDirectory = input.syncDirectory ?? defaultSynchronizeDirectory;
+  const rawSynchronizeParentDirectory = input.syncParentDirectory ?? defaultSynchronizeDirectory;
+  const synchronizeDirectory = async (root: string): Promise<void> => {
+    if (
+      platform === "win32" &&
+      classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable"
+    ) {
+      return;
+    }
+    await rawSynchronizeDirectory(root);
+  };
+  const synchronizeParentDirectory = async (root: string): Promise<void> => {
+    if (
+      platform === "win32" &&
+      classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable"
+    ) {
+      return;
+    }
+    await rawSynchronizeParentDirectory(root);
+  };
+  let windowsDirectory: WindowsPrivateDirectoryBinding | undefined;
+  const bindPreferenceDirectory = (): WindowsPrivateDirectoryBinding => {
+    if (windowsDirectory === undefined) {
+      windowsDirectory = bindWindowsPrivateDirectory(dirname(input.root), input.root);
+    } else {
+      assertWindowsPrivateDirectoryStable(windowsDirectory);
+    }
+    return windowsDirectory;
+  };
   const ownedTransient = (entry: string): boolean => {
     const prefix = `.${BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME}.`;
     if (!entry.startsWith(prefix)) return false;
@@ -180,8 +218,12 @@ export function createBackgroundAtLoginPreferenceStore(
         }
         throw error;
       }
-      if (!rootMetadata.isDirectory()) throw new TypeError("invalid login preference root");
-      assertOwner(rootMetadata, LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE);
+      if (platform === "win32") {
+        bindPreferenceDirectory();
+      } else {
+        if (!rootMetadata.isDirectory()) throw new TypeError("invalid login preference root");
+        assertOwner(rootMetadata, LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE);
+      }
       for (const entry of await readdir(input.root)) {
         if (ownedTransient(entry)) {
           await (input.removeFile ?? rm)(join(input.root, entry), { force: true });
@@ -202,6 +244,16 @@ export function createBackgroundAtLoginPreferenceStore(
     } catch (error) {
       if (isMissing(error)) return undefined;
       throw error;
+    }
+    if (platform === "win32") {
+      return (
+        await readWindowsPrivateFile({
+          directory: bindPreferenceDirectory(),
+          path: target,
+          maximumBytes: MAX_PREFERENCE_FILE_BYTES,
+          openFile: input.openFile,
+        })
+      )?.contents;
     }
     if (!rootMetadata.isDirectory()) throw new TypeError("invalid login preference root");
     assertOwner(rootMetadata, LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE);
@@ -238,7 +290,17 @@ export function createBackgroundAtLoginPreferenceStore(
     if (contents === undefined) return { schemaVersion: 1, enabled: false };
     try {
       const record = parsePreference(contents.toString("utf8"));
-      if (record === undefined) throw new TypeError("invalid login preference record");
+      if (record === undefined) {
+        if (platform === "win32") {
+          assertWindowsPrivatePathRead({
+            bounded: true,
+            identityStable: true,
+            contentValid: false,
+            authenticatedHomeBinding: true,
+          });
+        }
+        throw new TypeError("invalid login preference record");
+      }
       return record;
     } finally {
       contents.fill(0);
@@ -249,16 +311,30 @@ export function createBackgroundAtLoginPreferenceStore(
   ): Promise<ReversibleDurableReplaceOutcome> => {
     await mkdir(input.root, { recursive: true, mode: LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE });
     const rootMetadata = await lstat(input.root);
-    if (!rootMetadata.isDirectory()) throw new TypeError("invalid login preference root");
-    assertOwner(rootMetadata, LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE);
+    if (platform === "win32") {
+      bindPreferenceDirectory();
+    } else {
+      if (!rootMetadata.isDirectory()) throw new TypeError("invalid login preference root");
+      assertOwner(rootMetadata, LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE);
+    }
     if (!parentDirectoryVerified) {
       await synchronizeParentDirectory(dirname(input.root));
       parentDirectoryVerified = true;
     }
     try {
       const existing = await lstat(target);
-      if (!existing.isFile()) throw new TypeError("invalid login preference target");
-      assertOwner(existing, LOGIN_ITEM_PREFERENCE_FILE_MODE);
+      if (platform === "win32") {
+        assertWindowsPrivateFileAtPath(
+          bindPreferenceDirectory(),
+          target,
+          existing,
+          0,
+          MAX_PREFERENCE_FILE_BYTES,
+        );
+      } else {
+        if (!existing.isFile()) throw new TypeError("invalid login preference target");
+        assertOwner(existing, LOGIN_ITEM_PREFERENCE_FILE_MODE);
+      }
     } catch (error) {
       if (!isMissing(error)) throw error;
     }
@@ -277,7 +353,8 @@ export function createBackgroundAtLoginPreferenceStore(
         createId: () => id,
         renameFile: input.renameFile,
         removeFile: input.removeFile,
-        syncDirectory: input.syncDirectory,
+        syncDirectory: platform === "win32" ? synchronizeDirectory : input.syncDirectory,
+        platform,
       });
     } finally {
       previous?.fill(0);

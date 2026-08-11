@@ -145,6 +145,25 @@ describe("desktop credential vault", () => {
     await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("refuses a Windows encryption result containing plaintext", async () => {
+    const root = await temporaryRoot();
+    const vault = createCredentialVault({
+      root,
+      platform: "win32",
+      encryption: {
+        isEncryptionAvailable: () => true,
+        encryptString: (value) => Buffer.concat([Buffer.from([0]), Buffer.from(value, "utf8")]),
+        decryptString: (value) => value.toString("utf8"),
+      },
+      applyCredential: vi.fn(),
+    });
+
+    await expect(
+      vault.writeCredential({ slot: "anthropic", value: "test-token-placeholder" }),
+    ).resolves.toEqual({ slot: "anthropic", status: "refused", reason: "storage-failed" });
+    await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("accepts the macOS encryption shape and writes one atomic secure ciphertext", async () => {
     const root = await temporaryRoot();
     const sentinel = "desktop-sentinel-model-key";
@@ -1413,6 +1432,62 @@ describe("desktop credential vault", () => {
       }),
     ).resolves.toEqual({ status: "refused", reason: "invalid-input" });
     expect(applyCredential).not.toHaveBeenCalled();
+  });
+
+  it("reopens DPAPI-shaped Windows ciphertext without POSIX modes or directory sync", async () => {
+    const root = await temporaryRoot();
+    const backend = vi.fn(() => {
+      throw new TypeError("Linux-only backend probe");
+    });
+    const encryptionPort = { ...encryption(), getSelectedStorageBackend: backend };
+    const syncCredentialDirectory = vi.fn(async () => {
+      throw new TypeError("Windows directory sync must stay unavailable");
+    });
+    const syncCredentialParentDirectory = vi.fn(async () => {
+      throw new TypeError("Windows parent sync must stay unavailable");
+    });
+    const vault = createCredentialVault({
+      root,
+      platform: "win32",
+      encryption: encryptionPort,
+      applyCredential: vi.fn(async () => undefined),
+      createId: () => randomUUID(),
+      syncCredentialDirectory,
+      syncCredentialParentDirectory,
+    });
+
+    await expect(
+      vault.writeCredential({ slot: "anthropic", value: "synthetic-windows-anthropic" }),
+    ).resolves.toMatchObject({ status: "configured" });
+    await expect(
+      vault.writeCredential({ slot: "openrouter", value: "synthetic-windows-openrouter" }),
+    ).resolves.toMatchObject({ status: "configured" });
+    expect(
+      (await readFile(join(root, "anthropic.bin"))).includes("synthetic-windows-anthropic"),
+    ).toBe(false);
+    expect(
+      (await readFile(join(root, "openrouter.bin"))).includes("synthetic-windows-openrouter"),
+    ).toBe(false);
+
+    await chmod(root, 0o755);
+    await writeFile(join(root, "anthropic.bin"), "corrupt-ciphertext");
+    const reopened = createCredentialVault({
+      root,
+      platform: "win32",
+      encryption: encryptionPort,
+      applyCredential: vi.fn(async () => undefined),
+      syncCredentialDirectory,
+      syncCredentialParentDirectory,
+    });
+    await expect(reopened.credentialStatuses()).resolves.toEqual(
+      expect.arrayContaining([
+        { slot: "anthropic", state: "re-prompt", runtimeState: null },
+        { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+      ]),
+    );
+    expect(backend).not.toHaveBeenCalled();
+    expect(syncCredentialDirectory).not.toHaveBeenCalled();
+    expect(syncCredentialParentDirectory).not.toHaveBeenCalled();
   });
 
   it("marks model credentials inactive when a profile becomes selected", () => {
