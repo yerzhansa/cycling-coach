@@ -41,6 +41,7 @@ function createComposingBot(
     rawApi?: ApiCall;
     start?: (callApi: ApiCall) => Promise<void>;
     stop?: (callApi: ApiCall) => Promise<void>;
+    isRunning?: () => boolean;
   } = {},
 ) {
   const middleware: Middleware[] = [];
@@ -78,6 +79,7 @@ function createComposingBot(
     }),
     start: vi.fn(() => options.start?.(callApi) ?? Promise.resolve()),
     stop: vi.fn(() => options.stop?.(callApi) ?? Promise.resolve()),
+    isRunning: vi.fn(() => options.isRunning?.() ?? true),
     dispatch: (ctx: any) => {
       const command = /^\/([^\s]+)/.exec(ctx.message?.text ?? "")?.[1];
       const terminal =
@@ -526,6 +528,88 @@ describe("Telegram polling generation release", () => {
     finalOffset.resolve({ ok: true, result: [] });
     await stopping;
     await Promise.all([startSettled, runtime.captureDrain().wait()]);
+  });
+
+  it("drains a sealed generation when final-offset confirmation fails after polling stops", async () => {
+    const offline = new Error("offline");
+    const polling = deferred<void>();
+    let running = false;
+    const bot = createComposingBot({
+      rawApi: (method, payload) =>
+        method === "getUpdates" && payload.timeout === 0
+          ? Promise.reject(offline)
+          : Promise.resolve({ ok: true, result: true }),
+      start: async () => {
+        running = true;
+        await polling.promise;
+      },
+      stop: (callApi) => {
+        running = false;
+        return callApi("getUpdates", { offset: 8, timeout: 0 }).then(() => undefined);
+      },
+      isRunning: () => running,
+    });
+    vi.doMock("grammy", () => ({
+      Bot: function FakeBot() {
+        return bot;
+      },
+      InputFile: class {},
+    }));
+    vi.doMock("@grammyjs/auto-retry", () => ({
+      autoRetry: () => (previous: ApiCall, method: string, payload: Record<string, unknown>) =>
+        previous(method, payload),
+    }));
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const runtime = createTelegramBot(makeRuntimeInput());
+
+    const pollingSettled = runtime.start();
+    await expect(runtime.stop()).resolves.toBeUndefined();
+    await expect(runtime.sendMessage("12345", "late")).rejects.toMatchObject({
+      code: "telegram-generation-sealed",
+    });
+    let drained = false;
+    const draining = runtime
+      .captureDrain()
+      .wait()
+      .then(() => {
+        drained = true;
+      });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    polling.resolve();
+    await Promise.all([pollingSettled, draining]);
+    expect(drained).toBe(true);
+    expect(bot.isRunning).toHaveBeenCalledOnce();
+  });
+
+  it("keeps final-offset failure fatal while polling remains running", async () => {
+    const stopFailure = new Error("stop failed");
+    const bot = createComposingBot({
+      rawApi: (method, payload) =>
+        method === "getUpdates" && payload.timeout === 0
+          ? Promise.reject(stopFailure)
+          : Promise.resolve({ ok: true, result: true }),
+      stop: (callApi) =>
+        callApi("getUpdates", { offset: 8, timeout: 0 }).then(() => undefined),
+      isRunning: () => true,
+    });
+    vi.doMock("grammy", () => ({
+      Bot: function FakeBot() {
+        return bot;
+      },
+      InputFile: class {},
+    }));
+    vi.doMock("@grammyjs/auto-retry", () => ({
+      autoRetry: () => (previous: ApiCall, method: string, payload: Record<string, unknown>) =>
+        previous(method, payload),
+    }));
+    const { createTelegramBot } = await import("../src/channels/telegram.js");
+    const runtime = createTelegramBot(makeRuntimeInput());
+
+    await expect(runtime.stop()).rejects.toBe(stopFailure);
+    expect(bot.isRunning).toHaveBeenCalledOnce();
+    expect(() => runtime.captureDrain()).toThrow(/must stop before/);
   });
 
   it("tracks a retry-wrapped 429 request through its final API attempt", async () => {
