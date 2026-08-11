@@ -124,6 +124,7 @@ export { ChatStore } from "./agent/chat-store.js";
 export {
   ConversationRecoveryError,
   createConversationStore,
+  type ConversationStoreOptions,
   type ConversationStorePort,
 } from "./agent/conversation-store.js";
 export {
@@ -140,6 +141,22 @@ export type {
   TranscriptPageResult,
   TranscriptPageTurn,
 } from "./agent/transcript-store.js";
+export {
+  WindowsPrivatePathPolicyError,
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivateFileBinding,
+  assertWindowsPrivateFileMetadata,
+  assertWindowsPrivatePathRead,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathFailure,
+  sameWindowsPrivatePathIdentity,
+  windowsPrivatePathIdentity,
+} from "./io/windows-private-path-policy.js";
+export type {
+  WindowsPrivateDirectoryBinding,
+  WindowsPrivatePathIdentity,
+  WindowsPrivatePathPolicyStage,
+} from "./io/windows-private-path-policy.js";
 export { engineConfigFromConfig } from "./agent/engine-host-adapter.js";
 export { classifyFailure, extractRetryAfterMs } from "./agent/token-utils.js";
 export {

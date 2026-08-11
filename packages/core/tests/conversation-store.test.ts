@@ -22,6 +22,7 @@ import {
 } from "../src/agent/chat-store.js";
 import { ConversationRecoveryError, ConversationStore } from "../src/agent/conversation-store.js";
 import { TranscriptStore, type ResetIntentRecord } from "../src/agent/transcript-store.js";
+import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-policy.js";
 
 const roots: string[] = [];
 const RESET_ID = "c".repeat(64);
@@ -73,6 +74,18 @@ function seedSession(store: ChatStore, chatId: string): void {
 function resetArchives(dataDir: string, chatId: string): string[] {
   return readdirSync(join(dataDir, "sessions")).filter((name) =>
     name.startsWith(`${chatId}.jsonl.reset.`),
+  );
+}
+
+function windowsSessionPath(dataDir: string, chatId: string): string {
+  const digest = createHash("sha256").update(chatId, "utf8").digest("hex");
+  return join(dataDir, "sessions", `${digest}.jsonl`);
+}
+
+function windowsResetArchives(dataDir: string, chatId: string): string[] {
+  const digest = createHash("sha256").update(chatId, "utf8").digest("hex");
+  return readdirSync(join(dataDir, "sessions")).filter((name) =>
+    name.startsWith(`${digest}.jsonl.reset.`),
   );
 }
 
@@ -745,5 +758,94 @@ describe("ConversationStore reset transaction recovery", () => {
     expect(() => store.readCurrentConversation(reset.chatId)).toThrow(ConversationRecoveryError);
     expect(chat.hasSession(reset.chatId)).toBe(true);
     expect(boundaryCount(dataDir, reset.chatId)).toBe(0);
+  });
+});
+
+describe("ConversationStore Windows restart recovery", () => {
+  it("reopens completed archives without changing the recovered conversation", () => {
+    const dataDir = makeDataDir();
+    const chatId = "telegram:synthetic-windows-restart";
+    const first = new ConversationStore(
+      new ChatStore(dataDir, 0, { platform: "win32" }),
+      new TranscriptStore(dataDir, { platform: "win32" }),
+      () => RESET_ID,
+    );
+    first.appendTurn(chatId, "synthetic athlete", "synthetic coach", LINEAGE);
+    first.appendCompletedTurn({
+      chatId,
+      turnId: "turn-1",
+      completedAt: "2026-07-22T00:00:00.000Z",
+      athleteText: "synthetic athlete",
+      coachText: "synthetic coach",
+    });
+    first.resetConversation({
+      chatId,
+      boundaryAt: "2026-07-22T01:02:03.000Z",
+      reason: "explicit-reset",
+    });
+
+    const reopened = new ConversationStore(
+      new ChatStore(dataDir, 0, { platform: "win32" }),
+      new TranscriptStore(dataDir, { platform: "win32" }),
+    );
+
+    expect(reopened.hasSession(chatId)).toBe(false);
+    expect(reopened.listArchivedConversations(chatId)).toEqual({
+      schemaVersion: 1,
+      conversations: [
+        {
+          boundaryRef: RESET_ID,
+          boundaryAt: "2026-07-22T01:02:03.000Z",
+          reason: "explicit-reset",
+          turnCount: 1,
+        },
+      ],
+      truncated: false,
+    });
+    expect(
+      reopened
+        .readArchivedConversationPage(chatId, RESET_ID, { cursor: null, limit: 25 })
+        .turns.map((record) => record.turnId),
+    ).toEqual(["turn-1"]);
+  });
+
+  it("keeps corrupt recovery scoped to its chat and completes an unrelated intent", () => {
+    const dataDir = makeDataDir();
+    const chat = new ChatStore(dataDir, 0, { platform: "win32" });
+    const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+    const corrupt = resetIntent("telegram:synthetic-windows-corrupt", "a".repeat(64));
+    const unrelated = resetIntent("telegram:synthetic-windows-unrelated", "b".repeat(64));
+    seedSession(chat, corrupt.chatId);
+    seedSession(chat, unrelated.chatId);
+    transcript.createResetIntent(corrupt);
+    transcript.createResetIntent(unrelated);
+    const corruptActive = windowsSessionPath(dataDir, corrupt.chatId);
+    linkSync(corruptActive, join(dataDir, "synthetic-shared-session.jsonl"));
+
+    const recovered = new ConversationStore(chat, transcript);
+
+    let failure: unknown;
+    try {
+      recovered.load(corrupt.chatId);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ConversationRecoveryError);
+    expect((failure as Error & { cause?: unknown }).cause).toBeInstanceOf(
+      WindowsPrivatePathPolicyError,
+    );
+    expect((failure as Error & { cause?: unknown }).cause).toMatchObject({
+      stage: "binding-check",
+      category: "corruption",
+    });
+    expect(String(failure)).not.toContain(corruptActive);
+    expect(JSON.stringify(failure)).not.toContain(corruptActive);
+    expect(existsSync(corruptActive)).toBe(true);
+    expect(existsSync(intentPath(dataDir, corrupt.chatId))).toBe(true);
+    expect(windowsResetArchives(dataDir, corrupt.chatId)).toHaveLength(0);
+    expect(recovered.hasSession(unrelated.chatId)).toBe(false);
+    expect(existsSync(intentPath(dataDir, unrelated.chatId))).toBe(false);
+    expect(windowsResetArchives(dataDir, unrelated.chatId)).toHaveLength(1);
   });
 });

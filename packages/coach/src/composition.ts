@@ -167,6 +167,7 @@ export interface LocalCoachCompositionDependencies {
   readonly createRepository?: (store: CoachStoreWriterContext["store"]) => AnchorRepository;
   readonly createResolver?: (repository: AnchorRepository) => CyclingFtpAnchorResolver;
   readonly now?: () => number;
+  readonly platform?: NodeJS.Platform;
   readonly randomId?: () => string;
   readonly modelTransportDecorator?: ModelTransportDecorator;
   readonly onToolsAssembled?: (names: readonly string[]) => void;
@@ -835,6 +836,7 @@ export async function createLocalCoachComposition(
       const conversationStore = createConversationStore(
         input.home.root,
         config.session.resetArchiveRetentionDays,
+        { platform: dependencies.platform },
       );
       const projectedConfig = engineConfigFromConfig(effectiveConfig);
       const legacyClient =

@@ -29,11 +29,16 @@ export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPo
   ): TranscriptPageResult;
 }
 
+export interface ConversationStoreOptions {
+  readonly platform?: NodeJS.Platform;
+}
+
 export function createConversationStore(
   dataDir: string,
   resetArchiveRetentionDays = 0,
+  options: ConversationStoreOptions = {},
 ): ConversationStorePort {
-  return ConversationStore.create(dataDir, resetArchiveRetentionDays);
+  return ConversationStore.create(dataDir, resetArchiveRetentionDays, options);
 }
 
 export class ConversationRecoveryError extends Error {
@@ -48,10 +53,14 @@ export class ConversationRecoveryError extends Error {
 export class ConversationStore implements ConversationStorePort {
   private readonly blockedChats = new Map<string, unknown>();
 
-  static create(dataDir: string, resetArchiveRetentionDays = 0): ConversationStore {
+  static create(
+    dataDir: string,
+    resetArchiveRetentionDays = 0,
+    options: ConversationStoreOptions = {},
+  ): ConversationStore {
     return new ConversationStore(
-      new ChatStore(dataDir, resetArchiveRetentionDays),
-      new TranscriptStore(dataDir),
+      new ChatStore(dataDir, resetArchiveRetentionDays, options),
+      new TranscriptStore(dataDir, { platform: options.platform }),
     );
   }
 

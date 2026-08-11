@@ -11,8 +11,10 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  readSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -21,6 +23,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   MAX_ARCHIVED_CONVERSATION_ENTRIES,
+  MAX_TRANSCRIPT_FILE_BYTES,
   MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES,
   MAX_TRANSCRIPT_PAGE_TURNS,
   MAX_TRANSCRIPT_RECORD_BYTES,
@@ -29,6 +32,7 @@ import {
   UnsafeTranscriptTargetError,
   type ResetIntentRecord,
 } from "../src/agent/transcript-store.js";
+import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-policy.js";
 
 const roots: string[] = [];
 const RESET_ID_A = "a".repeat(64);
@@ -1087,5 +1091,295 @@ describe("TranscriptStore private race-checked targets", () => {
     linkSync(intentPath(dataDir, reset.chatId), join(dataDir, "shared-intent.json"));
 
     expect(() => store.readResetIntent(reset.chatId)).toThrow(UnsafeTranscriptTargetError);
+  });
+});
+
+describe("TranscriptStore Windows private paths", () => {
+  it("persists and reopens transcript records through injected Windows semantics", () => {
+    const dataDir = makeDataDir();
+    const first = new TranscriptStore(dataDir, { platform: "win32" });
+    first.appendCompletedTurn(turn("restart", "turn-1"));
+
+    const reopened = new TranscriptStore(dataDir, { platform: "win32" });
+
+    expect(reopened.readCurrentConversation("restart").map((record) => record.turnId)).toEqual([
+      "turn-1",
+    ]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not inspect or repair POSIX modes under injected Windows semantics",
+    () => {
+      const dataDir = makeDataDir();
+      const directory = join(dataDir, "transcripts");
+      mkdirSync(directory, { mode: 0o755 });
+      chmodSync(directory, 0o755);
+      const path = transcriptPath(dataDir, "mode");
+      writeFileSync(path, serializedTurn(turn("mode", "turn-1")), { mode: 0o644 });
+      chmodSync(path, 0o644);
+
+      const store = new TranscriptStore(dataDir, { platform: "win32" });
+
+      expect(store.readCurrentConversation("mode").map((record) => record.turnId)).toEqual([
+        "turn-1",
+      ]);
+      expect(lstatSync(directory).mode & 0o7777).toBe(0o755);
+      expect(lstatSync(path).mode & 0o7777).toBe(0o644);
+    },
+  );
+
+  it("rejects a replaced transcript directory as path-free corruption", () => {
+    const dataDir = makeDataDir();
+    const store = new TranscriptStore(dataDir, { platform: "win32" });
+    store.appendCompletedTurn(turn("directory-swap", "turn-1"));
+    const directory = join(dataDir, "transcripts");
+    renameSync(directory, `${directory}.original`);
+    mkdirSync(directory, { mode: 0o700 });
+
+    let failure: unknown;
+    try {
+      store.readCurrentConversation("directory-swap");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "binding-check", category: "corruption" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(directory);
+    expect(JSON.stringify(failure)).not.toContain(directory);
+  });
+
+  it("classifies an incomplete Windows content write without swallowing it", () => {
+    const dataDir = makeDataDir();
+    const path = transcriptPath(dataDir, "short-write");
+    const store = new TranscriptStore(dataDir, {
+      platform: "win32",
+      write: () => 0,
+    });
+
+    let failure: unknown;
+    try {
+      store.appendCompletedTurn(turn("short-write", "turn-1"));
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "content-write", category: "io-failure" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
+  });
+
+  it("rejects an oversized Windows transcript before allocating its contents", () => {
+    const dataDir = makeDataDir();
+    const chatId = "oversized";
+    const store = new TranscriptStore(dataDir, { platform: "win32" });
+    store.appendCompletedTurn(turn(chatId, "turn-1"));
+    const path = transcriptPath(dataDir, chatId);
+    truncateSync(path, MAX_TRANSCRIPT_FILE_BYTES + 1);
+
+    let failure: unknown;
+    try {
+      store.readCurrentConversation(chatId);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
+    expect(lstatSync(path).size).toBe(MAX_TRANSCRIPT_FILE_BYTES + 1);
+  });
+
+  it("rejects malformed Windows transcript content without appending to it", () => {
+    const dataDir = makeDataDir();
+    const chatId = "corrupt-transcript";
+    const store = new TranscriptStore(dataDir, { platform: "win32" });
+    const path = transcriptPath(dataDir, chatId);
+    const corrupt = "{not-valid-json}\n";
+    writeFileSync(path, corrupt, { mode: 0o600 });
+
+    let readFailure: unknown;
+    try {
+      store.readCurrentConversation(chatId);
+    } catch (error) {
+      readFailure = error;
+    }
+    let appendFailure: unknown;
+    try {
+      store.appendCompletedTurn(turn(chatId, "turn-1"));
+    } catch (error) {
+      appendFailure = error;
+    }
+
+    expect(readFailure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(readFailure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect(appendFailure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(appendFailure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect(String(readFailure)).not.toContain(path);
+    expect(String(appendFailure)).not.toContain(path);
+    expect(readFileSync(path, "utf8")).toBe(corrupt);
+  });
+
+  it("rejects duplicate Windows reset boundaries on every transcript read", () => {
+    const dataDir = makeDataDir();
+    const chatId = "duplicate-boundary";
+    const store = new TranscriptStore(dataDir, { platform: "win32" });
+    const reset = intent(chatId);
+    const boundary = `${JSON.stringify({
+      version: 1,
+      kind: "conversation-boundary",
+      resetId: reset.resetId,
+      chatId,
+      boundaryAt: reset.boundaryAt,
+      reason: reset.reason,
+    })}\n`;
+    const path = transcriptPath(dataDir, chatId);
+    writeFileSync(path, boundary + boundary, { mode: 0o600 });
+
+    let failure: unknown;
+    try {
+      store.readCurrentConversation(chatId);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
+    expect(readFileSync(path, "utf8")).toBe(boundary + boundary);
+  });
+
+  it("classifies directory sync as unavailable while retaining file flushes", () => {
+    const dataDir = makeDataDir();
+    let directorySyncs = 0;
+    let fileSyncs = 0;
+    const store = new TranscriptStore(dataDir, {
+      platform: "win32",
+      syncDirectory: () => {
+        directorySyncs += 1;
+        throw new Error("Windows directory sync hook must not run");
+      },
+      syncFile: (descriptor) => {
+        fileSyncs += 1;
+        fsyncSync(descriptor);
+      },
+    });
+
+    store.appendCompletedTurn(turn("durable", "turn-1"));
+
+    expect(directorySyncs).toBe(0);
+    expect(fileSyncs).toBe(1);
+    expect(
+      new TranscriptStore(dataDir, { platform: "win32" })
+        .readCurrentConversation("durable")
+        .map((record) => record.turnId),
+    ).toEqual(["turn-1"]);
+  });
+
+  it("reopens an existing boundary with a writable Windows flush handle", () => {
+    const dataDir = makeDataDir();
+    const reset = intent("writable-flush");
+    const first = new TranscriptStore(dataDir, { platform: "win32" });
+    first.appendCompletedTurn(turn(reset.chatId, "turn-1"));
+    first.createResetIntent(reset);
+    first.ensureConversationBoundary(reset);
+    let syncs = 0;
+    const reopened = new TranscriptStore(dataDir, {
+      platform: "win32",
+      syncFile: (descriptor) => {
+        syncs += 1;
+        const firstByte = Buffer.allocUnsafe(1);
+        expect(readSync(descriptor, firstByte, 0, 1, 0)).toBe(1);
+        expect(writeSync(descriptor, firstByte, 0, 1, 0)).toBe(1);
+        fsyncSync(descriptor);
+      },
+    });
+
+    reopened.ensureConversationBoundary(reset);
+
+    expect(syncs).toBe(1);
+    expect(reopened.hasConversationBoundary(reset.chatId, reset.resetId)).toBe(true);
+  });
+
+  it("rejects malformed reset state as path-free corruption", () => {
+    const dataDir = makeDataDir();
+    const store = new TranscriptStore(dataDir, { platform: "win32" });
+    const path = intentPath(dataDir, "corrupt-intent");
+    writeFileSync(path, "{not-valid-json}\n", { mode: 0o644 });
+
+    let failure: unknown;
+    try {
+      store.readResetIntent("corrupt-intent");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
+    expect(readFileSync(path, "utf8")).toBe("{not-valid-json}\n");
+  });
+
+  it("rejects a malformed orphan reset temp without deleting it during recovery", () => {
+    const dataDir = makeDataDir();
+    const reset = intent("corrupt-orphan-temp");
+    const digest = createHash("sha256").update(reset.chatId, "utf8").digest("hex");
+    const path = join(dataDir, "transcripts", `${digest}.${reset.resetId}.reset-intent.tmp`);
+    const store = new TranscriptStore(dataDir, { platform: "win32" });
+    writeFileSync(path, "{not-valid-json}\n", { mode: 0o600 });
+
+    let failure: unknown;
+    try {
+      store.readResetIntent(reset.chatId);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
+    expect(readFileSync(path, "utf8")).toBe("{not-valid-json}\n");
+  });
+
+  it("does not swallow a Windows sharing violation during file flush", () => {
+    const dataDir = makeDataDir();
+    const path = transcriptPath(dataDir, "locked");
+    const store = new TranscriptStore(dataDir, {
+      platform: "win32",
+      syncFile: () => {
+        throw Object.assign(new Error(`locked ${path}`), { code: "EACCES", path });
+      },
+    });
+
+    let failure: unknown;
+    try {
+      store.appendCompletedTurn(turn("locked", "turn-1"));
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "file-flush", category: "sharing-violation" });
+    expect(failure).not.toHaveProperty("path");
+    expect(failure).not.toHaveProperty("cause");
+    expect(String(failure)).not.toContain(path);
+    expect(JSON.stringify(failure)).not.toContain(path);
   });
 });

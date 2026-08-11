@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   readFileSync,
   writeFileSync,
@@ -15,9 +16,11 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  readSync,
   unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
+import { TextDecoder } from "node:util";
 import type { ModelMessage } from "ai";
 import type { ChatLineage } from "@enduragent/engine";
 import { messageText } from "@enduragent/engine/sport";
@@ -28,8 +31,24 @@ import {
   setMessageProvenance,
   type SourceProvenance,
 } from "../provenance.js";
+import {
+  WindowsPrivatePathPolicyError,
+  assertWindowsPrivateDirectoryStable,
+  assertWindowsPrivateFileBinding,
+  assertWindowsPrivateFileMetadata,
+  assertWindowsPrivatePathRead,
+  bindWindowsPrivateDirectory,
+  classifyWindowsPrivatePathDurability,
+  classifyWindowsPrivatePathFailure,
+  sameWindowsPrivatePathIdentity,
+  windowsPrivatePathIdentity,
+  type WindowsPrivateDirectoryBinding,
+  type WindowsPrivatePathPolicyStage,
+} from "../io/windows-private-path-policy.js";
 
 const MS_PER_DAY = 86_400_000;
+export const MAX_CHAT_SESSION_BYTES = 67_108_864;
+const STRICT_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 // Recorded in history when a turn fails before producing a reply, so the
 // athlete's (durably persisted) message is visibly unanswered rather than
@@ -43,9 +62,16 @@ interface FileIdentity {
 }
 
 interface ChatStoreHooks {
+  readonly rename?: typeof renameSync;
   readonly syncFile?: (descriptor: number) => void;
   readonly syncDirectory?: (descriptor: number) => void;
 }
+
+interface ChatStoreOptions {
+  readonly platform?: NodeJS.Platform;
+}
+
+type DirectoryDescriptor = number | null;
 
 interface DurableChatReset {
   readonly resetId: string;
@@ -149,54 +175,68 @@ export class ChatStore {
   private readonly sessionsDir: string;
   private readonly resetArchiveRetentionDays: number;
   private readonly sessionsDirectoryIdentity: FileIdentity;
+  private readonly platform: NodeJS.Platform;
+  private readonly windowsDirectoryBinding: WindowsPrivateDirectoryBinding | undefined;
 
-  constructor(dataDir: string, resetArchiveRetentionDays = 0) {
+  constructor(dataDir: string, resetArchiveRetentionDays = 0, options: ChatStoreOptions = {}) {
     this.sessionsDir = join(dataDir, "sessions");
     this.resetArchiveRetentionDays = resetArchiveRetentionDays;
+    this.platform = options.platform ?? process.platform;
     let created = false;
     try {
       mkdirSync(this.sessionsDir, { mode: 0o700 });
       created = true;
     } catch (error) {
-      if (!isExists(error)) throw error;
+      if (!isExists(error)) {
+        throw this.platform === "win32"
+          ? classifyWindowsPrivatePathFailure("entry-check", error)
+          : error;
+      }
     }
 
-    const beforeOpen = lstatSync(this.sessionsDir);
-    if (beforeOpen.isSymbolicLink() || !beforeOpen.isDirectory()) {
-      throw new Error("Sessions directory is unsafe.");
-    }
-    let descriptor: number;
-    try {
-      descriptor = openSync(
-        this.sessionsDir,
-        constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-      );
-    } catch {
-      throw new Error("Sessions directory is unsafe.");
-    }
-    try {
-      let hardened = true;
-      if (created || !isStrictPrivateDirectory(fstatSync(descriptor))) {
-        try {
-          fchmodSync(descriptor, 0o700);
-        } catch {
-          hardened = false;
-        }
-      }
-      const opened = fstatSync(descriptor);
-      const afterOpen = lstatSync(this.sessionsDir);
-      if (
-        !hardened ||
-        !isStrictPrivateDirectory(opened) ||
-        !isStrictPrivateDirectory(afterOpen) ||
-        !sameIdentity(identity(beforeOpen), identity(opened)) ||
-        !sameIdentity(identity(opened), identity(afterOpen))
-      ) {
+    if (this.platform === "win32") {
+      const binding = bindWindowsPrivateDirectory(dataDir, this.sessionsDir);
+      this.windowsDirectoryBinding = binding;
+      this.sessionsDirectoryIdentity = binding.identity;
+    } else {
+      this.windowsDirectoryBinding = undefined;
+      const beforeOpen = lstatSync(this.sessionsDir);
+      if (beforeOpen.isSymbolicLink() || !beforeOpen.isDirectory()) {
         throw new Error("Sessions directory is unsafe.");
       }
-      this.sessionsDirectoryIdentity = identity(opened);
-    } finally {
-      closeSync(descriptor);
+      let descriptor: number;
+      try {
+        descriptor = openSync(
+          this.sessionsDir,
+          constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+        );
+      } catch {
+        throw new Error("Sessions directory is unsafe.");
+      }
+      try {
+        let hardened = true;
+        if (created || !isStrictPrivateDirectory(fstatSync(descriptor))) {
+          try {
+            fchmodSync(descriptor, 0o700);
+          } catch {
+            hardened = false;
+          }
+        }
+        const opened = fstatSync(descriptor);
+        const afterOpen = lstatSync(this.sessionsDir);
+        if (
+          !hardened ||
+          !isStrictPrivateDirectory(opened) ||
+          !isStrictPrivateDirectory(afterOpen) ||
+          !sameIdentity(identity(beforeOpen), identity(opened)) ||
+          !sameIdentity(identity(opened), identity(afterOpen))
+        ) {
+          throw new Error("Sessions directory is unsafe.");
+        }
+        this.sessionsDirectoryIdentity = identity(opened);
+      } finally {
+        closeSync(descriptor);
+      }
     }
 
     DURABLE_RESET_OPERATIONS.set(this, (chatId, reset) => {
@@ -209,20 +249,472 @@ export class ChatStore {
   }
 
   private filePath(chatId: string): string {
-    return join(this.sessionsDir, `${chatId}.jsonl`);
+    const fileName = this.platform === "win32" ? this.chatDigest(chatId) : chatId;
+    return join(this.sessionsDir, `${fileName}.jsonl`);
+  }
+
+  private chatDigest(chatId: string): string {
+    return createHash("sha256").update(chatId, "utf8").digest("hex");
+  }
+
+  private sessionExists(path: string): boolean {
+    if (this.platform !== "win32") return existsSync(path);
+    return this.withSessionsDirectory((directoryDescriptor) => {
+      let metadata: import("node:fs").Stats;
+      try {
+        metadata = lstatSync(path);
+      } catch (error) {
+        if (isMissing(error)) {
+          this.assertSessionsDirectoryStable(directoryDescriptor);
+          return false;
+        }
+        throw error;
+      }
+      assertWindowsPrivateFileMetadata(metadata);
+      assertWindowsPrivateFileBinding(
+        this.windowsDirectoryBinding!,
+        path,
+        windowsPrivatePathIdentity(metadata),
+      );
+      return true;
+    });
+  }
+
+  private openWindowsSessionFile(
+    directoryDescriptor: DirectoryDescriptor,
+    path: string,
+    flags: number,
+    allowedLinks: 1 | 2 = 1,
+  ): number {
+    const beforeOpen = lstatSync(path);
+    assertWindowsPrivateFileMetadata(beforeOpen, allowedLinks);
+    this.assertSessionsDirectoryStable(directoryDescriptor);
+    const descriptor = openSync(path, flags);
+    try {
+      const opened = fstatSync(descriptor);
+      assertWindowsPrivateFileMetadata(opened, allowedLinks);
+      if (
+        !sameWindowsPrivatePathIdentity(
+          windowsPrivatePathIdentity(beforeOpen),
+          windowsPrivatePathIdentity(opened),
+        )
+      ) {
+        throw new WindowsPrivatePathPolicyError("binding-check", "corruption");
+      }
+      assertWindowsPrivateFileBinding(
+        this.windowsDirectoryBinding!,
+        path,
+        windowsPrivatePathIdentity(opened),
+        allowedLinks,
+      );
+      return descriptor;
+    } catch (error) {
+      closeSync(descriptor);
+      throw error;
+    }
+  }
+
+  private readSessionText(path: string, allowedLinks: 1 | 2 = 1): string {
+    if (this.platform !== "win32") return readFileSync(path, "utf-8");
+    return this.withSessionsDirectory((directoryDescriptor) => {
+      const descriptor = this.openWindowsSessionFile(
+        directoryDescriptor,
+        path,
+        constants.O_RDONLY,
+        allowedLinks,
+      );
+      try {
+        return this.readWindowsSessionDescriptor(
+          directoryDescriptor,
+          descriptor,
+          path,
+          allowedLinks,
+        );
+      } finally {
+        closeSync(descriptor);
+      }
+    });
+  }
+
+  private readWindowsSessionDescriptor(
+    directoryDescriptor: DirectoryDescriptor,
+    descriptor: number,
+    path: string,
+    allowedLinks: 1 | 2 = 1,
+  ): string {
+    const beforeRead = fstatSync(descriptor);
+    const bounded =
+      Number.isSafeInteger(beforeRead.size) &&
+      beforeRead.size >= 0 &&
+      beforeRead.size <= MAX_CHAT_SESSION_BYTES;
+    if (!bounded) {
+      assertWindowsPrivatePathRead({
+        bounded: false,
+        identityStable: true,
+        contentValid: true,
+        authenticatedHomeBinding: true,
+      });
+    }
+    const contents = Buffer.allocUnsafe(beforeRead.size);
+    let offset = 0;
+    while (offset < contents.length) {
+      const bytesRead = readSync(descriptor, contents, offset, contents.length - offset, offset);
+      if (bytesRead <= 0) {
+        assertWindowsPrivatePathRead({
+          bounded: true,
+          identityStable: true,
+          contentValid: false,
+          authenticatedHomeBinding: true,
+        });
+      }
+      offset += bytesRead;
+    }
+    const afterRead = fstatSync(descriptor);
+    assertWindowsPrivateFileMetadata(afterRead, allowedLinks);
+    const current = assertWindowsPrivateFileBinding(
+      this.windowsDirectoryBinding!,
+      path,
+      windowsPrivatePathIdentity(afterRead),
+      allowedLinks,
+    );
+    let decoded = "";
+    let contentValid = true;
+    try {
+      decoded = STRICT_UTF8_DECODER.decode(contents);
+    } catch {
+      contentValid = false;
+    }
+    assertWindowsPrivatePathRead({
+      bounded: true,
+      identityStable:
+        sameWindowsPrivatePathIdentity(
+          windowsPrivatePathIdentity(beforeRead),
+          windowsPrivatePathIdentity(afterRead),
+        ) &&
+        beforeRead.size === afterRead.size &&
+        beforeRead.size === current.size &&
+        beforeRead.mtimeMs === afterRead.mtimeMs &&
+        beforeRead.mtimeMs === current.mtimeMs &&
+        beforeRead.ctimeMs === afterRead.ctimeMs &&
+        beforeRead.ctimeMs === current.ctimeMs,
+      contentValid,
+      authenticatedHomeBinding: true,
+    });
+    this.assertSessionsDirectoryStable(directoryDescriptor);
+    return decoded;
+  }
+
+  private assertWindowsSessionContent(contents: string): void {
+    assertWindowsPrivatePathRead({
+      bounded: Buffer.byteLength(contents, "utf8") <= MAX_CHAT_SESSION_BYTES,
+      identityStable: true,
+      contentValid:
+        (contents.length === 0 || contents.endsWith("\n")) &&
+        contents.split("\n").every((line) => line.trim() === "" || parseSessionLine(line) !== null),
+      authenticatedHomeBinding: true,
+    });
+  }
+
+  private assertWindowsSessionSize(size: number): void {
+    assertWindowsPrivatePathRead({
+      bounded: Number.isSafeInteger(size) && size >= 0 && size <= MAX_CHAT_SESSION_BYTES,
+      identityStable: true,
+      contentValid: true,
+      authenticatedHomeBinding: true,
+    });
+  }
+
+  private isPrivateFile(stats: import("node:fs").Stats, links: 1 | 2): boolean {
+    if (this.platform === "win32") {
+      assertWindowsPrivateFileMetadata(stats, links);
+      return true;
+    }
+    return isStrictPrivateFile(stats, links);
+  }
+
+  private unsafeTarget(message: string): Error {
+    return this.platform === "win32"
+      ? new WindowsPrivatePathPolicyError("binding-check", "corruption")
+      : new Error(message);
+  }
+
+  private createWindowsSessionFile(
+    directoryDescriptor: DirectoryDescriptor,
+    path: string,
+    extraFlags = 0,
+  ): number {
+    this.assertSessionsDirectoryStable(directoryDescriptor);
+    const descriptor = openSync(
+      path,
+      constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | extraFlags,
+      0o600,
+    );
+    try {
+      const opened = fstatSync(descriptor);
+      assertWindowsPrivateFileMetadata(opened);
+      assertWindowsPrivateFileBinding(
+        this.windowsDirectoryBinding!,
+        path,
+        windowsPrivatePathIdentity(opened),
+      );
+      return descriptor;
+    } catch (error) {
+      closeSync(descriptor);
+      throw error;
+    }
+  }
+
+  private appendSessionContent(path: string, content: string): void {
+    if (this.platform !== "win32") {
+      appendFileSync(path, content, { encoding: "utf-8", mode: 0o600 });
+      return;
+    }
+    this.withSessionsDirectory((directoryDescriptor) => {
+      let descriptor: number;
+      let created = false;
+      try {
+        descriptor = this.openWindowsSessionFile(
+          directoryDescriptor,
+          path,
+          constants.O_RDWR | constants.O_APPEND,
+        );
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+        try {
+          descriptor = this.createWindowsSessionFile(directoryDescriptor, path, constants.O_APPEND);
+          created = true;
+        } catch (createError) {
+          if (!isExists(createError)) throw createError;
+          descriptor = this.openWindowsSessionFile(
+            directoryDescriptor,
+            path,
+            constants.O_RDWR | constants.O_APPEND,
+          );
+        }
+      }
+      try {
+        this.assertWindowsSessionContent(
+          this.readWindowsSessionDescriptor(directoryDescriptor, descriptor, path),
+        );
+        const beforeWrite = fstatSync(descriptor);
+        const contentBytes = Buffer.byteLength(content, "utf8");
+        this.assertWindowsSessionSize(beforeWrite.size);
+        this.assertWindowsSessionSize(beforeWrite.size + contentBytes);
+        writeFileSync(descriptor, content, "utf8");
+        this.syncFile(descriptor);
+        const written = fstatSync(descriptor);
+        assertWindowsPrivateFileMetadata(written);
+        if (written.size !== beforeWrite.size + contentBytes) {
+          throw new WindowsPrivatePathPolicyError("content-write", "corruption");
+        }
+        assertWindowsPrivateFileBinding(
+          this.windowsDirectoryBinding!,
+          path,
+          windowsPrivatePathIdentity(written),
+        );
+        if (created) this.syncDirectory(directoryDescriptor);
+      } finally {
+        closeSync(descriptor);
+      }
+    }, "content-write");
+  }
+
+  private replaceSessionContent(path: string, content: string): void {
+    if (this.platform !== "win32") {
+      const tmpPath = `${path}.tmp`;
+      writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
+      renameSync(tmpPath, path);
+      return;
+    }
+    const tmpPath = `${path}.tmp`;
+    this.withSessionsDirectory((directoryDescriptor) => {
+      const contentBytes = Buffer.byteLength(content, "utf8");
+      this.assertWindowsSessionSize(contentBytes);
+      let descriptor: number;
+      try {
+        descriptor = this.createWindowsSessionFile(directoryDescriptor, tmpPath);
+      } catch (error) {
+        if (isExists(error)) throw this.unsafeTarget("Session replacement target is unsafe.");
+        throw error;
+      }
+      try {
+        writeFileSync(descriptor, content, "utf8");
+        this.syncFile(descriptor);
+        const written = fstatSync(descriptor);
+        assertWindowsPrivateFileMetadata(written);
+        if (written.size !== contentBytes) {
+          throw new WindowsPrivatePathPolicyError("content-write", "corruption");
+        }
+        assertWindowsPrivateFileBinding(
+          this.windowsDirectoryBinding!,
+          tmpPath,
+          windowsPrivatePathIdentity(written),
+        );
+        if (this.sessionExists(path)) this.assertSessionsDirectoryStable(directoryDescriptor);
+        try {
+          (CHAT_STORE_HOOKS.get(this)?.rename ?? renameSync)(tmpPath, path);
+        } catch (error) {
+          throw classifyWindowsPrivatePathFailure("rename", error);
+        }
+        const replaced = lstatSync(path);
+        assertWindowsPrivateFileMetadata(replaced);
+        if (
+          !sameWindowsPrivatePathIdentity(
+            windowsPrivatePathIdentity(written),
+            windowsPrivatePathIdentity(replaced),
+          )
+        ) {
+          throw new WindowsPrivatePathPolicyError("binding-check", "corruption");
+        }
+        assertWindowsPrivateFileBinding(
+          this.windowsDirectoryBinding!,
+          path,
+          windowsPrivatePathIdentity(replaced),
+        );
+        this.syncDirectory(directoryDescriptor);
+      } finally {
+        closeSync(descriptor);
+      }
+    }, "content-write");
+  }
+
+  private renameSessionPath(source: string, target: string): void {
+    if (this.platform !== "win32") {
+      renameSync(source, target);
+      return;
+    }
+    this.withSessionsDirectory((directoryDescriptor) => {
+      const descriptor = this.openWindowsSessionFile(
+        directoryDescriptor,
+        source,
+        constants.O_RDONLY,
+      );
+      try {
+        this.assertWindowsSessionContent(
+          this.readWindowsSessionDescriptor(directoryDescriptor, descriptor, source),
+        );
+        const beforeRename = fstatSync(descriptor);
+        this.assertWindowsSessionSize(beforeRename.size);
+        try {
+          (CHAT_STORE_HOOKS.get(this)?.rename ?? renameSync)(source, target);
+        } catch (error) {
+          throw classifyWindowsPrivatePathFailure("rename", error);
+        }
+        const moved = lstatSync(target);
+        assertWindowsPrivateFileMetadata(moved);
+        if (
+          !sameWindowsPrivatePathIdentity(
+            windowsPrivatePathIdentity(beforeRename),
+            windowsPrivatePathIdentity(moved),
+          )
+        ) {
+          throw new WindowsPrivatePathPolicyError("binding-check", "corruption");
+        }
+        assertWindowsPrivateFileBinding(
+          this.windowsDirectoryBinding!,
+          target,
+          windowsPrivatePathIdentity(moved),
+        );
+      } finally {
+        closeSync(descriptor);
+      }
+    }, "rename");
+  }
+
+  private unlinkSessionPath(path: string): void {
+    if (this.platform !== "win32") {
+      unlinkSync(path);
+      return;
+    }
+    if (!this.sessionExists(path)) return;
+    this.assertWindowsSessionContent(this.readSessionText(path));
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      throw classifyWindowsPrivatePathFailure("rename", error);
+    }
+    this.syncSessionsDirectory();
+  }
+
+  private copySessionPath(source: string, target: string): void {
+    if (this.platform !== "win32") {
+      copyFileSync(source, target);
+      return;
+    }
+    this.withSessionsDirectory((directoryDescriptor) => {
+      if (!this.sessionExists(source) || this.sessionExists(target)) {
+        throw this.unsafeTarget("Session archive target is unsafe.");
+      }
+      const sourceDescriptor = this.openWindowsSessionFile(
+        directoryDescriptor,
+        source,
+        constants.O_RDONLY,
+      );
+      try {
+        const sourceContent = this.readWindowsSessionDescriptor(
+          directoryDescriptor,
+          sourceDescriptor,
+          source,
+        );
+        this.assertWindowsSessionContent(sourceContent);
+        const sourceBefore = fstatSync(sourceDescriptor);
+        this.assertWindowsSessionSize(sourceBefore.size);
+        copyFileSync(source, target, constants.COPYFILE_EXCL);
+        const targetDescriptor = this.openWindowsSessionFile(
+          directoryDescriptor,
+          target,
+          constants.O_RDWR,
+        );
+        try {
+          this.syncFile(targetDescriptor);
+          const targetMetadata = fstatSync(targetDescriptor);
+          if (targetMetadata.size !== sourceBefore.size) {
+            throw new WindowsPrivatePathPolicyError("content-write", "corruption");
+          }
+        } finally {
+          closeSync(targetDescriptor);
+        }
+        const targetContent = this.readSessionText(target);
+        this.assertWindowsSessionContent(targetContent);
+        if (targetContent !== sourceContent) {
+          throw new WindowsPrivatePathPolicyError("content-write", "corruption");
+        }
+        const sourceAfter = fstatSync(sourceDescriptor);
+        assertWindowsPrivateFileMetadata(sourceAfter);
+        assertWindowsPrivateFileBinding(
+          this.windowsDirectoryBinding!,
+          source,
+          windowsPrivatePathIdentity(sourceAfter),
+        );
+        if (
+          !sameWindowsPrivatePathIdentity(
+            windowsPrivatePathIdentity(sourceBefore),
+            windowsPrivatePathIdentity(sourceAfter),
+          ) ||
+          sourceBefore.size !== sourceAfter.size ||
+          sourceBefore.mtimeMs !== sourceAfter.mtimeMs ||
+          sourceBefore.ctimeMs !== sourceAfter.ctimeMs
+        ) {
+          throw new WindowsPrivatePathPolicyError("binding-check", "corruption");
+        }
+      } finally {
+        closeSync(sourceDescriptor);
+      }
+      this.syncDirectory(directoryDescriptor);
+    }, "content-write");
   }
 
   hasSession(chatId: string): boolean {
-    return existsSync(this.filePath(chatId));
+    return this.sessionExists(this.filePath(chatId));
   }
 
   load(chatId: string): { messages: ModelMessage[]; lastMessageTime: string | null } {
     const path = this.filePath(chatId);
-    if (!existsSync(path)) return { messages: [], lastMessageTime: null };
+    if (!this.sessionExists(path)) return { messages: [], lastMessageTime: null };
 
-    const lines = readFileSync(path, "utf-8")
-      .split("\n")
-      .filter((line) => line.trim() !== "");
+    const contents = this.readSessionText(path);
+    if (this.platform === "win32") this.assertWindowsSessionContent(contents);
+    const lines = contents.split("\n").filter((line) => line.trim() !== "");
     const good: string[] = [];
     const corrupt: string[] = [];
     const parsed: JsonlLine[] = [];
@@ -240,6 +732,7 @@ export class ChatStore {
       try {
         this.quarantineCorruptLines(chatId, good, corrupt);
       } catch (err) {
+        if (this.platform === "win32") throw err;
         console.warn(
           "Failed to quarantine corrupt session lines; continuing with parseable lines",
           err,
@@ -283,7 +776,7 @@ export class ChatStore {
       lineage === undefined
         ? { role, content, ts: new Date().toISOString() }
         : { role, content, ts: new Date().toISOString(), ...lineage };
-    appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
+    this.appendSessionContent(path, JSON.stringify(line) + "\n");
   }
 
   appendTurn(
@@ -311,12 +804,11 @@ export class ChatStore {
     // Both lines in one buffer and one write so the pair lands together or not
     // at all — a partial write can never leave a dangling user line.
     const buffer = JSON.stringify(userLine) + "\n" + JSON.stringify(assistantLine) + "\n";
-    appendFileSync(path, buffer, { encoding: "utf-8", mode: 0o600 });
+    this.appendSessionContent(path, buffer);
   }
 
   overwriteHistory(chatId: string, messages: ModelMessage[]): void {
     const path = this.filePath(chatId);
-    const tmpPath = `${path}.tmp`;
     const now = new Date().toISOString();
 
     // Preserve the original timestamp of a message that survives the rewrite so
@@ -326,8 +818,10 @@ export class ChatStore {
     // duplicate lines keep the stamp whose source label matches the surviving
     // message, falling back to occurrence order when the labels are identical.
     const preservedByKey = new Map<string, Array<{ ts: string; provenance?: SourceProvenance }>>();
-    if (existsSync(path)) {
-      for (const line of readFileSync(path, "utf-8").split("\n")) {
+    if (this.sessionExists(path)) {
+      const contents = this.readSessionText(path);
+      if (this.platform === "win32") this.assertWindowsSessionContent(contents);
+      for (const line of contents.split("\n")) {
         if (line.trim() === "") continue;
         const entry = parseSessionLine(line);
         if (entry === null || entry.role === "system") continue;
@@ -368,8 +862,7 @@ export class ChatStore {
           return JSON.stringify(line);
         })
         .join("\n") + "\n";
-    writeFileSync(tmpPath, content, { encoding: "utf-8", mode: 0o600 });
-    renameSync(tmpPath, path);
+    this.replaceSessionContent(path, content);
   }
 
   // Terminal failure marker: makes a turn that died before producing a reply
@@ -378,37 +871,37 @@ export class ChatStore {
   // records that the turn did not complete. No-op when no session file exists.
   appendFailureMarker(chatId: string): void {
     const path = this.filePath(chatId);
-    if (!existsSync(path)) return;
+    if (!this.sessionExists(path)) return;
     const line: JsonlLine = {
       role: "system",
       content: TURN_FAILURE_MARKER,
       ts: new Date().toISOString(),
     };
-    appendFileSync(path, JSON.stringify(line) + "\n", { encoding: "utf-8", mode: 0o600 });
+    this.appendSessionContent(path, JSON.stringify(line) + "\n");
   }
 
   archiveAndReset(chatId: string): void {
     const path = this.filePath(chatId);
     const ts = new Date().toISOString().replace(/:/g, "-");
     const archivePath = `${path}.reset.${ts}`;
-    const sessionExists = existsSync(path);
-    const archiveExists = existsSync(archivePath);
+    const sessionExists = this.sessionExists(path);
+    const archiveExists = this.sessionExists(archivePath);
     if (sessionExists && archiveExists) {
-      throw new Error("Reset archive and active session both exist.");
+      throw this.unsafeTarget("Reset archive and active session both exist.");
     }
     if (!sessionExists) return;
 
-    renameSync(path, archivePath);
+    this.renameSessionPath(path, archivePath);
     this.syncSessionsDirectory();
     this.pruneArchives(chatId, "reset");
   }
 
   archivePreCompact(chatId: string): void {
     const path = this.filePath(chatId);
-    if (!existsSync(path)) return;
+    if (!this.sessionExists(path)) return;
 
     const ts = new Date().toISOString().replace(/:/g, "-");
-    copyFileSync(path, `${path}.precompact.${ts}`);
+    this.copySessionPath(path, `${path}.precompact.${ts}`);
     this.pruneArchives(chatId, "precompact");
   }
 
@@ -416,33 +909,44 @@ export class ChatStore {
     const path = this.filePath(chatId);
     const ts = new Date().toISOString().replace(/:/g, "-");
     const sidecarPath = `${path}.corrupt.${ts}`;
-    appendFileSync(sidecarPath, corrupt.join("\n") + "\n", { encoding: "utf-8", mode: 0o600 });
+    this.appendSessionContent(sidecarPath, corrupt.join("\n") + "\n");
     if (good.length === 0) {
-      unlinkSync(path);
+      this.unlinkSessionPath(path);
       console.warn(
-        `Quarantined ${corrupt.length} corrupt session line(s) to ${sidecarPath}; removed empty session`,
+        this.platform === "win32"
+          ? `Quarantined ${corrupt.length} corrupt session line(s); removed empty session`
+          : `Quarantined ${corrupt.length} corrupt session line(s) to ${sidecarPath}; removed empty session`,
       );
       return;
     }
-    const tmpPath = `${path}.tmp`;
-    writeFileSync(tmpPath, good.join("\n") + "\n", { encoding: "utf-8", mode: 0o600 });
-    renameSync(tmpPath, path);
+    this.replaceSessionContent(path, good.join("\n") + "\n");
     console.warn(
-      `Quarantined ${corrupt.length} corrupt session line(s) to ${sidecarPath}; kept ${good.length} valid line(s)`,
+      this.platform === "win32"
+        ? `Quarantined ${corrupt.length} corrupt session line(s); kept ${good.length} valid line(s)`
+        : `Quarantined ${corrupt.length} corrupt session line(s) to ${sidecarPath}; kept ${good.length} valid line(s)`,
     );
   }
 
   private pruneArchives(chatId: string, suffix: "reset" | "precompact"): void {
     if (this.resetArchiveRetentionDays <= 0) return;
-    const prefix = `${chatId}.jsonl.${suffix}.`;
+    const fileName = this.platform === "win32" ? this.chatDigest(chatId) : chatId;
+    const prefix = `${fileName}.jsonl.${suffix}.`;
     const cutoffMs = Date.now() - this.resetArchiveRetentionDays * MS_PER_DAY;
-    for (const name of readdirSync(this.sessionsDir)) {
+    let names: string[];
+    try {
+      names = readdirSync(this.sessionsDir);
+    } catch (error) {
+      throw this.platform === "win32"
+        ? classifyWindowsPrivatePathFailure("read-check", error)
+        : error;
+    }
+    for (const name of names) {
       if (!name.startsWith(prefix)) continue;
       const archivedAtMs = parseArchiveTimestampMs(name.slice(prefix.length));
       // Unparseable timestamps are kept: never delete an archive that
       // cannot be dated.
       if (archivedAtMs !== null && archivedAtMs < cutoffMs) {
-        unlinkSync(join(this.sessionsDir, name));
+        this.unlinkSessionPath(join(this.sessionsDir, name));
       }
     }
   }
@@ -451,7 +955,7 @@ export class ChatStore {
     this.withSessionsDirectory((descriptor) => {
       this.syncDirectory(descriptor);
       this.assertSessionsDirectoryStable(descriptor);
-    });
+    }, "rename");
   }
 
   private completeDurableReset(path: string, archivePath: string): void {
@@ -468,8 +972,16 @@ export class ChatStore {
       const archive = readStats(archivePath);
       if (active === null) {
         if (archive !== null) {
-          if (!isStrictPrivateFile(archive, 1)) {
-            throw new Error("Reset archive target is unsafe.");
+          if (!this.isPrivateFile(archive, 1)) {
+            throw this.unsafeTarget("Reset archive target is unsafe.");
+          }
+          if (this.platform === "win32") {
+            assertWindowsPrivateFileBinding(
+              this.windowsDirectoryBinding!,
+              archivePath,
+              windowsPrivatePathIdentity(archive),
+            );
+            this.assertWindowsSessionContent(this.readSessionText(archivePath));
           }
           this.assertSessionsDirectoryStable(directoryDescriptor);
           this.syncDirectory(directoryDescriptor);
@@ -477,13 +989,16 @@ export class ChatStore {
         }
         return;
       }
+      if (this.platform === "win32") {
+        this.assertWindowsSessionContent(this.readSessionText(path, archive === null ? 1 : 2));
+      }
       if (archive !== null) {
         this.assertLinkedResetTargets(active, archive);
         this.syncStableSessionFile(directoryDescriptor, path, identity(active), 2);
         this.assertLinkedResetPaths(directoryDescriptor, path, archivePath, identity(active));
       } else {
-        if (!isStrictPrivateFile(active, 1)) {
-          throw new Error("Active reset session target is unsafe.");
+        if (!this.isPrivateFile(active, 1)) {
+          throw this.unsafeTarget("Active reset session target is unsafe.");
         }
         this.syncStableSessionFile(directoryDescriptor, path, identity(active), 1);
         linkSync(path, archivePath);
@@ -499,43 +1014,75 @@ export class ChatStore {
       this.assertSessionsDirectoryStable(directoryDescriptor);
       const completed = lstatSync(archivePath);
       if (
-        !isStrictPrivateFile(completed, 1) ||
+        !this.isPrivateFile(completed, 1) ||
         !sameIdentity(identity(completed), identity(active))
       ) {
-        throw new Error("Reset archive did not complete safely.");
+        throw this.unsafeTarget("Reset archive did not complete safely.");
       }
-    });
+      if (this.platform === "win32") {
+        assertWindowsPrivateFileBinding(
+          this.windowsDirectoryBinding!,
+          archivePath,
+          windowsPrivatePathIdentity(completed),
+        );
+      }
+    }, "rename");
   }
 
   private syncStableSessionFile(
-    directoryDescriptor: number,
+    directoryDescriptor: DirectoryDescriptor,
     path: string,
     expectedIdentity: FileIdentity,
     expectedLinks: 1 | 2,
   ): void {
-    const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const descriptor = openSync(
+      path,
+      this.platform === "win32" ? constants.O_RDWR : constants.O_RDONLY | constants.O_NOFOLLOW,
+    );
     try {
+      if (this.platform === "win32") {
+        this.assertWindowsSessionContent(
+          this.readWindowsSessionDescriptor(directoryDescriptor, descriptor, path, expectedLinks),
+        );
+      }
       const opened = fstatSync(descriptor);
       const current = lstatSync(path);
+      if (this.platform === "win32") this.assertWindowsSessionSize(opened.size);
       if (
-        !isStrictPrivateFile(opened, expectedLinks) ||
-        !isStrictPrivateFile(current, expectedLinks) ||
+        !this.isPrivateFile(opened, expectedLinks) ||
+        !this.isPrivateFile(current, expectedLinks) ||
         !sameIdentity(identity(opened), expectedIdentity) ||
         !sameIdentity(identity(current), expectedIdentity)
       ) {
-        throw new Error("Active reset session was raced.");
+        throw this.unsafeTarget("Active reset session was raced.");
+      }
+      if (this.platform === "win32") {
+        assertWindowsPrivateFileBinding(
+          this.windowsDirectoryBinding!,
+          path,
+          windowsPrivatePathIdentity(opened),
+          expectedLinks,
+        );
       }
       this.assertSessionsDirectoryStable(directoryDescriptor);
-      (CHAT_STORE_HOOKS.get(this)?.syncFile ?? fsyncSync)(descriptor);
+      this.syncFile(descriptor);
       const synced = fstatSync(descriptor);
       const afterSync = lstatSync(path);
       if (
-        !isStrictPrivateFile(synced, expectedLinks) ||
-        !isStrictPrivateFile(afterSync, expectedLinks) ||
+        !this.isPrivateFile(synced, expectedLinks) ||
+        !this.isPrivateFile(afterSync, expectedLinks) ||
         !sameIdentity(identity(synced), expectedIdentity) ||
         !sameIdentity(identity(afterSync), expectedIdentity)
       ) {
-        throw new Error("Active reset session was raced.");
+        throw this.unsafeTarget("Active reset session was raced.");
+      }
+      if (this.platform === "win32") {
+        assertWindowsPrivateFileBinding(
+          this.windowsDirectoryBinding!,
+          path,
+          windowsPrivatePathIdentity(synced),
+          expectedLinks,
+        );
       }
       this.assertSessionsDirectoryStable(directoryDescriptor);
     } finally {
@@ -548,16 +1095,16 @@ export class ChatStore {
     archive: import("node:fs").Stats,
   ): void {
     if (
-      !isStrictPrivateFile(active, 2) ||
-      !isStrictPrivateFile(archive, 2) ||
+      !this.isPrivateFile(active, 2) ||
+      !this.isPrivateFile(archive, 2) ||
       !sameIdentity(identity(active), identity(archive))
     ) {
-      throw new Error("Reset archive and active session do not agree.");
+      throw this.unsafeTarget("Reset archive and active session do not agree.");
     }
   }
 
   private assertLinkedResetPaths(
-    directoryDescriptor: number,
+    directoryDescriptor: DirectoryDescriptor,
     path: string,
     archivePath: string,
     expectedIdentity: FileIdentity,
@@ -566,12 +1113,53 @@ export class ChatStore {
     const archive = lstatSync(archivePath);
     this.assertLinkedResetTargets(active, archive);
     if (!sameIdentity(identity(active), expectedIdentity)) {
-      throw new Error("Reset archive publication was raced.");
+      throw this.unsafeTarget("Reset archive publication was raced.");
+    }
+    if (this.platform === "win32") {
+      assertWindowsPrivateFileBinding(
+        this.windowsDirectoryBinding!,
+        path,
+        windowsPrivatePathIdentity(active),
+        2,
+      );
+      assertWindowsPrivateFileBinding(
+        this.windowsDirectoryBinding!,
+        archivePath,
+        windowsPrivatePathIdentity(archive),
+        2,
+      );
     }
     this.assertSessionsDirectoryStable(directoryDescriptor);
   }
 
-  private withSessionsDirectory<T>(operation: (descriptor: number) => T): T {
+  private syncFile(descriptor: number): void {
+    try {
+      (CHAT_STORE_HOOKS.get(this)?.syncFile ?? fsyncSync)(descriptor);
+    } catch (error) {
+      throw this.platform === "win32"
+        ? classifyWindowsPrivatePathFailure("file-flush", error)
+        : error;
+    }
+  }
+
+  private withSessionsDirectory<T>(
+    operation: (descriptor: DirectoryDescriptor) => T,
+    failureStage: WindowsPrivatePathPolicyStage = "read-check",
+  ): T {
+    if (this.platform === "win32") {
+      try {
+        this.assertSessionsDirectoryStable(null);
+        return operation(null);
+      } catch (error) {
+        if (
+          error instanceof WindowsPrivatePathPolicyError ||
+          (typeof error === "object" && error !== null && "code" in error)
+        ) {
+          throw classifyWindowsPrivatePathFailure(failureStage, error);
+        }
+        throw error;
+      }
+    }
     const beforeOpen = lstatSync(this.sessionsDir);
     if (
       !isStrictPrivateDirectory(beforeOpen) ||
@@ -591,9 +1179,13 @@ export class ChatStore {
     }
   }
 
-  private assertSessionsDirectoryStable(descriptor: number): void {
+  private assertSessionsDirectoryStable(descriptor: DirectoryDescriptor): void {
+    if (this.platform === "win32") {
+      assertWindowsPrivateDirectoryStable(this.windowsDirectoryBinding!);
+      return;
+    }
     const current = lstatSync(this.sessionsDir);
-    const opened = fstatSync(descriptor);
+    const opened = fstatSync(descriptor!);
     if (
       !isStrictPrivateDirectory(current) ||
       !isStrictPrivateDirectory(opened) ||
@@ -604,8 +1196,11 @@ export class ChatStore {
     }
   }
 
-  private syncDirectory(descriptor: number): void {
-    (CHAT_STORE_HOOKS.get(this)?.syncDirectory ?? fsyncSync)(descriptor);
+  private syncDirectory(descriptor: DirectoryDescriptor): void {
+    if (this.platform === "win32") {
+      if (classifyWindowsPrivatePathDurability("directory-sync").kind === "unavailable") return;
+    }
+    (CHAT_STORE_HOOKS.get(this)?.syncDirectory ?? fsyncSync)(descriptor!);
   }
 }
 
@@ -613,8 +1208,9 @@ export function createChatStoreWithHooks(
   dataDir: string,
   resetArchiveRetentionDays: number,
   hooks: ChatStoreHooks,
+  options: ChatStoreOptions = {},
 ): ChatStore {
-  const store = new ChatStore(dataDir, resetArchiveRetentionDays);
+  const store = new ChatStore(dataDir, resetArchiveRetentionDays, options);
   CHAT_STORE_HOOKS.set(store, hooks);
   return store;
 }
