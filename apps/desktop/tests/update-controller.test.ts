@@ -7,6 +7,7 @@ import {
   DESKTOP_UPDATE_INTERVAL_MS,
   type DesktopAutoUpdater,
 } from "../src/main/update-controller.js";
+import type { DesktopUpdateVersionFloor } from "../src/main/update-version-floor.js";
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -34,6 +35,15 @@ function updateResult(
 
 function fakeCancellationToken() {
   return { cancel: vi.fn() };
+}
+
+function readyVersionFloor(version?: string): DesktopUpdateVersionFloor {
+  return {
+    recordRunningVersion: vi.fn(async (runningVersion: string) => ({
+      status: "ready" as const,
+      version: version ?? runningVersion,
+    })),
+  };
 }
 
 function fakeDeadlines() {
@@ -125,6 +135,7 @@ function activeController(
   const controller = createDesktopUpdateController({
     releaseEligible: true,
     currentVersion: "0.1.0",
+    versionFloor: readyVersionFloor(),
     loadUpdater: vi.fn(async () => updater),
     requestQuit: quit,
     setInterval: vi.fn((callback, interval) => {
@@ -148,9 +159,11 @@ describe("desktop update controller", () => {
   it("is silent when release eligibility is disabled", async () => {
     const loadUpdater = vi.fn();
     const setInterval = vi.fn();
+    const versionFloor = readyVersionFloor();
     const controller = createDesktopUpdateController({
       releaseEligible: false,
       currentVersion: "0.1.0",
+      versionFloor,
       loadUpdater,
       requestQuit: vi.fn(),
       setInterval,
@@ -160,6 +173,8 @@ describe("desktop update controller", () => {
     await controller.check();
 
     expect(controller.state()).toEqual({ status: "disabled" });
+    expect(versionFloor.recordRunningVersion).toHaveBeenCalledOnce();
+    expect(versionFloor.recordRunningVersion).toHaveBeenCalledWith("0.1.0");
     expect(loadUpdater).not.toHaveBeenCalled();
     expect(setInterval).not.toHaveBeenCalled();
   });
@@ -172,6 +187,7 @@ describe("desktop update controller", () => {
     const controller = createDesktopUpdateController({
       releaseEligible: true,
       currentVersion: "0.1.0",
+      versionFloor: readyVersionFloor(),
       loadUpdater,
       requestQuit: vi.fn(),
       setInterval,
@@ -187,6 +203,45 @@ describe("desktop update controller", () => {
     await controller.start();
     expect(loadUpdater).toHaveBeenCalledOnce();
     expect(setInterval).not.toHaveBeenCalled();
+  });
+
+  it("retries floor initialization on a manual check after failing closed", async () => {
+    const fake = fakeUpdater();
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.0"));
+    const recordRunningVersion = vi
+      .fn<DesktopUpdateVersionFloor["recordRunningVersion"]>()
+      .mockResolvedValueOnce({ status: "unavailable" })
+      .mockResolvedValueOnce({ status: "ready", version: "0.1.0" });
+    const loadUpdater = vi.fn(async () => fake.updater);
+    const log = vi.fn();
+    const timer = { unref: vi.fn() };
+    const setInterval = vi.fn(() => timer);
+    const controller = createDesktopUpdateController({
+      releaseEligible: true,
+      currentVersion: "0.1.0",
+      versionFloor: { recordRunningVersion },
+      loadUpdater,
+      requestQuit: vi.fn(),
+      log,
+      setInterval,
+    });
+
+    await controller.start();
+
+    expect(controller.state()).toEqual({ status: "failed", stage: "check" });
+    expect(log).toHaveBeenCalledWith("desktop-update-version-floor-unavailable");
+    expect(loadUpdater).not.toHaveBeenCalled();
+
+    await expect(Promise.all([controller.check(), controller.check()])).resolves.toEqual([
+      { status: "current" },
+      { status: "current" },
+    ]);
+    expect(recordRunningVersion).toHaveBeenCalledTimes(2);
+    expect(loadUpdater).toHaveBeenCalledOnce();
+    expect(setInterval).toHaveBeenCalledOnce();
+    expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
+    expect(controller.state()).toEqual({ status: "current" });
+    controller.close();
   });
 
   it("configures a quiet updater, performs startup and unref'd six-hour checks, and cleans up", async () => {
@@ -289,6 +344,57 @@ describe("desktop update controller", () => {
     expect(JSON.stringify(subject.controller.state())).not.toContain("raw.zip");
   });
 
+  it("accepts a candidate equal to the recorded version floor", async () => {
+    const fake = fakeUpdater();
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.2.0"));
+    const subject = activeController(fake.updater, {
+      versionFloor: readyVersionFloor("0.2.0"),
+    });
+
+    const startup = subject.controller.start();
+    await vi.waitFor(() => expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce());
+    expect(subject.controller.state()).toEqual({ status: "downloading", version: "0.2.0" });
+    fake.emit("update-downloaded", { version: "0.2.0" });
+    await startup;
+  });
+
+  it("accepts a candidate higher than the recorded version floor", async () => {
+    const fake = fakeUpdater();
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.3.0"));
+    const subject = activeController(fake.updater, {
+      versionFloor: readyVersionFloor("0.2.0"),
+    });
+
+    const startup = subject.controller.start();
+    await vi.waitFor(() => expect(fake.updater.downloadUpdate).toHaveBeenCalledOnce());
+    expect(subject.controller.state()).toEqual({ status: "downloading", version: "0.3.0" });
+    fake.emit("update-downloaded", { version: "0.3.0" });
+    await startup;
+  });
+
+  it("refuses and reports a candidate lower than the recorded version floor", async () => {
+    const fake = fakeUpdater();
+    const token = fakeCancellationToken();
+    const log = vi.fn();
+    vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult("0.1.1", true, token));
+    const subject = activeController(fake.updater, {
+      versionFloor: readyVersionFloor("0.2.0"),
+      log,
+    });
+    const states: unknown[] = [];
+    subject.controller.subscribe((state) => states.push(state));
+
+    await subject.controller.start();
+
+    expect(subject.controller.state()).toEqual({ status: "failed", stage: "check" });
+    expect(states).toContainEqual({ status: "failed", stage: "check" });
+    expect(log).toHaveBeenCalledWith(
+      "desktop-update-downgrade-refused candidate=0.1.1 floor=0.2.0",
+    );
+    expect(token.cancel).toHaveBeenCalledOnce();
+    expect(fake.updater.downloadUpdate).not.toHaveBeenCalled();
+  });
+
   it("resets the no-progress deadline only when transferred bytes advance", async () => {
     const fake = fakeUpdater();
     const download = deferred<never>();
@@ -359,8 +465,15 @@ describe("desktop update controller", () => {
     expect(token.cancel).toHaveBeenCalledOnce();
   });
 
-  it.each(["0.1.0", "0.0.9", "0.1.1-beta.1", "0.01.1", "0.1.9007199254740992", "not-a-version"])(
-    "refuses non-newer or non-stable target %s",
+  it.each([
+    "0.1.0",
+    "0.0.9",
+    "0.1.1-beta.1",
+    "0.01.1",
+    "0.1.9007199254740992",
+    "not-a-version",
+  ])(
+    "does not download a non-newer or non-stable target %s",
     async (version) => {
       const fake = fakeUpdater();
       vi.mocked(fake.updater.checkForUpdates).mockResolvedValue(updateResult(version));

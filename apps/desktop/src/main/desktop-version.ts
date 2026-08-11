@@ -13,14 +13,18 @@ export function isStableDesktopVersion(value: unknown): value is string {
   return stableSemVerParts(value) !== null;
 }
 
-export function isDesktopUpdateAvailable(candidate: string, current: string): boolean {
-  const candidateParts = stableSemVerParts(candidate);
-  const currentParts = stableSemVerParts(current);
-  if (candidateParts === null || currentParts === null) return false;
-  for (let index = 0; index < candidateParts.length; index += 1) {
-    if (candidateParts[index] !== currentParts[index]) {
-      return candidateParts[index] > currentParts[index];
+export function compareDesktopVersions(left: string, right: string): -1 | 0 | 1 | null {
+  const leftParts = stableSemVerParts(left);
+  const rightParts = stableSemVerParts(right);
+  if (leftParts === null || rightParts === null) return null;
+  for (let index = 0; index < leftParts.length; index += 1) {
+    if (leftParts[index] !== rightParts[index]) {
+      return leftParts[index] > rightParts[index] ? 1 : -1;
     }
   }
-  return false;
+  return 0;
+}
+
+export function isDesktopUpdateAvailable(candidate: string, current: string): boolean {
+  return compareDesktopVersions(candidate, current) === 1;
 }

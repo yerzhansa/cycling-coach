@@ -82,7 +82,10 @@ describe("Desktop development package plan", () => {
       appId: "icu.enduragent.desktop",
       productName: "Enduragent",
       directories: { output: "dist" },
-      mac: { icon: "resources/app-icon.png" },
+      mac: {
+        icon: "resources/app-icon.png",
+        extendInfo: { ElectronSquirrelPreventDowngrades: true },
+      },
     });
     const release = await createMacosReleasePlan(
       {

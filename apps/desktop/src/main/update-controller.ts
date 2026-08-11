@@ -5,7 +5,16 @@ import type {
   UpdateCheckResult,
   UpdateDownloadedEvent,
 } from "electron-updater";
-import { isDesktopUpdateAvailable, isStableDesktopVersion } from "./desktop-version.js";
+import {
+  compareDesktopVersions,
+  isDesktopUpdateAvailable,
+  isStableDesktopVersion,
+} from "./desktop-version.js";
+import { createSafeLog } from "./safe-log.js";
+import type {
+  DesktopUpdateVersionFloor,
+  DesktopUpdateVersionFloorResult,
+} from "./update-version-floor.js";
 
 export type DesktopUpdateState =
   | { readonly status: "disabled" }
@@ -83,8 +92,10 @@ export function copyDesktopUpdateState(state: DesktopUpdateState): DesktopUpdate
 export function createDesktopUpdateController(input: {
   readonly releaseEligible: boolean;
   readonly currentVersion: string;
+  readonly versionFloor: DesktopUpdateVersionFloor;
   readonly loadUpdater: () => Promise<DesktopAutoUpdater>;
   readonly requestQuit: () => void;
+  readonly log?: (message: string) => void;
   readonly setInterval?: (callback: () => void, interval: number) => TimerHandle;
   readonly clearInterval?: (handle: TimerHandle) => void;
   readonly setTimeout?: (callback: () => void, timeout: number) => TimerHandle;
@@ -113,6 +124,9 @@ export function createDesktopUpdateController(input: {
   let activeOperation: UpdateOperation | undefined;
   let installRequested = false;
   let installInvoked = false;
+  let floorVersion: string | undefined;
+  let updaterInitialization: Promise<boolean> | undefined;
+  const log = createSafeLog(input.log);
 
   const publish = (next: DesktopUpdateState): void => {
     if (closed) return;
@@ -300,7 +314,7 @@ export function createDesktopUpdateController(input: {
       .catch(() => failOperation(operation, "download"));
   };
 
-  const check = (): Promise<DesktopUpdateState> => {
+  const runCheck = (): Promise<DesktopUpdateState> => {
     if (activeOperation !== undefined) return activeOperation.promise;
     if (!canCheck() || updater === undefined) return Promise.resolve(currentState());
     let resolveOperation!: (state: DesktopUpdateState) => void;
@@ -353,6 +367,21 @@ export function createDesktopUpdateController(input: {
             finishOperation(operation, false);
             return;
           }
+          if (floorVersion === undefined) {
+            operation.cancellationToken = result.cancellationToken;
+            log("desktop-update-version-floor-unavailable");
+            publish({ status: "failed", stage: "check" });
+            finishOperation(operation, true);
+            return;
+          }
+          const floorComparison = compareDesktopVersions(version, floorVersion);
+          if (floorComparison === null || floorComparison < 0) {
+            operation.cancellationToken = result.cancellationToken;
+            log(`desktop-update-downgrade-refused candidate=${version} floor=${floorVersion}`);
+            publish({ status: "failed", stage: "check" });
+            finishOperation(operation, true);
+            return;
+          }
           beginDownload(operation, result);
         },
         () => {
@@ -364,38 +393,86 @@ export function createDesktopUpdateController(input: {
     return operation.promise;
   };
 
-  const start = async (): Promise<void> => {
-    if (started || closed || !active) return;
-    started = true;
-    try {
-      updater = await input.loadUpdater();
-    } catch {
-      if (!closed) publish({ status: "restart-required", stage: "check" });
-      return;
-    }
-    if (closed) return;
-    try {
-      updater.logger = null;
-      updater.autoDownload = false;
-      updater.autoInstallOnAppQuit = false;
-      updater.autoRunAppAfterInstall = true;
-      updater.allowPrerelease = false;
-      updater.allowDowngrade = false;
-      intervalTimer = scheduleInterval(() => {
-        void check();
-      }, DESKTOP_UPDATE_INTERVAL_MS);
-      intervalTimer.unref();
-    } catch {
-      if (intervalTimer !== undefined) {
+  const initializeUpdater = (): Promise<boolean> => {
+    if (closed) return Promise.resolve(false);
+    if (updater !== undefined) return Promise.resolve(true);
+    if (updaterInitialization !== undefined) return updaterInitialization;
+    const attempt = (async (): Promise<boolean> => {
+      if (floorVersion === undefined) {
+        let recordedFloor: DesktopUpdateVersionFloorResult;
         try {
-          unscheduleInterval(intervalTimer);
-        } catch {}
-        intervalTimer = undefined;
+          recordedFloor = await input.versionFloor.recordRunningVersion(input.currentVersion);
+        } catch {
+          recordedFloor = { status: "unavailable" };
+        }
+        if (closed) return false;
+        if (recordedFloor.status !== "ready") {
+          log("desktop-update-version-floor-unavailable");
+          if (active) publish({ status: "failed", stage: "check" });
+          return false;
+        }
+        if (!isStableDesktopVersion(recordedFloor.version)) {
+          log("desktop-update-version-floor-unavailable");
+          if (active) publish({ status: "failed", stage: "check" });
+          return false;
+        }
+        floorVersion = recordedFloor.version;
       }
-      if (!closed) publish({ status: "failed", stage: "check" });
-      return;
-    }
-    await check();
+      if (!active) return false;
+      try {
+        updater = await input.loadUpdater();
+      } catch {
+        if (!closed) publish({ status: "restart-required", stage: "check" });
+        return false;
+      }
+      if (closed) return false;
+      try {
+        updater.logger = null;
+        updater.autoDownload = false;
+        updater.autoInstallOnAppQuit = false;
+        updater.autoRunAppAfterInstall = true;
+        updater.allowPrerelease = false;
+        updater.allowDowngrade = false;
+        intervalTimer = scheduleInterval(() => {
+          void check();
+        }, DESKTOP_UPDATE_INTERVAL_MS);
+        intervalTimer.unref();
+      } catch {
+        if (intervalTimer !== undefined) {
+          try {
+            unscheduleInterval(intervalTimer);
+          } catch {}
+          intervalTimer = undefined;
+        }
+        if (!closed) publish({ status: "failed", stage: "check" });
+        return false;
+      }
+      return true;
+    })();
+    updaterInitialization = attempt;
+    void attempt.then(
+      () => {
+        if (updaterInitialization === attempt) updaterInitialization = undefined;
+      },
+      () => {
+        if (updaterInitialization === attempt) updaterInitialization = undefined;
+      },
+    );
+    return attempt;
+  };
+
+  const check = (): Promise<DesktopUpdateState> => {
+    if (activeOperation !== undefined) return activeOperation.promise;
+    if (!canCheck()) return Promise.resolve(currentState());
+    if (updater !== undefined) return runCheck();
+    return initializeUpdater().then((ready) => (ready ? runCheck() : currentState()));
+  };
+
+  const start = async (): Promise<void> => {
+    if (started || closed) return;
+    started = true;
+    if (!(await initializeUpdater())) return;
+    await runCheck();
   };
 
   return {

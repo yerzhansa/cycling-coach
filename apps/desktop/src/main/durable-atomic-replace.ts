@@ -45,7 +45,10 @@ export interface ReversibleDurableReplaceInput extends DurableAtomicReplaceInput
   readonly readCurrent?: (target: string) => Promise<Buffer | undefined>;
 }
 
-async function syncDirectory(root: string, openDirectory: typeof open): Promise<void> {
+export async function syncDirectory(
+  root: string,
+  openDirectory: typeof open = open,
+): Promise<void> {
   const directory = await openDirectory(root, "r");
   try {
     await directory.sync();
