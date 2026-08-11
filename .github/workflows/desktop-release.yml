@@ -85,7 +85,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       actions: read
-      contents: read
+      contents: write
     outputs:
       source_run_id: ${{ steps.authorize.outputs.source_run_id }}
       source_run_attempt: ${{ steps.authorize.outputs.source_run_attempt }}

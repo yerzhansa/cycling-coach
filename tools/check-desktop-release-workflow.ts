@@ -348,6 +348,51 @@ function exactPermissions(
   }
 }
 
+function checkDraftReleaseReadPermissions(
+  workflow: Mapping,
+  label: string,
+  issues: string[],
+): void {
+  const jobs = mapping(workflow.jobs, `${label}.jobs`, issues);
+  for (const [jobName, rawJob] of Object.entries(jobs)) {
+    const job = mapping(rawJob, `${label}.jobs.${jobName}`, issues);
+    const commands = runs(job).flatMap(shellCommands);
+    const releaseTargets = commands.flatMap((command) => {
+      if (!/\bgh api\b/u.test(command)) return [];
+      const method = command.match(/\b(?:--method|-X)\s+([A-Za-z]+)/u)?.[1]?.toUpperCase();
+      if (
+        (method !== undefined && method !== "GET") ||
+        /\s(?:-f|-F|--field|--raw-field)(?:\s|=)/u.test(command)
+      ) {
+        return [];
+      }
+      return [
+        ...command.matchAll(/\brepos\/[^"'\s]+\/releases\/([^/"'\s)?#]+)(?=[?"'\s)]|$)/gu),
+      ].map((match) => match[1]);
+    });
+    if (releaseTargets.length === 0) continue;
+    const mutatesReleases = commands.some((command) => {
+      if (/\bgh release (?:create|delete|edit|upload)\b/u.test(command)) return true;
+      if (!/\brepos\/[^"'\s]+\/releases(?:\/|[?"'\s)]|$)/u.test(command)) return false;
+      const method = command.match(/\b(?:--method|-X)\s+([A-Za-z]+)/u)?.[1]?.toUpperCase();
+      return (
+        (method !== undefined && method !== "GET") ||
+        /\s(?:-f|-F|--field|--raw-field)(?:\s|=)/u.test(command)
+      );
+    });
+    const requiredContents =
+      mutatesReleases || releaseTargets.some((target) => target !== "latest") ? "write" : "read";
+    const permissions = mapping(
+      job.permissions,
+      `${label}.jobs.${jobName} draft release read permissions`,
+      issues,
+    );
+    if (permissions.contents !== requiredContents) {
+      issues.push(`${label}.jobs.${jobName} draft release reads require exact contents permission`);
+    }
+  }
+}
+
 function requireQueue(
   concurrencyValue: unknown,
   group: string,
@@ -1114,7 +1159,7 @@ function checkDesktopChild(
 
   exactPermissions(
     authorize.permissions,
-    { actions: "read", contents: "read" },
+    { actions: "read", contents: "write" },
     "desktop coordinator authorization",
     issues,
   );
@@ -2343,6 +2388,10 @@ export function inspectDesktopReleaseWorkflows(
   checkCheckouts(coordinator, "desktop coordinator", issues);
   checkCheckouts(desktop, "desktop child", issues);
   checkCheckouts(version, "version", issues);
+  checkDraftReleaseReadPermissions(release, "npm release", issues);
+  checkDraftReleaseReadPermissions(coordinator, "desktop coordinator", issues);
+  checkDraftReleaseReadPermissions(desktop, "desktop child", issues);
+  checkDraftReleaseReadPermissions(version, "version", issues);
   checkNpmRelease(releaseSource, release, issues);
   checkCoordinator(coordinatorSource, coordinator, issues);
   checkDesktopChild(desktopSource, desktop, issues, resolve(root));
