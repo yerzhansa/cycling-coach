@@ -357,7 +357,8 @@ function safeAsarList(archivePath, archiveLabel) {
   }
 }
 
-function safeAsarStat(archivePath, path, entryLabelRoot) {
+function safeAsarStat(archivePath, listedPath, entryLabelRoot) {
+  const path = listedPath.replace(/^[/\\]+/u, "");
   try {
     return statFile(archivePath, path, false);
   } catch {
@@ -365,7 +366,8 @@ function safeAsarStat(archivePath, path, entryLabelRoot) {
   }
 }
 
-function safeAsarExtract(archivePath, path, entryLabelRoot) {
+function safeAsarExtract(archivePath, listedPath, entryLabelRoot) {
+  const path = listedPath.replace(/^[/\\]+/u, "");
   try {
     return extractFile(archivePath, path, false);
   } catch {
@@ -381,7 +383,7 @@ export function collectAsar(archivePath, options) {
     if (tree.has(path)) fail("duplicate ASAR entry", `${options.entryLabelRoot}/${path}`);
     const label = `${options.entryLabelRoot}/${path}`;
     inspectPath(path, label);
-    const metadata = safeAsarStat(archivePath, path, options.entryLabelRoot);
+    const metadata = safeAsarStat(archivePath, listedPath, options.entryLabelRoot);
     if ("link" in metadata) fail("symbolic links are forbidden", label);
     if ("files" in metadata) {
       tree.set(path, { type: "directory", unpacked: metadata.unpacked === true });
@@ -389,7 +391,7 @@ export function collectAsar(archivePath, options) {
     }
     let bytes;
     if (metadata.unpacked !== true) {
-      bytes = safeAsarExtract(archivePath, path, options.entryLabelRoot);
+      bytes = safeAsarExtract(archivePath, listedPath, options.entryLabelRoot);
       inspectContents(bytes, label);
     }
     tree.set(path, { type: "file", unpacked: metadata.unpacked === true, bytes });
