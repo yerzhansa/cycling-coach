@@ -116,7 +116,9 @@ describe("Desktop Telegram power lifecycle", () => {
       createId: () => `state-${++id}`,
       syncDirectory: async () => {
         syncCount += 1;
-        if (syncCount === 1) throw new TypeError("synthetic first directory sync failure");
+        if (syncCount === 1) {
+          throw Object.assign(new Error("synthetic first directory sync failure"), { code: "EIO" });
+        }
         const directory = await open(files.root, "r");
         try {
           await directory.sync();
@@ -178,7 +180,7 @@ describe("Desktop Telegram power lifecycle", () => {
     const telegram = controller();
     const syncParentDirectory = vi.fn(async (path: string) => {
       expect(path).toBe(dirname(files.root));
-      throw new TypeError("synthetic parent sync failure");
+      throw Object.assign(new Error("synthetic parent sync failure"), { code: "EIO" });
     });
     const lifecycle = createDesktopTelegramPowerLifecycle({
       ...files,
@@ -237,7 +239,7 @@ describe("Desktop Telegram power lifecycle", () => {
     await publishUnsyncedPowerState(files, "2026-08-01T00:00:00.000Z");
     const telegram = controller();
     const syncDirectory = vi.fn(async () => {
-      throw new TypeError("synthetic reopen sync failure");
+      throw Object.assign(new Error("synthetic reopen sync failure"), { code: "EIO" });
     });
     const lifecycle = createDesktopTelegramPowerLifecycle({
       ...files,
@@ -416,8 +418,12 @@ describe("Desktop Telegram power lifecycle", () => {
     expect(telegram.resumePolling).not.toHaveBeenCalled();
 
     const target = join(files.root, TELEGRAM_POWER_STATE_FILE_NAME);
-    expect((await lstat(files.root)).mode & 0o777).toBe(TELEGRAM_POWER_STATE_DIRECTORY_MODE);
-    expect((await lstat(target)).mode & 0o777).toBe(TELEGRAM_POWER_STATE_FILE_MODE);
+    if (process.platform === "win32") {
+      expect((await lstat(target)).nlink).toBe(1);
+    } else {
+      expect((await lstat(files.root)).mode & 0o777).toBe(TELEGRAM_POWER_STATE_DIRECTORY_MODE);
+      expect((await lstat(target)).mode & 0o777).toBe(TELEGRAM_POWER_STATE_FILE_MODE);
+    }
     const suspended = JSON.parse(await readFile(target, "utf8"));
     expect(suspended).toEqual({
       schemaVersion: 2,
@@ -621,7 +627,7 @@ describe("Desktop Telegram power lifecycle", () => {
     });
   });
 
-  it("fails closed for malformed, wrong-home, and permissive state files", async () => {
+  it("fails closed for malformed and wrong-home files, plus permissive POSIX files", async () => {
     const files = await fixture();
     const powerMonitor = monitor();
     const failures: string[] = [];
@@ -672,17 +678,19 @@ describe("Desktop Telegram power lifecycle", () => {
     expect(JSON.parse(await readFile(target, "utf8"))).toEqual(wrongHomeRecord);
     await wrongHome.close();
 
-    await chmod(target, 0o644);
-    const permissive = createDesktopTelegramPowerLifecycle({
-      ...files,
-      powerMonitor: monitor(),
-      controller: controller(),
-      now: () => Date.parse("2026-08-02T00:00:00.000Z"),
-    });
-    await expect(permissive.start()).resolves.toMatchObject({ state: "possible-message-loss" });
-    await expect(permissive.acknowledgeWarning()).resolves.toMatchObject({
-      state: "possible-message-loss",
-    });
+    if (process.platform !== "win32") {
+      await chmod(target, 0o644);
+      const permissive = createDesktopTelegramPowerLifecycle({
+        ...files,
+        powerMonitor: monitor(),
+        controller: controller(),
+        now: () => Date.parse("2026-08-02T00:00:00.000Z"),
+      });
+      await expect(permissive.start()).resolves.toMatchObject({ state: "possible-message-loss" });
+      await expect(permissive.acknowledgeWarning()).resolves.toMatchObject({
+        state: "possible-message-loss",
+      });
+    }
     expect(failures).toContain("read-state");
   });
 

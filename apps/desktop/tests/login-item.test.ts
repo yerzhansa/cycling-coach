@@ -207,8 +207,12 @@ describe("background-at-login preference", () => {
     });
 
     const target = join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME);
-    expect((await stat(root)).mode & 0o777).toBe(LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE);
-    expect((await stat(target)).mode & 0o777).toBe(LOGIN_ITEM_PREFERENCE_FILE_MODE);
+    if (process.platform === "win32") {
+      expect((await stat(target)).nlink).toBe(1);
+    } else {
+      expect((await stat(root)).mode & 0o777).toBe(LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE);
+      expect((await stat(target)).mode & 0o777).toBe(LOGIN_ITEM_PREFERENCE_FILE_MODE);
+    }
     expect(JSON.parse(await readFile(target, "utf8"))).toEqual({
       schemaVersion: 2,
       enabled: true,
@@ -220,7 +224,7 @@ describe("background-at-login preference", () => {
     const root = join(await scratch(), "preferences");
     const syncParentDirectory = vi.fn(async (path: string) => {
       expect(path).toBe(dirname(root));
-      throw new TypeError("synthetic parent sync failure");
+      throw Object.assign(new Error("synthetic parent sync failure"), { code: "EIO" });
     });
     const store = createBackgroundAtLoginPreferenceStore({ root, syncParentDirectory });
 
@@ -243,7 +247,9 @@ describe("background-at-login preference", () => {
       createId: () => `write-${syncCount}`,
       syncDirectory: async () => {
         syncCount += 1;
-        if (syncCount === 2) throw new TypeError("synthetic replacement sync failure");
+        if (syncCount === 2) {
+          throw Object.assign(new Error("synthetic replacement sync failure"), { code: "EIO" });
+        }
         const directory = await open(root, "r");
         try {
           await directory.sync();
@@ -269,7 +275,9 @@ describe("background-at-login preference", () => {
       root,
       createId: () => "never-durable",
       syncDirectory: async () => {
-        throw new TypeError("synthetic persistent directory sync failure");
+        throw Object.assign(new Error("synthetic persistent directory sync failure"), {
+          code: "EIO",
+        });
       },
     });
 
@@ -311,7 +319,7 @@ describe("background-at-login preference", () => {
     await expect(seed.set(false)).resolves.toEqual({ status: "stored", enabled: false });
     await publishUnsyncedPreference(root, true);
     const syncDirectory = vi.fn(async () => {
-      throw new TypeError("synthetic reopen sync failure");
+      throw Object.assign(new Error("synthetic reopen sync failure"), { code: "EIO" });
     });
     const reopened = createBackgroundAtLoginPreferenceStore({ root, syncDirectory });
 
@@ -511,15 +519,17 @@ describe("background-at-login preference", () => {
     ).resolves.toBe(false);
   });
 
-  it("fails closed for malformed, permissive, and non-boolean preference state", async () => {
+  it("fails closed for malformed and non-boolean state, plus permissive POSIX state", async () => {
     const root = join(await scratch(), "preferences");
     const first = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
     await expect(first.set(true)).resolves.toEqual({ status: "stored", enabled: true });
     const target = join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME);
 
-    await chmod(target, 0o644);
-    await expect(first.read()).resolves.toEqual({ state: "unavailable", enabled: false });
-    await chmod(target, LOGIN_ITEM_PREFERENCE_FILE_MODE);
+    if (process.platform !== "win32") {
+      await chmod(target, 0o644);
+      await expect(first.read()).resolves.toEqual({ state: "unavailable", enabled: false });
+      await chmod(target, LOGIN_ITEM_PREFERENCE_FILE_MODE);
+    }
     await writeFile(target, '{"schemaVersion":1,"enabled":"true"}\n', { mode: 0o600 });
     await expect(first.read()).resolves.toEqual({ state: "unavailable", enabled: false });
     await writeFile(

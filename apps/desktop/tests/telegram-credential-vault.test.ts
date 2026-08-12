@@ -47,6 +47,22 @@ async function fixture(): Promise<VaultFixture> {
   };
 }
 
+async function createSymlinkOrReturnWindowsCapabilityReason(
+  target: string,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    await symlink(target, path);
+    return undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
+      return `Windows symlink capability unavailable (${code})`;
+    }
+    throw error;
+  }
+}
+
 async function anotherHome(root: string): Promise<string> {
   const path = join(root, "..", "other-athlete-home");
   await mkdir(path, { mode: 0o700 });
@@ -218,9 +234,13 @@ describe("Telegram credential vault", () => {
       bot: BOT_A,
     });
     expect(encryptedBuffer?.every((byte) => byte === 0)).toBe(true);
-    expect((await lstat(value.root)).mode & 0o777).toBe(TELEGRAM_CREDENTIAL_DIRECTORY_MODE);
+    if (process.platform !== "win32") {
+      expect((await lstat(value.root)).mode & 0o777).toBe(TELEGRAM_CREDENTIAL_DIRECTORY_MODE);
+    }
     const profilePath = join(value.root, TELEGRAM_PROFILE_FILE_NAME);
-    expect((await lstat(profilePath)).mode & 0o777).toBe(TELEGRAM_CREDENTIAL_FILE_MODE);
+    if (process.platform !== "win32") {
+      expect((await lstat(profilePath)).mode & 0o777).toBe(TELEGRAM_CREDENTIAL_FILE_MODE);
+    }
     const ciphertext = await readFile(profilePath);
     expect(ciphertext.includes(Buffer.from(token))).toBe(false);
     expect(await readdir(value.root)).toEqual([TELEGRAM_PROFILE_FILE_NAME]);
@@ -1003,11 +1023,15 @@ describe("Telegram credential vault", () => {
     expect(reopenSyncAttempts).toBe(1);
   });
 
-  it("refuses symlinked and permissive profile storage", async () => {
+  it("refuses symlinked and permissive profile storage", async ({ skip }) => {
     const value = await fixture();
     const actual = join(value.root, "..", "actual-vault");
     await mkdir(actual, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
-    await symlink(actual, value.root);
+    const rootSymlinkCapabilityReason = await createSymlinkOrReturnWindowsCapabilityReason(
+      actual,
+      value.root,
+    );
+    if (rootSymlinkCapabilityReason) return skip(rootSymlinkCapabilityReason);
     const symlinkedRoot = createTelegramCredentialVault({ ...value, encryption: encryption() });
     await expect(
       symlinkedRoot.replaceProfile({
@@ -1021,7 +1045,11 @@ describe("Telegram credential vault", () => {
     await mkdir(value.root, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
     const outside = join(value.root, "..", "outside-profile");
     await writeFile(outside, "ciphertext", { mode: TELEGRAM_CREDENTIAL_FILE_MODE });
-    await symlink(outside, join(value.root, TELEGRAM_PROFILE_FILE_NAME));
+    const fileSymlinkCapabilityReason = await createSymlinkOrReturnWindowsCapabilityReason(
+      outside,
+      join(value.root, TELEGRAM_PROFILE_FILE_NAME),
+    );
+    if (fileSymlinkCapabilityReason) return skip(fileSymlinkCapabilityReason);
     const symlinkedFile = createTelegramCredentialVault({ ...value, encryption: encryption() });
     await expect(symlinkedFile.profileStatus()).resolves.toEqual({
       state: "re-prompt",
@@ -1037,10 +1065,14 @@ describe("Telegram credential vault", () => {
 
     await rm(join(value.root, TELEGRAM_PROFILE_FILE_NAME));
     await chmod(value.root, 0o755);
-    await expect(symlinkedFile.profileStatus()).resolves.toEqual({
-      state: "re-prompt",
-      reason: "storage-failed",
-    });
+    if (process.platform === "win32") {
+      await expect(symlinkedFile.profileStatus()).resolves.toEqual({ state: "missing" });
+    } else {
+      await expect(symlinkedFile.profileStatus()).resolves.toEqual({
+        state: "re-prompt",
+        reason: "storage-failed",
+      });
+    }
   });
 
   it("deletes through a durable tombstone and cleans deferred ciphertext later", async () => {
