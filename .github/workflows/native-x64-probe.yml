@@ -1,0 +1,69 @@
+name: native-x64-probe-282
+
+on:
+  push:
+    branches: [ci/native-x64-probe-282]
+  workflow_dispatch: {}
+
+jobs:
+  probe-epic-tip:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Record host identity
+        shell: pwsh
+        run: |
+          "arch=$env:PROCESSOR_ARCHITECTURE" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          (Get-CimInstance Win32_OperatingSystem).Caption + " " + (Get-CimInstance Win32_OperatingSystem).Version | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          (Get-CimInstance Win32_ComputerSystem).SystemType | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+      - name: Build workspace
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: corepack pnpm -r build
+      - name: Package Windows installer
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: corepack pnpm --filter @enduragent/desktop package:win
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "apps\desktop\dist\windows" -Filter "Enduragent-*-x64.exe" | Where-Object { $_.Name -notmatch "uninstaller" } | Select-Object -First 1
+          if ($null -eq $installer) { throw "installer not found in apps\desktop\dist\windows" }
+          "installer: $($installer.FullName)" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait
+          $exe = "$env:LOCALAPPDATA\Programs\Enduragent\Enduragent.exe"
+          for ($i = 0; $i -lt 30 -and !(Test-Path $exe); $i++) { Start-Sleep -Seconds 2 }
+          if (!(Test-Path $exe)) {
+            $found = Get-ChildItem -Recurse "$env:LOCALAPPDATA\Programs" -Filter Enduragent.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -eq $found) { throw "Enduragent.exe not found after install" }
+            $exe = $found.FullName
+          }
+          "EXE_PATH=$exe" | Out-File -Append $env:GITHUB_ENV
+          Get-Process Enduragent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      - name: Launch with CDP port
+        shell: pwsh
+        run: Start-Process -FilePath $env:EXE_PATH -ArgumentList "--remote-debugging-port=9222"
+      - name: Probe Settings navigation
+        run: node tools/native-x64-probe.mjs
+      - name: Stop app
+        if: always()
+        shell: pwsh
+        run: Get-Process Enduragent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-282-evidence
+          path: probe-out/
+          if-no-files-found: warn
