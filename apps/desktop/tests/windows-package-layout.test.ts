@@ -172,7 +172,7 @@ function builderYaml(): string {
     "productName: Enduragent",
     "asar: true",
     "electronLanguages:",
-    "  - en",
+    "  - en-US",
     "directories:",
     "  output: dist",
     "files:",
@@ -292,6 +292,7 @@ async function syntheticWindowsPackage(): Promise<SyntheticWindowsPackage> {
     writeFile(join(externalSource, "self-test/matrix.json"), matrix),
     writeFile(join(externalSource, "self-test/matrix.sha256"), matrixChecksum),
     writeFile(join(externalSource, "self-test/self-test-runner.cjs"), runner),
+    writeFile(join(application, "locales/en-US.pak"), "synthetic locale\n"),
     writeFile(join(sourceResources, "tray.ico"), "tray ico\n"),
     writeFile(join(sourceResources, "trayTemplate.png"), "tray png\n"),
     writeFile(join(sourceResources, "trayTemplate@2x.png"), "tray 2x png\n"),
@@ -440,6 +441,34 @@ describe("Windows package verification", () => {
       verifyWindowsPackageLayout(fixture.application, { desktopRoot: fixture.desktop }),
     ).rejects.toThrow(
       'windows-package/application-inventory: undeclared application entry: "unexpected.bin"',
+    );
+  });
+
+  it("requires the shipped en-US locale pak", async () => {
+    const missing = await syntheticWindowsPackage();
+    await rm(join(missing.application, "locales/en-US.pak"));
+    await expect(
+      verifyWindowsPackageLayout(missing.application, { desktopRoot: missing.desktop }),
+    ).rejects.toThrow(
+      'windows-package/application-inventory: missing locale: "locales/en-US.pak"',
+    );
+
+    const empty = await syntheticWindowsPackage();
+    await writeFile(join(empty.application, "locales/en-US.pak"), "");
+    await expect(
+      verifyWindowsPackageLayout(empty.application, { desktopRoot: empty.desktop }),
+    ).rejects.toThrow(
+      'windows-package/application-inventory: missing locale: "locales/en-US.pak"',
+    );
+  });
+
+  it("rejects locales beyond the pinned en-US pak", async () => {
+    const fixture = await syntheticWindowsPackage();
+    await writeFile(join(fixture.application, "locales/fr.pak"), "synthetic locale\n");
+    await expect(
+      verifyWindowsPackageLayout(fixture.application, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow(
+      'windows-package/application-inventory: undeclared locale: "locales/fr.pak"',
     );
   });
 

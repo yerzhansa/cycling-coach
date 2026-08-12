@@ -147,7 +147,7 @@ function builderYaml(
     "productName: Enduragent",
     "asar: true",
     "electronLanguages:",
-    "  - en",
+    "  - en-US",
     "directories:",
     "  output: dist",
     "files:",
@@ -591,7 +591,7 @@ describe("desktop package layout", () => {
 
   it("pins the sole audited Electron locale", async () => {
     const fixture = await syntheticPackage();
-    const yaml = builderYaml().replace("electronLanguages:\n  - en\n", "");
+    const yaml = builderYaml().replace("electronLanguages:\n  - en-US\n", "");
     await writeFile(join(fixture.desktop, "electron-builder.yml"), yaml);
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
@@ -599,7 +599,15 @@ describe("desktop package layout", () => {
 
     await writeFile(
       join(fixture.desktop, "electron-builder.yml"),
-      builderYaml().replace("  - en\n", "  - en\n  - fr\n"),
+      builderYaml().replace("  - en-US\n", "  - en-US\n  - fr\n"),
+    );
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("invalid builder packaging authority");
+
+    await writeFile(
+      join(fixture.desktop, "electron-builder.yml"),
+      builderYaml().replace("  - en-US\n", "  - en\n"),
     );
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),

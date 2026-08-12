@@ -240,7 +240,7 @@ export function validateBuilderInventoryAuthority(config, desktopRoot, options =
     config.asar !== true ||
     !Array.isArray(config.electronLanguages) ||
     config.electronLanguages.length !== 1 ||
-    config.electronLanguages[0] !== "en" ||
+    config.electronLanguages[0] !== "en-US" ||
     !exactObject(config.directories) ||
     config.directories.output !== "dist" ||
     !Array.isArray(config.files) ||

@@ -62,6 +62,7 @@ const expectedWindowsRuntime = new Set([
   "vk_swiftshader_icd.json",
   "vulkan-1.dll",
 ]);
+const expectedWindowsLocale = "locales/en-US.pak";
 const expectedAsarResourceFiles = new Set([
   "resources/tray.ico",
   "resources/trayTemplate.png",
@@ -212,6 +213,24 @@ function validateRuntimeEntryTypes(tree) {
     if (entry === undefined || entry.type !== expectedType) {
       failWindows("application-inventory", "application entry type is invalid", [name]);
     }
+  }
+}
+
+function validateRuntimeLocales(tree) {
+  const locale = tree.get(expectedWindowsLocale);
+  if (
+    locale === undefined ||
+    locale.type !== "file" ||
+    !Buffer.isBuffer(locale.bytes) ||
+    locale.bytes.length === 0
+  ) {
+    failWindows("application-inventory", "missing locale", [expectedWindowsLocale]);
+  }
+  const undeclared = [...tree.keys()].filter(
+    (path) => path.startsWith("locales/") && path !== expectedWindowsLocale,
+  );
+  if (undeclared.length > 0) {
+    failWindows("application-inventory", "undeclared locale", undeclared);
   }
 }
 
@@ -581,10 +600,7 @@ export async function verifyWindowsPackageLayout(application, options = {}) {
       "application entry",
     );
     validateRuntimeEntryTypes(tree);
-    const locales = [...tree.keys()].filter((path) => path.startsWith("locales/"));
-    if (locales.length > 0) {
-      failWindows("application-inventory", "undeclared locale", locales);
-    }
+    validateRuntimeLocales(tree);
     for (const [path, entry] of tree) {
       if (path === "resources" || path.startsWith("resources/")) continue;
       inspectPath(path, `win-unpacked/${path}`);
