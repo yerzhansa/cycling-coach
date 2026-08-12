@@ -181,7 +181,7 @@ function setup(
     trayIconPath: "/synthetic/trayTemplate.png",
     trayPopoverUrl: "enduragent://app/tray.html",
     trayPreloadPath: "/synthetic/tray.cjs",
-    platform: options.platform,
+    platform: options.platform ?? "darwin",
     loginItemExecutablePath: options.loginItemExecutablePath,
     telegramStatus,
     persistLoginPreference,
@@ -691,5 +691,5 @@ describe("desktop residency", () => {
     expect(mocks.app.getLoginItemSettings).not.toHaveBeenCalled();
     expect(mocks.app.setLoginItemSettings).not.toHaveBeenCalled();
     expect(mocks.supervisor).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 });

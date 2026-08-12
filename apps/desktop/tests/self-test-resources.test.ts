@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,6 +153,14 @@ describe("packaged self-test resources", () => {
   );
 
   it("keeps generated artifacts outside tracked source", async () => {
+    try {
+      await lstat(join(repositoryRoot, ".git"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const ignoreRules = await readFile(join(repositoryRoot, ".gitignore"), "utf8");
+      expect(ignoreRules.split(/\r?\n/u)).toContain("dist/");
+      return;
+    }
     const ignore = await run("git", ["check-ignore", "apps/desktop/dist/self-test-asar"], {
       cwd: repositoryRoot,
     });

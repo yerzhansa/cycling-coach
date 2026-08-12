@@ -332,6 +332,7 @@ describe("Desktop Telegram IPC", () => {
         ).resolves.toMatchObject({ outcome: "applied" });
         const reopened = createTelegramCredentialVault({
           ...value,
+          ...(backend === undefined ? {} : { platform: "linux" as const }),
           encryption: {
             ...encryption,
             isEncryptionAvailable: () => available,

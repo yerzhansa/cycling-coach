@@ -310,9 +310,10 @@ describe("Telegram credential vault", () => {
     await unavailable.profileStatus();
 
     const namespaceValue = await fixture();
-    await mkdir(namespaceValue.root, { mode: 0o755 });
+    await writeFile(namespaceValue.root, "synthetic namespace collision");
     const unsafeNamespace = createTelegramCredentialVault({
       ...namespaceValue,
+      platform: "linux",
       encryption: encryption(),
       observeSecureStorageFailure,
     });

@@ -614,6 +614,7 @@ describe("Telegram main-process control coordinator", () => {
         const observeSecureStorageFailure = vi.fn();
         const reopened = createTelegramCredentialVault({
           ...value,
+          ...(selectedBackend === undefined ? {} : { platform: "linux" as const }),
           encryption: {
             ...realVaultEncryption(),
             isEncryptionAvailable: () => available,
