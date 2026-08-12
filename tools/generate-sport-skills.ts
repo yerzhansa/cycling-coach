@@ -11,11 +11,7 @@ import { readdirSync, writeFileSync, renameSync, mkdtempSync } from "node:fs";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 
-const pkgDir = process.argv[2];
-if (!pkgDir) {
-  console.error("usage: generate-sport-skills.ts <packageDirectory>");
-  process.exit(1);
-}
+const pkgDir = process.argv[2] ?? process.cwd();
 
 const skillsDir = join(pkgDir, "skills");
 const targetFile = join(pkgDir, "src", "skills.generated.ts");
