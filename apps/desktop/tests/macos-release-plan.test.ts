@@ -162,7 +162,7 @@ async function metadataSealFixture() {
   };
 }
 
-describe("macOS release plan", () => {
+describe.skipIf(process.platform === "win32")("macOS release plan", () => {
   it("exposes only controlled release-plan failures to the release log", () => {
     expect(
       safeMacosReleasePlanMessage(new TypeError("release envelope changed during verification")),
