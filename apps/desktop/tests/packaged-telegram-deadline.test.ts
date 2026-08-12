@@ -95,7 +95,7 @@ describe("packaged Telegram acceptance deadlines", () => {
     await expect(
       terminateAcceptanceChild(child, { terminationGraceMs: 20, killGraceMs: 500 }),
     ).resolves.toBe(true);
-    expect(child.signalCode).toBe("SIGKILL");
+    expect(child.signalCode).toBe(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
   });
 
   it("closes a stalled debugger connection when its command expires", async () => {

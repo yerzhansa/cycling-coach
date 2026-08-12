@@ -257,6 +257,15 @@ describe("shared package trees", () => {
     );
 
     const linkRoot = await temporaryRoot();
+    if (process.platform === "win32") {
+      const target = join(linkRoot, "target");
+      await mkdir(target);
+      await symlink(target, join(linkRoot, "link"), "junction");
+      await expect(collectTree(linkRoot, "link-tree", false)).rejects.toThrow(
+        "symbolic links are forbidden: link-tree/link",
+      );
+      return;
+    }
     await writeFile(join(linkRoot, "target.bin"), "runtime");
     await symlink("target.bin", join(linkRoot, "link.bin"));
     await expect(collectTree(linkRoot, "link-tree", false)).rejects.toThrow(
