@@ -66,10 +66,14 @@ describe("desktop first-run configuration", () => {
 
     const configDirectory = join(home, "config");
     const configPath = join(configDirectory, "config.yaml");
-    for (const path of [dirname(home), home, configDirectory]) {
-      expect((await fileLstat(path)).mode & 0o777).toBe(FIRST_RUN_CONFIG_DIRECTORY_MODE);
+    if (process.platform === "win32") {
+      expect((await fileLstat(configPath)).nlink).toBe(1);
+    } else {
+      for (const path of [dirname(home), home, configDirectory]) {
+        expect((await fileLstat(path)).mode & 0o777).toBe(FIRST_RUN_CONFIG_DIRECTORY_MODE);
+      }
+      expect((await fileLstat(configPath)).mode & 0o777).toBe(FIRST_RUN_CONFIG_FILE_MODE);
     }
-    expect((await fileLstat(configPath)).mode & 0o777).toBe(FIRST_RUN_CONFIG_FILE_MODE);
     const contents = await readFile(configPath, "utf8");
     const parsed = parseYaml(contents) as Record<string, unknown>;
     expect(parsed).toMatchObject({

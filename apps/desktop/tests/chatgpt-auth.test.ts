@@ -197,7 +197,9 @@ describe("desktop ChatGPT auth", () => {
       refresh: "obviously-fake-refresh",
       expires: 4_102_444_800_000,
     });
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
     await expect(hasChatGptProfile(directory)).resolves.toBe(true);
   });
 
@@ -237,7 +239,9 @@ describe("desktop ChatGPT auth", () => {
       expires: 4_102_444_800_000,
       email: "synthetic@example.invalid",
     });
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("treats absent, corrupt, and invalid profiles as absent", async () => {
@@ -312,8 +316,10 @@ describe("desktop ChatGPT auth", () => {
       operationId: "quarantine",
     });
     expect(await readFile(`${path}.corrupt`)).toEqual(originalBytes);
-    expect((await stat(`${path}.corrupt`)).mode & 0o777).toBe(0o600);
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await stat(`${path}.corrupt`)).mode & 0o777).toBe(0o600);
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
     await expect(hasChatGptProfile(directory)).resolves.toBe(true);
   });
 

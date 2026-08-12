@@ -34,6 +34,22 @@ async function temporaryRoot(): Promise<string> {
   return join(root, "credentials-v1");
 }
 
+async function createSymlinkOrReturnWindowsCapabilityReason(
+  target: string,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    await symlink(target, path);
+    return undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
+      return `Windows symlink capability unavailable (${code})`;
+    }
+    throw error;
+  }
+}
+
 function encryption(): CredentialEncryptionPort {
   return {
     isEncryptionAvailable: () => true,
@@ -57,9 +73,14 @@ async function storeEncryptedCredential(
   value: string,
   encryptionPort: CredentialEncryptionPort,
 ): Promise<void> {
-  await mkdir(root, { recursive: true, mode: CREDENTIAL_DIRECTORY_MODE });
-  await writeFile(join(root, `${slot}.bin`), encryptionPort.encryptString(value), {
-    mode: CREDENTIAL_FILE_MODE,
+  const vault = createCredentialVault({
+    root,
+    encryption: encryptionPort,
+    applyCredential: vi.fn(async () => undefined),
+  });
+  await expect(vault.writeCredential({ slot, value }, { activate: false })).resolves.toMatchObject({
+    slot,
+    status: "configured",
   });
 }
 
@@ -185,8 +206,10 @@ describe("desktop credential vault", () => {
     const path = join(root, "anthropic.bin");
     const file = await lstat(path);
     const ciphertext = await readFile(path);
-    expect(directory.mode & 0o777).toBe(CREDENTIAL_DIRECTORY_MODE);
-    expect(file.mode & 0o777).toBe(CREDENTIAL_FILE_MODE);
+    if (process.platform !== "win32") {
+      expect(directory.mode & 0o777).toBe(CREDENTIAL_DIRECTORY_MODE);
+      expect(file.mode & 0o777).toBe(CREDENTIAL_FILE_MODE);
+    }
     expect(ciphertext.length).toBeGreaterThan(0);
     expect(ciphertext.includes(Buffer.from(sentinel))).toBe(false);
     expect(await readdir(root)).toEqual(["anthropic.bin"]);
@@ -885,7 +908,7 @@ describe("desktop credential vault", () => {
     expect((await readdir(root)).some((entry) => entry.endsWith(".deleted"))).toBe(true);
   });
 
-  it("fails closed for insecure directories and targets", async () => {
+  it("fails closed for insecure directories and targets", async ({ skip }) => {
     const root = await temporaryRoot();
     await mkdir(root, { mode: 0o755 });
     const vault = createCredentialVault({
@@ -893,14 +916,27 @@ describe("desktop credential vault", () => {
       encryption: encryption(),
       applyCredential: vi.fn(),
     });
-    await expect(
-      vault.writeCredential({ slot: "anthropic", value: "synthetic" }),
-    ).resolves.toMatchObject({
-      status: "refused",
-      reason: "storage-failed",
+    const permissiveDirectoryWrite = vault.writeCredential({
+      slot: "anthropic",
+      value: "synthetic",
     });
-    await chmod(root, 0o700);
-    await symlink(join(root, "missing"), join(root, "anthropic.bin"));
+    if (process.platform === "win32") {
+      await expect(permissiveDirectoryWrite).resolves.toMatchObject({ status: "configured" });
+      await expect(vault.deleteCredential("anthropic")).resolves.toMatchObject({
+        status: "deleted",
+      });
+    } else {
+      await expect(permissiveDirectoryWrite).resolves.toMatchObject({
+        status: "refused",
+        reason: "storage-failed",
+      });
+      await chmod(root, 0o700);
+    }
+    const symlinkCapabilityReason = await createSymlinkOrReturnWindowsCapabilityReason(
+      join(root, "missing"),
+      join(root, "anthropic.bin"),
+    );
+    if (symlinkCapabilityReason) return skip(symlinkCapabilityReason);
     await expect(
       vault.writeCredential({ slot: "anthropic", value: "synthetic" }),
     ).resolves.toMatchObject({
@@ -925,12 +961,24 @@ describe("desktop credential vault", () => {
     });
     await rm(join(root, "anthropic.bin"), { recursive: true });
     await writeFile(join(root, "anthropic.bin"), "ciphertext", { mode: 0o644 });
-    await expect(
-      vault.writeCredential({ slot: "anthropic", value: "synthetic" }),
-    ).resolves.toMatchObject({
-      status: "refused",
-      reason: "storage-failed",
+    const permissiveFileWrite = vault.writeCredential({
+      slot: "anthropic",
+      value: "synthetic",
     });
+    if (process.platform === "win32") {
+      await expect(permissiveFileWrite).resolves.toMatchObject({ status: "configured" });
+      expect((await readFile(join(root, "anthropic.bin"))).includes("synthetic")).toBe(false);
+      await expect(vault.credentialStatuses()).resolves.toContainEqual({
+        slot: "anthropic",
+        state: "configured",
+        runtimeState: "active",
+      });
+    } else {
+      await expect(permissiveFileWrite).resolves.toMatchObject({
+        status: "refused",
+        reason: "storage-failed",
+      });
+    }
   });
 
   it("minimizes encryption backend failures without touching storage", async () => {
