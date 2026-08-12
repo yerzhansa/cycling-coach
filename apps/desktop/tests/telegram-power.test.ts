@@ -101,7 +101,9 @@ function disabledPollingStatus() {
 }
 
 describe("Desktop Telegram power lifecycle", () => {
-  it("keeps the forward gap anchor and warns when its rename is visible but durability is uncertain", async () => {
+  const posixIt = it.skipIf(process.platform === "win32");
+
+  posixIt("keeps the forward gap anchor and warns when its rename is visible but durability is uncertain", async () => {
     const files = await fixture();
     const powerMonitor = monitor();
     const telegram = controller();
@@ -174,7 +176,7 @@ describe("Desktop Telegram power lifecycle", () => {
     });
   });
 
-  it("does not stop polling before the power-state namespace is durably anchored", async () => {
+  posixIt("does not stop polling before the power-state namespace is durably anchored", async () => {
     const files = await fixture();
     const powerMonitor = monitor();
     const telegram = controller();
@@ -208,7 +210,7 @@ describe("Desktop Telegram power lifecycle", () => {
     });
   });
 
-  it("fsyncs and accepts the visible power record after reconstructing the lifecycle", async () => {
+  posixIt("fsyncs and accepts the visible power record after reconstructing the lifecycle", async () => {
     const files = await fixture();
     await publishUnsyncedPowerState(files, "2026-08-01T00:00:00.000Z");
     const syncDirectory = vi.fn(async () => {
@@ -234,7 +236,7 @@ describe("Desktop Telegram power lifecycle", () => {
     expect(syncDirectory).toHaveBeenCalledOnce();
   });
 
-  it("fails closed without power mutations when reopen convergence cannot be proven", async () => {
+  posixIt("fails closed without power mutations when reopen convergence cannot be proven", async () => {
     const files = await fixture();
     await publishUnsyncedPowerState(files, "2026-08-01T00:00:00.000Z");
     const telegram = controller();
