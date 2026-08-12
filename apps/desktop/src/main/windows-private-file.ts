@@ -7,6 +7,7 @@ import {
   assertWindowsPrivatePathRead,
   classifyWindowsPrivatePathFailure,
   sameWindowsPrivatePathIdentity,
+  WindowsPrivatePathPolicyError,
   windowsPrivatePathIdentity,
   type WindowsPrivateDirectoryBinding,
 } from "@enduragent/core";
@@ -16,6 +17,12 @@ export const MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES = 262_144;
 export interface WindowsPrivateFileSnapshot {
   readonly contents: Buffer;
   readonly modifiedAt: number;
+}
+
+export class WindowsPrivateFileMaximumBytesExceededError extends WindowsPrivatePathPolicyError {
+  constructor() {
+    super("read-check", "corruption");
+  }
 }
 
 export interface ReadWindowsPrivateFileInput {
@@ -32,6 +39,9 @@ function isMissing(error: unknown): boolean {
 }
 
 function assertBounded(metadata: Stats, minimumBytes: number, maximumBytes: number): void {
+  if (Number.isSafeInteger(metadata.size) && metadata.size > maximumBytes) {
+    throw new WindowsPrivateFileMaximumBytesExceededError();
+  }
   assertWindowsPrivatePathRead({
     bounded:
       Number.isSafeInteger(metadata.size) &&
@@ -52,13 +62,13 @@ export function assertWindowsPrivateFileAtPath(
   allowedLinks: 1 | 2 = 1,
 ): void {
   assertWindowsPrivateFileMetadata(metadata, allowedLinks);
-  assertBounded(metadata, minimumBytes, maximumBytes);
   assertWindowsPrivateFileBinding(
     directory,
     path,
     windowsPrivatePathIdentity(metadata),
     allowedLinks,
   );
+  assertBounded(metadata, minimumBytes, maximumBytes);
 }
 
 export async function readWindowsPrivateFile(
@@ -91,7 +101,6 @@ export async function readWindowsPrivateFile(
     try {
       const opened = await handle.stat();
       assertWindowsPrivateFileMetadata(opened, allowedLinks);
-      assertBounded(opened, minimumBytes, input.maximumBytes);
       assertWindowsPrivatePathRead({
         bounded: true,
         identityStable: sameWindowsPrivatePathIdentity(
@@ -107,6 +116,7 @@ export async function readWindowsPrivateFile(
         windowsPrivatePathIdentity(opened),
         allowedLinks,
       );
+      assertBounded(opened, minimumBytes, input.maximumBytes);
       contents = Buffer.allocUnsafe(opened.size);
       let offset = 0;
       while (offset < contents.length) {
