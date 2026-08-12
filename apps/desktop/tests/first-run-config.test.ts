@@ -152,9 +152,22 @@ describe("desktop first-run configuration", () => {
     await expect(
       seedFirstRunConfig({
         env: { ENDURAGENT_HOME: home },
-        dependencies: { fileSystem, timezone: () => "UTC", createId: () => "atomic-seam" },
+        dependencies: {
+          fileSystem,
+          timezone: () => "UTC",
+          createId: () => "atomic-seam",
+          openFile: (async (path) => {
+            temporaryPath = path.toString();
+            await fileWrite(path, "partial", { flag: "wx", mode: 0o600 });
+            throw new Error("synthetic write failure");
+          }) as typeof fileOpen,
+        },
       }),
-    ).rejects.toThrow("synthetic write failure");
+    ).rejects.toThrow(
+      process.platform === "win32"
+        ? "Windows private path policy failed"
+        : "synthetic write failure",
+    );
     expect(temporaryPath).toBe(join(dirname(configPath), ".config.atomic-seam.tmp"));
     await expect(fileLstat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readdir(dirname(configPath))).toEqual([]);
