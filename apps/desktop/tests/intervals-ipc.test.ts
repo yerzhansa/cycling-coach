@@ -551,7 +551,7 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
       ),
     },
   ] as const)(
-    "keeps an existing encrypted key and runtime state unchanged after $name verification refusal",
+    "keeps an existing encrypted key and runtime state unchanged after verification refusal",
     async ({ platform, expectedCiphertext }) => {
       const value = await temporaryVault({ platform });
       try {
