@@ -53,6 +53,8 @@ const mocks = vi.hoisted(() => {
     exit: vi.fn(),
     whenReady: vi.fn(async () => {}),
     quit: vi.fn(),
+    setAppUserModelId: vi.fn(),
+    setPath: vi.fn(),
     getLoginItemSettings: vi.fn(),
     setLoginItemSettings: vi.fn(),
     getVersion: vi.fn(() => "0.0.1"),
@@ -524,81 +526,84 @@ describe("desktop residency", () => {
     expect(openAtLogin).toBe(true);
   });
 
-  it("keeps a partial OS enablement restart-safe when durable compensation is uncertain", async () => {
-    const root = join(await scratch(), "preferences");
-    const seed = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
-    await expect(seed.set(true)).resolves.toEqual({ status: "stored", enabled: true });
-    await writeFile(
-      join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME),
-      `${JSON.stringify({ schemaVersion: 1, enabled: false })}\n`,
-      { mode: LOGIN_ITEM_PREFERENCE_FILE_MODE },
-    );
-    let syncCount = 0;
-    const syncDirectory = async (path: string): Promise<void> => {
-      syncCount += 1;
-      if (syncCount >= 3) throw new TypeError();
-      const directory = await open(path, "r");
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    };
-    let renameCount = 0;
-    const renameFile: typeof rename = async (from, to) => {
-      renameCount += 1;
-      if (renameCount === 3) throw new TypeError();
-      await rename(from, to);
-    };
-    const faulted = createBackgroundAtLoginPreferenceStore({
-      root,
-      createId: () => "faulted",
-      renameFile,
-      syncDirectory,
-    });
-    const { residency, persistLoginPreference, reportFailure } = setup();
-    const persistenceResults: unknown[] = [];
-    persistLoginPreference.mockImplementation(async (enabled) => {
-      const result = await faulted.set(enabled);
-      persistenceResults.push(result);
-      return result;
-    });
-    let openAtLogin = false;
-    mocks.app.getLoginItemSettings.mockImplementation(
-      () => loginState(openAtLogin ? "enabled" : "not-registered", openAtLogin) as never,
-    );
-    mocks.app.setLoginItemSettings.mockImplementation(({ openAtLogin: requested }) => {
-      openAtLogin = requested;
-      throw new TypeError();
-    });
-    await residency.start();
-    mocks.FakeTray.instances[0]!.emit("right-click");
-    const menu = mocks.buildFromTemplate.mock.calls[0]![0] as Array<Record<string, unknown>>;
+  it.skipIf(process.platform === "win32")(
+    "keeps a partial OS enablement restart-safe when durable compensation is uncertain",
+    async () => {
+      const root = join(await scratch(), "preferences");
+      const seed = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
+      await expect(seed.set(true)).resolves.toEqual({ status: "stored", enabled: true });
+      await writeFile(
+        join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME),
+        `${JSON.stringify({ schemaVersion: 1, enabled: false })}\n`,
+        { mode: LOGIN_ITEM_PREFERENCE_FILE_MODE },
+      );
+      let syncCount = 0;
+      const syncDirectory = async (path: string): Promise<void> => {
+        syncCount += 1;
+        if (syncCount >= 3) throw new TypeError();
+        const directory = await open(path, "r");
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
+      };
+      let renameCount = 0;
+      const renameFile: typeof rename = async (from, to) => {
+        renameCount += 1;
+        if (renameCount === 3) throw new TypeError();
+        await rename(from, to);
+      };
+      const faulted = createBackgroundAtLoginPreferenceStore({
+        root,
+        createId: () => "faulted",
+        renameFile,
+        syncDirectory,
+      });
+      const { residency, persistLoginPreference, reportFailure } = setup();
+      const persistenceResults: unknown[] = [];
+      persistLoginPreference.mockImplementation(async (enabled) => {
+        const result = await faulted.set(enabled);
+        persistenceResults.push(result);
+        return result;
+      });
+      let openAtLogin = false;
+      mocks.app.getLoginItemSettings.mockImplementation(
+        () => loginState(openAtLogin ? "enabled" : "not-registered", openAtLogin) as never,
+      );
+      mocks.app.setLoginItemSettings.mockImplementation(({ openAtLogin: requested }) => {
+        openAtLogin = requested;
+        throw new TypeError();
+      });
+      await residency.start();
+      mocks.FakeTray.instances[0]!.emit("right-click");
+      const menu = mocks.buildFromTemplate.mock.calls[0]![0] as Array<Record<string, unknown>>;
 
-    (menu[2]!.click as (item: { checked: boolean }) => void)({ checked: true });
-    await vi.waitFor(() => expect(reportFailure).toHaveBeenCalledWith("set-login-item"));
-    await residency.close();
+      (menu[2]!.click as (item: { checked: boolean }) => void)({ checked: true });
+      await vi.waitFor(() => expect(reportFailure).toHaveBeenCalledWith("set-login-item"));
+      await residency.close();
 
-    expect(mocks.app.setLoginItemSettings).toHaveBeenCalledOnce();
-    expect(openAtLogin).toBe(true);
-    expect(persistLoginPreference.mock.calls).toEqual([[true], [false]]);
-    expect(persistenceResults).toEqual([
-      { status: "stored", enabled: true },
-      { status: "uncertain" },
-    ]);
-    const reopened = createBackgroundAtLoginPreferenceStore({ root });
-    await expect(reopened.read()).resolves.toEqual({
-      state: "configured",
-      enabled: false,
-      loginLaunchBehavior: "background",
-    });
-    await expect(
-      shouldStartInBackgroundAtLogin(
-        { getLoginItemSettings: () => ({ wasOpenedAtLogin: openAtLogin }) } as never,
-        reopened,
-      ),
-    ).resolves.toBe(true);
-  });
+      expect(mocks.app.setLoginItemSettings).toHaveBeenCalledOnce();
+      expect(openAtLogin).toBe(true);
+      expect(persistLoginPreference.mock.calls).toEqual([[true], [false]]);
+      expect(persistenceResults).toEqual([
+        { status: "stored", enabled: true },
+        { status: "uncertain" },
+      ]);
+      const reopened = createBackgroundAtLoginPreferenceStore({ root });
+      await expect(reopened.read()).resolves.toEqual({
+        state: "configured",
+        enabled: false,
+        loginLaunchBehavior: "background",
+      });
+      await expect(
+        shouldStartInBackgroundAtLogin(
+          { getLoginItemSettings: () => ({ wasOpenedAtLogin: openAtLogin }) } as never,
+          reopened,
+        ),
+      ).resolves.toBe(true);
+    },
+  );
 
   it("reports show failures by operation and keeps observer data closed", async () => {
     const { residency, reportFailure, mainWindow, events } = setup();

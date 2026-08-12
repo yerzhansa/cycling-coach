@@ -1,13 +1,4 @@
-import {
-  chmod,
-  link,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -66,8 +57,12 @@ describe("desktop update version floor", () => {
     await expect(readFile(target, "utf8")).resolves.toBe(
       `${JSON.stringify({ schemaVersion: 1, version: "1.2.3" })}\n`,
     );
-    expect((await lstat(root)).mode & 0o777).toBe(DESKTOP_UPDATE_VERSION_FLOOR_DIRECTORY_MODE);
-    expect((await lstat(target)).mode & 0o777).toBe(DESKTOP_UPDATE_VERSION_FLOOR_FILE_MODE);
+    if (process.platform === "win32") {
+      expect((await lstat(target)).nlink).toBe(1);
+    } else {
+      expect((await lstat(root)).mode & 0o777).toBe(DESKTOP_UPDATE_VERSION_FLOOR_DIRECTORY_MODE);
+      expect((await lstat(target)).mode & 0o777).toBe(DESKTOP_UPDATE_VERSION_FLOOR_FILE_MODE);
+    }
 
     const restarted = createDesktopUpdateVersionFloor({ root });
     await expect(restarted.recordRunningVersion("1.0.0")).resolves.toEqual({

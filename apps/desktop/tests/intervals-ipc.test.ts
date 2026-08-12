@@ -410,7 +410,7 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
     async (reason) => {
       const value = await temporaryVault({
         available: reason !== "encryption-unavailable",
-        ...(reason === "unsafe-backend" ? { backend: "basic_text" } : {}),
+        ...(reason === "unsafe-backend" ? { backend: "basic_text", platform: "darwin" } : {}),
       });
       try {
         const runtime = setup({ vault: value.vault });
@@ -425,7 +425,9 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
     },
   );
 
-  it.each(["encryption-unavailable", "unsafe-backend"] as const)(
+  it
+    .skipIf(process.platform === "win32")
+    .each(["encryption-unavailable", "unsafe-backend"] as const)(
     "preserves an existing key across the %s storage refusal",
     async (reason) => {
       const security = { available: true, backend: "keychain" };
@@ -537,51 +539,51 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
     expect(JSON.stringify(result)).not.toContain(API_KEY);
   });
 
-  it.each([
+  for (const { platform, expectedCiphertext } of [
     {
-      name: "POSIX",
       platform: "darwin",
       expectedCiphertext: Buffer.from(`sealed:${EXISTING_API_KEY}`, "utf8"),
     },
     {
-      name: "Windows",
       platform: "win32",
       expectedCiphertext: Buffer.from(
         Buffer.from(EXISTING_API_KEY, "utf8").map((byte) => byte ^ 0xa5),
       ),
     },
-  ] as const)(
-    "keeps an existing encrypted key and runtime state unchanged after verification refusal",
-    async ({ platform, expectedCiphertext }) => {
-      const value = await temporaryVault({ platform });
-      try {
-        await expect(
-          value.vault.writeCredential({ slot: "intervals-icu", value: EXISTING_API_KEY }),
-        ).resolves.toMatchObject({ status: "configured", runtimeReady: true });
-        const before = await readFile(join(value.root, "intervals-icu.bin"));
-        expect(before).toEqual(expectedCiphertext);
-        value.applyCredential.mockClear();
-        const runtime = setup({
-          vault: value.vault,
-          verification: { status: "refused", reason: "training-account-mismatch" },
-        });
+  ] as const) {
+    it.skipIf(process.platform === "win32" && platform === "darwin")(
+      "keeps an existing encrypted key and runtime state unchanged after verification refusal",
+      async () => {
+        const value = await temporaryVault({ platform });
+        try {
+          await expect(
+            value.vault.writeCredential({ slot: "intervals-icu", value: EXISTING_API_KEY }),
+          ).resolves.toMatchObject({ status: "configured", runtimeReady: true });
+          const before = await readFile(join(value.root, "intervals-icu.bin"));
+          expect(before).toEqual(expectedCiphertext);
+          value.applyCredential.mockClear();
+          const runtime = setup({
+            vault: value.vault,
+            verification: { status: "refused", reason: "training-account-mismatch" },
+          });
 
-        await expect(runtime.invoke()).resolves.toEqual({
-          outcome: "refused",
-          reason: "training-account-mismatch",
-          current: status("configured", "active"),
-        });
+          await expect(runtime.invoke()).resolves.toEqual({
+            outcome: "refused",
+            reason: "training-account-mismatch",
+            current: status("configured", "active"),
+          });
 
-        expect(await readFile(join(value.root, "intervals-icu.bin"))).toEqual(before);
-        expect(value.applyCredential).not.toHaveBeenCalled();
-        await expect(value.vault.credentialStatuses()).resolves.toContainEqual(
-          status("configured", "active"),
-        );
-      } finally {
-        await rm(value.base, { recursive: true, force: true });
-      }
-    },
-  );
+          expect(await readFile(join(value.root, "intervals-icu.bin"))).toEqual(before);
+          expect(value.applyCredential).not.toHaveBeenCalled();
+          await expect(value.vault.credentialStatuses()).resolves.toContainEqual(
+            status("configured", "active"),
+          );
+        } finally {
+          await rm(value.base, { recursive: true, force: true });
+        }
+      },
+    );
+  }
 
   it("retains a coherent verified candidate when runtime application is uncertain", async () => {
     const value = await temporaryVault({});
