@@ -10,6 +10,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  crashReporter,
   dialog,
   ipcMain,
   powerMonitor,
@@ -21,6 +22,7 @@ import {
 import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
 import { createClaudeCliStatus, readClaudeCliSettings } from "./claude-cli-status.js";
 import { installDesktopConnectionIpc } from "./connection-ipc.js";
+import { installDesktopCrashTelemetry, startDesktopCrashReporter } from "./crash-telemetry.js";
 import { bindDesktopAppUserModelId, createDesktopActivationRelay } from "./desktop-lifecycle.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
@@ -117,6 +119,8 @@ import {
 
 bindDesktopAppUserModelId(app);
 bindWindowsUserData(app);
+startDesktopCrashReporter({ crashReporter });
+installDesktopCrashTelemetry({ app });
 registerDesktopScheme();
 
 function disableChromiumMediaSessionIntegration(): void {

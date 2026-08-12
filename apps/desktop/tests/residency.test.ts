@@ -75,11 +75,13 @@ const mocks = vi.hoisted(() => {
     BrowserWindow: vi.fn(),
     supervisor: vi.fn(),
     registerDesktopScheme: vi.fn(),
+    crashReporter: { start: vi.fn() },
   };
 });
 
 vi.mock("electron", () => ({
   app: mocks.app,
+  crashReporter: mocks.crashReporter,
   BrowserWindow: mocks.BrowserWindow,
   Menu: { buildFromTemplate: mocks.buildFromTemplate },
   Tray: mocks.FakeTray,
@@ -688,6 +690,9 @@ describe("desktop residency", () => {
     expect(source).toContain("if (!primaryInstance) {\n  app.exit(0);");
     mocks.app.requestSingleInstanceLock.mockReturnValueOnce(false);
     await import("../src/main/index.js");
+    expect(mocks.crashReporter.start).toHaveBeenCalledWith({ uploadToServer: false });
+    expect(mocks.app.listenerCount("render-process-gone")).toBe(1);
+    expect(mocks.app.listenerCount("child-process-gone")).toBe(1);
     expect(mocks.app.exit).toHaveBeenCalledWith(0);
     expect(mocks.app.whenReady).not.toHaveBeenCalled();
     expect(mocks.app.commandLine.appendSwitch).not.toHaveBeenCalled();
