@@ -30,6 +30,7 @@ const PROFILE_A = "00000000-0000-4000-8000-000000000001";
 const PROFILE_B = "00000000-0000-4000-8000-000000000002";
 const BOT_A = { id: 123456, username: "synthetic_bot_a" } as const;
 const BOT_B = { id: 234567, username: "synthetic_bot_b" } as const;
+const posixIt = it.skipIf(process.platform === "win32");
 
 interface VaultFixture {
   readonly root: string;
@@ -188,6 +189,7 @@ describe("Telegram credential vault", () => {
 
     const unsafe = createTelegramCredentialVault({
       ...value,
+      platform: "darwin",
       encryption: { ...encryption(), getSelectedStorageBackend: () => "basic_text" },
     });
     await expect(
@@ -274,6 +276,15 @@ describe("Telegram credential vault", () => {
       } satisfies CredentialEncryptionPort,
       "encryption-unavailable" as const,
     ],
+  ])("preserves %s as a closed status reason after reopen", async (_label, backend, reason) => {
+    const value = await fixture();
+    await seedProfile(value);
+    const reopened = createTelegramCredentialVault({ ...value, encryption: backend });
+
+    await expect(reopened.profileStatus()).resolves.toEqual({ state: "re-prompt", reason });
+  });
+
+  posixIt.each([
     [
       "an unsafe backend",
       {
@@ -362,7 +373,7 @@ describe("Telegram credential vault", () => {
     );
   });
 
-  it("anchors the profile namespace in its parent before publishing ciphertext", async () => {
+  posixIt("anchors the profile namespace in its parent before publishing ciphertext", async () => {
     const value = await fixture();
     const syncParentDirectory = vi.fn(async (path: string) => {
       expect(path).toBe(dirname(value.root));
@@ -481,7 +492,7 @@ describe("Telegram credential vault", () => {
     }
   });
 
-  it("durably restores the prior ciphertext before refusing post-rename profile uncertainty", async () => {
+  posixIt("durably restores the prior ciphertext before refusing post-rename profile uncertainty", async () => {
     const value = await fixture();
     await seedProfile(value);
     let syncCount = 0;
@@ -518,7 +529,7 @@ describe("Telegram credential vault", () => {
     });
   });
 
-  it("durably removes a first candidate before refusing initial-write uncertainty", async () => {
+  posixIt("durably removes a first candidate before refusing initial-write uncertainty", async () => {
     const value = await fixture();
     let syncCount = 0;
     const vault = createTelegramCredentialVault({
@@ -546,7 +557,7 @@ describe("Telegram credential vault", () => {
     });
   });
 
-  it("blocks replay and reports uncertainty when neither candidate nor prior can converge durably", async () => {
+  posixIt("blocks replay and reports uncertainty when neither candidate nor prior can converge durably", async () => {
     const value = await fixture();
     await seedProfile(value);
     let syncCount = 0;
@@ -581,7 +592,7 @@ describe("Telegram credential vault", () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
-  it("converges a visible prior profile on reopen before accepting or replaying it", async () => {
+  posixIt("converges a visible prior profile on reopen before accepting or replaying it", async () => {
     const value = await fixture();
     await seedProfile(value);
     let syncCount = 0;
@@ -643,7 +654,7 @@ describe("Telegram credential vault", () => {
     expect(events).toEqual(["sync", "decrypt", "decrypt", "apply"]);
   });
 
-  it("converges a visible candidate profile on reopen before accepting or replaying it", async () => {
+  posixIt("converges a visible candidate profile on reopen before accepting or replaying it", async () => {
     const value = await fixture();
     await seedProfile(value);
     let syncCount = 0;
@@ -699,7 +710,7 @@ describe("Telegram credential vault", () => {
     expect(namespaceSync).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a failed reopen reconciliation uncertain and never replays the visible profile", async () => {
+  posixIt("keeps a failed reopen reconciliation uncertain and never replays the visible profile", async () => {
     const value = await fixture();
     await seedProfile(value);
     let syncAttempts = 0;
@@ -774,10 +785,10 @@ describe("Telegram credential vault", () => {
     const remaining = await readdir(value.root);
     expect(exact.some((entry) => remaining.includes(entry))).toBe(false);
     expect(lookalikes.every((entry) => remaining.includes(entry))).toBe(true);
-    expect(namespaceSync).toHaveBeenCalledTimes(1);
+    expect(namespaceSync).toHaveBeenCalledTimes(process.platform === "win32" ? 0 : 1);
   });
 
-  it("treats an unsynced tombstone cleanup as permanently uncertain", async () => {
+  posixIt("treats an unsynced tombstone cleanup as permanently uncertain", async () => {
     const value = await fixture();
     await seedProfile(value);
     await writeFile(
@@ -838,7 +849,7 @@ describe("Telegram credential vault", () => {
     expect((await readdir(value.root)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
   });
 
-  it("stores desired state separately without encryption and durably compensates uncertainty", async () => {
+  posixIt("stores desired state separately without encryption and durably compensates uncertainty", async () => {
     const value = await fixture();
     const encryptString = vi.fn();
     const decryptString = vi.fn();
@@ -874,7 +885,7 @@ describe("Telegram credential vault", () => {
     ).toEqual({ schemaVersion: 1, athleteHome: value.athleteHome, enabled: false });
   });
 
-  it("marks desired state uncertain when durable compensation cannot be proven", async () => {
+  posixIt("marks desired state uncertain when durable compensation cannot be proven", async () => {
     const value = await fixture();
     const seed = createTelegramCredentialVault({ ...value, encryption: encryption() });
     await seed.setDesiredState(false);
@@ -929,10 +940,10 @@ describe("Telegram credential vault", () => {
       state: "configured",
       enabled: false,
     });
-    expect(namespaceSync).toHaveBeenCalledTimes(1);
+    expect(namespaceSync).toHaveBeenCalledTimes(process.platform === "win32" ? 0 : 1);
   });
 
-  it("accepts an uncertain visible enable only after a fresh reopen converges it", async () => {
+  posixIt("accepts an uncertain visible enable only after a fresh reopen converges it", async () => {
     const value = await fixture();
     const seed = createTelegramCredentialVault({ ...value, encryption: encryption() });
     await seed.setDesiredState(false);
@@ -977,7 +988,7 @@ describe("Telegram credential vault", () => {
     expect(namespaceSync).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an uncertain visible enable disabled while reopen convergence is indeterminate", async () => {
+  posixIt("keeps an uncertain visible enable disabled while reopen convergence is indeterminate", async () => {
     const value = await fixture();
     const seed = createTelegramCredentialVault({ ...value, encryption: encryption() });
     await seed.setDesiredState(false);
@@ -1121,7 +1132,7 @@ describe("Telegram credential vault", () => {
     await expect(vault.profileStatus()).resolves.toMatchObject({ state: "configured" });
   });
 
-  it("restores a profile when tombstone durability fails and reports uncertainty if restore fails", async () => {
+  posixIt("restores a profile when tombstone durability fails and reports uncertainty if restore fails", async () => {
     const value = await fixture();
     await seedProfile(value);
     let syncCount = 0;

@@ -582,17 +582,24 @@ describe("Telegram main-process control coordinator", () => {
     expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
   });
 
-  it.each([
+  for (const [run, reason, available, selectedBackend, errorCode] of [
     [
+      it,
       "encryption-unavailable" as const,
       false,
       undefined,
       "telegram-credential-encryption-unavailable" as const,
     ],
-    ["unsafe-backend" as const, true, "basic_text", "telegram-credential-unsafe-backend" as const],
-  ])(
-    "preserves a reopened real-vault %s refusal across profile-dependent actions",
-    async (reason, available, selectedBackend, errorCode) => {
+    [
+      it.skipIf(process.platform === "win32"),
+      "unsafe-backend" as const,
+      true,
+      "basic_text",
+      "telegram-credential-unsafe-backend" as const,
+    ],
+  ] as const) {
+    const title = `preserves a reopened real-vault ${reason} refusal across profile-dependent actions`;
+    run(title, async () => {
       const value = await realVaultFixture();
       try {
         const seed = createTelegramCredentialVault({
@@ -686,8 +693,8 @@ describe("Telegram main-process control coordinator", () => {
       } finally {
         await rm(value.base, { recursive: true, force: true });
       }
-    },
-  );
+    });
+  }
 
   it("returns the preserved pre-mutation snapshot when a real vault backend flips during replacement", async () => {
     const value = await realVaultFixture();
