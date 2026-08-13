@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { PlatformAbsolutePathSchema } from "@enduragent/coach-contract";
 import { desktopPlatformProjection } from "../main/platform-copy.js";
 import {
   DESKTOP_CONNECTION_CHANNEL,
@@ -1013,16 +1014,10 @@ function parsePaths(value: unknown): readonly string[] {
     throw new TypeError();
   }
   const paths = value.map((path) => {
-    if (
-      typeof path !== "string" ||
-      path.length === 0 ||
-      path.length > 4_096 ||
-      !path.startsWith("/") ||
-      path.includes("\0")
-    ) {
+    if (!PlatformAbsolutePathSchema.safeParse(path).success) {
       throw new TypeError();
     }
-    const slash = path.lastIndexOf("/");
+    const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
     const dot = path.lastIndexOf(".");
     if (dot <= slash || !IMPORT_EXTENSIONS.has(path.slice(dot).toLowerCase())) {
       throw new TypeError();

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { open, rename, rm } from "node:fs/promises";
-import { basename, dirname, isAbsolute, normalize } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { makeAbortableClient } from "@enduragent/core";
 import {
   ExportTrainingFileRpcResultSchema,
@@ -175,12 +175,14 @@ async function syncDirectory(path: string): Promise<void> {
 }
 
 export function createDurableTrainingExportWriter(input?: {
+  readonly platform?: NodeJS.Platform;
   readonly createTemporaryId?: () => string;
   readonly openFile?: typeof open;
   readonly renameFile?: typeof rename;
   readonly removeFile?: typeof rm;
   readonly syncDirectory?: (path: string) => Promise<void>;
 }): TrainingExportWriter {
+  const platform = input?.platform ?? process.platform;
   const createTemporaryId = input?.createTemporaryId ?? (() => randomBytes(12).toString("hex"));
   const openFile = input?.openFile ?? open;
   const renameFile = input?.renameFile ?? rename;
@@ -207,7 +209,7 @@ export function createDurableTrainingExportWriter(input?: {
       const root = dirname(destination);
       const id = createTemporaryId();
       if (!/^[A-Za-z0-9-]{1,128}$/.test(id)) return "failed";
-      const temporary = `${root}/.enduragent-export-${id}.tmp`;
+      const temporary = join(root, `.enduragent-export-${id}.tmp`);
       let handle: Awaited<ReturnType<typeof open>> | undefined;
       let renamed = false;
       try {
@@ -227,7 +229,7 @@ export function createDurableTrainingExportWriter(input?: {
         request.signal?.throwIfAborted();
         await renameFile(temporary, destination);
         renamed = true;
-        await sync(root);
+        if (platform !== "win32") await sync(root);
         return "committed";
       } catch {
         return renamed ? "uncertain" : "failed";

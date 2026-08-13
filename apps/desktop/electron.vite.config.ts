@@ -30,7 +30,7 @@ export function createDesktopViteConfig(
       },
     },
     preload: {
-      plugins: [externalizeDepsPlugin()],
+      plugins: [externalizeDepsPlugin({ exclude: ["@enduragent/coach-contract"] })],
       build: {
         outDir: resolve(outputRoot, "preload"),
         rollupOptions: {

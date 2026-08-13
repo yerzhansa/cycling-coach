@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rename, rm, stat } from "node:fs/promises";
+import { mkdtemp, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -555,17 +555,22 @@ describe("durable training export writer", () => {
     const root = await mkdtemp(join(tmpdir(), "enduragent-export-"));
     roots.push(root);
     const destinationPath = join(root, "ride.fit");
-    const writer = createDurableTrainingExportWriter({ createTemporaryId: () => "fixed" });
+    const openFile = vi.fn(open);
+    const writer = createDurableTrainingExportWriter({
+      createTemporaryId: () => "fixed",
+      openFile,
+    });
 
     await expect(
       writer.write({ destinationPath, bytes: Uint8Array.from([1, 2, 3]) }),
     ).resolves.toBe("committed");
+    expect(openFile).toHaveBeenCalledWith(join(root, ".enduragent-export-fixed.tmp"), "wx", 0o600);
     expect(await readFile(destinationPath)).toEqual(Buffer.from([1, 2, 3]));
     expect((await stat(destinationPath)).mode & 0o777).toBe(0o600);
     expect(await readdir(root)).toEqual(["ride.fit"]);
   });
 
-  it("distinguishes pre-commit failure from post-rename commit uncertainty", async () => {
+  it("reports a pre-commit failure when temporary creation fails", async () => {
     const root = await mkdtemp(join(tmpdir(), "enduragent-export-state-"));
     roots.push(root);
     const destinationPath = join(root, "workouts.zip");
@@ -578,19 +583,34 @@ describe("durable training export writer", () => {
     await expect(failed.write({ destinationPath, bytes: Uint8Array.from([1]) })).resolves.toBe(
       "failed",
     );
-
-    const uncertain = createDurableTrainingExportWriter({
-      createTemporaryId: () => "uncertain",
-      renameFile: rename,
-      syncDirectory: vi.fn(async () => {
-        throw new Error("directory sync failed");
-      }),
-    });
-    await expect(uncertain.write({ destinationPath, bytes: Uint8Array.from([2]) })).resolves.toBe(
-      "uncertain",
-    );
-    expect(await readFile(destinationPath)).toEqual(Buffer.from([2]));
   });
+
+  it.each([
+    { name: "POSIX", platform: "linux", expected: "uncertain", syncCount: 1 },
+    { name: "Windows", platform: "win32", expected: "committed", syncCount: 0 },
+  ] as const)(
+    "reports the $name outcome when rename commits but directory sync fails",
+    async ({ platform, expected, syncCount }) => {
+      const root = await mkdtemp(join(tmpdir(), "enduragent-export-state-"));
+      roots.push(root);
+      const destinationPath = join(root, `workouts-${platform}.zip`);
+      const syncDirectory = vi.fn(async () => {
+        throw new Error("directory sync failed");
+      });
+
+      const writer = createDurableTrainingExportWriter({
+        platform,
+        createTemporaryId: () => `committed-${platform}`,
+        renameFile: rename,
+        syncDirectory,
+      });
+      await expect(writer.write({ destinationPath, bytes: Uint8Array.from([2]) })).resolves.toBe(
+        expected,
+      );
+      expect(syncDirectory).toHaveBeenCalledTimes(syncCount);
+      expect(await readFile(destinationPath)).toEqual(Buffer.from([2]));
+    },
+  );
 
   it("does not rename when cancellation is observed before the commit point", async () => {
     const controller = new AbortController();
