@@ -70,6 +70,14 @@ import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onbo
 import { installDesktopReleaseNotesIpc } from "./release-notes-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import {
+  createSessionTimezoneNoticeStore,
+  installDesktopSessionTimezoneIpc,
+} from "./session-timezone-ipc.js";
+import {
+  recordSessionTimezoneSource,
+  reconcileSessionTimezoneAtStart,
+} from "./session-timezone.js";
+import {
   BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME,
   createBackgroundAtLoginPreferenceStore,
   shouldStartInBackgroundAtLogin,
@@ -190,6 +198,7 @@ async function runDesktop(): Promise<void> {
   desktopStartedInBackground =
     !securitySmokeMode && (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
   const controller = new AbortController();
+  const sessionTimezoneNotices = createSessionTimezoneNoticeStore();
   const environment = { ...process.env };
   const rendererSource = resolveDesktopRendererSource(
     app.isPackaged,
@@ -198,7 +207,17 @@ async function runDesktop(): Promise<void> {
   try {
     const preparedHome = await prepareDesktopAthleteHome(environment);
     environment.ENDURAGENT_HOME = preparedHome.root;
-    await seedFirstRunConfig({ env: environment });
+    const seeded = await seedFirstRunConfig({ env: environment });
+    if (seeded === "seeded") {
+      await recordSessionTimezoneSource({ stateRoot: desktopPreferencesRoot, source: "auto" });
+    }
+    sessionTimezoneNotices.set(
+      await reconcileSessionTimezoneAtStart({
+        configPath: join(preparedHome.root, "config", "config.yaml"),
+        stateRoot: desktopPreferencesRoot,
+        env: environment,
+      }),
+    );
   } catch {
     process.stderr.write("desktop-first-run-config-failure seed\n");
   }
@@ -220,6 +239,7 @@ async function runDesktop(): Promise<void> {
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeAppearanceIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
+  let disposeSessionTimezoneIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
   let disposeIntervalsIpc: (() => Promise<void>) | undefined;
   let disposeTelegramIpc: (() => Promise<void>) | undefined;
@@ -269,6 +289,8 @@ async function runDesktop(): Promise<void> {
       disposeAppearanceIpc = undefined;
       disposeReleaseNotesIpc?.();
       disposeReleaseNotesIpc = undefined;
+      disposeSessionTimezoneIpc?.();
+      disposeSessionTimezoneIpc = undefined;
       disposeUpdateIpc?.();
       disposeUpdateIpc = undefined;
       await telegramPower?.close();
@@ -902,6 +924,13 @@ async function runDesktop(): Promise<void> {
     disposeReleaseNotesIpc = installDesktopReleaseNotesIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
+    });
+    disposeSessionTimezoneIpc = installDesktopSessionTimezoneIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      notices: sessionTimezoneNotices,
+      record: (source) =>
+        recordSessionTimezoneSource({ stateRoot: desktopPreferencesRoot, source }),
     });
     disposeUpdateIpc = installDesktopUpdateIpc({
       ipcMain,

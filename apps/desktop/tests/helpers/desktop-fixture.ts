@@ -18,6 +18,8 @@ import { createHealthzRequestHandler } from "../../../../packages/coach/src/daem
 import { createCoachRpcServer } from "../../../../packages/coach/src/daemon/rpc-server.js";
 import type { DesktopTelegramController } from "../../../../packages/coach/src/desktop-telegram-controller.js";
 import { connectCdp, reservePort, waitForPage } from "../../scripts/support/desktop-cdp.js";
+import { BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME } from "../../src/main/login-item.js";
+import { SESSION_TIMEZONE_SOURCE_FILE_NAME } from "../../src/main/session-timezone-contract.js";
 
 export interface DesktopFixtureScript {
   readonly onRequest: (request: unknown) => readonly string[] | Promise<readonly string[]>;
@@ -164,11 +166,18 @@ export async function launchDesktopFixture(input: {
   const athleteHome = join(scratch, "h");
   const configDir = join(athleteHome, "config");
   const userData = join(scratch, "u");
+  const desktopPreferences = join(userData, BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME);
   await Promise.all([
     mkdir(configDir, { recursive: true, mode: 0o700 }),
     mkdir(userData, { recursive: true, mode: 0o700 }),
+    mkdir(desktopPreferences, { recursive: true, mode: 0o700 }),
   ]);
   await Promise.all([
+    writeFile(
+      join(desktopPreferences, SESSION_TIMEZONE_SOURCE_FILE_NAME),
+      `${JSON.stringify({ schemaVersion: 1, source: "user" })}\n`,
+      { mode: 0o600 },
+    ),
     writeFile(join(configDir, "daemon.token"), `${input.token}\n`, { mode: 0o600 }),
     writeFile(
       join(configDir, "config.yaml"),
