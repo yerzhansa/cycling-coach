@@ -11,6 +11,7 @@ import {
   RETRY_INTAKE_SAVE_LABEL,
   SETUP_MENU_LABEL,
 } from "../src/ui/onboarding/copy.js";
+import { BUTTON_DANGER_QUIET_SM } from "../src/ui/shared/buttons.js";
 import {
   chooseLane,
   claudeCliNoteText,
@@ -293,7 +294,7 @@ describe("setup card", () => {
     expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
     const remove = screen.getByRole("button", { name: "Delete the Intervals.icu connection" });
     expect(remove).toHaveTextContent("Delete");
-    expect(remove.className).toContain("border-transparent");
+    expect(remove.className).toBe(BUTTON_DANGER_QUIET_SM);
     expect(setupRow("training").querySelectorAll("button")).toHaveLength(2);
     wizard.controller.dispose();
   });

@@ -15,7 +15,7 @@ import { PLATFORM_COPY } from "../../platform-copy.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import {
-  BUTTON_DANGER_OUTLINE_SM,
+  BUTTON_DANGER_QUIET_SM,
   BUTTON_OUTLINE_SM,
   BUTTON_QUIET_SM,
   BUTTON_SOLID_SM,
@@ -377,7 +377,7 @@ export function TelegramSection(): ReactElement {
               <button
                 type="button"
                 ref={deleteTrigger}
-                className={BUTTON_DANGER_OUTLINE_SM}
+                className={BUTTON_DANGER_QUIET_SM}
                 disabled={busy || confirmRemove}
                 onClick={() => {
                   setConfirmRemove(true);
