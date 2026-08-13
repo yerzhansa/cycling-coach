@@ -10,11 +10,19 @@ import {
 } from "../src/onboarding/completion.js";
 import {
   createOnboardingController,
-  ONBOARDING_STATUS_REFRESH_TIMEOUT_MS,
+  onboardingStatusRetryDelayMs,
+  ONBOARDING_STATUS_COLD_START_TIMEOUT_MS,
+  ONBOARDING_STATUS_LOAD_ATTEMPTS,
   type OnboardingSurfaceState,
 } from "../src/onboarding/controller.js";
 import type { CredentialDraftPort } from "../src/onboarding/credentials.js";
 import type { OnboardingCompletion } from "../src/onboarding/machine.js";
+
+const COLD_START_WINDOW_MS =
+  ONBOARDING_STATUS_COLD_START_TIMEOUT_MS * ONBOARDING_STATUS_LOAD_ATTEMPTS +
+  Array.from({ length: ONBOARDING_STATUS_LOAD_ATTEMPTS }, (_unused, attempt) =>
+    onboardingStatusRetryDelayMs(attempt),
+  ).reduce((total, delay) => total + delay, 0);
 
 const completion = {
   providerConfigured: true,
@@ -615,8 +623,12 @@ describe("onboarding runtime completion gate", () => {
         status: "configured",
         runtimeReady: true,
       }));
-      baseBridge.credentialStatuses.mockImplementationOnce(
-        async () => await new Promise<never>(() => undefined),
+      let credentialStatusesHang = true;
+      const readyStatuses = baseBridge.credentialStatuses.getMockImplementation();
+      baseBridge.credentialStatuses.mockImplementation(async () =>
+        credentialStatusesHang
+          ? await new Promise<never>(() => undefined)
+          : ((await readyStatuses?.()) ?? []),
       );
       const bridge = {
         ...baseBridge,
@@ -636,10 +648,11 @@ describe("onboarding runtime completion gate", () => {
       const harness = onboardingHarness(bridge);
 
       const opening = harness.controller.open();
-      await vi.advanceTimersByTimeAsync(ONBOARDING_STATUS_REFRESH_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(COLD_START_WINDOW_MS);
       await opening;
 
       expect(harness.surface().loadUnavailable).toBe(true);
+      expect(bridge.credentialStatuses).toHaveBeenCalledTimes(ONBOARDING_STATUS_LOAD_ATTEMPTS);
       const stateBeforeMutations = harness.controller.state();
       harness.controller.selectProvider("anthropic");
       harness.controller.selectModel("claude-sonnet-4-6");
@@ -670,6 +683,7 @@ describe("onboarding runtime completion gate", () => {
       expect(bridge.saveIntake).not.toHaveBeenCalled();
       expect(harness.controller.ownsDroppedImportFiles()).toBe(false);
 
+      credentialStatusesHang = false;
       await harness.controller.refresh();
 
       expect(harness.surface().loadUnavailable).toBe(false);

@@ -1,5 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
-import type { OnboardingActions, OnboardingSurfaceState } from "../../onboarding/controller.js";
+import {
+  setupStatusKnown,
+  type OnboardingActions,
+  type OnboardingSurfaceState,
+} from "../../onboarding/controller.js";
 import { credentialPresentation } from "../../onboarding/credential-presentation.js";
 import { errorSection } from "../../onboarding/lanes.js";
 import {
@@ -15,6 +19,7 @@ import {
   IMPORT_FILES_LABEL,
   INTERVALS_PANEL_HINT,
   RETRY_SAVED_KEYS_LABEL,
+  SETUP_ROW_CHECKING_SUBTITLE,
   TRAINING_CANCEL_LABEL,
   TRAINING_CONNECT_TITLE,
   TRAINING_ROW_SUBTITLES,
@@ -116,7 +121,12 @@ export function TrainingRow(props: {
     }
   }, [credentialFocus, props.placement, repairCredential]);
 
-  const subtitle = connected ? TRAINING_ROW_SUBTITLES.connected : TRAINING_ROW_SUBTITLES.missing;
+  const statusKnown = setupStatusKnown(surface);
+  const subtitle = !statusKnown
+    ? SETUP_ROW_CHECKING_SUBTITLE
+    : connected
+      ? TRAINING_ROW_SUBTITLES.connected
+      : TRAINING_ROW_SUBTITLES.missing;
 
   const connect = (): void => {
     if (actions === null || controlsDisabled || importing) return;
@@ -128,7 +138,7 @@ export function TrainingRow(props: {
     <>
       <SetupRow
         id="training"
-        status={connected ? "ready" : "pending"}
+        status={!statusKnown ? "none" : connected ? "ready" : "pending"}
         title={TRAINING_ROW_TITLE}
         subtitle={subtitle}
         info={
@@ -139,7 +149,7 @@ export function TrainingRow(props: {
           />
         }
         trailing={
-          connected ? (
+          !statusKnown ? null : connected ? (
             <CredentialDeleteButton credential="intervals-icu" buttonRef={deleteRef} />
           ) : (
             <button

@@ -67,6 +67,15 @@ export const SETUP_SETTINGS_HEADING = "Setup";
 export const SETUP_CHAT_SUBTITLE =
   "Connect what your coach needs. Telegram is optional and never blocks Chat.";
 
+export const SETUP_CHECKING_HEADING = "Checking your setup";
+
+export const SETUP_CHECKING_SUBTITLE =
+  "Reading the connections already saved on this computer. This can take a moment right after launch.";
+
+export const SETUP_STATUS_CHECKING_COPY = "Checking setup…";
+
+export const SETUP_ROW_CHECKING_SUBTITLE = "Checking what is already connected…";
+
 export const SETUP_STATUS_UNAVAILABLE_COPY =
   "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.";
 

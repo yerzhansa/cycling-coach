@@ -146,7 +146,7 @@ describe("shell", () => {
   it("keeps the selected destination active while setup is required", async () => {
     useEnduragentStore.setState({
       activeView: "training",
-      onboarding: { ...CLOSED_ONBOARDING, open: true },
+      onboarding: { ...CLOSED_ONBOARDING, open: true, initialized: true, loading: false },
     });
     render(<Shell onReady={() => {}} />);
 
