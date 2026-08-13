@@ -48,12 +48,9 @@ describe("authoritative setup readiness", () => {
 
     await wizard.open();
 
-    expect(wizard.controller.state().intake).toEqual({
-      injuryStatus: "managing",
-      clinicianCleared: false,
-    });
+    expect(wizard.controller.state().intake).toEqual({ injuryStatus: "managing" });
     expect(control<HTMLSelectElement>("onboarding-injury-status")).toHaveValue("managing");
-    expect(control<HTMLSelectElement>("onboarding-clinician-cleared")).toHaveValue("no");
+    expect(document.querySelector("#onboarding-clinician-cleared")).toBeNull();
     expect(useEnduragentStore.getState().onboarding.readiness).toEqual({
       provider: true,
       trainingData: true,
@@ -244,7 +241,7 @@ describe("authoritative setup readiness", () => {
     expect(document.querySelector('[data-setup-trigger="ai"]')).toBeEnabled();
     expect(document.querySelector('[data-setup-trigger="training"]')).toBeEnabled();
     expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeEnabled();
-    expect(control<HTMLSelectElement>("onboarding-clinician-cleared")).toBeEnabled();
+    expect(document.querySelector("#onboarding-clinician-cleared")).toBeNull();
     expect(document.querySelector("[data-setup-readiness]")).toHaveTextContent(
       "3 of 3 required ready",
     );
@@ -335,17 +332,11 @@ describe("authoritative setup readiness", () => {
     ).toBeDisabled();
 
     fireEvent.change(injury, { target: { value: "none" } });
-    expect(wizard.controller.state().intake).toEqual({
-      injuryStatus: "managing",
-      clinicianCleared: false,
-    });
+    expect(wizard.controller.state().intake).toEqual({ injuryStatus: "managing" });
 
     resolveRefresh({ schemaVersion: 1, intake: savedIntake, durableTrainingData: true });
     await act(async () => refreshing);
-    expect(wizard.controller.state().intake).toEqual({
-      injuryStatus: "managing",
-      clinicianCleared: false,
-    });
+    expect(wizard.controller.state().intake).toEqual({ injuryStatus: "managing" });
     wizard.controller.dispose();
   });
 
@@ -493,4 +484,30 @@ describe("authoritative setup readiness", () => {
       wizard.controller.dispose();
     },
   );
+
+  it("counts an answered injury status before it is persisted, so the badge agrees with the primary action", async () => {
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "configured", runtimeReady: true });
+    bridge.getSetupStatus = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      intake: null,
+      durableTrainingData: true,
+    }));
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+
+    expect(readinessBadge()).toHaveTextContent("2 of 3 required ready");
+    expect(screen.getByRole("button", { name: "Start coaching" })).toBeDisabled();
+
+    fireEvent.change(control<HTMLSelectElement>("onboarding-injury-status"), {
+      target: { value: "none" },
+    });
+
+    expect(useEnduragentStore.getState().onboarding.readiness.intake).toBe(false);
+    expect(readinessBadge()).toHaveTextContent("3 of 3 required ready");
+    expect(readinessBadge()).toHaveAttribute("data-state", "ready");
+    expect(readinessDot()).toHaveAttribute("data-setup-readiness-dot", "ready");
+    expect(screen.getByRole("button", { name: "Start coaching" })).toBeEnabled();
+    wizard.controller.dispose();
+  });
 });

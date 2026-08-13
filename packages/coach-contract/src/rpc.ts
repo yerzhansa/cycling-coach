@@ -505,14 +505,12 @@ export const SaveIntakeRpcParamsSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    const needsClearance = value.prior_bsi || value.injury_status !== "none";
-    if (needsClearance === (value.clinician_cleared === null)) {
+    const couldBeAsked = value.prior_bsi || value.injury_status !== "none";
+    if (!couldBeAsked && value.clinician_cleared !== null) {
       context.addIssue({
         code: "custom",
         path: ["clinician_cleared"],
-        message: needsClearance
-          ? "clinician clearance is required"
-          : "clinician clearance must be null",
+        message: "clinician clearance must be null",
       });
     }
   });

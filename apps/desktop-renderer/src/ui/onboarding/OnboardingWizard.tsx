@@ -14,7 +14,8 @@ import {
   OUTSTANDING_NOTE,
   PRIMARY_LABEL,
   RETRY_SETUP_STATUS_LABEL,
-  SETUP_CHAT_SUBTITLE,
+  SETUP_DISCLAIMER,
+  SETUP_GATE_SUBTITLE,
   SETUP_HEADING,
   SETUP_SETTINGS_HEADING,
   SETUP_STATUS_UNAVAILABLE_COPY,
@@ -28,12 +29,10 @@ import {
 } from "../../state/settings-slice.js";
 import { BUTTON_PRIMARY, SetupCard } from "./SetupCard.js";
 import { SetupError } from "./SetupRow.js";
-import { TelegramRow } from "./TelegramRow.js";
 import { TrainingRow } from "./TrainingRow.js";
-import styles from "./OnboardingWizard.module.css";
 import settingsStyles from "../settings/SettingsView.module.css";
 
-export type SetupPlacement = "chat" | "settings";
+export type SetupPlacement = "gate" | "settings";
 
 export function SetupPanel(props: { readonly placement: SetupPlacement }): ReactElement {
   const surface = useEnduragentStore((state) => state.onboarding);
@@ -57,7 +56,8 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
 
   const wizard = surface.wizard;
   const readiness = surface.readiness;
-  const requiredReadyCount = [readiness.provider, readiness.trainingData, readiness.intake].filter(
+  const intakeAnswered = readiness.intake || intakeComplete(wizard.intake);
+  const requiredReadyCount = [readiness.provider, readiness.trainingData, intakeAnswered].filter(
     Boolean,
   ).length;
   const requiredSetupReady = requiredReadyCount === 3;
@@ -89,30 +89,28 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
       ? "coach"
       : !readiness.trainingData
         ? "training"
-        : !readiness.intake && !intakeComplete(wizard.intake)
-          ? wizard.intake.injuryStatus === null
-            ? "intake"
-            : "clearance"
+        : !intakeAnswered
+          ? "intake"
           : null;
 
   return (
     <section
       ref={panel}
-      className={`setup-panel mx-auto w-full ${props.placement === "chat" ? styles.chatPanel : "max-w-[760px]"}`}
+      className={`setup-panel mx-auto w-full ${props.placement === "gate" ? "max-w-[680px]" : "max-w-[760px]"}`}
       data-setup-host={props.placement}
       aria-busy={surface.loading ? "true" : undefined}
     >
-      {props.placement === "chat" ? (
-        <header className={`${styles.chatHeader} flex flex-wrap justify-between`}>
+      {props.placement === "gate" ? (
+        <header className="mb-[22px] flex flex-wrap items-end justify-between gap-5">
           <div>
-            <h2
+            <h1
               id="setup-panel-title"
               tabIndex={-1}
-              className={`${styles.chatTitle} focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink`}
+              className="text-[27px] leading-[1.16] font-[590] tracking-[-0.035em]"
             >
               {SETUP_HEADING}
-            </h2>
-            <p className={`${styles.chatSubtitle} text-ink-2`}>{SETUP_CHAT_SUBTITLE}</p>
+            </h1>
+            <p className="mt-2 max-w-[520px] text-[13.5px] text-ink-2">{SETUP_GATE_SUBTITLE}</p>
           </div>
           <span
             className={`inline-flex h-ctl-sm flex-none items-center gap-2 rounded-full border px-row text-xs ${requiredSetupReady ? "border-ok/35 bg-ok/10 text-ok" : "border-line-2 bg-surface text-ink-2"}`}
@@ -131,11 +129,7 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
           </span>
         </header>
       ) : (
-        <h2
-          id="setup-panel-title"
-          tabIndex={-1}
-          className={`${settingsStyles.heading} focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink`}
-        >
+        <h2 id="setup-panel-title" tabIndex={-1} className={settingsStyles.heading}>
           {SETUP_SETTINGS_HEADING}
         </h2>
       )}
@@ -162,7 +156,6 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
       <SetupCard>
         <AiRow surface={surface} actions={actions} placement={props.placement} />
         <TrainingRow surface={surface} actions={actions} placement={props.placement} />
-        {props.placement === "chat" ? <TelegramRow /> : null}
         {props.placement === "settings" ? (
           <AdditionalCredentialRows
             primaryAiCredential={primaryAiCredential}
@@ -170,29 +163,29 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
           />
         ) : null}
         <IntakeRows surface={surface} actions={actions} placement={props.placement} />
-        {props.placement === "settings" ? <CredentialSettingsFeedback /> : null}
-        {props.placement === "chat" ? (
-          <footer className={styles.chatFooter}>
-            <span className="text-xs text-ink-2">{FOOTER_NOTE}</span>
-            <SetupError surface={surface} section="footer" />
-            {outstanding === null ? null : (
-              <span data-setup-outstanding={outstanding} className="text-xs text-ink-2">
-                {OUTSTANDING_NOTE[outstanding]}
-              </span>
-            )}
-            <button
-              type="button"
-              className={BUTTON_PRIMARY}
-              disabled={blocked}
-              onClick={() => {
-                actions?.finish();
-              }}
-            >
-              {PRIMARY_LABEL}
-            </button>
-          </footer>
-        ) : null}
+        <CredentialSettingsFeedback />
       </SetupCard>
+      {props.placement === "gate" ? (
+        <footer className="mt-[18px] flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            className={BUTTON_PRIMARY}
+            disabled={blocked}
+            onClick={() => {
+              actions?.finish();
+            }}
+          >
+            {PRIMARY_LABEL}
+          </button>
+          <span className="text-xs text-ink-2">{FOOTER_NOTE}</span>
+          <SetupError surface={surface} section="footer" />
+          {outstanding === null ? null : (
+            <span data-setup-outstanding={outstanding} className="ml-auto text-xs text-ink-2">
+              {OUTSTANDING_NOTE[outstanding]}
+            </span>
+          )}
+        </footer>
+      ) : null}
       <p
         className="import-status mt-2 min-h-[18px] text-xs text-ink-2"
         role="status"
@@ -216,11 +209,14 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
       <p className="onboarding-error-announcer sr-only" role="status" aria-live="polite">
         {wizard.fixedError === null ? "" : ERROR_COPY[wizard.fixedError]}
       </p>
+      {props.placement === "gate" ? (
+        <p className="mt-5 text-[11px] leading-normal text-ink-3">{SETUP_DISCLAIMER}</p>
+      ) : null}
     </section>
   );
 }
 
 export function OnboardingWizard(): ReactElement | null {
   const open = useEnduragentStore((state) => state.onboarding.open);
-  return open ? <SetupPanel placement="chat" /> : null;
+  return open ? <SetupPanel placement="gate" /> : null;
 }

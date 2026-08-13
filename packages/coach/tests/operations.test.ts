@@ -347,7 +347,7 @@ describe("coach operations", () => {
           extra: true,
         } as never),
       ).rejects.toThrow();
-      await expect(async () =>
+      await expect(
         operations.saveIntake({
           swim_skill_floor: null,
           continuous_distance_capable: null,
@@ -355,6 +355,20 @@ describe("coach operations", () => {
           prior_bsi: false,
           clinician_cleared: null,
           injury_status: "returning",
+        }),
+      ).resolves.toEqual({ schemaVersion: 1, saved: true });
+      expect(await store.get("SELECT * FROM intake_flags")).toMatchObject({
+        clinician_cleared: null,
+        injury_status: "returning",
+      });
+      await expect(async () =>
+        operations.saveIntake({
+          swim_skill_floor: null,
+          continuous_distance_capable: null,
+          open_water_comfort: null,
+          prior_bsi: false,
+          clinician_cleared: true,
+          injury_status: "none",
         }),
       ).rejects.toThrow();
     } finally {

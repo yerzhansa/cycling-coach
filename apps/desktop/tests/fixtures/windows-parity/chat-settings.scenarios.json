@@ -137,14 +137,14 @@
     {
       "id": "settings.setup.inventory",
       "surface": "settings",
-      "expected": "Setup appears first and contains the shipped coach provider, Intervals.icu, injury status, conditional clinician clearance, and Settings credential rows; Telegram remains optional in Chat setup.",
+      "expected": "Setup appears first as a full-window gate containing the shipped coach provider, Intervals.icu and injury status rows, plus the Settings credential rows in the Settings placement; Telegram never appears in setup.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > renders every required row in order and admits the clearance row to the same card"
+      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > renders every required row in order and adds no row for an injury answer"
     },
     {
       "id": "settings.setup.readiness-gate",
       "surface": "settings",
-      "expected": "First-run coaching remains blocked until a supported coach provider, durable training data, and the required intake are ready; Telegram never blocks Chat.",
+      "expected": "First-run coaching remains blocked until a supported coach provider, durable training data, and the required intake are ready; Telegram is never part of the gate.",
       "automation": "deterministic",
       "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > keeps Start coaching disabled until every requirement is met"
     },

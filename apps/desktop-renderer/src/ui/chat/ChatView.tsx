@@ -1,8 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
 import { CHAT_AUTO_LOAD_EARLIER_THRESHOLD, chatScrollAnchor } from "../../state/chat-stream.js";
 import { useEnduragentStore } from "../../state/store.js";
-import { setupRequired } from "../../state/onboarding-slice.js";
-import { SetupPanel } from "../onboarding/OnboardingWizard.js";
 import styles from "./ChatView.module.css";
 import { Composer, type ComposerHandle } from "./Composer.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
@@ -32,14 +30,13 @@ export function ChatView(): ReactElement {
   const composerWrap = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
   const activeView = useEnduragentStore((state) => state.activeView);
-  const needsSetup = useEnduragentStore(setupRequired);
   const status = useEnduragentStore((state) => state.chat.status);
   const announcement = useEnduragentStore((state) => state.chat.announcement);
   const hydrationStatus = useEnduragentStore((state) => state.chat.hydrationStatus);
   const hasEarlier = useEnduragentStore((state) => state.chat.hydrationHasEarlier);
   const workBlocked = useEnduragentStore((state) => state.chat.workBlocked);
   const actions = useEnduragentStore((state) => state.chatActions);
-  const previousNeedsSetup = useRef(needsSetup);
+  const mountedView = useRef(activeView);
 
   useLayoutEffect(() => {
     chatScrollAnchor.attach(conversation.current);
@@ -47,17 +44,6 @@ export function ChatView(): ReactElement {
       chatScrollAnchor.attach(null);
     };
   }, []);
-
-  useLayoutEffect(() => {
-    const setupFinished = previousNeedsSetup.current && !needsSetup;
-    previousNeedsSetup.current = needsSetup;
-    const chatActive = activeView === "chat";
-    chatScrollAnchor.setStartPinned(chatActive && needsSetup);
-    if (chatActive && !needsSetup) {
-      chatScrollAnchor.reanchor();
-      if (setupFinished) composer.current?.focus();
-    }
-  }, [activeView, needsSetup]);
 
   useLayoutEffect(() => {
     const host = composerWrap.current;
@@ -77,6 +63,15 @@ export function ChatView(): ReactElement {
       observer.disconnect();
       target.style.removeProperty(COMPOSER_CLEARANCE_PROPERTY);
     };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (activeView !== "chat") return;
+    chatScrollAnchor.reanchor();
+  }, [activeView]);
+
+  useEffect(() => {
+    if (mountedView.current === "chat") composer.current?.focus();
   }, []);
 
   useEffect(() => {
@@ -109,7 +104,6 @@ export function ChatView(): ReactElement {
         ref={conversation}
       >
         <div className={`${styles.thread} thread`}>
-          {activeView === "chat" && needsSetup ? <SetupPanel placement="chat" /> : null}
           <Transcript />
           <FirstSyncCard />
         </div>

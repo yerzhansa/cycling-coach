@@ -181,16 +181,13 @@ function authoritativeBridge() {
   };
 }
 
-function expectedIntake(
-  injuryStatus: "none" | "managing" | "returning",
-  clinicianCleared: boolean | null,
-) {
+function expectedIntake(injuryStatus: "none" | "managing" | "returning") {
   return {
     swim_skill_floor: null,
     continuous_distance_capable: null,
     open_water_comfort: null,
     prior_bsi: false,
-    clinician_cleared: clinicianCleared,
+    clinician_cleared: null,
     injury_status: injuryStatus,
   };
 }
@@ -337,7 +334,7 @@ describe("settings intake persistence", () => {
       expect(bridge.saveIntake).toHaveBeenCalledOnce();
       expect(harness.surface().readiness.intake).toBe(true);
     });
-    expect(bridge.saveIntake).toHaveBeenCalledWith(expectedIntake("none", null));
+    expect(bridge.saveIntake).toHaveBeenCalledWith(expectedIntake("none"));
     expect(harness.controller.state().busy).toBe(false);
     expect(harness.onComplete).not.toHaveBeenCalled();
     expect(harness.onReady).not.toHaveBeenCalled();
@@ -345,7 +342,7 @@ describe("settings intake persistence", () => {
   });
 
   it.each(["managing", "returning"] as const)(
-    "waits for clearance before persisting a %s injury answer",
+    "persists a %s injury answer without a second question",
     async (injuryStatus) => {
       const bridge = authoritativeBridge();
       const harness = onboardingHarness(bridge);
@@ -354,17 +351,11 @@ describe("settings intake persistence", () => {
       harness.controller.setIntake("injuryStatus", injuryStatus, {
         persistWhenComplete: true,
       });
-      await Promise.resolve();
-      expect(bridge.saveIntake).not.toHaveBeenCalled();
-
-      harness.controller.setIntake("clinicianCleared", false, {
-        persistWhenComplete: true,
-      });
 
       await vi.waitFor(() => {
         expect(bridge.saveIntake).toHaveBeenCalledOnce();
       });
-      expect(bridge.saveIntake).toHaveBeenCalledWith(expectedIntake(injuryStatus, false));
+      expect(bridge.saveIntake).toHaveBeenCalledWith(expectedIntake(injuryStatus));
       expect(harness.onComplete).not.toHaveBeenCalled();
       expect(harness.onReady).not.toHaveBeenCalled();
       harness.controller.dispose();
@@ -386,7 +377,7 @@ describe("settings intake persistence", () => {
       expect(harness.onComplete).toHaveBeenCalledOnce();
     });
     expect(bridge.saveIntake).toHaveBeenCalledOnce();
-    expect(bridge.saveIntake).toHaveBeenCalledWith(expectedIntake("none", null));
+    expect(bridge.saveIntake).toHaveBeenCalledWith(expectedIntake("none"));
     expect(harness.onReady).toHaveBeenCalledOnce();
     harness.controller.dispose();
   });
@@ -403,18 +394,17 @@ describe("settings intake persistence", () => {
 
     harness.controller.setIntake("injuryStatus", "none", { persistWhenComplete: true });
     harness.controller.setIntake("injuryStatus", "managing", { persistWhenComplete: true });
-    harness.controller.setIntake("clinicianCleared", true, { persistWhenComplete: true });
     harness.controller.setIntake("injuryStatus", "returning", { persistWhenComplete: true });
 
     expect(bridge.saveIntake).toHaveBeenCalledOnce();
-    expect(bridge.saveIntake).toHaveBeenNthCalledWith(1, expectedIntake("none", null));
+    expect(bridge.saveIntake).toHaveBeenNthCalledWith(1, expectedIntake("none"));
     first.resolve();
 
     await vi.waitFor(() => {
       expect(bridge.saveIntake).toHaveBeenCalledTimes(2);
     });
     expect(harness.surface().readiness.intake).toBe(false);
-    expect(bridge.saveIntake).toHaveBeenNthCalledWith(2, expectedIntake("returning", true));
+    expect(bridge.saveIntake).toHaveBeenNthCalledWith(2, expectedIntake("returning"));
 
     latest.resolve();
     await vi.waitFor(() => {
@@ -431,7 +421,7 @@ describe("settings intake persistence", () => {
     await harness.controller.open();
 
     harness.controller.setIntake("injuryStatus", "none", { persistWhenComplete: true });
-    harness.controller.setIntake("injuryStatus", "managing", { persistWhenComplete: true });
+    harness.controller.setIntake("injuryStatus", null, { persistWhenComplete: true });
     pending.resolve();
     await Promise.resolve();
     await Promise.resolve();
@@ -456,7 +446,6 @@ describe("settings intake persistence", () => {
 
     harness.controller.setIntake("injuryStatus", "none", { persistWhenComplete: true });
     harness.controller.setIntake("injuryStatus", "returning", { persistWhenComplete: true });
-    harness.controller.setIntake("clinicianCleared", false, { persistWhenComplete: true });
     stale.reject(new Error("stale private detail"));
 
     await vi.waitFor(() => {
@@ -476,7 +465,7 @@ describe("settings intake persistence", () => {
       expect(harness.controller.state().fixedError).toBeNull();
       expect(harness.surface().readiness.intake).toBe(true);
     });
-    expect(bridge.saveIntake).toHaveBeenNthCalledWith(3, expectedIntake("returning", false));
+    expect(bridge.saveIntake).toHaveBeenNthCalledWith(3, expectedIntake("returning"));
     harness.controller.dispose();
   });
 
@@ -488,7 +477,7 @@ describe("settings intake persistence", () => {
       .mockResolvedValueOnce({ schemaVersion: 1, intake: null, durableTrainingData: true })
       .mockResolvedValueOnce({
         schemaVersion: 1,
-        intake: expectedIntake("returning", false),
+        intake: expectedIntake("returning"),
         durableTrainingData: true,
       });
     bridge.saveIntake
@@ -498,15 +487,11 @@ describe("settings intake persistence", () => {
     await harness.controller.open();
     harness.controller.setIntake("injuryStatus", "none", { persistWhenComplete: true });
     harness.controller.setIntake("injuryStatus", "returning", { persistWhenComplete: true });
-    harness.controller.setIntake("clinicianCleared", false, { persistWhenComplete: true });
 
     await harness.controller.refresh();
 
     expect(bridge.saveIntake).toHaveBeenCalledOnce();
-    expect(harness.controller.state().intake).toEqual({
-      injuryStatus: "returning",
-      clinicianCleared: false,
-    });
+    expect(harness.controller.state().intake).toEqual({ injuryStatus: "returning" });
     expect(harness.surface().readiness.intake).toBe(false);
 
     stale.reject(new Error("stale private detail"));
@@ -514,7 +499,7 @@ describe("settings intake persistence", () => {
       expect(bridge.saveIntake).toHaveBeenCalledTimes(2);
     });
     expect(harness.controller.state().fixedError).toBeNull();
-    expect(bridge.saveIntake).toHaveBeenNthCalledWith(2, expectedIntake("returning", false));
+    expect(bridge.saveIntake).toHaveBeenNthCalledWith(2, expectedIntake("returning"));
 
     replacement.resolve();
     await vi.waitFor(() => {
@@ -531,7 +516,7 @@ describe("settings intake persistence", () => {
       .mockResolvedValueOnce({ schemaVersion: 1, intake: null, durableTrainingData: true })
       .mockResolvedValueOnce({
         schemaVersion: 1,
-        intake: expectedIntake("none", null),
+        intake: expectedIntake("none"),
         durableTrainingData: true,
       });
     const harness = onboardingHarness(bridge);

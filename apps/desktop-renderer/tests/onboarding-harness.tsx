@@ -90,7 +90,7 @@ export function mountWizard(input: {
   readonly credentialMutationsBlocked?: () => boolean;
   readonly createOperationId?: () => string;
   readonly afterPaint?: (callback: () => void) => () => void;
-  readonly placement?: "chat" | "settings";
+  readonly placement?: "gate" | "settings";
   readonly codexAgentSupported?: boolean;
 }): MountedWizard {
   const focusOpener = vi.fn<() => void>();

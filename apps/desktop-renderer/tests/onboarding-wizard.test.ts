@@ -19,6 +19,7 @@ const SETUP_SOURCES = [
   "TrainingRow.tsx",
   "IntakeRows.tsx",
   "InfoTip.tsx",
+  "../../app/SetupGate.tsx",
   "CredentialField.tsx",
   "../shared/buttons.ts",
 ] as const;
@@ -262,6 +263,10 @@ describe("desktop onboarding wizard", () => {
     expect(wizard).not.toContain('aria-modal="true"');
     expect(wizard).not.toContain('event.key === "Escape"');
     expect(wizard).not.toContain('event.key !== "Tab"');
+    expect(wizard).not.toContain('placement === "chat"');
+    expect(wizard).not.toContain("TelegramRow");
+    expect(wizard).not.toContain("focus-visible:outline");
+    expect(wizard).toContain("SETUP_DISCLAIMER");
     expect(wizard).toContain('aria-live="polite"');
     expect(aiRow).toContain("CHATGPT_SIGN_IN_LABEL");
     expect(aiRow).toContain("CHATGPT_PHASE_COPY");

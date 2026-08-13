@@ -67,6 +67,7 @@ import {
   SETUP_LABEL_CLASS,
 } from "./SetupCard.js";
 import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
+import type { SetupPlacement } from "./OnboardingWizard.js";
 
 const ENDPOINT_MODE_COPY = [
   ["automatic", "Keep current, or use provider default"],
@@ -83,7 +84,7 @@ const MENU_ACTION_CLASS =
 export function AiRow(props: {
   readonly surface: OnboardingSurfaceState;
   readonly actions: OnboardingActions | null;
-  readonly placement: "chat" | "settings";
+  readonly placement: SetupPlacement;
 }): ReactElement {
   const { surface, actions } = props;
   const wizard = surface.wizard;

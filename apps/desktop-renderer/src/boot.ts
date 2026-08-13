@@ -301,9 +301,7 @@ export function bootRenderer(): Disposer {
     onComplete: (completion) => onboardingCompletion.complete(completion),
     ownsDroppedImportFiles: () => {
       const state = store.getState();
-      return (
-        state.activeView === "settings" || (state.activeView === "chat" && setupRequired(state))
-      );
+      return setupRequired(state) || state.activeView === "settings";
     },
     credentialMutationsBlocked: () => onboardingCredentialMutationsBlocked(store.getState()),
     codexAgentSupported: platform.capabilities.codexAgent,

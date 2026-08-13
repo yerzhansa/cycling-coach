@@ -117,12 +117,12 @@ describe("mounted onboarding", () => {
     resetOnboardingStore();
   });
 
-  it("presents the embedded setup block without a bypass action", async () => {
+  it("presents the full-window setup gate without a bypass action", async () => {
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    const page = document.querySelector('[data-setup-host="chat"]');
+    const page = document.querySelector('[data-setup-host="gate"]');
     expect(page).not.toBeNull();
     expect(control("setup-panel-title")).toHaveTextContent(
       "Get your coach running before you can chat",
@@ -131,6 +131,12 @@ describe("mounted onboarding", () => {
     expect(document.querySelector(".onboarding-scrim")).toBeNull();
     expect(document.activeElement).toBe(control("setup-panel-title"));
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(
+      screen.getByText(
+        "Not medical advice, and not a substitute for a doctor or a certified coach.",
+      ),
+    ).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-setup-row="telegram"]')).toHaveLength(0);
     wizard.controller.dispose();
   });
 
@@ -139,7 +145,7 @@ describe("mounted onboarding", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    const page = document.querySelector('[data-setup-host="chat"]');
+    const page = document.querySelector('[data-setup-host="gate"]');
     if (!(page instanceof HTMLElement)) throw new TypeError("setup host missing");
     expect(fireEvent.keyDown(page, { key: "Escape" })).toBe(true);
 
@@ -153,7 +159,7 @@ describe("mounted onboarding", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
 
-    const page = document.querySelector('[data-setup-host="chat"]');
+    const page = document.querySelector('[data-setup-host="gate"]');
     if (!(page instanceof HTMLElement)) throw new TypeError("setup host missing");
     const first = button("Change what powers your coach");
     expect(primaryButton()).toBeDisabled();
@@ -1326,7 +1332,7 @@ describe("mounted onboarding", () => {
     },
   );
 
-  it("asks for clinician clearance once an injury history is recorded", async () => {
+  it("finishes on the injury answer alone once an injury history is recorded", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.credentialStatuses.mockResolvedValue([
@@ -1337,10 +1343,8 @@ describe("mounted onboarding", () => {
 
     await chooseOption(user, "onboarding-injury-status", "returning");
 
-    expect(control("onboarding-clinician-cleared")).toBeInTheDocument();
-    expect(primaryButton()).toBeDisabled();
+    expect(document.querySelector("#onboarding-clinician-cleared")).toBeNull();
 
-    await chooseOption(user, "onboarding-clinician-cleared", "yes");
     await waitFor(() => {
       expect(primaryButton()).toBeEnabled();
     });
@@ -1354,7 +1358,7 @@ describe("mounted onboarding", () => {
       continuous_distance_capable: null,
       open_water_comfort: null,
       prior_bsi: false,
-      clinician_cleared: true,
+      clinician_cleared: null,
       injury_status: "returning",
     });
     wizard.controller.dispose();

@@ -10,6 +10,10 @@
   font: 14px/1.5 var(--f-ui);
 }
 
+.win[data-shell="gate"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .main {
   display: flex;
   flex-direction: column;

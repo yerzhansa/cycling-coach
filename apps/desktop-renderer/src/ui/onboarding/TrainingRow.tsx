@@ -35,11 +35,12 @@ import {
   SETUP_LINK_BUTTON,
 } from "./SetupCard.js";
 import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
+import type { SetupPlacement } from "./OnboardingWizard.js";
 
 export function TrainingRow(props: {
   readonly surface: OnboardingSurfaceState;
   readonly actions: OnboardingActions | null;
-  readonly placement: "chat" | "settings";
+  readonly placement: SetupPlacement;
 }): ReactElement {
   const { surface, actions } = props;
   const wizard = surface.wizard;
@@ -51,8 +52,7 @@ export function TrainingRow(props: {
       ? settingsMutationActive(state.settings)
       : nonTelegramSettingsMutationActive(state.settings),
   );
-  const repairCredential = repairRequiredCredential(credentialSettings);
-  const repairRequired = repairCredential !== null;
+  const repairRequired = repairRequiredCredential(credentialSettings) !== null;
   const controlsDisabled =
     busy ||
     surface.loading ||
@@ -69,7 +69,6 @@ export function TrainingRow(props: {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const deleteRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  const repairFeedbackRef = useRef<HTMLDivElement>(null);
   const focusHeadingAfterOpen = useRef<"delete" | "trigger" | null>(null);
   const panelId = "onboarding-training-panel";
   const credentialFocus = "focus" in credentialSettings ? credentialSettings.focus : null;
@@ -105,16 +104,6 @@ export function TrainingRow(props: {
     }
     focusHeadingAfterOpen.current = null;
   }, [credentialPort, open]);
-
-  useEffect(() => {
-    if (
-      props.placement === "chat" &&
-      repairCredential === "intervals-icu" &&
-      credentialFocus?.target === "feedback"
-    ) {
-      repairFeedbackRef.current?.focus();
-    }
-  }, [credentialFocus, props.placement, repairCredential]);
 
   const subtitle = connected ? TRAINING_ROW_SUBTITLES.connected : TRAINING_ROW_SUBTITLES.missing;
 
@@ -237,29 +226,6 @@ export function TrainingRow(props: {
       {!connected && !open && ownsError ? (
         <SetupSubPanel name="training-error">
           <SetupError surface={surface} section="training" />
-        </SetupSubPanel>
-      ) : null}
-      {props.placement === "chat" && repairCredential === "intervals-icu" ? (
-        <SetupSubPanel name="training-repair">
-          <div
-            ref={repairFeedbackRef}
-            tabIndex={-1}
-            className="focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
-          >
-            <p className="m-0 text-xs text-ink-2" role="status" aria-live="polite">
-              {"announcement" in credentialSettings && credentialSettings.announcement.length > 0
-                ? credentialSettings.announcement
-                : "Credential status must be reloaded before training setup can continue."}
-            </p>
-            <button
-              type="button"
-              className={SETUP_LINK_BUTTON}
-              disabled={settingsMutating || credentialSettings.status === "loading"}
-              onClick={() => credentialPort?.retry()}
-            >
-              Reload credential status
-            </button>
-          </div>
         </SetupSubPanel>
       ) : null}
     </>

@@ -233,7 +233,6 @@ function persistedIntakeMatchesDraft(
     persisted.continuous_distance_capable === expected.continuous_distance_capable &&
     persisted.open_water_comfort === expected.open_water_comfort &&
     persisted.prior_bsi === expected.prior_bsi &&
-    persisted.clinician_cleared === expected.clinician_cleared &&
     persisted.injury_status === expected.injury_status
   );
 }

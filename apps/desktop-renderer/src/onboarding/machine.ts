@@ -72,7 +72,6 @@ export type ChatGptCancelLoginResult = {
 
 export interface DesktopIntakeDraft {
   readonly injuryStatus: "none" | "managing" | "returning" | null;
-  readonly clinicianCleared: boolean | null;
 }
 
 export type OnboardingErrorCode =
@@ -160,7 +159,7 @@ export function createOnboardingState(
     claudeCliState: claudeCliStatus === null ? null : claudeCliStatus.state,
     claudeCliIdentity: claudeCliStatus === null ? null : claudeCliIdentityLine(claudeCliStatus),
     importedRideFileCount: 0,
-    intake: { injuryStatus: null, clinicianCleared: null },
+    intake: { injuryStatus: null },
     busy: false,
     fixedError: null,
   };
@@ -350,14 +349,12 @@ export function hasTrainingData(state: OnboardingState): boolean {
 
 export function toDesktopIntakeFlags(draft: DesktopIntakeDraft): SaveIntakeRpcParams {
   if (draft.injuryStatus === null) throw new TypeError();
-  const needsClearance = draft.injuryStatus !== "none";
-  if (needsClearance && draft.clinicianCleared === null) throw new TypeError();
   return SaveIntakeRpcParamsSchema.parse({
     swim_skill_floor: null,
     continuous_distance_capable: null,
     open_water_comfort: null,
     prior_bsi: false,
-    clinician_cleared: needsClearance ? draft.clinicianCleared : null,
+    clinician_cleared: null,
     injury_status: draft.injuryStatus,
   });
 }
@@ -404,10 +401,9 @@ export function withIntake(
   update: Partial<DesktopIntakeDraft>,
 ): OnboardingState {
   const intake = { ...state.intake, ...update };
-  const needsClearance = intake.injuryStatus !== null && intake.injuryStatus !== "none";
   return {
     ...state,
-    intake: needsClearance ? intake : { ...intake, clinicianCleared: null },
+    intake,
     fixedError: null,
   };
 }
@@ -418,10 +414,7 @@ export function withPersistedIntake(
 ): OnboardingState {
   if (intake === null) return state;
   const parsed = SaveIntakeRpcParamsSchema.parse(intake);
-  return withIntake(state, {
-    injuryStatus: parsed.injury_status,
-    clinicianCleared: parsed.clinician_cleared,
-  });
+  return withIntake(state, { injuryStatus: parsed.injury_status });
 }
 
 export function withBusy(state: OnboardingState, busy: boolean): OnboardingState {
