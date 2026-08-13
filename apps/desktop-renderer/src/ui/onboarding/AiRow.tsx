@@ -71,6 +71,7 @@ import {
   SETUP_FIELD_CLASS,
   SETUP_HINT_CLASS,
   SETUP_LABEL_CLASS,
+  SETUP_SELECT_CLASS,
 } from "./SetupCard.js";
 import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
 
@@ -491,7 +492,7 @@ export function AiRow(props: {
               </label>
               <select
                 id="onboarding-llm-provider"
-                className={SETUP_FIELD_CLASS}
+                className={SETUP_SELECT_CLASS}
                 disabled={controlsDisabled}
                 value={draft.provider.provider}
                 onChange={(event) => {
@@ -545,7 +546,7 @@ export function AiRow(props: {
                     </label>
                     <select
                       id="onboarding-llm-model"
-                      className={SETUP_FIELD_CLASS}
+                      className={SETUP_SELECT_CLASS}
                       disabled={controlsDisabled}
                       value={draft.modelChoice}
                       onChange={(event) => {
@@ -590,7 +591,7 @@ export function AiRow(props: {
                         </label>
                         <select
                           id="onboarding-endpoint-mode"
-                          className={SETUP_FIELD_CLASS}
+                          className={SETUP_SELECT_CLASS}
                           disabled={controlsDisabled}
                           value={draft.endpointMode}
                           onChange={(event) => {

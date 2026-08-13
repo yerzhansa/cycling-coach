@@ -9,6 +9,10 @@ import type {
 import { EMPTY_SETTINGS_SURFACE, type TelegramSettingsPort } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { TelegramSection } from "../src/ui/settings/TelegramSection.js";
+import {
+  BUTTON_DANGER_QUIET_SM,
+  BUTTON_DANGER_SOLID_SM,
+} from "../src/ui/shared/buttons.js";
 
 function status(overrides: Partial<TelegramControlStatus> = {}): TelegramControlStatus {
   return {
@@ -257,7 +261,12 @@ describe("Telegram settings surface", () => {
     expect(within(users).getByText("Primary user · required")).toBeVisible();
     expect(within(users).queryByRole("button", { name: "Remove Telegram user 101" })).toBeNull();
 
-    await user.click(within(users).getByRole("button", { name: "Remove Telegram user 202" }));
+    const removeSender = within(users).getByRole("button", {
+      name: "Remove Telegram user 202",
+    });
+    expect(removeSender.className).toBe(BUTTON_DANGER_QUIET_SM);
+
+    await user.click(removeSender);
     expect(port.removeSender).toHaveBeenCalledWith(202);
 
     const senderId = screen.getByLabelText("Add a Telegram user ID");
@@ -491,11 +500,7 @@ describe("Telegram settings surface", () => {
     ).toBeVisible();
 
     const deleteTrigger = screen.getByRole("button", { name: "Delete" });
-    expect(deleteTrigger).toHaveClass(
-      "border-[color-mix(in_srgb,var(--danger)_34%,transparent)]",
-      "bg-transparent",
-      "text-danger",
-    );
+    expect(deleteTrigger.className).toBe(BUTTON_DANGER_QUIET_SM);
     expect(screen.queryByRole("button", { name: "Replace token from clipboard" })).toBeNull();
 
     await user.click(deleteTrigger);
@@ -511,11 +516,7 @@ describe("Telegram settings surface", () => {
       "Delete connection",
     ]);
     expect(confirmationButtons[0]).toHaveFocus();
-    expect(confirmationButtons[1]).toHaveClass(
-      "border-[color-mix(in_srgb,var(--danger)_34%,transparent)]",
-      "bg-transparent",
-      "text-danger",
-    );
+    expect(confirmationButtons[1]?.className).toBe(BUTTON_DANGER_SOLID_SM);
     expect(port.remove).not.toHaveBeenCalled();
 
     await user.click(confirmationButtons[0]);

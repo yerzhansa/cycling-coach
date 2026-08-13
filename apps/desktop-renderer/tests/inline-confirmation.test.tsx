@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { useRef, useState, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { BUTTON_COMPACT_QUIET_SM, BUTTON_DANGER_SOLID_SM } from "../src/ui/shared/buttons.js";
 import { InlineConfirmation } from "../src/ui/shared/InlineConfirmation.js";
 
 function ReturnFocusHarness(): ReactElement {
@@ -51,8 +52,8 @@ describe("inline confirmation", () => {
     expect(buttons.map((button) => button.textContent)).toEqual(["Cancel", "Delete connection"]);
     expect(buttons[0]).toHaveFocus();
     expect(group.parentElement).toHaveClass("bg-sunk");
-    expect(buttons[1]).toHaveClass("border-[color-mix(in_srgb,var(--danger)_34%,transparent)]");
-    expect(buttons[1]).toHaveClass("bg-transparent", "text-danger");
+    expect(buttons[0]?.className).toBe(BUTTON_COMPACT_QUIET_SM);
+    expect(buttons[1]?.className).toBe(BUTTON_DANGER_SOLID_SM);
 
     view.rerender(
       <InlineConfirmation
