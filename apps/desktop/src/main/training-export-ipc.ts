@@ -11,6 +11,7 @@ import {
 } from "@enduragent/coach-contract";
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent, SaveDialogOptions } from "electron";
 import { DESKTOP_TRAINING_EXPORT_CHANNEL } from "./constants.js";
+import { createSafeLog } from "./safe-log.js";
 import { isTrustedConnectionRequest } from "./security.js";
 
 export interface DesktopTrainingExporter {
@@ -98,12 +99,20 @@ function refusedWrite(): DesktopTrainingExportResult {
   return { status: "refused", reason: "write-failed" };
 }
 
+function describeWriteFailure(error: unknown): string {
+  const name = error instanceof Error ? error.name : "NonError";
+  const message = error instanceof Error ? error.message : String(error);
+  return `desktop-training-export-write-failed name=${JSON.stringify(name)} message=${JSON.stringify(message)}`;
+}
+
 export function installDesktopTrainingExportIpc(input: {
   readonly ipcMain: Pick<IpcMain, "handle" | "removeHandler">;
   readonly currentWindow: () => BrowserWindow | undefined;
   readonly dialog: TrainingExportDialogPort;
   readonly exporter: () => DesktopTrainingExporter | undefined;
+  readonly log?: (message: string) => void;
 }): () => void {
+  const log = createSafeLog(input.log);
   input.ipcMain.handle(
     DESKTOP_TRAINING_EXPORT_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<DesktopTrainingExportResult> => {
@@ -119,7 +128,8 @@ export function installDesktopTrainingExportIpc(input: {
       let selection: Awaited<ReturnType<TrainingExportDialogPort["showSaveDialog"]>>;
       try {
         selection = await input.dialog.showSaveDialog(window, saveDialogOptions(parsed.data));
-      } catch {
+      } catch (error) {
+        log(describeWriteFailure(error));
         return refusedWrite();
       }
       if (selection.canceled || selection.filePath === undefined) return { status: "cancelled" };
@@ -135,7 +145,8 @@ export function installDesktopTrainingExportIpc(input: {
             ? { status: "saved", byteLength: result.byteLength }
             : result,
         );
-      } catch {
+      } catch (error) {
+        log(describeWriteFailure(error));
         return refusedWrite();
       }
     },

@@ -39,17 +39,20 @@ function setup(result: unknown = EXPORTED) {
     ),
   };
   const exporter = { export: vi.fn(async () => result) };
+  const log = vi.fn();
   const dispose = installDesktopTrainingExportIpc({
     ipcMain: ipcMain as never,
     currentWindow: () => window as never,
     dialog,
     exporter: () => exporter as never,
+    log,
   });
   return {
     handlers,
     ipcMain,
     dialog,
     exporter,
+    log,
     dispose,
     trusted: { sender: webContents, senderFrame: mainFrame },
   };
@@ -88,6 +91,28 @@ describe("desktop training export IPC", () => {
     });
     expect(result).not.toHaveProperty("suggestedFilename");
     expect(result).not.toHaveProperty("contentType");
+  });
+
+  it("passes a Windows save-dialog destination to the exporter", async () => {
+    const subject = setup();
+    const destinationPath = "C:\\Users\\x\\Documents\\ride.fit";
+    subject.dialog.showSaveDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePath: destinationPath,
+    });
+
+    await expect(
+      subject.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(subject.trusted, {
+        kind: "activity",
+        canonicalActivityId: "a".repeat(64),
+        localDate: "1998-07-19",
+        format: "fit",
+      }),
+    ).resolves.toEqual({ status: "saved", byteLength: 4_096 });
+    expect(subject.exporter.export).toHaveBeenCalledWith(
+      expect.objectContaining({ destinationPath }),
+    );
+    expect(subject.log).not.toHaveBeenCalled();
   });
 
   it("routes a closed workout archive request and handles cancellation without daemon work", async () => {
@@ -182,17 +207,24 @@ describe("desktop training export IPC", () => {
     await expect(
       malformed.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(malformed.trusted, request),
     ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(malformed.log).toHaveBeenCalledWith(expect.stringContaining('name="ZodError"'));
 
     const failed = setup();
     failed.exporter.export.mockRejectedValueOnce(new Error("private provider response"));
     await expect(
       failed.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(failed.trusted, request),
     ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(failed.log).toHaveBeenLastCalledWith(
+      'desktop-training-export-write-failed name="Error" message="private provider response"',
+    );
 
     failed.dialog.showSaveDialog.mockRejectedValueOnce(new Error("private filesystem path"));
     await expect(
       failed.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(failed.trusted, request),
     ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(failed.log).toHaveBeenLastCalledWith(
+      'desktop-training-export-write-failed name="Error" message="private filesystem path"',
+    );
 
     failed.dialog.showSaveDialog.mockResolvedValueOnce({
       canceled: false,
@@ -201,6 +233,8 @@ describe("desktop training export IPC", () => {
     await expect(
       failed.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(failed.trusted, request),
     ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(failed.log).toHaveBeenLastCalledWith(expect.stringContaining('name="ZodError"'));
+    expect(failed.log).toHaveBeenCalledTimes(3);
   });
 
   it("uses one privileged client and closes it after the export", async () => {

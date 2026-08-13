@@ -10,6 +10,7 @@ import {
   type CoachEngine,
 } from "./engine.js";
 import { TurnEventSchema } from "./turn-event.js";
+import { PlatformAbsolutePathSchema } from "./platform-path.js";
 import {
   GetSpendSummaryRpcParamsSchema,
   SetDailySpendCapRpcParamsSchema,
@@ -409,13 +410,7 @@ export type ListArchivedConversationsRpcResult = z.infer<
   typeof ListArchivedConversationsRpcResultSchema
 >;
 
-export const AbsoluteImportPathSchema = z
-  .string()
-  .min(1)
-  .max(4_096)
-  .refine((value) => value.startsWith("/") && !value.includes("\0"), {
-    message: "import paths must be absolute",
-  });
+export const AbsoluteImportPathSchema = PlatformAbsolutePathSchema;
 
 export const ImportFilesRpcParamsSchema = z
   .object({
@@ -853,9 +848,7 @@ export interface CoachOperations {
     request: SyncRpcParams,
     onEvent?: (event: OperationProgressEvent) => void,
   ): Promise<SyncRpcResult>;
-  getSetupStatus?(
-    request: GetSetupStatusRpcParams,
-  ): Promise<GetSetupStatusRpcResult>;
+  getSetupStatus?(request: GetSetupStatusRpcParams): Promise<GetSetupStatusRpcResult>;
   saveIntake(request: SaveIntakeRpcParams): Promise<SaveIntakeRpcResult>;
   getTranscriptPage(request: GetTranscriptPageRpcParams): Promise<GetTranscriptPageRpcResult>;
   listArchivedConversations(

@@ -59,6 +59,11 @@ describe("desktop onboarding wizard", () => {
     expect(
       validateImportPaths(["/synthetic/a.FIT", "/synthetic/b.tcx", "/synthetic/c.GpX"]),
     ).toEqual(["/synthetic/a.FIT", "/synthetic/b.tcx", "/synthetic/c.GpX"]);
+    expect(
+      validateImportPaths(["C:\\synthetic\\a.FIT", "\\\\server\\share\\b.gpx"]),
+    ).toEqual(["C:\\synthetic\\a.FIT", "\\\\server\\share\\b.gpx"]);
+    expect(() => validateImportPaths(["C:\\synthetic\\photos.fit\\ride"])).toThrow(TypeError);
+    expect(() => validateImportPaths(["C:relative\\a.fit"])).toThrow(TypeError);
     expect(() => validateImportPaths(["relative.fit"])).toThrow(TypeError);
     expect(() => validateImportPaths(["/synthetic/a.zip"])).toThrow(TypeError);
     expect(() => validateImportPaths(["/synthetic/a.fit", "/synthetic/a.fit"])).toThrow();

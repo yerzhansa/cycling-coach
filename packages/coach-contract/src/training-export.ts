@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CanonicalActivityIdSchema } from "./activity-analysis.js";
+import { PlatformAbsolutePathSchema } from "./platform-path.js";
 
 export const ACTIVITY_EXPORT_FORMATS = ["fit", "gpx"] as const;
 export const WORKOUT_ARCHIVE_FORMATS = ["zwo", "mrc", "erg", "fit"] as const;
@@ -45,13 +46,7 @@ export const DesktopTrainingExportRequestSchema = z.discriminatedUnion("kind", [
     }),
 ]);
 
-export const TrainingExportDestinationPathSchema = z
-  .string()
-  .min(1)
-  .max(4_096)
-  .refine((value) => value.startsWith("/") && !value.includes("\0"), {
-    message: "training export destination must be absolute",
-  });
+export const TrainingExportDestinationPathSchema = PlatformAbsolutePathSchema;
 
 export const ExportTrainingFileRpcParamsSchema = z.discriminatedUnion("kind", [
   z
