@@ -17,6 +17,7 @@ const hasLoopback = await new Promise<boolean>((resolveAvailability) => {
 });
 
 const token = "z".repeat(43);
+const DEVICE_ZONE = "Asia/Qyzylorda";
 const fixtures: RunningDesktopFixture[] = [];
 
 interface ScriptRequest {
@@ -98,6 +99,7 @@ function makeScript(): DesktopFixtureScript {
 
 async function launch(input: {
   readonly seedConfig: boolean;
+  readonly pinned: boolean;
   readonly extraEnv?: Readonly<Record<string, string>>;
 }): Promise<RunningDesktopFixture> {
   const fixture = await launchDesktopFixture({
@@ -107,7 +109,7 @@ async function launch(input: {
     height: 840,
     colorScheme: "light",
     reducedMotion: true,
-    sessionTimezoneMode: null,
+    sessionTimezonePinned: input.pinned,
     seedConfig: input.seedConfig,
     ...(input.extraEnv === undefined ? {} : { extraEnv: input.extraEnv }),
   });
@@ -115,10 +117,9 @@ async function launch(input: {
   return fixture;
 }
 
-async function persistedMode(fixture: RunningDesktopFixture): Promise<string | "absent"> {
+async function persistedPin(fixture: RunningDesktopFixture): Promise<string> {
   try {
-    const contents = await readFile(fixture.paths.sessionTimezoneModePath, "utf8");
-    return String((JSON.parse(contents) as { mode?: unknown }).mode);
+    return await readFile(fixture.paths.sessionTimezonePinPath, "utf8");
   } catch {
     return "absent";
   }
@@ -135,21 +136,10 @@ async function storedZone(fixture: RunningDesktopFixture): Promise<string | "abs
   }
 }
 
-async function noticeStatus(fixture: RunningDesktopFixture): Promise<string> {
-  const raw = await fixture.evaluate<string>(
-    "return JSON.stringify(await window.enduragentAuth.sessionTimezoneNotice());",
+async function pinFromRenderer(fixture: RunningDesktopFixture): Promise<string> {
+  return fixture.evaluate<string>(
+    "return JSON.stringify(await window.enduragentAuth.pinSessionTimezone());",
   );
-  return String((JSON.parse(raw) as { status?: unknown }).status);
-}
-
-async function settingStatus(fixture: RunningDesktopFixture): Promise<{
-  readonly status: string;
-  readonly mode?: unknown;
-}> {
-  const raw = await fixture.evaluate<string>(
-    "return JSON.stringify(await window.enduragentAuth.sessionTimezoneSetting());",
-  );
-  return JSON.parse(raw) as { status: string; mode?: unknown };
 }
 
 afterEach(async () => {
@@ -159,39 +149,50 @@ afterEach(async () => {
 describe.skipIf(process.platform !== "darwin" || !hasLoopback)(
   "desktop session timezone startup",
   () => {
-    it("seeds a fresh profile without persisting any timezone source when COACH_TZ owns the zone", async () => {
-      const fixture = await launch({
-        seedConfig: false,
-        extraEnv: { COACH_TZ: "Europe/Berlin" },
-      });
-
-      expect(await storedZone(fixture)).not.toBe("absent");
-      expect(await persistedMode(fixture)).toBe("absent");
-      expect(await noticeStatus(fixture)).toBe("none");
-      const setting = await settingStatus(fixture);
-      expect(setting.status).toBe("environment-managed");
-    });
-
-    it("defaults a fresh profile to following this computer when COACH_TZ is unset", async () => {
-      const fixture = await launch({ seedConfig: false });
-
-      expect(await storedZone(fixture)).not.toBe("absent");
-      expect(await persistedMode(fixture)).toBe("follow");
-      expect(await noticeStatus(fixture)).toBe("none");
-      const setting = await settingStatus(fixture);
-      expect(setting.status).toBe("editable");
-      expect(setting.mode).toBe("follow");
-    });
-
-    it("leaves an existing config and its unanswered source alone when COACH_TZ owns the zone", async () => {
+    it("adopts this computer's timezone into an unpinned config at start", async () => {
       const fixture = await launch({
         seedConfig: true,
-        extraEnv: { COACH_TZ: "Europe/Berlin" },
+        pinned: false,
+        extraEnv: { TZ: DEVICE_ZONE },
       });
 
-      expect(await storedZone(fixture)).toBe("UTC");
-      expect(await persistedMode(fixture)).toBe("absent");
-      expect(await noticeStatus(fixture)).toBe("none");
-    });
+      expect(await storedZone(fixture)).toEqual(DEVICE_ZONE);
+      expect(await persistedPin(fixture)).toEqual("absent");
+    }, 90_000);
+
+    it("keeps a pinned timezone even when this computer reports a different one", async () => {
+      const fixture = await launch({
+        seedConfig: true,
+        pinned: true,
+        extraEnv: { TZ: DEVICE_ZONE },
+      });
+
+      expect(await storedZone(fixture)).toEqual("UTC");
+      expect(await persistedPin(fixture)).toEqual('{"schemaVersion":1,"pinned":true}\n');
+    }, 90_000);
+
+    it("leaves the stored zone and the pin alone when COACH_TZ owns the timezone", async () => {
+      const fixture = await launch({
+        seedConfig: true,
+        pinned: false,
+        extraEnv: { TZ: DEVICE_ZONE, COACH_TZ: "Europe/Berlin" },
+      });
+
+      expect(await storedZone(fixture)).toEqual("UTC");
+      expect(await persistedPin(fixture)).toEqual("absent");
+      expect(await pinFromRenderer(fixture)).toEqual("false");
+      expect(await persistedPin(fixture)).toEqual("absent");
+    }, 90_000);
+
+    it("pins on request from the renderer and stops adopting afterwards", async () => {
+      const fixture = await launch({
+        seedConfig: true,
+        pinned: false,
+        extraEnv: { TZ: DEVICE_ZONE },
+      });
+
+      expect(await pinFromRenderer(fixture)).toEqual("true");
+      expect(await persistedPin(fixture)).toEqual('{"schemaVersion":1,"pinned":true}\n');
+    }, 90_000);
   },
 );

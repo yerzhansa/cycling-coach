@@ -27,10 +27,6 @@ import {
   settingsMutationActive,
   type SettingsSlice,
 } from "./settings-slice.js";
-import {
-  createSessionTimezoneSlice,
-  type SessionTimezoneSlice,
-} from "./session-timezone-slice.js";
 import { createSyncSlice, type SyncSlice } from "./sync-slice.js";
 import { createTrainingSlice, type TrainingSlice } from "./training-slice.js";
 import { createTrainingExportSlice, type TrainingExportSlice } from "./training-export-slice.js";
@@ -45,7 +41,6 @@ export interface EnduragentState
     ActivityAnalysisSlice,
     SyncSlice,
     RideImportSlice,
-    SessionTimezoneSlice,
     OnboardingSlice {
   readonly activeView: StoredViewId;
   readonly paletteId: string;
@@ -77,7 +72,6 @@ export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
   ...createActivityAnalysisSlice(set, get, api),
   ...createSyncSlice(set, get, api),
   ...createRideImportSlice(set, get, api),
-  ...createSessionTimezoneSlice(set, get, api),
   ...createOnboardingSlice(set, get, api),
   activeView: "chat",
   paletteId: readStoredPaletteId(),

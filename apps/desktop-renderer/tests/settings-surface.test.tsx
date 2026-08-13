@@ -184,6 +184,7 @@ interface HarnessOptions {
   readonly spend?: () => Promise<SpendSummary>;
   readonly telegram?: TelegramControlStatus;
   readonly codexAgentSupported?: boolean;
+  readonly pinTimezone?: () => Promise<boolean>;
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -268,9 +269,15 @@ function createHarness(options: HarnessOptions = {}) {
     publish: (patch) => store.getState().patchSettings(patch),
   });
 
+  const pinTimezone = options.pinTimezone ?? (async () => true);
+  const pinCalls: number[] = [];
   const conversationController = createSessionSettingsController({
     clients,
     beginMutation: () => store.getState().beginSettingsMutation("session"),
+    pinTimezone: async () => {
+      pinCalls.push(1);
+      return pinTimezone();
+    },
     view: conversationAdapter.view,
   });
   const credentialController = createCredentialSettingsController({
@@ -411,6 +418,7 @@ function createHarness(options: HarnessOptions = {}) {
 
   return {
     calls,
+    pinCalls,
     applyLlmSelection,
     deleteCredential,
     restartToUpdate,
@@ -797,6 +805,46 @@ describe("conversation settings", () => {
     expect(subject.calls.find((call) => call.method === "configureRuntime")?.params).toEqual({
       session: { idleMinutes: 45 },
     });
+  });
+
+  it("keeps the timezone field editable and pins the zone the athlete saves", async () => {
+    const user = userEvent.setup();
+    const subject = await renderSettings();
+
+    const timezone = screen.getByLabelText("Timezone");
+    expect(timezone).toBeEnabled();
+    await user.clear(timezone);
+    await user.type(timezone, "Asia/Qyzylorda");
+    await user.click(screen.getByRole("button", { name: "Save conversation settings" }));
+
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().settings.conversation.status).toBe("saved");
+    });
+    expect(subject.calls.find((call) => call.method === "configureRuntime")?.params).toEqual({
+      session: { timezone: "Asia/Qyzylorda" },
+    });
+    expect(subject.pinCalls).toEqual([1]);
+  });
+
+  it("shows a save error when the saved timezone could not be pinned", async () => {
+    const user = userEvent.setup();
+    const subject = await renderSettings({ pinTimezone: async () => false });
+
+    await user.clear(screen.getByLabelText("Timezone"));
+    await user.type(screen.getByLabelText("Timezone"), "Asia/Qyzylorda");
+    await user.click(screen.getByRole("button", { name: "Save conversation settings" }));
+
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().settings.conversation.status).toBe("error");
+    });
+    expect(subject.pinCalls).toEqual([1]);
+    expect(
+      screen.getByText(
+        "Your timezone was saved but couldn\u2019t be kept. Save it again, or the next start will use this computer\u2019s timezone.",
+      ).textContent,
+    ).toEqual(
+      "Your timezone was saved but couldn\u2019t be kept. Save it again, or the next start will use this computer\u2019s timezone.",
+    );
   });
 
   it("keeps a managed field read-only", async () => {

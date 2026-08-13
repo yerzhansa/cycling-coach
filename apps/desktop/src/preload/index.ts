@@ -1,11 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { PlatformAbsolutePathSchema } from "@enduragent/coach-contract";
 import { parseDesktopAppearance } from "../main/appearance.js";
-import {
-  parseSessionTimezoneMode,
-  parseSessionTimezoneNotice,
-  parseSessionTimezoneSetting,
-} from "../main/session-timezone-contract.js";
 import { desktopPlatformProjection } from "../main/platform-copy.js";
 import {
   DESKTOP_APPEARANCE_CHANNEL,
@@ -14,9 +9,7 @@ import {
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_RELEASE_NOTES_CHANNEL,
-  DESKTOP_SESSION_TIMEZONE_MODE_CHANNEL,
-  DESKTOP_SESSION_TIMEZONE_NOTICE_CHANNEL,
-  DESKTOP_SESSION_TIMEZONE_SETTING_CHANNEL,
+  DESKTOP_SESSION_TIMEZONE_PIN_CHANNEL,
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
@@ -1595,19 +1588,8 @@ contextBridge.exposeInMainWorld(
     },
     releaseNotes: async () =>
       parseReleaseNotes(await ipcRenderer.invoke(DESKTOP_RELEASE_NOTES_CHANNEL)),
-    sessionTimezoneNotice: async () =>
-      parseSessionTimezoneNotice(
-        await ipcRenderer.invoke(DESKTOP_SESSION_TIMEZONE_NOTICE_CHANNEL),
-      ),
-    sessionTimezoneSetting: async () =>
-      parseSessionTimezoneSetting(
-        await ipcRenderer.invoke(DESKTOP_SESSION_TIMEZONE_SETTING_CHANNEL),
-      ),
-    setSessionTimezoneMode: async (mode: unknown) => {
-      const parsed = parseSessionTimezoneMode(mode);
-      if (parsed === undefined) throw new TypeError();
-      return (await ipcRenderer.invoke(DESKTOP_SESSION_TIMEZONE_MODE_CHANNEL, parsed)) === true;
-    },
+    pinSessionTimezone: async () =>
+      (await ipcRenderer.invoke(DESKTOP_SESSION_TIMEZONE_PIN_CHANNEL)) === true,
     getUpdateState: async () =>
       parseUpdateState(await ipcRenderer.invoke(DESKTOP_UPDATE_GET_CHANNEL)),
     checkForUpdates: async () =>

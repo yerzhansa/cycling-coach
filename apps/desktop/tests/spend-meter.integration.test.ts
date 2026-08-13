@@ -420,6 +420,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "onUpdateState",
       "pasteIntervalsApiKeyFromClipboard",
       "pasteTelegramTokenFromClipboard",
+      "pinSessionTimezone",
       "platform",
       "reconcileTelegram",
       "releaseNotes",
@@ -428,10 +429,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "removeTelegramWebhook",
       "restartToUpdate",
       "retryFailedCredentials",
-      "sessionTimezoneNotice",
-      "sessionTimezoneSetting",
       "setAppearance",
-      "setSessionTimezoneMode",
       "telegramStatus",
       "writeCredential",
     ]);

@@ -69,16 +69,8 @@ import {
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 import { installDesktopReleaseNotesIpc } from "./release-notes-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
-import {
-  createSessionTimezoneNoticeStore,
-  installDesktopSessionTimezoneIpc,
-} from "./session-timezone-ipc.js";
-import {
-  chooseSessionTimezoneMode,
-  readSessionTimezoneSetting,
-  recordFirstRunSessionTimezoneMode,
-  reconcileSessionTimezoneAtStart,
-} from "./session-timezone.js";
+import { installDesktopSessionTimezoneIpc } from "./session-timezone-ipc.js";
+import { adoptDeviceTimezoneAtStart, pinSessionTimezone } from "./session-timezone.js";
 import {
   BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME,
   createBackgroundAtLoginPreferenceStore,
@@ -200,7 +192,6 @@ async function runDesktop(): Promise<void> {
   desktopStartedInBackground =
     !securitySmokeMode && (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
   const controller = new AbortController();
-  const sessionTimezoneNotices = createSessionTimezoneNoticeStore();
   const environment = { ...process.env };
   const rendererSource = resolveDesktopRendererSource(
     app.isPackaged,
@@ -209,21 +200,12 @@ async function runDesktop(): Promise<void> {
   try {
     const preparedHome = await prepareDesktopAthleteHome(environment);
     environment.ENDURAGENT_HOME = preparedHome.root;
-    const seeded = await seedFirstRunConfig({ env: environment });
-    if (environment.COACH_TZ === undefined) {
-      await recordFirstRunSessionTimezoneMode({
-        stateRoot: desktopPreferencesRoot,
-        seeded,
-        env: environment,
-      });
-    }
-    sessionTimezoneNotices.set(
-      await reconcileSessionTimezoneAtStart({
-        configPath: join(preparedHome.root, "config", "config.yaml"),
-        stateRoot: desktopPreferencesRoot,
-        env: environment,
-      }),
-    );
+    await seedFirstRunConfig({ env: environment });
+    await adoptDeviceTimezoneAtStart({
+      configPath: join(preparedHome.root, "config", "config.yaml"),
+      stateRoot: desktopPreferencesRoot,
+      env: environment,
+    });
   } catch {
     process.stderr.write("desktop-first-run-config-failure seed\n");
   }
@@ -934,11 +916,7 @@ async function runDesktop(): Promise<void> {
     disposeSessionTimezoneIpc = installDesktopSessionTimezoneIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
-      notices: sessionTimezoneNotices,
-      readSetting: () =>
-        readSessionTimezoneSetting({ stateRoot: desktopPreferencesRoot, env: environment }),
-      chooseMode: (mode) =>
-        chooseSessionTimezoneMode({ stateRoot: desktopPreferencesRoot, mode, env: environment }),
+      pin: () => pinSessionTimezone({ stateRoot: desktopPreferencesRoot, env: environment }),
     });
     disposeUpdateIpc = installDesktopUpdateIpc({
       ipcMain,

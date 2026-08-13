@@ -10,7 +10,6 @@ import { NewConversationDialog } from "./NewConversationDialog.js";
 import { QueuedMessages } from "./QueuedMessages.js";
 import { QuickActions } from "./QuickActions.js";
 import { SpendNotice } from "./SpendNotice.js";
-import { TimezoneNoticeCard } from "./TimezoneNoticeCard.js";
 import { Transcript } from "./Transcript.js";
 
 const COMPOSER_CLEARANCE_PROPERTY = "--chat-composer-clearance";
@@ -113,7 +112,6 @@ export function ChatView(): ReactElement {
           {activeView === "chat" && needsSetup ? <SetupPanel placement="chat" /> : null}
           <Transcript />
           <FirstSyncCard />
-          <TimezoneNoticeCard />
         </div>
       </main>
       <div className={`${styles.composerWrap} composer-wrap`} ref={composerWrap}>
