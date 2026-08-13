@@ -5,6 +5,7 @@ import type {
 import type { CredentialSettingsEntry } from "../../settings/credential-controller.js";
 import type { ProviderModelValidationError } from "../../settings/provider-model-controller.js";
 import type { SessionSettingField } from "../../settings/session-controller.js";
+import type { SessionTimezoneModeState } from "../../state/session-timezone-slice.js";
 
 export const COACH_VALIDATION_COPY: Readonly<Record<ProviderModelValidationError, string>> = {
   "model-required": "Enter a model name.",
@@ -43,6 +44,40 @@ export const ATHLETE_SAVE_ERROR_COPY: Readonly<Record<AthleteSettingsSaveError, 
 export const MANAGED_BY_ENVIRONMENT_COPY =
   "Managed by an environment variable. Change it outside Enduragent.";
 
+export const TIMEZONE_MODE_COPY = {
+  title: "Timezone source",
+  groupLabel: "Timezone source",
+  followLabel: "Follow this computer",
+  fixedLabel: "Use a fixed timezone",
+  failed: "That choice wasn’t saved. Pick it again.",
+  loading: "Checking which timezone source is saved…",
+  unavailable: "The timezone source isn’t available right now.",
+  unanswered: "Enduragent hasn’t been told which to use yet. Pick one.",
+  hostUnknown: "This computer isn’t reporting a timezone right now.",
+} as const;
+
+export function timezoneModeDetailCopy(state: SessionTimezoneModeState): string {
+  if (state.status === "loading") return TIMEZONE_MODE_COPY.loading;
+  if (state.status === "unavailable") return TIMEZONE_MODE_COPY.unavailable;
+  if (state.status === "environment-managed") {
+    return `COACH_TZ sets the timezone to ${state.timezone}.`;
+  }
+  const host = state.host === null ? null : `this computer says ${state.host}`;
+  if (state.mode === "follow") {
+    return host === null
+      ? `Enduragent adopts this computer’s timezone every time it starts. ${TIMEZONE_MODE_COPY.hostUnknown}`
+      : `Enduragent adopts this computer’s timezone every time it starts — ${host}.`;
+  }
+  if (state.mode === "fixed") {
+    return host === null
+      ? "Enduragent keeps the timezone below and never changes it on its own."
+      : `Enduragent keeps the timezone below and never changes it on its own — ${host}.`;
+  }
+  return host === null
+    ? TIMEZONE_MODE_COPY.unanswered
+    : `${TIMEZONE_MODE_COPY.unanswered} ${host[0]?.toUpperCase()}${host.slice(1)}.`;
+}
+
 export interface ConversationFieldDefinition {
   readonly field: SessionSettingField;
   readonly label: string;
@@ -58,7 +93,7 @@ export const CONVERSATION_FIELDS: readonly ConversationFieldDefinition[] = [
   {
     field: "timezone",
     label: "Timezone",
-    help: "Use an IANA timezone, such as Europe/London. Saving one here pins it, and Enduragent keeps it even when this computer’s timezone changes.",
+    help: "Use an IANA timezone, such as Europe/London. Editable only while the timezone source above is “Use a fixed timezone”; while it follows this computer, Enduragent rewrites this on every start.",
     type: "text",
   },
   {

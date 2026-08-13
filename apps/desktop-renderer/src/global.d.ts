@@ -57,7 +57,8 @@ interface EnduragentAuth {
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
   sessionTimezoneNotice(): Promise<DesktopSessionTimezoneNotice>;
-  recordSessionTimezoneSource(source: DesktopSessionTimezoneSource): Promise<boolean>;
+  sessionTimezoneSetting(): Promise<DesktopSessionTimezoneSetting>;
+  setSessionTimezoneMode(mode: DesktopSessionTimezoneMode): Promise<boolean>;
   getUpdateState(): Promise<DesktopUpdateState>;
   checkForUpdates(): Promise<DesktopUpdateState>;
   restartToUpdate(): Promise<DesktopUpdateState>;
@@ -278,11 +279,20 @@ type DesktopTelegramAllowedSendersMutationResult =
       readonly reason: "storage-uncertain" | "control-uncertain";
     };
 
-type DesktopSessionTimezoneSource = "auto" | "user";
+type DesktopSessionTimezoneMode = "follow" | "fixed";
 
 type DesktopSessionTimezoneNotice =
   | { readonly status: "none" }
   | { readonly status: "reconcile"; readonly stored: string; readonly host: string };
+
+type DesktopSessionTimezoneSetting =
+  | { readonly status: "unavailable" }
+  | { readonly status: "environment-managed"; readonly timezone: string }
+  | {
+      readonly status: "editable";
+      readonly mode: DesktopSessionTimezoneMode | null;
+      readonly host: string | null;
+    };
 
 type ReleaseNotesResult =
   | {

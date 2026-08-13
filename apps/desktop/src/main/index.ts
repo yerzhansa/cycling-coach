@@ -74,7 +74,9 @@ import {
   installDesktopSessionTimezoneIpc,
 } from "./session-timezone-ipc.js";
 import {
-  recordSessionTimezoneSource,
+  chooseSessionTimezoneMode,
+  readSessionTimezoneSetting,
+  recordFirstRunSessionTimezoneMode,
   reconcileSessionTimezoneAtStart,
 } from "./session-timezone.js";
 import {
@@ -208,8 +210,12 @@ async function runDesktop(): Promise<void> {
     const preparedHome = await prepareDesktopAthleteHome(environment);
     environment.ENDURAGENT_HOME = preparedHome.root;
     const seeded = await seedFirstRunConfig({ env: environment });
-    if (seeded === "seeded") {
-      await recordSessionTimezoneSource({ stateRoot: desktopPreferencesRoot, source: "auto" });
+    if (environment.COACH_TZ === undefined) {
+      await recordFirstRunSessionTimezoneMode({
+        stateRoot: desktopPreferencesRoot,
+        seeded,
+        env: environment,
+      });
     }
     sessionTimezoneNotices.set(
       await reconcileSessionTimezoneAtStart({
@@ -929,8 +935,10 @@ async function runDesktop(): Promise<void> {
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
       notices: sessionTimezoneNotices,
-      record: (source) =>
-        recordSessionTimezoneSource({ stateRoot: desktopPreferencesRoot, source }),
+      readSetting: () =>
+        readSessionTimezoneSetting({ stateRoot: desktopPreferencesRoot, env: environment }),
+      chooseMode: (mode) =>
+        chooseSessionTimezoneMode({ stateRoot: desktopPreferencesRoot, mode, env: environment }),
     });
     disposeUpdateIpc = installDesktopUpdateIpc({
       ipcMain,

@@ -11,6 +11,7 @@ import {
   conversationSaveErrorCopy,
 } from "./copy.js";
 import styles from "./SettingsView.module.css";
+import { TimezoneModeControl } from "./TimezoneModeControl.js";
 
 function formState(state: SessionSettingsState): SessionSettingsFormState | null {
   if (
@@ -45,7 +46,13 @@ export function ConversationSection(): ReactElement {
   const state = useEnduragentStore((store) => store.settings.conversation);
   const mutating = useEnduragentStore((store) => settingsMutationActive(store.settings));
   const port = useEnduragentStore((store) => store.settingsPorts?.conversation ?? null);
+  const timezoneMode = useEnduragentStore((store) => store.sessionTimezoneMode);
 
+  const followingHost =
+    (timezoneMode.status === "ready" ||
+      timezoneMode.status === "saving" ||
+      timezoneMode.status === "failed") &&
+    timezoneMode.mode === "follow";
   const editable = formState(state);
   const busy =
     mutating ||
@@ -67,10 +74,12 @@ export function ConversationSection(): ReactElement {
         <p className={styles.note}>
           Set when conversations renew and how much recent context your coach carries forward.
         </p>
+        <TimezoneModeControl />
         {editable === null
           ? null
           : CONVERSATION_FIELDS.map((definition) => {
               const managed = editable.effective.managedByEnvironment[definition.field];
+              const locked = definition.field === "timezone" && followingHost;
               const error = editable.validationErrors[definition.field];
               const id = `conversation-${definition.field}`;
               const describedBy = [
@@ -95,7 +104,7 @@ export function ConversationSection(): ReactElement {
                     step={definition.step}
                     className={`${styles.control} ${styles.controlWide}`}
                     value={editable.draft[definition.field]}
-                    disabled={busy || managed}
+                    disabled={busy || managed || locked}
                     aria-invalid={error === undefined ? undefined : "true"}
                     aria-describedby={describedBy}
                     onChange={(event) => {

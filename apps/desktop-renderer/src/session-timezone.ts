@@ -7,7 +7,6 @@ import {
 
 export interface SessionTimezoneBridge {
   sessionTimezoneNotice(): Promise<DesktopSessionTimezoneNotice>;
-  recordSessionTimezoneSource(source: DesktopSessionTimezoneSource): Promise<boolean>;
 }
 
 export interface SessionTimezoneNoticeController extends SessionTimezoneActions {
@@ -19,6 +18,7 @@ export interface SessionTimezoneNoticeController extends SessionTimezoneActions 
 export function createSessionTimezoneNoticeController(input: {
   readonly bridge: SessionTimezoneBridge;
   readonly clients: DesktopCoachClientProvider;
+  readonly chooseMode: (mode: DesktopSessionTimezoneMode) => Promise<boolean>;
   readonly view: { render(state: SessionTimezoneNoticeState): void };
 }): SessionTimezoneNoticeController {
   let current: SessionTimezoneNoticeState = HIDDEN_SESSION_TIMEZONE_NOTICE;
@@ -31,7 +31,7 @@ export function createSessionTimezoneNoticeController(input: {
   };
 
   const answer = async (
-    source: DesktopSessionTimezoneSource,
+    mode: DesktopSessionTimezoneMode,
     adopt: string | null,
   ): Promise<void> => {
     if (disposed || answering) return;
@@ -47,9 +47,9 @@ export function createSessionTimezoneNoticeController(input: {
           throw new TypeError();
         }
       }
-      const recorded = await input.bridge.recordSessionTimezoneSource(source);
+      const chosen = await input.chooseMode(mode);
       if (disposed) return;
-      if (!recorded) {
+      if (!chosen) {
         render({ status: "failed", stored: shown.stored, host: shown.host });
         return;
       }
@@ -74,12 +74,12 @@ export function createSessionTimezoneNoticeController(input: {
       render({ status: "shown", stored: notice.stored, host: notice.host });
     },
     keepStored() {
-      void answer("user", null);
+      void answer("fixed", null);
     },
     useHost() {
       const shown = current;
       if (shown.status !== "shown" && shown.status !== "failed") return;
-      void answer("auto", shown.host);
+      void answer("follow", shown.host);
     },
     state: () => current,
     dispose() {

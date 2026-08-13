@@ -258,7 +258,6 @@ export function createSessionSettingsController(input: {
   readonly clients: DesktopCoachClientProvider;
   readonly view: SessionSettingsView;
   readonly beginMutation: () => (() => void) | null;
-  readonly onTimezoneSaved: () => void;
 }): SessionSettingsController {
   let currentState: SessionSettingsState = { status: "closed" };
   let generation = 0;
@@ -354,7 +353,6 @@ export function createSessionSettingsController(input: {
     if (releaseMutation === null) return Promise.resolve();
     const operationGeneration = ++generation;
     const patch = buildSessionPatch(editable);
-    const timezoneSaved = patch.timezone !== undefined;
     render({ ...editable, status: "saving" });
     let activeClient: CoachClient | undefined;
     const pending = Promise.resolve()
@@ -364,7 +362,6 @@ export function createSessionSettingsController(input: {
         if (result.status !== "applied" || result.applied.session !== true) {
           throw new CoachClientProtocolError();
         }
-        if (timezoneSaved) input.onTimezoneSaved();
         return activeClient.call("getRuntimeConfig", {});
       })
       .then(

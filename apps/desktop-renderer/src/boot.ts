@@ -29,7 +29,6 @@ import { createTrainingViewAdapter } from "./state/adapters/training.js";
 import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
 import { credentialDrafts } from "./state/credential-drafts.js";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
-import { HIDDEN_SESSION_TIMEZONE_NOTICE } from "./state/session-timezone-slice.js";
 import { useEnduragentStore, type EnduragentState } from "./state/store.js";
 import { setupReady, setupSurfaceOnScreen } from "./state/onboarding-slice.js";
 import { nonTelegramSettingsMutationActive } from "./state/settings-slice.js";
@@ -56,6 +55,7 @@ import {
 } from "./settings/credential-controller.js";
 import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
 import { createSessionTimezoneNoticeController } from "./session-timezone.js";
+import { createSessionTimezoneModeController } from "./settings/timezone-mode-controller.js";
 import { createTrainingExportController } from "./training-export/controller.js";
 
 export type Disposer = () => void;
@@ -332,9 +332,19 @@ export function bootRenderer(): Disposer {
   const telegramAdapter = createTelegramSettingsAdapter({
     publish: (state) => store.getState().patchSettings({ telegram: state }),
   });
+  const sessionTimezoneModeController = createSessionTimezoneModeController({
+    bridge: window.enduragentAuth,
+    view: { render: (next) => store.getState().setSessionTimezoneMode(next) },
+  });
+  store.getState().bindSessionTimezoneModeActions({
+    choose: (mode) => {
+      void sessionTimezoneModeController.choose(mode);
+    },
+  });
   const sessionTimezoneNoticeController = createSessionTimezoneNoticeController({
     bridge: window.enduragentAuth,
     clients,
+    chooseMode: (mode) => sessionTimezoneModeController.choose(mode),
     view: { render: (next) => store.getState().setSessionTimezoneNotice(next) },
   });
   store.getState().bindSessionTimezoneActions({
@@ -344,10 +354,6 @@ export function bootRenderer(): Disposer {
   const sessionSettingsController = createSessionSettingsController({
     clients,
     beginMutation: () => store.getState().beginSettingsMutation("session"),
-    onTimezoneSaved: () => {
-      void window.enduragentAuth.recordSessionTimezoneSource("user");
-      store.getState().setSessionTimezoneNotice(HIDDEN_SESSION_TIMEZONE_NOTICE);
-    },
     view: conversationAdapter.view,
   });
   const refreshOnboardingCredentials = async (): Promise<void> => {
@@ -436,6 +442,7 @@ export function bootRenderer(): Disposer {
   void trainingContextController.start();
   spendController.start();
   void telegramSettingsController.activate();
+  void sessionTimezoneModeController.start();
   void sessionTimezoneNoticeController.start();
   void chatController.start();
   void onboarding.open().finally(() => store.getState().setOnboardingStartupSettled(true));
@@ -461,6 +468,7 @@ export function bootRenderer(): Disposer {
     store.getState().bindTrainingExportActions(null);
     store.getState().bindOnboardingActions(null);
     store.getState().bindSessionTimezoneActions(null);
+    store.getState().bindSessionTimezoneModeActions(null);
     disposeRideAnalysisSelection();
     disposeSetupReadiness();
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
@@ -472,6 +480,7 @@ export function bootRenderer(): Disposer {
     athleteSettingsController.dispose();
     sessionSettingsController.dispose();
     sessionTimezoneNoticeController.dispose();
+    sessionTimezoneModeController.dispose();
     telegramSettingsController.dispose();
     disposeDroppedRideImports();
     onboarding.dispose();

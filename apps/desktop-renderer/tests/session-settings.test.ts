@@ -104,7 +104,6 @@ function createSubject(input: {
   readonly beginMutation?: () => (() => void) | null;
 }) {
   const subject = fakeView();
-  const timezoneSaved = vi.fn(() => {});
   const client =
     input.client ??
     clientWith(async (method) => {
@@ -123,9 +122,8 @@ function createSubject(input: {
     clients,
     view: subject.view,
     beginMutation: input.beginMutation ?? (() => () => {}),
-    onTimezoneSaved: timezoneSaved,
   });
-  return { controller, subject, clients, client, timezoneSaved };
+  return { controller, subject, clients, client };
 }
 
 function form(controller: SessionSettingsController) {
@@ -349,57 +347,6 @@ describe("conversation and time settings controller", () => {
     expect(controller.state()).toEqual({ status: "closed" });
     expect(subject.view.render).toHaveBeenCalledTimes(1);
     expect(subject.view.render).toHaveBeenLastCalledWith({ status: "loading" });
-  });
-
-  it("records the athlete as the source when the saved zone equals the current host zone", async () => {
-    const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const calls: Array<{ readonly method: string; readonly request: unknown }> = [];
-    const call = vi.fn(async (method: string, request: unknown) => {
-      calls.push({ method, request });
-      if (method === "configureRuntime") {
-        return {
-          schemaVersion: 3,
-          status: "applied",
-          applied: { llm: false, intervals: false, session: true },
-        };
-      }
-      return calls.length === 1 ? snapshot({ timezone: "Africa/Harare" }) : snapshot({ timezone: host });
-    });
-    const { controller, subject, timezoneSaved } = createSubject({ client: clientWith(call) });
-    await controller.activate();
-
-    subject.change("timezone", host);
-    expect([...form(controller).dirtyFields]).toEqual(["timezone"]);
-    subject.save();
-    await vi.waitFor(() => expect(controller.state().status).toBe("saved"));
-
-    expect(calls).toEqual([
-      { method: "getRuntimeConfig", request: {} },
-      { method: "configureRuntime", request: { session: { timezone: host } } },
-      { method: "getRuntimeConfig", request: {} },
-    ]);
-    expect(timezoneSaved).toHaveBeenCalledOnce();
-  });
-
-  it("does not record an athlete-set source when the saved patch leaves the zone alone", async () => {
-    const call = vi.fn(async (method: string) => {
-      if (method === "configureRuntime") {
-        return {
-          schemaVersion: 3,
-          status: "applied",
-          applied: { llm: false, intervals: false, session: true },
-        };
-      }
-      return snapshot();
-    });
-    const { controller, subject, timezoneSaved } = createSubject({ client: clientWith(call) });
-    await controller.activate();
-
-    subject.change("idleMinutes", "45");
-    subject.save();
-    await vi.waitFor(() => expect(controller.state().status).toBe("saved"));
-
-    expect(timezoneSaved).not.toHaveBeenCalled();
   });
 
   it("keeps an unchanged displayed percentage lossless even when decimal scaling is not invertible", async () => {

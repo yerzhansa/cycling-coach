@@ -19,13 +19,22 @@ import { createCoachRpcServer } from "../../../../packages/coach/src/daemon/rpc-
 import type { DesktopTelegramController } from "../../../../packages/coach/src/desktop-telegram-controller.js";
 import { connectCdp, reservePort, waitForPage } from "../../scripts/support/desktop-cdp.js";
 import { BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME } from "../../src/main/login-item.js";
-import { SESSION_TIMEZONE_SOURCE_FILE_NAME } from "../../src/main/session-timezone-contract.js";
+import { SESSION_TIMEZONE_MODE_FILE_NAME } from "../../src/main/session-timezone-contract.js";
 
 export interface DesktopFixtureScript {
   readonly onRequest: (request: unknown) => readonly string[] | Promise<readonly string[]>;
 }
 
+export interface DesktopFixturePaths {
+  readonly athleteHome: string;
+  readonly configPath: string;
+  readonly userData: string;
+  readonly desktopPreferences: string;
+  readonly sessionTimezoneModePath: string;
+}
+
 export interface RunningDesktopFixture {
+  readonly paths: DesktopFixturePaths;
   evaluate<T>(source: string): Promise<T>;
   screenshot(path: string): Promise<void>;
   setViewport(width: number, height: number): Promise<void>;
@@ -156,6 +165,9 @@ export async function launchDesktopFixture(input: {
   readonly height: number;
   readonly colorScheme: "light" | "dark";
   readonly reducedMotion: boolean;
+  readonly seedConfig?: boolean;
+  readonly sessionTimezoneMode?: "follow" | "fixed" | null;
+  readonly extraEnv?: Readonly<Record<string, string>>;
 }): Promise<RunningDesktopFixture> {
   if (!/^[A-Za-z0-9_-]{43}$/.test(input.token)) throw new TypeError("invalid fixture token");
   if (!existsSync(join(desktopRoot, "out/main/index.js"))) {
@@ -172,13 +184,20 @@ export async function launchDesktopFixture(input: {
     mkdir(userData, { recursive: true, mode: 0o700 }),
     mkdir(desktopPreferences, { recursive: true, mode: 0o700 }),
   ]);
+  const sessionTimezoneMode = input.sessionTimezoneMode === undefined ? "fixed" : input.sessionTimezoneMode;
+  const sessionTimezoneModeFile = join(desktopPreferences, SESSION_TIMEZONE_MODE_FILE_NAME);
   await Promise.all([
-    writeFile(
-      join(desktopPreferences, SESSION_TIMEZONE_SOURCE_FILE_NAME),
-      `${JSON.stringify({ schemaVersion: 1, source: "user" })}\n`,
-      { mode: 0o600 },
-    ),
+    ...(sessionTimezoneMode === null
+      ? []
+      : [
+          writeFile(
+            sessionTimezoneModeFile,
+            `${JSON.stringify({ schemaVersion: 1, mode: sessionTimezoneMode })}\n`,
+            { mode: 0o600 },
+          ),
+        ]),
     writeFile(join(configDir, "daemon.token"), `${input.token}\n`, { mode: 0o600 }),
+    ...(input.seedConfig === false ? [] : [
     writeFile(
       join(configDir, "config.yaml"),
       [
@@ -197,6 +216,7 @@ export async function launchDesktopFixture(input: {
       ].join("\n"),
       { mode: 0o600 },
     ),
+    ]),
   ]);
   const lock = await acquireWriteLock({
     configDir,
@@ -335,6 +355,7 @@ export async function launchDesktopFixture(input: {
     {
       env: {
         ...process.env,
+        ...input.extraEnv,
         ENDURAGENT_HOME: athleteHome,
         ENDURAGENT_ACCEPTANCE_HIDDEN: "1",
         FORCE_COLOR: undefined,
@@ -418,6 +439,13 @@ export async function launchDesktopFixture(input: {
     throw error;
   }
   return {
+    paths: {
+      athleteHome,
+      configPath: join(configDir, "config.yaml"),
+      userData,
+      desktopPreferences,
+      sessionTimezoneModePath: sessionTimezoneModeFile,
+    },
     async evaluate<T>(source: string): Promise<T> {
       if (closed || cdp === undefined) throw new Error("desktop fixture is closed");
       const response = await cdp.call("Runtime.evaluate", {

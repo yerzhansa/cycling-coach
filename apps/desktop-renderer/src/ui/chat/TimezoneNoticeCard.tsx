@@ -25,8 +25,9 @@ export function TimezoneNoticeCard(): ReactElement | null {
           This computer says {notice.host}
         </h2>
         <p className="m-0 text-sm leading-normal text-ink-2">
-          Enduragent has been using {notice.stored} for your training days. Pick the one you want —
-          you can change it later in Settings.
+          Enduragent has been using {notice.stored} for your training days. Your answer is saved as
+          the timezone source in Settings, under Conversation &amp; time, and you can change it
+          there any time.
         </p>
         {notice.status === "failed" ? (
           <p className="mt-2 mb-0 text-sm leading-normal text-danger" role="status">
@@ -48,7 +49,7 @@ export function TimezoneNoticeCard(): ReactElement | null {
             disabled={busy}
             onClick={() => actions?.useHost()}
           >
-            Use {notice.host}
+            Follow this computer ({notice.host})
           </button>
         </div>
       </div>

@@ -48,18 +48,18 @@ function createSubject(input: {
   readonly notice: DesktopSessionTimezoneNotice;
   readonly recorded?: boolean;
 }) {
-  const records: DesktopSessionTimezoneSource[] = [];
+  const records: DesktopSessionTimezoneMode[] = [];
   const bridge: SessionTimezoneBridge = {
     sessionTimezoneNotice: async () => input.notice,
-    recordSessionTimezoneSource: async (source) => {
-      records.push(source);
-      return input.recorded ?? true;
-    },
   };
   const provider = providerWith(async () => appliedSession());
   const controller = createSessionTimezoneNoticeController({
     bridge,
     clients: provider.clients,
+    chooseMode: async (mode) => {
+      records.push(mode);
+      return input.recorded ?? true;
+    },
     view: { render: (next) => useEnduragentStore.getState().setSessionTimezoneNotice(next) },
   });
   useEnduragentStore.getState().bindSessionTimezoneActions({
@@ -81,7 +81,7 @@ describe("session timezone reconciliation notice", () => {
     useEnduragentStore.getState().bindSessionTimezoneActions(null);
   });
 
-  it("shows the notice once and records user when the athlete keeps the stored zone", async () => {
+  it("shows the notice once and persists a fixed source when the athlete keeps the stored zone", async () => {
     const subject = createSubject({
       notice: { status: "reconcile", stored: HARARE, host: QYZYLORDA },
     });
@@ -94,7 +94,7 @@ describe("session timezone reconciliation notice", () => {
     await userEvent.click(screen.getByRole("button", { name: `Keep ${HARARE}` }));
 
     await waitFor(() => {
-      expect(subject.records).toEqual(["user"]);
+      expect(subject.records).toEqual(["fixed"]);
     });
     expect(subject.calls).toEqual([]);
     await waitFor(() => {
@@ -102,7 +102,7 @@ describe("session timezone reconciliation notice", () => {
     });
   });
 
-  it("adopts the host zone through the runtime and records auto when the athlete matches the computer", async () => {
+  it("adopts the host zone through the runtime and persists a follow source when the athlete matches the computer", async () => {
     const subject = createSubject({
       notice: { status: "reconcile", stored: HARARE, host: QYZYLORDA },
     });
@@ -111,10 +111,10 @@ describe("session timezone reconciliation notice", () => {
       await subject.controller.start();
     });
 
-    await userEvent.click(screen.getByRole("button", { name: `Use ${QYZYLORDA}` }));
+    await userEvent.click(screen.getByRole("button", { name: `Follow this computer (${QYZYLORDA})` }));
 
     await waitFor(() => {
-      expect(subject.records).toEqual(["auto"]);
+      expect(subject.records).toEqual(["follow"]);
     });
     expect(subject.calls).toEqual([
       { method: "configureRuntime", request: { session: { timezone: QYZYLORDA } } },
@@ -145,6 +145,6 @@ describe("session timezone reconciliation notice", () => {
     });
 
     const labels = screen.getAllByRole("button").map((button) => button.textContent);
-    expect(labels).toEqual([`Keep ${HARARE}`, `Use ${QYZYLORDA}`]);
+    expect(labels).toEqual([`Keep ${HARARE}`, `Follow this computer (${QYZYLORDA})`]);
   });
 });

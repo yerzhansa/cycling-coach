@@ -2,17 +2,20 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { DESKTOP_RENDERER_URL } from "../src/main/constants.js";
 import {
   createSessionTimezoneNoticeStore,
   installDesktopSessionTimezoneIpc,
 } from "../src/main/session-timezone-ipc.js";
 import {
+  chooseSessionTimezoneMode,
   decideSessionTimezoneAtStart,
-  readSessionTimezoneSource,
+  readSessionTimezoneMode,
+  readSessionTimezoneSetting,
+  recordFirstRunSessionTimezoneMode,
   reconcileSessionTimezoneAtStart,
-  recordSessionTimezoneSource,
-  sessionTimezoneSourcePath,
+  sessionTimezoneModePath,
   type DesktopSessionTimezoneNotice,
 } from "../src/main/session-timezone.js";
 
@@ -24,6 +27,7 @@ async function createInstall(storedTimezone: string): Promise<{
   readonly configPath: string;
   readonly stateRoot: string;
   readonly read: () => Promise<string>;
+  readonly storedZone: () => Promise<unknown>;
 }> {
   const root = await mkdtemp(join(tmpdir(), "session-timezone-"));
   const configDirectory = join(root, "config");
@@ -31,25 +35,35 @@ async function createInstall(storedTimezone: string): Promise<{
   const configPath = join(configDirectory, "config.yaml");
   await writeFile(
     configPath,
-    ["data_source: store", "session:", `  timezone: ${storedTimezone}`, "  daily_reset_hour: 4", ""].join(
-      "\n",
-    ),
+    [
+      "data_source: store",
+      "session:",
+      `  timezone: ${storedTimezone}`,
+      "  daily_reset_hour: 4",
+      "",
+    ].join("\n"),
     "utf8",
   );
   const stateRoot = join(root, "preferences");
   await mkdir(stateRoot, { recursive: true });
-  return { configPath, stateRoot, read: () => readFile(configPath, "utf8") };
+  const read = () => readFile(configPath, "utf8");
+  return {
+    configPath,
+    stateRoot,
+    read,
+    storedZone: async () => {
+      const document = parseYaml(await read()) as { readonly session?: { timezone?: unknown } };
+      return document.session?.timezone;
+    },
+  };
 }
 
-function storedTimezoneOf(contents: string): string | undefined {
-  const line = contents.split("\n").find((candidate) => candidate.trim().startsWith("timezone:"));
-  return line?.split(":").slice(1).join(":").trim();
-}
-
-describe("desktop session timezone reconciliation", () => {
-  it("adopts the host zone on the next start when the stored zone was auto-detected", async () => {
+describe("desktop session timezone start behaviour", () => {
+  it("adopts the host zone on the next start while the athlete follows this computer", async () => {
     const install = await createInstall(HARARE);
-    await recordSessionTimezoneSource({ stateRoot: install.stateRoot, source: "auto" });
+    expect(
+      await chooseSessionTimezoneMode({ stateRoot: install.stateRoot, mode: "follow", env: {} }),
+    ).toBe(true);
 
     const notice = await reconcileSessionTimezoneAtStart({
       configPath: install.configPath,
@@ -59,23 +73,23 @@ describe("desktop session timezone reconciliation", () => {
     });
 
     expect(notice).toEqual({ status: "none" });
-    expect(storedTimezoneOf(await install.read())).toBe(QYZYLORDA);
-    expect(await readSessionTimezoneSource(install.stateRoot)).toBe("auto");
+    expect(await install.storedZone()).toBe(QYZYLORDA);
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBe("follow");
   });
 
-  it("keeps a zone the athlete set even when it equalled the host zone at the time", async () => {
+  it("never touches a fixed zone the athlete pinned while it already equalled the host", async () => {
     const install = await createInstall(LISBON);
-    await recordSessionTimezoneSource({ stateRoot: install.stateRoot, source: "user" });
-    const before = await install.read();
+    const setting = await readSessionTimezoneSetting({
+      stateRoot: install.stateRoot,
+      env: {},
+      hostTimezone: () => LISBON,
+    });
+    expect(setting).toEqual({ status: "editable", mode: null, host: LISBON });
 
     expect(
-      decideSessionTimezoneAtStart({
-        environmentManaged: false,
-        source: "user",
-        stored: LISBON,
-        host: LISBON,
-      }),
-    ).toEqual({ kind: "idle", reason: "user-set" });
+      await chooseSessionTimezoneMode({ stateRoot: install.stateRoot, mode: "fixed", env: {} }),
+    ).toBe(true);
+    const before = await install.read();
 
     const notice = await reconcileSessionTimezoneAtStart({
       configPath: install.configPath,
@@ -86,10 +100,11 @@ describe("desktop session timezone reconciliation", () => {
 
     expect(notice).toEqual({ status: "none" });
     expect(await install.read()).toBe(before);
-    expect(storedTimezoneOf(await install.read())).toBe(LISBON);
+    expect(await install.storedZone()).toBe(LISBON);
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBe("fixed");
   });
 
-  it("asks once when there is no marker and never rewrites the config before the answer", async () => {
+  it("asks once when nothing is persisted, and keeping the stored zone persists the choice", async () => {
     const install = await createInstall(HARARE);
     const before = await install.read();
 
@@ -102,10 +117,11 @@ describe("desktop session timezone reconciliation", () => {
 
     expect(first).toEqual({ status: "reconcile", stored: HARARE, host: QYZYLORDA });
     expect(await install.read()).toBe(before);
-    expect(await readSessionTimezoneSource(install.stateRoot)).toBeUndefined();
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBeUndefined();
 
-    await recordSessionTimezoneSource({ stateRoot: install.stateRoot, source: "user" });
-    expect(await readSessionTimezoneSource(install.stateRoot)).toBe("user");
+    expect(
+      await chooseSessionTimezoneMode({ stateRoot: install.stateRoot, mode: "fixed", env: {} }),
+    ).toBe(true);
     const afterKeeping = await reconcileSessionTimezoneAtStart({
       configPath: install.configPath,
       stateRoot: install.stateRoot,
@@ -116,7 +132,7 @@ describe("desktop session timezone reconciliation", () => {
     expect(await install.read()).toBe(before);
   });
 
-  it("stops asking once the athlete chooses the computer zone", async () => {
+  it("stops asking once the athlete answers with this computer's zone", async () => {
     const install = await createInstall(HARARE);
 
     expect(
@@ -128,7 +144,9 @@ describe("desktop session timezone reconciliation", () => {
       }),
     ).toEqual({ status: "reconcile", stored: HARARE, host: QYZYLORDA });
 
-    await recordSessionTimezoneSource({ stateRoot: install.stateRoot, source: "auto" });
+    expect(
+      await chooseSessionTimezoneMode({ stateRoot: install.stateRoot, mode: "follow", env: {} }),
+    ).toBe(true);
     const afterAdopting = await reconcileSessionTimezoneAtStart({
       configPath: install.configPath,
       stateRoot: install.stateRoot,
@@ -137,7 +155,7 @@ describe("desktop session timezone reconciliation", () => {
     });
 
     expect(afterAdopting).toEqual({ status: "none" });
-    expect(storedTimezoneOf(await install.read())).toBe(QYZYLORDA);
+    expect(await install.storedZone()).toBe(QYZYLORDA);
     expect(
       await reconcileSessionTimezoneAtStart({
         configPath: install.configPath,
@@ -146,23 +164,6 @@ describe("desktop session timezone reconciliation", () => {
         hostTimezone: () => QYZYLORDA,
       }),
     ).toEqual({ status: "none" });
-  });
-
-  it("leaves everything alone when COACH_TZ owns the zone", async () => {
-    const install = await createInstall(HARARE);
-    const before = await install.read();
-
-    const notice = await reconcileSessionTimezoneAtStart({
-      configPath: install.configPath,
-      stateRoot: install.stateRoot,
-      env: { COACH_TZ: "Europe/Berlin" },
-      hostTimezone: () => QYZYLORDA,
-    });
-
-    expect(notice).toEqual({ status: "none" });
-    expect(await install.read()).toBe(before);
-    expect(await readSessionTimezoneSource(install.stateRoot)).toBeUndefined();
-    await expect(readFile(sessionTimezoneSourcePath(install.stateRoot), "utf8")).rejects.toThrow();
   });
 
   it("falls back exactly as before when the stored zone is invalid, with no notice", async () => {
@@ -178,35 +179,162 @@ describe("desktop session timezone reconciliation", () => {
 
     expect(notice).toEqual({ status: "none" });
     expect(await install.read()).toBe(before);
-    expect(await readSessionTimezoneSource(install.stateRoot)).toBeUndefined();
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBeUndefined();
   });
 
-  it("never infers a source from a stored value that happens to match the host", async () => {
+  it("takes the mode as an input and never returns one", () => {
     expect(
-      decideSessionTimezoneAtStart({ environmentManaged: false, stored: LISBON, host: LISBON }),
-    ).toEqual({ kind: "idle", reason: "unchanged" });
+      decideSessionTimezoneAtStart({ environmentManaged: false, mode: null, stored: LISBON, host: LISBON }),
+    ).toEqual({ kind: "idle", reason: "unanswered-and-equal" });
     expect(
-      decideSessionTimezoneAtStart({ environmentManaged: false, stored: HARARE, host: QYZYLORDA }),
+      decideSessionTimezoneAtStart({
+        environmentManaged: false,
+        mode: null,
+        stored: HARARE,
+        host: QYZYLORDA,
+      }),
     ).toEqual({ kind: "reconcile", stored: HARARE, host: QYZYLORDA });
     expect(
       decideSessionTimezoneAtStart({
+        environmentManaged: false,
+        mode: "fixed",
+        stored: LISBON,
+        host: LISBON,
+      }),
+    ).toEqual({ kind: "idle", reason: "fixed" });
+    expect(
+      decideSessionTimezoneAtStart({
         environmentManaged: true,
-        source: "auto",
+        mode: "follow",
         stored: HARARE,
         host: QYZYLORDA,
       }),
     ).toEqual({ kind: "idle", reason: "environment-managed" });
+    for (const decision of [
+      decideSessionTimezoneAtStart({
+        environmentManaged: false,
+        mode: "follow",
+        stored: HARARE,
+        host: QYZYLORDA,
+      }),
+      decideSessionTimezoneAtStart({
+        environmentManaged: false,
+        mode: null,
+        stored: HARARE,
+        host: QYZYLORDA,
+      }),
+    ]) {
+      expect(Object.keys(decision).includes("mode")).toBe(false);
+      expect(Object.keys(decision).includes("source")).toBe(false);
+    }
+  });
+});
+
+describe("desktop session timezone persisted mode", () => {
+  it("defaults a freshly seeded install to following this computer", async () => {
+    const install = await createInstall(HARARE);
+    expect(
+      await recordFirstRunSessionTimezoneMode({
+        stateRoot: install.stateRoot,
+        seeded: "seeded",
+        env: {},
+      }),
+    ).toBe(true);
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBe("follow");
+  });
+
+  it("writes nothing when the config already existed", async () => {
+    const install = await createInstall(HARARE);
+    expect(
+      await recordFirstRunSessionTimezoneMode({
+        stateRoot: install.stateRoot,
+        seeded: "existing",
+        env: {},
+      }),
+    ).toBe(false);
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBeUndefined();
+  });
+
+  it("refuses every write path and reports environment ownership when COACH_TZ is set", async () => {
+    const install = await createInstall(HARARE);
+    const before = await install.read();
+    const env = { COACH_TZ: "Europe/Berlin" };
+
+    expect(
+      await recordFirstRunSessionTimezoneMode({
+        stateRoot: install.stateRoot,
+        seeded: "seeded",
+        env,
+      }),
+    ).toBe(false);
+    expect(await chooseSessionTimezoneMode({ stateRoot: install.stateRoot, mode: "fixed", env })).toBe(
+      false,
+    );
+    expect(
+      await chooseSessionTimezoneMode({ stateRoot: install.stateRoot, mode: "follow", env }),
+    ).toBe(false);
+    expect(
+      await reconcileSessionTimezoneAtStart({
+        configPath: install.configPath,
+        stateRoot: install.stateRoot,
+        env,
+        hostTimezone: () => QYZYLORDA,
+      }),
+    ).toEqual({ status: "none" });
+
+    expect(await install.read()).toBe(before);
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBeUndefined();
+    await expect(readFile(sessionTimezoneModePath(install.stateRoot), "utf8")).rejects.toThrow();
+    expect(
+      await readSessionTimezoneSetting({
+        stateRoot: install.stateRoot,
+        env,
+        hostTimezone: () => QYZYLORDA,
+      }),
+    ).toEqual({ status: "environment-managed", timezone: "Europe/Berlin" });
+  });
+
+  it("still lets the environment own an empty COACH_TZ, naming the zone the engine falls back to", async () => {
+    const install = await createInstall(HARARE);
+    const env = { COACH_TZ: "" };
+    expect(
+      await readSessionTimezoneSetting({
+        stateRoot: install.stateRoot,
+        env,
+        hostTimezone: () => QYZYLORDA,
+      }),
+    ).toEqual({ status: "environment-managed", timezone: QYZYLORDA });
+    expect(await chooseSessionTimezoneMode({ stateRoot: install.stateRoot, mode: "fixed", env })).toBe(
+      false,
+    );
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBeUndefined();
+  });
+
+  it("reports an unusable host zone as no host rather than guessing", async () => {
+    const install = await createInstall(HARARE);
+    expect(
+      await readSessionTimezoneSetting({
+        stateRoot: install.stateRoot,
+        env: {},
+        hostTimezone: () => "Not/AZone",
+      }),
+    ).toEqual({ status: "editable", mode: null, host: null });
   });
 });
 
 describe("desktop session timezone ipc", () => {
-  function installIpc(initial: DesktopSessionTimezoneNotice, stateRoot: string) {
+  function installIpc(input: {
+    readonly initial: DesktopSessionTimezoneNotice;
+    readonly stateRoot: string;
+    readonly env?: Record<string, string | undefined>;
+  }) {
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const notices = createSessionTimezoneNoticeStore();
-    notices.set(initial);
+    notices.set(input.initial);
     const mainFrame = { url: DESKTOP_RENDERER_URL };
     const webContents = { isDestroyed: () => false, mainFrame };
     const window = { isDestroyed: () => false, webContents } as never;
+    const env = input.env ?? {};
     const dispose = installDesktopSessionTimezoneIpc({
       ipcMain: {
         handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -218,21 +346,76 @@ describe("desktop session timezone ipc", () => {
       } as never,
       currentWindow: () => window,
       notices,
-      record: (source) => recordSessionTimezoneSource({ stateRoot, source }),
+      readSetting: () =>
+        readSessionTimezoneSetting({
+          stateRoot: input.stateRoot,
+          env,
+          hostTimezone: () => QYZYLORDA,
+        }),
+      chooseMode: (mode) => chooseSessionTimezoneMode({ stateRoot: input.stateRoot, mode, env }),
     });
     const event = { sender: webContents, senderFrame: mainFrame } as never;
-    return { handlers, dispose, event };
+    return { handlers, dispose, event, notices };
   }
 
-  it("rejects an unrecognised source instead of writing a marker", async () => {
+  it("rejects an unrecognised mode instead of writing one", async () => {
     const install = await createInstall(HARARE);
-    const ipc = installIpc({ status: "reconcile", stored: HARARE, host: QYZYLORDA }, install.stateRoot);
-    const record = ipc.handlers.get("desktop:session-timezone:record");
-    expect(record).toBeDefined();
-    await expect(
-      Promise.resolve(record?.(ipc.event, "somewhere-else")),
-    ).rejects.toBeInstanceOf(TypeError);
-    expect(await readSessionTimezoneSource(install.stateRoot)).toBeUndefined();
+    const ipc = installIpc({
+      initial: { status: "reconcile", stored: HARARE, host: QYZYLORDA },
+      stateRoot: install.stateRoot,
+    });
+    const choose = ipc.handlers.get("desktop:session-timezone:mode");
+    expect(choose).toBeDefined();
+    await expect(Promise.resolve(choose?.(ipc.event, "somewhere-else"))).rejects.toBeInstanceOf(
+      TypeError,
+    );
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBeUndefined();
+    ipc.dispose();
+  });
+
+  it("clears the notice only when the chosen mode was persisted", async () => {
+    const install = await createInstall(HARARE);
+    const ipc = installIpc({
+      initial: { status: "reconcile", stored: HARARE, host: QYZYLORDA },
+      stateRoot: install.stateRoot,
+    });
+    const choose = ipc.handlers.get("desktop:session-timezone:mode");
+    expect(await choose?.(ipc.event, "fixed")).toBe(true);
+    expect(ipc.notices.read()).toEqual({ status: "none" });
+    ipc.dispose();
+
+    const refused = await createInstall(HARARE);
+    const guarded = installIpc({
+      initial: { status: "reconcile", stored: HARARE, host: QYZYLORDA },
+      stateRoot: refused.stateRoot,
+      env: { COACH_TZ: "Europe/Berlin" },
+    });
+    const guardedChoose = guarded.handlers.get("desktop:session-timezone:mode");
+    expect(await guardedChoose?.(guarded.event, "fixed")).toBe(false);
+    expect(guarded.notices.read()).toEqual({
+      status: "reconcile",
+      stored: HARARE,
+      host: QYZYLORDA,
+    });
+    expect(await readSessionTimezoneMode(refused.stateRoot)).toBeUndefined();
+    guarded.dispose();
+  });
+
+  it("serves the persisted setting to the settings control", async () => {
+    const install = await createInstall(HARARE);
+    const ipc = installIpc({ initial: { status: "none" }, stateRoot: install.stateRoot });
+    const setting = ipc.handlers.get("desktop:session-timezone:setting");
+    expect(await setting?.(ipc.event)).toEqual({
+      status: "editable",
+      mode: null,
+      host: QYZYLORDA,
+    });
+    await chooseSessionTimezoneMode({ stateRoot: install.stateRoot, mode: "fixed", env: {} });
+    expect(await setting?.(ipc.event)).toEqual({
+      status: "editable",
+      mode: "fixed",
+      host: QYZYLORDA,
+    });
     ipc.dispose();
   });
 });

@@ -2,4 +2,4 @@
 "@enduragent/desktop": patch
 ---
 
-User-facing: The desktop app now records whether your timezone was auto-detected or set by you. An auto-detected timezone follows this computer on every start, a timezone you saved in Settings is never overwritten, and an install from before this change is asked once which of the two zones to keep.
+User-facing: Settings → Conversation & time now has a visible Timezone source control with two choices: follow this computer, or use a fixed timezone. Following adopts this computer's timezone every time Enduragent starts, so a machine that moves zones no longer coaches on the old one. Fixed keeps your timezone exactly as you set it. An install from before this change is asked once which to use, and your answer is saved as the setting. COACH_TZ still owns the timezone when it is set, and the control says so instead of pretending to be editable.

@@ -271,7 +271,6 @@ function createHarness(options: HarnessOptions = {}) {
   const conversationController = createSessionSettingsController({
     clients,
     beginMutation: () => store.getState().beginSettingsMutation("session"),
-    onTimezoneSaved: () => {},
     view: conversationAdapter.view,
   });
   const credentialController = createCredentialSettingsController({
