@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { EngineHostPorts } from "../src/host-ports.js";
 import { normalizeError } from "../src/agent/codex-bridge.js";
 import { usageFieldsFromResult } from "../src/llm-types.js";
+import { isProviderAuthFailure } from "../src/provider-auth-failure.js";
 import {
   classifyFailure,
   isContextOverflowError,
@@ -487,6 +488,43 @@ describe("codex-bridge", () => {
     expect(complete).toHaveBeenCalledWith(expect.objectContaining({ signal }));
   });
 
+  it("refreshes a server-rejected token once without poisoning the next turn", async () => {
+    let storedAccess = "stale-access";
+    const complete = vi.fn(async ({ accessToken }: { accessToken: string }) => {
+      if (accessToken === "stale-access") {
+        throw Object.assign(new Error("unauthorized"), { httpStatus: 401 });
+      }
+      return asstMsg({ text: "accepted" });
+    });
+    const readStoredValue = vi.fn(
+      async (_profileName: string, _signal?: AbortSignal, rejectedAccessToken?: string) => {
+        if (rejectedAccessToken === "stale-access") storedAccess = "fresh-access";
+        return storedAccess;
+      },
+    );
+    const freshToken = readStoredValue;
+    const { codexGenerateText } = await loadBridgeWithMocks({ complete, freshToken });
+    const input = {
+      messages: [{ role: "user" as const, content: "hi" }],
+      modelId: "gpt-5.4",
+      profileName: "openai-codex",
+    };
+
+    await expect(codexGenerateText(input)).resolves.toMatchObject({ text: "accepted" });
+    await expect(codexGenerateText(input)).resolves.toMatchObject({ text: "accepted" });
+
+    expect(readStoredValue.mock.calls).toEqual([
+      ["openai-codex", undefined],
+      ["openai-codex", undefined, "stale-access"],
+      ["openai-codex", undefined],
+    ]);
+    expect(complete.mock.calls.map(([call]) => call.accessToken)).toEqual([
+      "stale-access",
+      "fresh-access",
+      "fresh-access",
+    ]);
+  });
+
   it("surfaces finishReason=length so isContextOverflowError can catch it upstream via retry", async () => {
     const complete = vi.fn(async () => asstMsg({ stopReason: "length", text: "truncated" }));
     const { codexGenerateText } = await loadBridgeWithMocks({ complete });
@@ -680,6 +718,12 @@ describe("codex-bridge normalizeError", () => {
       expect(isServerError(normalized)).toBe(true);
       expect(isRateLimitError(normalized)).toBe(false);
     }
+  });
+
+  it.each([401, 403])("classifies a %i as provider auth", (status) => {
+    const normalized = normalizeError(httpError(status, "unauthorized"), classifyFailure);
+    expect(isProviderAuthFailure(normalized)).toBe(true);
+    expect(classifyFailure(normalized)).toBe("auth");
   });
 
   it("keeps a 429 as rate limit, not server error", () => {

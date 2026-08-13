@@ -32,7 +32,6 @@ export interface OAuthCredential extends StoredProfile {
 // ============================================================================
 
 const PROFILES_FILE = join(CONFIG_DIR, "auth-profiles.json");
-const REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
 
 interface OAuthProfileSnapshot {
   readonly profile: OAuthCredential;
@@ -83,11 +82,6 @@ export function loadProfile(name: string): OAuthCredential | null {
 
 export function saveProfile(name: string, cred: OAuthCredential): void {
   recoverAndSaveStoredProfile(PROFILES_FILE, name, cred);
-}
-
-function isExpiredOrUnusable(cred: OAuthCredential): boolean {
-  if (!Number.isFinite(cred.expires)) return true;
-  return Date.now() > cred.expires - REFRESH_THRESHOLD_MS;
 }
 
 // ============================================================================
@@ -145,11 +139,15 @@ async function refreshWithReauthConfirmation(
 
 const refreshQueues = new Map<string, Promise<unknown>>();
 
-export async function getFreshToken(name: string, signal?: AbortSignal): Promise<string> {
+export async function getFreshToken(
+  name: string,
+  signal?: AbortSignal,
+  rejectedAccessToken?: string,
+): Promise<string> {
   const prev = refreshQueues.get(name) ?? Promise.resolve();
   const run = prev.then(
-    () => getFreshTokenExclusive(name, signal),
-    () => getFreshTokenExclusive(name, signal),
+    () => getFreshTokenExclusive(name, signal, rejectedAccessToken),
+    () => getFreshTokenExclusive(name, signal, rejectedAccessToken),
   );
   refreshQueues.set(name, run);
   try {
@@ -161,12 +159,16 @@ export async function getFreshToken(name: string, signal?: AbortSignal): Promise
   }
 }
 
-async function getFreshTokenExclusive(name: string, signal?: AbortSignal): Promise<string> {
+async function getFreshTokenExclusive(
+  name: string,
+  signal?: AbortSignal,
+  rejectedAccessToken?: string,
+): Promise<string> {
   const initial = loadOAuthProfileSnapshot(name);
   if (initial === null) throw missingProfile(name);
   const cred = initial.profile;
 
-  if (!isExpiredOrUnusable(cred)) {
+  if (rejectedAccessToken === undefined || cred.access !== rejectedAccessToken) {
     return cred.access;
   }
 

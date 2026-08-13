@@ -131,7 +131,7 @@ describe("auth/profiles", () => {
     expect(token).toBe("cached-access");
   });
 
-  it("getFreshToken refreshes when expires is non-finite", async () => {
+  it("getFreshToken returns stored access when expires is non-finite", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
@@ -153,14 +153,14 @@ describe("auth/profiles", () => {
       expires: Number.NaN,
     });
     const token = await getFreshToken("openai-codex");
-    expect(token).toBe("new-access");
+    expect(token).toBe("old");
 
     const saved = JSON.parse(readFileSync(profilesPath(), "utf-8"));
-    expect(saved["openai-codex"].access).toBe("new-access");
-    expect(saved["openai-codex"].refresh).toBe("new-refresh");
+    expect(saved["openai-codex"].access).toBe("old");
+    expect(saved["openai-codex"].refresh).toBe("old-refresh");
   });
 
-  it("getFreshToken refreshes when within 5-min threshold", async () => {
+  it("getFreshToken returns stored access when within the former 5-min threshold", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
@@ -179,13 +179,41 @@ describe("auth/profiles", () => {
       type: "oauth",
       access: "old",
       refresh: "old-refresh",
-      expires: Date.now() + 2 * 60_000, // 2 min from now — inside threshold
+      expires: Date.now() + 2 * 60_000,
     });
     const token = await getFreshToken("openai-codex");
-    expect(token).toBe("rotated");
+    expect(token).toBe("old");
   });
 
-  it("getFreshToken preserves a newer profile when an ordinary refresh resolves stale", async () => {
+  it.each([-2, 2])(
+    "getFreshToken returns stored access with a %i-hour local clock skew",
+    async (skewHours) => {
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
+
+      const serverNow = Date.parse("1998-07-18T12:00:00.000Z");
+      vi.useFakeTimers();
+      vi.setSystemTime(serverNow + skewHours * 60 * 60_000);
+      const refreshMock = vi.fn();
+      vi.doMock("../src/agent/codex/oauth.js", () => ({
+        refreshCodexToken: refreshMock,
+        loginCodex: vi.fn(),
+      }));
+
+      const { saveProfile, getFreshToken } = await loadModule();
+      saveProfile("openai-codex", {
+        type: "oauth",
+        access: "stored-access",
+        refresh: "refresh",
+        expires: serverNow + 60 * 60_000,
+      });
+
+      await expect(getFreshToken("openai-codex")).resolves.toBe("stored-access");
+      expect(refreshMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("getFreshToken preserves a newer profile when a rejection refresh resolves stale", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
@@ -221,7 +249,7 @@ describe("auth/profiles", () => {
     };
     saveProfile("openai-codex", original);
 
-    const settled = getFreshToken("openai-codex");
+    const settled = getFreshToken("openai-codex", undefined, "original-access");
     await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
     saveProfile("openai-codex", newer);
     const newerBytes = readFileSync(profilesPath(), "utf-8");
@@ -233,7 +261,7 @@ describe("auth/profiles", () => {
     expect(refreshMock).toHaveBeenCalledWith("original-refresh", undefined);
   });
 
-  it("getFreshToken does not resurrect a profile deleted during an ordinary refresh", async () => {
+  it("getFreshToken does not resurrect a profile deleted during a rejection refresh", async () => {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(tempHome, ".cycling-coach"), { recursive: true });
 
@@ -260,7 +288,7 @@ describe("auth/profiles", () => {
       email: "original@example.test",
     });
 
-    const settled = getFreshToken("openai-codex");
+    const settled = getFreshToken("openai-codex", undefined, "original-access");
     await vi.waitFor(() => expect(refreshMock).toHaveBeenCalledTimes(1));
     unlinkSync(profilesPath());
     pendingRefresh.resolve(staleRefresh);
@@ -293,7 +321,7 @@ describe("auth/profiles", () => {
     });
 
     vi.useFakeTimers();
-    const settled = getFreshToken("openai-codex").then(
+    const settled = getFreshToken("openai-codex", undefined, "original-access").then(
       () => null,
       (error: unknown) => error,
     );
@@ -326,7 +354,7 @@ describe("auth/profiles", () => {
     });
 
     vi.useFakeTimers();
-    const settled = getFreshToken("openai-codex").then(
+    const settled = getFreshToken("openai-codex", undefined, "old").then(
       () => null,
       (err: unknown) => err,
     );
@@ -359,7 +387,7 @@ describe("auth/profiles", () => {
       });
 
       vi.useFakeTimers();
-      const error = await getFreshToken("openai-codex").then(
+      const error = await getFreshToken("openai-codex", undefined, "old").then(
         () => null,
         (failure: unknown) => failure,
       );
@@ -396,7 +424,7 @@ describe("auth/profiles", () => {
       });
 
       vi.useFakeTimers();
-      const settled = getFreshToken("openai-codex").then(
+      const settled = getFreshToken("openai-codex", undefined, "synthetic-access").then(
         () => null,
         (error: unknown) => error,
       );
@@ -455,7 +483,7 @@ describe("auth/profiles", () => {
     });
 
     vi.useFakeTimers();
-    const settled = getFreshToken("openai-codex");
+    const settled = getFreshToken("openai-codex", undefined, "old");
     await vi.advanceTimersByTimeAsync(2_000);
     expect(await settled).toBe("confirmed-access");
     expect(refreshMock).toHaveBeenCalledTimes(2);
@@ -515,7 +543,7 @@ describe("auth/profiles", () => {
     saveProfile("openai-codex", original);
 
     vi.useFakeTimers();
-    const settled = getFreshToken("openai-codex");
+    const settled = getFreshToken("openai-codex", undefined, "original-access");
     await vi.advanceTimersByTimeAsync(2_000);
     expect(refreshMock).toHaveBeenCalledTimes(2);
     saveProfile("openai-codex", newer);
@@ -559,7 +587,7 @@ describe("auth/profiles", () => {
     });
 
     vi.useFakeTimers();
-    const settled = getFreshToken("openai-codex").then(
+    const settled = getFreshToken("openai-codex", undefined, "original-access").then(
       () => null,
       (error: unknown) => error,
     );
@@ -606,7 +634,7 @@ describe("auth/profiles", () => {
       expires: Date.now() - 1_000,
     });
 
-    await expect(getFreshToken("openai-codex", controller.signal)).resolves.toBe(
+    await expect(getFreshToken("openai-codex", controller.signal, "original-access")).resolves.toBe(
       "committed-access",
     );
     expect(controller.signal.reason).toBe(lateAbort);
@@ -636,7 +664,7 @@ describe("auth/profiles", () => {
     });
 
     vi.useFakeTimers();
-    const error = await getFreshToken("openai-codex").then(
+    const error = await getFreshToken("openai-codex", undefined, "old").then(
       () => null,
       (failure: unknown) => failure,
     );
@@ -667,7 +695,7 @@ describe("auth/profiles", () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     const abortError = new DOMException("Cancelled before wait", "AbortError");
-    const settled = getFreshToken("openai-codex", controller.signal);
+    const settled = getFreshToken("openai-codex", controller.signal, "old");
     for (let turn = 0; turn < 10 && refreshMock.mock.calls.length === 0; turn += 1) {
       await Promise.resolve();
     }
@@ -703,7 +731,7 @@ describe("auth/profiles", () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const controller = new AbortController();
     const abortError = new DOMException("Cancelled during wait", "AbortError");
-    const settled = getFreshToken("openai-codex", controller.signal);
+    const settled = getFreshToken("openai-codex", controller.signal, "old");
     for (let turn = 0; turn < 10 && vi.getTimerCount() !== 1; turn += 1) {
       await Promise.resolve();
     }
@@ -742,9 +770,9 @@ describe("auth/profiles", () => {
     });
 
     const [a, b, c] = await Promise.all([
-      getFreshToken("openai-codex"),
-      getFreshToken("openai-codex"),
-      getFreshToken("openai-codex"),
+      getFreshToken("openai-codex", undefined, "old"),
+      getFreshToken("openai-codex", undefined, "old"),
+      getFreshToken("openai-codex", undefined, "old"),
     ]);
     expect(a).toBe("fresh");
     expect(b).toBe("fresh");
