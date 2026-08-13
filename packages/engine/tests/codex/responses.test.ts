@@ -183,6 +183,22 @@ describe("codexResponses SSE accumulation", () => {
 });
 
 describe("codexResponses error surface (single attempt, no retry loop)", () => {
+  it("throws an auth-classified httpStatus carrier on a 401 and fetches once", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: "invalid_token", message: "expired" } }), {
+        status: 401,
+      }),
+    );
+
+    const err = (await codexResponses(baseParams()).catch((e) => e)) as Error & {
+      httpStatus?: number;
+    };
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(err.httpStatus).toBe(401);
+    expect(classifyFailure(normalizeError(err, classifyFailure))).toBe("auth");
+  });
+
   it("throws an httpStatus-carrying RateLimit error on a 429 and fetches once", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ error: { code: "rate_limit_exceeded", message: "slow down" } }), {
