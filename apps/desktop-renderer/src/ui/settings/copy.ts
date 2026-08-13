@@ -93,7 +93,7 @@ export const CONVERSATION_FIELDS: readonly ConversationFieldDefinition[] = [
   {
     field: "timezone",
     label: "Timezone",
-    help: "Use an IANA timezone, such as Europe/London. Editable only while the timezone source above is “Use a fixed timezone”; while it follows this computer, Enduragent rewrites this on every start.",
+    help: "Use an IANA timezone, such as Europe/London. Editable unless the source above follows this computer, in which case Enduragent keeps it matched to the computer’s zone.",
     type: "text",
   },
   {

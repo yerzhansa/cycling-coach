@@ -228,6 +228,44 @@ describe("desktop session timezone start behaviour", () => {
       expect(Object.keys(decision).includes("source")).toBe(false);
     }
   });
+
+  it("repairs an unusable stored zone while following this computer", () => {
+    expect(
+      decideSessionTimezoneAtStart({
+        environmentManaged: false,
+        mode: "follow",
+        stored: "Not/AZone",
+        host: QYZYLORDA,
+      }),
+    ).toEqual({ kind: "adopt", timezone: QYZYLORDA });
+    expect(
+      decideSessionTimezoneAtStart({
+        environmentManaged: false,
+        mode: "follow",
+        stored: "",
+        host: QYZYLORDA,
+      }),
+    ).toEqual({ kind: "adopt", timezone: QYZYLORDA });
+  });
+
+  it("still leaves an unusable stored zone alone when nobody has answered", () => {
+    expect(
+      decideSessionTimezoneAtStart({
+        environmentManaged: false,
+        mode: null,
+        stored: "Not/AZone",
+        host: QYZYLORDA,
+      }),
+    ).toEqual({ kind: "idle", reason: "stored-invalid" });
+    expect(
+      decideSessionTimezoneAtStart({
+        environmentManaged: false,
+        mode: null,
+        stored: "",
+        host: QYZYLORDA,
+      }),
+    ).toEqual({ kind: "idle", reason: "stored-missing" });
+  });
 });
 
 describe("desktop session timezone persisted mode", () => {
@@ -241,6 +279,21 @@ describe("desktop session timezone persisted mode", () => {
       }),
     ).toBe(true);
     expect(await readSessionTimezoneMode(install.stateRoot)).toBe("follow");
+  });
+
+  it("never overwrites a mode the athlete already chose, even when the config is reseeded", async () => {
+    const install = await createInstall(HARARE);
+    expect(
+      await chooseSessionTimezoneMode({ stateRoot: install.stateRoot, mode: "fixed", env: {} }),
+    ).toBe(true);
+    expect(
+      await recordFirstRunSessionTimezoneMode({
+        stateRoot: install.stateRoot,
+        seeded: "seeded",
+        env: {},
+      }),
+    ).toBe(false);
+    expect(await readSessionTimezoneMode(install.stateRoot)).toBe("fixed");
   });
 
   it("writes nothing when the config already existed", async () => {

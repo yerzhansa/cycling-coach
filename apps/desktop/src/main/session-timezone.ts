@@ -58,8 +58,6 @@ export function decideSessionTimezoneAtStart(
   if (input.environmentManaged) return { kind: "idle", reason: "environment-managed" };
   if (input.mode === "fixed") return { kind: "idle", reason: "fixed" };
   const stored = input.stored?.trim() ?? "";
-  if (stored.length === 0) return { kind: "idle", reason: "stored-missing" };
-  if (!isValidTimezone(stored)) return { kind: "idle", reason: "stored-invalid" };
   const host = input.host?.trim() ?? "";
   if (host.length === 0 || !isValidTimezone(host)) {
     return { kind: "idle", reason: "host-unavailable" };
@@ -69,6 +67,8 @@ export function decideSessionTimezoneAtStart(
       ? { kind: "idle", reason: "already-following" }
       : { kind: "adopt", timezone: host };
   }
+  if (stored.length === 0) return { kind: "idle", reason: "stored-missing" };
+  if (!isValidTimezone(stored)) return { kind: "idle", reason: "stored-invalid" };
   return stored === host
     ? { kind: "idle", reason: "unanswered-and-equal" }
     : { kind: "reconcile", stored, host };
@@ -162,6 +162,7 @@ export async function recordFirstRunSessionTimezoneMode(input: {
 }): Promise<boolean> {
   if (input.seeded !== "seeded") return false;
   if (environmentTimezone(input.env ?? process.env) !== undefined) return false;
+  if ((await readSessionTimezoneMode(input.stateRoot)) !== undefined) return false;
   return writeSessionTimezoneMode({
     stateRoot: input.stateRoot,
     mode: "follow",
