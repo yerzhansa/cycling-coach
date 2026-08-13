@@ -420,6 +420,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "onUpdateState",
       "pasteIntervalsApiKeyFromClipboard",
       "pasteTelegramTokenFromClipboard",
+      "pinSessionTimezone",
       "platform",
       "reconcileTelegram",
       "releaseNotes",

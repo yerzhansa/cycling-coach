@@ -58,7 +58,7 @@ export const CONVERSATION_FIELDS: readonly ConversationFieldDefinition[] = [
   {
     field: "timezone",
     label: "Timezone",
-    help: "Use an IANA timezone, such as Europe/London. This is the current system truth.",
+    help: "Use an IANA timezone, such as Europe/London. Enduragent follows this computer’s timezone until you save one here, and keeps yours after that.",
     type: "text",
   },
   {
@@ -101,13 +101,16 @@ export const CONVERSATION_FIELDS: readonly ConversationFieldDefinition[] = [
 ] as const;
 
 export function conversationSaveErrorCopy(
-  reason: "request-failed" | "not-applied" | "runtime-unavailable",
+  reason: "request-failed" | "not-applied" | "runtime-unavailable" | "timezone-not-pinned",
 ): string {
   if (reason === "not-applied") {
     return "Conversation settings weren’t applied. Reconnect and reload before trying again.";
   }
   if (reason === "runtime-unavailable") {
     return "Current conversation settings couldn’t be reloaded. Your edits are still here.";
+  }
+  if (reason === "timezone-not-pinned") {
+    return "Your timezone was saved but couldn’t be kept. Save it again, or the next start will use this computer’s timezone.";
   }
   return "Conversation settings couldn’t be saved. Your edits are still here.";
 }

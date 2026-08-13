@@ -102,6 +102,7 @@ function createSubject(input: {
   readonly client?: CoachClient;
   readonly clients?: DesktopCoachClientProvider;
   readonly beginMutation?: () => (() => void) | null;
+  readonly pinTimezone?: () => Promise<boolean>;
 }) {
   const subject = fakeView();
   const client =
@@ -118,12 +119,17 @@ function createSubject(input: {
       throw new Error(`Unexpected method ${method}`);
     });
   const clients = input.clients ?? providerWith(client);
+  const pinCalls: string[] = [];
   const controller = createSessionSettingsController({
     clients,
     view: subject.view,
     beginMutation: input.beginMutation ?? (() => () => {}),
+    pinTimezone: async () => {
+      pinCalls.push("pin");
+      return input.pinTimezone === undefined ? true : input.pinTimezone();
+    },
   });
-  return { controller, subject, clients, client };
+  return { controller, subject, clients, client, pinCalls };
 }
 
 function form(controller: SessionSettingsController) {
@@ -251,6 +257,93 @@ describe("conversation and time settings controller", () => {
       draft: { idleMinutes: "45", historyTokenBudgetRatio: "30" },
     });
     expect(form(controller).dirtyFields.size).toBe(0);
+  });
+
+  it("pins the timezone only when the saved edit changed the timezone", async () => {
+    const saved = vi.fn(async (method: string) => {
+      if (method === "configureRuntime") {
+        return {
+          schemaVersion: 3,
+          status: "applied",
+          applied: { llm: false, intervals: false, session: true },
+        };
+      }
+      return snapshot();
+    });
+    const timezoneEdit = createSubject({ client: clientWith(saved) });
+    await timezoneEdit.controller.activate();
+    timezoneEdit.subject.change("timezone", "Asia/Qyzylorda");
+    expect([...form(timezoneEdit.controller).dirtyFields]).toEqual(["timezone"]);
+    timezoneEdit.subject.save();
+    await vi.waitFor(() => expect(timezoneEdit.controller.state().status).toBe("saved"));
+    expect(timezoneEdit.pinCalls).toEqual(["pin"]);
+
+    const otherEdit = createSubject({ client: clientWith(saved) });
+    await otherEdit.controller.activate();
+    otherEdit.subject.change("idleMinutes", "45");
+    expect([...form(otherEdit.controller).dirtyFields]).toEqual(["idleMinutes"]);
+    otherEdit.subject.save();
+    await vi.waitFor(() => expect(otherEdit.controller.state().status).toBe("saved"));
+    expect(otherEdit.pinCalls).toEqual([]);
+  });
+
+  it("reports a save error when the timezone was stored but could not be pinned", async () => {
+    const call = vi.fn(async (method: string) => {
+      if (method === "configureRuntime") {
+        return {
+          schemaVersion: 3,
+          status: "applied",
+          applied: { llm: false, intervals: false, session: true },
+        };
+      }
+      return snapshot();
+    });
+    const { controller, subject, pinCalls } = createSubject({
+      client: clientWith(call),
+      pinTimezone: async () => false,
+    });
+    await controller.activate();
+    subject.change("timezone", "Asia/Qyzylorda");
+    subject.save();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    expect(pinCalls).toEqual(["pin"]);
+    expect(controller.state()).toMatchObject({
+      status: "error",
+      kind: "save",
+      reason: "timezone-not-pinned",
+      draft: { timezone: "Asia/Qyzylorda" },
+    });
+  });
+
+  it("reports a save error when the pin request itself throws", async () => {
+    const call = vi.fn(async (method: string) => {
+      if (method === "configureRuntime") {
+        return {
+          schemaVersion: 3,
+          status: "applied",
+          applied: { llm: false, intervals: false, session: true },
+        };
+      }
+      return snapshot();
+    });
+    const { controller, subject } = createSubject({
+      client: clientWith(call),
+      pinTimezone: async () => {
+        throw new Error("bridge gone");
+      },
+    });
+    await controller.activate();
+    subject.change("timezone", "Asia/Qyzylorda");
+    subject.save();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    expect(controller.state()).toMatchObject({
+      status: "error",
+      kind: "save",
+      reason: "timezone-not-pinned",
+      draft: { timezone: "Asia/Qyzylorda" },
+    });
   });
 
   it("retains the draft when the daemon refuses to apply the session patch", async () => {

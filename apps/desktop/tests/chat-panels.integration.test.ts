@@ -1066,6 +1066,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "onUpdateState",
         "pasteIntervalsApiKeyFromClipboard",
         "pasteTelegramTokenFromClipboard",
+        "pinSessionTimezone",
         "platform",
         "reconcileTelegram",
         "releaseNotes",

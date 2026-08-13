@@ -333,6 +333,7 @@ export function bootRenderer(): Disposer {
   const sessionSettingsController = createSessionSettingsController({
     clients,
     beginMutation: () => store.getState().beginSettingsMutation("session"),
+    pinTimezone: () => window.enduragentAuth.pinSessionTimezone(),
     view: conversationAdapter.view,
   });
   const refreshOnboardingCredentials = async (): Promise<void> => {

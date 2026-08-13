@@ -47,8 +47,14 @@ export type SessionSettingsState =
   | ({
       readonly status: "error";
       readonly kind: "save";
-      readonly reason: "request-failed" | "not-applied" | "runtime-unavailable";
+      readonly reason:
+        | "request-failed"
+        | "not-applied"
+        | "runtime-unavailable"
+        | "timezone-not-pinned";
     } & SessionSettingsFormState);
+
+class SessionTimezonePinFailedError extends Error {}
 
 export interface SessionSettingsView {
   bind(handlers: {
@@ -243,6 +249,14 @@ function reconcileDraft(
   return next;
 }
 
+function saveErrorReason(
+  error: unknown,
+): "request-failed" | "not-applied" | "timezone-not-pinned" {
+  if (error instanceof SessionTimezonePinFailedError) return "timezone-not-pinned";
+  if (error instanceof CoachClientProtocolError) return "not-applied";
+  return "request-failed";
+}
+
 function buildSessionPatch(
   form: SessionSettingsFormState,
 ): NonNullable<ConfigureRuntimeRpcParams["session"]> {
@@ -258,6 +272,7 @@ export function createSessionSettingsController(input: {
   readonly clients: DesktopCoachClientProvider;
   readonly view: SessionSettingsView;
   readonly beginMutation: () => (() => void) | null;
+  readonly pinTimezone: () => Promise<boolean>;
 }): SessionSettingsController {
   let currentState: SessionSettingsState = { status: "closed" };
   let generation = 0;
@@ -362,7 +377,17 @@ export function createSessionSettingsController(input: {
         if (result.status !== "applied" || result.applied.session !== true) {
           throw new CoachClientProtocolError();
         }
-        return activeClient.call("getRuntimeConfig", {});
+        const snapshot = await activeClient.call("getRuntimeConfig", {});
+        if (editable.dirtyFields.has("timezone")) {
+          let pinned: boolean;
+          try {
+            pinned = await input.pinTimezone();
+          } catch {
+            pinned = false;
+          }
+          if (pinned !== true) throw new SessionTimezonePinFailedError();
+        }
+        return snapshot;
       })
       .then(
         (snapshot) => {
@@ -379,7 +404,7 @@ export function createSessionSettingsController(input: {
             ...editable,
             status: "error",
             kind: "save",
-            reason: error instanceof CoachClientProtocolError ? "not-applied" : "request-failed",
+            reason: saveErrorReason(error),
           });
         },
       )
