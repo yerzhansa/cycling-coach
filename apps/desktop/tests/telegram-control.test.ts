@@ -24,6 +24,7 @@ import type {
   TelegramProfileRecord,
 } from "../src/main/telegram-credential-vault.js";
 import { createTelegramCredentialVault } from "../src/main/telegram-credential-vault.js";
+import { startDesktopTelegram } from "../src/main/telegram-startup.js";
 
 const HOME = "/synthetic/athlete" as AthleteHomeIdentity;
 const OTHER_HOME = "/synthetic/other" as AthleteHomeIdentity;
@@ -825,6 +826,121 @@ describe("Telegram main-process control coordinator", () => {
     expect(JSON.stringify(observeSecureStorageFailure.mock.calls)).not.toMatch(
       /private daemon|private observer|synthetic-token/u,
     );
+  });
+
+  it.each([true, false])(
+    "keeps configured desired=%s reconciliation uncertainty visible until repair succeeds",
+    async (enabled) => {
+      const runtime = harness({
+        configured: true,
+        enabled,
+        daemonSnapshot: {
+          channel: enabled
+            ? { desiredState: "enabled", state: "waiting-for-credential" }
+            : { desiredState: "disabled", state: "disabled" },
+          bot: { state: "unconfigured" },
+          pairing: { state: "unpaired" },
+        },
+      });
+      vi.mocked(runtime.binding.configureTelegram).mockRejectedValueOnce(
+        new TypeError("synthetic lost response"),
+      );
+      const desiredState = enabled ? "enabled" : "disabled";
+      const repairChannel = {
+        desiredState,
+        state: "failed" as const,
+        errorCode: "telegram-control-failed" as const,
+      };
+      const powerStart = vi.fn(async () => ({ state: "clear" as const }));
+
+      const reconciliation = await startDesktopTelegram({
+        supervision: "app-supervised",
+        coordinator: runtime.coordinator,
+        power: { start: powerStart },
+      });
+      expect(powerStart).toHaveBeenCalledOnce();
+      expect(reconciliation).toMatchObject({
+        outcome: "uncertain",
+        reason: "control-uncertain",
+        current: { channel: repairChannel, credentialConfigured: true },
+      });
+      await expect(runtime.coordinator.status()).resolves.toMatchObject({
+        channel: repairChannel,
+        credentialConfigured: true,
+      });
+
+      runtime.setSnapshot(
+        snapshot(
+          enabled
+            ? { desiredState: "enabled", state: "online" }
+            : { desiredState: "disabled", state: "disabled" },
+        ),
+      );
+      await expect(runtime.coordinator.reconcile()).resolves.toMatchObject({
+        outcome: "applied",
+        current: {
+          channel: enabled
+            ? { desiredState: "enabled", state: "online" }
+            : { desiredState: "disabled", state: "disabled" },
+        },
+      });
+      await expect(runtime.coordinator.status()).resolves.toMatchObject({
+        channel: enabled
+          ? { desiredState: "enabled", state: "online" }
+          : { desiredState: "disabled", state: "disabled" },
+      });
+    },
+  );
+
+  it.each([true, false])(
+    "keeps configured desired=%s reconciliation refusal visible when its fallback looks healthy",
+    async (enabled) => {
+      const runtime = harness({ configured: true, enabled });
+      vi.mocked(runtime.binding.getTelegramStatus).mockRejectedValueOnce(
+        new TypeError("synthetic status refusal"),
+      );
+      const repairChannel = {
+        desiredState: enabled ? ("enabled" as const) : ("disabled" as const),
+        state: "failed" as const,
+        errorCode: "telegram-control-failed" as const,
+      };
+
+      await expect(runtime.coordinator.reconcile()).resolves.toMatchObject({
+        outcome: "refused",
+        reason: "stale-operation",
+        current: { channel: repairChannel, credentialConfigured: true },
+      });
+      await expect(runtime.coordinator.status()).resolves.toMatchObject({
+        channel: repairChannel,
+        credentialConfigured: true,
+      });
+    },
+  );
+
+  it("keeps an unexpected reconciliation throw visible as a repair state", async () => {
+    const runtime = harness({ configured: true, enabled: false });
+    vi.mocked(runtime.vault.desiredState)
+      .mockRejectedValueOnce(new TypeError("synthetic desired-state read failure"))
+      .mockRejectedValueOnce(new TypeError("synthetic fallback read failure"));
+
+    await expect(runtime.coordinator.reconcile()).resolves.toMatchObject({
+      outcome: "uncertain",
+      reason: "control-uncertain",
+      current: {
+        channel: {
+          desiredState: "disabled",
+          state: "failed",
+          errorCode: "telegram-control-failed",
+        },
+      },
+    });
+    await expect(runtime.coordinator.status()).resolves.toMatchObject({
+      channel: {
+        desiredState: "disabled",
+        state: "failed",
+        errorCode: "telegram-control-failed",
+      },
+    });
   });
 
   it("converges to A when daemon replacement throws after B storage", async () => {
@@ -2321,7 +2437,11 @@ describe("Telegram main-process control coordinator", () => {
       outcome: "refused",
       reason: "encryption-unavailable",
       current: {
-        channel: { desiredState: "enabled", state: "online" },
+        channel: {
+          desiredState: "enabled",
+          state: "failed",
+          errorCode: "telegram-credential-encryption-unavailable",
+        },
         bot: { state: "ready", username: USERNAME },
         pairing: { state: "paired" },
         credentialConfigured: true,

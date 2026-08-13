@@ -642,25 +642,28 @@ describe("desktop residency", () => {
     expect(initialShow).toBeGreaterThan(residencyStart);
   });
 
-  it("reads repaired Telegram intent after startup and successor reconciliation", async () => {
+  it("reads repaired Telegram intent after successor reconciliation", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
-    const blocks = [
-      source.slice(
-        source.indexOf("const successorTelegramCoordinator"),
-        source.indexOf('throw new TypeError("Telegram successor preparation failed")'),
-      ),
-      source.slice(
-        source.indexOf('if (initialTelegramConnection.supervision === "app-supervised")'),
-        source.indexOf('throw new TypeError("Telegram startup reconciliation failed")'),
-      ),
-    ];
+    const block = source.slice(
+      source.indexOf("const successorTelegramCoordinator"),
+      source.indexOf('throw new TypeError("Telegram successor preparation failed")'),
+    );
+    const reconcile = block.indexOf(".reconcile();");
+    const desiredRead = block.indexOf("telegramVault.desiredState();");
 
-    for (const block of blocks) {
-      const reconcile = block.indexOf(".reconcile();");
-      const desiredRead = block.indexOf("telegramVault.desiredState();");
-      expect(reconcile).toBeGreaterThanOrEqual(0);
-      expect(desiredRead).toBeGreaterThan(reconcile);
-    }
+    expect(reconcile).toBeGreaterThanOrEqual(0);
+    expect(desiredRead).toBeGreaterThan(reconcile);
+  });
+
+  it("continues initial startup through Telegram startup preparation", async () => {
+    const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    const startup = source.indexOf("await startDesktopTelegram({");
+    const protocolStart = source.indexOf("await installDesktopProtocol({", startup);
+
+    expect(startup).toBeGreaterThanOrEqual(0);
+    expect(protocolStart).toBeGreaterThan(startup);
+    expect(source.slice(startup, protocolStart)).not.toMatch(/\bthrow\b/u);
+    expect(source).not.toContain("Telegram startup reconciliation failed");
   });
 
   it("reports tray-start and keeps running when the tray icon cannot load", async () => {

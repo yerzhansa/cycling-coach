@@ -83,6 +83,7 @@ import {
   resolveDesktopRendererSource,
 } from "./security.js";
 import { DesktopDaemonSupervisor, isUtilityTerminalFrame } from "./supervisor.js";
+import { logDesktopStartupFailure } from "./startup-failure.js";
 import {
   createDesktopQuitCoordinator,
   installDesktopTerminationSignalHandler,
@@ -106,6 +107,7 @@ import {
   createDesktopTelegramPowerLifecycle,
   type DesktopTelegramPowerLifecycle,
 } from "./telegram-power.js";
+import { startDesktopTelegram } from "./telegram-startup.js";
 import {
   createConnectionTranscriptReader,
   installDesktopTranscriptIpc,
@@ -743,22 +745,11 @@ async function runDesktop(): Promise<void> {
       initialTelegramConnection,
       selectedAthleteHome,
     );
-    if (initialTelegramConnection.supervision === "app-supervised") {
-      const reconciliation = await telegramCoordinator.reconcile();
-      const desiredState = await telegramVault.desiredState();
-      const expectedEnabled = desiredState.state === "configured" && desiredState.enabled;
-      const prepared =
-        reconciliation.outcome === "applied" &&
-        (expectedEnabled
-          ? reconciliation.current.credentialConfigured &&
-            reconciliation.current.channel.desiredState === "enabled" &&
-            (reconciliation.current.channel.state === "starting" ||
-              reconciliation.current.channel.state === "online" ||
-              reconciliation.current.channel.state === "offline-retrying")
-          : reconciliation.current.channel.state === "disabled");
-      if (!prepared) throw new TypeError("Telegram startup reconciliation failed");
-    }
-    await telegramPower.start();
+    await startDesktopTelegram({
+      supervision: initialTelegramConnection.supervision,
+      coordinator: telegramCoordinator,
+      power: telegramPower,
+    });
     await installDesktopProtocol({
       session: session.defaultSession,
       currentDaemonPort: () => daemonLifecycle!.currentPort(),
@@ -1044,6 +1035,7 @@ if (!primaryInstance) {
     ? runRuntimeSmoke
     : runDesktop;
   void runPrimaryDesktop().catch((error: unknown) => {
+    logDesktopStartupFailure(error);
     console.error("desktop startup failed", error);
     if (!desktopIsClosing && !desktopStartedInBackground && !desktopAcceptanceHidden) {
       dialog.showErrorBox(unexpectedStartupCopy.title, unexpectedStartupCopy.content);

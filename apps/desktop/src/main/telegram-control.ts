@@ -308,6 +308,36 @@ function matchesDesired(snapshot: TelegramControlSnapshot, enabled: boolean): bo
   return (snapshot.channel.desiredState === "enabled") === enabled;
 }
 
+function reconciliationFailureSnapshot(
+  result: Exclude<DesktopTelegramMutationResult, { readonly outcome: "applied" }>,
+): DesktopTelegramSnapshot {
+  const current = result.current;
+  if (
+    current.channel.state === "failed" ||
+    current.channel.state === "conflict" ||
+    current.channel.state === "invalid-token" ||
+    current.channel.state === "transfer-required" ||
+    (result.outcome === "refused" &&
+      result.reason === "invalid-state" &&
+      current.channel.state === "waiting-for-credential")
+  ) {
+    return current;
+  }
+  const errorCode =
+    result.outcome === "refused" && isSecureStorageRefusal(result.reason)
+      ? profileStatusErrorCode(result.reason)
+      : result.outcome === "uncertain" && result.reason === "storage-uncertain"
+        ? "telegram-settings-storage-uncertain"
+        : "telegram-control-failed";
+  return failure(
+    current.channel.desiredState,
+    errorCode,
+    current.credentialConfigured,
+    current.bot,
+    current.pairing,
+  );
+}
+
 export function createTelegramControlCoordinator(
   input: CreateTelegramControlCoordinatorInput,
 ): TelegramControlCoordinator {
@@ -315,6 +345,12 @@ export function createTelegramControlCoordinator(
   let accepting = true;
   let closePromise: Promise<void> | undefined;
   let transientSuspension: TelegramDaemonBinding | undefined;
+  let reconciliationFailure:
+    | {
+        readonly binding: TelegramDaemonBinding | undefined;
+        readonly current: DesktopTelegramSnapshot;
+      }
+    | undefined;
   const leaseClock =
     input.pairingLease ??
     ({
@@ -529,11 +565,29 @@ export function createTelegramControlCoordinator(
   ): Promise<DesktopTelegramMutationResult> =>
     serialize(async () => {
       try {
-        return await operation();
+        const result = await operation();
+        if (result.outcome === "applied") reconciliationFailure = undefined;
+        return result;
       } catch {
         return uncertain("control-uncertain");
       }
     });
+
+  const rememberReconciliation = (
+    result: DesktopTelegramMutationResult,
+  ): DesktopTelegramMutationResult => {
+    if (result.outcome === "applied") {
+      reconciliationFailure = undefined;
+      return result;
+    }
+    const current = reconciliationFailureSnapshot(result);
+    reconciliationFailure = { binding: binding(), current };
+    return { ...result, current };
+  };
+
+  const reconcileMutation = (
+    operation: () => Promise<DesktopTelegramMutationResult>,
+  ): Promise<DesktopTelegramMutationResult> => runMutation(operation).then(rememberReconciliation);
 
   const checkedBinding = async (): Promise<
     | { readonly active: TelegramDaemonBinding; readonly desiredState: "disabled" | "enabled" }
@@ -1685,6 +1739,10 @@ export function createTelegramControlCoordinator(
     status: () =>
       runSnapshot(async () => {
         const active = binding();
+        if (reconciliationFailure !== undefined) {
+          if (reconciliationFailure.binding === active) return reconciliationFailure.current;
+          reconciliationFailure = undefined;
+        }
         if (active === undefined) return project();
         const daemonStatus = await guardedSnapshotCall(active, () => active.getTelegramStatus({}));
         if (daemonStatus === undefined) {
@@ -1730,7 +1788,7 @@ export function createTelegramControlCoordinator(
       }),
 
     reconcile() {
-      return runMutation(async () => {
+      return reconcileMutation(async () => {
         const checked = await checkedBinding();
         if ("result" in checked) return checked.result;
         const daemonStatus = await guardedSnapshotCall(checked.active, () =>
