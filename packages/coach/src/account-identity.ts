@@ -90,6 +90,25 @@ export type IntervalsCredentialVerificationResult =
 
 export type IntervalsStoreOwnerComparison = Exclude<StoreOwnerCheckResult, "unresolved">;
 
+export type IntervalsStoreOwnerState =
+  | Readonly<{ status: "unowned" }>
+  | Readonly<{ status: "owned"; fingerprint: string }>;
+
+export interface IntervalsCredentialVerificationEvidence {
+  readonly verifiedFingerprint: string;
+  readonly ownerState: IntervalsStoreOwnerState;
+}
+
+export type IntervalsCredentialVerificationWithEvidenceResult =
+  | Readonly<{
+      status: "verified";
+      evidence: IntervalsCredentialVerificationEvidence;
+    }>
+  | Readonly<{
+      status: "refused";
+      reason: IntervalsCredentialVerificationRefusalReason;
+    }>;
+
 const lookupArchiveResult: ArchiveWriteResult = Object.freeze({
   address: "0".repeat(64),
   relPath: "1970/01/lookup.json.gz",
@@ -134,6 +153,15 @@ async function readStoreOwnerFingerprint(
     throw new Error("invalid store owner row");
   }
   return current.account_fingerprint;
+}
+
+export async function readIntervalsStoreOwnerState(
+  store: Pick<SqlStore, "get">,
+): Promise<IntervalsStoreOwnerState> {
+  const fingerprint = await readStoreOwnerFingerprint(store);
+  return fingerprint === undefined
+    ? Object.freeze({ status: "unowned" })
+    : Object.freeze({ status: "owned", fingerprint });
 }
 
 async function compareStoreOwner(
@@ -301,6 +329,43 @@ export async function assertRuntimeAthleteOwner(
   }
 }
 
+export async function assertRuntimeAthleteOwnerFromEvidence(
+  store: SqlStore,
+  evidence: IntervalsCredentialVerificationEvidence,
+  signal: AbortSignal,
+): Promise<RuntimeAthleteOwnerClaim | undefined> {
+  if (
+    !/^[0-9a-f]{64}$/.test(evidence.verifiedFingerprint) ||
+    (evidence.ownerState.status === "owned" &&
+      evidence.ownerState.fingerprint !== evidence.verifiedFingerprint)
+  ) {
+    throw new TypeError("invalid intervals credential verification evidence");
+  }
+  try {
+    signal.throwIfAborted();
+  } catch {
+    throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+  }
+  const ownership = await compareStoreOwner(store, evidence.verifiedFingerprint);
+  try {
+    signal.throwIfAborted();
+  } catch {
+    throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+  }
+  if (ownership === "mismatch") throw new RuntimeAthleteOwnerRefusal("mismatch");
+  if (ownership === "matched") return undefined;
+  return Object.freeze({
+    async claim() {
+      try {
+        signal.throwIfAborted();
+      } catch {
+        throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+      }
+      await store.run(CLAIM_STORE_OWNER_SQL, [evidence.verifiedFingerprint]);
+    },
+  });
+}
+
 export async function enforceIntervalsStoreOwner(
   store: SqlStore,
   options: StoreOwnerCheckOptions,
@@ -440,7 +505,7 @@ function timeoutFailure(error: unknown): boolean {
   );
 }
 
-export async function verifyIntervalsCredentialAtPath(
+export async function verifyIntervalsCredentialAtPathWithEvidence(
   storePath: string,
   options: Omit<StoreOwnerCheckOptions, "signal" | "budget"> & {
     readonly signal: AbortSignal;
@@ -451,7 +516,7 @@ export async function verifyIntervalsCredentialAtPath(
       fingerprint: string,
     ) => Promise<IntervalsStoreOwnerComparison>;
   },
-): Promise<IntervalsCredentialVerificationResult> {
+): Promise<IntervalsCredentialVerificationWithEvidenceResult> {
   const overallTimeoutMs = options.overallTimeoutMs ?? INTERVALS_CREDENTIAL_VERIFICATION_TIMEOUT_MS;
   const perRequestTimeoutMs =
     options.perRequestTimeoutMs ?? INTERVALS_CREDENTIAL_REQUEST_TIMEOUT_MS;
@@ -536,7 +601,16 @@ export async function verifyIntervalsCredentialAtPath(
       }
       comparison = "store-unavailable";
     }
-    if (comparison === "matched" || comparison === "unowned") return { status: "verified" };
+    if (comparison === "matched" || comparison === "unowned") {
+      const ownerState: IntervalsStoreOwnerState =
+        comparison === "unowned"
+          ? Object.freeze({ status: "unowned" })
+          : Object.freeze({ status: "owned", fingerprint });
+      return {
+        status: "verified",
+        evidence: Object.freeze({ verifiedFingerprint: fingerprint, ownerState }),
+      };
+    }
     if (comparison === "mismatch") {
       return { status: "refused", reason: "training-account-mismatch" };
     }
@@ -544,4 +618,20 @@ export async function verifyIntervalsCredentialAtPath(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function verifyIntervalsCredentialAtPath(
+  storePath: string,
+  options: Omit<StoreOwnerCheckOptions, "signal" | "budget"> & {
+    readonly signal: AbortSignal;
+    readonly overallTimeoutMs?: number;
+    readonly perRequestTimeoutMs?: number;
+    readonly compareOwner?: (
+      storePath: string,
+      fingerprint: string,
+    ) => Promise<IntervalsStoreOwnerComparison>;
+  },
+): Promise<IntervalsCredentialVerificationResult> {
+  const result = await verifyIntervalsCredentialAtPathWithEvidence(storePath, options);
+  return result.status === "verified" ? { status: "verified" } : result;
 }

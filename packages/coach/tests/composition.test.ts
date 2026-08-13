@@ -36,6 +36,7 @@ import {
   type LocalStoreRuntimeOptions,
 } from "../src/composition.js";
 import { RuntimeAthleteOwnerRefusal } from "../src/backfill.js";
+import { INTERVALS_CREDENTIAL_APPROVAL_TTL_MS } from "../src/intervals-credential-approval.js";
 import { checkHomeReadiness } from "../src/readiness.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 
@@ -272,6 +273,50 @@ function fakeContext(home: AthleteHome): CoachStoreWriterContext {
       },
     },
   };
+}
+
+async function intervalsApprovalFixture(now: () => number) {
+  const home = await freshHome();
+  await mkdir(home.storeDir, { recursive: true });
+  const store = openSqliteStorage(join(home.storeDir, "store.db"));
+  stores.push(store);
+  await runMigrations(store, MIGRATIONS);
+  const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (url.pathname !== "/api/v1/athlete/0") throw new Error("unexpected request");
+    return new Response(
+      JSON.stringify({
+        sportSettings: [
+          {
+            id: 1,
+            athlete_id: "synthetic-approved-owner",
+            types: ["Ride"],
+            updated: "2026-01-01",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  const ownerGuard = vi.fn(async () => {});
+  const lifecycle = await compose(
+    home,
+    {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: () => backend(),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+      assertRuntimeAthleteOwner: ownerGuard,
+      now,
+    },
+    { home, store, listener: inertWriterProtocolListener },
+    { apiKey: "", athleteId: "" },
+  );
+  return { lifecycle, ownerGuard, fetchStub };
 }
 
 async function compose(
@@ -2150,6 +2195,68 @@ describe("local coach composition", () => {
     },
   );
 
+  it("uses a fresh daemon approval without repeating the owner guard request", async () => {
+    const { lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(() =>
+      Date.parse("2026-08-11T00:00:00.000Z"),
+    );
+    const verification = await lifecycle.operations.verify_intervals_credential!({
+      api_key: "candidate-key",
+    });
+    if (!("approval" in verification)) throw new Error("expected credential approval");
+
+    expect(fetchStub).toHaveBeenCalledOnce();
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: {
+          api_key: "candidate-key",
+          verification_approval: verification.approval,
+        },
+      }),
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+    expect(fetchStub).toHaveBeenCalledOnce();
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it.each(["invalid", "expired", "reused"] as const)(
+    "falls back to the existing owner guard for an %s approval",
+    async (scenario) => {
+      let now = Date.parse("2026-08-11T00:00:00.000Z");
+      const { lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(() => now);
+      const verification = await lifecycle.operations.verify_intervals_credential!({
+        api_key: "candidate-key",
+      });
+      if (!("approval" in verification)) throw new Error("expected credential approval");
+      let approval = verification.approval;
+
+      if (scenario === "invalid") {
+        approval = `${approval[0] === "0" ? "1" : "0"}${approval.slice(1)}`;
+      } else if (scenario === "expired") {
+        now += INTERVALS_CREDENTIAL_APPROVAL_TTL_MS;
+      } else {
+        await expect(
+          lifecycle.operations.configureRuntime({
+            intervals: { api_key: "candidate-key", verification_approval: approval },
+          }),
+        ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+        await expect(
+          lifecycle.operations.configureRuntime({ intervals: { clear_credential: true } }),
+        ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+      }
+
+      const ownerCallsBefore = ownerGuard.mock.calls.length;
+      await expect(
+        lifecycle.operations.configureRuntime({
+          intervals: { api_key: "candidate-key", verification_approval: approval },
+        }),
+      ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+      expect(ownerGuard.mock.calls.length - ownerCallsBefore).toBe(1);
+      expect(fetchStub).toHaveBeenCalledOnce();
+      await lifecycle.close();
+    },
+  );
+
   it("refuses an environment-managed athlete field even when the requested value is unchanged", async () => {
     const home = await freshHome();
     const initialYaml = "sentinel: unchanged\n";
@@ -2491,6 +2598,7 @@ describe("local coach composition", () => {
     );
 
     expect(trace.slice(0, 3)).toEqual(["owner:0", "runtime:0", "window:0"]);
+    expect(assertRuntimeAthleteOwner).toHaveBeenCalledOnce();
     await lifecycle.close();
   });
 

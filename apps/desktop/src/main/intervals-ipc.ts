@@ -2,10 +2,12 @@ import {
   INTERVALS_CREDENTIAL_VERIFICATION_TIMEOUT_MS,
   verifyIntervalsCredentialAtPath,
   type IntervalsCredentialVerificationRefusalReason,
-  type IntervalsCredentialVerificationResult,
 } from "@enduragent/coach/account-identity";
 import { awaitWithSignal } from "@enduragent/coach/abortable-operation";
-import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
+import type {
+  RuntimeConfigSnapshot,
+  VerifyIntervalsCredentialRpcResult,
+} from "@enduragent/coach-contract";
 import type { Clipboard, IpcMain, IpcMainInvokeEvent } from "electron";
 import { DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL } from "./constants.js";
 import { intervalsAthleteIdForOwnership } from "./credential-runtime.js";
@@ -32,6 +34,14 @@ const STORAGE_REFUSAL_REASONS = new Set([
   "runtime-unavailable",
 ]);
 const INTERVALS_API_KEY_MAX_LENGTH = 256;
+const INTERVALS_VERIFICATION_APPROVAL_PATTERN = /^[0-9a-f]{64}$/;
+
+export type DesktopIntervalsCredentialVerificationResult =
+  | Readonly<{ status: "verified"; verificationApproval?: string }>
+  | Readonly<{
+      status: "refused";
+      reason: IntervalsCredentialVerificationRefusalReason;
+    }>;
 
 export interface DesktopIntervalsCredentialStatus {
   readonly slot: "intervals-icu";
@@ -52,8 +62,49 @@ type DesktopIntervalsMutationRefusalReason =
 export function createDesktopIntervalsCredentialVerifier(input: {
   readonly storePath: string;
   readonly readRuntimeConfig: (signal?: AbortSignal) => Promise<RuntimeConfigSnapshot>;
-}): (apiKey: string, signal: AbortSignal) => Promise<IntervalsCredentialVerificationResult> {
+  readonly verifyWithDaemon?: (
+    apiKey: string,
+    signal: AbortSignal,
+  ) => Promise<VerifyIntervalsCredentialRpcResult | undefined>;
+}): (
+  apiKey: string,
+  signal: AbortSignal,
+) => Promise<DesktopIntervalsCredentialVerificationResult> {
   return async (apiKey, signal) => {
+    if (input.verifyWithDaemon !== undefined) {
+      let result: unknown;
+      try {
+        result = await input.verifyWithDaemon(apiKey, signal);
+        signal.throwIfAborted();
+      } catch {
+        signal.throwIfAborted();
+        return { status: "refused", reason: "validation-unavailable" };
+      }
+      if (result !== undefined) {
+        if (
+          record(result) &&
+          typeof result.approval === "string" &&
+          INTERVALS_VERIFICATION_APPROVAL_PATTERN.test(result.approval) &&
+          exactKeys(result, ["approval"])
+        ) {
+          return { status: "verified", verificationApproval: result.approval };
+        }
+        if (
+          record(result) &&
+          typeof result.reason === "string" &&
+          VERIFICATION_REFUSAL_REASONS.has(
+            result.reason as IntervalsCredentialVerificationRefusalReason,
+          ) &&
+          exactKeys(result, ["reason"])
+        ) {
+          return {
+            status: "refused",
+            reason: result.reason as IntervalsCredentialVerificationRefusalReason,
+          };
+        }
+        return { status: "refused", reason: "validation-unavailable" };
+      }
+    }
     let snapshot: RuntimeConfigSnapshot;
     try {
       snapshot = await input.readRuntimeConfig(signal);
@@ -126,10 +177,18 @@ function closedStatus(): DesktopIntervalsCredentialStatus {
   return { slot: "intervals-icu", state: "re-prompt", runtimeState: null };
 }
 
-function copyVerification(value: unknown): IntervalsCredentialVerificationResult {
+function copyVerification(value: unknown): DesktopIntervalsCredentialVerificationResult {
   if (!record(value) || typeof value.status !== "string") throw new TypeError();
   if (value.status === "verified" && exactKeys(value, ["status"])) {
     return { status: "verified" };
+  }
+  if (
+    value.status === "verified" &&
+    typeof value.verificationApproval === "string" &&
+    INTERVALS_VERIFICATION_APPROVAL_PATTERN.test(value.verificationApproval) &&
+    exactKeys(value, ["status", "verificationApproval"])
+  ) {
+    return { status: "verified", verificationApproval: value.verificationApproval };
   }
   if (
     value.status === "refused" &&
@@ -248,12 +307,12 @@ export function installDesktopIntervalsIpc(input: {
   readonly verifyCredential: (
     apiKey: string,
     signal: AbortSignal,
-  ) => Promise<IntervalsCredentialVerificationResult>;
+  ) => Promise<DesktopIntervalsCredentialVerificationResult>;
 }): () => Promise<void> {
   let accepting = true;
   let closePromise: Promise<void> | undefined;
   let operationQueue = Promise.resolve();
-  const pendingVerifications = new Set<Promise<IntervalsCredentialVerificationResult>>();
+  const pendingVerifications = new Set<Promise<DesktopIntervalsCredentialVerificationResult>>();
   const closeController = new AbortController();
   const verificationSignal = AbortSignal.any([input.signal, closeController.signal]);
   const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -283,7 +342,7 @@ export function installDesktopIntervalsIpc(input: {
   };
   const verifyCandidate = async (
     apiKey: string,
-  ): Promise<IntervalsCredentialVerificationResult> => {
+  ): Promise<DesktopIntervalsCredentialVerificationResult> => {
     if (verificationSignal.aborted) {
       return { status: "refused", reason: "validation-aborted" };
     }
@@ -334,13 +393,19 @@ export function installDesktopIntervalsIpc(input: {
           if (verification.status === "refused") {
             result = { outcome: "refused", reason: verification.reason };
           } else {
+            const behavior = {
+              rollbackOnRuntimeRefusal: true,
+              ...(verification.verificationApproval === undefined
+                ? {}
+                : { verificationApproval: verification.verificationApproval }),
+            };
             result = mutationFromWrite(
               await mutation.writeCredential(
                 {
                   slot: "intervals-icu",
                   value: apiKey,
                 },
-                { rollbackOnRuntimeRefusal: true },
+                behavior,
               ),
             );
           }

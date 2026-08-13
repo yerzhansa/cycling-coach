@@ -81,6 +81,7 @@ const rpcDeadlineCases = [
     30_000,
   ],
   ["configureRuntime", { llm: { provider: "openai" } }, 30_000],
+  ["verify_intervals_credential", { api_key: "placeholder" }, 30_000],
   ["getRuntimeConfig", {}, 30_000],
   ["getUnitsPreference", {}, 30_000],
   ["setUnitsPreference", { value: "metric" }, 30_000],
@@ -848,6 +849,7 @@ describe("RPC receive and observers", () => {
           status: "applied",
           applied: { llm: true, intervals: false, session: false },
         },
+        verify_intervals_credential: { approval: "a".repeat(64) },
         getRuntimeConfig: {
           schemaVersion: 3,
           llm: {
@@ -1131,6 +1133,14 @@ describe("RPC receive and observers", () => {
       "getSpendSummary",
       "setDailySpendCap",
     ]);
+    await expect(
+      client.call("verify_intervals_credential", { api_key: "placeholder" }),
+    ).resolves.toEqual({ approval: "a".repeat(64) });
+    expect(received.at(-1)).toMatchObject({
+      id: 36,
+      method: "verify_intervals_credential",
+      params: { api_key: "placeholder" },
+    });
     socket.closeSynchronously = true;
     await client.close();
   });

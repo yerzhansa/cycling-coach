@@ -894,6 +894,104 @@ describe("coach operations", () => {
     expect(observedSignal?.aborted).toBe(true);
   });
 
+  it("validates intervals credential preflight requests and results", async () => {
+    const verifyIntervalsCredential = vi.fn(async () => ({ approval: "a".repeat(64) }));
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: operationRuntime(),
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async () => {},
+      verifyIntervalsCredential,
+    });
+
+    await expect(
+      operations.verify_intervals_credential!({ api_key: "synthetic-candidate-key" }),
+    ).resolves.toEqual({ approval: "a".repeat(64) });
+    expect(verifyIntervalsCredential).toHaveBeenCalledWith(
+      { api_key: "synthetic-candidate-key" },
+      expect.any(AbortSignal),
+    );
+    expect(() =>
+      operations.verify_intervals_credential!({
+        api_key: "synthetic-candidate-key",
+        extra: true,
+      } as never),
+    ).toThrow();
+    expect(verifyIntervalsCredential).toHaveBeenCalledOnce();
+
+    const refused = createCoachOperations({
+      home,
+      context: context(),
+      runtime: operationRuntime(),
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async () => {},
+      verifyIntervalsCredential: async () => ({ reason: "credential-rejected" }),
+    });
+    await expect(
+      refused.verify_intervals_credential!({ api_key: "synthetic-candidate-key" }),
+    ).resolves.toEqual({ reason: "credential-rejected" });
+
+    const malformed = createCoachOperations({
+      home,
+      context: context(),
+      runtime: operationRuntime(),
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async () => {},
+      verifyIntervalsCredential: async () => ({ approval: "A".repeat(64) }),
+    });
+    await expect(
+      malformed.verify_intervals_credential!({ api_key: "synthetic-candidate-key" }),
+    ).rejects.toThrow();
+
+    const unavailable = createCoachOperations({
+      home,
+      context: context(),
+      runtime: operationRuntime(),
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async () => {},
+    });
+    expect(() =>
+      unavailable.verify_intervals_credential!({ api_key: "synthetic-candidate-key" }),
+    ).toThrow("Intervals credential verification is unavailable.");
+  });
+
+  it("propagates caller cancellation into intervals credential preflight", async () => {
+    const started = promiseGate();
+    let observedSignal: AbortSignal | undefined;
+    const operations = createCoachOperations({
+      home,
+      context: context(),
+      runtime: operationRuntime(),
+      intervalsCredentials: intervalsCredentials(),
+      historyNewestDate: () => "1998-07-18",
+      applyRuntimeConfig: async () => {},
+      verifyIntervalsCredential: async (_request, signal): Promise<never> => {
+        observedSignal = signal;
+        started.release();
+        return await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    });
+    const controller = new AbortController();
+    const pending = operations.verify_intervals_credential!(
+      { api_key: "synthetic-candidate-key" },
+      controller.signal,
+    );
+    await started.promise;
+
+    controller.abort(new DOMException("Detached", "AbortError"));
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(observedSignal).toBe(controller.signal);
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
   it.each([
     "credential-required",
     "ownership-unavailable",

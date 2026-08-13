@@ -103,6 +103,7 @@ export interface CredentialWriteInput {
 export interface CredentialWriteBehavior {
   readonly activate?: boolean;
   readonly rollbackOnRuntimeRefusal?: boolean;
+  readonly verificationApproval?: string;
 }
 
 export interface CredentialVaultMutation {
@@ -154,6 +155,7 @@ interface CredentialVaultOptions {
     slot: DesktopCredentialSlot,
     value: string,
     selection?: OnboardingLlmSelection,
+    verificationApproval?: string,
   ) => Promise<void>;
   readonly reapplyCredential?: (
     slot: DesktopCredentialSlot,
@@ -636,6 +638,14 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     if (value.length === 0) {
       return { slot: input.slot, status: "refused", reason: "invalid-input" };
     }
+    if (
+      behavior?.verificationApproval !== undefined &&
+      (input.slot !== "intervals-icu" ||
+        behavior.activate === false ||
+        !/^[0-9a-f]{64}$/.test(behavior.verificationApproval))
+    ) {
+      return { slot: input.slot, status: "refused", reason: "invalid-input" };
+    }
     const encryptionFailure = encryptionRefusal(options.encryption, platform);
     if (encryptionFailure !== undefined) {
       return { slot: input.slot, status: "refused", reason: encryptionFailure };
@@ -723,7 +733,14 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
       }
       try {
         const canPublish = options.createRuntimePublicationGuard?.(input.slot);
-        if (selection === undefined) {
+        if (behavior?.verificationApproval !== undefined) {
+          await options.applyCredential(
+            input.slot,
+            value,
+            selection,
+            behavior.verificationApproval,
+          );
+        } else if (selection === undefined) {
           await options.applyCredential(input.slot, value);
         } else {
           await options.applyCredential(input.slot, value, selection);
