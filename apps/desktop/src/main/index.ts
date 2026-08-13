@@ -13,6 +13,7 @@ import {
   crashReporter,
   dialog,
   ipcMain,
+  nativeTheme,
   powerMonitor,
   safeStorage,
   session,
@@ -24,6 +25,7 @@ import { createClaudeCliStatus, readClaudeCliSettings } from "./claude-cli-statu
 import { installDesktopConnectionIpc } from "./connection-ipc.js";
 import { installDesktopCrashTelemetry, startDesktopCrashReporter } from "./crash-telemetry.js";
 import { bindDesktopAppUserModelId, createDesktopActivationRelay } from "./desktop-lifecycle.js";
+import { installDesktopAppearanceIpc } from "./appearance-ipc.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import {
@@ -216,6 +218,7 @@ async function runDesktop(): Promise<void> {
   let disposeTranscriptIpc: (() => void) | undefined;
   let disposeTrainingExportIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
+  let disposeAppearanceIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
   let disposeIntervalsIpc: (() => Promise<void>) | undefined;
@@ -262,6 +265,8 @@ async function runDesktop(): Promise<void> {
       disposeTrainingExportIpc = undefined;
       disposeExternalLinkIpc?.();
       disposeExternalLinkIpc = undefined;
+      disposeAppearanceIpc?.();
+      disposeAppearanceIpc = undefined;
       disposeReleaseNotesIpc?.();
       disposeReleaseNotesIpc = undefined;
       disposeUpdateIpc?.();
@@ -771,7 +776,10 @@ async function runDesktop(): Promise<void> {
           return Promise.resolve(current);
         }
         windowCreation = (async () => {
-          const windowOptions = desktopWindowOptions(preloadEntry);
+          const windowOptions = desktopWindowOptions(
+            preloadEntry,
+            nativeTheme.shouldUseDarkColors ? "dark" : "light",
+          );
           if (desktopAcceptanceHidden) {
             windowOptions.webPreferences = {
               ...windowOptions.webPreferences,
@@ -882,6 +890,14 @@ async function runDesktop(): Promise<void> {
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
       openExternal: (url) => shell.openExternal(url),
+    });
+    disposeAppearanceIpc = installDesktopAppearanceIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      applyThemeSource: (appearance) => {
+        nativeTheme.themeSource = appearance;
+        return nativeTheme.shouldUseDarkColors ? "dark" : "light";
+      },
     });
     disposeReleaseNotesIpc = installDesktopReleaseNotesIpc({
       ipcMain,

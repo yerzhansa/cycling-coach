@@ -6,6 +6,7 @@ import {
   type Appearance,
   type ResolvedTheme,
 } from "../theme/applyPalette.js";
+import { publishNativeAppearance } from "../theme/nativeAppearance.js";
 import { paletteById } from "../theme/palettes.js";
 import {
   readStoredAppearance,
@@ -88,6 +89,7 @@ export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
   },
   setAppearance(appearance) {
     writeStoredAppearance(appearance);
+    publishNativeAppearance(appearance);
     set({ appearance, theme: stamp(get().paletteId, appearance) });
   },
   refreshTheme() {
@@ -101,6 +103,7 @@ export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
 
 export function bootTheme(): ResolvedTheme {
   const { paletteId, appearance } = useEnduragentStore.getState();
+  publishNativeAppearance(appearance);
   const theme = stamp(paletteId, appearance);
   useEnduragentStore.setState({ theme });
   return theme;
