@@ -261,7 +261,12 @@ describe("Telegram settings surface", () => {
     expect(within(users).getByText("Primary user · required")).toBeVisible();
     expect(within(users).queryByRole("button", { name: "Remove Telegram user 101" })).toBeNull();
 
-    await user.click(within(users).getByRole("button", { name: "Remove Telegram user 202" }));
+    const removeSender = within(users).getByRole("button", {
+      name: "Remove Telegram user 202",
+    });
+    expect(removeSender.className).toBe(BUTTON_DANGER_QUIET_SM);
+
+    await user.click(removeSender);
     expect(port.removeSender).toHaveBeenCalledWith(202);
 
     const senderId = screen.getByLabelText("Add a Telegram user ID");

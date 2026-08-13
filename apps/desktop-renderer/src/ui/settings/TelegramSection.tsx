@@ -604,7 +604,7 @@ export function TelegramSection(): ReactElement {
                     {sender.role === "additional" ? (
                       <button
                         type="button"
-                        className={BUTTON_OUTLINE_SM}
+                        className={BUTTON_DANGER_QUIET_SM}
                         disabled={busy}
                         aria-label={"Remove Telegram user " + sender.senderId}
                         onClick={() => {

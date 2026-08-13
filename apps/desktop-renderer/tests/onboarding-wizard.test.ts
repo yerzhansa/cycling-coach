@@ -334,7 +334,7 @@ describe("desktop onboarding wizard", () => {
       ),
     );
     for (const [index, source] of sources.entries()) {
-      const transitions = source.match(/transition-(?!none)[a-z-]+/gu) ?? [];
+      const transitions = source.match(/transition-(?!none)(?:\[[^\]]*\]|[a-z-]+)/gu) ?? [];
       const escapes = source.match(/motion-reduce:transition-none/gu) ?? [];
       expect({ file: SETUP_SOURCES[index], escapes: escapes.length }).toEqual({
         file: SETUP_SOURCES[index],

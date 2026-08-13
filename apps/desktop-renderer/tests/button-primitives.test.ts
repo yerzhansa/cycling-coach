@@ -92,8 +92,10 @@ describe("button primitives", () => {
     const exported = constants();
     expect(exported.length).toBeGreaterThanOrEqual(6);
     for (const [name, value] of exported) {
-      expect(`${name} ${value}`).toContain("cursor-pointer");
-      expect(`${name} ${value}`).toContain("disabled:cursor-default");
+      expect({ name, utilities: classes(value) }).toEqual({
+        name,
+        utilities: expect.arrayContaining(["cursor-pointer", "disabled:cursor-default"]),
+      });
     }
   });
 
@@ -110,7 +112,7 @@ describe("button primitives", () => {
     expect(classes(buttons.BUTTON_DANGER_QUIET_SM)).toContain("border-transparent");
     expect(classes(buttons.BUTTON_DANGER_QUIET_SM)).toContain("bg-transparent");
     const bordered = classes(buttons.BUTTON_DANGER_QUIET_SM).filter(
-      (entry) => entry.startsWith("border-") && entry !== "border-transparent",
+      (entry) => /(^|:)border-/u.test(entry) && entry !== "border-transparent",
     );
     expect(bordered).toEqual([]);
     expect(
@@ -145,9 +147,17 @@ describe("button primitives", () => {
     const hover = arbitrary(buttons.BUTTON_DANGER_QUIET_SM, "hover:bg");
 
     const base = compact(declarations(surface, ".dangerous"));
-    expect(base).toContain("border-color:transparent");
-    expect(base).toContain("background-color:transparent");
-    expect(base).toContain("color:var(--danger)");
+    expect(
+      base
+        .split(";")
+        .filter((entry) => entry.length > 0)
+        .sort(),
+    ).toEqual([
+      "background-color:transparent",
+      "border-color:transparent",
+      "box-shadow:none",
+      "color:var(--danger)",
+    ]);
 
     const hovered = compact(declarations(surface, ".dangerous:hover:not(:disabled)"));
     expect(hovered).toContain(`background-color:${compact(hover)}`);
@@ -175,6 +185,41 @@ describe("button primitives", () => {
     expect(compact(declarations(surface, ".control:disabled"))).toContain(
       `opacity:${String(opacity)}`,
     );
+  });
+
+  it("takes disabled controls out of hit testing across both styling systems", async () => {
+    const surface = await readFile(resolve(themeRoot, "surface.module.css"), "utf8");
+    for (const [name, value] of constants()) {
+      expect({ name, utilities: classes(value) }).toEqual({
+        name,
+        utilities: expect.arrayContaining([
+          "disabled:pointer-events-none",
+          "aria-disabled:pointer-events-none",
+        ]),
+      });
+    }
+    expect(compact(declarations(surface, ".control:disabled"))).toContain("pointer-events:none");
+  });
+
+  it("animates the same properties over the same timing in both styling systems", async () => {
+    const surface = await readFile(resolve(themeRoot, "surface.module.css"), "utf8");
+    const control = compact(declarations(surface, ".control"));
+    const animated = (/transition:([^;]+)/u.exec(control)?.[1] ?? "")
+      .split(",")
+      .map((entry) => entry.replace("120msease", ""))
+      .filter((entry) => entry.length > 0)
+      .sort();
+    expect(animated).toEqual(["background-color", "border-color", "box-shadow"]);
+    expect(
+      arbitrary(buttons.BUTTON_SOLID_SM, "transition")
+        .split(",")
+        .map((entry) => entry.trim())
+        .sort(),
+    ).toEqual(animated);
+    expect(classes(buttons.BUTTON_SOLID_SM)).toEqual(
+      expect.arrayContaining(["duration-[120ms]", "ease-[ease]", "leading-none", "relative"]),
+    );
+    expect(control).toContain("position:relative");
   });
 
   it("keeps Tailwind preflight out of the stylesheet entry", async () => {

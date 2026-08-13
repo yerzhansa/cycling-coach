@@ -1,5 +1,5 @@
 const BUTTON_LAYOUT =
-  "inline-flex flex-none items-center justify-center rounded-ctl border whitespace-nowrap font-medium transition-colors cursor-pointer disabled:cursor-default disabled:opacity-64 aria-disabled:cursor-default aria-disabled:opacity-64 motion-reduce:transition-none";
+  "relative inline-flex flex-none items-center justify-center rounded-ctl border whitespace-nowrap py-0 font-medium leading-none transition-[background-color,border-color,box-shadow] duration-[120ms] ease-[ease] cursor-pointer disabled:cursor-default disabled:opacity-64 disabled:pointer-events-none aria-disabled:cursor-default aria-disabled:opacity-64 aria-disabled:pointer-events-none motion-reduce:transition-none";
 
 const BUTTON_BASE = `${BUTTON_LAYOUT} gap-1.5`;
 
