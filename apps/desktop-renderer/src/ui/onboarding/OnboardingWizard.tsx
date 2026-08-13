@@ -15,11 +15,15 @@ import {
   PRIMARY_LABEL,
   RETRY_SETUP_STATUS_LABEL,
   SETUP_CHAT_SUBTITLE,
+  SETUP_CHECKING_HEADING,
+  SETUP_CHECKING_SUBTITLE,
   SETUP_HEADING,
   SETUP_SETTINGS_HEADING,
+  SETUP_STATUS_CHECKING_COPY,
   SETUP_STATUS_UNAVAILABLE_COPY,
 } from "./copy.js";
 import { IntakeRows } from "./IntakeRows.js";
+import { setupStatusKnown } from "../../onboarding/controller.js";
 import { intakeComplete } from "../../onboarding/machine.js";
 import { credentialChangesBlocked } from "../../settings/credential-controller.js";
 import {
@@ -57,10 +61,12 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
 
   const wizard = surface.wizard;
   const readiness = surface.readiness;
+  const statusKnown = setupStatusKnown(surface);
   const requiredReadyCount = [readiness.provider, readiness.trainingData, readiness.intake].filter(
     Boolean,
   ).length;
   const requiredSetupReady = requiredReadyCount === 3;
+  const readinessState = !statusKnown ? "checking" : requiredSetupReady ? "ready" : "pending";
   const activeCredential = desktopCredentialId(surface.configuration?.active?.provider);
   const primaryAiCredential =
     activeCredential === surface.draft?.provider.provider ? activeCredential : null;
@@ -110,24 +116,26 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
               tabIndex={-1}
               className={`${styles.chatTitle} focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink`}
             >
-              {SETUP_HEADING}
+              {statusKnown ? SETUP_HEADING : SETUP_CHECKING_HEADING}
             </h2>
-            <p className={`${styles.chatSubtitle} text-ink-2`}>{SETUP_CHAT_SUBTITLE}</p>
+            <p className={`${styles.chatSubtitle} text-ink-2`}>
+              {statusKnown ? SETUP_CHAT_SUBTITLE : SETUP_CHECKING_SUBTITLE}
+            </p>
           </div>
           <span
-            className={`inline-flex h-ctl-sm flex-none items-center gap-2 rounded-full border px-row text-xs ${requiredSetupReady ? "border-ok/35 bg-ok/10 text-ok" : "border-line-2 bg-surface text-ink-2"}`}
-            data-setup-readiness={requiredReadyCount}
-            data-state={requiredSetupReady ? "ready" : "pending"}
+            className={`inline-flex h-ctl-sm flex-none items-center gap-2 rounded-full border px-row text-xs ${readinessState === "ready" ? "border-ok/35 bg-ok/10 text-ok" : "border-line-2 bg-surface text-ink-2"}`}
+            data-setup-readiness={statusKnown ? requiredReadyCount : "unknown"}
+            data-state={readinessState}
             role="status"
             aria-live="polite"
             aria-atomic="true"
           >
             <span
-              className={`size-2 rounded-full ring-4 ${requiredSetupReady ? "bg-ok ring-ok/10" : "bg-warn ring-warn/10"}`}
-              data-setup-readiness-dot={requiredSetupReady ? "ready" : "pending"}
+              className={`size-2 rounded-full ring-4 ${readinessState === "ready" ? "bg-ok ring-ok/10" : readinessState === "pending" ? "bg-warn ring-warn/10" : "bg-line-2 ring-line-2/20"}`}
+              data-setup-readiness-dot={readinessState}
               aria-hidden="true"
             />
-            {requiredReadyCount} of 3 required ready
+            {statusKnown ? `${requiredReadyCount} of 3 required ready` : SETUP_STATUS_CHECKING_COPY}
           </span>
         </header>
       ) : (

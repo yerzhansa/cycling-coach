@@ -164,6 +164,23 @@ export const CHATGPT_PROGRESS_DETAIL_DELAY_MS = 3_000;
 // had time to report its authoritative result.
 export const CHATGPT_ACTIVATION_TRANSPORT_TIMEOUT_MS = 12_000;
 export const ONBOARDING_STATUS_REFRESH_TIMEOUT_MS = 3_000;
+export const ONBOARDING_STATUS_COLD_START_TIMEOUT_MS = 8_000;
+export const ONBOARDING_STATUS_LOAD_ATTEMPTS = 4;
+export const ONBOARDING_STATUS_RETRY_BASE_DELAY_MS = 500;
+export const ONBOARDING_STATUS_RETRY_MAX_DELAY_MS = 2_000;
+
+export function onboardingStatusRetryDelayMs(attempt: number): number {
+  const delay = ONBOARDING_STATUS_RETRY_BASE_DELAY_MS * 2 ** attempt;
+  return delay > ONBOARDING_STATUS_RETRY_MAX_DELAY_MS
+    ? ONBOARDING_STATUS_RETRY_MAX_DELAY_MS
+    : delay;
+}
+
+export function setupStatusKnown(
+  surface: Pick<OnboardingSurfaceState, "initialized" | "loadUnavailable">,
+): boolean {
+  return surface.initialized && !surface.loadUnavailable;
+}
 
 type BoundedResult<T> =
   | { readonly status: "fulfilled"; readonly value: T }
@@ -933,7 +950,7 @@ export function createOnboardingController(
     publish();
   });
 
-  const load = async (hydrateIntake: boolean): Promise<void> => {
+  const load = async (hydrateIntake: boolean, retryWhileStarting: boolean): Promise<void> => {
     if (disposed || opening) return;
     const currentIntake = state.intake;
     const currentAutoPersistIntakeDraft = autoPersistIntakeDraft;
@@ -954,16 +971,42 @@ export function createOnboardingController(
     completed = false;
     lastCommit = null;
     actionStatus = null;
-    const [statusesResult, chatGptResult, configurationResult, setupResult] = await Promise.all([
-      settleWithin(options.bridge.credentialStatuses(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
-      settleWithin(options.bridge.chatGptStatus(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
-      settleWithin(options.bridge.llmConfiguration(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
-      settleWithin(
-        options.bridge.getSetupStatus?.() ??
-          Promise.resolve({ schemaVersion: 1 as const, intake: null, durableTrainingData: false }),
-        ONBOARDING_STATUS_REFRESH_TIMEOUT_MS,
-      ),
-    ]);
+    const coldStart = retryWhileStarting && !hasSuccessfulLoad;
+    const attemptTimeoutMs = coldStart
+      ? ONBOARDING_STATUS_COLD_START_TIMEOUT_MS
+      : ONBOARDING_STATUS_REFRESH_TIMEOUT_MS;
+    const maxAttempts = coldStart ? ONBOARDING_STATUS_LOAD_ATTEMPTS : 1;
+    const readAuthoritativeStatus = () =>
+      Promise.all([
+        settleWithin(options.bridge.credentialStatuses(), attemptTimeoutMs),
+        settleWithin(options.bridge.chatGptStatus(), attemptTimeoutMs),
+        settleWithin(options.bridge.llmConfiguration(), attemptTimeoutMs),
+        settleWithin(
+          options.bridge.getSetupStatus?.() ??
+            Promise.resolve({
+              schemaVersion: 1 as const,
+              intake: null,
+              durableTrainingData: false,
+            }),
+          attemptTimeoutMs,
+        ),
+      ]);
+    let read = await readAuthoritativeStatus();
+    let attempt = 0;
+    while (
+      read.some((entry) => entry.status !== "fulfilled") &&
+      attempt + 1 < maxAttempts &&
+      !disposed &&
+      visit === openVisit
+    ) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, onboardingStatusRetryDelayMs(attempt));
+      });
+      if (disposed || visit !== openVisit) break;
+      attempt += 1;
+      read = await readAuthoritativeStatus();
+    }
+    const [statusesResult, chatGptResult, configurationResult, setupResult] = read;
     if (disposed || visit !== openVisit) {
       opening = false;
       return;
@@ -1056,11 +1099,11 @@ export function createOnboardingController(
   return {
     open(): Promise<void> {
       if (disposed || presenting || opening) return Promise.resolve();
-      return load(true);
+      return load(true, true);
     },
     refresh(): Promise<void> {
       if (disposed || opening) return Promise.resolve();
-      return load(false);
+      return load(false, false);
     },
     close,
     dispose(): void {

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RideImportState } from "../src/ride-import.js";
 import { EMPTY_RIDE_ANALYSIS } from "../src/activity-analysis/controller.js";
 import { restoreManualSyncFocus } from "../src/state/manual-sync-focus.js";
+import { READY_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { IDLE_RIDE_IMPORT } from "../src/state/ride-import-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
@@ -1247,7 +1248,7 @@ describe("training page ride import", () => {
     expect(status).toHaveAttribute("data-state", "failed");
   });
 
-  it("suppresses the resident status while onboarding owns the import surface", () => {
+  it("suppresses the resident status only while the setup surface is on screen", () => {
     render(<TrainingView />);
     setRideImport({
       status: "running",
@@ -1256,14 +1257,31 @@ describe("training page ride import", () => {
       progress: null,
       result: null,
     });
-    update({ rideImportSuppressed: true });
+    update({ rideImportSuppressed: true, activeView: "settings" });
 
     const status = document.querySelector(".ride-import-status");
     expect(status).toHaveProperty("hidden", true);
     expect(status).toHaveAttribute("data-state", "idle");
 
-    update({ rideImportSuppressed: false });
+    update({ activeView: "training" });
     expect(status).toHaveProperty("hidden", false);
     expect(status).toHaveTextContent("Importing ride files…");
+  });
+
+  it("keeps reporting imports after setup completes and the wizard stops presenting", () => {
+    render(<TrainingView />);
+    update({ rideImportSuppressed: true, onboarding: READY_ONBOARDING });
+    setRideImport({
+      status: "running",
+      owner: "resident",
+      stage: "importing",
+      progress: null,
+      result: null,
+    });
+
+    const status = document.querySelector(".ride-import-status");
+    expect(status).toHaveProperty("hidden", false);
+    expect(status).toHaveTextContent("Importing ride files…");
+    expect(status).toHaveAttribute("data-state", "running");
   });
 });

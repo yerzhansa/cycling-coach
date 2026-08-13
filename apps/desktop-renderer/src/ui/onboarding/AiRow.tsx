@@ -7,7 +7,11 @@ import {
   DESKTOP_CREDENTIAL_SLOTS,
   ONBOARDING_LLM_PROVIDER_LABELS,
 } from "../../onboarding/constants.js";
-import type { OnboardingActions, OnboardingSurfaceState } from "../../onboarding/controller.js";
+import {
+  setupStatusKnown,
+  type OnboardingActions,
+  type OnboardingSurfaceState,
+} from "../../onboarding/controller.js";
 import { chatGptReady, chatGptSignedIn, chatGptUiPhase } from "../../onboarding/machine.js";
 import {
   aiRowCopy,
@@ -32,6 +36,7 @@ import {
   AI_CANCEL_LABEL,
   AI_PANEL_ANNOUNCEMENTS,
   AI_ROW_TOOLTIP,
+  AI_ROW_UNSET,
   AI_SAVE_LABEL,
   AI_TRIGGER_LABELS,
   API_KEY_PANEL_HINT,
@@ -48,6 +53,7 @@ import {
   SETUP_LANE_LABELS,
   SETUP_LANE_MENU_HINTS,
   SETUP_MENU_LABEL,
+  SETUP_ROW_CHECKING_SUBTITLE,
 } from "./copy.js";
 import { CredentialField } from "./CredentialField.js";
 import { InfoTip } from "./InfoTip.js";
@@ -208,12 +214,15 @@ export function AiRow(props: {
         : null;
   const lanes = offeredLanes(configuration, wizard, lane);
   const note = claudeCliNote(configuration, wizard);
-  const copy = showsActiveProviderOutsideCatalogue
-    ? {
-        title: ONBOARDING_LLM_PROVIDER_LABELS[configuration.active!.provider],
-        subtitle: "Connected · powers your coach",
-      }
-    : aiRowCopy(lane, wizard, ready);
+  const statusKnown = setupStatusKnown(surface);
+  const copy = !statusKnown
+    ? { title: AI_ROW_UNSET.title, subtitle: SETUP_ROW_CHECKING_SUBTITLE }
+    : showsActiveProviderOutsideCatalogue
+      ? {
+          title: ONBOARDING_LLM_PROVIDER_LABELS[configuration.active!.provider],
+          subtitle: "Connected · powers your coach",
+        }
+      : aiRowCopy(lane, wizard, ready);
   const hasDisplayedProvider = lane !== null || showsActiveProviderOutsideCatalogue;
   const keyProviders = apiKeyProviders(configuration);
   const keySlot = DESKTOP_CREDENTIAL_SLOTS.find((slot) => slot === draft?.provider.provider);
@@ -319,7 +328,7 @@ export function AiRow(props: {
     <>
       <SetupRow
         id="ai"
-        status={ready ? "ready" : "pending"}
+        status={!statusKnown ? "none" : ready ? "ready" : "pending"}
         title={copy.title}
         subtitle={copy.subtitle}
         announce={panel === null ? "" : AI_PANEL_ANNOUNCEMENTS[panel]}
@@ -331,82 +340,86 @@ export function AiRow(props: {
           />
         }
         trailing={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Menu.Root>
-              <Menu.Trigger
-                ref={triggerRef}
-                data-setup-trigger="ai"
-                disabled={controlsDisabled || chatGptActivating}
-                aria-label={hasDisplayedProvider ? AI_TRIGGER_LABELS.set : AI_TRIGGER_LABELS.unset}
-                className={!hasDisplayedProvider ? BUTTON_OUTLINE_SM : BUTTON_QUIET_SM}
-              >
-                {hasDisplayedProvider ? "Change" : "Choose"}
-              </Menu.Trigger>
-              <Menu.Portal>
-                <Menu.Positioner side="bottom" align="end" sideOffset={6}>
-                  <Menu.Popup
-                    data-setup-menu="ai"
-                    className="w-[262px] rounded-md border border-line-2 bg-surface p-[5px] shadow-elev-3"
-                  >
-                    <Menu.RadioGroup value={lane}>
-                      <Menu.GroupLabel className="px-[9px] pt-1.5 pb-1 text-[11px] font-semibold tracking-wider text-ink-2 uppercase">
-                        {SETUP_MENU_LABEL}
-                      </Menu.GroupLabel>
-                      {lanes.map((entry) => (
-                        <Menu.RadioItem
-                          key={entry}
-                          value={entry}
-                          data-lane={entry}
-                          closeOnClick
-                          disabled={controlsDisabled}
-                          className={MENU_ITEM_CLASS}
-                          onClick={() => {
-                            choose(entry);
-                          }}
-                        >
-                          <span className="mt-px grid size-[15px] shrink-0 place-items-center text-ok">
-                            <Menu.RadioItemIndicator>
-                              <Check size={11} strokeWidth={3.2} aria-hidden="true" />
-                            </Menu.RadioItemIndicator>
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <b className="block text-[13.5px] font-medium">
-                              {SETUP_LANE_LABELS[entry]}
-                            </b>
-                            <i className="mt-px block text-xs text-ink-2 not-italic">
-                              {SETUP_LANE_MENU_HINTS[entry]}
-                            </i>
-                          </span>
-                        </Menu.RadioItem>
-                      ))}
-                    </Menu.RadioGroup>
-                    {note === null ? null : (
-                      <div className="mt-1 border-t border-line px-[9px] pt-2 pb-1">
-                        <p
-                          data-setup-note="claude-cli"
-                          className="text-[11.5px] leading-normal text-ink-2"
-                        >
-                          {note}
-                        </p>
-                        <Menu.Item
-                          disabled={controlsDisabled}
-                          className={MENU_ACTION_CLASS}
-                          onClick={() => {
-                            actions?.recheckClaudeCli();
-                          }}
-                        >
-                          {CLAUDE_CLI_RECHECK_LABEL}
-                        </Menu.Item>
-                      </div>
-                    )}
-                  </Menu.Popup>
-                </Menu.Positioner>
-              </Menu.Portal>
-            </Menu.Root>
-            {props.placement === "settings" && primaryCredential !== null ? (
-              <CredentialDeleteButton credential={primaryCredential} />
-            ) : null}
-          </div>
+          !statusKnown ? null : (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Menu.Root>
+                <Menu.Trigger
+                  ref={triggerRef}
+                  data-setup-trigger="ai"
+                  disabled={controlsDisabled || chatGptActivating}
+                  aria-label={
+                    hasDisplayedProvider ? AI_TRIGGER_LABELS.set : AI_TRIGGER_LABELS.unset
+                  }
+                  className={!hasDisplayedProvider ? BUTTON_OUTLINE_SM : BUTTON_QUIET_SM}
+                >
+                  {hasDisplayedProvider ? "Change" : "Choose"}
+                </Menu.Trigger>
+                <Menu.Portal>
+                  <Menu.Positioner side="bottom" align="end" sideOffset={6}>
+                    <Menu.Popup
+                      data-setup-menu="ai"
+                      className="w-[262px] rounded-md border border-line-2 bg-surface p-[5px] shadow-elev-3"
+                    >
+                      <Menu.RadioGroup value={lane}>
+                        <Menu.GroupLabel className="px-[9px] pt-1.5 pb-1 text-[11px] font-semibold tracking-wider text-ink-2 uppercase">
+                          {SETUP_MENU_LABEL}
+                        </Menu.GroupLabel>
+                        {lanes.map((entry) => (
+                          <Menu.RadioItem
+                            key={entry}
+                            value={entry}
+                            data-lane={entry}
+                            closeOnClick
+                            disabled={controlsDisabled}
+                            className={MENU_ITEM_CLASS}
+                            onClick={() => {
+                              choose(entry);
+                            }}
+                          >
+                            <span className="mt-px grid size-[15px] shrink-0 place-items-center text-ok">
+                              <Menu.RadioItemIndicator>
+                                <Check size={11} strokeWidth={3.2} aria-hidden="true" />
+                              </Menu.RadioItemIndicator>
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <b className="block text-[13.5px] font-medium">
+                                {SETUP_LANE_LABELS[entry]}
+                              </b>
+                              <i className="mt-px block text-xs text-ink-2 not-italic">
+                                {SETUP_LANE_MENU_HINTS[entry]}
+                              </i>
+                            </span>
+                          </Menu.RadioItem>
+                        ))}
+                      </Menu.RadioGroup>
+                      {note === null ? null : (
+                        <div className="mt-1 border-t border-line px-[9px] pt-2 pb-1">
+                          <p
+                            data-setup-note="claude-cli"
+                            className="text-[11.5px] leading-normal text-ink-2"
+                          >
+                            {note}
+                          </p>
+                          <Menu.Item
+                            disabled={controlsDisabled}
+                            className={MENU_ACTION_CLASS}
+                            onClick={() => {
+                              actions?.recheckClaudeCli();
+                            }}
+                          >
+                            {CLAUDE_CLI_RECHECK_LABEL}
+                          </Menu.Item>
+                        </div>
+                      )}
+                    </Menu.Popup>
+                  </Menu.Positioner>
+                </Menu.Portal>
+              </Menu.Root>
+              {props.placement === "settings" && primaryCredential !== null ? (
+                <CredentialDeleteButton credential={primaryCredential} />
+              ) : null}
+            </div>
+          )
         }
       />
       {props.placement === "settings" && primaryCredential !== null ? (

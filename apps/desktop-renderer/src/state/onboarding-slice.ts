@@ -54,6 +54,18 @@ export function setupRequired(state: Pick<EnduragentState, "onboarding" | "setti
   return !setupReady(state);
 }
 
+export function setupSurfaceOnScreen(
+  state: Pick<EnduragentState, "activeView" | "onboarding" | "settings">,
+): boolean {
+  return state.activeView === "settings" || (state.activeView === "chat" && setupRequired(state));
+}
+
+export function rideImportStatusSuppressed(
+  state: Pick<EnduragentState, "activeView" | "onboarding" | "rideImportSuppressed" | "settings">,
+): boolean {
+  return state.rideImportSuppressed && setupSurfaceOnScreen(state);
+}
+
 export const createOnboardingSlice: StateCreator<EnduragentState, [], [], OnboardingSlice> = (
   set,
 ) => ({
