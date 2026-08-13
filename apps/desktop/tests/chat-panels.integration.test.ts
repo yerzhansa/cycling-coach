@@ -1074,6 +1074,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "removeTelegramWebhook",
         "restartToUpdate",
         "retryFailedCredentials",
+        "setAppearance",
         "telegramStatus",
         "writeCredential",
       ],
