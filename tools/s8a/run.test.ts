@@ -58,6 +58,12 @@ describe("scenario child stage diagnostics", () => {
         "inj-02",
       ),
     ).toBe("none");
+    expect(
+      parseLastScenarioChildStage(
+        "S8A_CHILD_STAGE START scenario=inj-02 stage=turn turn=123456789",
+        "inj-02",
+      ),
+    ).toBe("none");
   });
 
   it("binds every requested child boundary in execution order", () => {
