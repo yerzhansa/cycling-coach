@@ -89,6 +89,11 @@ describe("Windows parity automation contract", () => {
     expect(driver).toContain('child.once("close"');
     expect(nativeEvidence).toContain("ConvertFrom-Json");
     expect(nativeEvidence).toContain("Get-AuthenticodeSignature");
+    expect(nativeEvidence).toContain('$installRoot = "HKCU:\\Software\\$($Request.guid)"');
+    expect(nativeEvidence).toContain(
+      "(Get-ItemProperty -LiteralPath $installRoot).InstallLocation",
+    );
+    expect(nativeEvidence).toContain("installLocation = $installLocation");
     expect(nativeEvidence).toContain("WScript.Shell");
     expect(nativeEvidence).toContain("Get-CimInstance Win32_Process -Filter");
     expect(nativeEvidence).not.toContain("[IO.Path]::GetFileName");

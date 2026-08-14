@@ -9,6 +9,12 @@ $ProgressPreference = "SilentlyContinue"
 function Get-UninstallRegistrations {
   param($Request)
   $root = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
+  $installRoot = "HKCU:\Software\$($Request.guid)"
+  $installLocation = if (Test-Path -LiteralPath $installRoot) {
+    (Get-ItemProperty -LiteralPath $installRoot).InstallLocation
+  } else {
+    $null
+  }
   if (-not (Test-Path -LiteralPath $root)) { return @() }
   $items = @(Get-ChildItem -LiteralPath $root | ForEach-Object {
     $value = Get-ItemProperty -LiteralPath $_.PSPath
@@ -22,7 +28,7 @@ function Get-UninstallRegistrations {
         keyName = $_.PSChildName
         displayName = $value.DisplayName
         displayVersion = $value.DisplayVersion
-        installLocation = $value.InstallLocation
+        installLocation = $installLocation
         uninstallString = $value.UninstallString
         quietUninstallString = $value.QuietUninstallString
       }
