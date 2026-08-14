@@ -249,12 +249,14 @@
     {
       "id": "storage.first-run.configuration",
       "surface": "shell-storage",
-      "expected": "Windows prepares the athlete home, seeds a parseable first-run configuration only when absent, reopens an existing configuration unchanged, and completes this work before constructing the daemon supervisor.",
+      "expected": "Windows prepares the athlete home and seeds a parseable first-run configuration only when absent. The seeder leaves an existing configuration byte-identical; startup then adopts the device timezone into an unpinned configuration before constructing the daemon supervisor.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop/tests/first-run-config.test.ts > leaves an existing arbitrary configuration byte-identical",
         "apps/desktop/tests/first-run-config.test.ts > seeds and reopens a Windows configuration without POSIX mode assertions",
-        "apps/desktop/tests/first-run-config.test.ts > prepares the home before seeding and constructing the daemon supervisor"
+        "apps/desktop/tests/session-timezone.test.ts > rewrites the stored zone to the device zone when nothing is pinned",
+        "apps/desktop/tests/session-timezone.test.ts > never rewrites the stored zone once the athlete pinned one",
+        "apps/desktop/tests/first-run-config.test.ts > prepares the home, seeds the config, and adopts the device timezone before constructing the daemon supervisor"
       ]
     },
     {
