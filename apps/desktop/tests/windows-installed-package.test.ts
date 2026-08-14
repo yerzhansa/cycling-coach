@@ -79,7 +79,7 @@ describe("canonical installed package manifests", () => {
       collectCanonicalTree("/synthetic", {
         lstat: vi.fn(async (path: string) =>
           directoryStat(
-            path === "/synthetic/link" ? { isSymbolicLink: () => true } : {},
+            path === join("/synthetic", "link") ? { isSymbolicLink: () => true } : {},
           ) as never,
         ),
         readdir: vi.fn(async (path: string) => (path === "/synthetic" ? ["link"] : [])),

@@ -98,11 +98,12 @@ describe("packaged self-test resources", () => {
         readFile(join(generatedRoot, "extra-resources/self-test/matrix.sha256")),
         readFile(join(desktopRoot, "electron-builder.yml"), "utf8"),
         readFile(join(generatedRoot, "extra-resources/self-test/self-test-runner.cjs"), "utf8"),
-      ]);
+    ]);
     expect(outsideMatrix.equals(insideMatrix)).toBe(true);
     expect(outsideChecksum.equals(insideChecksum)).toBe(true);
-    expect(builder).toContain("from: dist/self-test-asar\n    to: .");
-    expect(builder).toContain("from: dist/extra-resources");
+    const normalizedBuilder = builder.replaceAll("\r\n", "\n");
+    expect(normalizedBuilder).toContain("from: dist/self-test-asar\n    to: .");
+    expect(normalizedBuilder).toContain("from: dist/extra-resources");
     expect(bundle).not.toMatch(/vitest|process\.exit|process\.exitCode|console\./iu);
     const root = await mkdtemp(join(tmpdir(), "self-test-layout-"));
     roots.push(root);

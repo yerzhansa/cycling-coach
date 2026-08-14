@@ -688,9 +688,10 @@ describe("desktop residency", () => {
 
   it("keeps the production failure adapter closed and gates the loser before bootstrap", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    const normalizedSource = source.replaceAll("\r\n", "\n");
     expect(source).toContain("desktop-residency-failure ${operation}\\n");
     expect(source).toContain("const primaryInstance = app.requestSingleInstanceLock();");
-    expect(source).toContain("if (!primaryInstance) {\n  app.exit(0);");
+    expect(normalizedSource).toContain("if (!primaryInstance) {\n  app.exit(0);");
     mocks.app.requestSingleInstanceLock.mockReturnValueOnce(false);
     await import("../src/main/index.js");
     expect(mocks.crashReporter.start).toHaveBeenCalledWith({ uploadToServer: false });

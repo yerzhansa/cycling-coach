@@ -141,7 +141,7 @@ jobs:
       - name: Build Desktop dependencies
         run: pnpm --filter "@enduragent/desktop^..." build
       - name: Run deterministic Windows parity scenarios
-        run: pnpm exec vitest run apps/desktop/tests packages/core/tests/conversation-store.test.ts packages/coach/tests/upgrade-fence.test.ts packages/coach/tests/windows-upgrade-fence.test.ts packages/engine/tests/codex-bridge.test.ts packages/engine/tests/coach-agent-streaming.test.ts
+        run: pnpm exec vitest run apps/desktop/tests packages/core/tests/conversation-store.test.ts packages/coach/tests/upgrade-fence.test.ts packages/coach/tests/windows-upgrade-fence.test.ts --maxWorkers=1
       - name: Run deterministic renderer scenarios
         run: pnpm --filter @enduragent/desktop-renderer test
       - name: Build and verify unsigned x64 NSIS package

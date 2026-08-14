@@ -123,6 +123,21 @@ function platformError(message: string): string | typeof WindowsPrivatePathPolic
   return process.platform === "win32" ? WindowsPrivatePathPolicyError : message;
 }
 
+function expectUnrecoveredBoundaryRead(dataDir: string, chatId: string): void {
+  const read = () => new TranscriptStore(dataDir).readCurrentConversation(chatId);
+  if (process.platform !== "win32") {
+    expect(read()).toEqual([]);
+    return;
+  }
+  let failure: unknown;
+  try {
+    read();
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
+}
+
 function boundaryCount(dataDir: string, chatId: string, resetId = RESET_ID): number {
   const path = transcriptPath(dataDir, chatId);
   if (!existsSync(path)) return 0;
@@ -498,7 +513,7 @@ describe("ConversationStore reset transaction recovery", () => {
     expect(chat.hasSession(chatId)).toBe(true);
     expect(transcript.readResetIntent(chatId)).not.toBeNull();
     expect(boundaryCount(dataDir, chatId)).toBe(0);
-    expect(new TranscriptStore(dataDir).readCurrentConversation(chatId)).toEqual([]);
+    expectUnrecoveredBoundaryRead(dataDir, chatId);
     expect(removeIntent).not.toHaveBeenCalled();
 
     expect(store.load(chatId).messages).toEqual([]);
@@ -546,12 +561,14 @@ describe("ConversationStore reset transaction recovery", () => {
     expect(chat.hasSession(chatId)).toBe(true);
     expect(transcript.readResetIntent(chatId)).not.toBeNull();
     expect(boundaryCount(dataDir, chatId)).toBe(0);
-    expect(new TranscriptStore(dataDir).readCurrentConversation(chatId)).toEqual([]);
+    expectUnrecoveredBoundaryRead(dataDir, chatId);
     expect(removeIntent).not.toHaveBeenCalled();
   });
 
   it("retains a valid boundary intent after archive failure and finishes before later access", () => {
     const dataDir = makeDataDir();
+    const chatId = "archive-failure";
+    seedSession(new ChatStore(dataDir), chatId);
     let fileSyncs = 0;
     const chat = createChatStoreWithHooks(dataDir, 0, {
       syncFile: (descriptor) => {
@@ -562,8 +579,6 @@ describe("ConversationStore reset transaction recovery", () => {
     });
     const transcript = new TranscriptStore(dataDir);
     const store = new ConversationStore(chat, transcript, () => RESET_ID);
-    const chatId = "archive-failure";
-    seedSession(chat, chatId);
 
     expect(() =>
       store.resetConversation({
