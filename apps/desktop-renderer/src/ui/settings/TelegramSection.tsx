@@ -145,8 +145,10 @@ export function TelegramSection(): ReactElement {
   const [senderDraft, setSenderDraft] = useState("");
   const [senderError, setSenderError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmRemoveSenderId, setConfirmRemoveSenderId] = useState<number | null>(null);
   const [firstTimeOpen, setFirstTimeOpen] = useState(() => telegram?.credentialConfigured !== true);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
+  const removeSenderTrigger = useRef<HTMLButtonElement>(null);
   const firstTimeTrigger = useRef<HTMLButtonElement>(null);
   const firstTimeHeading = useRef<HTMLHeadingElement>(null);
   const focusFirstTimeHeading = useRef(false);
@@ -165,6 +167,7 @@ export function TelegramSection(): ReactElement {
   const working = state.status === "working";
   const busy = mutating || loading || working;
   const removing = state.status === "working" && state.operation === "remove";
+  const removingSender = state.status === "working" && state.operation === "remove-sender";
   const botUsername =
     telegram === null || telegram.bot.state === "unconfigured" ? null : telegram.bot.username;
   const credentialIdentityMissing =
@@ -200,6 +203,16 @@ export function TelegramSection(): ReactElement {
       setConfirmRemove(false);
     }
   }, [telegram]);
+
+  useEffect(() => {
+    if (
+      confirmRemoveSenderId !== null &&
+      allowedSenders !== null &&
+      !allowedSenders.senders.some((sender) => sender.senderId === confirmRemoveSenderId)
+    ) {
+      setConfirmRemoveSenderId(null);
+    }
+  }, [allowedSenders, confirmRemoveSenderId]);
 
   useEffect(() => {
     if (!credentialIdentityMissing) return;
@@ -602,17 +615,39 @@ export function TelegramSection(): ReactElement {
                       </div>
                     </div>
                     {sender.role === "additional" ? (
-                      <button
-                        type="button"
-                        className={BUTTON_DANGER_QUIET_SM}
-                        disabled={busy}
-                        aria-label={"Remove Telegram user " + sender.senderId}
-                        onClick={() => {
-                          port?.removeSender(sender.senderId);
-                        }}
-                      >
-                        Remove
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className={BUTTON_DANGER_QUIET_SM}
+                          disabled={busy || confirmRemoveSenderId !== null}
+                          aria-label={"Remove Telegram user " + sender.senderId}
+                          onClick={(event) => {
+                            removeSenderTrigger.current = event.currentTarget;
+                            setConfirmRemoveSenderId(sender.senderId);
+                          }}
+                        >
+                          Remove
+                        </button>
+                        {confirmRemoveSenderId === sender.senderId ? (
+                          <InlineConfirmation
+                            name="remove-telegram-user"
+                            title={`Remove Telegram user ${sender.senderId}?`}
+                            copy={`This user will lose access to your coach and shared athlete data until you re-add them by sender ID ${sender.senderId}.`}
+                            confirmLabel="Remove user"
+                            focusTarget={null}
+                            cancelDisabled={busy}
+                            confirmDisabled={busy}
+                            confirmBusy={removingSender}
+                            onCancel={() => {
+                              setConfirmRemoveSenderId(null);
+                              queueMicrotask(() => removeSenderTrigger.current?.focus());
+                            }}
+                            onConfirm={() => {
+                              port?.removeSender(sender.senderId);
+                            }}
+                          />
+                        ) : null}
+                      </>
                     ) : null}
                   </li>
                 ))}

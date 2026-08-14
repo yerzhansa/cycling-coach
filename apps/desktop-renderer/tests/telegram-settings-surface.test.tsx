@@ -231,25 +231,24 @@ describe("Telegram settings surface", () => {
 
   it("manages paired users without offering removal for the primary user", async () => {
     const user = userEvent.setup();
+    const connected = status({
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "desktop_coach_bot" },
+      pairing: { state: "paired" },
+      credentialConfigured: true,
+      gapWarning: {
+        state: "possible-message-loss",
+        detectedAt: "1998-07-06T12:00:00.000Z",
+      },
+    });
+    const allowedSenders: TelegramAllowedSenders = {
+      senders: [
+        { senderId: 101, role: "primary" },
+        { senderId: 202, role: "additional" },
+      ],
+    };
     const port = setup(
-      readyState(
-        status({
-          channel: { desiredState: "enabled", state: "online" },
-          bot: { state: "ready", username: "desktop_coach_bot" },
-          pairing: { state: "paired" },
-          credentialConfigured: true,
-          gapWarning: {
-            state: "possible-message-loss",
-            detectedAt: "1998-07-06T12:00:00.000Z",
-          },
-        }),
-        {
-          senders: [
-            { senderId: 101, role: "primary" },
-            { senderId: 202, role: "additional" },
-          ],
-        },
-      ),
+      readyState(connected, allowedSenders),
     );
 
     expect(screen.getByText("@desktop_coach_bot")).toBeVisible();
@@ -267,7 +266,66 @@ describe("Telegram settings surface", () => {
     expect(removeSender.className).toBe(BUTTON_DANGER_QUIET_SM);
 
     await user.click(removeSender);
+    let confirmation = within(users).getByRole("group", {
+      name: "Remove Telegram user 202?",
+    });
+    expect(confirmation).toHaveAccessibleDescription(
+      /lose access to your coach and shared athlete data until you re-add them by sender ID 202/iu,
+    );
+    let confirmationButtons = within(confirmation).getAllByRole("button");
+    expect(confirmationButtons.map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Remove user",
+    ]);
+    expect(confirmationButtons[0]).toHaveFocus();
+    expect(port.removeSender).not.toHaveBeenCalled();
+
+    await user.click(confirmationButtons[0]);
+    await waitFor(() => expect(removeSender).toHaveFocus());
+    expect(port.removeSender).not.toHaveBeenCalled();
+
+    await user.click(removeSender);
+    confirmation = within(users).getByRole("group", {
+      name: "Remove Telegram user 202?",
+    });
+    confirmationButtons = within(confirmation).getAllByRole("button");
+    await user.click(confirmationButtons[1]);
+    expect(port.removeSender).toHaveBeenCalledTimes(1);
     expect(port.removeSender).toHaveBeenCalledWith(202);
+
+    act(() => {
+      useEnduragentStore.setState((current) => ({
+        settings: {
+          ...current.settings,
+          telegram: {
+            ...readyState(connected, allowedSenders),
+            status: "working",
+            operation: "remove-sender",
+          },
+        },
+      }));
+    });
+    const busyRemove = within(confirmation).getByRole("button", { name: "Remove user" });
+    expect(busyRemove).toHaveAttribute("aria-disabled", "true");
+    expect(busyRemove).not.toBeDisabled();
+    await user.click(busyRemove);
+    expect(port.removeSender).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useEnduragentStore.setState((current) => ({
+        settings: {
+          ...current.settings,
+          telegram: readyState(connected, {
+            senders: [{ senderId: 101, role: "primary" }],
+          }),
+        },
+      }));
+    });
+    await waitFor(() =>
+      expect(
+        within(users).queryByRole("group", { name: "Remove Telegram user 202?" }),
+      ).toBeNull(),
+    );
 
     const senderId = screen.getByLabelText("Add a Telegram user ID");
     await user.type(senderId, "9");
