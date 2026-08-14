@@ -347,6 +347,14 @@ const nativeFailureStages = new Set([
   "evidence",
   "seed-startup",
   "terminate-installed",
+  "registrations",
+  "program-residues",
+  "processes",
+  "shortcut",
+  "run",
+  "startup-approved",
+  "reparse-paths",
+  "signatures",
   "internal",
 ]);
 

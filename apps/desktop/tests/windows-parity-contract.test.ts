@@ -95,6 +95,14 @@ describe("Windows parity automation contract", () => {
     );
     expect(nativeEvidence).toContain('code = "NATIVE_EVIDENCE_FAILED"');
     expect(nativeEvidence).not.toContain("$_.Exception.Message");
+    expect(nativeEvidence).toContain("[Collections.Generic.Stack[string]]::new()");
+    expect(nativeEvidence).not.toMatch(/Get-ChildItem[^\r\n]*-Recurse/u);
+    expect(nativeEvidence).toMatch(
+      /if \(\(\$item\.Attributes -band \[IO\.FileAttributes\]::ReparsePoint\) -ne 0\) \{\s+\$paths \+= \$item\.FullName\s+continue\s+\}\s+if \(-not \$item\.PSIsContainer\) \{ continue \}/u,
+    );
+    expect(nativeEvidence).toMatch(
+      /if \(\(\$child\.Attributes -band \[IO\.FileAttributes\]::ReparsePoint\) -ne 0\) \{\s+\$paths \+= \$child\.FullName\s+\} elseif \(\$child\.PSIsContainer\) \{\s+\$pending\.Push\(\$child\.FullName\)\s+\}/u,
+    );
     expect(nativeEvidence).toContain("installLocation = $installLocation");
     expect(nativeEvidence).toContain("WScript.Shell");
     expect(nativeEvidence).toContain("Get-CimInstance Win32_Process -Filter");

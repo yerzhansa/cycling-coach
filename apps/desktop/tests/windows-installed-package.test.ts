@@ -317,6 +317,28 @@ describe("native evidence result parsing", () => {
   });
 
   it.each([
+    "registrations",
+    "program-residues",
+    "processes",
+    "shortcut",
+    "run",
+    "startup-approved",
+    "reparse-paths",
+    "signatures",
+  ])("accepts the fixed %s evidence substage", (stage) => {
+    const stdout = `${JSON.stringify({
+      ok: false,
+      error: { code: "NATIVE_EVIDENCE_FAILED", stage },
+    })}\n`;
+    expect(() =>
+      parseNativeEvidenceResult(
+        { code: 1, signal: null, stdout, stderr: "" },
+        "native Windows evidence evidence",
+      ),
+    ).toThrow(`native Windows evidence evidence failed at ${stage}`);
+  });
+
+  it.each([
     { ok: false, error: { code: "NATIVE_EVIDENCE_FAILED", stage: "unknown" } },
     { ok: false, error: { code: "RAW_EXCEPTION", stage: "evidence" } },
     { ok: false, error: { code: "NATIVE_EVIDENCE_FAILED", stage: "evidence", path: "C:\\secret" } },

@@ -118,13 +118,25 @@ function Get-RegistryValueEvidence {
 function Get-ReparsePaths {
   param($Roots)
   $paths = @()
+  $pending = [Collections.Generic.Stack[string]]::new()
   foreach ($root in @($Roots)) {
     if (-not (Test-Path -LiteralPath $root)) { continue }
-    $rootItem = Get-Item -LiteralPath $root -Force
-    if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $paths += $rootItem.FullName }
-    $paths += @(Get-ChildItem -LiteralPath $root -Force -Recurse | Where-Object {
-      ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
-    } | ForEach-Object { $_.FullName })
+    $pending.Push([string]$root)
+  }
+  while ($pending.Count -gt 0) {
+    $item = Get-Item -LiteralPath ($pending.Pop()) -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      $paths += $item.FullName
+      continue
+    }
+    if (-not $item.PSIsContainer) { continue }
+    foreach ($child in @(Get-ChildItem -LiteralPath $item.FullName -Force)) {
+      if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        $paths += $child.FullName
+      } elseif ($child.PSIsContainer) {
+        $pending.Push($child.FullName)
+      }
+    }
   }
   return @($paths | Sort-Object -Unique)
 }
@@ -168,16 +180,32 @@ function Get-Evidence {
   param($Request)
   $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
   $startupKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+  $script:FailureStage = "registrations"
+  $registrations = @(Get-UninstallRegistrations -Request $Request)
+  $script:FailureStage = "program-residues"
+  $programResidues = @(Get-ProgramResidues -Request $Request)
+  $script:FailureStage = "processes"
+  $processes = @(Get-MatchingProcesses -Request $Request)
+  $script:FailureStage = "shortcut"
+  $shortcut = Get-ShortcutEvidence -Request $Request
+  $script:FailureStage = "run"
+  $run = Get-RegistryValueEvidence -KeyPath $runKey -Name $Request.appId -Binary $false
+  $script:FailureStage = "startup-approved"
+  $startupApproved = Get-RegistryValueEvidence -KeyPath $startupKey -Name $Request.appId -Binary $true
+  $script:FailureStage = "reparse-paths"
+  $reparsePaths = @(Get-ReparsePaths -Roots $Request.treeRoots)
+  $script:FailureStage = "signatures"
+  $signatures = @(Get-Signatures -Paths $Request.signaturePaths)
   return [ordered]@{
     ok = $true
-    registrations = @(Get-UninstallRegistrations -Request $Request)
-    programResidues = @(Get-ProgramResidues -Request $Request)
-    processes = @(Get-MatchingProcesses -Request $Request)
-    shortcut = Get-ShortcutEvidence -Request $Request
-    run = Get-RegistryValueEvidence -KeyPath $runKey -Name $Request.appId -Binary $false
-    startupApproved = Get-RegistryValueEvidence -KeyPath $startupKey -Name $Request.appId -Binary $true
-    reparsePaths = @(Get-ReparsePaths -Roots $Request.treeRoots)
-    signatures = @(Get-Signatures -Paths $Request.signaturePaths)
+    registrations = $registrations
+    programResidues = $programResidues
+    processes = $processes
+    shortcut = $shortcut
+    run = $run
+    startupApproved = $startupApproved
+    reparsePaths = $reparsePaths
+    signatures = $signatures
   }
 }
 
@@ -225,7 +253,21 @@ try {
   }
   [Console]::Out.WriteLine(($result | ConvertTo-Json -Compress -Depth 8))
 } catch {
-  $allowedStages = @("request", "install-location", "evidence", "seed-startup", "terminate-installed")
+  $allowedStages = @(
+    "request",
+    "install-location",
+    "evidence",
+    "seed-startup",
+    "terminate-installed",
+    "registrations",
+    "program-residues",
+    "processes",
+    "shortcut",
+    "run",
+    "startup-approved",
+    "reparse-paths",
+    "signatures"
+  )
   $stage = if ($allowedStages -contains $script:FailureStage) { $script:FailureStage } else { "internal" }
   $result = [ordered]@{
     ok = $false
