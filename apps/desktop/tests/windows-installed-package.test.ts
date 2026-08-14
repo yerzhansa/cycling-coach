@@ -18,6 +18,7 @@ import {
 } from "../scripts/windows-installed-package.mjs";
 import {
   observeProcessExit,
+  removeWindowsScratch,
   validatePackagedSecondLaunch,
   validateSelfTestTerminal,
 } from "../scripts/verify-windows-packaged-self-test.mjs";
@@ -487,6 +488,32 @@ describe("packaged application process exit", () => {
     const exited = observeProcessExit(child as never);
     child.emit("error", new Error("C:\\private\\process"));
     await expect(exited).rejects.toThrow(/^packaged application process observation failed$/u);
+  });
+});
+
+describe("packaged Windows scratch cleanup", () => {
+  it("uses bounded native recursive removal options", async () => {
+    const remove = vi.fn(async () => {});
+    await expect(removeWindowsScratch("C:\\scratch", remove)).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith("C:\\scratch", {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  });
+
+  it("rejects a persistent failure without exposing its path", async () => {
+    const privatePath = "C:\\private\\athlete-home\\store\\store.db-shm";
+    const remove = vi.fn(async () => {
+      throw Object.assign(new Error(`busy ${privatePath}`), { code: "EBUSY" });
+    });
+    const cleanup = removeWindowsScratch(privatePath, remove);
+    await expect(cleanup).rejects.toThrow(/^packaged Windows scratch cleanup failed$/u);
+    await cleanup.catch((error) => {
+      expect(String(error)).not.toContain(privatePath);
+    });
   });
 });
 

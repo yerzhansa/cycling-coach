@@ -69,6 +69,19 @@ function destroyProcessStdio(child) {
   child.stderr?.destroy();
 }
 
+export async function removeWindowsScratch(path, remove = rm) {
+  try {
+    await remove(path, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  } catch {
+    throw new Error("packaged Windows scratch cleanup failed");
+  }
+}
+
 function launchApplication(executable, args, environment) {
   const child = spawn(executable, args, {
     cwd: dirname(executable),
@@ -312,7 +325,7 @@ export async function runWindowsPackagedSelfTest(input = {}) {
         destroyProcessStdio(running.child);
       }
     }
-    await rm(scratch, { recursive: true, force: true });
+    await removeWindowsScratch(scratch);
   }
 }
 

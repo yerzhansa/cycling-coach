@@ -55,6 +55,10 @@ describe("Windows parity automation contract", () => {
       join(repositoryRoot, "apps/desktop/scripts/windows-installed-evidence.ps1"),
       "utf8",
     );
+    const packagedSelfTest = await readFile(
+      join(repositoryRoot, "apps/desktop/scripts/verify-windows-packaged-self-test.mjs"),
+      "utf8",
+    );
     const packageCommands = workflow.match(/pnpm --filter @enduragent\/desktop package:win/g) ?? [];
     const installedCommands =
       workflow.match(
@@ -116,5 +120,26 @@ describe("Windows parity automation contract", () => {
     expect(nativeEvidence).toContain("Get-CimInstance Win32_Process -Filter");
     expect(nativeEvidence).not.toContain("[IO.Path]::GetFileName");
     expect(nativeEvidence).not.toContain("Invoke-Expression");
+    const packagedRun = packagedSelfTest.indexOf("export async function runWindowsPackagedSelfTest");
+    const packagedFinally = packagedSelfTest.indexOf("  } finally {", packagedRun);
+    const exitSettlement = packagedSelfTest.indexOf(
+      "running.exited.then(() => true)",
+      packagedFinally,
+    );
+    const forcedExit = packagedSelfTest.indexOf(
+      'running.child.kill("SIGKILL")',
+      exitSettlement,
+    );
+    const forcedSettlement = packagedSelfTest.indexOf("await running.exited;", forcedExit);
+    const scratchCleanup = packagedSelfTest.indexOf(
+      "await removeWindowsScratch(scratch);",
+      forcedSettlement,
+    );
+    expect(packagedRun).toBeGreaterThanOrEqual(0);
+    expect(packagedFinally).toBeGreaterThan(packagedRun);
+    expect(exitSettlement).toBeGreaterThan(packagedFinally);
+    expect(forcedExit).toBeGreaterThan(exitSettlement);
+    expect(forcedSettlement).toBeGreaterThan(forcedExit);
+    expect(scratchCleanup).toBeGreaterThan(forcedSettlement);
   });
 });

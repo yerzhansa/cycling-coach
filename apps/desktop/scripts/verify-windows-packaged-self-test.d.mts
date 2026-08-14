@@ -20,6 +20,18 @@ export interface ProcessExitResult {
 
 export function observeProcessExit(child: ProcessExitSource): Promise<ProcessExitResult>;
 
+export interface WindowsScratchRemoveOptions {
+  readonly recursive: true;
+  readonly force: true;
+  readonly maxRetries: 10;
+  readonly retryDelay: 100;
+}
+
+export function removeWindowsScratch(
+  path: string,
+  remove?: (path: string, options: WindowsScratchRemoveOptions) => Promise<void>,
+): Promise<void>;
+
 export interface PackagedSelfTestTerminal {
   readonly type: "self-test-terminal";
   readonly ok: true;
