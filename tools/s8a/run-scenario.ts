@@ -97,7 +97,10 @@ interface StagedCodexProfile {
 type ScenarioStage = "setup" | "turn" | "finish-replay" | "finish-record" | "cleanup";
 
 function safeScenarioId(value: string): string {
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) ? value : "unknown";
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return "unknown";
+  if (/^i[0-9]{8,9}$/.test(value)) return "unknown";
+  if (/^[0-9]{8,}$/.test(value)) return "unknown";
+  return value;
 }
 
 function emitScenarioStage(

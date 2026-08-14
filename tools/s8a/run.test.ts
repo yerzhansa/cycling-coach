@@ -14,6 +14,7 @@ import {
   resolveRecordLane,
   runDirName,
   runSelfTestDeterminism,
+  safeScenarioDiagnosticId,
   spawnScenarioChild,
   type ScenarioChildSpawn,
   usage,
@@ -66,6 +67,48 @@ describe("scenario child stage diagnostics", () => {
     ).toBe("none");
   });
 
+  it.each(["i12345678", "12345678"])(
+    "keeps fixture-private scenario id %s out of diagnostics",
+    (privateId) => {
+      expect(safeScenarioDiagnosticId(privateId)).toBe("unknown");
+      expect(
+        parseLastScenarioChildStage(
+          `S8A_CHILD_STAGE START scenario=${privateId} stage=setup`,
+          privateId,
+        ),
+      ).toBe("none");
+
+      const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+        const home = options.env.CYCLING_COACH_HOME;
+        if (home !== undefined) rmSync(home, { recursive: true, force: true });
+        return {
+          stdout: "S8A_CHILD_STAGE START scenario=unknown stage=setup\n",
+          stderr: privateId,
+          status: null,
+          error: Object.assign(new Error(privateId), { code: "ETIMEDOUT" }),
+        };
+      });
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const outcome = spawnScenarioChild(
+        {
+          scenarioId: privateId,
+          stage: "replay",
+          mode: "replay",
+          runDir: "/fixed/run",
+          provider: "openai-codex",
+          llmModel: "gpt-5.6-sol",
+        },
+        spawnProcess,
+      );
+      const surfaced = JSON.stringify({ outcome, logs: log.mock.calls });
+      expect(surfaced).not.toContain(privateId);
+      expect(outcome.stderr).toBe(
+        "scenario child timed out: scenario=unknown stage=replay child-stage=setup-start",
+      );
+      log.mockRestore();
+    },
+  );
+
   it("binds every requested child boundary in execution order", () => {
     const markers = [
       'emitScenarioStage("START", diagnosticScenario, "setup")',
@@ -80,6 +123,8 @@ describe("scenario child stage diagnostics", () => {
     const positions = markers.map((marker) => RUN_SCENARIO_SOURCE.indexOf(marker));
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
+    expect(RUN_SCENARIO_SOURCE).toContain("/^i[0-9]{8,9}$/");
+    expect(RUN_SCENARIO_SOURCE).toContain("/^[0-9]{8,}$/");
   });
 });
 
