@@ -391,7 +391,7 @@ async function runNativeEvidence(request, scratch, dependencies = {}) {
   await (dependencies.writeFile ?? writeFile)(requestPath, JSON.stringify(request), { mode: 0o600 });
   const run = dependencies.capture ?? capture;
   const result = await run(
-    "powershell.exe",
+    "pwsh.exe",
     [
       "-NoLogo",
       "-NoProfile",
