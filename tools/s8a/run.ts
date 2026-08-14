@@ -302,8 +302,7 @@ export function parseLastScenarioChildStage(output: string, scenarioId: string):
 
 export function safeScenarioDiagnosticId(value: string): string {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return "unknown";
-  if (/^i[0-9]{8,9}$/.test(value)) return "unknown";
-  if (/^[0-9]{8,}$/.test(value)) return "unknown";
+  if (/[0-9]{8,}/.test(value)) return "unknown";
   return value;
 }
 
