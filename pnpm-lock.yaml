@@ -116,6 +116,9 @@ importers:
       '@enduragent/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@enduragent/kernel-node':
+        specifier: workspace:*
+        version: link:../../packages/kernel-node
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@7.3.6(@types/node@25.6.0)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3))

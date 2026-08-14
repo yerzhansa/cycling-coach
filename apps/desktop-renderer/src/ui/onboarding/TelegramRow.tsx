@@ -17,7 +17,12 @@ import {
   TELEGRAM_ROW_TITLE,
   TELEGRAM_VERIFIED_PREFIX,
 } from "./copy.js";
-import { BUTTON_DANGER_OUTLINE_SM, BUTTON_QUIET_SM, BUTTON_SOLID_SM } from "../shared/buttons.js";
+import {
+  BUTTON_DANGER_OUTLINE_SM,
+  BUTTON_OUTLINE_SM,
+  BUTTON_QUIET_SM,
+  BUTTON_SOLID_SM,
+} from "../shared/buttons.js";
 import { InlineConfirmation, type InlineConfirmationFocus } from "../shared/InlineConfirmation.js";
 import { SetupRow, SetupSubPanel } from "./SetupRow.js";
 
@@ -478,7 +483,7 @@ export function TelegramRow(): ReactElement {
             <button
               ref={trigger}
               type="button"
-              className={BUTTON_QUIET_SM}
+              className={BUTTON_OUTLINE_SM}
               data-setup-trigger="telegram"
               disabled={busy}
               aria-expanded={panel === "token"}

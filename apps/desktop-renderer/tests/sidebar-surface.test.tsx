@@ -324,12 +324,13 @@ describe("sidebar setup gating", () => {
     expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveClass("bg-warn");
   });
 
-  it("waits when initialized setup is only partially ready", () => {
+  it("waits when initialized setup still requires completion", () => {
     render(<Sidebar />);
 
     update({
       onboarding: {
         ...READY_ONBOARDING,
+        completionRequired: true,
         readiness: { provider: true, trainingData: true, intake: false },
       },
     });

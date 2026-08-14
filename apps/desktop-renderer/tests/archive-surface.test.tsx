@@ -9,7 +9,7 @@ import {
 import { Shell } from "../src/app/Shell.js";
 import type { ArchiveActions } from "../src/state/archive-slice.js";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
-import { CLOSED_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { READY_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { ArchiveView } from "../src/ui/archive/ArchiveView.js";
 
@@ -95,7 +95,7 @@ beforeEach(() => {
     archiveActions: null,
     chat: { ...EMPTY_CHAT_SURFACE, newConversationUnavailable: false },
     chatActions: chatActions(),
-    onboarding: CLOSED_ONBOARDING,
+    onboarding: READY_ONBOARDING,
     onboardingActions: null,
     onboardingStartupSettled: true,
   });

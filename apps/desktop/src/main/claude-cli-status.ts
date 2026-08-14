@@ -27,6 +27,8 @@ export const CLAUDE_CLI_STATUS_STATES = [
   "disabled",
 ] as const;
 
+export const CLAUDE_CLI_STATUS_DEADLINE_MS = 72_000;
+
 export type ClaudeCliStatusState = (typeof CLAUDE_CLI_STATUS_STATES)[number];
 
 export interface ClaudeCliStatus {
@@ -165,6 +167,15 @@ export function createClaudeCliStatus(
       ? {}
       : { windowsMcpConfigFileSystem: options.dependencies.windowsMcpConfigFileSystem }),
   };
+  interface ReadSlot {
+    readonly generation: number;
+    readonly task: Promise<ClaudeCliStatus>;
+  }
+
+  let readGeneration = 0;
+  let recheckGeneration = 0;
+  let activeRead: ReadSlot | undefined;
+  let queuedRecheck: ReadSlot | undefined;
 
   const read = async (forceRecheck: boolean): Promise<ClaudeCliStatus> => {
     let settings: ClaudeCliSettings;
@@ -177,30 +188,92 @@ export function createClaudeCliStatus(
     if (!isClaudeCliLaneEligible({ environment: baseEnv, enabled: settings.enabled })) {
       return { state: "disabled" };
     }
-    try {
-      return statusForReadiness(
-        await ensureReady(
-          {
-            ...(settings.binaryPath === undefined ? {} : { binaryPath: settings.binaryPath }),
-            ...(settings.configDir === undefined ? {} : { configDir: settings.configDir }),
-            billing: settings.billing,
-            baseEnv,
-            platform,
-            ...(forceRecheck ? { forceRecheck: true } : {}),
-          },
-          probeDependencies,
-        ),
-      );
-    } catch (error) {
-      return { state: stateForFailure(error) };
-    }
+    return statusForReadiness(
+      await ensureReady(
+        {
+          ...(settings.binaryPath === undefined ? {} : { binaryPath: settings.binaryPath }),
+          ...(settings.configDir === undefined ? {} : { configDir: settings.configDir }),
+          billing: settings.billing,
+          baseEnv,
+          platform,
+          ...(forceRecheck ? { forceRecheck: true } : {}),
+        },
+        probeDependencies,
+      ),
+    );
   };
 
+  const startRead = (forceRecheck: boolean): Promise<ClaudeCliStatus> => {
+    const generation = ++readGeneration;
+    const rawTask = read(forceRecheck);
+    let timedOut = false;
+    const task = new Promise<ClaudeCliStatus>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        reject(new DOMException("Claude CLI status read timed out", "TimeoutError"));
+      }, CLAUDE_CLI_STATUS_DEADLINE_MS);
+      timeout.unref?.();
+      const settleLate = (): void => {
+        try {
+          invalidate();
+        } catch {}
+      };
+      void rawTask
+        .then(
+          (status) => {
+            if (timedOut) {
+              settleLate();
+              return;
+            }
+            clearTimeout(timeout);
+            resolve(status);
+          },
+          (error: unknown) => {
+            if (timedOut) {
+              settleLate();
+              return;
+            }
+            clearTimeout(timeout);
+            resolve({ state: stateForFailure(error) });
+          },
+        )
+        .catch(() => undefined);
+    });
+    activeRead = { generation, task };
+    const clear = (): void => {
+      if (activeRead?.generation === generation && activeRead.task === task) {
+        activeRead = undefined;
+      }
+    };
+    void task.then(clear, clear);
+    return task;
+  };
+  const status = (): Promise<ClaudeCliStatus> =>
+    activeRead?.task ?? queuedRecheck?.task ?? startRead(false);
+
   return {
-    status: () => read(false),
-    async recheck() {
-      invalidate();
-      return await read(true);
+    status,
+    recheck() {
+      if (queuedRecheck !== undefined) return queuedRecheck.task;
+      const previous = activeRead;
+      const generation = ++recheckGeneration;
+      const task = (async () => {
+        if (previous !== undefined) {
+          try {
+            await previous.task;
+          } catch {}
+        }
+        invalidate();
+        return await startRead(true);
+      })();
+      queuedRecheck = { generation, task };
+      const clear = (): void => {
+        if (queuedRecheck?.generation === generation && queuedRecheck.task === task) {
+          queuedRecheck = undefined;
+        }
+      };
+      void task.then(clear, clear);
+      return task;
     },
     invalidateProbeCache: () => invalidate(),
     async activate(input) {
@@ -210,7 +283,7 @@ export function createClaudeCliStatus(
       } catch {
         return { status: "refused", reason: "invalid-input" };
       }
-      const current = await read(false);
+      const current = await status();
       if (current.state === "disabled") {
         return { status: "refused", reason: "runtime-unavailable" };
       }

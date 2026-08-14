@@ -324,6 +324,20 @@ describe("coach operations", () => {
       });
       expect(second?.id).not.toBe(first?.id);
       expect(Number(second?.hlc_counter)).toBeGreaterThanOrEqual(Number(first?.hlc_counter));
+      await expect(
+        operations.saveIntake({
+          swim_skill_floor: null,
+          continuous_distance_capable: null,
+          open_water_comfort: null,
+          prior_bsi: false,
+          clinician_cleared: null,
+          injury_status: "managing",
+        }),
+      ).resolves.toEqual({ schemaVersion: 1, saved: true });
+      expect(await store.get("SELECT * FROM intake_flags")).toMatchObject({
+        clinician_cleared: null,
+        injury_status: "managing",
+      });
       await expect(operations.getSetupStatus?.({})).resolves.toEqual({
         schemaVersion: 1,
         intake: {
@@ -331,7 +345,7 @@ describe("coach operations", () => {
           continuous_distance_capable: null,
           open_water_comfort: null,
           prior_bsi: false,
-          clinician_cleared: false,
+          clinician_cleared: null,
           injury_status: "managing",
         },
         durableTrainingData: false,
@@ -347,7 +361,7 @@ describe("coach operations", () => {
           extra: true,
         } as never),
       ).rejects.toThrow();
-      await expect(async () =>
+      await expect(
         operations.saveIntake({
           swim_skill_floor: null,
           continuous_distance_capable: null,
@@ -355,6 +369,20 @@ describe("coach operations", () => {
           prior_bsi: false,
           clinician_cleared: null,
           injury_status: "returning",
+        }),
+      ).resolves.toEqual({ schemaVersion: 1, saved: true });
+      expect(await store.get("SELECT * FROM intake_flags")).toMatchObject({
+        clinician_cleared: null,
+        injury_status: "returning",
+      });
+      await expect(async () =>
+        operations.saveIntake({
+          swim_skill_floor: null,
+          continuous_distance_capable: null,
+          open_water_comfort: null,
+          prior_bsi: false,
+          clinician_cleared: true,
+          injury_status: "none",
         }),
       ).rejects.toThrow();
     } finally {

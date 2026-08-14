@@ -10,6 +10,7 @@ export const INTERVALS_APPROVAL_TOKEN_BYTES = 32;
 
 export interface IntervalsCredentialApprovalIssue {
   readonly apiKey: string;
+  readonly configuredAthleteSelector: string;
   readonly athleteSelector: string;
   readonly evidence: IntervalsCredentialVerificationEvidence;
   readonly configRevision: number;
@@ -18,16 +19,22 @@ export interface IntervalsCredentialApprovalIssue {
 export interface IntervalsCredentialApprovalConsumption {
   readonly approval: string;
   readonly credentialDigest: string;
-  readonly athleteSelector: string;
+  readonly configuredAthleteSelector: string;
+  readonly requestedAthleteSelector?: string;
   readonly ownerState: IntervalsStoreOwnerState;
   readonly configRevision: number;
+}
+
+export interface IntervalsCredentialApprovalResult {
+  readonly athleteSelector: string;
+  readonly evidence: IntervalsCredentialVerificationEvidence;
 }
 
 export interface IntervalsCredentialApprovalStore {
   issue(input: IntervalsCredentialApprovalIssue): string;
   consume(
     input: IntervalsCredentialApprovalConsumption,
-  ): IntervalsCredentialVerificationEvidence | undefined;
+  ): IntervalsCredentialApprovalResult | undefined;
 }
 
 export interface IntervalsCredentialApprovalStoreDependencies {
@@ -38,6 +45,7 @@ export interface IntervalsCredentialApprovalStoreDependencies {
 type PendingApproval = Readonly<{
   token: string;
   credentialDigest: string;
+  configuredAthleteSelector: string;
   athleteSelector: string;
   evidence: IntervalsCredentialVerificationEvidence;
   configRevision: number;
@@ -127,6 +135,14 @@ export function createIntervalsCredentialApprovalStore(
       if (!validRevision(input.configRevision)) {
         throw new TypeError("invalid intervals config revision");
       }
+      const configuredAthleteSelector = normalizeIntervalsAthleteSelector(
+        input.configuredAthleteSelector,
+      );
+      const athleteSelector = normalizeIntervalsAthleteSelector(input.athleteSelector);
+      const evidence = copyEvidence(input.evidence);
+      if (configuredAthleteSelector !== athleteSelector && evidence.ownerState.status !== "owned") {
+        throw new TypeError("unowned intervals approval cannot change athlete selector");
+      }
       const issuedAtMs = now();
       const expiresAtMs = issuedAtMs + INTERVALS_CREDENTIAL_APPROVAL_TTL_MS;
       if (!Number.isSafeInteger(issuedAtMs) || !Number.isSafeInteger(expiresAtMs)) {
@@ -146,8 +162,9 @@ export function createIntervalsCredentialApprovalStore(
       pending = Object.freeze({
         token,
         credentialDigest: digestIntervalsCredential(input.apiKey),
-        athleteSelector: normalizeIntervalsAthleteSelector(input.athleteSelector),
-        evidence: copyEvidence(input.evidence),
+        configuredAthleteSelector,
+        athleteSelector,
+        evidence,
         configRevision: input.configRevision,
         expiresAtMs,
       });
@@ -159,19 +176,26 @@ export function createIntervalsCredentialApprovalStore(
       pending = undefined;
       if (selected === undefined) return undefined;
       const consumedAtMs = now();
-      const athleteSelector =
-        typeof input.athleteSelector === "string"
-          ? input.athleteSelector.length === 0
-            ? "0"
-            : input.athleteSelector
+      const configuredAthleteSelector =
+        typeof input.configuredAthleteSelector === "string"
+          ? normalizeIntervalsAthleteSelector(input.configuredAthleteSelector)
           : undefined;
+      const requestedAthleteSelector =
+        input.requestedAthleteSelector === undefined
+          ? undefined
+          : typeof input.requestedAthleteSelector === "string"
+            ? normalizeIntervalsAthleteSelector(input.requestedAthleteSelector)
+            : null;
       if (
         !Number.isSafeInteger(consumedAtMs) ||
         consumedAtMs >= selected.expiresAtMs ||
         !tokensMatch(selected.token, input.approval) ||
         !/^[0-9a-f]{64}$/.test(input.credentialDigest) ||
         selected.credentialDigest !== input.credentialDigest ||
-        selected.athleteSelector !== athleteSelector ||
+        selected.configuredAthleteSelector !== configuredAthleteSelector ||
+        requestedAthleteSelector === null ||
+        (requestedAthleteSelector !== undefined &&
+          selected.athleteSelector !== requestedAthleteSelector) ||
         !validOwnerState(input.ownerState) ||
         !ownerStatesMatch(selected.evidence.ownerState, input.ownerState) ||
         !validRevision(input.configRevision) ||
@@ -179,7 +203,10 @@ export function createIntervalsCredentialApprovalStore(
       ) {
         return undefined;
       }
-      return selected.evidence;
+      return Object.freeze({
+        athleteSelector: selected.athleteSelector,
+        evidence: selected.evidence,
+      });
     },
   });
 }

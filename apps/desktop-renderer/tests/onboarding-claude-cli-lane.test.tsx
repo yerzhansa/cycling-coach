@@ -1,10 +1,16 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingBridge, OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
 import type { ClaudeCliState } from "../src/onboarding/constants.js";
+import {
+  CLAUDE_CLI_STATUS_TRANSPORT_TIMEOUT_MS,
+  ONBOARDING_STATUS_REFRESH_TIMEOUT_MS,
+} from "../src/onboarding/controller.js";
 import { claudeCliPresentation } from "../src/onboarding/credential-presentation.js";
 import type { ClaudeCliStatus } from "../src/onboarding/machine.js";
+import { setupDisposition, setupReady } from "../src/state/onboarding-slice.js";
+import { useEnduragentStore } from "../src/state/store.js";
 import {
   chooseLane,
   claudeCliNoteText,
@@ -100,6 +106,192 @@ describe("claude-cli onboarding lane", () => {
     });
     expect(claudeCliNoteText()).toBeNull();
     wizard.controller.dispose();
+  });
+
+  it("keeps the initial decision unresolved until the active account probe answers", async () => {
+    let settle: ((status: ClaudeCliStatus) => void) | undefined;
+    const bridge = claudeBridge({ state: "ready" });
+    bridge.llmConfiguration.mockResolvedValue(ACTIVE_CLAUDE_CLI_CONFIGURATION);
+    bridge.claudeCliStatus.mockReturnValue(
+      new Promise<ClaudeCliStatus>((resolve) => {
+        settle = resolve;
+      }),
+    );
+    const wizard = mountWizard({ bridge });
+    let opening!: Promise<void>;
+
+    act(() => {
+      opening = wizard.controller.open();
+    });
+
+    expect(useEnduragentStore.getState().onboarding.initialized).toBe(false);
+    expect(useEnduragentStore.getState().onboarding.loading).toBe(true);
+
+    settle?.({ state: "ready", email: "athlete@example.test", plan: "Max" });
+    await act(async () => opening);
+
+    expect(useEnduragentStore.getState().onboarding.initialized).toBe(true);
+    expect(useEnduragentStore.getState().onboarding.readiness.provider).toBe(true);
+    wizard.controller.dispose();
+  });
+
+  it("accepts an active account probe that resolves after the generic status deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let settle: ((status: ClaudeCliStatus) => void) | undefined;
+      const bridge = claudeBridge({ state: "ready" });
+      bridge.llmConfiguration.mockResolvedValue(ACTIVE_CLAUDE_CLI_CONFIGURATION);
+      bridge.claudeCliStatus.mockReturnValue(
+        new Promise<ClaudeCliStatus>((resolve) => {
+          settle = resolve;
+        }),
+      );
+      const wizard = mountWizard({ bridge });
+      let opening!: Promise<void>;
+
+      act(() => {
+        opening = wizard.controller.open();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ONBOARDING_STATUS_REFRESH_TIMEOUT_MS + 1);
+      });
+
+      expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
+      expect(setupDisposition(useEnduragentStore.getState())).toBe("unknown");
+      expect(useEnduragentStore.getState().onboarding).toMatchObject({
+        initialized: false,
+        loading: true,
+        loadUnavailable: false,
+        hasSuccessfulLoad: false,
+      });
+
+      await act(async () => {
+        settle?.({ state: "ready", email: "athlete@example.test", plan: "Max" });
+        await opening;
+      });
+
+      expect(useEnduragentStore.getState().onboarding).toMatchObject({
+        initialized: true,
+        loading: false,
+        loadUnavailable: false,
+        hasSuccessfulLoad: true,
+        readiness: { provider: true },
+      });
+      wizard.controller.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes an unavailable active account probe to setup recovery", async () => {
+    const bridge = claudeBridge({ state: "ready" });
+    bridge.llmConfiguration.mockResolvedValue(ACTIVE_CLAUDE_CLI_CONFIGURATION);
+    bridge.claudeCliStatus.mockRejectedValue(new TypeError("synthetic probe failure"));
+    const wizard = mountWizard({ bridge });
+
+    await wizard.open();
+
+    expect(useEnduragentStore.getState().onboarding.initialized).toBe(true);
+    expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(true);
+    expect(useEnduragentStore.getState().onboarding.hasSuccessfulLoad).toBe(false);
+    expect(useEnduragentStore.getState().onboarding.completionRequired).toBe(false);
+    wizard.controller.dispose();
+  });
+
+  it("keeps a slow active account probe neutral until its transport deadline, then recovers", async () => {
+    vi.useFakeTimers();
+    try {
+      let settleStatus: ((status: ClaudeCliStatus) => void) | undefined;
+      const bridge = claudeBridge(
+        { state: "ready" },
+        {
+          getSetupStatus: async () => ({
+            schemaVersion: 1,
+            intake: {
+              swim_skill_floor: null,
+              continuous_distance_capable: null,
+              open_water_comfort: null,
+              prior_bsi: false,
+              clinician_cleared: null,
+              injury_status: "none",
+            },
+            durableTrainingData: true,
+          }),
+        },
+      );
+      bridge.llmConfiguration.mockResolvedValue(ACTIVE_CLAUDE_CLI_CONFIGURATION);
+      const status = new Promise<ClaudeCliStatus>((resolve) => {
+        settleStatus = resolve;
+      });
+      bridge.claudeCliStatus.mockImplementation(() => status.then((result) => result));
+      const wizard = mountWizard({ bridge });
+      let opening!: Promise<void>;
+
+      act(() => {
+        opening = wizard.controller.open();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ONBOARDING_STATUS_REFRESH_TIMEOUT_MS);
+      });
+
+      expect(setupDisposition(useEnduragentStore.getState())).toBe("unknown");
+      expect(useEnduragentStore.getState().onboarding).toMatchObject({
+        initialized: false,
+        loading: true,
+        loadUnavailable: false,
+        hasSuccessfulLoad: false,
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          CLAUDE_CLI_STATUS_TRANSPORT_TIMEOUT_MS - ONBOARDING_STATUS_REFRESH_TIMEOUT_MS - 1,
+        );
+      });
+
+      expect(setupDisposition(useEnduragentStore.getState())).toBe("unknown");
+      expect(useEnduragentStore.getState().onboarding.initialized).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+        await opening;
+      });
+
+      expect(useEnduragentStore.getState().onboarding).toMatchObject({
+        initialized: true,
+        loading: false,
+        loadUnavailable: true,
+        hasSuccessfulLoad: false,
+      });
+      expect(setupDisposition(useEnduragentStore.getState())).toBe("required");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry setup status" }));
+        await Promise.resolve();
+      });
+      expect(bridge.claudeCliStatus).toHaveBeenCalledTimes(2);
+      expect(bridge.claudeCliStatus.mock.results[0]?.value).not.toBe(
+        bridge.claudeCliStatus.mock.results[1]?.value,
+      );
+      expect(settleStatus).toBeDefined();
+
+      await act(async () => {
+        settleStatus?.({ state: "ready", email: "athlete@example.test", plan: "Max" });
+      });
+
+      expect(useEnduragentStore.getState().onboarding).toMatchObject({
+        initialized: true,
+        loading: false,
+        loadUnavailable: false,
+        hasSuccessfulLoad: true,
+        readiness: { provider: true, trainingData: true, intake: true },
+      });
+      expect(setupDisposition(useEnduragentStore.getState())).toBe("satisfied");
+      expect(setupReady(useEnduragentStore.getState())).toBe(true);
+      expect(rowState("ai")).toBe("ready");
+      wizard.controller.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("offers the lane and carries the signed-in identity into the row", async () => {

@@ -348,12 +348,7 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
 
     const result = await runtime.invoke();
 
-    expect(runtime.trace).toEqual([
-      "read",
-      "clear",
-      `preflight:${API_KEY}`,
-      `write:${API_KEY}`,
-    ]);
+    expect(runtime.trace).toEqual(["read", "clear", `preflight:${API_KEY}`, `write:${API_KEY}`]);
     expect(runtime.writeCredential).toHaveBeenCalledWith(
       { slot: "intervals-icu", value: API_KEY },
       { rollbackOnRuntimeRefusal: true, verificationApproval: APPROVAL },
@@ -469,6 +464,30 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
       }
     },
   );
+
+  it("reports secure-storage write failure after successful verification", async () => {
+    const encryption = {
+      ...testEncryption(),
+      encryptString: () => {
+        throw new Error(PRIVATE_DETAIL);
+      },
+    };
+    const value = await temporaryVault({ encryption });
+    try {
+      const runtime = setup({ vault: value.vault });
+
+      const result = await runtime.invoke();
+
+      expect(runtime.verifyCredential).toHaveBeenCalledOnce();
+      expect(runtime.clipboard.clear).toHaveBeenCalledOnce();
+      expect(result).toEqual({ outcome: "refused", reason: "storage-failed", current: status() });
+      expect(value.applyCredential).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain(API_KEY);
+      expect(JSON.stringify(result)).not.toContain("credential-rejected");
+    } finally {
+      await rm(value.base, { recursive: true, force: true });
+    }
+  });
 
   it.each(["encryption-unavailable", "unsafe-backend"] as const)(
     "preserves an existing key across the %s storage refusal",

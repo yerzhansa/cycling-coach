@@ -421,7 +421,10 @@ describe("repository ports over real node:sqlite", () => {
     expect(await repo.read()).toEqual(second);
     expect(await store.all("SELECT id FROM intake_flags")).toHaveLength(1);
     await expect(repo.replace({ ...second, id: "invalid" })).rejects.toThrow("intake id");
-    await expect(repo.replace({ ...second, clinician_cleared: null })).rejects.toThrow(
+    const third = { ...second, id: "2".repeat(26), clinician_cleared: null, hlc_counter: 2 };
+    await repo.replace(third);
+    expect(await repo.read()).toEqual(third);
+    await expect(repo.replace({ ...first, clinician_cleared: true })).rejects.toThrow(
       "clinician clearance",
     );
   });

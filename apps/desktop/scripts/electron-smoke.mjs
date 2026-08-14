@@ -329,7 +329,7 @@ async function security() {
       },
       url: ready.url,
       blockedOffPort: ready.blockedOffPort,
-      syncChipPresent: ready.syncChipPresent,
+      rendererSurface: ready.rendererSurface,
       tokenAbsent:
         ready.tokenAbsentInRendererSurfaces === true &&
         !JSON.stringify(running.args).includes(token) &&
@@ -342,11 +342,11 @@ async function security() {
     if (
       Object.values(summary.passes).some((value) => value !== true) ||
       summary.blockedOffPort !== true ||
-      summary.syncChipPresent !== true ||
+      summary.rendererSurface !== "setup-gate" ||
       summary.tokenAbsent !== true ||
       !existsSync(environment.screenshotPath)
     ) {
-      throw new Error("desktop security assertions failed");
+      throw new Error(`desktop security assertions failed: ${JSON.stringify(summary)}`);
     }
     if (environment.outputDirectory !== undefined)
       await writeFile(

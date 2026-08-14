@@ -565,11 +565,7 @@ async function runDesktop(): Promise<void> {
         const lifecycleState = daemonLifecycle?.snapshot();
         if (lifecycleState?.status !== "ready") throw new TypeError();
         const request = runtimeConfigurationForCredential(slot, value, selection);
-        await applyExplicitCredentialToRuntime(
-          binding.credentials,
-          request,
-          verificationApproval,
-        );
+        await applyExplicitCredentialToRuntime(binding.credentials, request, verificationApproval);
         const currentLifecycleState = daemonLifecycle?.snapshot();
         if (
           activeRuntimeBinding !== binding ||
@@ -974,9 +970,28 @@ async function runDesktop(): Promise<void> {
         socket.addEventListener("error", () => setTimeout(finish, 0), { once: true });
         setTimeout(finish, 1000);
       });
+      const detectRendererSurface = () => {
+        const appSurface =
+          document.querySelector('[data-shell="app"] button.sync-chip') !== null;
+        const setupGateSurface =
+          document.querySelector('[data-shell="gate"] [data-setup-host="gate"]') !== null;
+        if (appSurface === setupGateSurface) return null;
+        return appSurface ? "app" : "setup-gate";
+      };
+      const poll = () => new Promise((resolve) => setTimeout(resolve, 20));
       const deadline = Date.now() + 5000;
       while (document.documentElement.dataset.rpc === undefined && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await poll();
+      }
+      let rendererSurface = detectRendererSurface();
+      while (rendererSurface === null && Date.now() < deadline) {
+        await poll();
+        rendererSurface = detectRendererSurface();
+      }
+      if (rendererSurface !== null) {
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        );
       }
       const credentialStatuses = await window.enduragentAuth.credentialStatuses();
       return {
@@ -986,7 +1001,7 @@ async function runDesktop(): Promise<void> {
         noNodeGlobals: ["process", "require", "Buffer", "global", "module"].every((key) => typeof window[key] === "undefined"),
         rpcConnected: document.documentElement.dataset.rpc === "connected",
         blockedOffPort: blocked,
-        syncChipPresent: document.querySelector("button.sync-chip") !== null,
+        rendererSurface,
         rendererSurfaces: {
           dom: document.documentElement.outerHTML,
           localStorage: Object.entries(localStorage),
@@ -1008,7 +1023,7 @@ async function runDesktop(): Promise<void> {
         noNodeGlobals: rendererResult.noNodeGlobals,
         rpcConnected: rendererResult.rpcConnected,
         blockedOffPort: rendererResult.blockedOffPort,
-        syncChipPresent: rendererResult.syncChipPresent,
+        rendererSurface: rendererResult.rendererSurface,
         credentialStatuses: rendererResult.credentialStatuses,
         credentialStatusesMetadataOnly:
           Array.isArray(rendererResult.credentialStatuses) &&

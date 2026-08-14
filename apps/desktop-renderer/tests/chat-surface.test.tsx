@@ -154,18 +154,30 @@ describe("chat surface", () => {
   });
 
   describe("composer", () => {
-    it("focuses the enabled composer after required setup completes in Chat", () => {
-      useEnduragentStore.setState({ onboarding: CLOSED_ONBOARDING });
+    it("places the medical disclaimer directly below the composer", () => {
       render(<Harness />);
 
-      expect(composer()).toBeDisabled();
+      const disclaimer = screen.getByText(
+        "Not medical advice, and not a substitute for a doctor or a certified coach.",
+      );
+      const form = composer().closest("form");
 
-      act(() => {
-        useEnduragentStore.setState({ onboarding: READY_ONBOARDING });
-      });
+      expect(form?.nextElementSibling).toBe(disclaimer);
+      expect(disclaimer.parentElement).toHaveClass("composer-wrap");
+    });
+
+    it("focuses the enabled composer when Chat mounts after required setup", () => {
+      render(<Harness />);
 
       expect(composer()).toBeEnabled();
       expect(composer()).toHaveFocus();
+    });
+
+    it("leaves the composer unfocused when the app mounts on another destination", () => {
+      useEnduragentStore.setState({ activeView: "training" });
+      render(<Harness />);
+
+      expect(composer()).not.toHaveFocus();
     });
 
     it("never submits while an IME composition is in flight", async () => {

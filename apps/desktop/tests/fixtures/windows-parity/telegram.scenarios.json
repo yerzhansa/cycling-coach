@@ -4,13 +4,11 @@
     {
       "id": "telegram.setup.clipboard-connect",
       "surface": "telegram-setup",
-      "expected": "Telegram is optional in Chat setup, directs the athlete to BotFather, renders no token field, reads and clears a copied token before credential work, and shows a verified bot only after the controller reports an applied result.",
+      "expected": "Telegram is set up from Settings only, directs the athlete to BotFather, renders no token field, reads and clears a copied token before credential work, and shows a verified bot only after the controller reports an applied result.",
       "automation": "deterministic",
       "tests": [
-        "apps/desktop-renderer/tests/onboarding-telegram-row.test.tsx > sits after Training only in Chat and uses the approved logo-free clipboard flow",
         "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > explains the dedicated-bot boundary and accepts a token only from the clipboard",
-        "apps/desktop/tests/telegram-ipc.test.ts > reads and clears the clipboard synchronously before any credential await",
-        "apps/desktop-renderer/tests/onboarding-telegram-row.test.tsx > shows generic progress and closes only after the controller reports applied verification"
+        "apps/desktop/tests/telegram-ipc.test.ts > reads and clears the clipboard synchronously before any credential await"
       ]
     },
     {
@@ -21,8 +19,7 @@
       "tests": [
         "apps/desktop/tests/telegram-ipc.test.ts > does not use clipboard contents when read, validation, or clear fails",
         "apps/desktop/tests/telegram-ipc.test.ts > passes through refused and uncertain credential outcomes without inferring success from health",
-        "apps/desktop-renderer/tests/telegram-settings.test.ts > keeps the connected bot online while reporting a refused clipboard token",
-        "apps/desktop-renderer/tests/onboarding-telegram-row.test.tsx > offers one retry and restores Create focus when uncertain setup resolves as missing"
+        "apps/desktop-renderer/tests/telegram-settings.test.ts > keeps the connected bot online while reporting a refused clipboard token"
       ]
     },
     {
@@ -31,7 +28,6 @@
       "expected": "A configured bot offers Delete and no token replacement, requires confirmation, turns off and forgets the daemon credential and allowed-user access before deleting the durable encrypted profile, leaves the Telegram bot and chat in Telegram, and returns to first-time setup after authoritative success.",
       "automation": "deterministic",
       "tests": [
-        "apps/desktop-renderer/tests/onboarding-telegram-row.test.tsx > confirms deletion, restores focus on dismissal, and opens first-time setup after apply",
         "apps/desktop-renderer/tests/telegram-settings-surface.test.tsx > requires confirmation before deleting the encrypted bot credential",
         "apps/desktop/tests/telegram-control.test.ts > forgets the released daemon profile before deleting the coherent vault profile",
         "apps/desktop/tests/telegram-credential-vault.test.ts > deletes through a durable tombstone and cleans deferred ciphertext later"

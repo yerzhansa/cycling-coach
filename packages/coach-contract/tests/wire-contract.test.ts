@@ -662,14 +662,16 @@ describe("coach request and event projection", () => {
       clinician_cleared: true,
     } as const;
     expect(SaveIntakeRpcParamsSchema.parse(historicalIntake)).toEqual(historicalIntake);
+    const unclearedIntake = { ...clearedIntake, clinician_cleared: null } as const;
+    expect(SaveIntakeRpcParamsSchema.parse(unclearedIntake)).toEqual(unclearedIntake);
+    const priorBsiIntake = { ...safeIntake, prior_bsi: true } as const;
+    expect(SaveIntakeRpcParamsSchema.parse(priorBsiIntake)).toEqual(priorBsiIntake);
     const { prior_bsi: _priorBsi, ...withoutPriorBsi } = safeIntake;
     for (const invalid of [
       withoutPriorBsi,
       { ...safeIntake, swim_skill_floor: "novice" },
       { ...safeIntake, extra: true },
-      { ...safeIntake, prior_bsi: true },
       { ...safeIntake, clinician_cleared: true },
-      { ...clearedIntake, clinician_cleared: null },
     ]) {
       expect(SaveIntakeRpcParamsSchema.safeParse(invalid).success).toBe(false);
     }
@@ -684,10 +686,13 @@ describe("coach request and event projection", () => {
     } as const;
     expect(GetSetupStatusRpcParamsSchema.parse({})).toEqual({});
     expect(GetSetupStatusRpcResultSchema.parse(setupStatus)).toEqual(setupStatus);
+    expect(
+      GetSetupStatusRpcResultSchema.parse({ ...setupStatus, intake: unclearedIntake }).intake
+        ?.clinician_cleared,
+    ).toBeNull();
     for (const invalid of [
       { ...setupStatus, apiKey: "must-not-cross-boundary" },
       { ...setupStatus, intake: { ...setupStatus.intake, credential: "must-not-cross-boundary" } },
-      { ...setupStatus, intake: { ...clearedIntake, clinician_cleared: null } },
       { ...setupStatus, intake: { ...safeIntake, clinician_cleared: true } },
       { ...setupStatus, importedPaths: [] },
     ]) {

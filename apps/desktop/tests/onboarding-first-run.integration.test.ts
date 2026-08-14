@@ -153,12 +153,14 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       readonly modalAbsent: boolean;
       readonly title: string;
       readonly escapeStayed: boolean;
+      readonly shellReplaced: boolean;
       readonly finished: boolean;
+      readonly shellRestored: boolean;
       readonly chatWorking: boolean;
     }>(`
       const deadline = Date.now() + 10000;
       const setupSelector =
-        '[data-view="chat"][data-onboarding="settled"] [data-setup-host="chat"]';
+        '[data-shell="gate"][data-onboarding="settled"] [data-setup-host="gate"]';
       while (!document.querySelector(setupSelector) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
@@ -172,6 +174,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       page?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 60));
       const escapeStayed = document.querySelector(setupSelector) !== null;
+      const shellReplaced =
+        document.querySelector('nav[aria-label="Main navigation"]') === null &&
+        document.querySelector("textarea#message") === null;
       const button = (label) =>
         Array.from(document.querySelectorAll(".setup-panel button")).find(
           (entry) => entry.textContent?.trim() === label,
@@ -263,7 +268,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
         modalAbsent,
         title,
         escapeStayed,
+        shellReplaced,
         finished: document.querySelector("[data-setup-host]") === null,
+        shellRestored: document.querySelector('nav[aria-label="Main navigation"]') !== null,
         chatWorking: composer !== null && composer.disabled === false,
       };
     `);
@@ -274,7 +281,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       modalAbsent: true,
       title: "Get your coach running before you can chat",
       escapeStayed: true,
+      shellReplaced: true,
       finished: true,
+      shellRestored: true,
       chatWorking: true,
     });
   }, 90_000);

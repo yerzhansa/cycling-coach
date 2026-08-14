@@ -56,7 +56,7 @@
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/setup-readiness.test.tsx > fails closed while the durable setup read is still loading",
-        "apps/desktop-renderer/tests/setup-readiness.test.tsx > shows unavailable setup status, disables controls, and recovers through Retry",
+        "apps/desktop-renderer/tests/setup-readiness.test.tsx > shows only gate recovery for unavailable setup status and keeps Settings rows",
         "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > keeps Start coaching disabled until every requirement is met"
       ]
     },

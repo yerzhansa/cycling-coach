@@ -64,9 +64,6 @@ export const CHATGPT_REFUSAL_COPY: Readonly<Record<ChatGptLoginRefusalReason, st
 export const SETUP_HEADING = "Get your coach running before you can chat";
 export const SETUP_SETTINGS_HEADING = "Setup";
 
-export const SETUP_CHAT_SUBTITLE =
-  "Connect what your coach needs. Telegram is optional and never blocks Chat.";
-
 export const SETUP_STATUS_UNAVAILABLE_COPY =
   "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.";
 
@@ -198,12 +195,5 @@ export const RETRY_SAVED_KEYS_LABEL = "Retry saved keys";
 export const RETRY_INTAKE_SAVE_LABEL = "Retry saving answers";
 
 export const FOOTER_NOTE = `Everything stays on ${PLATFORM_COPY.computer}.`;
-
-export const OUTSTANDING_NOTE = {
-  coach: "Choose what powers your coach to finish.",
-  training: "Connect intervals.icu to finish.",
-  intake: "Answer the injury question to finish.",
-  clearance: "Confirm clinician clearance above to finish.",
-} as const;
 
 export const PRIMARY_LABEL = "Start coaching";

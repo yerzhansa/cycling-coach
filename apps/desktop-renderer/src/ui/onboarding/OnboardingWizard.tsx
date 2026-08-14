@@ -8,20 +8,20 @@ import {
 } from "../settings/CredentialsSection.js";
 import { AiRow } from "./AiRow.js";
 import {
-  CHATGPT_PHASE_COPY,
   ERROR_COPY,
   FOOTER_NOTE,
-  OUTSTANDING_NOTE,
   PRIMARY_LABEL,
   RETRY_SETUP_STATUS_LABEL,
-  SETUP_CHAT_SUBTITLE,
   SETUP_HEADING,
   SETUP_SETTINGS_HEADING,
   SETUP_STATUS_UNAVAILABLE_COPY,
 } from "./copy.js";
 import { IntakeRows } from "./IntakeRows.js";
 import { intakeComplete } from "../../onboarding/machine.js";
-import { credentialChangesBlocked } from "../../settings/credential-controller.js";
+import {
+  credentialChangesBlocked,
+  repairRequiredCredential,
+} from "../../settings/credential-controller.js";
 import {
   nonTelegramSettingsMutationActive,
   settingsMutationActive,
@@ -30,10 +30,9 @@ import { BUTTON_PRIMARY, SetupCard } from "./SetupCard.js";
 import { SetupError } from "./SetupRow.js";
 import { TelegramRow } from "./TelegramRow.js";
 import { TrainingRow } from "./TrainingRow.js";
-import styles from "./OnboardingWizard.module.css";
 import settingsStyles from "../settings/SettingsView.module.css";
 
-export type SetupPlacement = "chat" | "settings";
+export type SetupPlacement = "gate" | "settings";
 
 export function SetupPanel(props: { readonly placement: SetupPlacement }): ReactElement {
   const surface = useEnduragentStore((state) => state.onboarding);
@@ -46,6 +45,14 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
         : nonTelegramSettingsMutationActive(state.settings),
     ),
   );
+  const credentialFeedbackVisible = useEnduragentStore((state) => {
+    const credentials = state.settings.credentials;
+    return (
+      props.placement === "settings" ||
+      credentials.status !== "closed" ||
+      repairRequiredCredential(credentials) !== null
+    );
+  });
   const panel = useRef<HTMLElement>(null);
   const focused = useRef(-1);
 
@@ -57,7 +64,9 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
 
   const wizard = surface.wizard;
   const readiness = surface.readiness;
-  const requiredReadyCount = [readiness.provider, readiness.trainingData, readiness.intake].filter(
+  const gateUnavailable = props.placement === "gate" && surface.loadUnavailable;
+  const intakeAnswered = readiness.intake || intakeComplete(wizard.intake);
+  const requiredReadyCount = [readiness.provider, readiness.trainingData, intakeAnswered].filter(
     Boolean,
   ).length;
   const requiredSetupReady = requiredReadyCount === 3;
@@ -65,15 +74,6 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
   const primaryAiCredential =
     activeCredential === surface.draft?.provider.provider ? activeCredential : null;
   const importCopy = rideImportStatusCopy(surface.rideImport);
-  const actionStatus = surface.actionStatus ?? (wizard.busy || surface.loading ? "working" : null);
-  const actionStatusCopy =
-    actionStatus === null
-      ? ""
-      : actionStatus === "working"
-        ? surface.loading
-          ? "Checking setup…"
-          : "Working…"
-        : CHATGPT_PHASE_COPY[actionStatus];
   const blocked =
     credentialMutationBlocked ||
     surface.loading ||
@@ -83,59 +83,44 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
     !readiness.provider ||
     !readiness.trainingData ||
     !intakeComplete(wizard.intake);
-  const outstanding = surface.loadUnavailable
-    ? null
-    : !readiness.provider
-      ? "coach"
-      : !readiness.trainingData
-        ? "training"
-        : !readiness.intake && !intakeComplete(wizard.intake)
-          ? wizard.intake.injuryStatus === null
-            ? "intake"
-            : "clearance"
-          : null;
-
   return (
     <section
       ref={panel}
-      className={`setup-panel mx-auto w-full ${props.placement === "chat" ? styles.chatPanel : "max-w-[760px]"}`}
+      className={`setup-panel mx-auto w-full ${props.placement === "gate" ? "max-w-[680px]" : "max-w-[760px]"}`}
       data-setup-host={props.placement}
       aria-busy={surface.loading ? "true" : undefined}
     >
-      {props.placement === "chat" ? (
-        <header className={`${styles.chatHeader} flex flex-wrap justify-between`}>
+      {props.placement === "gate" ? (
+        <header className="mb-[22px] flex flex-wrap items-end justify-between gap-x-5 gap-y-2">
           <div>
-            <h2
+            <h1
               id="setup-panel-title"
               tabIndex={-1}
-              className={`${styles.chatTitle} focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink`}
+              className="text-[27px] leading-[1.16] font-[590] tracking-[-0.035em] outline-none"
             >
               {SETUP_HEADING}
-            </h2>
-            <p className={`${styles.chatSubtitle} text-ink-2`}>{SETUP_CHAT_SUBTITLE}</p>
+            </h1>
           </div>
-          <span
-            className={`inline-flex h-ctl-sm flex-none items-center gap-2 rounded-full border px-row text-xs ${requiredSetupReady ? "border-ok/35 bg-ok/10 text-ok" : "border-line-2 bg-surface text-ink-2"}`}
-            data-setup-readiness={requiredReadyCount}
-            data-state={requiredSetupReady ? "ready" : "pending"}
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-          >
+          {gateUnavailable ? null : (
             <span
-              className={`size-2 rounded-full ring-4 ${requiredSetupReady ? "bg-ok ring-ok/10" : "bg-warn ring-warn/10"}`}
-              data-setup-readiness-dot={requiredSetupReady ? "ready" : "pending"}
-              aria-hidden="true"
-            />
-            {requiredReadyCount} of 3 required ready
-          </span>
+              className={`inline-flex h-ctl-sm flex-none items-center gap-2 rounded-full border px-row text-xs ${requiredSetupReady ? "border-ok/35 bg-ok/10 text-ok" : "border-line-2 bg-surface text-ink-2"}`}
+              data-setup-readiness={requiredReadyCount}
+              data-state={requiredSetupReady ? "ready" : "pending"}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <span
+                className={`size-2 rounded-full ring-4 ${requiredSetupReady ? "bg-ok ring-ok/10" : "bg-warn ring-warn/10"}`}
+                data-setup-readiness-dot={requiredSetupReady ? "ready" : "pending"}
+                aria-hidden="true"
+              />
+              {requiredReadyCount} of 3 required ready
+            </span>
+          )}
         </header>
       ) : (
-        <h2
-          id="setup-panel-title"
-          tabIndex={-1}
-          className={`${settingsStyles.heading} focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink`}
-        >
+        <h2 id="setup-panel-title" tabIndex={-1} className={settingsStyles.heading}>
           {SETUP_SETTINGS_HEADING}
         </h2>
       )}
@@ -159,40 +144,37 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
           </button>
         </div>
       ) : null}
-      <SetupCard>
-        <AiRow surface={surface} actions={actions} placement={props.placement} />
-        <TrainingRow surface={surface} actions={actions} placement={props.placement} />
-        {props.placement === "chat" ? <TelegramRow /> : null}
-        {props.placement === "settings" ? (
-          <AdditionalCredentialRows
-            primaryAiCredential={primaryAiCredential}
-            primaryAiProvider={surface.configuration?.active?.provider ?? null}
-          />
-        ) : null}
-        <IntakeRows surface={surface} actions={actions} placement={props.placement} />
-        {props.placement === "settings" ? <CredentialSettingsFeedback /> : null}
-        {props.placement === "chat" ? (
-          <footer className={styles.chatFooter}>
-            <span className="text-xs text-ink-2">{FOOTER_NOTE}</span>
-            <SetupError surface={surface} section="footer" />
-            {outstanding === null ? null : (
-              <span data-setup-outstanding={outstanding} className="text-xs text-ink-2">
-                {OUTSTANDING_NOTE[outstanding]}
-              </span>
-            )}
-            <button
-              type="button"
-              className={BUTTON_PRIMARY}
-              disabled={blocked}
-              onClick={() => {
-                actions?.finish();
-              }}
-            >
-              {PRIMARY_LABEL}
-            </button>
-          </footer>
-        ) : null}
-      </SetupCard>
+      {gateUnavailable ? null : (
+        <SetupCard>
+          <AiRow surface={surface} actions={actions} placement={props.placement} />
+          <TrainingRow surface={surface} actions={actions} placement={props.placement} />
+          {props.placement === "gate" ? <TelegramRow /> : null}
+          {props.placement === "settings" ? (
+            <AdditionalCredentialRows
+              primaryAiCredential={primaryAiCredential}
+              primaryAiProvider={surface.configuration?.active?.provider ?? null}
+            />
+          ) : null}
+          <IntakeRows surface={surface} actions={actions} placement={props.placement} />
+          {credentialFeedbackVisible ? <CredentialSettingsFeedback /> : null}
+        </SetupCard>
+      )}
+      {props.placement === "gate" && !surface.loadUnavailable ? (
+        <footer className="mt-[18px] flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            className={BUTTON_PRIMARY}
+            disabled={blocked}
+            onClick={() => {
+              actions?.finish();
+            }}
+          >
+            {PRIMARY_LABEL}
+          </button>
+          <SetupError surface={surface} section="footer" />
+          <span className="ml-auto text-xs text-ink-2">{FOOTER_NOTE}</span>
+        </footer>
+      ) : null}
       <p
         className="import-status mt-2 min-h-[18px] text-xs text-ink-2"
         role="status"
@@ -203,16 +185,6 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
       >
         {importCopy}
       </p>
-      <p
-        className="onboarding-action-status mt-1.5 text-xs text-ink-2"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        hidden={actionStatus === null}
-        data-state={actionStatus ?? "idle"}
-      >
-        {actionStatusCopy}
-      </p>
       <p className="onboarding-error-announcer sr-only" role="status" aria-live="polite">
         {wizard.fixedError === null ? "" : ERROR_COPY[wizard.fixedError]}
       </p>
@@ -222,5 +194,5 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
 
 export function OnboardingWizard(): ReactElement | null {
   const open = useEnduragentStore((state) => state.onboarding.open);
-  return open ? <SetupPanel placement="chat" /> : null;
+  return open ? <SetupPanel placement="gate" /> : null;
 }
