@@ -224,9 +224,7 @@ export function spawnScenarioChild(
   },
   spawnProcess: ScenarioChildSpawn = (command, args, options) => spawnSync(command, args, options),
 ): ChildOutcome {
-  const safeScenarioId = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(params.scenarioId)
-    ? params.scenarioId
-    : "unknown";
+  const safeScenarioId = safeScenarioDiagnosticId(params.scenarioId);
   console.log(`S8A_CHILD START scenario=${safeScenarioId} stage=${params.stage}`);
   const tempHome = mkdtempSync(join(tmpdir(), "s8a-home-"));
   const childArgs = [
@@ -284,7 +282,7 @@ export function spawnScenarioChild(
 
 export function parseLastScenarioChildStage(output: string, scenarioId: string): string {
   const maxDiagnosticTurnIndex = 99;
-  const safeScenarioId = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(scenarioId) ? scenarioId : "unknown";
+  const safeScenarioId = safeScenarioDiagnosticId(scenarioId);
   let last = "none";
   for (const line of output.split("\n")) {
     const match =
@@ -300,6 +298,13 @@ export function parseLastScenarioChildStage(output: string, scenarioId: string):
     last = stage === "turn" ? `turn-${turn}-${phase}` : `${stage}-${phase}`;
   }
   return last;
+}
+
+export function safeScenarioDiagnosticId(value: string): string {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return "unknown";
+  if (/^i[0-9]{8,9}$/.test(value)) return "unknown";
+  if (/^[0-9]{8,}$/.test(value)) return "unknown";
+  return value;
 }
 
 export type SelfTestDiffSpawn = (
