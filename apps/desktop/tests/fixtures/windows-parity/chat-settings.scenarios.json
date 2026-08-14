@@ -162,7 +162,7 @@
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/onboarding-surface.test.tsx > runs ChatGPT sign-in through pending to a ready row",
-        "apps/desktop-renderer/tests/onboarding-chatgpt-lifecycle.test.tsx > renders every phase and replaces generic progress at exactly three seconds",
+        "apps/desktop-renderer/tests/onboarding-chatgpt-lifecycle.test.tsx > renders every phase inside the ChatGPT row",
         "apps/desktop-renderer/tests/onboarding-chatgpt-lifecycle.test.tsx > retries activation without starting OAuth again",
         "apps/desktop/tests/chatgpt-auth.test.ts > forwards the separate login limits and closed progress phases",
         "apps/desktop/tests/chatgpt-auth.test.ts > publishes stored before a separate keyless runtime activation"

@@ -258,15 +258,18 @@ export function CredentialSettingsFeedback(): ReactElement | null {
   const port = useEnduragentStore((store) => store.settingsPorts?.credentials ?? null);
   const feedback = useRef<HTMLDivElement>(null);
   const target = "focus" in state ? state.focus : null;
-  const loading = state.status === "closed" || state.status === "loading";
-  const loadError = state.status === "error" && state.kind === "load";
   const repairRequired = repairRequiredCredential(state);
+  const loading =
+    state.status === "loading" || (state.status === "closed" && repairRequired === null);
+  const loadError = state.status === "error" && state.kind === "load";
   const announcement =
     "announcement" in state && state.announcement.length > 0
       ? state.announcement
-      : loading
-        ? "Loading saved credentials…"
-        : "";
+      : state.status === "closed" && repairRequired !== null
+        ? "Saved credential status needs to be reloaded before setup can continue."
+        : loading
+          ? "Loading saved credentials…"
+          : "";
 
   useEffect(() => {
     if (target?.target === "feedback") {

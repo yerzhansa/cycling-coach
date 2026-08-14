@@ -392,24 +392,30 @@ export function createChatController(input: {
     return dispatch(group.text, true, false);
   };
 
+  const start = (): Promise<void> => {
+    if (!canChat() || disposed) return Promise.resolve();
+    void hydrator.start();
+    if (probeTask !== undefined) return probeTask;
+    const probeEpoch = epoch;
+    const task = (async () => {
+      try {
+        const client = await input.clients.getClient();
+        const result = await client.call("hasSession", { chatId: DESKTOP_CHAT_ID });
+        if (disposed || epoch !== probeEpoch) return;
+        reduce({ type: "session-probe", hasSession: result.hasSession });
+      } catch {}
+    })();
+    probeTask = task;
+    return task;
+  };
+
   render();
   return {
     start() {
-      void hydrator.start();
-      if (probeTask !== undefined) return probeTask;
-      const probeEpoch = epoch;
-      const task = (async () => {
-        try {
-          const client = await input.clients.getClient();
-          const result = await client.call("hasSession", { chatId: DESKTOP_CHAT_ID });
-          if (disposed || epoch !== probeEpoch) return;
-          reduce({ type: "session-probe", hasSession: result.hasSession });
-        } catch {}
-      })();
-      probeTask = task;
-      return task;
+      return start();
     },
     resume() {
+      void start();
       return drain();
     },
     submit(message) {

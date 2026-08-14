@@ -74,6 +74,7 @@ function subject(input: {
     cursor: string | null;
     limit: number;
   }) => Promise<TranscriptPage>;
+  readonly canChat?: () => boolean;
 }) {
   const states: ChatState[] = [];
   const controls: Array<
@@ -94,11 +95,39 @@ function subject(input: {
     refreshTrainingContext: vi.fn(async () => {}),
     refreshSpend: vi.fn(async () => {}),
     readTranscriptPage: input.readTranscriptPage,
+    canChat: input.canChat ?? (() => true),
   });
   return { controller, states, controls };
 }
 
 describe("chat controller transcript hydration", () => {
+  it("defers transcript and session hydration until chat becomes available", async () => {
+    let ready = false;
+    const client = coachClient({ hasSession: true });
+    const readTranscriptPage = vi.fn(async () => transcriptPage("turn-1"));
+    const { controller, states } = subject({
+      client,
+      readTranscriptPage,
+      canChat: () => ready,
+    });
+
+    await controller.start();
+
+    expect(readTranscriptPage).not.toHaveBeenCalled();
+    expect(client.call).not.toHaveBeenCalled();
+    expect(states.at(-1)?.messages).toHaveLength(0);
+
+    ready = true;
+    await controller.resume();
+
+    await vi.waitFor(() => {
+      expect(readTranscriptPage).toHaveBeenCalledTimes(1);
+      expect(states.at(-1)?.messages).toHaveLength(2);
+    });
+    expect(client.call).toHaveBeenCalledTimes(1);
+    expect(client.call).toHaveBeenCalledWith("hasSession", { chatId: "desktop" });
+  });
+
   it("renders the first persisted page alongside a still-pending live readiness probe", async () => {
     const session = deferred<{ hasSession: boolean }>();
     const client = coachClient({});

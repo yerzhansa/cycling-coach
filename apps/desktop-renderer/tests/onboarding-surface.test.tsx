@@ -497,7 +497,7 @@ describe("mounted onboarding", () => {
     });
     expect(input).toBeDisabled();
     expect(input.value).toBe("");
-    expect(document.querySelector(".onboarding-action-status")?.textContent).toBe("Working…");
+    expect(document.querySelector(".onboarding-action-status")).toBeNull();
     write.resolve();
 
     await waitFor(() => {

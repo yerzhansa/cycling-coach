@@ -181,6 +181,16 @@ function authoritativeBridge() {
   };
 }
 
+function readyAuthoritativeBridge() {
+  const bridge = authoritativeBridge();
+  bridge.getSetupStatus.mockResolvedValue({
+    schemaVersion: 1,
+    intake: expectedIntake("none"),
+    durableTrainingData: true,
+  });
+  return bridge;
+}
+
 function expectedIntake(injuryStatus: "none" | "managing" | "returning") {
   return {
     swim_skill_floor: null,
@@ -323,6 +333,44 @@ describe("onboarding completion", () => {
 });
 
 describe("settings intake persistence", () => {
+  it("keeps a saved Settings edit in Settings while its replacement persists", async () => {
+    const pending = deferred<void>();
+    const bridge = readyAuthoritativeBridge();
+    bridge.saveIntake.mockReturnValueOnce(pending.promise);
+    const harness = onboardingHarness(bridge);
+    await harness.controller.open();
+
+    expect(harness.surface().completionRequired).toBe(false);
+
+    harness.controller.setIntake("injuryStatus", "managing", { persistWhenComplete: true });
+
+    expect(harness.surface().readiness.intake).toBe(false);
+    expect(harness.surface().completionRequired).toBe(false);
+    pending.resolve();
+    await vi.waitFor(() => {
+      expect(harness.surface().readiness.intake).toBe(true);
+    });
+    expect(harness.surface().completionRequired).toBe(false);
+    expect(harness.onReady).not.toHaveBeenCalled();
+    harness.controller.dispose();
+  });
+
+  it("holds an explicit recovery gate until setup completion is acknowledged", async () => {
+    const bridge = readyAuthoritativeBridge();
+    const harness = onboardingHarness(bridge);
+    await harness.controller.open();
+
+    harness.controller.requireCompletion();
+
+    expect(harness.surface().completionRequired).toBe(true);
+    harness.controller.finish();
+    await vi.waitFor(() => {
+      expect(harness.onReady).toHaveBeenCalledOnce();
+    });
+    expect(harness.surface().completionRequired).toBe(false);
+    harness.controller.dispose();
+  });
+
   it("persists a complete Settings answer without completing or navigating", async () => {
     const bridge = authoritativeBridge();
     const harness = onboardingHarness(bridge);
@@ -367,9 +415,12 @@ describe("settings intake persistence", () => {
     const harness = onboardingHarness(bridge);
     await harness.controller.open();
 
+    expect(harness.surface().completionRequired).toBe(true);
+
     harness.controller.setIntake("injuryStatus", "none");
     await Promise.resolve();
     expect(bridge.saveIntake).not.toHaveBeenCalled();
+    expect(harness.surface().completionRequired).toBe(true);
 
     harness.controller.finish();
 
@@ -378,6 +429,7 @@ describe("settings intake persistence", () => {
     });
     expect(bridge.saveIntake).toHaveBeenCalledOnce();
     expect(bridge.saveIntake).toHaveBeenCalledWith(expectedIntake("none"));
+    expect(harness.surface().completionRequired).toBe(false);
     expect(harness.onReady).toHaveBeenCalledOnce();
     harness.controller.dispose();
   });

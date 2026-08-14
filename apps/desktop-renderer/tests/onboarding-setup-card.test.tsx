@@ -9,6 +9,7 @@ import {
   API_KEY_PANEL_HINT,
   FOOTER_NOTE,
   RETRY_INTAKE_SAVE_LABEL,
+  SETUP_DISCLAIMER,
   SETUP_MENU_LABEL,
 } from "../src/ui/onboarding/copy.js";
 import {
@@ -140,6 +141,80 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
+  it("hides inactive credential loading feedback on the gate but keeps it in Settings", async () => {
+    const gate = mountWizard({ bridge: coldBridge() });
+    await gate.open();
+
+    expect(screen.queryByText("Loading saved credentials…")).toBeNull();
+    expect(document.querySelector("[data-credential-feedback]")).toBeNull();
+    gate.controller.dispose();
+    gate.rendered.unmount();
+    resetOnboardingStore();
+
+    const settings = mountWizard({ bridge: coldBridge(), placement: "settings" });
+    await settings.open();
+
+    expect(screen.getByText("Loading saved credentials…")).toBeInTheDocument();
+    expect(document.querySelector("[data-credential-feedback]")).not.toBeNull();
+    settings.controller.dispose();
+  });
+
+  it("keeps credential repair feedback and its reload action on the gate", async () => {
+    const user = userEvent.setup();
+    const wizard = mountWizard({ bridge: coldBridge() });
+    await wizard.open();
+    const port = bindCredentialPort();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          credentials: {
+            status: "error",
+            kind: "load",
+            announcement: "That saved key could not be reloaded.",
+            repairCredential: "anthropic",
+            recoveryAvailable: false,
+            focus: null,
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText("That saved key could not be reloaded.")).toBeInTheDocument();
+    const reload = screen.getByRole("button", { name: "Reload credential status" });
+    expect(reload).toBeEnabled();
+    await user.click(reload);
+    expect(port.retry).toHaveBeenCalledOnce();
+    wizard.controller.dispose();
+  });
+
+  it("keeps reload enabled when credential repair survives Settings cleanup", async () => {
+    const user = userEvent.setup();
+    const wizard = mountWizard({ bridge: coldBridge() });
+    await wizard.open();
+    const port = bindCredentialPort();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          credentials: { status: "closed", repairCredential: "openrouter" },
+        },
+      });
+    });
+
+    expect(
+      screen.getByText("Saved credential status needs to be reloaded before setup can continue."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Loading saved credentials…")).toBeNull();
+    const reload = screen.getByRole("button", { name: "Reload credential status" });
+    expect(reload).toBeEnabled();
+    await user.click(reload);
+    expect(port.retry).toHaveBeenCalledOnce();
+    wizard.controller.dispose();
+  });
+
   it("keeps every sub-panel a sibling row inside the same card", async () => {
     const user = userEvent.setup();
     const wizard = mountWizard({ bridge: coldBridge() });
@@ -240,11 +315,7 @@ describe("setup card", () => {
     expect(primary).toBeInTheDocument();
     expect(setupCard().contains(primary)).toBe(false);
     expect(screen.getByText("Everything stays on this Mac.")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Not medical advice, and not a substitute for a doctor or a certified coach.",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText(SETUP_DISCLAIMER)).toBeInTheDocument();
 
     chat.controller.dispose();
     chat.rendered.unmount();
@@ -255,11 +326,7 @@ describe("setup card", () => {
 
     expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
     expect(screen.queryByText("Everything stays on this Mac.")).toBeNull();
-    expect(
-      screen.queryByText(
-        "Not medical advice, and not a substitute for a doctor or a certified coach.",
-      ),
-    ).toBeNull();
+    expect(screen.queryByText(SETUP_DISCLAIMER)).toBeNull();
     settings.controller.dispose();
   });
 
@@ -740,6 +807,7 @@ describe("setup card", () => {
     const headings = screen.getAllByRole("heading", { level: 1 });
     expect(headings).toHaveLength(1);
     expect(headings[0]).toHaveAttribute("id", "setup-panel-title");
+    expect(headings[0]).toHaveClass("outline-none");
 
     gate.controller.dispose();
     gate.rendered.unmount();
@@ -1099,7 +1167,7 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("names what is still outstanding beside a blocked Start coaching", async () => {
+  it("keeps the footer privacy note visible while Start coaching is blocked", async () => {
     const user = userEvent.setup();
     const wizard = mountWizard({ bridge: readyEverythingBridge() });
     await wizard.open();
@@ -1107,19 +1175,16 @@ describe("setup card", () => {
       expect(rowState("training")).toBe("ready");
     });
 
-    const outstanding = (): HTMLElement | null =>
-      document.querySelector<HTMLElement>("[data-setup-outstanding]");
-
     expect(primaryButton()).toBeDisabled();
-    expect(outstanding()?.getAttribute("data-setup-outstanding")).toBe("intake");
-    expect(outstanding()?.textContent).toBe("Answer the injury question to finish.");
+    expect(screen.getByText(FOOTER_NOTE).className).toContain("ml-auto");
+    expect(document.querySelector("[data-setup-outstanding]")).toBeNull();
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
 
     await waitFor(() => {
       expect(primaryButton()).toBeEnabled();
     });
-    expect(outstanding()).toBeNull();
+    expect(screen.getByText(FOOTER_NOTE)).toBeInTheDocument();
     wizard.controller.dispose();
   });
 
@@ -1224,6 +1289,33 @@ function rowAnnouncer(id: string): HTMLElement | null {
 describe("setup card accessibility", () => {
   afterEach(() => {
     resetOnboardingStore();
+  });
+
+  it("announces clipboard guidance when the copied Intervals API key has an invalid format", async () => {
+    const user = userEvent.setup();
+    const bridge = coldBridge();
+    bridge.pasteIntervalsApiKeyFromClipboard.mockResolvedValue({
+      outcome: "refused",
+      reason: "invalid-key-format",
+      current: { slot: "intervals-icu", state: "missing", runtimeState: null },
+    });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+
+    await openTrainingPanel(user);
+    await user.click(
+      within(panel("training") as HTMLElement).getByRole("button", {
+        name: "Use copied API key",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(wizard.controller.state().fixedError).toBe("intervals-clipboard-unavailable");
+    });
+    expect(errorAnnouncer()?.textContent).toBe(
+      "Enduragent couldn’t read an API key from the clipboard. Copy it in Intervals.icu, then try again.",
+    );
+    wizard.controller.dispose();
   });
 
   it("announces errors through a region that is mounted before the error exists", async () => {
@@ -1392,7 +1484,7 @@ describe("setup card accessibility", () => {
     const compactCopy = [
       setupRow("ai").querySelector("[data-setup-row-title]")?.nextElementSibling,
       screen.getByText(FOOTER_NOTE),
-      document.querySelector("[data-setup-outstanding]"),
+      screen.getByText(SETUP_DISCLAIMER),
       document.querySelector("[data-info-tip]"),
     ];
     for (const element of compactCopy) {

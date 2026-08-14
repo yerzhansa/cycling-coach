@@ -1,5 +1,6 @@
 ---
-"cycling-coach": patch
+"@enduragent/desktop": patch
+"@enduragent/desktop-renderer": patch
 ---
 
 User-facing: Setup is now its own full-window screen that opens first and stays up until you answer all three required questions — what powers your coach, Intervals.icu, and your injury status. Telegram moved out of setup and lives in Settings.

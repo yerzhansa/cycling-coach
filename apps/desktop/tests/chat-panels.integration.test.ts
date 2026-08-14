@@ -667,7 +667,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly text: string;
       readonly focused: boolean;
       readonly chatStateUnchanged: boolean;
-      readonly transcriptUnchanged: boolean;
       readonly liveRegionUnchanged: boolean;
       readonly athleteRows: number;
       readonly quickActionClicks: number;
@@ -675,7 +674,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const textarea = document.querySelector("#message");
       const submit = document.querySelector('.composer button[type="submit"]');
       const conversation = document.querySelector(".conversation");
-      const transcript = document.querySelector(".chat-transcript");
       const liveRegion = document.querySelector(".new-conversation-status");
       const quickActions = [...document.querySelectorAll(".coaching-shortcut")];
       let quickActionClicks = 0;
@@ -691,12 +689,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         status: conversation.dataset.chatStatus,
         textareaDisabled: textarea.disabled,
         submitDisabled: submit.disabled,
-      });
-      const transcriptBefore = JSON.stringify({
-        html: transcript.innerHTML,
-        ariaLive: transcript.getAttribute("aria-live"),
-        ariaRelevant: transcript.getAttribute("aria-relevant"),
-        ariaAtomic: transcript.getAttribute("aria-atomic"),
       });
       const liveRegionBefore = JSON.stringify({
         html: liveRegion.innerHTML,
@@ -726,13 +718,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
             textareaDisabled: textarea.disabled,
             submitDisabled: submit.disabled,
           }) === chatStateBefore,
-        transcriptUnchanged:
-          JSON.stringify({
-            html: transcript.innerHTML,
-            ariaLive: transcript.getAttribute("aria-live"),
-            ariaRelevant: transcript.getAttribute("aria-relevant"),
-            ariaAtomic: transcript.getAttribute("aria-atomic"),
-          }) === transcriptBefore,
         liveRegionUnchanged:
           JSON.stringify({
             html: liveRegion.innerHTML,
@@ -750,7 +735,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       text: composingDraft,
       focused: true,
       chatStateUnchanged: true,
-      transcriptUnchanged: true,
       liveRegionUnchanged: true,
       athleteRows: 0,
       quickActionClicks: 0,

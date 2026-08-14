@@ -67,6 +67,8 @@ export interface OnboardingSurfaceState {
   readonly initialized: boolean;
   readonly loading: boolean;
   readonly loadUnavailable: boolean;
+  readonly hasSuccessfulLoad: boolean;
+  readonly completionRequired: boolean;
   readonly wizard: OnboardingState;
   readonly statuses: readonly CredentialSlotStatus[];
   readonly configuration: OnboardingLlmConfiguration | null;
@@ -128,6 +130,7 @@ export interface OnboardingActions {
 export interface OnboardingController extends OnboardingActions {
   open(): Promise<void>;
   refresh(): Promise<void>;
+  requireCompletion(): void;
   close(): void;
   dispose(): void;
   state(): OnboardingState;
@@ -164,6 +167,7 @@ export const CHATGPT_PROGRESS_DETAIL_DELAY_MS = 3_000;
 // had time to report its authoritative result.
 export const CHATGPT_ACTIVATION_TRANSPORT_TIMEOUT_MS = 12_000;
 export const ONBOARDING_STATUS_REFRESH_TIMEOUT_MS = 3_000;
+export const CLAUDE_CLI_STATUS_TRANSPORT_TIMEOUT_MS = 75_000;
 
 type BoundedResult<T> =
   | { readonly status: "fulfilled"; readonly value: T }
@@ -250,7 +254,7 @@ const CREDENTIAL_WRITE_REFUSAL_ERRORS = {
 const INTERVALS_REFUSAL_ERRORS = {
   "clipboard-unavailable": "intervals-clipboard-unavailable",
   "clipboard-clear-failed": "intervals-clipboard-clear-failed",
-  "invalid-key-format": "intervals-key-rejected",
+  "invalid-key-format": "intervals-clipboard-unavailable",
   "credential-rejected": "intervals-key-rejected",
   "malformed-athlete-response": "intervals-validation-unavailable",
   "validation-timeout": "intervals-validation-unavailable",
@@ -318,6 +322,7 @@ export function createOnboardingController(
   let initialized = false;
   let loading = false;
   let loadUnavailable = false;
+  let completionRequired = false;
   let hasSuccessfulLoad = false;
   let durableTrainingData = false;
   let intakeSaved = false;
@@ -370,18 +375,21 @@ export function createOnboardingController(
   });
 
   const publish = (): void => {
+    const readiness = currentReadiness();
     options.view.render({
       open: presenting,
       initialized,
       loading,
       loadUnavailable,
+      hasSuccessfulLoad,
+      completionRequired,
       wizard: state,
       statuses: credentialStatuses,
       configuration: llmConfiguration ?? null,
       draft: llmDraft ?? null,
       rideImport: rideImportState,
       focusSeq,
-      readiness: currentReadiness(),
+      readiness,
       lastCommit,
       actionStatus,
     });
@@ -567,15 +575,17 @@ export function createOnboardingController(
     options.focusOpener();
   };
 
-  const loadClaudeCliStatus = (expectedVisit: number): void => {
-    void options.bridge.claudeCliStatus().then(
-      (status) => {
-        if (disposed || visit !== expectedVisit || !presenting) return;
-        state = withClaudeCliStatus(state, status);
-        publish();
-      },
-      () => undefined,
-    );
+  const applyClaudeCliStatus = (
+    expectedVisit: number,
+    result: Promise<BoundedResult<Awaited<ReturnType<OnboardingBridge["claudeCliStatus"]>>>>,
+  ): void => {
+    void result.then((settled) => {
+      if (settled.status !== "fulfilled" || disposed || visit !== expectedVisit || !presenting) {
+        return;
+      }
+      state = withClaudeCliStatus(state, settled.value);
+      publish();
+    });
   };
 
   const refreshStatuses = async (expectedVisit: number): Promise<boolean> => {
@@ -835,6 +845,7 @@ export function createOnboardingController(
       return;
     }
     completed = true;
+    completionRequired = false;
     publish();
     options.onComplete(toOnboardingCompletion(state));
     options.onReady?.();
@@ -953,6 +964,16 @@ export function createOnboardingController(
     completed = false;
     lastCommit = null;
     actionStatus = null;
+    const finishUnavailableLoad = (): void => {
+      loadUnavailable = true;
+      state = withImportedRideFileCount(state, rideImports.importedFileCount());
+      initialized = true;
+      loading = false;
+      setRideImportPresentation(true);
+      focusTitle();
+      publish();
+      opening = false;
+    };
     const [statusesResult, chatGptResult, configurationResult, setupResult] = await Promise.all([
       settleWithin(options.bridge.credentialStatuses(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
       settleWithin(options.bridge.chatGptStatus(), ONBOARDING_STATUS_REFRESH_TIMEOUT_MS),
@@ -973,14 +994,23 @@ export function createOnboardingController(
       configurationResult.status !== "fulfilled" ||
       setupResult.status !== "fulfilled"
     ) {
-      loadUnavailable = true;
-      state = withImportedRideFileCount(state, rideImports.importedFileCount());
-      initialized = true;
-      loading = false;
-      setRideImportPresentation(true);
-      focusTitle();
-      publish();
+      finishUnavailableLoad();
+      return;
+    }
+    const claudeCliResultPromise = settleWithin(
+      options.bridge.claudeCliStatus(),
+      CLAUDE_CLI_STATUS_TRANSPORT_TIMEOUT_MS,
+    );
+    const activeClaudeCliResult =
+      configurationResult.value.active?.provider === "claude-cli"
+        ? await claudeCliResultPromise
+        : undefined;
+    if (disposed || visit !== openVisit) {
       opening = false;
+      return;
+    }
+    if (activeClaudeCliResult?.status === "rejected") {
+      finishUnavailableLoad();
       return;
     }
     const statuses = statusesResult.value;
@@ -1009,6 +1039,9 @@ export function createOnboardingController(
     );
     credentialStatuses = statuses;
     state = createOnboardingState(statuses, restoredChatGptStatus);
+    if (activeClaudeCliResult?.status === "fulfilled") {
+      state = withClaudeCliStatus(state, activeClaudeCliResult.value);
+    }
     if (hydrateAuthoritativeState) {
       state = withPersistedIntake(state, setupResult.value.intake);
       intakeSaved = setupResult.value.intake !== null;
@@ -1032,9 +1065,12 @@ export function createOnboardingController(
       intakeComplete(state.intake) &&
       !intakeSaved;
     durableTrainingData = setupResult.value.durableTrainingData;
-    const restoredPhase = chatGptUiPhase(state);
-    if (restoredPhase === "signed-in" || restoredPhase === "ready") {
-      actionStatus = restoredPhase;
+    const readiness = currentReadiness();
+    if (!readiness.provider || !readiness.trainingData || !readiness.intake) {
+      completionRequired = true;
+    }
+    if (chatGptUiPhase(state) === "signed-in") {
+      actionStatus = "signed-in";
     }
     if (llmDraft === undefined) state = withError(state, "configuration-unavailable");
     state = withImportedRideFileCount(state, rideImports.importedFileCount());
@@ -1049,7 +1085,9 @@ export function createOnboardingController(
     if (shouldResumeIntakePersistence) {
       void persistIntake(intakeRevision, toDesktopIntakeFlags(state.intake));
     }
-    loadClaudeCliStatus(openVisit);
+    if (activeClaudeCliResult === undefined) {
+      applyClaudeCliStatus(openVisit, claudeCliResultPromise);
+    }
   };
 
   return {
@@ -1060,6 +1098,11 @@ export function createOnboardingController(
     refresh(): Promise<void> {
       if (disposed || opening) return Promise.resolve();
       return load(false);
+    },
+    requireCompletion(): void {
+      if (disposed || completionRequired) return;
+      completionRequired = true;
+      publish();
     },
     close,
     dispose(): void {

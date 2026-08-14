@@ -286,7 +286,7 @@ describe("authoritative setup readiness", () => {
     wizard.controller.dispose();
   });
 
-  it("keeps every setup control inert while authoritative status refreshes", async () => {
+  it("keeps setup controls inert and committed Chat readiness while status refreshes", async () => {
     let resolveRefresh!: (value: {
       schemaVersion: 1;
       intake: typeof savedIntake;
@@ -317,7 +317,7 @@ describe("authoritative setup readiness", () => {
       refreshing = wizard.controller.refresh();
     });
 
-    expect(setupReady(useEnduragentStore.getState())).toBe(false);
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
     expect(readinessBadge()).toHaveTextContent("3 of 3 required ready");
     expect(readinessBadge()).toHaveAttribute("data-state", "ready");
     const injury = control<HTMLSelectElement>("onboarding-injury-status");
@@ -340,7 +340,25 @@ describe("authoritative setup readiness", () => {
     wizard.controller.dispose();
   });
 
-  it("shows unavailable setup status, disables controls, and recovers through Retry", async () => {
+  it("keeps committed Chat readiness when a status refresh becomes unavailable", async () => {
+    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+    bridge.getSetupStatus = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      intake: savedIntake,
+      durableTrainingData: true,
+    }));
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+    bridge.llmConfiguration.mockRejectedValueOnce(new TypeError("synthetic catalogue failure"));
+
+    await act(async () => wizard.controller.refresh());
+
+    expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(true);
+    expect(setupReady(useEnduragentStore.getState())).toBe(true);
+    wizard.controller.dispose();
+  });
+
+  it("shows only gate recovery for unavailable setup status and keeps Settings rows", async () => {
     const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.getSetupStatus = vi
@@ -361,12 +379,21 @@ describe("authoritative setup readiness", () => {
         "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.",
       ),
     ).toBeInTheDocument();
+    expect(document.querySelector("[data-setup-readiness]")).toBeNull();
+    expect(document.querySelector("[data-setup-card]")).toBeNull();
+    expect(document.querySelector("[data-setup-row]")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
+    expect(screen.queryByText("Loading saved credentials…")).toBeNull();
+
+    wizard.rendered.rerender(<SetupPanel placement="settings" />);
+
+    expect(document.querySelector("[data-setup-card]")).not.toBeNull();
     expect(document.querySelector<HTMLButtonElement>('[data-setup-trigger="ai"]')).toBeDisabled();
     expect(
       document.querySelector<HTMLButtonElement>('[data-setup-trigger="training"]'),
     ).toBeDisabled();
     expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Start coaching" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Retry setup status" }));
 

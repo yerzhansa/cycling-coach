@@ -202,10 +202,4 @@ export const RETRY_INTAKE_SAVE_LABEL = "Retry saving answers";
 
 export const FOOTER_NOTE = `Everything stays on ${PLATFORM_COPY.computer}.`;
 
-export const OUTSTANDING_NOTE = {
-  coach: "Choose what powers your coach to finish.",
-  training: "Connect intervals.icu to finish.",
-  intake: "Answer the injury question to finish.",
-} as const;
-
 export const PRIMARY_LABEL = "Start coaching";

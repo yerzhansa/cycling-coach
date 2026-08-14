@@ -16,6 +16,11 @@ const evidence: IntervalsCredentialVerificationEvidence = Object.freeze({
   verifiedFingerprint: fingerprint,
   ownerState: Object.freeze({ status: "unowned" }),
 });
+const ownedEvidence: IntervalsCredentialVerificationEvidence = Object.freeze({
+  verifiedFingerprint: fingerprint,
+  ownerState: Object.freeze({ status: "owned", fingerprint }),
+});
+const consumed = Object.freeze({ athleteSelector: "0", evidence });
 
 function fixture() {
   let now = 1_000;
@@ -27,6 +32,7 @@ function fixture() {
   const issue = () =>
     store.issue({
       apiKey: "candidate-key",
+      configuredAthleteSelector: "",
       athleteSelector: "",
       evidence,
       configRevision: 7,
@@ -35,7 +41,8 @@ function fixture() {
     approval: string,
     overrides: Partial<{
       credentialDigest: string;
-      athleteSelector: string;
+      configuredAthleteSelector: string;
+      requestedAthleteSelector: string;
       ownerState: IntervalsStoreOwnerState;
       configRevision: number;
     }> = {},
@@ -43,7 +50,7 @@ function fixture() {
     store.consume({
       approval,
       credentialDigest: digestIntervalsCredential("candidate-key"),
-      athleteSelector: "0",
+      configuredAthleteSelector: "0",
       ownerState: { status: "unowned" },
       configRevision: 7,
       ...overrides,
@@ -65,7 +72,7 @@ describe("intervals credential approval", () => {
 
     expect(INTERVALS_APPROVAL_TOKEN_BYTES).toBe(32);
     expect(approval).toMatch(/^[0-9a-f]{64}$/);
-    expect(value.consume(approval)).toEqual(evidence);
+    expect(value.consume(approval)).toEqual(consumed);
     expect(value.consume(approval)).toBeUndefined();
   });
 
@@ -86,7 +93,7 @@ describe("intervals credential approval", () => {
     const current = value.issue();
 
     expect(current).not.toBe(replaced);
-    expect(value.consume(current)).toEqual(evidence);
+    expect(value.consume(current)).toEqual(consumed);
     expect(value.consume(replaced)).toBeUndefined();
   });
 
@@ -96,8 +103,12 @@ describe("intervals credential approval", () => {
       overrides: { credentialDigest: "b".repeat(64) },
     },
     {
-      binding: "athlete selector",
-      overrides: { athleteSelector: "different-athlete" },
+      binding: "configured athlete selector",
+      overrides: { configuredAthleteSelector: "different-athlete" },
+    },
+    {
+      binding: "explicit requested athlete selector",
+      overrides: { requestedAthleteSelector: "different-athlete" },
     },
     {
       binding: "owner state",
@@ -130,9 +141,56 @@ describe("intervals credential approval", () => {
     const approvals = Array.from({ length: 10 }, () => value.issue());
 
     expect(INTERVALS_PENDING_APPROVALS_PER_GENERATION).toBe(1);
-    expect(value.consume(approvals.at(-1)!)).toEqual(evidence);
+    expect(value.consume(approvals.at(-1)!)).toEqual(consumed);
     for (const approval of approvals.slice(0, -1)) {
       expect(value.consume(approval)).toBeUndefined();
     }
+  });
+
+  it("returns the verified selector only when an explicit requested selector matches it", () => {
+    const store = createIntervalsCredentialApprovalStore({
+      now: () => 1_000,
+      randomBytes: (size) => Buffer.alloc(size, 1),
+    });
+    const issue = () =>
+      store.issue({
+        apiKey: "candidate-key",
+        configuredAthleteSelector: "stale-athlete",
+        athleteSelector: "0",
+        evidence: ownedEvidence,
+        configRevision: 7,
+      });
+    const consume = (approval: string, requestedAthleteSelector?: string) =>
+      store.consume({
+        approval,
+        credentialDigest: digestIntervalsCredential("candidate-key"),
+        configuredAthleteSelector: "stale-athlete",
+        ...(requestedAthleteSelector === undefined ? {} : { requestedAthleteSelector }),
+        ownerState: { status: "owned", fingerprint },
+        configRevision: 7,
+      });
+
+    expect(consume(issue())).toEqual({ athleteSelector: "0", evidence: ownedEvidence });
+    expect(consume(issue(), "0")).toEqual({ athleteSelector: "0", evidence: ownedEvidence });
+    const mismatched = issue();
+    expect(consume(mismatched, "stale-athlete")).toBeUndefined();
+    expect(consume(mismatched, "0")).toBeUndefined();
+  });
+
+  it("rejects a selector-changing approval for an unowned store", () => {
+    const store = createIntervalsCredentialApprovalStore({
+      now: () => 1_000,
+      randomBytes: (size) => Buffer.alloc(size, 1),
+    });
+
+    expect(() =>
+      store.issue({
+        apiKey: "candidate-key",
+        configuredAthleteSelector: "stale-athlete",
+        athleteSelector: "0",
+        evidence,
+        configRevision: 7,
+      }),
+    ).toThrow(new TypeError("unowned intervals approval cannot change athlete selector"));
   });
 });

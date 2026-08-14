@@ -10,6 +10,8 @@ export const CLOSED_ONBOARDING: OnboardingSurfaceState = Object.freeze({
   initialized: false,
   loading: true,
   loadUnavailable: false,
+  hasSuccessfulLoad: false,
+  completionRequired: false,
   wizard: createOnboardingState(),
   statuses: Object.freeze([]),
   configuration: null,
@@ -25,6 +27,7 @@ export const READY_ONBOARDING: OnboardingSurfaceState = Object.freeze({
   ...CLOSED_ONBOARDING,
   initialized: true,
   loading: false,
+  hasSuccessfulLoad: true,
   readiness: Object.freeze({ provider: true, trainingData: true, intake: true }),
 });
 
@@ -38,20 +41,33 @@ export interface OnboardingSlice {
 }
 
 export function setupReady(state: Pick<EnduragentState, "onboarding" | "settings">): boolean {
-  const { initialized, loading, loadUnavailable, readiness } = state.onboarding;
-  return (
-    repairRequiredCredential(state.settings.credentials) === null &&
-    initialized &&
-    !loading &&
-    !loadUnavailable &&
-    readiness.provider &&
-    readiness.trainingData &&
-    readiness.intake
-  );
+  return setupDisposition(state) === "satisfied";
+}
+
+export type SetupDisposition = "unknown" | "required" | "satisfied";
+
+export function setupDisposition(
+  state: Pick<EnduragentState, "onboarding" | "settings">,
+): SetupDisposition {
+  if (!state.onboarding.initialized) return "unknown";
+  if (
+    state.onboarding.completionRequired ||
+    repairRequiredCredential(state.settings.credentials) !== null
+  ) {
+    return "required";
+  }
+  if (!state.onboarding.hasSuccessfulLoad) {
+    return state.onboarding.loadUnavailable ? "required" : "unknown";
+  }
+  return "satisfied";
 }
 
 export function setupRequired(state: Pick<EnduragentState, "onboarding" | "settings">): boolean {
-  return !setupReady(state);
+  return setupDisposition(state) === "required";
+}
+
+export function setupBlocked(state: Pick<EnduragentState, "onboarding" | "settings">): boolean {
+  return setupDisposition(state) !== "satisfied";
 }
 
 export const createOnboardingSlice: StateCreator<EnduragentState, [], [], OnboardingSlice> = (

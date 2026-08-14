@@ -2,10 +2,16 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Shell } from "../src/app/Shell.js";
+import type { OnboardingController } from "../src/onboarding/controller.js";
 import type { CredentialSettingsState } from "../src/settings/credential-controller.js";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
 import { resetChatStream } from "../src/state/chat-stream.js";
-import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice.js";
+import {
+  CLOSED_ONBOARDING,
+  READY_ONBOARDING,
+  setupBlocked,
+  setupRequired,
+} from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 
 const REPAIR_REQUIRED_CREDENTIALS: CredentialSettingsState = {
@@ -18,6 +24,14 @@ const REPAIR_REQUIRED_CREDENTIALS: CredentialSettingsState = {
   recoveryAvailable: false,
   focus: null,
 };
+
+const REQUIRED_ONBOARDING = Object.freeze({
+  ...CLOSED_ONBOARDING,
+  open: true,
+  initialized: true,
+  loading: false,
+  completionRequired: true,
+});
 
 function stubActions(): ChatActions {
   return {
@@ -146,10 +160,89 @@ describe("shell", () => {
     expect(onReady).toHaveBeenCalledTimes(1);
   });
 
-  it("replaces the shell with the setup gate while setup is required", () => {
+  it("keeps a neutral shell while the setup decision is unknown", () => {
     useEnduragentStore.setState({ onboarding: CLOSED_ONBOARDING });
     render(<Shell onReady={() => {}} />);
 
+    expect(setupRequired(useEnduragentStore.getState())).toBe(false);
+    expect(setupBlocked(useEnduragentStore.getState())).toBe(true);
+    expect(document.querySelector('[data-shell="unknown"]')).not.toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Checking setup…");
+    expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
+    expect(document.querySelector("[data-setup-host]")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Main navigation" })).toBeNull();
+    expect(screen.queryByLabelText("Coaching conversation")).toBeNull();
+    expect(document.querySelector("textarea#message")).toBeNull();
+  });
+
+  it("keeps an initialized state without a committed setup load neutral", () => {
+    useEnduragentStore.setState({
+      onboarding: { ...CLOSED_ONBOARDING, initialized: true, loading: false },
+    });
+    render(<Shell onReady={() => {}} />);
+
+    expect(document.querySelector('[data-shell="unknown"]')).not.toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Checking setup…");
+    expect(document.querySelector("[data-setup-host]")).toBeNull();
+    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
+    expect(document.querySelector("textarea#message")).toBeNull();
+  });
+
+  it("keeps the known app shell mounted while setup status refreshes", () => {
+    useEnduragentStore.setState({
+      onboarding: { ...READY_ONBOARDING, loading: true },
+    });
+    render(<Shell onReady={() => {}} />);
+
+    expect(setupRequired(useEnduragentStore.getState())).toBe(false);
+    expect(setupBlocked(useEnduragentStore.getState())).toBe(false);
+    expect(document.querySelector('[data-shell="app"]')).not.toBeNull();
+    expect(document.querySelector('[data-setup-host="gate"]')).toBeNull();
+    expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled();
+    expect(screen.getByLabelText("Message your coach")).toBeEnabled();
+  });
+
+  it("keeps the known app shell mounted when a refresh becomes unavailable", () => {
+    useEnduragentStore.setState({
+      onboarding: { ...READY_ONBOARDING, loadUnavailable: true },
+    });
+    render(<Shell onReady={() => {}} />);
+
+    expect(document.querySelector('[data-shell="app"]')).not.toBeNull();
+    expect(document.querySelector('[data-setup-host="gate"]')).toBeNull();
+    expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled();
+    expect(screen.getByLabelText("Message your coach")).toBeEnabled();
+  });
+
+  it("routes an unavailable initial decision to the setup recovery gate", () => {
+    useEnduragentStore.setState({
+      onboarding: {
+        ...CLOSED_ONBOARDING,
+        open: true,
+        initialized: true,
+        loading: false,
+        loadUnavailable: true,
+      },
+    });
+    render(<Shell onReady={() => {}} />);
+
+    expect(document.querySelector('[data-shell="gate"]')).not.toBeNull();
+    expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Retry setup status" })).toBeEnabled();
+    expect(document.querySelector("[data-setup-readiness]")).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Main navigation" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
+    expect(document.querySelector("textarea#message")).toBeNull();
+  });
+
+  it("replaces the shell with the setup gate while setup is required", () => {
+    useEnduragentStore.setState({ onboarding: REQUIRED_ONBOARDING });
+    render(<Shell onReady={() => {}} />);
+
+    expect(setupRequired(useEnduragentStore.getState())).toBe(true);
+    expect(setupBlocked(useEnduragentStore.getState())).toBe(true);
     expect(document.querySelectorAll('[data-setup-host="gate"]')).toHaveLength(1);
     expect(document.querySelectorAll("#setup-panel-title")).toHaveLength(1);
     expect(document.querySelector('[data-shell="gate"]')).not.toBeNull();
@@ -158,13 +251,14 @@ describe("shell", () => {
     expect(screen.queryByLabelText("Coaching conversation")).toBeNull();
     expect(document.querySelector("div.thread")).toBeNull();
     expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
     expect(document.querySelector("textarea#message")).toBeNull();
   });
 
   it("ignores the persisted destination while setup is required", () => {
     useEnduragentStore.setState({
       activeView: "training",
-      onboarding: { ...CLOSED_ONBOARDING, open: true },
+      onboarding: REQUIRED_ONBOARDING,
     });
     render(<Shell onReady={() => {}} />);
 
@@ -179,7 +273,7 @@ describe("shell", () => {
   it("holds the gate even when the stored destination is Settings", () => {
     useEnduragentStore.setState({
       activeView: "settings",
-      onboarding: CLOSED_ONBOARDING,
+      onboarding: REQUIRED_ONBOARDING,
     });
     render(<Shell onReady={() => {}} />);
 
@@ -190,7 +284,7 @@ describe("shell", () => {
   });
 
   it("offers no dismiss, skip or close control on the gate", () => {
-    useEnduragentStore.setState({ onboarding: CLOSED_ONBOARDING });
+    useEnduragentStore.setState({ onboarding: REQUIRED_ONBOARDING });
     render(<Shell onReady={() => {}} />);
 
     const gate = document.querySelector('[data-setup-host="gate"]');
@@ -203,12 +297,25 @@ describe("shell", () => {
     expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
   });
 
-  it("drops the gate and mounts the shell when setup completes", () => {
+  it("holds the gate at three ready until setup completion is acknowledged", () => {
     const onReady = vi.fn<() => void>();
-    useEnduragentStore.setState({ onboarding: CLOSED_ONBOARDING });
+    useEnduragentStore.setState({ onboarding: REQUIRED_ONBOARDING });
     render(<Shell onReady={onReady} />);
 
     expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
+
+    act(() => {
+      useEnduragentStore.setState({
+        onboarding: {
+          ...READY_ONBOARDING,
+          open: true,
+          completionRequired: true,
+        },
+      });
+    });
+
+    expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Main navigation" })).toBeNull();
 
     act(() => {
       useEnduragentStore.setState({ onboarding: READY_ONBOARDING });
@@ -235,9 +342,35 @@ describe("shell", () => {
     expect(gate).not.toBeNull();
     const feedback = gate?.querySelector("[data-credential-feedback]");
     expect(feedback).not.toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Reload credential status" }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reload credential status" })).toBeEnabled();
+    expect(screen.queryByRole("navigation", { name: "Main navigation" })).toBeNull();
+  });
+
+  it("holds a repair-triggered gate after reconciliation until Start coaching", () => {
+    const requireCompletion = vi.fn(() => {
+      useEnduragentStore.setState((state) => ({
+        onboarding: { ...state.onboarding, completionRequired: true },
+      }));
+    });
+    useEnduragentStore.getState().bindOnboardingActions({
+      requireCompletion,
+    } as unknown as OnboardingController);
+    render(<Shell onReady={() => {}} />);
+
+    act(() => {
+      useEnduragentStore.getState().patchSettings({
+        credentials: REPAIR_REQUIRED_CREDENTIALS,
+      });
+    });
+
+    expect(requireCompletion).toHaveBeenCalledOnce();
+    expect(document.querySelector('[data-shell="gate"]')).not.toBeNull();
+
+    act(() => {
+      useEnduragentStore.getState().patchSettings({ credentials: { status: "closed" } });
+    });
+
+    expect(document.querySelector('[data-shell="gate"]')).not.toBeNull();
     expect(screen.queryByRole("navigation", { name: "Main navigation" })).toBeNull();
   });
 
