@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { createReadStream } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,6 +17,7 @@ import {
   validateSignaturePolicy,
 } from "../scripts/windows-installed-package.mjs";
 import {
+  observeProcessExit,
   validatePackagedSecondLaunch,
   validateSelfTestTerminal,
 } from "../scripts/verify-windows-packaged-self-test.mjs";
@@ -455,6 +457,36 @@ describe("packaged second launch", () => {
     } catch (error) {
       expect(String(error)).not.toContain(privateValue);
     }
+  });
+});
+
+describe("packaged application process exit", () => {
+  it("resolves on exit without waiting for close", async () => {
+    const child = new EventEmitter();
+    const exited = observeProcessExit(child as never);
+    child.emit("exit", 0, null);
+    await expect(exited).resolves.toEqual({ code: 0, signal: null });
+  });
+
+  it("does not resolve on close alone", async () => {
+    const child = new EventEmitter();
+    let settled = false;
+    const exited = observeProcessExit(child as never).then((result) => {
+      settled = true;
+      return result;
+    });
+    child.emit("close", 0, null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    child.emit("exit", 0, null);
+    await expect(exited).resolves.toEqual({ code: 0, signal: null });
+  });
+
+  it("rejects process errors without exposing their contents", async () => {
+    const child = new EventEmitter();
+    const exited = observeProcessExit(child as never);
+    child.emit("error", new Error("C:\\private\\process"));
+    await expect(exited).rejects.toThrow(/^packaged application process observation failed$/u);
   });
 });
 

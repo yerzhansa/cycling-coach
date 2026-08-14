@@ -5,6 +5,21 @@ export interface PackagedSecondLaunchResult {
   readonly stderr: string;
 }
 
+export interface ProcessExitSource {
+  once(event: "error", listener: (error: Error) => void): unknown;
+  once(
+    event: "exit",
+    listener: (code: number | null, signal: string | null) => void,
+  ): unknown;
+}
+
+export interface ProcessExitResult {
+  readonly code: number | null;
+  readonly signal: string | null;
+}
+
+export function observeProcessExit(child: ProcessExitSource): Promise<ProcessExitResult>;
+
 export interface PackagedSelfTestTerminal {
   readonly type: "self-test-terminal";
   readonly ok: true;

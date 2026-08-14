@@ -54,6 +54,21 @@ function capture(file, args, options = {}) {
   });
 }
 
+export function observeProcessExit(child) {
+  return new Promise((resolveExit, rejectExit) => {
+    child.once("error", () =>
+      rejectExit(new Error("packaged application process observation failed")),
+    );
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
+}
+
+function destroyProcessStdio(child) {
+  child.stdin?.destroy();
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+}
+
 function launchApplication(executable, args, environment) {
   const child = spawn(executable, args, {
     cwd: dirname(executable),
@@ -92,10 +107,7 @@ function launchApplication(executable, args, environment) {
   child.stderr.on("data", (chunk) => {
     stderr += String(chunk);
   });
-  const exited = new Promise((resolveExit, rejectExit) => {
-    child.once("error", rejectExit);
-    child.once("close", (code, signal) => resolveExit({ code, signal }));
-  });
+  const exited = observeProcessExit(child);
   return { child, ready, exited, output: () => ({ stdout, stderr }) };
 }
 
@@ -210,6 +222,7 @@ async function waitForCleanExit(running, rpcUrl) {
     delay(CLEAN_EXIT_TIMEOUT_MS).then(() => undefined),
   ]);
   checked(outcome !== undefined, "packaged Windows application did not stop cleanly");
+  destroyProcessStdio(running.child);
   checked(
     outcome.code === 0 && outcome.signal === null,
     "packaged Windows application exited unsuccessfully",
@@ -286,13 +299,17 @@ export async function runWindowsPackagedSelfTest(input = {}) {
     return Object.freeze({ successExit: 0, secondLaunchExit: 0, suites: terminal.suites });
   } finally {
     if (running !== undefined) {
-      const settled = await Promise.race([
-        running.exited.then(() => true),
-        delay(CLEANUP_GRACE_MS).then(() => false),
-      ]);
-      if (!settled) {
-        running.child.kill("SIGKILL");
-        await running.exited;
+      try {
+        const settled = await Promise.race([
+          running.exited.then(() => true),
+          delay(CLEANUP_GRACE_MS).then(() => false),
+        ]);
+        if (!settled) {
+          running.child.kill("SIGKILL");
+          await running.exited;
+        }
+      } finally {
+        destroyProcessStdio(running.child);
       }
     }
     await rm(scratch, { recursive: true, force: true });
