@@ -80,6 +80,8 @@ import {
   type ListArchivedConversationsRpcParams,
   type ListArchivedConversationsRpcResult,
   type GetRuntimeConfigRpcResult,
+  type VerifyIntervalsCredentialRpcParams,
+  type VerifyIntervalsCredentialRpcResult,
 } from "@enduragent/coach-contract";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
@@ -90,6 +92,17 @@ import {
   RuntimeAthleteOwnerRefusal,
   type RuntimeAthleteOwnerClaim,
 } from "./backfill.js";
+import {
+  assertRuntimeAthleteOwnerFromEvidence,
+  readIntervalsStoreOwnerState,
+  type IntervalsCredentialVerificationEvidence,
+  verifyIntervalsCredentialAtPathWithEvidence,
+} from "./account-identity.js";
+import {
+  createIntervalsCredentialApprovalStore,
+  digestIntervalsCredential,
+  normalizeIntervalsAthleteSelector,
+} from "./intervals-credential-approval.js";
 import { createCoachEngineAdapter } from "./coach-engine-adapter.js";
 import {
   createStoreRuntime,
@@ -389,7 +402,9 @@ function persistRuntimeConfig(
       llm.claude_cli = block;
     }
     if (request.llm.codex_agent !== undefined) {
-      const block: Record<string, unknown> = isRecord(llm.codex_agent) ? { ...llm.codex_agent } : {};
+      const block: Record<string, unknown> = isRecord(llm.codex_agent)
+        ? { ...llm.codex_agent }
+        : {};
       for (const [field, value] of Object.entries(request.llm.codex_agent)) {
         if (value === null) delete block[field];
         else block[field] = value;
@@ -529,8 +544,7 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
         run((bundle) => bundle.spendMeter.setDailySpendCap(dailyCapUsd)),
     },
     confirmations: {
-      peek: (chatId) =>
-        pendingReplacements === 0 ? active.confirmations.peek(chatId) : undefined,
+      peek: (chatId) => (pendingReplacements === 0 ? active.confirmations.peek(chatId) : undefined),
       confirm: (chatId, nonce) => run((bundle) => bundle.confirmations.confirm(chatId, nonce)),
       cancel: (chatId, nonce) =>
         pendingReplacements === 0 ? active.confirmations.cancel(chatId, nonce) : "none",
@@ -731,6 +745,8 @@ export async function createLocalCoachComposition(
   }
   const now = dependencies.now ?? Date.now;
   const ownerClock = { now, monotonicNow: () => performance.now() };
+  const intervalsCredentialApprovals = createIntervalsCredentialApprovalStore({ now });
+  let intervalsConfigRevision = 0;
   const ownerLookup = (intervals: Config["intervals"]) => ({
     apiKey: intervals.apiKey,
     athleteId: intervals.athleteId.length === 0 ? "0" : intervals.athleteId,
@@ -742,7 +758,15 @@ export async function createLocalCoachComposition(
     candidate: Config["intervals"],
     signal: AbortSignal,
     claimUnownedCandidateWithoutCurrent = false,
+    verificationEvidence?: IntervalsCredentialVerificationEvidence,
   ): Promise<RuntimeAthleteOwnerClaim | undefined> => {
+    if (verificationEvidence !== undefined) {
+      return await assertRuntimeAthleteOwnerFromEvidence(
+        input.context.store,
+        verificationEvidence,
+        signal,
+      );
+    }
     const approval = await (dependencies.assertRuntimeAthleteOwner ?? assertRuntimeAthleteOwner)(
       input.context.store,
       {
@@ -763,6 +787,60 @@ export async function createLocalCoachComposition(
       intervals: { ...activeConfig.intervals, athleteId: "0" },
     };
   }
+  const verifyIntervalsCredential = async (
+    request: VerifyIntervalsCredentialRpcParams,
+    signal: AbortSignal,
+  ): Promise<VerifyIntervalsCredentialRpcResult> => {
+    const configuredAthleteSelector = normalizeIntervalsAthleteSelector(
+      activeConfig.intervals.athleteId,
+    );
+    const configRevision = intervalsConfigRevision;
+    let athleteSelector = configuredAthleteSelector;
+    let usedCurrentAthleteFallback = false;
+    let verification = await verifyIntervalsCredentialAtPathWithEvidence(
+      join(input.home.storeDir, "store.db"),
+      {
+        apiKey: request.api_key,
+        athleteId: athleteSelector,
+        historyNewestDate: new Date(now()).toISOString().slice(0, 10),
+        clock: ownerClock,
+        signal,
+      },
+    );
+    if (
+      verification.status === "refused" &&
+      verification.reason === "credential-rejected" &&
+      configuredAthleteSelector !== "0"
+    ) {
+      signal.throwIfAborted();
+      athleteSelector = "0";
+      usedCurrentAthleteFallback = true;
+      verification = await verifyIntervalsCredentialAtPathWithEvidence(
+        join(input.home.storeDir, "store.db"),
+        {
+          apiKey: request.api_key,
+          athleteId: athleteSelector,
+          historyNewestDate: new Date(now()).toISOString().slice(0, 10),
+          clock: ownerClock,
+          signal,
+        },
+      );
+    }
+    if (verification.status === "refused") return { reason: verification.reason };
+    signal.throwIfAborted();
+    if (usedCurrentAthleteFallback && verification.evidence.ownerState.status === "unowned") {
+      return { reason: "owner-unresolved" };
+    }
+    return {
+      approval: intervalsCredentialApprovals.issue({
+        apiKey: request.api_key,
+        configuredAthleteSelector,
+        athleteSelector,
+        evidence: verification.evidence,
+        configRevision,
+      }),
+    };
+  };
   let runtime: LocalStoreRuntime | undefined;
   let reference: LocalReferenceRuntime | undefined;
   let closePromise: Promise<void> | undefined;
@@ -950,19 +1028,67 @@ export async function createLocalCoachComposition(
           }
         }
       }
-      const candidate = mergedRuntimeConfig(activeConfig, request);
+      let effectiveRequest = request;
+      let verificationEvidence: IntervalsCredentialVerificationEvidence | undefined;
+      if (request.intervals?.verification_approval !== undefined) {
+        const preliminaryCandidate = mergedRuntimeConfig(activeConfig, request);
+        let ownerState: Awaited<ReturnType<typeof readIntervalsStoreOwnerState>> | undefined;
+        try {
+          ownerState = await readIntervalsStoreOwnerState(input.context.store);
+        } catch {}
+        if (ownerState !== undefined) {
+          const approval = intervalsCredentialApprovals.consume({
+            approval: request.intervals.verification_approval,
+            credentialDigest: digestIntervalsCredential(preliminaryCandidate.intervals.apiKey),
+            configuredAthleteSelector: normalizeIntervalsAthleteSelector(
+              activeConfig.intervals.athleteId,
+            ),
+            ...(request.intervals.athlete_id === undefined
+              ? {}
+              : { requestedAthleteSelector: request.intervals.athlete_id }),
+            ownerState,
+            configRevision: intervalsConfigRevision,
+          });
+          if (approval !== undefined) {
+            verificationEvidence = approval.evidence;
+            if (
+              approval.athleteSelector !==
+              normalizeIntervalsAthleteSelector(preliminaryCandidate.intervals.athleteId)
+            ) {
+              if (input.env.INTERVALS_ATHLETE_ID !== undefined) {
+                return "managed-by-environment";
+              }
+              effectiveRequest = {
+                ...request,
+                intervals: {
+                  ...request.intervals,
+                  athlete_id: approval.athleteSelector,
+                },
+              };
+            }
+          }
+        }
+      }
+      const candidate = mergedRuntimeConfig(activeConfig, effectiveRequest);
       const activeAthleteId =
         activeConfig.intervals.athleteId.length === 0 ? "0" : activeConfig.intervals.athleteId;
       const candidateAthleteId =
         candidate.intervals.athleteId.length === 0 ? "0" : candidate.intervals.athleteId;
       const athleteIdChanged =
-        request.intervals?.athlete_id !== undefined && candidateAthleteId !== activeAthleteId;
+        effectiveRequest.intervals?.athlete_id !== undefined &&
+        candidateAthleteId !== activeAthleteId;
       const apiKeyChanged =
-        (request.intervals?.api_key !== undefined ||
-          request.intervals?.clear_credential === true) &&
+        (effectiveRequest.intervals?.api_key !== undefined ||
+          effectiveRequest.intervals?.clear_credential === true) &&
         candidate.intervals.apiKey !== activeConfig.intervals.apiKey;
+      const intervalsConfigChanged =
+        candidate.intervals.apiKey !== activeConfig.intervals.apiKey ||
+        candidate.intervals.athleteId !== activeConfig.intervals.athleteId;
       let pendingOwnerClaim: RuntimeAthleteOwnerClaim | undefined;
-      if (athleteIdChanged || (apiKeyChanged && request.intervals?.clear_credential !== true)) {
+      if (
+        athleteIdChanged ||
+        (apiKeyChanged && effectiveRequest.intervals?.clear_credential !== true)
+      ) {
         if (
           apiKeyChanged &&
           input.env.INTERVALS_API_KEY !== undefined &&
@@ -976,6 +1102,7 @@ export async function createLocalCoachComposition(
             candidate.intervals,
             signal,
             activeConfig.intervals.apiKey.length === 0 && candidate.intervals.apiKey.length > 0,
+            verificationEvidence,
           );
         } catch (error) {
           if (!(error instanceof RuntimeAthleteOwnerRefusal)) throw error;
@@ -1007,7 +1134,7 @@ export async function createLocalCoachComposition(
             ? undefined
             : captureRuntimeConfigFile(input.home.configDir);
         try {
-          persistConfig(input.home.configDir, candidate, request, activeConfig);
+          persistConfig(input.home.configDir, candidate, effectiveRequest, activeConfig);
           if (chatGptProfileClear) {
             deleteStoredProfile(join(input.home.configDir, "auth-profiles.json"), "openai-codex");
           }
@@ -1026,6 +1153,7 @@ export async function createLocalCoachComposition(
           throw error;
         }
         activeConfig = candidate;
+        if (intervalsConfigChanged) intervalsConfigRevision += 1;
         activeTimezone = replacement.timezone;
         return replacement;
       });
@@ -1118,6 +1246,7 @@ export async function createLocalCoachComposition(
           readArchivedTranscriptPage: (request) =>
             reconfigurable.getArchivedTranscriptPage(request),
           applyRuntimeConfig,
+          verifyIntervalsCredential,
           readRuntimeConfig: () =>
             runtimeConfigSnapshot(input.home.configDir, activeConfig, input.env, activeTimezone),
         },

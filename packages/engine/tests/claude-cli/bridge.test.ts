@@ -13,11 +13,34 @@ import {
   type ClaudeCliBridgePorts,
 } from "../../src/agent/claude-cli/bridge.js";
 import { NOT_SIGNED_IN_MESSAGE } from "../../src/agent/claude-cli/errors.js";
+import {
+  type ClaudeLaunchPurpose,
+  type ClaudeWorkingAreaPort,
+} from "../../src/agent/claude-cli/working-area.js";
 import type { ModelStreamActivity } from "../../src/sport.js";
 import { createScriptedQuery } from "./helpers/frame-script.js";
+import { fixedClaudeWorkingArea } from "./helpers/working-area.js";
 
 const SENTINEL = "sk-ant-sentinel-bridge-0000";
 const BINARY = "/Users/tester/.local/bin/claude";
+const WORKING_AREA = "/Users/tester/Library/Caches/Enduragent/claude";
+
+function recordingWorkingArea(): {
+  workingArea: ClaudeWorkingAreaPort;
+  purposes: ClaudeLaunchPurpose[];
+} {
+  const purposes: ClaudeLaunchPurpose[] = [];
+  return {
+    purposes,
+    workingArea: {
+      cacheKey: WORKING_AREA,
+      async prepareForLaunch(purpose) {
+        purposes.push(purpose);
+        return { cwd: WORKING_AREA, assertCurrent() {} };
+      },
+    },
+  };
+}
 
 function baseEnv(): NodeJS.ProcessEnv {
   return {
@@ -59,6 +82,7 @@ function ports(
   return {
     ports: {
       runtime: { binaryPath: BINARY, billing: "subscription" },
+      workingArea: fixedClaudeWorkingArea(WORKING_AREA),
       baseEnv: baseEnv(),
       query: scripted.query,
       ...overrides,
@@ -87,6 +111,7 @@ describe("claudeCliGenerateText option construction", () => {
     for (const options of harness.state.options) {
       expect(options.pathToClaudeCodeExecutable).toBe(BINARY);
       expect(options.model).toBe("haiku");
+      expect(options.cwd).toBe(WORKING_AREA);
       const env = options.env as Record<string, string>;
       expect(env.ANTHROPIC_API_KEY).toBeUndefined();
       expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
@@ -399,12 +424,36 @@ describe("error normalization", () => {
 
 describe("subprocess death", () => {
   it("rebuilds and replays the generation exactly once", async () => {
-    const harness = ports(["die-mid-stream", "happy-turn"]);
+    const area = recordingWorkingArea();
+    const harness = ports(["die-mid-stream", "happy-turn"], {
+      workingArea: area.workingArea,
+    });
     const result = await claudeCliGenerateText(generateOpts(), harness.ports);
 
     expect(harness.state.calls).toBe(2);
     expect(harness.state.scripts).toEqual(["die-mid-stream", "happy-turn"]);
+    expect(harness.state.options.map((options) => options.cwd)).toEqual([
+      WORKING_AREA,
+      WORKING_AREA,
+    ]);
+    expect(area.purposes).toEqual(["rebuild", "retry"]);
     expect(result.text).toBe("Easy spin today.");
+  });
+
+  it("fails before querying when the private working area cannot be prepared", async () => {
+    const harness = ports(["happy-turn"], {
+      workingArea: {
+        cacheKey: WORKING_AREA,
+        async prepareForLaunch() {
+          throw new Error("private working area unavailable");
+        },
+      },
+    });
+
+    await expect(claudeCliGenerateText(generateOpts(), harness.ports)).rejects.toThrow(
+      "private working area unavailable",
+    );
+    expect(harness.state.calls).toBe(0);
   });
 
   it("surfaces a second death as a terminal NetworkError", async () => {

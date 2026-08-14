@@ -324,7 +324,7 @@ describe("sidebar setup gating", () => {
     expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveClass("bg-warn");
   });
 
-  it("says setup is being checked instead of waiting while status is unknown", () => {
+  it("says setup is being checked only while initial status is unknown", () => {
     render(<Sidebar />);
 
     update({ onboarding: CLOSED_ONBOARDING });
@@ -335,15 +335,17 @@ describe("sidebar setup gating", () => {
 
     update({ onboarding: { ...READY_ONBOARDING, loadUnavailable: true } });
 
-    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "checking");
+    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "ready");
+    expect(setupReadiness()).toHaveTextContent("Ready");
   });
 
-  it("waits when initialized setup is only partially ready", () => {
+  it("waits when initialized setup is partially ready and still requires completion", () => {
     render(<Sidebar />);
 
     update({
       onboarding: {
         ...READY_ONBOARDING,
+        completionRequired: true,
         readiness: { provider: true, trainingData: true, intake: false },
       },
     });

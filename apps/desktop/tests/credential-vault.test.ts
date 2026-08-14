@@ -28,6 +28,7 @@ import {
 
 const roots: string[] = [];
 const posixIt = it.skipIf(process.platform === "win32");
+const VERIFICATION_APPROVAL = "b".repeat(64);
 
 async function temporaryRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "desktop-vault-"));
@@ -1078,6 +1079,92 @@ describe("desktop credential vault", () => {
       state: "configured",
       runtimeState: "failed",
     });
+  });
+
+  it("forwards an approval once without persisting or replaying it", async () => {
+    const root = await temporaryRoot();
+    const encryptionPort = encryption();
+    const applyCredential = vi.fn(async () => {});
+    const reapplyCredential = vi.fn(async () => "active" as const);
+    const vault = createCredentialVault({
+      root,
+      encryption: encryptionPort,
+      applyCredential,
+      reapplyCredential,
+    });
+
+    await expect(
+      vault.writeCredential(
+        { slot: "intervals-icu", value: "synthetic-intervals-key" },
+        { verificationApproval: VERIFICATION_APPROVAL },
+      ),
+    ).resolves.toEqual({
+      slot: "intervals-icu",
+      status: "configured",
+      runtimeReady: true,
+    });
+    expect(applyCredential).toHaveBeenCalledWith(
+      "intervals-icu",
+      "synthetic-intervals-key",
+      undefined,
+      VERIFICATION_APPROVAL,
+    );
+    const persisted = await readFile(join(root, "intervals-icu.bin"));
+    expect(encryptionPort.decryptString(persisted)).toBe("synthetic-intervals-key");
+    expect(persisted.includes(Buffer.from(VERIFICATION_APPROVAL))).toBe(false);
+    expect(JSON.stringify(await vault.credentialStatuses())).not.toContain(VERIFICATION_APPROVAL);
+
+    applyCredential.mockClear();
+    await vault.reapplyConfigured();
+
+    expect(applyCredential).not.toHaveBeenCalled();
+    expect(reapplyCredential).toHaveBeenCalledWith(
+      "intervals-icu",
+      "synthetic-intervals-key",
+      ["intervals-icu"],
+    );
+    expect(JSON.stringify(reapplyCredential.mock.calls)).not.toContain(VERIFICATION_APPROVAL);
+  });
+
+  it("keeps legacy Intervals activation tokenless when no approval is present", async () => {
+    const root = await temporaryRoot();
+    const applyCredential = vi.fn(async () => {});
+    const vault = createCredentialVault({ root, encryption: encryption(), applyCredential });
+
+    await expect(
+      vault.writeCredential(
+        { slot: "intervals-icu", value: "synthetic-intervals-key" },
+        { rollbackOnRuntimeRefusal: true },
+      ),
+    ).resolves.toEqual({
+      slot: "intervals-icu",
+      status: "configured",
+      runtimeReady: true,
+    });
+    expect(applyCredential.mock.calls).toEqual([
+      ["intervals-icu", "synthetic-intervals-key"],
+    ]);
+  });
+
+  it("refuses approval data outside an explicit Intervals activation", async () => {
+    const root = await temporaryRoot();
+    const applyCredential = vi.fn(async () => {});
+    const vault = createCredentialVault({ root, encryption: encryption(), applyCredential });
+
+    await expect(
+      vault.writeCredential(
+        { slot: "anthropic", value: "synthetic-model-key" },
+        { verificationApproval: VERIFICATION_APPROVAL },
+      ),
+    ).resolves.toEqual({ slot: "anthropic", status: "refused", reason: "invalid-input" });
+    await expect(
+      vault.writeCredential(
+        { slot: "intervals-icu", value: "synthetic-intervals-key" },
+        { activate: false, verificationApproval: VERIFICATION_APPROVAL },
+      ),
+    ).resolves.toEqual({ slot: "intervals-icu", status: "refused", reason: "invalid-input" });
+    expect(applyCredential).not.toHaveBeenCalled();
+    await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("routes passive replay separately from an explicit credential selection", async () => {

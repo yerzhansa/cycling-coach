@@ -352,13 +352,10 @@ async function _runLlmPrompts(
         ? prevClaudeCli.config_dir
         : undefined;
     const prevBilling =
-      provider === prevProvider && prevClaudeCli.billing === "api-key"
-        ? "api-key"
-        : "subscription";
+      provider === prevProvider && prevClaudeCli.billing === "api-key" ? "api-key" : "subscription";
 
-    const { runClaudeCliSetupStep, CLAUDE_CLI_API_KEY_OPT_IN_PROMPT } = await import(
-      "./claude-cli-setup.js"
-    );
+    const { runClaudeCliSetupStep, CLAUDE_CLI_API_KEY_OPT_IN_PROMPT } =
+      await import("./claude-cli-setup.js");
     const outcome = await runClaudeCliSetupStep(
       {
         ...(prevBinaryPath === undefined ? {} : { binaryPath: prevBinaryPath }),
@@ -367,6 +364,7 @@ async function _runLlmPrompts(
         model,
       },
       {
+        forbiddenRoots: [CONFIG_DIR],
         note: (line) => log.info(line),
         confirmApiKeyOptIn: async () => {
           const answer = await confirm({

@@ -47,10 +47,6 @@ function manualPaintScheduler(): {
   };
 }
 
-function actionCopy(): string {
-  return document.querySelector<HTMLElement>(".onboarding-action-status")?.textContent ?? "";
-}
-
 function expectChatGptPhase(phase: string, copy: string): void {
   const status = panel("chatgpt")?.querySelector<HTMLElement>("[data-chatgpt-phase]");
   expect(status?.dataset.chatgptPhase).toBe(phase);
@@ -70,7 +66,29 @@ describe("ChatGPT onboarding lifecycle", () => {
     resetOnboardingStore();
   });
 
-  it("renders every phase and replaces generic progress at exactly three seconds", async () => {
+  it("does not restore transient Ready copy when setup opens with ChatGPT ready", async () => {
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    const wizard = mountWizard({ bridge });
+
+    await wizard.open();
+
+    expect(rowState("ai")).toBe("ready");
+    expect(document.querySelector(".onboarding-action-status")).toBeNull();
+    wizard.controller.dispose();
+  });
+
+  it("restores Signed in copy when setup opens before ChatGPT activation", async () => {
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.chatGptStatus.mockResolvedValue({ state: "configured", runtimeReady: false });
+    const wizard = mountWizard({ bridge });
+
+    await wizard.open();
+
+    expectChatGptPhase("signed-in", "Signed in");
+    wizard.controller.dispose();
+  });
+
+  it("renders every phase inside the ChatGPT row", async () => {
     const login = deferred<void>();
     const activation = deferred<void>();
     const paint = manualPaintScheduler();
@@ -92,11 +110,9 @@ describe("ChatGPT onboarding lifecycle", () => {
     await wizard.open();
     await chooseLane(user, "openai-codex");
 
-    vi.useFakeTimers();
     act(() => {
       wizard.controller.startChatGptLogin();
     });
-    expect(actionCopy()).toBe("Working…");
     expectChatGptPhase("waiting-for-browser", "Waiting for browser…");
 
     act(() => {
@@ -104,14 +120,8 @@ describe("ChatGPT onboarding lifecycle", () => {
         operationId: "login-phase-operation",
         phase: "waiting-for-browser",
       });
-      vi.advanceTimersByTime(2_999);
     });
-    expect(actionCopy()).toBe("Working…");
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(actionCopy()).toBe("Waiting for browser…");
+    expectChatGptPhase("waiting-for-browser", "Waiting for browser…");
 
     act(() => {
       bridge.emitChatGptProgress({
@@ -119,24 +129,20 @@ describe("ChatGPT onboarding lifecycle", () => {
         phase: "completing-sign-in",
       });
     });
-    expect(actionCopy()).toBe("Completing sign-in…");
     expectChatGptPhase("completing-sign-in", "Completing sign-in…");
 
     login.resolve(undefined);
     await flushAsyncWork();
-    expect(actionCopy()).toBe("Signed in");
     expectChatGptPhase("signed-in", "Signed in");
     expect(bridge.applyLlmSelection).not.toHaveBeenCalled();
 
     act(() => {
       paint.runNext();
     });
-    expect(actionCopy()).toBe("Activating coach…");
     expectChatGptPhase("activating-coach", "Activating coach…");
 
     activation.resolve(undefined);
     await flushAsyncWork();
-    expect(actionCopy()).toBe("Ready");
     expect(rowState("ai")).toBe("ready");
     expect(panel("chatgpt")).toBeNull();
     wizard.controller.dispose();
@@ -228,7 +234,7 @@ describe("ChatGPT onboarding lifecycle", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
     await flushAsyncWork();
-    expect(actionCopy()).toBe("Signed in");
+    expectChatGptPhase("signed-in", "Signed in");
     expect(bridge.chatGptLogin).toHaveBeenCalledOnce();
 
     act(() => {
@@ -243,7 +249,7 @@ describe("ChatGPT onboarding lifecycle", () => {
     expect(bridge.applyLlmSelection).toHaveBeenCalledTimes(2);
     expect(bridge.chatGptLogin).toHaveBeenCalledOnce();
     expect(wizard.controller.state().chatGptRuntimeState).toBe("ready");
-    expect(actionCopy()).toBe("Ready");
+    expect(rowState("ai")).toBe("ready");
     wizard.controller.dispose();
   });
 
@@ -273,7 +279,7 @@ describe("ChatGPT onboarding lifecycle", () => {
     });
 
     expect(wizard.controller.state().chatGptRuntimeState).toBe("ready");
-    expect(actionCopy()).toBe("Ready");
+    expect(rowState("ai")).toBe("ready");
     expect(bridge.applyLlmSelection).toHaveBeenCalledOnce();
     expect(bridge.chatGptLogin).not.toHaveBeenCalled();
     wizard.controller.dispose();
@@ -311,7 +317,7 @@ describe("ChatGPT onboarding lifecycle", () => {
       await Promise.resolve();
     });
     expect(wizard.controller.state().chatGptCredentialState).toBe("stored");
-    expect(actionCopy()).toBe("Signed in");
+    expectChatGptPhase("signed-in", "Signed in");
 
     act(() => {
       paint.runNext();
@@ -328,7 +334,7 @@ describe("ChatGPT onboarding lifecycle", () => {
       chatGptCredentialState: "stored",
       chatGptRuntimeState: "ready",
     });
-    expect(actionCopy()).toBe("Ready");
+    expect(rowState("ai")).toBe("ready");
     wizard.controller.dispose();
   });
 });

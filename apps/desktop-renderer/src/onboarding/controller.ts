@@ -67,6 +67,8 @@ export interface OnboardingSurfaceState {
   readonly initialized: boolean;
   readonly loading: boolean;
   readonly loadUnavailable: boolean;
+  readonly hasSuccessfulLoad: boolean;
+  readonly completionRequired: boolean;
   readonly wizard: OnboardingState;
   readonly statuses: readonly CredentialSlotStatus[];
   readonly configuration: OnboardingLlmConfiguration | null;
@@ -128,6 +130,7 @@ export interface OnboardingActions {
 export interface OnboardingController extends OnboardingActions {
   open(): Promise<void>;
   refresh(): Promise<void>;
+  requireCompletion(): void;
   close(): void;
   dispose(): void;
   state(): OnboardingState;
@@ -168,6 +171,7 @@ export const ONBOARDING_STATUS_COLD_START_TIMEOUT_MS = 8_000;
 export const ONBOARDING_STATUS_LOAD_ATTEMPTS = 4;
 export const ONBOARDING_STATUS_RETRY_BASE_DELAY_MS = 500;
 export const ONBOARDING_STATUS_RETRY_MAX_DELAY_MS = 2_000;
+export const CLAUDE_CLI_STATUS_TRANSPORT_TIMEOUT_MS = 75_000;
 
 export function onboardingStatusRetryDelayMs(attempt: number): number {
   const delay = ONBOARDING_STATUS_RETRY_BASE_DELAY_MS * 2 ** attempt;
@@ -250,7 +254,6 @@ function persistedIntakeMatchesDraft(
     persisted.continuous_distance_capable === expected.continuous_distance_capable &&
     persisted.open_water_comfort === expected.open_water_comfort &&
     persisted.prior_bsi === expected.prior_bsi &&
-    persisted.clinician_cleared === expected.clinician_cleared &&
     persisted.injury_status === expected.injury_status
   );
 }
@@ -268,7 +271,7 @@ const CREDENTIAL_WRITE_REFUSAL_ERRORS = {
 const INTERVALS_REFUSAL_ERRORS = {
   "clipboard-unavailable": "intervals-clipboard-unavailable",
   "clipboard-clear-failed": "intervals-clipboard-clear-failed",
-  "invalid-key-format": "intervals-key-rejected",
+  "invalid-key-format": "intervals-clipboard-unavailable",
   "credential-rejected": "intervals-key-rejected",
   "malformed-athlete-response": "intervals-validation-unavailable",
   "validation-timeout": "intervals-validation-unavailable",
@@ -336,6 +339,7 @@ export function createOnboardingController(
   let initialized = false;
   let loading = false;
   let loadUnavailable = false;
+  let completionRequired = false;
   let hasSuccessfulLoad = false;
   let durableTrainingData = false;
   let intakeSaved = false;
@@ -378,6 +382,7 @@ export function createOnboardingController(
   const activeProviderIsReady = (): boolean => {
     const active = llmConfiguration?.active ?? null;
     if (active?.provider === "codex-agent" && options.codexAgentSupported === false) return false;
+    if (active?.provider === "claude-cli" && state.claudeCliState === null) return true;
     return selectedProviderReady(state, active, active);
   };
 
@@ -388,18 +393,21 @@ export function createOnboardingController(
   });
 
   const publish = (): void => {
+    const readiness = currentReadiness();
     options.view.render({
       open: presenting,
       initialized,
       loading,
       loadUnavailable,
+      hasSuccessfulLoad,
+      completionRequired,
       wizard: state,
       statuses: credentialStatuses,
       configuration: llmConfiguration ?? null,
       draft: llmDraft ?? null,
       rideImport: rideImportState,
       focusSeq,
-      readiness: currentReadiness(),
+      readiness,
       lastCommit,
       actionStatus,
     });
@@ -585,17 +593,6 @@ export function createOnboardingController(
     options.focusOpener();
   };
 
-  const loadClaudeCliStatus = (expectedVisit: number): void => {
-    void options.bridge.claudeCliStatus().then(
-      (status) => {
-        if (disposed || visit !== expectedVisit || !presenting) return;
-        state = withClaudeCliStatus(state, status);
-        publish();
-      },
-      () => undefined,
-    );
-  };
-
   const refreshStatuses = async (expectedVisit: number): Promise<boolean> => {
     const expectedAuthGeneration = authGeneration;
     const refreshGeneration = ++statusRefreshGeneration;
@@ -761,6 +758,33 @@ export function createOnboardingController(
     publish();
   };
 
+  const checkClaudeCliForSelection = (forceRecheck: boolean): void => {
+    if (disposed || !presenting || setupStatusBlocksMutations() || state.busy) return;
+    const expectedVisit = visit;
+    actionStatus = null;
+    state = withBusy(state, true);
+    publish();
+    const request = forceRecheck
+      ? options.bridge.claudeCliRecheck()
+      : options.bridge.claudeCliStatus();
+    void request.then(
+      (status) => {
+        if (disposed || visit !== expectedVisit || !presenting) return;
+        state = withBusy(withClaudeCliStatus(state, status), false);
+        publish();
+        const ready = status.state === "ready" || status.state === "ready-api-key";
+        if (ready && llmDraft?.provider.provider === "claude-cli" && !selectedProviderIsReady()) {
+          void saveModelKey();
+        }
+      },
+      () => {
+        if (disposed || visit !== expectedVisit || !presenting) return;
+        state = withBusy(state, false);
+        publish();
+      },
+    );
+  };
+
   const connectTrainingData = async (): Promise<void> => {
     if (
       disposed ||
@@ -853,6 +877,7 @@ export function createOnboardingController(
       return;
     }
     completed = true;
+    completionRequired = false;
     publish();
     options.onComplete(toOnboardingCompletion(state));
     options.onReady?.();
@@ -971,6 +996,16 @@ export function createOnboardingController(
     completed = false;
     lastCommit = null;
     actionStatus = null;
+    const finishUnavailableLoad = (): void => {
+      loadUnavailable = true;
+      state = withImportedRideFileCount(state, rideImports.importedFileCount());
+      initialized = true;
+      loading = false;
+      setRideImportPresentation(true);
+      focusTitle();
+      publish();
+      opening = false;
+    };
     const coldStart = retryWhileStarting && !hasSuccessfulLoad;
     const attemptTimeoutMs = coldStart
       ? ONBOARDING_STATUS_COLD_START_TIMEOUT_MS
@@ -1017,14 +1052,7 @@ export function createOnboardingController(
       configurationResult.status !== "fulfilled" ||
       setupResult.status !== "fulfilled"
     ) {
-      loadUnavailable = true;
-      state = withImportedRideFileCount(state, rideImports.importedFileCount());
-      initialized = true;
-      loading = false;
-      setRideImportPresentation(true);
-      focusTitle();
-      publish();
-      opening = false;
+      finishUnavailableLoad();
       return;
     }
     const statuses = statusesResult.value;
@@ -1076,9 +1104,12 @@ export function createOnboardingController(
       intakeComplete(state.intake) &&
       !intakeSaved;
     durableTrainingData = setupResult.value.durableTrainingData;
-    const restoredPhase = chatGptUiPhase(state);
-    if (restoredPhase === "signed-in" || restoredPhase === "ready") {
-      actionStatus = restoredPhase;
+    const readiness = currentReadiness();
+    if (!readiness.provider || !readiness.trainingData || !readiness.intake) {
+      completionRequired = true;
+    }
+    if (chatGptUiPhase(state) === "signed-in") {
+      actionStatus = "signed-in";
     }
     if (llmDraft === undefined) state = withError(state, "configuration-unavailable");
     state = withImportedRideFileCount(state, rideImports.importedFileCount());
@@ -1093,7 +1124,6 @@ export function createOnboardingController(
     if (shouldResumeIntakePersistence) {
       void persistIntake(intakeRevision, toDesktopIntakeFlags(state.intake));
     }
-    loadClaudeCliStatus(openVisit);
   };
 
   return {
@@ -1104,6 +1134,11 @@ export function createOnboardingController(
     refresh(): Promise<void> {
       if (disposed || opening) return Promise.resolve();
       return load(false, false);
+    },
+    requireCompletion(): void {
+      if (disposed || completionRequired) return;
+      completionRequired = true;
+      publish();
     },
     close,
     dispose(): void {
@@ -1343,23 +1378,7 @@ export function createOnboardingController(
       beginChatGptActivation(parsedSelection.selection, visit);
     },
     recheckClaudeCli(): void {
-      if (disposed || !presenting || setupStatusBlocksMutations() || state.busy) return;
-      const recheckVisit = visit;
-      actionStatus = null;
-      state = withBusy(state, true);
-      publish();
-      void options.bridge.claudeCliRecheck().then(
-        (status) => {
-          if (disposed || visit !== recheckVisit || !presenting) return;
-          state = withBusy(withClaudeCliStatus(state, status), false);
-          publish();
-        },
-        () => {
-          if (disposed || visit !== recheckVisit || !presenting) return;
-          state = withBusy(state, false);
-          publish();
-        },
-      );
+      checkClaudeCliForSelection(true);
     },
     chooseImportFiles(): void {
       if (
@@ -1393,7 +1412,11 @@ export function createOnboardingController(
       const canActivateWithoutInput =
         provider === "claude-cli" &&
         (state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key");
-      if (canActivateWithoutInput && !selectedProviderIsReady()) void saveModelKey();
+      if (provider === "claude-cli" && !canActivateWithoutInput) {
+        checkClaudeCliForSelection(false);
+      } else if (canActivateWithoutInput && !selectedProviderIsReady()) {
+        void saveModelKey();
+      }
     },
     selectModel(model): void {
       if (setupStatusBlocksMutations() || llmDraft === undefined) return;

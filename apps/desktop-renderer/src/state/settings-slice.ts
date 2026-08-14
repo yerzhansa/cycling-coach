@@ -207,7 +207,11 @@ export const createSettingsSlice: StateCreator<EnduragentState, [], [], Settings
     set({ settingsPorts: ports });
   },
   patchSettings(patch) {
-    set({ settings: { ...get().settings, ...patch } });
+    const settings = { ...get().settings, ...patch };
+    if (repairRequiredCredential(settings.credentials) !== null) {
+      get().onboardingActions?.requireCompletion();
+    }
+    set({ settings });
   },
   beginSettingsMutation(owner) {
     if (settingsMutationActive(get().settings)) return null;
@@ -228,6 +232,7 @@ export const createSettingsSlice: StateCreator<EnduragentState, [], [], Settings
   closeSettingsPanes() {
     get().settingsPorts?.panes.close();
     const repairCredential = repairRequiredCredential(get().settings.credentials);
+    if (repairCredential !== null) get().onboardingActions?.requireCompletion();
     set({
       settings: {
         ...get().settings,

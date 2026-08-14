@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { ClaudeCliConfigError, type ClaudeAccountProbeResult } from "@enduragent/core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ClaudeCliConfigError,
+  ClaudeWorkingAreaError,
+  type ClaudeAccountProbeResult,
+  type ClaudeCliReadiness,
+  type ClaudeWorkingAreaPort,
+} from "@enduragent/core";
+import {
+  CLAUDE_CLI_STATUS_DEADLINE_MS,
   createClaudeCliStatus,
   readClaudeCliSettings,
   type ClaudeCliSettings,
@@ -12,6 +19,16 @@ import {
 } from "../src/main/onboarding-ipc.js";
 
 const BINARY = "/opt/homebrew/bin/claude";
+type EnsureReady = NonNullable<ClaudeCliStatusDependencies["ensureReady"]>;
+
+function fixedWorkingArea(cwd: string): ClaudeWorkingAreaPort {
+  return {
+    cacheKey: cwd,
+    async prepareForLaunch() {
+      return { cwd, assertCurrent() {} };
+    },
+  };
+}
 
 function settings(overrides: Partial<ClaudeCliSettings> = {}): ClaudeCliSettings {
   return { enabled: true, billing: "subscription", ...overrides };
@@ -26,6 +43,31 @@ function subscriptionProbe(): ClaudeAccountProbeResult {
   };
 }
 
+function subscriptionReadiness(): ClaudeCliReadiness {
+  return {
+    binaryPath: BINARY,
+    version: "2.9.0",
+    identityLine: "Signed in as athlete@synthetic.test - Claude Max subscription",
+    accountClass: "subscription",
+    email: "athlete@synthetic.test",
+    plan: "Max",
+  };
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((settle, fail) => {
+    resolve = settle;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 function harness(input: {
   readonly settings?: ClaudeCliSettings;
   readonly probe?: ClaudeAccountProbeResult;
@@ -35,19 +77,25 @@ function harness(input: {
   readonly platform?: NodeJS.Platform;
   readonly preflightMcpConfigTransform?: () => void;
   readonly applyRuntimeConfig?: (request: unknown) => Promise<void>;
+  readonly probeAccount?: NonNullable<ClaudeCliStatusDependencies["probeAccount"]>;
+  readonly ensureReady?: EnsureReady;
 }) {
   const resolveBinary = vi.fn(async () => (input.binary === undefined ? BINARY : input.binary));
   const probeVersion = vi.fn(async () => input.version ?? "2.9.0");
-  const probeAccount = vi.fn(async () => input.probe ?? subscriptionProbe());
+  const probeAccount = vi.fn(
+    input.probeAccount ?? (async () => input.probe ?? subscriptionProbe()),
+  );
   const preflightMcpConfigTransform = vi.fn(input.preflightMcpConfigTransform ?? (() => {}));
   const invalidateProbeCache = vi.fn();
   const applyRuntimeConfig = vi.fn(input.applyRuntimeConfig ?? (async () => {}));
+  const ensureReady = input.ensureReady === undefined ? undefined : vi.fn(input.ensureReady);
   const dependencies: ClaudeCliStatusDependencies = {
     resolveBinary,
     probeVersion,
     probeAccount,
     preflightMcpConfigTransform,
     invalidateProbeCache,
+    ...(ensureReady === undefined ? {} : { ensureReady }),
   };
   const readSettings = vi.fn(async () => input.settings ?? settings());
   const controller = createClaudeCliStatus({
@@ -55,6 +103,7 @@ function harness(input: {
     environment: () => input.environment ?? {},
     ...(input.platform === undefined ? {} : { platform: input.platform }),
     applyRuntimeConfig,
+    workingArea: fixedWorkingArea("/private/tmp/enduragent-claude-status-test"),
     dependencies,
   });
   return {
@@ -66,10 +115,15 @@ function harness(input: {
     invalidateProbeCache,
     applyRuntimeConfig,
     readSettings,
+    ensureReady,
   };
 }
 
 describe("desktop claude-cli status controller", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("reports a verified subscription identity as ready", async () => {
     const subject = harness({});
 
@@ -156,6 +210,46 @@ describe("desktop claude-cli status controller", () => {
     expect(subject.probeAccount).not.toHaveBeenCalled();
   });
 
+  it("reports a private working-area failure without exposing its path", async () => {
+    const controller = createClaudeCliStatus({
+      settings: () => settings(),
+      environment: () => ({}),
+      applyRuntimeConfig: async () => {},
+      workingArea: {
+        cacheKey: "private-test-key",
+        async prepareForLaunch() {
+          throw new ClaudeWorkingAreaError("permission-check", "permissions");
+        },
+      },
+      dependencies: {
+        resolveBinary: async () => BINARY,
+      },
+    });
+
+    await expect(controller.status()).resolves.toEqual({ state: "working-area-unavailable" });
+  });
+
+  it("refuses before probing when the configured Claude directory overlaps the working area", async () => {
+    const probeAccount = vi.fn(async () => subscriptionProbe());
+    const workspace = "/private/tmp/synthetic-home/.cache/enduragent/claude/workspace";
+    const controller = createClaudeCliStatus({
+      settings: () => settings({ configDir: workspace }),
+      environment: () => ({
+        HOME: "/private/tmp/synthetic-home",
+        XDG_CACHE_HOME: "/private/tmp/synthetic-home/.cache",
+      }),
+      platform: "linux",
+      applyRuntimeConfig: async () => {},
+      dependencies: {
+        resolveBinary: async () => BINARY,
+        probeAccount,
+      },
+    });
+
+    await expect(controller.status()).resolves.toEqual({ state: "working-area-unavailable" });
+    expect(probeAccount).not.toHaveBeenCalled();
+  });
+
   it("runs Windows readiness against the desktop environment and resolved .cmd shim", async () => {
     const environment = {
       Path: "C:\\Windows\\System32",
@@ -226,6 +320,7 @@ describe("desktop claude-cli status controller", () => {
       settings: () => settings(),
       environment: () => environment,
       applyRuntimeConfig: async () => {},
+      workingArea: fixedWorkingArea("/private/tmp/enduragent-claude-status-test"),
       dependencies: {
         resolveBinary: async () => BINARY,
         probeVersion: async () => "2.9.0",
@@ -250,6 +345,209 @@ describe("desktop claude-cli status controller", () => {
     expect(subject.invalidateProbeCache).toHaveBeenCalledOnce();
   });
 
+  it("coalesces concurrent status reads onto one account probe", async () => {
+    let settle!: (result: ClaudeAccountProbeResult) => void;
+    const probe = new Promise<ClaudeAccountProbeResult>((resolve) => {
+      settle = resolve;
+    });
+    const subject = harness({ probeAccount: async () => probe });
+
+    const first = subject.controller.status();
+    const second = subject.controller.status();
+
+    await vi.waitFor(() => expect(subject.probeAccount).toHaveBeenCalledOnce());
+    expect(subject.resolveBinary).toHaveBeenCalledOnce();
+    settle(subscriptionProbe());
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ state: "ready" }),
+      expect.objectContaining({ state: "ready" }),
+    ]);
+  });
+
+  it("rejects at the 72-second main deadline before the 75-second renderer deadline and starts a fresh status read", async () => {
+    vi.useFakeTimers();
+    const firstReadiness = deferred<ClaudeCliReadiness>();
+    const ensureReady = vi
+      .fn<EnsureReady>()
+      .mockImplementationOnce(() => firstReadiness.promise)
+      .mockResolvedValueOnce(subscriptionReadiness());
+    const subject = harness({ ensureReady });
+
+    const firstStatus = subject.controller.status();
+    const firstRejection = expect(firstStatus).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(CLAUDE_CLI_STATUS_DEADLINE_MS).toBeLessThan(75_000);
+
+    await vi.advanceTimersByTimeAsync(CLAUDE_CLI_STATUS_DEADLINE_MS);
+    await firstRejection;
+    await expect(subject.controller.status()).resolves.toMatchObject({ state: "ready" });
+    expect(ensureReady).toHaveBeenCalledTimes(2);
+
+    firstReadiness.resolve(subscriptionReadiness());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(subject.invalidateProbeCache).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an immediate status on the active 72-second generation when Retry is queued", async () => {
+    vi.useFakeTimers();
+    const firstReadiness = deferred<ClaudeCliReadiness>();
+    const ensureReady = vi
+      .fn<EnsureReady>()
+      .mockImplementationOnce(() => firstReadiness.promise)
+      .mockResolvedValueOnce(subscriptionReadiness());
+    const subject = harness({ ensureReady });
+
+    const activeStatus = subject.controller.status();
+    const activeRejection = expect(activeStatus).rejects.toMatchObject({ name: "TimeoutError" });
+    const recheck = subject.controller.recheck();
+    const immediateStatus = subject.controller.status();
+    const immediateRejection = expect(immediateStatus).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+
+    expect(immediateStatus).toBe(activeStatus);
+    await vi.advanceTimersByTimeAsync(CLAUDE_CLI_STATUS_DEADLINE_MS);
+    await activeRejection;
+    await immediateRejection;
+    await expect(recheck).resolves.toMatchObject({ state: "ready" });
+    expect(ensureReady).toHaveBeenCalledTimes(2);
+    expect(subject.invalidateProbeCache).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a forced recheck active when the timed-out raw generation rejects late", async () => {
+    vi.useFakeTimers();
+    const firstReadiness = deferred<ClaudeCliReadiness>();
+    const secondReadiness = deferred<ClaudeCliReadiness>();
+    const ensureReady = vi
+      .fn<EnsureReady>()
+      .mockImplementationOnce(() => firstReadiness.promise)
+      .mockImplementationOnce((input) => {
+        expect(input?.forceRecheck).toBe(true);
+        return secondReadiness.promise;
+      });
+    const subject = harness({ ensureReady });
+
+    const firstStatus = subject.controller.status();
+    const firstRejection = expect(firstStatus).rejects.toMatchObject({ name: "TimeoutError" });
+    const recheck = subject.controller.recheck();
+    expect(subject.controller.recheck()).toBe(recheck);
+
+    await vi.advanceTimersByTimeAsync(CLAUDE_CLI_STATUS_DEADLINE_MS);
+    await firstRejection;
+    expect(ensureReady).toHaveBeenCalledTimes(2);
+    expect(subject.invalidateProbeCache).toHaveBeenCalledOnce();
+
+    const joinedStatus = subject.controller.status();
+    expect(joinedStatus).not.toBe(recheck);
+    firstReadiness.reject(new Error("late synthetic rejection"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(subject.invalidateProbeCache).toHaveBeenCalledTimes(2);
+    expect(subject.controller.status()).toBe(joinedStatus);
+    expect(ensureReady).toHaveBeenCalledTimes(2);
+
+    secondReadiness.resolve(subscriptionReadiness());
+    await expect(Promise.all([recheck, joinedStatus])).resolves.toEqual([
+      expect.objectContaining({ state: "ready" }),
+      expect.objectContaining({ state: "ready" }),
+    ]);
+  });
+
+  it("joins activation to an active status probe", async () => {
+    let settle!: (result: ClaudeAccountProbeResult) => void;
+    const probe = new Promise<ClaudeAccountProbeResult>((resolve) => {
+      settle = resolve;
+    });
+    const subject = harness({ probeAccount: async () => probe });
+
+    const status = subject.controller.status();
+    const activation = subject.controller.activate({
+      provider: "claude-cli",
+      model: "sonnet",
+      endpoint: { mode: "automatic" },
+    });
+
+    await vi.waitFor(() => expect(subject.probeAccount).toHaveBeenCalledOnce());
+    settle(subscriptionProbe());
+
+    await expect(status).resolves.toMatchObject({ state: "ready" });
+    await expect(activation).resolves.toEqual({ status: "configured", runtimeReady: true });
+    expect(subject.probeAccount).toHaveBeenCalledOnce();
+    expect(subject.applyRuntimeConfig).toHaveBeenCalledOnce();
+  });
+
+  it("serializes and coalesces rechecks behind an active status read", async () => {
+    let settleFirst!: (result: ClaudeAccountProbeResult) => void;
+    let settleSecond!: (result: ClaudeAccountProbeResult) => void;
+    const firstProbe = new Promise<ClaudeAccountProbeResult>((resolve) => {
+      settleFirst = resolve;
+    });
+    const secondProbe = new Promise<ClaudeAccountProbeResult>((resolve) => {
+      settleSecond = resolve;
+    });
+    const subject = harness({
+      probeAccount: vi
+        .fn()
+        .mockImplementationOnce(async () => firstProbe)
+        .mockImplementationOnce(async () => secondProbe),
+    });
+
+    const status = subject.controller.status();
+    const firstRecheck = subject.controller.recheck();
+    const secondRecheck = subject.controller.recheck();
+
+    await vi.waitFor(() => expect(subject.probeAccount).toHaveBeenCalledOnce());
+    expect(subject.invalidateProbeCache).not.toHaveBeenCalled();
+    settleFirst(subscriptionProbe());
+    await expect(status).resolves.toMatchObject({ state: "ready" });
+
+    await vi.waitFor(() => expect(subject.probeAccount).toHaveBeenCalledTimes(2));
+    expect(subject.invalidateProbeCache).toHaveBeenCalledOnce();
+    settleSecond(subscriptionProbe());
+
+    await expect(Promise.all([firstRecheck, secondRecheck])).resolves.toEqual([
+      expect.objectContaining({ state: "ready" }),
+      expect.objectContaining({ state: "ready" }),
+    ]);
+    expect(subject.probeAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("joins a queued recheck when status is requested during its handoff", async () => {
+    let settleFirst!: (result: ClaudeAccountProbeResult) => void;
+    let settleSecond!: (result: ClaudeAccountProbeResult) => void;
+    const firstProbe = new Promise<ClaudeAccountProbeResult>((resolve) => {
+      settleFirst = resolve;
+    });
+    const secondProbe = new Promise<ClaudeAccountProbeResult>((resolve) => {
+      settleSecond = resolve;
+    });
+    const subject = harness({
+      probeAccount: vi
+        .fn()
+        .mockImplementationOnce(async () => firstProbe)
+        .mockImplementation(async () => secondProbe),
+    });
+
+    const firstStatus = subject.controller.status();
+    const statusDuringHandoff = firstStatus.then(() => subject.controller.status());
+    const recheck = subject.controller.recheck();
+
+    await vi.waitFor(() => expect(subject.probeAccount).toHaveBeenCalledOnce());
+    settleFirst(subscriptionProbe());
+    await expect(firstStatus).resolves.toMatchObject({ state: "ready" });
+
+    await vi.waitFor(() => expect(subject.probeAccount).toHaveBeenCalledTimes(2));
+    settleSecond(subscriptionProbe());
+
+    await expect(Promise.all([statusDuringHandoff, recheck])).resolves.toEqual([
+      expect.objectContaining({ state: "ready" }),
+      expect.objectContaining({ state: "ready" }),
+    ]);
+    expect(subject.invalidateProbeCache).toHaveBeenCalledOnce();
+    expect(subject.probeAccount).toHaveBeenCalledTimes(2);
+  });
+
   it("busts the probe cache when the settings credentials surface opens", () => {
     const subject = harness({});
 
@@ -271,6 +569,24 @@ describe("desktop claude-cli status controller", () => {
     expect(subject.applyRuntimeConfig).toHaveBeenCalledWith({
       llm: { provider: "claude-cli", model: "sonnet" },
     });
+  });
+
+  it("reuses the verified status when activation immediately follows selection", async () => {
+    const subject = harness({});
+    const selection = {
+      provider: "claude-cli" as const,
+      model: "sonnet",
+      endpoint: { mode: "automatic" as const },
+    };
+
+    await expect(subject.controller.status()).resolves.toMatchObject({ state: "ready" });
+    await expect(subject.controller.activate(selection)).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
+
+    expect(subject.probeVersion).toHaveBeenCalledOnce();
+    expect(subject.probeAccount).toHaveBeenCalledOnce();
   });
 
   it.each([

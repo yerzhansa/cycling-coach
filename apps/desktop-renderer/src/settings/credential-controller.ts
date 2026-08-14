@@ -330,7 +330,7 @@ export function createCredentialSettingsController(input: {
       ]);
       const loadClaudeCli = input.loadClaudeCliStatus;
       const claudeCli =
-        loadClaudeCli === undefined || !isNonCredentialProvider(runtime.llm.provider)
+        loadClaudeCli === undefined || runtime.llm.provider !== "claude-cli"
           ? null
           : await loadClaudeCli().catch(() => null);
       return {

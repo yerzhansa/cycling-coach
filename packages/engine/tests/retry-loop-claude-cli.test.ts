@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 import { classifyFailure } from "../../core/src/agent/token-utils.js";
 import { createScriptedQuery, type ScriptedQueryState } from "./claude-cli/helpers/frame-script.js";
 import { cyclingSport } from "@enduragent/sport-cycling";
+import { createClaudeWorkingArea } from "../src/index.js";
 import type { EngineHostPorts } from "../src/host-ports.js";
 import type { Sport } from "../src/sport.js";
 
@@ -14,7 +15,7 @@ let origHome: string | undefined;
 let dataDir: string;
 
 beforeEach(() => {
-  tempHome = mkdtempSync(join(tmpdir(), "cc-retry-claude-"));
+  tempHome = realpathSync(mkdtempSync(join(tmpdir(), "cc-retry-claude-")));
   origHome = process.env.HOME;
   process.env.HOME = tempHome;
   dataDir = join(tempHome, ".cycling-coach");
@@ -29,7 +30,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function setupAgent(scripts: readonly string[]): Promise<{
+async function setupAgent(
+  scripts: readonly string[],
+  configDir?: string,
+): Promise<{
   chat: (chatId: string, text: string) => Promise<string>;
   state: ScriptedQueryState;
 }> {
@@ -41,6 +45,15 @@ async function setupAgent(scripts: readonly string[]): Promise<{
       name: options.name,
       instance: {},
     }),
+  }));
+  vi.doMock("../src/agent/claude-cli/probe.js", () => ({
+    ensureClaudeCliReady: vi.fn(async (input: { binaryPath?: string; billing?: string }) => ({
+      binaryPath: input.binaryPath ?? "/Users/tester/.local/bin/claude",
+      version: "2.1.80",
+      identityLine: "Claude subscription",
+      accountClass:
+        input.billing === "api-key" ? ("api-key-token" as const) : ("subscription" as const),
+    })),
   }));
 
   const { CoachAgent } = await import("../src/agent/coach-agent.js");
@@ -58,6 +71,7 @@ async function setupAgent(scripts: readonly string[]): Promise<{
           binaryPath: "/Users/tester/.local/bin/claude",
           billing: "subscription",
           cursorStorePath: join(dataDir, "claude-cli-sessions.json"),
+          ...(configDir === undefined ? {} : { configDir }),
         },
       },
     },
@@ -70,6 +84,27 @@ async function setupAgent(scripts: readonly string[]): Promise<{
 }
 
 describe("retry loop on the claude-cli path", () => {
+  it("refuses a configuration overlap before starting a Claude query", async () => {
+    const workspace = createClaudeWorkingArea({
+      environment: { ...process.env, HOME: tempHome },
+      homeDirectory: tempHome,
+    }).cacheKey;
+    const agent = await setupAgent(["happy-turn"], workspace);
+
+    const outcome = await agent.chat("claude-overlap", "hello").then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error: error as Error }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toMatchObject({ kind: "working-area-unavailable" });
+      expect(outcome.error.message).not.toContain(tempHome);
+      expect(outcome.error.message).not.toContain(workspace);
+    }
+    expect(agent.state.calls).toBe(0);
+  });
+
   it("retries after a rate-limit result and then succeeds", async () => {
     vi.useFakeTimers();
     const agent = await setupAgent(["rate-limit", "happy-turn"]);

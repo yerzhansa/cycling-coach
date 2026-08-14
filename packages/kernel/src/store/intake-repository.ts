@@ -20,11 +20,7 @@ function validate(row: IntakeFlagsRow): void {
   ) {
     throw new TypeError("intake injury status is invalid");
   }
-  const needsClearance = row.injury_status !== "none";
-  if (
-    (needsClearance && typeof row.clinician_cleared !== "boolean") ||
-    (!needsClearance && row.clinician_cleared !== null)
-  ) {
+  if (row.injury_status === "none" && row.clinician_cleared !== null) {
     throw new TypeError("intake clinician clearance is invalid");
   }
   if (!DEVICE_ID.test(row.device_id)) throw new TypeError("intake device id is invalid");

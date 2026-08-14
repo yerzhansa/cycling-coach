@@ -1248,7 +1248,7 @@ describe("training page ride import", () => {
     expect(status).toHaveAttribute("data-state", "failed");
   });
 
-  it("suppresses the resident status only while the setup surface is on screen", () => {
+  it("suppresses the resident status while setup blocks the app shell or Settings is open", () => {
     render(<TrainingView />);
     setRideImport({
       status: "running",
@@ -1257,13 +1257,20 @@ describe("training page ride import", () => {
       progress: null,
       result: null,
     });
-    update({ rideImportSuppressed: true, activeView: "settings" });
+    update({
+      rideImportSuppressed: true,
+      activeView: "settings",
+      onboarding: { ...READY_ONBOARDING, completionRequired: true },
+    });
 
     const status = document.querySelector(".ride-import-status");
     expect(status).toHaveProperty("hidden", true);
     expect(status).toHaveAttribute("data-state", "idle");
 
     update({ activeView: "training" });
+    expect(status).toHaveProperty("hidden", true);
+
+    update({ onboarding: READY_ONBOARDING });
     expect(status).toHaveProperty("hidden", false);
     expect(status).toHaveTextContent("Importing ride files…");
   });

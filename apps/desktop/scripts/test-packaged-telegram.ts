@@ -12,6 +12,7 @@ import {
   prepareDisposableKeychain,
   type DisposableKeychain,
 } from "./support/packaged-telegram/disposable-keychain.js";
+import { preparePackagedTelegramSetupFixture } from "./support/packaged-telegram/setup-fixture.js";
 import {
   observeTelegramAcceptanceChild,
   releaseAcceptanceStorage,
@@ -48,8 +49,6 @@ const TELEGRAM_PROFILE_FILE = "profile.bin";
 const TELEGRAM_DESIRED_STATE_FILE = "desired-state.json";
 const BACKGROUND_PREFERENCE_DIRECTORY = "desktop-preferences-v1";
 const BACKGROUND_PREFERENCE_FILE = "background-at-login.json";
-const ONBOARDING_STORAGE_KEY = "enduragent.desktop.onboarding";
-const ONBOARDING_STORAGE_VALUE = '{"version":1,"completed":true}';
 const GENERIC_FAILURE = "Sorry, something went wrong. Please try again.";
 const EXPECTED_WELCOME_MESSAGE =
   "Welcome to Cycling Coach!\n\n" +
@@ -783,25 +782,14 @@ async function waitForButton(
   );
 }
 
-async function seedCompletedOnboardingAfterStartup(
-  page: Awaited<ReturnType<typeof cdpPage>>,
-): Promise<void> {
-  await waitUntil("initial renderer startup", async () =>
+async function waitForSettledAppShell(page: Awaited<ReturnType<typeof cdpPage>>): Promise<void> {
+  await waitUntil("settled Desktop app shell", async () =>
     page
-      .evaluate<boolean>(`document.readyState === "complete" &&
-        document.documentElement.dataset.rpc === "connected" &&
-        document.querySelector('[data-onboarding="settled"]') !== null`)
+      .evaluate<boolean>(
+        `document.querySelector('[data-shell="app"][data-onboarding="settled"]') !== null`,
+      )
       .catch(() => false),
   );
-  const persisted = await page.evaluate<boolean>(
-    `(() => {
-      const key = ${JSON.stringify(ONBOARDING_STORAGE_KEY)};
-      const value = ${JSON.stringify(ONBOARDING_STORAGE_VALUE)};
-      localStorage.setItem(key, value);
-      return localStorage.getItem(key) === value;
-    })()`,
-  );
-  assert(persisted, "completed onboarding state was not persisted");
 }
 
 async function telegramRendererSnapshot(
@@ -1092,8 +1080,11 @@ async function main(): Promise<void> {
         "data_source: store",
         `data_dir: ${JSON.stringify(athleteHome)}`,
         "llm:",
-        "  provider: openai-codex",
+        "  provider: codex-agent",
         "  model: gpt-5.6-sol",
+        "  codex_agent:",
+        "    enabled: true",
+        "    binary_path: /usr/bin/false",
         "intervals:",
         "  api_key: ''",
         "  athlete_id: '0'",
@@ -1103,6 +1094,7 @@ async function main(): Promise<void> {
       ].join("\n"),
       { mode: 0o600 },
     );
+    await preparePackagedTelegramSetupFixture(athleteHome);
     const authProfilesPath = join(configDirectory, "auth-profiles.json");
     assert(!existsSync(authProfilesPath), "model auth profile unexpectedly exists");
 
@@ -1153,7 +1145,7 @@ async function main(): Promise<void> {
         { cause: error },
       );
     }
-    await seedCompletedOnboardingAfterStartup(page);
+    await waitForSettledAppShell(page);
     await waitForButton(page, "Settings");
     await page.clickButton("Settings");
     await waitUntil("Settings after onboarding startup settled", async () =>
@@ -1415,6 +1407,7 @@ async function main(): Promise<void> {
       "secondary Desktop instance exit was not clean",
     );
     page = await cdpPage(debugPort, requireDebuggerAuthority(debuggerAuthorities, debugPort));
+    await waitForSettledAppShell(page);
     await waitForButton(page, "Settings");
     await page.clickButton("Settings");
     await waitForButton(page, "Turn off");
@@ -1451,6 +1444,7 @@ async function main(): Promise<void> {
       debuggerAuthorities,
     );
     page = await cdpPage(relaunchPort, requireDebuggerAuthority(debuggerAuthorities, relaunchPort));
+    await waitForSettledAppShell(page);
     await waitForButton(page, "Settings");
     await page.clickButton("Settings");
     await waitForButton(page, "Turn on");
@@ -1510,10 +1504,7 @@ async function main(): Promise<void> {
         `document.querySelector('[data-inline-confirmation="delete-telegram"]') !== null`,
       ),
     );
-    await page.clickButton(
-      "Delete connection",
-      '[data-inline-confirmation="delete-telegram"]',
-    );
+    await page.clickButton("Delete connection", '[data-inline-confirmation="delete-telegram"]');
     await waitForButton(page, "Paste token from clipboard");
     await waitUntil("Telegram polling stop after removal", () => telegram?.activePollCount() === 0);
     assert(!existsSync(profilePath), "Telegram profile remained after removal");

@@ -1082,6 +1082,23 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               invocationFailure = { error };
             }
             break;
+          case "verify_intervals_credential":
+            try {
+              const request =
+                COACH_RPC_METHOD_REGISTRY.verify_intervals_credential.requestSchema.parse(
+                  generic.data.params,
+                );
+              if (input.operations.verify_intervals_credential === undefined) {
+                throw new TypeError("Intervals credential verification is unavailable.");
+              }
+              result = await input.operations.verify_intervals_credential(
+                request,
+                state.detachController.signal,
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
           case "getRuntimeConfig":
             try {
               const request = COACH_RPC_METHOD_REGISTRY.getRuntimeConfig.requestSchema.parse(

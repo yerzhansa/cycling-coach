@@ -124,6 +124,7 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   getSetupStatus: 30_000,
   saveIntake: 30_000,
   configureRuntime: 30_000,
+  verify_intervals_credential: 30_000,
   getRuntimeConfig: 30_000,
   getUnitsPreference: 30_000,
   setUnitsPreference: 30_000,

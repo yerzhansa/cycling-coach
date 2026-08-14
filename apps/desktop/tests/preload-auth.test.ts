@@ -1680,7 +1680,8 @@ describe("desktop preload ChatGPT auth", () => {
         plan: "Max",
         version: "2.9.0",
       })
-      .mockResolvedValueOnce({ state: "disabled" });
+      .mockResolvedValueOnce({ state: "disabled" })
+      .mockResolvedValueOnce({ state: "working-area-unavailable" });
     await expect(bridge.claudeCliStatus()).resolves.toEqual({
       state: "ready",
       email: "athlete@synthetic.test",
@@ -1688,9 +1689,13 @@ describe("desktop preload ChatGPT auth", () => {
       version: "2.9.0",
     });
     await expect(bridge.claudeCliRecheck()).resolves.toEqual({ state: "disabled" });
+    await expect(bridge.claudeCliStatus()).resolves.toEqual({
+      state: "working-area-unavailable",
+    });
     expect(mocks.invoke.mock.calls.map(([channel]) => channel)).toEqual([
       "enduragent:onboarding:claude-cli-status",
       "enduragent:onboarding:claude-cli-recheck",
+      "enduragent:onboarding:claude-cli-status",
     ]);
   });
 

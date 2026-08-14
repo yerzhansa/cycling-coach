@@ -21,6 +21,7 @@ export interface FakeClaude {
   setScript(script: string): Promise<void>;
   readArgv(): Promise<string[]>;
   readEnv(): Promise<Record<string, string>>;
+  readCwds(): Promise<string[]>;
   readFramesIn(): Promise<string[]>;
   cleanup(): Promise<void>;
 }
@@ -36,6 +37,7 @@ const argv = process.argv.slice(2);
 
 fs.writeFileSync(path.join(STUB_DIR, "argv"), argv.map((a) => a + "\\n").join(""));
 fs.writeFileSync(path.join(STUB_DIR, "env.json"), JSON.stringify(process.env, null, 2));
+fs.appendFileSync(path.join(STUB_DIR, "cwd-log"), process.cwd() + "\\n");
 
 function readPointer(name, fallback) {
   try {
@@ -148,6 +150,10 @@ export async function createFakeClaude(options: FakeClaudeOptions = {}): Promise
     readEnv: async () => {
       const raw = await readFile(join(dir, "env.json"), "utf8");
       return JSON.parse(raw) as Record<string, string>;
+    },
+    readCwds: async () => {
+      const raw = await readFile(join(dir, "cwd-log"), "utf8");
+      return raw.split("\n").filter((line) => line.length > 0);
     },
     readFramesIn: async () => {
       const raw = await readFile(join(dir, "frames-in.ndjson"), "utf8");

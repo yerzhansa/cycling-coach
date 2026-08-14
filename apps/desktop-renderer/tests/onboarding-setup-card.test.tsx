@@ -26,10 +26,12 @@ import {
   panel,
   passwordInput,
   primaryButton,
+  readyTelegramSettings,
   resetOnboardingStore,
   rowState,
   rowSubtitle,
   seedSecret,
+  setTelegramSettings,
   setupCard,
   setupRow,
   testBridge,
@@ -135,8 +137,81 @@ describe("setup card", () => {
     expect(card.className).not.toContain("overflow-hidden");
     expect(setupRow("ai").parentElement).toBe(card);
     expect(setupRow("training").parentElement).toBe(card);
-    expect(setupRow("telegram").parentElement).toBe(card);
     expect(setupRow("injury-status").parentElement).toBe(card);
+    wizard.controller.dispose();
+  });
+
+  it("hides inactive credential loading feedback on the gate but keeps it in Settings", async () => {
+    const gate = mountWizard({ bridge: coldBridge() });
+    await gate.open();
+
+    expect(screen.queryByText("Loading saved credentials…")).toBeNull();
+    expect(document.querySelector("[data-credential-feedback]")).toBeNull();
+    gate.controller.dispose();
+    gate.rendered.unmount();
+    resetOnboardingStore();
+
+    const settings = mountWizard({ bridge: coldBridge(), placement: "settings" });
+    await settings.open();
+
+    expect(screen.getByText("Loading saved credentials…")).toBeInTheDocument();
+    expect(document.querySelector("[data-credential-feedback]")).not.toBeNull();
+    settings.controller.dispose();
+  });
+
+  it("keeps credential repair feedback and its reload action on the gate", async () => {
+    const user = userEvent.setup();
+    const wizard = mountWizard({ bridge: coldBridge() });
+    await wizard.open();
+    const port = bindCredentialPort();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          credentials: {
+            status: "error",
+            kind: "load",
+            announcement: "That saved key could not be reloaded.",
+            repairCredential: "anthropic",
+            recoveryAvailable: false,
+            focus: null,
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText("That saved key could not be reloaded.")).toBeInTheDocument();
+    const reload = screen.getByRole("button", { name: "Reload credential status" });
+    expect(reload).toBeEnabled();
+    await user.click(reload);
+    expect(port.retry).toHaveBeenCalledOnce();
+    wizard.controller.dispose();
+  });
+
+  it("keeps reload enabled when credential repair survives Settings cleanup", async () => {
+    const user = userEvent.setup();
+    const wizard = mountWizard({ bridge: coldBridge() });
+    await wizard.open();
+    const port = bindCredentialPort();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          credentials: { status: "closed", repairCredential: "openrouter" },
+        },
+      });
+    });
+
+    expect(
+      screen.getByText("Saved credential status needs to be reloaded before setup can continue."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Loading saved credentials…")).toBeNull();
+    const reload = screen.getByRole("button", { name: "Reload credential status" });
+    expect(reload).toBeEnabled();
+    await user.click(reload);
+    expect(port.retry).toHaveBeenCalledOnce();
     wizard.controller.dispose();
   });
 
@@ -173,9 +248,10 @@ describe("setup card", () => {
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
     });
-    expect(
-      screen.getByRole("button", { name: "Change what powers your coach" }),
-    ).toBeInTheDocument();
+    const change = screen.getByRole("button", { name: "Change what powers your coach" });
+    expect(change.className).toBe(
+      screen.getByRole("button", { name: "Connect Intervals.icu" }).className,
+    );
     warm.controller.dispose();
   });
 
@@ -232,12 +308,19 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("keeps the completion footer in Chat and omits it from Settings", async () => {
+  it("keeps the completion footer on the gate and omits it from Settings", async () => {
     const chat = mountWizard({ bridge: readyEverythingBridge() });
     await chat.open();
 
-    expect(screen.getByRole("button", { name: "Start coaching" })).toBeInTheDocument();
+    const primary = screen.getByRole("button", { name: "Start coaching" });
+    expect(primary).toBeInTheDocument();
+    expect(setupCard().contains(primary)).toBe(false);
     expect(screen.getByText("Everything stays on this Mac.")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Not medical advice, and not a substitute for a doctor or a certified coach.",
+      ),
+    ).toBeNull();
 
     chat.controller.dispose();
     chat.rendered.unmount();
@@ -281,7 +364,7 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("keeps AI changes quiet and gives connected Intervals only Delete", async () => {
+  it("outlines AI changes in the gate and gives connected Intervals only Delete", async () => {
     bindCredentialPort();
     const wizard = mountWizard({ bridge: readyEverythingBridge() });
     await wizard.open();
@@ -290,7 +373,7 @@ describe("setup card", () => {
       expect(rowState("training")).toBe("ready");
     });
 
-    expect(trigger("ai").className).toContain("border-transparent");
+    expect(trigger("ai").className).toContain("border-ink-2");
     expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
     const remove = screen.getByRole("button", { name: "Delete the Intervals.icu connection" });
     expect(remove).toHaveTextContent("Delete");
@@ -487,9 +570,18 @@ describe("setup card", () => {
     );
     expect(
       Array.from(chatgpt?.querySelectorAll("button") ?? [], (entry) => entry.textContent),
-    ).toEqual(["Keep Claude Code", "Sign in with ChatGPT"]);
+    ).toEqual(["Cancel", "Sign in with ChatGPT"]);
+    expect(
+      screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement,
+    ).toHaveClass("justify-end");
+    expect(
+      screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement
+        ?.previousElementSibling,
+    ).toHaveTextContent(
+      "Opens OpenAI's sign-in page in your browser — you type your password there, not here.",
+    );
 
-    await user.click(screen.getByRole("button", { name: "Keep Claude Code" }));
+    await user.click(screen.getByRole("button", { name: "Cancel ChatGPT setup" }));
 
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
@@ -585,13 +677,12 @@ describe("setup card", () => {
         ".setup-panel input, .setup-panel select, .setup-panel textarea",
       ),
     );
-    expect(controls.length).toBeGreaterThan(5);
+    expect(controls.length).toBeGreaterThan(4);
     for (const element of controls) {
       const id = element.getAttribute("id") ?? "";
       const label = document.querySelector(`label[for="${id}"]`);
       expect(label?.textContent?.trim() ?? "").not.toBe("");
     }
-    expect(control("onboarding-clinician-cleared")).toBeInTheDocument();
     wizard.controller.dispose();
   });
 
@@ -652,10 +743,18 @@ describe("setup card", () => {
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
 
+    expect(document.querySelector("[data-setup-readiness]")).toHaveTextContent(
+      "0 of 3 required ready",
+    );
+    expect(primaryButton()).toBeDisabled();
+
     await completeIntake(user);
 
     expect(rowState("ai")).toBe("pending");
     expect(rowState("training")).toBe("pending");
+    expect(document.querySelector("[data-setup-readiness]")).toHaveTextContent(
+      "1 of 3 required ready",
+    );
     expect(primaryButton()).toBeDisabled();
     wizard.controller.dispose();
   });
@@ -672,13 +771,10 @@ describe("setup card", () => {
     expect(tick?.className).toContain("text-ok");
     const pending = setupRow("injury-status").querySelector('[data-setup-disc="pending"]');
     expect(pending).not.toBeNull();
-    expect(setupRow("telegram").querySelector("[data-telegram-optional]")?.className).toContain(
-      "text-brand",
-    );
     wizard.controller.dispose();
   });
 
-  it("renders every required row in order and admits the clearance row to the same card", async () => {
+  it("renders every setup row in order and adds no row for an injury answer", async () => {
     const user = userEvent.setup();
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
@@ -687,9 +783,9 @@ describe("setup card", () => {
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
 
-    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status", "clinician-cleared"]);
-    expect(setupRow("clinician-cleared").parentElement).toBe(setupCard());
-    expect(setupRow("injury-status").nextElementSibling).toBe(setupRow("clinician-cleared"));
+    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
+    expect(setupRow("injury-status").parentElement).toBe(setupCard());
+    expect(document.querySelector('[data-setup-row="clinician-cleared"]')).toBeNull();
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
 
@@ -697,14 +793,55 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
+  it("includes the optional Telegram connection in the gate", async () => {
+    setTelegramSettings(
+      readyTelegramSettings({
+        channel: { desiredState: "enabled", state: "online" },
+        bot: { state: "ready", username: "desktop_coach_bot" },
+        pairing: { state: "unpaired" },
+        credentialConfigured: true,
+        gapWarning: { state: "clear" },
+      }),
+    );
+    const wizard = mountWizard({ bridge: coldBridge() });
+    await wizard.open();
+
+    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
+    expect(setupRow("telegram")).toHaveTextContent("Telegram");
+    expect(setupRow("telegram")).toHaveTextContent("Optional");
+    expect(screen.getByRole("button", { name: "Delete the Telegram connection" })).toBeVisible();
+    wizard.controller.dispose();
+  });
+
+  it("gives the gate a single level-one heading", async () => {
+    const gate = mountWizard({ bridge: coldBridge() });
+    await gate.open();
+
+    const headings = screen.getAllByRole("heading", { level: 1 });
+    expect(headings).toHaveLength(1);
+    expect(headings[0]).toHaveAttribute("id", "setup-panel-title");
+    expect(headings[0]).toHaveClass("outline-none");
+
+    gate.controller.dispose();
+    gate.rendered.unmount();
+    resetOnboardingStore();
+
+    const settings = mountWizard({ bridge: coldBridge(), placement: "settings" });
+    await settings.open();
+
+    expect(screen.queryAllByRole("heading", { level: 1 })).toHaveLength(0);
+    expect(screen.getByRole("heading", { level: 2, name: "Setup" })).toHaveAttribute(
+      "id",
+      "setup-panel-title",
+    );
+    settings.controller.dispose();
+  });
+
   it("describes the intake questions without promising unsupported coaching behavior", async () => {
-    const user = userEvent.setup();
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
 
     expect(rowSubtitle("injury-status")).toBe("Records your current injury or return context.");
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "managing");
-    expect(rowSubtitle("clinician-cleared")).toBe("An answer is required before continuing.");
     wizard.controller.dispose();
   });
 
@@ -727,13 +864,14 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("reads as required with the primary button off when nothing powers the coach", async () => {
-    const wizard = mountWizard({ bridge: claudeSignedOutBridge() });
+  it("keeps Claude unprobed while unrelated setup remains incomplete", async () => {
+    const bridge = claudeSignedOutBridge();
+    const wizard = mountWizard({ bridge });
     await wizard.open();
-    await waitFor(() => {
-      expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
-    });
 
+    expect(wizard.controller.state().claudeCliState).toBeNull();
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(bridge.claudeCliRecheck).not.toHaveBeenCalled();
     expect(rowState("ai")).toBe("pending");
     expect(setupRow("ai").querySelector('[data-setup-disc="pending"]')).not.toBeNull();
     expect(setupRow("ai").textContent).toContain("AI that powers your coach");
@@ -743,25 +881,37 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("drops an unavailable lane from the menu instead of listing it disabled", async () => {
+  it("offers Claude before probing and keeps it available after a signed-out result", async () => {
     const user = userEvent.setup();
-    const wizard = mountWizard({ bridge: claudeSignedOutBridge() });
+    const bridge = claudeSignedOutBridge();
+    const wizard = mountWizard({ bridge });
     await wizard.open();
-    await waitFor(() => {
-      expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
-    });
 
     await openLaneMenu(user);
 
-    expect(laneItems().map((item) => item.dataset.lane)).toEqual(["openai-codex", "api-key"]);
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(laneItems().map((item) => item.dataset.lane)).toEqual([
+      "claude-cli",
+      "openai-codex",
+      "api-key",
+    ]);
     for (const item of laneItems()) {
       expect(item.getAttribute("aria-disabled")).not.toBe("true");
       expect(item.hasAttribute("disabled")).toBe(false);
       expect(item.hasAttribute("data-disabled")).toBe(false);
     }
-    expect(
-      within(laneMenu() as HTMLElement).queryByRole("menuitemradio", { name: /Claude Code/u }),
-    ).toBeNull();
+
+    const claudeLane = within(laneMenu() as HTMLElement).getByRole("menuitemradio", {
+      name: /Claude Code/u,
+    });
+    await user.click(claudeLane);
+    await waitFor(() => {
+      expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
+      expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
+    });
+
+    await openLaneMenu(user);
+    expect(document.querySelector('[data-lane="claude-cli"]')).not.toBeNull();
     expect(claudeCliNoteText()).toContain("Claude Code CLI is not signed in.");
     wizard.controller.dispose();
   });
@@ -1043,7 +1193,7 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("names what is still outstanding beside a blocked Start coaching", async () => {
+  it("keeps the footer privacy note visible while Start coaching is blocked", async () => {
     const user = userEvent.setup();
     const wizard = mountWizard({ bridge: readyEverythingBridge() });
     await wizard.open();
@@ -1051,25 +1201,16 @@ describe("setup card", () => {
       expect(rowState("training")).toBe("ready");
     });
 
-    const outstanding = (): HTMLElement | null =>
-      document.querySelector<HTMLElement>("[data-setup-outstanding]");
-
     expect(primaryButton()).toBeDisabled();
-    expect(outstanding()?.getAttribute("data-setup-outstanding")).toBe("intake");
-    expect(outstanding()?.textContent).toBe("Answer the injury question to finish.");
+    expect(screen.getByText(FOOTER_NOTE).className).toContain("ml-auto");
+    expect(document.querySelector("[data-setup-outstanding]")).toBeNull();
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
-
-    expect(primaryButton()).toBeDisabled();
-    expect(outstanding()?.getAttribute("data-setup-outstanding")).toBe("clearance");
-    expect(outstanding()?.textContent).toBe("Confirm clinician clearance above to finish.");
-
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-clinician-cleared"), "yes");
 
     await waitFor(() => {
       expect(primaryButton()).toBeEnabled();
     });
-    expect(outstanding()).toBeNull();
+    expect(screen.getByText(FOOTER_NOTE)).toBeInTheDocument();
     wizard.controller.dispose();
   });
 
@@ -1144,21 +1285,33 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("names claude-cli in the menu only when it is signed in", async () => {
+  it("rechecks Claude only from the explicit recoverable menu action", async () => {
     const user = userEvent.setup();
     const bridge = claudeReadyBridge();
     bridge.llmConfiguration.mockResolvedValue({ ...CLAUDE_CONFIGURATION, active: null });
     bridge.claudeCliStatus.mockResolvedValue({ state: "not-logged-in" });
+    bridge.claudeCliRecheck.mockResolvedValue({ state: "not-logged-in" });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(bridge.claudeCliRecheck).not.toHaveBeenCalled();
+
+    await chooseLane(user, "claude-cli");
     await waitFor(() => {
-      expect(bridge.claudeCliStatus).toHaveBeenCalled();
+      expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
+      expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
     });
 
     await openLaneMenu(user);
-
-    expect(document.querySelector('[data-lane="claude-cli"]')).toBeNull();
     expect(claudeCliNoteText()).toContain("Claude Code CLI is not signed in.");
+    await user.click(screen.getByRole("menuitem", { name: "Check again" }));
+
+    await waitFor(() => {
+      expect(bridge.claudeCliRecheck).toHaveBeenCalledOnce();
+    });
+    expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
+    expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
     wizard.controller.dispose();
   });
 });
@@ -1174,6 +1327,33 @@ function rowAnnouncer(id: string): HTMLElement | null {
 describe("setup card accessibility", () => {
   afterEach(() => {
     resetOnboardingStore();
+  });
+
+  it("announces clipboard guidance when the copied Intervals API key has an invalid format", async () => {
+    const user = userEvent.setup();
+    const bridge = coldBridge();
+    bridge.pasteIntervalsApiKeyFromClipboard.mockResolvedValue({
+      outcome: "refused",
+      reason: "invalid-key-format",
+      current: { slot: "intervals-icu", state: "missing", runtimeState: null },
+    });
+    const wizard = mountWizard({ bridge });
+    await wizard.open();
+
+    await openTrainingPanel(user);
+    await user.click(
+      within(panel("training") as HTMLElement).getByRole("button", {
+        name: "Use copied API key",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(wizard.controller.state().fixedError).toBe("intervals-clipboard-unavailable");
+    });
+    expect(errorAnnouncer()?.textContent).toBe(
+      "Enduragent couldn’t read an API key from the clipboard. Copy it in Intervals.icu, then try again.",
+    );
+    wizard.controller.dispose();
   });
 
   it("announces errors through a region that is mounted before the error exists", async () => {
@@ -1342,7 +1522,6 @@ describe("setup card accessibility", () => {
     const compactCopy = [
       setupRow("ai").querySelector("[data-setup-row-title]")?.nextElementSibling,
       screen.getByText(FOOTER_NOTE),
-      document.querySelector("[data-setup-outstanding]"),
       document.querySelector("[data-info-tip]"),
     ];
     for (const element of compactCopy) {

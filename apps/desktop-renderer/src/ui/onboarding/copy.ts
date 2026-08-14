@@ -75,7 +75,6 @@ export const SETUP_CHECKING_SUBTITLE =
 export const SETUP_STATUS_CHECKING_COPY = "Checking setup…";
 
 export const SETUP_ROW_CHECKING_SUBTITLE = "Checking what is already connected…";
-
 export const SETUP_STATUS_UNAVAILABLE_COPY =
   "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.";
 
@@ -90,7 +89,7 @@ export const SETUP_LANE_LABELS = {
 } as const satisfies Readonly<Record<SetupLane, string>>;
 
 export const SETUP_LANE_MENU_HINTS = {
-  "claude-cli": `Detected on ${PLATFORM_COPY.computer}`,
+  "claude-cli": "Checks your Claude subscription when selected",
   "openai-codex": "Use the plan you already pay for",
   "api-key": "9 providers · pay per use",
 } as const satisfies Readonly<Record<SetupLane, string>>;
@@ -207,12 +206,5 @@ export const RETRY_SAVED_KEYS_LABEL = "Retry saved keys";
 export const RETRY_INTAKE_SAVE_LABEL = "Retry saving answers";
 
 export const FOOTER_NOTE = `Everything stays on ${PLATFORM_COPY.computer}.`;
-
-export const OUTSTANDING_NOTE = {
-  coach: "Choose what powers your coach to finish.",
-  training: "Connect intervals.icu to finish.",
-  intake: "Answer the injury question to finish.",
-  clearance: "Confirm clinician clearance above to finish.",
-} as const;
 
 export const PRIMARY_LABEL = "Start coaching";

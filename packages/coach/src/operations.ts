@@ -22,6 +22,8 @@ import {
   SetUnitsPreferenceRpcResultSchema,
   SyncRpcParamsSchema,
   SyncRpcResultSchema,
+  VerifyIntervalsCredentialRpcParamsSchema,
+  VerifyIntervalsCredentialRpcResultSchema,
   type ConfigureRuntimeRpcParams,
   type ConfigureRuntimeRpcRefusalReason,
   type ConfigureRuntimeRpcResult,
@@ -47,6 +49,8 @@ import {
   type SetUnitsPreferenceRpcResult,
   type SyncRpcParams,
   type SyncRpcResult,
+  type VerifyIntervalsCredentialRpcParams,
+  type VerifyIntervalsCredentialRpcResult,
 } from "@enduragent/coach-contract";
 import { createIntakeRepository, createUnitsPreferenceRepository } from "@enduragent/kernel/store";
 import {
@@ -82,6 +86,10 @@ export interface CreateCoachOperationsInput {
     request: ConfigureRuntimeRpcParams,
     signal: AbortSignal,
   ) => Promise<ConfigureRuntimeRpcRefusalReason | void>;
+  readonly verifyIntervalsCredential?: (
+    request: VerifyIntervalsCredentialRpcParams,
+    signal: AbortSignal,
+  ) => Promise<VerifyIntervalsCredentialRpcResult>;
   readonly readRuntimeConfig?: () => GetRuntimeConfigRpcResult;
 }
 
@@ -353,6 +361,21 @@ export function createCoachOperations(
           });
         };
         return parsedRequest.intervals === undefined ? apply() : input.runtime.runExclusive(apply);
+      });
+    },
+    verify_intervals_credential(
+      request: VerifyIntervalsCredentialRpcParams,
+      callerSignal?: AbortSignal,
+    ): Promise<VerifyIntervalsCredentialRpcResult> {
+      const parsedRequest = VerifyIntervalsCredentialRpcParamsSchema.parse(request);
+      if (input.verifyIntervalsCredential === undefined) {
+        throw new TypeError("Intervals credential verification is unavailable.");
+      }
+      const signal = callerSignal ?? new AbortController().signal;
+      signal.throwIfAborted();
+      return input.verifyIntervalsCredential(parsedRequest, signal).then((result) => {
+        signal.throwIfAborted();
+        return VerifyIntervalsCredentialRpcResultSchema.parse(result);
       });
     },
     getRuntimeConfig(request: GetRuntimeConfigRpcParams): Promise<GetRuntimeConfigRpcResult> {

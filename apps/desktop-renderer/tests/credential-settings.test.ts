@@ -276,9 +276,16 @@ describe("credential settings controller", () => {
     expect(row?.identity).toBe("Checking the Claude Code CLI sign-in on this Mac…");
   });
 
-  it("emits no status rows and never probes for credential-backed providers", async () => {
+  it("emits no status rows and never probes Claude while Codex is active", async () => {
     const claudeCli = vi.fn(async () => ({ state: "ready" }) as ClaudeCliStatus);
-    const { controller } = createSubject({ claudeCli });
+    const { controller } = createSubject({
+      runtime: runtime({
+        provider: "openai-codex",
+        model: "gpt-5.2-codex",
+        credential_configured: true,
+      }),
+      claudeCli,
+    });
 
     await controller.activate();
 

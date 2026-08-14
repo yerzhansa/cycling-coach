@@ -29,6 +29,15 @@ export function isKillSwitchValue(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true";
 }
 
+export function assertClaudeCliEnabled(
+  enabled: boolean,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): void {
+  if (enabled === false || isKillSwitchValue(baseEnv[CLAUDE_CLI_KILL_SWITCH_ENV])) {
+    throw new ClaudeCliDisabledError();
+  }
+}
+
 export type SessionKey = string;
 
 export interface SessionCursor {
@@ -91,11 +100,6 @@ class FileBackedSessionPool implements ClaudeCliSessionPool {
     return this.ports.baseEnv ?? process.env;
   }
 
-  private disabled(): boolean {
-    if (isKillSwitchValue(this.env[CLAUDE_CLI_KILL_SWITCH_ENV])) return true;
-    return this.ports.config.enabled === false;
-  }
-
   private load(): void {
     if (this.loaded) return;
     const read = readCursorStore(this.ports.config.cursorStorePath);
@@ -127,9 +131,11 @@ class FileBackedSessionPool implements ClaudeCliSessionPool {
   }
 
   async acquire(key: SessionKey, historyHash: string): Promise<AcquiredSession> {
-    if (this.disabled()) {
+    try {
+      assertClaudeCliEnabled(this.ports.config.enabled, this.env);
+    } catch (error) {
       await this.dispose();
-      throw new ClaudeCliDisabledError();
+      throw error;
     }
     this.load();
     const entry = this.entries.get(key);
@@ -198,8 +204,6 @@ class FileBackedSessionPool implements ClaudeCliSessionPool {
   }
 }
 
-export function createClaudeCliSessionPool(
-  ports: ClaudeCliSessionPoolPorts,
-): ClaudeCliSessionPool {
+export function createClaudeCliSessionPool(ports: ClaudeCliSessionPoolPorts): ClaudeCliSessionPool {
   return new FileBackedSessionPool(ports);
 }

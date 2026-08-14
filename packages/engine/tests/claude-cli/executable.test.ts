@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { PassThrough } from "node:stream";
@@ -11,11 +11,13 @@ import {
   assertVersionAtLeast,
   compareVersions,
   parseClaudeVersion,
-  probeVersion,
+  probeVersion as probeVersionImpl,
   resolveClaudeBinary,
   wellKnownClaudePaths,
 } from "../../src/agent/claude-cli/executable.js";
 import { ClaudeCliConfigError } from "../../src/agent/claude-cli/errors.js";
+import type { ClaudeWorkingAreaPort } from "../../src/agent/claude-cli/working-area.js";
+import { fixedClaudeWorkingArea } from "./helpers/working-area.js";
 
 const SENTINEL = "sk-ant-sentinel-executable-0000";
 
@@ -43,6 +45,17 @@ function baseEnvWithSecrets(): NodeJS.ProcessEnv {
 
 function onlyExecutable(match: string) {
   return async (candidate: string) => candidate === match;
+}
+
+type TestProbeVersionOptions = Omit<Parameters<typeof probeVersionImpl>[1], "workingArea"> & {
+  workingArea?: ClaudeWorkingAreaPort;
+};
+
+function probeVersion(binaryPath: string, options: TestProbeVersionOptions) {
+  return probeVersionImpl(binaryPath, {
+    ...options,
+    workingArea: options.workingArea ?? fixedClaudeWorkingArea(tmpdir()),
+  });
 }
 
 function fakeVersionSpawn(stdoutText: string, exitCode: number, stderrText = "") {
@@ -218,6 +231,7 @@ describe("probeVersion", () => {
     const version = await probeVersion(fake.binaryPath, { baseEnv: baseEnvWithSecrets() });
     expect(version).toBe("2.1.220");
     expect(await fake.readArgv()).toEqual(["--version"]);
+    expect(await fake.readCwds()).toEqual([await realpath(tmpdir())]);
   });
 
   it("spawns with a sanitized child environment", async () => {
@@ -292,6 +306,25 @@ describe("probeVersion", () => {
     );
   });
 
+  it("does not spawn when the private working area cannot be prepared", async () => {
+    const launch = vi.fn();
+    const workingArea: ClaudeWorkingAreaPort = {
+      cacheKey: "unavailable-test-working-area",
+      prepareForLaunch: vi.fn(async () => {
+        throw new Error("working area unavailable");
+      }),
+    };
+
+    await expect(
+      probeVersion("/opt/claude", {
+        baseEnv: baseEnvWithSecrets(),
+        workingArea,
+        spawn: launch,
+      }),
+    ).rejects.toThrow("working area unavailable");
+    expect(launch).not.toHaveBeenCalled();
+  });
+
   it("probes a Windows .cmd shim through cmd.exe with shell disabled", async () => {
     const shim = "C:\\Users\\Rider Name\\AppData\\Roaming\\npm\\claude.cmd";
     const fakeSpawn = fakeVersionSpawn("2.1.220 (Claude Code)\n", 0);
@@ -307,6 +340,7 @@ describe("probeVersion", () => {
       "C:\\Windows\\System32\\cmd.exe",
       ["/d", "/s", "/c", `""${shim}" "--version""`],
       expect.objectContaining({
+        cwd: tmpdir(),
         shell: false,
         windowsHide: true,
         windowsVerbatimArguments: true,

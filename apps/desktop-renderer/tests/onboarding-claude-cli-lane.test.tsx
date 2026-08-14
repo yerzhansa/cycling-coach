@@ -1,10 +1,11 @@
 import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingBridge, OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
 import type { ClaudeCliState } from "../src/onboarding/constants.js";
 import { claudeCliPresentation } from "../src/onboarding/credential-presentation.js";
 import type { ClaudeCliStatus } from "../src/onboarding/machine.js";
+import { useEnduragentStore } from "../src/state/store.js";
 import {
   chooseLane,
   claudeCliNoteText,
@@ -57,11 +58,20 @@ function claudeBridge(status: ClaudeCliStatus, overrides: Partial<OnboardingBrid
 async function openLane(bridge: TestBridge): Promise<ReturnType<typeof mountWizard>> {
   const wizard = mountWizard({ bridge });
   await wizard.open();
+  expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+  return wizard;
+}
+
+async function selectClaudeLane(
+  user: ReturnType<typeof userEvent.setup>,
+  wizard: ReturnType<typeof mountWizard>,
+  bridge: TestBridge,
+): Promise<void> {
+  await chooseLane(user, "claude-cli");
   await waitFor(() => {
-    expect(bridge.claudeCliStatus).toHaveBeenCalled();
+    expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
     expect(wizard.controller.state().claudeCliState).not.toBeNull();
   });
-  return wizard;
 }
 
 function laneItem(): HTMLElement | null {
@@ -73,7 +83,7 @@ describe("claude-cli onboarding lane", () => {
     resetOnboardingStore();
   });
 
-  it("opens Setup before the account probe answers and explains it is still checking", async () => {
+  it("offers Claude before probing, then checks once and activates only after readiness", async () => {
     const user = userEvent.setup();
     let settle: ((status: ClaudeCliStatus) => void) | undefined;
     const bridge = claudeBridge({ state: "ready" });
@@ -87,33 +97,53 @@ describe("claude-cli onboarding lane", () => {
     await wizard.open();
     await openLaneMenu(user);
 
-    expect(laneItem()).toBeNull();
-    expect(claudeCliNoteText()).toBe(claudeCliPresentation(null).detail);
-    expect(document.body.textContent).toContain("Checking the Claude Code CLI sign-in on this Mac");
+    expect(laneItem()).not.toBeNull();
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(claudeCliNoteText()).toBeNull();
+
+    await user.click(laneItem()!);
+
+    expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
+    expect(bridge.applyLlmSelection).not.toHaveBeenCalled();
+    expect(wizard.controller.state().busy).toBe(true);
+    expect(rowState("ai")).toBe("pending");
+    expect(setupRow("ai").textContent).toMatch(/checking/iu);
 
     await act(async () => {
       settle?.({ state: "ready", email: "athlete@example.test", plan: "Max" });
     });
 
-    await waitFor(() => {
-      expect(laneItem()).not.toBeNull();
-    });
-    expect(claudeCliNoteText()).toBeNull();
+    await waitFor(() => expect(bridge.applyLlmSelection).toHaveBeenCalledOnce());
+    await waitFor(() => expect(rowState("ai")).toBe("ready"));
+    expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
+    wizard.controller.dispose();
+  });
+
+  it("restores an active Claude configuration without probing during startup", async () => {
+    const bridge = claudeBridge({ state: "ready" });
+    bridge.llmConfiguration.mockResolvedValue(ACTIVE_CLAUDE_CLI_CONFIGURATION);
+    const wizard = mountWizard({ bridge });
+
+    await wizard.open();
+
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(useEnduragentStore.getState().onboarding.initialized).toBe(true);
+    expect(useEnduragentStore.getState().onboarding.readiness.provider).toBe(true);
     wizard.controller.dispose();
   });
 
   it("offers the lane and carries the signed-in identity into the row", async () => {
     const user = userEvent.setup();
-    const wizard = await openLane(
-      claudeBridge({
-        state: "ready",
-        email: "athlete@example.test",
-        plan: "Max",
-        version: "2.1.0",
-      }),
-    );
+    const bridge = claudeBridge({
+      state: "ready",
+      email: "athlete@example.test",
+      plan: "Max",
+      version: "2.1.0",
+    });
+    const wizard = await openLane(bridge);
 
-    await chooseLane(user, "claude-cli");
+    await selectClaudeLane(user, wizard, bridge);
+    await waitFor(() => expect(rowState("ai")).toBe("ready"));
 
     expect(rowState("ai")).toBe("ready");
     expect(setupRow("ai").textContent).toContain("Claude Code");
@@ -126,9 +156,11 @@ describe("claude-cli onboarding lane", () => {
 
   it("falls back to the email alone when the probe reports no plan", async () => {
     const user = userEvent.setup();
-    const wizard = await openLane(claudeBridge({ state: "ready", email: "athlete@example.test" }));
+    const bridge = claudeBridge({ state: "ready", email: "athlete@example.test" });
+    const wizard = await openLane(bridge);
 
-    await chooseLane(user, "claude-cli");
+    await selectClaudeLane(user, wizard, bridge);
+    await waitFor(() => expect(rowState("ai")).toBe("ready"));
 
     expect(rowSubtitle("ai")).toBe("Powers your coach · Signed in as athlete@example.test");
     expect(document.body.textContent).not.toContain("Claude undefined subscription");
@@ -137,9 +169,11 @@ describe("claude-cli onboarding lane", () => {
 
   it("keeps the plan when the email is unavailable", async () => {
     const user = userEvent.setup();
-    const wizard = await openLane(claudeBridge({ state: "ready", plan: "Pro" }));
+    const bridge = claudeBridge({ state: "ready", plan: "Pro" });
+    const wizard = await openLane(bridge);
 
-    await chooseLane(user, "claude-cli");
+    await selectClaudeLane(user, wizard, bridge);
+    await waitFor(() => expect(rowState("ai")).toBe("ready"));
 
     expect(rowSubtitle("ai")).toBe("Powers your coach · Signed in - Claude Pro subscription");
     wizard.controller.dispose();
@@ -147,9 +181,11 @@ describe("claude-cli onboarding lane", () => {
 
   it("names API key billing instead of claiming a subscription", async () => {
     const user = userEvent.setup();
-    const wizard = await openLane(claudeBridge({ state: "ready-api-key" }));
+    const bridge = claudeBridge({ state: "ready-api-key" });
+    const wizard = await openLane(bridge);
 
-    await chooseLane(user, "claude-cli");
+    await selectClaudeLane(user, wizard, bridge);
+    await waitFor(() => expect(rowState("ai")).toBe("ready"));
 
     expect(rowSubtitle("ai")).toBe(
       "Powers your coach · Using Anthropic API key billing - usage is charged to your API account.",
@@ -163,16 +199,27 @@ describe("claude-cli onboarding lane", () => {
     { state: "api-key-token" },
     { state: "absent-binary" },
     { state: "disabled" },
+    { state: "working-area-unavailable" },
   ] as const satisfies ReadonlyArray<{ readonly state: ClaudeCliState }>)(
-    "leaves the lane out of the menu and explains $state in place",
+    "keeps the selected lane recoverable and explains $state in place",
     async ({ state }) => {
       const user = userEvent.setup();
-      const wizard = await openLane(claudeBridge({ state }));
+      const bridge = claudeBridge({ state });
+      const wizard = await openLane(bridge);
+
+      await selectClaudeLane(user, wizard, bridge);
 
       await openLaneMenu(user);
 
-      expect(laneItem()).toBeNull();
+      expect(laneItem()).not.toBeNull();
       expect(claudeCliNoteText()).toBe(claudeCliPresentation(state).detail);
+      if (state === "working-area-unavailable") {
+        expect(claudeCliNoteText()).toBe(
+          "Enduragent could not prepare Claude's private working area. Restart Enduragent, then choose Check again.",
+        );
+        expect(claudeCliNoteText()).not.toContain("/Users/");
+        expect(claudeCliNoteText()).not.toContain("C:\\");
+      }
       expect(document.querySelector('input[data-slot="claude-cli"]')).toBeNull();
       wizard.controller.dispose();
     },
@@ -187,6 +234,7 @@ describe("claude-cli onboarding lane", () => {
       plan: "Pro",
     });
     const wizard = await openLane(bridge);
+    await selectClaudeLane(user, wizard, bridge);
     await openLaneMenu(user);
 
     await user.click(screen.getByRole("menuitem", { name: "Check again" }));
@@ -197,6 +245,7 @@ describe("claude-cli onboarding lane", () => {
     await waitFor(() => {
       expect(wizard.controller.state().claudeCliState).toBe("ready");
     });
+    await waitFor(() => expect(bridge.applyLlmSelection).toHaveBeenCalledOnce());
     await openLaneMenu(user);
     expect(laneItem()).not.toBeNull();
     expect(claudeCliNoteText()).toBeNull();
@@ -210,7 +259,8 @@ describe("claude-cli onboarding lane", () => {
     const bridge = claudeBridge({ state: "ready", email: "athlete@example.test", plan: "Max" });
     bridge.claudeCliRecheck.mockRejectedValue(new Error("probe unavailable"));
     const wizard = await openLane(bridge);
-    await chooseLane(user, "claude-cli");
+    await selectClaudeLane(user, wizard, bridge);
+    await waitFor(() => expect(rowState("ai")).toBe("ready"));
 
     act(() => {
       wizard.controller.recheckClaudeCli();
@@ -229,27 +279,31 @@ describe("claude-cli onboarding lane", () => {
     wizard.controller.dispose();
   });
 
-  it("preselects the lane when the daemon reports it as the active provider", async () => {
+  it("restores an active Claude selection without launching a readiness check", async () => {
     const bridge = claudeBridge({ state: "ready", email: "athlete@example.test", plan: "Max" });
     bridge.llmConfiguration.mockResolvedValue(ACTIVE_CLAUDE_CLI_CONFIGURATION);
-    const wizard = await openLane(bridge);
+    const wizard = mountWizard({ bridge });
 
-    await waitFor(() => {
-      expect(rowState("ai")).toBe("ready");
-    });
+    await wizard.open();
+
+    await waitFor(() => expect(rowState("ai")).toBe("ready"));
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(wizard.controller.state().claudeCliState).toBeNull();
+    expect(bridge.applyLlmSelection).not.toHaveBeenCalled();
     expect(setupRow("ai").textContent).toContain("Claude Code");
     wizard.controller.dispose();
   });
 
-  it("falls back to the first provider when the daemon reports no active provider", async () => {
+  it("opens generic non-Claude setup without checking Claude", async () => {
     const user = userEvent.setup();
-    const wizard = await openLane(
-      claudeBridge({ state: "ready", email: "athlete@example.test", plan: "Max" }),
-    );
+    const bridge = claudeBridge({ state: "ready", email: "athlete@example.test", plan: "Max" });
+    const wizard = await openLane(bridge);
     await openApiKeyPanel(user);
 
     expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("anthropic");
     expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("claude-sonnet-4-6");
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(bridge.claudeCliRecheck).not.toHaveBeenCalled();
     wizard.controller.dispose();
   });
 
@@ -258,7 +312,7 @@ describe("claude-cli onboarding lane", () => {
     const ready = claudeBridge({ state: "ready", email: "athlete@example.test", plan: "Max" });
     const wizard = await openLane(ready);
 
-    await chooseLane(user, "claude-cli");
+    await selectClaudeLane(user, wizard, ready);
 
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
@@ -273,7 +327,8 @@ describe("claude-cli onboarding lane", () => {
     const bridge = claudeBridge({ state: "ready", email: "athlete@example.test", plan: "Max" });
     bridge.claudeCliRecheck.mockResolvedValue({ state: "not-logged-in" });
     const wizard = await openLane(bridge);
-    await chooseLane(user, "claude-cli");
+    await selectClaudeLane(user, wizard, bridge);
+    await waitFor(() => expect(rowState("ai")).toBe("ready"));
 
     act(() => {
       wizard.controller.recheckClaudeCli();
@@ -301,6 +356,7 @@ describe("claude-cli onboarding lane", () => {
     await wizard.open();
     await openLaneMenu(user);
 
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
     expect(laneItem()).toBeNull();
     expect(claudeCliNoteText()).toBeNull();
     expect(document.body.textContent).not.toContain("Claude Code");
@@ -309,15 +365,15 @@ describe("claude-cli onboarding lane", () => {
 
   it("never leaks probe fields other than the rendered identity", async () => {
     const user = userEvent.setup();
-    const wizard = await openLane(
-      claudeBridge({
-        state: "ready",
-        email: "athlete@example.test",
-        plan: "Max",
-        version: "2.1.0",
-      }),
-    );
-    await chooseLane(user, "claude-cli");
+    const bridge = claudeBridge({
+      state: "ready",
+      email: "athlete@example.test",
+      plan: "Max",
+      version: "2.1.0",
+    });
+    const wizard = await openLane(bridge);
+    await selectClaudeLane(user, wizard, bridge);
+    await waitFor(() => expect(rowState("ai")).toBe("ready"));
 
     const rendered = document.body.textContent ?? "";
     expect(rendered).not.toContain("2.1.0");

@@ -1,66 +1,87 @@
-# Cycling Coach
+<h1 align="center">Enduragent</h1>
 
-AI cycling coaching agent. Bring your own LLM API key, **sign in with a ChatGPT Plus subscription, or use your Claude subscription through the Claude Code CLI you already run locally**, connect [intervals.icu](https://intervals.icu) for real athlete data, chat via Telegram or CLI.
+<p align="center">
+  <b>An AI cycling coach that runs on your own machine.</b><br>
+  It reads your real rides, writes your week, and never sends your training history to us.<br>
+  Chat in the Mac app, or pair it with your own Telegram bot and coach from your phone.
+</p>
 
-This project was formerly known as cycling-coach.
+<p align="center">
+  Bring your own LLM API key, <b>sign in with a ChatGPT Plus subscription, or use your Claude
+  subscription through the Claude Code CLI you already run locally</b>, connect
+  <a href="https://intervals.icu">intervals.icu</a> for real athlete data, and chat from the
+  desktop app, Telegram, or the terminal.
+</p>
 
-Training data and coaching insights may include data from Garmin devices.
+<p align="center">
+  <a href="https://enduragent.icu/"><b>enduragent.icu</b></a> ·
+  <a href="https://enduragent.icu/download/mac">Download for macOS</a> ·
+  <a href="https://enduragent.icu/privacy.html">Privacy</a> ·
+  <a href="https://railway.com/deploy/cycling-coach">Deploy the 24/7 bot</a>
+</p>
 
-Want the bot running 24/7 without keeping your computer on? Deploy the Railway template: https://railway.com/deploy/cycling-coach
+<p align="center">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="npm" src="https://img.shields.io/npm/v/cycling-coach?label=cycling-coach">
+  <img alt="Platform" src="https://img.shields.io/badge/desktop-macOS%20arm64-black">
+</p>
 
-Follow [@yerzhansa](https://x.com/yerzhansa) on X.com for updates, or drop a question/feedback anytime.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/yerzhansa/enduragent/main/guides/images/desktop-app.webp" alt="Enduragent on macOS: the coach explains why one hard session fits this weekend, then writes a VO2max 5x3 min workout and confirms it was added to the intervals.icu calendar." width="612">
+  <img src="https://raw.githubusercontent.com/yerzhansa/enduragent/main/guides/images/telegram-workout.webp" alt="The same coach in Telegram: the rider says a meeting ran late and asks to turn tonight's 90 minutes into 40; it rewrites the session as 3x6 min sweet spot at 233-249 W and updates the intervals.icu calendar." width="170">
+</p>
 
-## What it does
+<p align="center">
+  <i>The same coach, two front ends &mdash; the Mac app, and your own Telegram bot paired to it.</i>
+</p>
 
-- Analyzes fitness, fatigue, and form from your real rides
-- Builds periodized plans toward your goal event
-- Pushes structured workouts to your intervals.icu calendar (auto-syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, Zwift)
+---
 
-## How it works
+Ask it what to ride today and it answers from your numbers, not from a questionnaire: your FTP,
+your zones, the load you actually carried last week, and how you slept. Then it writes the session
+to your intervals.icu calendar, which syncs on to your head unit.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                          You                            │
-│                    Telegram / CLI                       │
-└────────────────────────────┬────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────┐
-│                  Cycling Coach Agent                    │
-│                                                         │
-│  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐   │
-│  │ Coaching     │  │ Cycling     │  │ Memory        │   │
-│  │ persona &    │  │ logic       │  │ goals, notes, │   │
-│  │ domain skills│  │ zones, plans│  │ preferences   │   │
-│  └──────────────┘  └─────────────┘  └───────────────┘   │
-│                                                         │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │                Intervals.icu API                 │   │
-│  │ fitness · fatigue · form · rides · push workouts │   │
-│  └──────────────────────────────────────────────────┘   │
-└────────────────────────────┬────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────┐
-│             LLM  (Claude / GPT / Gemini)                │
-│      Interprets data + coaching knowledge → response    │
-└─────────────────────────────────────────────────────────┘
-```
+Free, MIT licensed, and there is no paid version with the good features in it.
 
-1. **You send a message** — via Telegram or the command line ("Build me a 12-week gran fondo plan", "What should I ride today?")
-2. **The coach reads your history** — goals, past conversations, injury notes, and preferences stored locally on your machine
-3. **It pulls your real data** — current fitness, fatigue, form, recent rides, FTP, and zones from intervals.icu
-4. **It runs cycling logic** — zone calculations, periodization models, feasibility checks, workout structure — all deterministic, no guessing
-5. **An LLM puts it together** — Claude, GPT, or Gemini interprets everything and responds like a knowledgeable coach
-6. **Workouts land on your calendar** — structured intervals pushed to intervals.icu, which syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, and Zwift
+## Three things, done properly
 
-## Quick start
+### It reads your real numbers
 
-Requires [Node.js](https://nodejs.org/) 22+ (comes with npm).
+Paste your intervals.icu API key and it pulls your profile, FTP, zones and weight, your
+activities, and your power and heart-rate curves. Fitness, Fatigue, Form, Load and Intensity come
+from the rides you did.
 
-Supported on macOS and Linux. Windows is not supported — the secrets backends and process handling are POSIX-shaped (use WSL2 if you must run on Windows).
+- Wellness too: HRV, resting heart rate and sleep, when you log them.
+- No platform account? Drop in `.fit`, `.tcx` or `.gpx` files — parsed on your device.
+- Zones, plan skeletons and feasibility checks are computed locally, with no model call.
+- It remembers you: goals, injuries, equipment, schedule — plain files, yours to open or delete.
 
-Open **Terminal** (Mac/Linux) or **PowerShell** (Windows) and run:
+### It plans your season
+
+Periodized plans toward a goal event — linear, block, reverse linear, polarized or pyramidal —
+with volume tiers, hard-session spacing, and an honest feasibility check on FTP or W/kg targets.
+
+### It puts the session where you'll see it
+
+Structured intervals pushed to your intervals.icu calendar, which auto-syncs to Garmin, Wahoo,
+Hammerhead, COROS, Suunto and Zwift. Nothing is written to your calendar unless you ask.
+
+Away from the desk, pair the app with your own Telegram bot: tell it your meeting ran late, and
+the rewritten session lands on the same calendar before you have changed into kit.
+
+## Install
+
+### macOS app
+
+[**Download for macOS**](https://enduragent.icu/download/mac) — Apple Silicon, signed and
+notarized. Download, chat, connect. No Windows or Linux desktop build yet.
+
+In **Settings → Telegram** you can pair the app with a bot of your own: ask BotFather for a token,
+paste it once, and the same coach answers in Telegram with your athlete memory, training data and
+plans shared. It replies while the app is running and your Mac is awake — for a bot that answers
+around the clock, see below.
+
+### Terminal
 
 ```bash
 npm install -g cycling-coach
@@ -68,493 +89,128 @@ cycling-coach setup
 cycling-coach
 ```
 
-The setup wizard asks for your LLM provider — an API key for Anthropic / OpenAI / Google / DeepSeek / Qwen / MiniMax / Kimi / Z.AI / OpenRouter, **OAuth sign-in with your ChatGPT subscription, or your Claude subscription via the locally installed Claude Code CLI** (the last two need no API key). Then optionally connects [intervals.icu](https://intervals.icu) and Telegram. After setup, `cycling-coach` starts in CLI mode — or Telegram mode if you provided a bot token.
+Node 22+, macOS or Linux. The wizard walks you through model provider, intervals.icu, and
+optionally Telegram.
 
-```
-Cycling Coach (CLI mode). Type your message:
-> Calculate my zones for FTP 280
-> Build me a 12-week plan for a gran fondo
-> What should I do today?
-> /quit
-```
+### Telegram, around the clock
 
-**LLM provider options:**
-- **Anthropic (Claude)** — console API key from [Anthropic Console](https://console.anthropic.com/). Recommended default.
-- **OpenAI (GPT)** — console API key from [OpenAI Platform](https://platform.openai.com/).
-- **Google (Gemini)** — console API key from [Google AI Studio](https://aistudio.google.com/).
-- **DeepSeek** — API key from [DeepSeek Platform](https://platform.deepseek.com/).
-- **Qwen** — API key from Alibaba Cloud DashScope.
-- **MiniMax** — API key from [MiniMax Platform](https://platform.minimaxi.com/).
-- **Kimi** — API key from [Moonshot AI](https://platform.moonshot.ai/).
-- **Z.AI (GLM)** — API key from [Z.AI](https://z.ai/).
-- **OpenRouter** — API key from [OpenRouter](https://openrouter.ai/).
-- **OpenAI Codex (ChatGPT subscription) — experimental** — browser OAuth sign-in with your ChatGPT Plus / Pro / Business / Edu / Enterprise account. No API key needed; the bot uses your subscription quota. Minimum tier: ChatGPT Plus ($20/mo). Select it in `cycling-coach setup` to start the OAuth flow. Models offered in the wizard: `gpt-5.4` (balanced, recommended) and `gpt-5.4-mini` (faster, smaller context). Cost is covered by the subscription regardless of which model you pick — the choice is speed vs capability, not price. On hard rate-limit failures the bot retries up to 4× with backoff (~35s total) before reporting the error to the chat.
-- **Claude subscription (Claude Code CLI) — experimental** — drives the [Claude Code CLI](https://claude.com/claude-code) installed on your own machine, so your Claude subscription covers the usage and no API key is involved. Sign in once yourself: run `claude` in your terminal and complete the sign-in there. The app never signs you in, never reads or stores your tokens. Select it in `cycling-coach setup`; the wizard checks the CLI and prints `Signed in as <email> - Claude <plan> subscription`. Models offered in the wizard: `sonnet` (default), `opus`, and `haiku`. **macOS and Linux only this wave — Windows is not supported for this lane.** Because it needs a locally installed, signed-in CLI, it does not work in containers or on Railway (see below).
+Telegram works two ways, and both are your own bot:
 
-- **Codex agent (ChatGPT subscription, config-file only) — experimental, off by default** — delegates the whole coaching turn to the [Codex CLI](https://developers.openai.com/codex/cli) installed on your own machine, so your ChatGPT subscription covers the usage. Unlike every other option this one is **not offered in the setup wizard** and cannot be selected from the desktop app; you enable it by editing `config.yaml` (see below). Install `codex` (≥ 0.46.0) and sign in once yourself with `codex login` — the app never signs you in, never reads or stores your tokens. **macOS and Linux only; Windows is refused.** Because it needs a locally installed, signed-in CLI, it does not work in containers or on Railway.
+- **Paired to the Mac app** — the pairing above. Nothing else to host; it answers while the app is
+  running and your Mac is awake.
+- **Self-hosted, always on** — [deploy your own copy to
+  Railway](https://railway.com/deploy/cycling-coach) so it replies day and night. Your instance,
+  your keys, a sender allowlist so only you can talk to it.
 
-Anthropic's Claude Pro/Max subscription does **not** support OAuth for third-party tools (per Anthropic ToS), and Cycling Coach never brokers a Claude login. The two supported Anthropic paths are the console API key and the Claude Code CLI lane above, which delegates to the CLI you signed in yourself.
+Either way the commands are the same, and anyone who finds your bot's username but isn't on the
+allowlist is dropped before the coach sees them.
 
-**Where to get other keys:**
-- **intervals.icu**: [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings
-- **Telegram**: Message [@BotFather](https://t.me/BotFather) > `/newbot`
+> The npm package and CLI binary are still named `cycling-coach`. The project and the Mac app are
+> Enduragent.
 
-### From source (development)
+## Bring your own model
 
-```bash
-git clone git@github.com:yerzhansa/enduragent.git
-cd enduragent
+Enduragent does not resell tokens. You point it at an account you already have and your provider
+bills you. If you already pay for ChatGPT or Claude, sign in with it and add no new cost.
 
-npm install
-npm run build
+| | Provider | How you pay |
+|---|---|---|
+| 🔑 | Anthropic (Claude) | API key |
+| 🔑 | OpenAI (GPT) | API key |
+| 🔑 | Google (Gemini) | API key |
+| 🔑 | DeepSeek · Qwen · MiniMax · Kimi · Z.AI (GLM) | API key |
+| 🔑 | OpenRouter | API key |
+| ✨ | **ChatGPT subscription** *(experimental)* | OAuth sign-in, Plus or higher |
+| ✨ | **Claude subscription** *(experimental)* | Via the Claude Code CLI you signed into |
 
-# Dev loop (auto-reload, reads .env)
-npm run dev
-```
+Neither subscription lane brokers a login — you sign in yourself with the CLI, and the app never
+reads or stores your tokens. Both are macOS/Linux only and don't work in containers or on Railway.
+Details, model choices and kill switches: [docs/providers.md](./guides/providers.md).
 
-Note: `npm run dev` runs TypeScript directly (via tsx). `npm run build` produces `dist/` for running via Node / the published npm package.
+A spend meter with a daily cap you set shows what the day cost before the invoice does. It's a
+local estimate, not a billing control — set limits with your provider too.
+
+## Your data stays on your device
+
+There is no Enduragent account, no server holding your training history, and no analytics in the
+product. Nowhere for us to look, because we did not build the place to look.
+
+**Files you can open.** Everything lives under `~/.enduragent`: a local SQLite store, an archive
+of the raw data it read, plain-Markdown memory files, and your transcripts. Delete the folder and
+it is gone.
+
+**Keys encrypted at rest.** API keys are encrypted with macOS secure storage, keyed from your
+Keychain. If secure storage is unavailable, the app refuses to save the key rather than writing it
+in the clear.
+
+**What does leave.** Your prompt and the training numbers in it go to the model provider you
+chose. Your intervals.icu key goes to intervals.icu. The self-hosted Telegram bot checks
+`ping.enduragent.icu` for a newer version on startup and daily — no athlete data, no credentials;
+set `CYCLING_COACH_NO_UPDATE_CHECK=1` to switch it off. The desktop app never makes that request.
+
+Full policy: [enduragent.icu/privacy.html](https://enduragent.icu/privacy.html).
+
+## Pricing
+
+**$0.** No tiers, no trial, no upsell screen, no account to create. MIT licensed — read it, fork
+it, change it, ship your own version. You pay your model provider, not us.
 
 ## Telegram commands
 
 | Command | What it does |
 |---------|-------------|
 | `/start` | Welcome message + available commands |
-| `/plan` | Fetches your intervals.icu data, builds a periodized plan, asks to push to calendar |
-| `/workout` | Checks your current fitness, fatigue, and form — suggests today's workout with structured intervals |
-| `/status` | Shows fitness, fatigue, form, and coaching notes |
-| `/sync` | Pushes next 1-2 weeks of planned workouts to intervals.icu calendar |
-| `/whatsnew` | Shows what changed in the latest release |
-| `/update` | npm installs: updates the bot to the exact verified registry version. Managed container deploys: explains that updates happen by image redeploy. |
-
-Free-form chat works too — ask anything about training, report an injury, request plan adjustments.
-
-## Privacy
-
-Cycling Coach restricts Telegram interactions to a configured allowlist of user IDs. Only senders in `~/.cycling-coach/allowed-senders.json` (or set via the `CYCLING_COACH_OPERATOR_ID` env var, single ID) can interact with the bot. Random Telegram users who discover your bot's username are dropped at the middleware layer.
-
-### Update checks & usage counting
-
-To check whether a newer version exists, Cycling Coach makes one background HTTPS request to `ping.enduragent.icu`. That endpoint returns the latest published version (the same answer `registry.npmjs.org` gives) and records an anonymous usage count so the project can see roughly how many instances are running across install channels. The count contains no personal information.
-
-The check runs on Telegram-mode startup and again every 24 hours (so a long-running deployment learns about new releases without a restart). The same request powers the "update available" notification and the `/whatsnew` and `/update` commands. In development and test the bot talks to `registry.npmjs.org` directly instead; if the `ping.enduragent.icu` endpoint is ever unreachable, the bot silently falls back to `registry.npmjs.org`, so update checks keep working either way.
-
-Set `CYCLING_COACH_NO_UPDATE_CHECK=1` to disable the automatic background checks (both the startup check and the daily re-check). The operator-initiated `/update` and `/whatsnew` commands still query the endpoint — those are explicit requests, not background checks (and `/whatsnew` also reaches the GitHub Releases API for release notes). In managed container deploys, `/update` does not run npm; image hosts update by redeploying the container image.
-
-Desktop does not fetch release notes in the background. Choosing **What’s new** explicitly contacts
-`registry.npmjs.org` for the latest published version and the GitHub Releases API for that exact
-version’s athlete-facing notes. Those requests send no installation identifier, credential,
-configuration, or athlete data.
-
-### First-time setup
-
-The setup wizard prompts you to send `/start` from your Telegram account; the wizard captures your user ID and writes the allowlist file automatically — you never type your numeric ID.
-
-### Migration for existing installs
-
-When you run `cycling-coach` on an upgraded install with no allowlist yet:
-
-- **Interactive shell (TTY available):** the bot prompts you to send `/start` from your Telegram app. It captures your user ID, asks you to confirm, and writes the allowlist. Total friction: one Telegram message + one keypress. **You never type your user ID anywhere.**
-- **Non-interactive (Docker, systemd, fly.io, `cycling-coach &`):** the bot starts in pairing mode. DM it once — the reply contains your Telegram user ID and the exact CLI command to run. Copy-paste from the reply: `cycling-coach add-sender <id>`. Total friction: about 30 seconds.
-
-### Adding friends
-
-`cycling-coach add-sender <userId>`
-
-A friend's user ID appears in the bot's pairing-challenge reply when they first try to message it.
-
-### Removing senders
-
-`cycling-coach remove-sender <userId>`
-
-If you remove the only allowed sender, the bot drops back into pairing mode automatically.
-
-### Listing the allowlist
-
-`cycling-coach list-senders`
-
-Prints the current policy, allowed senders with their `addedAt` timestamps, and any session files left on disk from prior conversations (useful for identifying who's been DM-ing the bot).
-
-### Stranger sessions left over from before the upgrade
-
-Pre-upgrade, the bot accepted DMs from anyone who knew its username. Their session files (`~/.cycling-coach/sessions/telegram:<chat-id>.jsonl`) remain on disk after migration — they're no longer queryable through the bot, but they still exist. Manual deletion is safe (`rm` of any chat-ID that isn't yours). A `cycling-coach prune-sessions` CLI is tracked as a follow-up.
-
-## What the agent can do
-
-### Cycling logic (runs locally, no API calls)
-
-- **Zone calculator** — 6 power zones from FTP (Z1 Recovery through Z6 VO2max)
-- **Plan builder** — periodized training plan from athlete profile (linear, block, reverse linear, polarized, pyramidal models)
-- **Feasibility check** — assesses whether FTP or W/kg targets are realistic
-- **Sample weeks** — generates weekly workout templates by volume tier with hard session spacing
-
-### intervals.icu integration
-
-- Fetch athlete profile (FTP, weight, max HR, zones)
-- Fetch recent activities (load, intensity, duration)
-- Fetch wellness data (fitness, fatigue, form, HRV, resting HR, sleep)
-- Push workouts to calendar → auto-syncs to Garmin, Wahoo, Hammerhead, COROS, Suunto, and Zwift
-
-### Memory
-
-File-based at `~/.cycling-coach/`:
-- `memory/MEMORY.md` — long-term: goals, injury history, preferences
-- `memory/2026-04-13.md` — daily conversation notes
-- `plans/current-plan.json` — active training plan
-
-The agent reads memory at the start of each conversation and writes to it when significant decisions are made (new goal, plan change, injury).
-
-Conversation transcripts live at `~/.cycling-coach/sessions/<chatId>.jsonl`. A session reset renames the transcript to a timestamped archive (`<chatId>.jsonl.reset.<timestamp>`) rather than deleting it, and archives are kept indefinitely by default. To opt into age-based cleanup, set `session.resetArchiveRetentionDays` in `config.yaml` (or the `SESSION_RESET_ARCHIVE_RETENTION_DAYS` env var) to the number of days to keep archives; `0` — the default — keeps them forever. Archive files are owner-readable only (mode `0600`).
-
-## Alternative config: YAML
-
-Instead of env vars, you can create `~/.cycling-coach/config.yaml`:
-
-```yaml
-llm:
-  provider: anthropic
-  model: claude-opus-4-6
-  api_key: sk-ant-...
-  flush_model: claude-haiku-4-5-20251001 # optional: cheaper model for memory tidy-up
-
-intervals:
-  api_key: your-intervals-api-key
-  athlete_id: "0"
-
-telegram:
-  bot_token: "123456:ABC..."
-```
-
-For the Codex OAuth path, the config has no `api_key` — tokens live in `~/.cycling-coach/auth-profiles.json` (mode `0600`) and rotate automatically:
-
-```yaml
-llm:
-  provider: openai-codex
-  model: gpt-5.4
-  auth_profile: openai-codex
-```
-
-The Claude Code CLI path has no `api_key` either — the CLI uses the login you created in your own terminal, and Cycling Coach never touches those credentials:
-
-```yaml
-llm:
-  provider: claude-cli
-  model: sonnet                             # or opus / haiku
-  claude_cli:
-    enabled: true
-    binary_path: /opt/homebrew/bin/claude   # optional; resolved automatically when omitted
-    config_dir: ~/.claude                   # optional; only set it for a non-default CLI config dir
-    billing: subscription                   # or api-key — explicit opt-in, see below
-```
-
-`billing: subscription` is the default and never hands an API key to the CLI. Set `billing: api-key` only if you want the CLI to bill an Anthropic API key you have already approved inside the CLI — that opt-in is explicit, and usage is then charged to your API account instead of your subscription.
-
-**Kill switch:** set `ENDURAGENT_CLAUDE_CLI_DISABLED=1` (or `true`, case-insensitive) to disable this provider on an instance; `llm.claude_cli.enabled: false` does the same from YAML. A running daemon does not need a restart — it re-checks the switch every turn, so a flip takes effect on the **next turn**, which is then refused with an explanation. `CLAUDE_CLI_PATH` overrides `llm.claude_cli.binary_path`.
-
-#### Codex agent (experimental, off by default)
-
-This lane is config-file only — the setup wizard does not offer it, and it stays disabled until you write `enabled: true` yourself:
-
-```yaml
-llm:
-  provider: codex-agent
-  model: gpt-5.6-sol
-  codex_agent:
-    enabled: true                          # required — the lane refuses without it
-    binary_path: /opt/homebrew/bin/codex   # optional; resolved automatically when omitted
-    reasoning_effort: medium               # optional; low / medium / high / ultra
-```
-
-There is no `api_key` and no `base_url` — both are rejected, because the CLI owns the endpoint and your subscription covers the usage. `CODEX_CLI_PATH` overrides `binary_path`.
-
-**This lane works differently from every other provider, and the difference is worth understanding before you enable it.** The others send a prompt and get a reply back; here your turn is handed to Codex's own agent loop. Cycling Coach injects its coaching tools into that loop over a local MCP endpoint — 18 of them for cycling with intervals.icu connected, fewer without — and supplies the coach persona as *developer instructions* — steering the agent rather than replacing its system prompt. Practically: the retry loop, the tool wrapper stack, the ledger and your stored history all still work, but Cycling Coach gives up in-context prompt control and per-model-call accounting. One coaching turn is billed as one call against your subscription no matter how many model calls Codex makes internally, so ledger rows for this lane are marked notional and excluded from the spending cap. That trade is why it ships off by default.
-
-For the duration of a coaching turn, your own `~/.codex/config.toml` is neutralized: every MCP server you have configured is disabled, along with shell execution, multi-agent, plugins, apps, hooks, browser and computer use, and web search. The model provider and endpoint are pinned, sandboxing is read-only, and no approval can be requested or interactively granted — the coach's own tools carry standing pre-approval so they can run unattended, and a turn is refused if that pre-approval has been widened to anything else. If any of that cannot be verified on the spawned process, the turn is refused rather than run in a degraded configuration.
-
-Env vars take precedence over YAML.
-
-### Cheaper model for memory tidy-up
-
-The bot periodically summarizes a conversation into structured memory ("memory tidy-up"). This runs on your chat model by default, but it is a mechanical extract-the-facts task that a cheaper model handles just as well. Set `llm.flush_model` in `config.yaml` (or the `LLM_FLUSH_MODEL` env var) to route only the tidy-up through a cheaper model while your chat replies keep the default model. When unset, the tidy-up reuses your chat model (no change). Suggested cheap models per provider: Anthropic — a haiku-class model such as `claude-haiku-4-5-20251001`; OpenAI — a mini-class model such as `gpt-5.4-mini` or `gpt-4o-mini`; Google — a flash-class model such as `gemini-2.5-flash`.
-
-## Storing secrets outside config.yaml
-
-If you don't want API keys to live as plaintext in `~/.cycling-coach/config.yaml`, any secret field (`llm.api_key`, `intervals.api_key`, `telegram.bot_token`) can be replaced with a **SecretRef**. Two shapes are supported:
-
-- **`source: exec`** — runs an external command (1Password CLI, Vault, `age`, etc.) and reads its stdout. Best for local desktop use with a password manager.
-- **`source: env`** — reads a process env var directly (no spawn). Best for cloud / Docker / Railway / Kubernetes where the platform injects secrets as env vars.
-
-```yaml
-# exec — local with 1Password
-llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
-  api_key:
-    source: exec
-    command: op
-    args: [read, "op://Personal/Anthropic/credential"]
-
-# env — cloud / Docker
-llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
-  api_key:
-    source: env
-    var: ANTHROPIC_API_KEY
-```
-
-**Precedence**: env var (the legacy `ANTHROPIC_API_KEY` / `INTERVALS_API_KEY` / `TELEGRAM_BOT_TOKEN` keys) > SecretRef > plain YAML. Setting `ANTHROPIC_API_KEY` in your shell still wins — useful for debugging a vault issue without touching YAML.
-
-**`exec` requirements**:
-- The `command` must print **only the secret** to stdout. JSON blobs, labels, or extra output will be stored verbatim and downstream APIs will reject them.
-- A single trailing `\n` or `\r\n` is trimmed; all other whitespace is preserved.
-- Empty output, non-zero exit, a 30s timeout, or output over 64KB is a fatal startup error with a clear stderr message.
-- `shell: false` — `command` and `args` are passed directly to the OS. `~`, `$HOME`, globs, and shell operators are **not** expanded. Use absolute paths.
-
-**`env` requirements**:
-- `var` must name an env var that is set and non-empty at startup. Unset → `ENOENT`; empty string → `EMPTY`. Both are fatal startup errors.
-- The value is used verbatim — no trimming, no shell interpretation. If your platform's secret manager appends a newline, set the env var without it.
-
-### Using the setup wizard with a password manager
-
-If you have the [1Password CLI (`op`)](https://developer.1password.com/docs/cli/) or you're on macOS, `cycling-coach setup` can create the backend items for you — no YAML hand-editing, no manual `op item create` / `security add-generic-password` calls.
-
-When the wizard reaches the secrets step it asks **"Where to store secrets?"**. The available options depend on what it detects:
-
-- **Plain config.yaml** — the pre-existing behavior; secrets are written as plain strings.
-- **1Password CLI** — offered when `op` is on your `$PATH`. If `op` is installed but not signed in, the wizard offers an **"1Password CLI — sign in first"** option that runs `op signin` inline, then re-detects and continues. If no account is configured, the option is hidden and an INFO log explains why.
-- **macOS Keychain** — offered on macOS (Darwin) only.
-
-Pick one and the wizard handles every subsequent secret prompt (`llm.api_key`, `intervals.api_key`, `telegram.bot_token`) against that backend. For 1Password, the first write triggers Touch ID / system auth. The resulting `config.yaml` stores only a SecretRef pointing at the backend — your actual secret value never lands in YAML.
-
-**Re-running the wizard is idempotent.** Hit Enter at any password prompt to keep the existing value; YAML is unchanged and no new backend item is created. If a 1Password item with the same title already exists, the wizard prompts `[Update | Keep existing | Cancel]` instead of overwriting blindly.
-
-**Switching backends on a re-run** (e.g. you picked Keychain last time, now want 1Password): if you type a new value, the wizard writes to the new backend and leaves the old item alone — the old SecretRef is replaced in YAML but the old Keychain/1Password item is not deleted (clean it up manually if you want). If you hit Enter without typing a new value, the wizard shows an explicit `[Paste to migrate to <new backend> | Keep in <old backend> (YAML unchanged)]` prompt — it never silently reads a secret from one backend and writes it to another.
-
-> **Pasted keys are trimmed.** The wizard strips leading and trailing whitespace from pasted secrets and logs `Trimmed whitespace from pasted <field>.` at INFO when it does. This catches trailing newlines that clipboard managers commonly add (a frequent cause of "key works in curl, fails in the bot"). If your secret legitimately needs surrounding whitespace — rare, but real for some token formats — set it via env var instead; the env-var path bypasses trim.
-
-> **Run setup from one terminal at a time.** Concurrent `cycling-coach setup` runs may create duplicate backend items or race on the YAML write; the wizard does not lock against this in v1. If you accidentally start two, complete one and re-run the other — the re-run UX (Update / Keep / Cancel) handles duplicates cleanly.
-
-> **Keychain scope (macOS).** The Keychain backend uses your **login keychain** (per-Mac, unlocked automatically when you log in, not synced via iCloud). The full keychain path is pinned in the SecretRef so a later `security default-keychain -s …` won't silently break cycling-coach. If you want cross-device sync, pick **1Password** in the wizard instead. Custom keychains and iCloud Keychain targeting are planned for v2.
-
-> **Ctrl+C during a "1Password: creating item…" step may leave orphans.** The wizard tracks items it creates in-run and prints `op item delete "…"` cleanup commands on cancellation (Ctrl+C, SIGTERM). There is an unclosable sub-second race where `op` commits the new item server-side but the child is killed before it can report success — the wizard has no way to record it, so it can't list it for cleanup. After a forced cancel, run `op item list | grep cycling-coach` to check for stray items. This is a fundamental limitation of child-process write-then-ack semantics, not specific to cycling-coach.
-
-**Non-TTY invocations are rejected.** Running `cycling-coach setup` from a non-interactive context (CI, Docker build, `systemd` post-install, piped stdin) exits with code 2 and a stderr pointer to the [Non-interactive setup](#non-interactive-setup-ci--docker--launchd) section below. Zero side effects are performed before the TTY check.
-
-### Backend compatibility matrix
-
-| Backend | `command` | `args` | Caveat |
-|---|---|---|---|
-| 1Password CLI | `op` | `["read", "op://Vault/Item/field"]` | GUI session required for Touch ID; not for headless/launchd. |
-| macOS Keychain | `security` | `["find-generic-password", "-w", "-s", "cycling-coach", "-a", "anthropic_api_key", "/Users/you/Library/Keychains/login.keychain-db"]` | `-w` is mandatory — without it the whole record is dumped. The keychain path is passed as the **last positional argument** (pins the keychain so a later `security default-keychain -s …` doesn't break cycling-coach). macOS's `security` does not support a `-k` flag on `*-generic-password` subcommands. |
-| Bitwarden | `bw` | `["get", "password", "anthropic-api-key"]` | Requires `BW_SESSION` env from `bw unlock` before cycling-coach starts. |
-| HashiCorp Vault | `vault` | `["kv", "get", "-field=key", "secret/anthropic"]` | `-field=` is mandatory — raw `vault kv get` prints JSON. Needs `VAULT_ADDR` + `VAULT_TOKEN`. |
-| AWS Secrets Manager | `aws` | `["secretsmanager", "get-secret-value", "--secret-id", "my/secret", "--query", "SecretString", "--output", "text"]` | `--query SecretString --output text` is mandatory. Without both flags the output is JSON and the bot fails with "invalid API key". |
-| GCP Secret Manager | `gcloud` | `["secrets", "versions", "access", "latest", "--secret=anthropic"]` | Requires `gcloud auth application-default login` in the environment cycling-coach runs under. |
-| age-encrypted file | `age` | `["-d", "-i", "/Users/you/.age/key.txt", "/Users/you/secrets/anthropic.age"]` | **Absolute paths only** — `shell: false` does not expand `~` or `$HOME`. |
-
-### launchd / systemd / Docker (headless daemons)
-
-- Use **absolute paths** in `command:` — macOS `launchd` starts processes with a minimal `PATH` that excludes `/usr/local/bin` and Homebrew paths. Put `/usr/local/bin/op` (the output of `which op`) instead of bare `op`.
-- **1Password Touch ID won't work headless** — no GUI to prompt against. For daemon use, pick a backend with a pre-unlocked session (Vault, cloud secret managers, `age`-encrypted files), or supply the key via env var.
-- Stderr from the resolver command is shown on non-zero exit (last 200 chars). Stick to well-behaved CLIs — a buggy resolver that prints the secret on error will leak it to logs.
-
-### Non-interactive setup (CI / Docker / launchd)
-
-If you can't run `cycling-coach setup` in an interactive terminal, hand-edit `~/.cycling-coach/config.yaml` directly. A minimal YAML with env-supplied secrets:
-
-```yaml
-llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
-# api_key, intervals, telegram sourced from env vars:
-# ANTHROPIC_API_KEY, INTERVALS_API_KEY, INTERVALS_ATHLETE_ID, TELEGRAM_BOT_TOKEN
-```
-
-Or fully SecretRef-driven:
-
-```yaml
-llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
-  api_key:
-    source: exec
-    command: /usr/local/bin/op
-    args: [read, "op://Personal/Anthropic/credential"]
-
-intervals:
-  api_key:
-    source: exec
-    command: /usr/local/bin/vault
-    args: [kv, get, -field=key, secret/intervals]
-  athlete_id: "i12345"
-
-telegram:
-  bot_token:
-    source: exec
-    command: /usr/bin/security
-    args: [find-generic-password, -w, -s, cycling-coach, -a, telegram_bot_token, /Users/you/Library/Keychains/login.keychain-db]
-```
-
-### Downgrading
-
-SecretRef support was added in a recent release. Downgrading cycling-coach while `config.yaml` contains SecretRef blocks will fail at startup — older versions treat non-string secret values as malformed. Keep plain strings or env vars if you need to roll back.
-
-## Deploy in the cloud
-
-Cycling Coach is a single Node process holding a long-polling connection to Telegram, with state on a local volume at `$CYCLING_COACH_HOME` (defaults to `~/.cycling-coach`). It needs:
-
-- An always-on container or VM (no scale-to-zero — long-polling stops when the process stops).
-- A persistent volume mounted at `/data` (or wherever you point `CYCLING_COACH_HOME`).
-- Secrets injected as env vars, referenced from `config.yaml` via `source: env` (see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)).
-- One instance only — sessions are sharded by Telegram chat ID on local disk; do not enable autoscaling.
-- A BYOK API-key provider (`anthropic` / `openai` / `google` / `deepseek` / `qwen` / `minimax` / `kimi` / `zai` / `openrouter`). `LLM_PROVIDER=openai-codex` is **not supported in containers** — it depends on an interactive OAuth flow that writes to the data dir, which can't run headless. `LLM_PROVIDER=claude-cli` is **not supported in containers** either — it requires a locally installed Claude Code CLI that you have signed into, which a headless image does not have. `LLM_PROVIDER=codex-agent` is **not supported in containers** for the same reason, and cannot be enabled by environment variable at all — it needs `llm.codex_agent.enabled: true` in `config.yaml`.
-
-### Docker
-
-The official image is published to GHCR:
-
-```bash
-docker pull ghcr.io/yerzhansa/cycling-coach:stable
-```
-
-Run it with a persistent `/data` volume:
-
-```bash
-docker run -d --name cycling-coach \
-  -v cycling-coach-data:/data \
-  --env-file .env \
-  ghcr.io/yerzhansa/cycling-coach:stable
-```
-
-Or build the same image locally from this repo:
-
-```bash
-docker build -f packages/cycling-coach/Dockerfile -t cycling-coach .
-```
-
-Use `--env-file` rather than inline `-e KEY=value` flags — inline values land in shell history and are visible to other users via `ps`. Your `.env` should contain `LLM_PROVIDER`, `LLM_API_KEY`, `INTERVALS_API_KEY`, `INTERVALS_ATHLETE_ID`, `TELEGRAM_BOT_TOKEN`, and `CYCLING_COACH_OPERATOR_ID` for unattended cloud/container starts. Provider-specific LLM env vars still work and take precedence over `LLM_API_KEY`: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `DEEPSEEK_API_KEY`, `ALIBABA_API_KEY`, `MINIMAX_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY`, or `OPENROUTER_API_KEY`. Restrict the file to the user that invokes `docker`: `chmod 600 .env`. Note that env vars passed to a container remain visible via `docker inspect` to anything with Docker-socket access — where available, prefer Docker Compose `secrets:` or podman secrets instead. For non-container installs, the config-based secret backends (macOS Keychain, 1Password SecretRef — see [Storing secrets outside config.yaml](#storing-secrets-outside-configyaml)) keep keys out of the environment entirely.
-
-The image mounts `/data` for state and reads `/data/config.yaml` if present. The image sets `CYCLING_COACH_MANAGED_DEPLOY=1`, so `/update` is disabled and updates happen by pulling/redeploying a newer image. The container starts as root only long enough to fix managed-platform volume ownership, then drops to the non-root `node` user (uid 1000). With the env vars above, no `config.yaml` is required — `LLM_PROVIDER` + `LLM_API_KEY` covers all API-key LLM providers.
-
-For finer control (custom model, idle timeout, etc.) drop a `config.yaml` into the volume:
-
-```yaml
-# /data/config.yaml
-llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
-  api_key:
-    source: env
-    var: LLM_API_KEY
-intervals:
-  api_key:
-    source: env
-    var: INTERVALS_API_KEY
-  athlete_id: "i12345"
-telegram:
-  bot_token:
-    source: env
-    var: TELEGRAM_BOT_TOKEN
-```
-
-### Railway template
-
-Railway templates are one-click deploy recipes. The Cycling Coach template runs your own private bot on Railway 24/7, so your computer does not need to stay on.
-
-Deploy: https://railway.com/deploy/cycling-coach
-
-Railway hosts the container and volume in your Railway account. The bot reads your Railway variables, talks to Telegram, intervals.icu, and your chosen LLM provider from inside your Railway project. We do not host a shared backend, store your secrets, store your athlete data, or receive your Telegram messages. Your hosting and billing relationship is with Railway. Railway currently lists Hobby as the practical minimum for always-on apps: $5 minimum usage/month, including $5 monthly usage credits.
-
-The template uses `ghcr.io/yerzhansa/enduragent:stable`, mounts persistent state at `/data`, and has image auto-updates enabled.
-
-Before you click **Deploy**, prepare three accounts: one LLM provider account, intervals.icu, and Telegram.
-
-Fill these Railway variables:
-
-| Variable | What to enter | Where to get it |
-| --- | --- | --- |
-| `LLM_PROVIDER` | One lower-case provider id: `anthropic`, `openai`, `google`, `deepseek`, `qwen`, `minimax`, `kimi`, `zai`, or `openrouter`. Start with `anthropic` if unsure. | Pick the provider that issued your `LLM_API_KEY`. ChatGPT Plus login is not supported in Railway because it needs an interactive browser login. `LLM_PROVIDER=claude-cli` is not supported on Railway either — it needs a locally signed-in Claude Code CLI, and neither is `codex-agent`, which additionally cannot be enabled by environment variable. |
-| `LLM_API_KEY` | API key for the provider in `LLM_PROVIDER`. | [Anthropic Console](https://console.anthropic.com/), [OpenAI Platform](https://platform.openai.com/), [Google AI Studio](https://aistudio.google.com/), [DeepSeek Platform](https://platform.deepseek.com/), Alibaba Cloud DashScope, [MiniMax Platform](https://platform.minimaxi.com/), [Moonshot AI](https://platform.moonshot.ai/), [Z.AI](https://z.ai/), or [OpenRouter](https://openrouter.ai/). |
-| `INTERVALS_API_KEY` | Your intervals.icu API key. | [intervals.icu/settings](https://intervals.icu/settings) > Developer Settings. |
-| `INTERVALS_ATHLETE_ID` | Your intervals.icu athlete id, usually like `i12345`. Include the leading `i` when intervals.icu shows one. | Open your intervals.icu profile/settings URL and copy the athlete id from the URL or profile details. |
-| `TELEGRAM_BOT_TOKEN` | Token for the Telegram bot users will message. | In Telegram, open [@BotFather](https://t.me/BotFather), run `/newbot`, choose a name and username, then copy the token. |
-| `CYCLING_COACH_OPERATOR_ID` | Your numeric Telegram user id, for example `123456789`. This is not the bot token and not the bot username. | In Telegram, message a helper bot such as [@userinfobot](https://t.me/userinfobot) and copy your numeric id. Only this Telegram user is allowed to talk to your bot by default. |
-
-Railway does not run `cycling-coach setup`; the variables above are the setup. After deploy, open Telegram and send `/start` to the bot you created with BotFather. If a value is wrong, edit the service variables in Railway and redeploy or restart the service.
-
-### Other platforms
-
-- **Fly.io** — works with the same Dockerfile. In `fly.toml` set `auto_stop_machines = false` and `min_machines_running = 1`, otherwise Fly will stop the machine on idle inbound HTTP and the bot stops polling. Mount a 1 GB volume at `/data`.
-- **VPS (Hetzner, DigitalOcean, Lightsail, Oracle Free)** — `docker run` as above, or use systemd. Mount a host directory at `/data` for state.
-- **Avoid** scale-to-zero serverless (Lambda, Cloud Run with `min=0`, Cloudflare Workers, Vercel) and platforms with ephemeral filesystems (Heroku) — both break this app.
+| `/plan` | Builds a periodized plan from your data, asks to push it to the calendar |
+| `/workout` | Suggests today's session from current fitness, fatigue and form |
+| `/status` | Fitness, fatigue, form, and coaching notes |
+| `/sync` | Pushes the next 1–2 weeks of planned workouts to intervals.icu |
+| `/whatsnew` | What changed in the latest release |
+| `/update` | Updates an npm install to the verified registry version |
+
+Free-form chat works too, and the commands are identical whether your bot is paired to the Mac app
+or self-hosted. Who can talk to your bot: [docs/telegram.md](./guides/telegram.md).
+
+## Docs
+
+The website — what it is, how it works, screenshots and the full privacy policy — lives at
+**<https://enduragent.icu/>**. The reference material is here in the repo:
+
+| | |
+|---|---|
+| [Configuration](./guides/configuration.md) | `config.yaml`, env vars, and where to keep secrets |
+| [Providers](./guides/providers.md) | Every model lane, in detail |
+| [Deploy](./guides/deploy.md) | Railway, containers, and hosts that break this app |
+| [Telegram](./guides/telegram.md) | Allowlist, pairing, adding friends |
+| [Architecture](./guides/architecture.md) | Monorepo layout and conventions |
+| [Privacy](./guides/privacy.md) | Every outbound request, named |
 
 ## Development
 
 ```bash
-npm run check       # tsc --noEmit + oxlint
-npm test            # vitest (112 tests)
-npm run test:watch  # vitest watch mode
-npm run lint        # oxlint
-npm run fmt         # oxfmt
-npm run build       # tsc → dist/
+git clone git@github.com:yerzhansa/enduragent.git
+cd enduragent && npm install && npm run build
+npm run dev     # auto-reload
+npm run check   # tsc --noEmit + oxlint
+npm test        # vitest
 ```
 
-### Separating dev from prod
+Set `CYCLING_COACH_HOME=~/.cycling-coach-dev` in `.env` so dev never collides with your real
+install. Built with the [Vercel AI SDK](https://sdk.vercel.ai/),
+[grammY](https://grammy.dev/), [Zod](https://zod.dev/), TypeScript, Vitest and
+[oxc](https://oxc.rs/); the desktop app is Electron.
 
-Set `CYCLING_COACH_HOME` to isolate `npm run dev` from the globally-installed
-`cycling-coach` CLI. Each dir has its own `config.yaml`, `auth-profiles.json`,
-`sessions/`, and `memory/`, so dev and prod never collide:
+## Not medical advice
 
-```bash
-# .env (loaded only by `npm run dev`)
-CYCLING_COACH_HOME=~/.cycling-coach-dev
-```
-
-The global install keeps using `~/.cycling-coach`. For full isolation, run
-`npm run setup` once against the dev home to register a separate Telegram bot
-token and (recommended) a separate intervals.icu athlete.
-
-## Project structure
-
-```
-src/
-  cycling/           # Pure domain logic (extracted from training-app)
-    schemas.ts       # Zod schemas + types
-    zones.ts         # calculateCyclingZones(ftp)
-    periodization.ts # Model selection, phases, volume tiers
-    plan-builder.ts  # buildPlanSkeleton(profile)
-    feasibility.ts   # FTP/W:kg goal assessment
-    templates.ts     # Sample week builder
-  agent/
-    core.ts          # CyclingCoachAgent (Vercel AI SDK v6)
-    tools.ts         # 12 tool definitions
-    system-prompt.ts # SOUL + skills + memory → system prompt
-    memory.ts        # File-based memory system
-  channels/
-    telegram.ts      # grammY bot
-  config.ts          # Config loader (env + yaml)
-  index.ts           # Entry point
-skills/              # Markdown domain knowledge (loaded into system prompt)
-SOUL.md              # Coaching persona
-tests/               # 112 tests
-```
-
-## Tech stack
-
-| Dependency | Version | Purpose |
-|-----------|---------|---------|
-| [Vercel AI SDK](https://sdk.vercel.ai/) | 6.x | Model-agnostic LLM interface with tool calling |
-| [intervals-icu-api](https://github.com/yerzhansa/intervals-icu-api) | local | TypeScript client for intervals.icu |
-| [grammY](https://grammy.dev/) | 1.x | Telegram bot framework |
-| [Zod](https://zod.dev/) | 4.x | Schema validation |
-| [oxlint](https://oxc.rs/) | 1.x | Linter |
-| [oxfmt](https://oxc.rs/) | 0.x | Formatter |
-| [TypeScript](https://www.typescriptlang.org/) | 6.x | Type system |
-| [Vitest](https://vitest.dev/) | 4.x | Testing |
+Enduragent is not a doctor and not a certified coach. A workout on your calendar is a suggestion,
+not an instruction.
 
 ## Credits
 
-Cycling Coach's data substrate (the "Reference" submodule that grounds coaching in verified athlete numerics) is a port of [section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT-licensed). See [`NOTICE.md`](./NOTICE.md) for the full attribution and the list of modifications introduced during the port.
+The data substrate that grounds coaching in verified athlete numerics is a port of
+[section-11](https://github.com/CrankAddict/section-11) (CrankAddict, MIT). Full attribution in
+[`NOTICE.md`](./NOTICE.md).
+
+Follow [@yerzhansa](https://x.com/yerzhansa) for updates.
 
 ## License
 
