@@ -1840,6 +1840,15 @@ describe("local coach composition", () => {
       config(home),
     );
 
+    await lifecycle.operations.configureRuntime({ session: { idleMinutes: 12 } });
+    expect(
+      (
+        parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8")) as {
+          session: Record<string, unknown>;
+        }
+      ).session,
+    ).not.toHaveProperty("timezonePinned");
+
     await lifecycle.operations.configureRuntime({
       session: { timezone: "Europe/Berlin" },
     });
@@ -1849,10 +1858,11 @@ describe("local coach composition", () => {
       retained_top_level: { future: true },
       session: {
         historyTokenBudgetRatio: 0.3,
-        idleMinutes: 0,
+        idleMinutes: 12,
         dailyResetHour: 4,
         resetArchiveRetentionDays: 0,
         timezone: "Europe/Berlin",
+        timezonePinned: true,
         retained_session_field: { future: true },
       },
     });
@@ -1879,6 +1889,15 @@ describe("local coach composition", () => {
         }
       ).session.retained_session_field,
     ).toEqual({ future: true });
+    const persistedSession = (
+      parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8")) as {
+        session: Record<string, unknown>;
+      }
+    ).session;
+    expect(persistedSession.timezonePinned).toBe(true);
+    expect((await lifecycle.operations.getRuntimeConfig({})).session).not.toHaveProperty(
+      "timezonePinned",
+    );
     expect(runWindowAfter).not.toHaveBeenCalled();
     await lifecycle.close();
   });

@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 import { durableAtomicReplace } from "./durable-atomic-replace.js";
@@ -7,8 +7,6 @@ import { SESSION_TIMEZONE_PIN_FILE_NAME } from "./session-timezone-contract.js";
 
 export * from "./session-timezone-contract.js";
 
-export const SESSION_TIMEZONE_PIN_DIRECTORY_MODE = 0o700;
-export const SESSION_TIMEZONE_PIN_FILE_MODE = 0o600;
 export const SESSION_CONFIG_FILE_MODE = 0o600;
 
 const MAXIMUM_SESSION_TIMEZONE_PIN_FILE_BYTES = 256;
@@ -64,34 +62,16 @@ export async function readSessionTimezonePin(stateRoot: string): Promise<boolean
   return parsed.pinned === true;
 }
 
-export async function pinSessionTimezone(input: {
-  readonly stateRoot: string;
-  readonly env?: Record<string, string | undefined>;
-  readonly platform?: NodeJS.Platform;
-}): Promise<boolean> {
-  if (environmentTimezone(input.env ?? process.env) !== undefined) return false;
-  try {
-    await mkdir(input.stateRoot, {
-      recursive: true,
-      mode: SESSION_TIMEZONE_PIN_DIRECTORY_MODE,
-    });
-    const outcome = await durableAtomicReplace({
-      root: input.stateRoot,
-      fileName: SESSION_TIMEZONE_PIN_FILE_NAME,
-      contents: `${JSON.stringify({ schemaVersion: 1, pinned: true })}\n`,
-      mode: SESSION_TIMEZONE_PIN_FILE_MODE,
-      platform: input.platform ?? process.platform,
-    });
-    return outcome.state === "durably-committed";
-  } catch {
-    return false;
-  }
-}
-
 function storedSessionTimezone(document: unknown): string | undefined {
   if (!isRecord(document) || !isRecord(document.session)) return undefined;
   const timezone = document.session.timezone;
   return typeof timezone === "string" ? timezone : undefined;
+}
+
+function storedSessionTimezonePinned(document: unknown): boolean {
+  return (
+    isRecord(document) && isRecord(document.session) && document.session.timezonePinned === true
+  );
 }
 
 function withSessionTimezone(document: Record<string, unknown>, timezone: string): string {
@@ -116,8 +96,6 @@ export async function adoptDeviceTimezoneAtStart(input: AdoptDeviceTimezoneInput
   try {
     if (environmentTimezone(environment) !== undefined) return;
     if (await readSessionTimezonePin(input.stateRoot)) return;
-    const host = (input.hostTimezone ?? hostTimezoneFromRuntime)()?.trim() ?? "";
-    if (host.length === 0 || !isValidTimezone(host)) return;
     let contents: string;
     try {
       contents = await readFile(input.configPath, "utf8");
@@ -132,6 +110,9 @@ export async function adoptDeviceTimezoneAtStart(input: AdoptDeviceTimezoneInput
       return;
     }
     if (!isRecord(document)) return;
+    if (storedSessionTimezonePinned(document)) return;
+    const host = (input.hostTimezone ?? hostTimezoneFromRuntime)()?.trim() ?? "";
+    if (host.length === 0 || !isValidTimezone(host)) return;
     if ((storedSessionTimezone(document)?.trim() ?? "") === host) return;
     const outcome = await durableAtomicReplace({
       root: dirname(input.configPath),

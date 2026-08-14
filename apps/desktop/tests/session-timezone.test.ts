@@ -2,15 +2,11 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
-import { DESKTOP_RENDERER_URL } from "../src/main/constants.js";
-import { installDesktopSessionTimezoneIpc } from "../src/main/session-timezone-ipc.js";
+import { parse as parseYaml, stringify as toYaml } from "yaml";
 import {
   adoptDeviceTimezoneAtStart,
-  pinSessionTimezone,
   readSessionTimezonePin,
   sessionTimezonePinPath,
-  SESSION_TIMEZONE_PIN_FILE_NAME,
 } from "../src/main/session-timezone.js";
 
 const HARARE = "Africa/Harare";
@@ -80,9 +76,14 @@ describe("desktop session timezone adoption", () => {
     expect(await install.read()).toEqual(before);
   });
 
-  it("never rewrites the stored zone once the athlete pinned one", async () => {
+  it("never rewrites the stored zone when config embeds the athlete pin", async () => {
     const install = await createInstall(HARARE);
-    expect(await pinSessionTimezone({ stateRoot: install.stateRoot, env: {} })).toEqual(true);
+    const document = parseYaml(await install.read()) as Record<string, unknown>;
+    document.session = {
+      ...(document.session as Record<string, unknown>),
+      timezonePinned: true,
+    };
+    await writeFile(install.configPath, toYaml(document), "utf8");
     const before = await install.read();
     await adoptDeviceTimezoneAtStart({
       configPath: install.configPath,
@@ -94,19 +95,47 @@ describe("desktop session timezone adoption", () => {
     expect(await install.storedZone()).toEqual(HARARE);
   });
 
-  it("writes the pin marker as one durable line of pinned json", async () => {
+  it.each([false, "true", { pinned: true }])(
+    "treats a non-true embedded marker as unpinned: %o",
+    async (timezonePinned) => {
+      const install = await createInstall(HARARE);
+      const document = parseYaml(await install.read()) as Record<string, unknown>;
+      document.session = {
+        ...(document.session as Record<string, unknown>),
+        timezonePinned,
+      };
+      await writeFile(install.configPath, toYaml(document), "utf8");
+
+      await adoptDeviceTimezoneAtStart({
+        configPath: install.configPath,
+        stateRoot: install.stateRoot,
+        env: {},
+        hostTimezone: () => QYZYLORDA,
+      });
+
+      expect(await install.storedZone()).toEqual(QYZYLORDA);
+    },
+  );
+
+  it("keeps a timezone pinned by the legacy sidecar", async () => {
     const install = await createInstall(HARARE);
-    expect(await pinSessionTimezone({ stateRoot: install.stateRoot, env: {} })).toEqual(true);
-    expect(await readFile(sessionTimezonePinPath(install.stateRoot), "utf8")).toEqual(
-      '{"schemaVersion":1,"pinned":true}\n',
+    await writeFile(
+      sessionTimezonePinPath(install.stateRoot),
+      `${JSON.stringify({ schemaVersion: 1, pinned: true })}\n`,
+      { mode: 0o600 },
     );
-    expect(sessionTimezonePinPath(install.stateRoot)).toEqual(
-      join(install.stateRoot, SESSION_TIMEZONE_PIN_FILE_NAME),
-    );
+    const before = await install.read();
+    await adoptDeviceTimezoneAtStart({
+      configPath: install.configPath,
+      stateRoot: install.stateRoot,
+      env: {},
+      hostTimezone: () => QYZYLORDA,
+    });
+    expect(await install.read()).toEqual(before);
     expect(await readSessionTimezonePin(install.stateRoot)).toEqual(true);
   });
 
-  it("refuses to adopt or to pin while COACH_TZ owns the timezone", async () => {
+  it("refuses to adopt while COACH_TZ owns the timezone", async () => {
     const install = await createInstall(HARARE);
     const before = await install.read();
     const env = { COACH_TZ: QYZYLORDA };
@@ -117,7 +146,6 @@ describe("desktop session timezone adoption", () => {
       hostTimezone: () => QYZYLORDA,
     });
     expect(await install.read()).toEqual(before);
-    expect(await pinSessionTimezone({ stateRoot: install.stateRoot, env })).toEqual(false);
     expect(await readSessionTimezonePin(install.stateRoot)).toEqual(false);
     await expect(readFile(sessionTimezonePinPath(install.stateRoot), "utf8")).rejects.toThrow();
   });
@@ -179,78 +207,12 @@ describe("desktop session timezone adoption", () => {
       { mode: 0o600 },
     );
     expect(await readSessionTimezonePin(install.stateRoot)).toEqual(false);
-  });
-});
-
-describe("desktop session timezone ipc", () => {
-  function installIpc(pin: () => Promise<boolean>) {
-    const handlers = new Map<string, (...args: unknown[]) => unknown>();
-    const mainFrame = { url: DESKTOP_RENDERER_URL };
-    const webContents = { isDestroyed: () => false, mainFrame };
-    const window = { isDestroyed: () => false, webContents } as never;
-    const dispose = installDesktopSessionTimezoneIpc({
-      ipcMain: {
-        handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
-          handlers.set(channel, handler);
-        },
-        removeHandler: (channel: string) => {
-          handlers.delete(channel);
-        },
-      } as never,
-      currentWindow: () => window,
-      pin,
+    await adoptDeviceTimezoneAtStart({
+      configPath: install.configPath,
+      stateRoot: install.stateRoot,
+      env: {},
+      hostTimezone: () => QYZYLORDA,
     });
-    const event = { sender: webContents, senderFrame: mainFrame } as never;
-    return { handlers, dispose, event };
-  }
-
-  it("pins on the single trusted channel and reports the write outcome", async () => {
-    const install = await createInstall(HARARE);
-    const ipc = installIpc(() => pinSessionTimezone({ stateRoot: install.stateRoot, env: {} }));
-    const handler = ipc.handlers.get("desktop:session-timezone:pin");
-    expect(handler).toBeDefined();
-    expect(await handler?.(ipc.event)).toEqual(true);
-    expect(await readSessionTimezonePin(install.stateRoot)).toEqual(true);
-    ipc.dispose();
-    expect(ipc.handlers.get("desktop:session-timezone:pin")).toBeUndefined();
-  });
-
-  it("refuses a pin request that carries arguments", async () => {
-    let calls = 0;
-    const ipc = installIpc(async () => {
-      calls += 1;
-      return true;
-    });
-    const handler = ipc.handlers.get("desktop:session-timezone:pin");
-    await expect(Promise.resolve(handler?.(ipc.event, "follow"))).rejects.toBeInstanceOf(TypeError);
-    expect(calls).toEqual(0);
-    ipc.dispose();
-  });
-
-  it("refuses a pin request from an untrusted frame", async () => {
-    let calls = 0;
-    const handlers = new Map<string, (...args: unknown[]) => unknown>();
-    const dispose = installDesktopSessionTimezoneIpc({
-      ipcMain: {
-        handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
-          handlers.set(channel, handler);
-        },
-        removeHandler: (channel: string) => {
-          handlers.delete(channel);
-        },
-      } as never,
-      currentWindow: () => undefined,
-      pin: async () => {
-        calls += 1;
-        return true;
-      },
-    });
-    const hostileFrame = { url: "https://example.test/" };
-    const hostileContents = { isDestroyed: () => false, mainFrame: hostileFrame };
-    const event = { sender: hostileContents, senderFrame: hostileFrame } as never;
-    const handler = handlers.get("desktop:session-timezone:pin");
-    await expect(Promise.resolve(handler?.(event))).rejects.toThrow();
-    expect(calls).toEqual(0);
-    dispose();
+    expect(await install.storedZone()).toEqual(QYZYLORDA);
   });
 });

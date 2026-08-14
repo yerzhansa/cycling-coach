@@ -39,7 +39,6 @@ export const DESKTOP_TRAY_TELEGRAM_STATUS_CHANNEL = "desktop:tray:telegram-statu
 export const DESKTOP_LIFECYCLE_CHANNEL = "desktop:daemon-lifecycle" as const;
 export const DESKTOP_OPEN_EXTERNAL_CHANNEL = "desktop:open-external" as const;
 export const DESKTOP_APPEARANCE_CHANNEL = "desktop:set-appearance" as const;
-export const DESKTOP_SESSION_TIMEZONE_PIN_CHANNEL = "desktop:session-timezone:pin" as const;
 export const DESKTOP_WINDOW_LIGHT_BACKGROUND = "#f4f6f5" as const;
 export const DESKTOP_WINDOW_DARK_BACKGROUND = "#0f1520" as const;
 export const DESKTOP_WINDOW_WIDTH = 1_180 as const;

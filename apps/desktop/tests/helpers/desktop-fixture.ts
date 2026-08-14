@@ -166,7 +166,7 @@ export async function launchDesktopFixture(input: {
   readonly colorScheme: "light" | "dark";
   readonly reducedMotion: boolean;
   readonly seedConfig?: boolean;
-  readonly sessionTimezonePinned?: boolean;
+  readonly sessionTimezonePinned?: false | "embedded" | "legacy";
   readonly extraEnv?: Readonly<Record<string, string>>;
 }): Promise<RunningDesktopFixture> {
   if (!/^[A-Za-z0-9_-]{43}$/.test(input.token)) throw new TypeError("invalid fixture token");
@@ -184,10 +184,10 @@ export async function launchDesktopFixture(input: {
     mkdir(userData, { recursive: true, mode: 0o700 }),
     mkdir(desktopPreferences, { recursive: true, mode: 0o700 }),
   ]);
-  const sessionTimezonePinned = input.sessionTimezonePinned !== false;
+  const sessionTimezonePinned = input.sessionTimezonePinned ?? "legacy";
   const sessionTimezonePinFile = join(desktopPreferences, SESSION_TIMEZONE_PIN_FILE_NAME);
   await Promise.all([
-    ...(sessionTimezonePinned
+    ...(sessionTimezonePinned === "legacy"
       ? [
           writeFile(
             sessionTimezonePinFile,
@@ -197,26 +197,29 @@ export async function launchDesktopFixture(input: {
         ]
       : []),
     writeFile(join(configDir, "daemon.token"), `${input.token}\n`, { mode: 0o600 }),
-    ...(input.seedConfig === false ? [] : [
-    writeFile(
-      join(configDir, "config.yaml"),
-      [
-        "data_source: store",
-        `data_dir: ${JSON.stringify(athleteHome)}`,
-        "llm:",
-        "  provider: anthropic",
-        "  model: fixture",
-        "  api_key: fixture",
-        "intervals:",
-        "  api_key: ''",
-        "  athlete_id: '0'",
-        "session:",
-        "  timezone: UTC",
-        "",
-      ].join("\n"),
-      { mode: 0o600 },
-    ),
-    ]),
+    ...(input.seedConfig === false
+      ? []
+      : [
+          writeFile(
+            join(configDir, "config.yaml"),
+            [
+              "data_source: store",
+              `data_dir: ${JSON.stringify(athleteHome)}`,
+              "llm:",
+              "  provider: anthropic",
+              "  model: fixture",
+              "  api_key: fixture",
+              "intervals:",
+              "  api_key: ''",
+              "  athlete_id: '0'",
+              "session:",
+              "  timezone: UTC",
+              ...(sessionTimezonePinned === "embedded" ? ["  timezonePinned: true"] : []),
+              "",
+            ].join("\n"),
+            { mode: 0o600 },
+          ),
+        ]),
   ]);
   const lock = await acquireWriteLock({
     configDir,
