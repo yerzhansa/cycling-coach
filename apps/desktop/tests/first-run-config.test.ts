@@ -283,14 +283,16 @@ describe("desktop first-run configuration", () => {
     });
   });
 
-  it("prepares the home before seeding and constructing the daemon supervisor", async () => {
+  it("prepares the home, seeds the config, and adopts the device timezone before constructing the daemon supervisor", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
     const prepareCall = source.indexOf("await prepareDesktopAthleteHome(environment)");
     const seedCall = source.indexOf("await seedFirstRunConfig({ env: environment });");
+    const adoptTimezoneCall = source.indexOf("await adoptDeviceTimezoneAtStart({");
     const supervisorConstruction = source.indexOf("new DesktopDaemonSupervisor(");
     expect(prepareCall).toBeGreaterThan(-1);
     expect(seedCall).toBeGreaterThan(prepareCall);
-    expect(supervisorConstruction).toBeGreaterThan(seedCall);
+    expect(adoptTimezoneCall).toBeGreaterThan(seedCall);
+    expect(supervisorConstruction).toBeGreaterThan(adoptTimezoneCall);
     expect(source).toContain('process.stderr.write("desktop-first-run-config-failure seed\\n");');
   });
 });

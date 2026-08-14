@@ -52,11 +52,11 @@
     {
       "id": "training.setup.readiness-recovery",
       "surface": "training-setup",
-      "expected": "Setup remains locked while authoritative readiness is loading or unavailable, disables its mutation controls, and restores them only after Retry returns a complete provider, training-data, and intake result.",
+      "expected": "Setup remains locked while authoritative readiness is loading, retries cold-start reads before reporting unavailable, blocks mutation controls when unavailable, and restores them through Retry only after a complete provider, training-data, and intake result.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop-renderer/tests/setup-readiness.test.tsx > fails closed while the durable setup read is still loading",
-        "apps/desktop-renderer/tests/setup-readiness.test.tsx > shows unavailable setup status, disables controls, and recovers through Retry",
+        "apps/desktop-renderer/tests/setup-readiness.test.tsx > retries a cold start before it calls setup status unavailable, and recovers through Retry",
         "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > keeps Start coaching disabled until every requirement is met"
       ]
     },
