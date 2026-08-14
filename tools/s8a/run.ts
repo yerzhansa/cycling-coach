@@ -257,10 +257,11 @@ export function spawnScenarioChild(
   });
   if (result.error?.code === "ETIMEDOUT") {
     console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=timeout`);
+    const childStage = parseLastScenarioChildStage(result.stdout ?? "", safeScenarioId);
     return {
       verdict: null,
       exitCode: 2,
-      stderr: `scenario child timed out: scenario=${safeScenarioId} stage=${params.stage}`,
+      stderr: `scenario child timed out: scenario=${safeScenarioId} stage=${params.stage} child-stage=${childStage}`,
     };
   }
   const stdoutLines = (result.stdout ?? "").split("\n").filter((l) => l.trim() !== "");
@@ -279,6 +280,24 @@ export function spawnScenarioChild(
   const exitCode = result.status ?? 2;
   console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=exit-${exitCode}`);
   return { verdict, exitCode, stderr: result.stderr ?? "" };
+}
+
+export function parseLastScenarioChildStage(output: string, scenarioId: string): string {
+  const safeScenarioId = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(scenarioId) ? scenarioId : "unknown";
+  let last = "none";
+  for (const line of output.split("\n")) {
+    const match =
+      /^S8A_CHILD_STAGE (START|DONE) scenario=([a-z0-9]+(?:-[a-z0-9]+)*) stage=(setup|turn|finish-replay|finish-record|cleanup)(?: turn=(0|[1-9][0-9]*))?$/.exec(
+        line.trimEnd(),
+      );
+    if (match === null || match[2] !== safeScenarioId) continue;
+    const phase = match[1].toLowerCase();
+    const stage = match[3];
+    const turn = match[4];
+    if ((stage === "turn") !== (turn !== undefined)) continue;
+    last = stage === "turn" ? `turn-${turn}-${phase}` : `${stage}-${phase}`;
+  }
+  return last;
 }
 
 export type SelfTestDiffSpawn = (
