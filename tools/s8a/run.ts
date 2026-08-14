@@ -283,6 +283,7 @@ export function spawnScenarioChild(
 }
 
 export function parseLastScenarioChildStage(output: string, scenarioId: string): string {
+  const maxDiagnosticTurnIndex = 99;
   const safeScenarioId = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(scenarioId) ? scenarioId : "unknown";
   let last = "none";
   for (const line of output.split("\n")) {
@@ -295,6 +296,7 @@ export function parseLastScenarioChildStage(output: string, scenarioId: string):
     const stage = match[3];
     const turn = match[4];
     if ((stage === "turn") !== (turn !== undefined)) continue;
+    if (turn !== undefined && Number.parseInt(turn, 10) > maxDiagnosticTurnIndex) continue;
     last = stage === "turn" ? `turn-${turn}-${phase}` : `${stage}-${phase}`;
   }
   return last;
