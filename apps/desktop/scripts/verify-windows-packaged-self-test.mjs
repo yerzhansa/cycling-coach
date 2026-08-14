@@ -239,7 +239,7 @@ function parseSingleJsonLine(result, label) {
   }
 }
 
-function validateReadyFrame(value) {
+export function validateReadyFrame(value) {
   checked(value !== null && typeof value === "object", "packaged readiness was invalid");
   checked(value.url === "enduragent://app/index.html", "packaged renderer URL was invalid");
   checked(typeof value.rpcUrl === "string", "packaged readiness omitted the RPC address");
@@ -249,6 +249,7 @@ function validateReadyFrame(value) {
     "packaged RPC address was not loopback",
   );
   for (const field of [
+    "hasSingleInstanceLock",
     "noNodeGlobals",
     "rpcConnected",
     "blockedOffPort",
@@ -260,6 +261,13 @@ function validateReadyFrame(value) {
   }
   checked(Array.isArray(value.bridgeKeys) && value.bridgeKeys.length > 0, "preload bridge was absent");
   return value;
+}
+
+export function requireRunningPrimaryBeforeSecondLaunch(child) {
+  checked(
+    child.exitCode === null && child.signalCode === null,
+    "packaged Windows primary exited before second launch",
+  );
 }
 
 export function validateSelfTestTerminal(value) {
@@ -447,6 +455,7 @@ export async function runWindowsPackagedSelfTest(input = {}) {
   const scratch = await mkdtemp(join(base, "eaw-"));
   const security = createSecuritySmokeEnvironment(scratch);
   const localAppData = join(scratch, "local-app-data");
+  const windowsUserData = join(localAppData, "Enduragent");
   const launchEnvironment = {
     ...createSecuritySmokeLaunchEnvironment(process.env, security, process.platform),
     ENDURAGENT_ACCEPTANCE_HIDDEN: "1",
@@ -462,6 +471,7 @@ export async function runWindowsPackagedSelfTest(input = {}) {
       mkdir(security.operatorHome, { recursive: true }),
       mkdir(security.electronUserData, { recursive: true }),
       mkdir(localAppData, { recursive: true }),
+      mkdir(windowsUserData, { recursive: true }),
     ]);
     await writeFile(
       join(security.configDirectory, "config.yaml"),
@@ -480,10 +490,14 @@ export async function runWindowsPackagedSelfTest(input = {}) {
         "",
       ].join("\n"),
     );
-    const launchArguments = ["--desktop-security-smoke", ...security.extraArguments];
+    const launchArguments = [
+      "--desktop-security-smoke",
+      `--desktop-security-output=${security.screenshotPath}`,
+    ];
     running = launchApplication(executable, launchArguments, launchEnvironment);
     const ready = validateReadyFrame(await running.ready);
     const token = (await readFile(join(security.configDirectory, "daemon.token"), "utf8")).trim();
+    requireRunningPrimaryBeforeSecondLaunch(running.child);
     const second = await capture(executable, launchArguments, {
       cwd: dirname(executable),
       env: launchEnvironment,

@@ -91,6 +91,26 @@ export interface PackagedSelfTestTerminal {
 
 export function validateSelfTestTerminal(value: unknown): PackagedSelfTestTerminal;
 
+export interface PackagedReadyFrame {
+  readonly url: "enduragent://app/index.html";
+  readonly rpcUrl: string;
+  readonly hasSingleInstanceLock: true;
+  readonly bridgeKeys: readonly unknown[];
+  readonly noNodeGlobals: true;
+  readonly rpcConnected: true;
+  readonly blockedOffPort: true;
+  readonly syncChipPresent: true;
+  readonly credentialStatusesMetadataOnly: true;
+  readonly tokenAbsentInRendererSurfaces: true;
+}
+
+export function validateReadyFrame(value: unknown): PackagedReadyFrame;
+
+export function requireRunningPrimaryBeforeSecondLaunch(child: {
+  readonly exitCode: number | null;
+  readonly signalCode: string | null;
+}): void;
+
 export function validatePackagedSecondLaunch(
   result: PackagedSecondLaunchResult,
   privateValues: readonly string[],

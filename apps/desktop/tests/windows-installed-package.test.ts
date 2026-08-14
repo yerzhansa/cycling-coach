@@ -19,11 +19,13 @@ import {
 import {
   createSecuritySmokeStageObserver,
   observeProcessExit,
+  requireRunningPrimaryBeforeSecondLaunch,
   requestPackagedShutdown,
   removeWindowsScratch,
   SECURITY_SMOKE_SHUTDOWN_STAGES,
   throwPackagedCompletionFailures,
   validatePackagedSecondLaunch,
+  validateReadyFrame,
   validateSelfTestTerminal,
   waitForPackagedApplicationExit,
 } from "../scripts/verify-windows-packaged-self-test.mjs";
@@ -495,6 +497,42 @@ describe("packaged second launch", () => {
       );
     } catch (error) {
       expect(String(error)).not.toContain(privateValue);
+    }
+  });
+});
+
+describe("packaged primary identity", () => {
+  const ready = {
+    url: "enduragent://app/index.html",
+    rpcUrl: "ws://127.0.0.1:18473",
+    hasSingleInstanceLock: true,
+    bridgeKeys: ["desktop"],
+    noNodeGlobals: true,
+    rpcConnected: true,
+    blockedOffPort: true,
+    syncChipPresent: true,
+    credentialStatusesMetadataOnly: true,
+    tokenAbsentInRendererSurfaces: true,
+  };
+
+  it("requires the ready primary to retain Electron's single-instance lock", () => {
+    expect(validateReadyFrame(ready)).toBe(ready);
+    expect(() => validateReadyFrame({ ...ready, hasSingleInstanceLock: false })).toThrow(
+      /^packaged security assertion failed at hasSingleInstanceLock$/u,
+    );
+  });
+
+  it("rejects an exited primary before starting the second process", () => {
+    expect(() =>
+      requireRunningPrimaryBeforeSecondLaunch({ exitCode: null, signalCode: null }),
+    ).not.toThrow();
+    for (const child of [
+      { exitCode: 0, signalCode: null },
+      { exitCode: null, signalCode: "SIGTERM" },
+    ]) {
+      expect(() => requireRunningPrimaryBeforeSecondLaunch(child)).toThrow(
+        /^packaged Windows primary exited before second launch$/u,
+      );
     }
   });
 });

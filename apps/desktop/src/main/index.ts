@@ -1029,6 +1029,7 @@ async function runDesktop(): Promise<void> {
       const result = {
         url: rendererResult.url,
         rpcUrl: daemonLifecycle.connection().url,
+        hasSingleInstanceLock: app.hasSingleInstanceLock(),
         bridgeKeys: rendererResult.bridgeKeys,
         noNodeGlobals: rendererResult.noNodeGlobals,
         rpcConnected: rendererResult.rpcConnected,

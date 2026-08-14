@@ -148,6 +148,15 @@ describe("Windows parity automation contract", () => {
     expect(singleInstanceLock).toBeGreaterThan(evidenceFailureExit);
     expect(loserBranch).toBeGreaterThan(singleInstanceLock);
     expect(loserCall).toBeGreaterThan(loserBranch);
+    const packagedLaunchArguments = packagedSelfTest.slice(
+      packagedSelfTest.indexOf("const launchArguments"),
+      packagedSelfTest.indexOf("running = launchApplication"),
+    );
+    expect(packagedLaunchArguments).toContain("--desktop-security-output=");
+    expect(packagedLaunchArguments).not.toContain("--user-data-dir=");
+    expect(packagedSelfTest).toContain('const windowsUserData = join(localAppData, "Enduragent");');
+    expect(packagedSelfTest).toContain("mkdir(windowsUserData, { recursive: true })");
+    expect(packagedSelfTest).toContain("requireRunningPrimaryBeforeSecondLaunch(running.child);");
     const shutdownStart = desktopMain.indexOf("const shutdown = (): Promise<void> =>");
     const residencyClosed = desktopMain.indexOf(
       'reportSecuritySmokeShutdownStage("residency-closed")',
