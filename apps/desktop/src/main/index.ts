@@ -59,6 +59,7 @@ import { requireDesktopDaemonHome } from "./daemon-home-binding.js";
 import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-config.js";
 import {
   waitForSecuritySmokeShutdown,
+  writeSecuritySmokeSecondInstance,
   writeSecuritySmokeShutdownStage,
   type SecuritySmokeShutdownStage,
 } from "./security-smoke-shutdown.js";
@@ -1064,10 +1065,25 @@ async function runDesktop(): Promise<void> {
   }
 }
 
+async function exitSecondaryDesktop(): Promise<void> {
+  const evidenceRequired =
+    process.argv.includes("--desktop-security-smoke") && desktopAcceptanceHidden;
+  if (!evidenceRequired) {
+    app.exit(0);
+    return;
+  }
+  try {
+    await writeSecuritySmokeSecondInstance(process.stdout);
+    app.exit(0);
+  } catch {
+    app.exit(1);
+  }
+}
+
 const primaryInstance = app.requestSingleInstanceLock();
 
 if (!primaryInstance) {
-  app.exit(0);
+  void exitSecondaryDesktop();
 } else {
   disableChromiumMediaSessionIntegration();
   const runPrimaryDesktop = process.argv.includes("--desktop-runtime-smoke")

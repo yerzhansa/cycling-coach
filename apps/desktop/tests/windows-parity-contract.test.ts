@@ -124,6 +124,30 @@ describe("Windows parity automation contract", () => {
     expect(nativeEvidence).toContain("Get-CimInstance Win32_Process -Filter");
     expect(nativeEvidence).not.toContain("[IO.Path]::GetFileName");
     expect(nativeEvidence).not.toContain("Invoke-Expression");
+    const secondaryExit = desktopMain.indexOf("async function exitSecondaryDesktop");
+    const evidenceGate = desktopMain.indexOf(
+      'process.argv.includes("--desktop-security-smoke") && desktopAcceptanceHidden',
+      secondaryExit,
+    );
+    const normalExit = desktopMain.indexOf("app.exit(0);", evidenceGate);
+    const markerWrite = desktopMain.indexOf(
+      "await writeSecuritySmokeSecondInstance(process.stdout);",
+      normalExit,
+    );
+    const evidenceExit = desktopMain.indexOf("app.exit(0);", markerWrite);
+    const evidenceFailureExit = desktopMain.indexOf("app.exit(1);", evidenceExit);
+    const singleInstanceLock = desktopMain.indexOf("app.requestSingleInstanceLock()", secondaryExit);
+    const loserBranch = desktopMain.indexOf("if (!primaryInstance)", singleInstanceLock);
+    const loserCall = desktopMain.indexOf("void exitSecondaryDesktop();", loserBranch);
+    expect(secondaryExit).toBeGreaterThanOrEqual(0);
+    expect(evidenceGate).toBeGreaterThan(secondaryExit);
+    expect(normalExit).toBeGreaterThan(evidenceGate);
+    expect(markerWrite).toBeGreaterThan(normalExit);
+    expect(evidenceExit).toBeGreaterThan(markerWrite);
+    expect(evidenceFailureExit).toBeGreaterThan(evidenceExit);
+    expect(singleInstanceLock).toBeGreaterThan(evidenceFailureExit);
+    expect(loserBranch).toBeGreaterThan(singleInstanceLock);
+    expect(loserCall).toBeGreaterThan(loserBranch);
     const shutdownStart = desktopMain.indexOf("const shutdown = (): Promise<void> =>");
     const residencyClosed = desktopMain.indexOf(
       'reportSecuritySmokeShutdownStage("residency-closed")',

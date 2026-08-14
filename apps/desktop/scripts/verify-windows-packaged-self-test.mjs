@@ -53,9 +53,9 @@ function capture(file, args, options = {}) {
       child.kill("SIGKILL");
       rejectRun(new Error("packaged self-test command timed out"));
     }, COMMAND_TIMEOUT_MS);
-    child.once("error", (error) => {
+    child.once("error", () => {
       clearTimeout(timer);
-      rejectRun(error);
+      rejectRun(new Error("packaged self-test command process failed"));
     });
     child.once("close", (code, signal) => {
       clearTimeout(timer);
@@ -295,10 +295,6 @@ export function validateSelfTestTerminal(value) {
 }
 
 export function validatePackagedSecondLaunch(result, privateValues) {
-  checked(
-    result.code === 0 && result.signal === null,
-    "packaged second launch exited unsuccessfully",
-  );
   const output = `${result.stdout}${result.stderr}`;
   checked(
     !output.includes("DESKTOP_SECURITY_READY"),
@@ -308,7 +304,68 @@ export function validatePackagedSecondLaunch(result, privateValues) {
     privateValues.every((value) => value.length > 0 && !output.includes(value)),
     "packaged second launch output exposed private data",
   );
-  return result;
+  const marker = "DESKTOP_SECURITY_SECOND_INSTANCE";
+  const stdoutOccurrences = result.stdout.split(marker).length - 1;
+  const stderrOccurrences = result.stderr.split(marker).length - 1;
+  const framedStdoutOccurrences = [
+    ...result.stdout.matchAll(/(?:^|\n)DESKTOP_SECURITY_SECOND_INSTANCE\n/gu),
+  ].length;
+  const markerState =
+    stdoutOccurrences === 0 && stderrOccurrences === 0
+      ? "absent"
+      : stdoutOccurrences === 1 &&
+          stderrOccurrences === 0 &&
+          framedStdoutOccurrences === 1
+        ? "present"
+        : "invalid";
+  if (result.code === 0 && result.signal === null && markerState === "present") return result;
+  const safeCode = Number.isSafeInteger(result.code) ? String(result.code) : "unknown";
+  const allowedSignals = new Set([
+    "SIGABRT",
+    "SIGALRM",
+    "SIGBUS",
+    "SIGCHLD",
+    "SIGCONT",
+    "SIGFPE",
+    "SIGHUP",
+    "SIGILL",
+    "SIGINFO",
+    "SIGINT",
+    "SIGIO",
+    "SIGIOT",
+    "SIGKILL",
+    "SIGLOST",
+    "SIGPIPE",
+    "SIGPOLL",
+    "SIGPROF",
+    "SIGPWR",
+    "SIGQUIT",
+    "SIGSEGV",
+    "SIGSTKFLT",
+    "SIGSTOP",
+    "SIGSYS",
+    "SIGTERM",
+    "SIGTRAP",
+    "SIGTSTP",
+    "SIGTTIN",
+    "SIGTTOU",
+    "SIGURG",
+    "SIGUSR1",
+    "SIGUSR2",
+    "SIGVTALRM",
+    "SIGWINCH",
+    "SIGXCPU",
+    "SIGXFSZ",
+  ]);
+  const safeSignal =
+    result.signal === null
+      ? "none"
+      : allowedSignals.has(result.signal)
+        ? result.signal
+        : "unknown";
+  throw new Error(
+    `packaged second launch failed; code=${safeCode}; signal=${safeSignal}; marker=${markerState}`,
+  );
 }
 
 function listenerClosed(url) {

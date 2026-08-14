@@ -406,6 +406,7 @@ describe("native evidence result parsing", () => {
 
 describe("packaged second launch", () => {
   const privateValues = ["C:\\private\\athlete-home", "private-daemon-token"];
+  const marker = "DESKTOP_SECURITY_SECOND_INSTANCE\n";
 
   it("accepts a clean loser with harmless captured output", () => {
     expect(
@@ -413,7 +414,7 @@ describe("packaged second launch", () => {
         {
           code: 0,
           signal: null,
-          stdout: "diagnostic output\n",
+          stdout: `diagnostic output\n${marker}`,
           stderr: "desktop-crash-reporter-unavailable\n",
         },
         privateValues,
@@ -422,11 +423,43 @@ describe("packaged second launch", () => {
   });
 
   it.each([
-    [{ code: 1, signal: null, stdout: "", stderr: "" }],
-    [{ code: null, signal: "SIGTERM", stdout: "", stderr: "" }],
-  ])("rejects an unclean loser without exposing its result", (result) => {
+    [
+      { code: 1, signal: null, stdout: marker, stderr: "" },
+      "packaged second launch failed; code=1; signal=none; marker=present",
+    ],
+    [
+      { code: 3_221_225_477, signal: null, stdout: "", stderr: "" },
+      "packaged second launch failed; code=3221225477; signal=none; marker=absent",
+    ],
+    [
+      { code: null, signal: "SIGTERM", stdout: marker, stderr: "" },
+      "packaged second launch failed; code=unknown; signal=SIGTERM; marker=present",
+    ],
+    [
+      { code: null, signal: "private-daemon-token", stdout: marker, stderr: "" },
+      "packaged second launch failed; code=unknown; signal=unknown; marker=present",
+    ],
+  ])("classifies an unclean loser without exposing its result", (result, diagnostic) => {
     expect(() => validatePackagedSecondLaunch(result, privateValues)).toThrow(
-      /^packaged second launch exited unsuccessfully$/u,
+      new RegExp(`^${diagnostic}$`, "u"),
+    );
+  });
+
+  it.each([
+    ["", "", "absent"],
+    [marker.repeat(2), "", "invalid"],
+    ["DESKTOP_SECURITY_SECOND_INSTANCE", "", "invalid"],
+    ["prefix DESKTOP_SECURITY_SECOND_INSTANCE\n", "", "invalid"],
+    ["DESKTOP_SECURITY_SECOND_INSTANCE suffix\n", "", "invalid"],
+    ["", marker, "invalid"],
+  ])("rejects malformed marker evidence %#", (stdout, stderr, markerState) => {
+    expect(() =>
+      validatePackagedSecondLaunch({ code: 0, signal: null, stdout, stderr }, privateValues),
+    ).toThrow(
+      new RegExp(
+        `^packaged second launch failed; code=0; signal=none; marker=${markerState}$`,
+        "u",
+      ),
     );
   });
 
@@ -434,13 +467,13 @@ describe("packaged second launch", () => {
     const output = "DESKTOP_SECURITY_READY C:\\private\\readiness";
     expect(() =>
       validatePackagedSecondLaunch(
-        { code: 0, signal: null, stdout: output, stderr: "" },
+        { code: 0, signal: null, stdout: `${marker}${output}`, stderr: "" },
         privateValues,
       ),
     ).toThrow(/^packaged second launch emitted a readiness marker$/u);
     try {
       validatePackagedSecondLaunch(
-        { code: 0, signal: null, stdout: output, stderr: "" },
+        { code: 0, signal: null, stdout: `${marker}${output}`, stderr: "" },
         privateValues,
       );
     } catch (error) {
@@ -451,13 +484,13 @@ describe("packaged second launch", () => {
   it.each(privateValues)("rejects a supplied private value without exposing it", (privateValue) => {
     expect(() =>
       validatePackagedSecondLaunch(
-        { code: 0, signal: null, stdout: "", stderr: `diagnostic ${privateValue}` },
+        { code: 1, signal: "private-signal", stdout: marker, stderr: `diagnostic ${privateValue}` },
         privateValues,
       ),
     ).toThrow(/^packaged second launch output exposed private data$/u);
     try {
       validatePackagedSecondLaunch(
-        { code: 0, signal: null, stdout: "", stderr: `diagnostic ${privateValue}` },
+        { code: 1, signal: "private-signal", stdout: marker, stderr: `diagnostic ${privateValue}` },
         privateValues,
       );
     } catch (error) {
