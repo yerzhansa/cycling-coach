@@ -12,8 +12,6 @@ import {
   FOOTER_NOTE,
   PRIMARY_LABEL,
   RETRY_SETUP_STATUS_LABEL,
-  SETUP_DISCLAIMER,
-  SETUP_GATE_SUBTITLE,
   SETUP_HEADING,
   SETUP_SETTINGS_HEADING,
   SETUP_STATUS_UNAVAILABLE_COPY,
@@ -30,6 +28,7 @@ import {
 } from "../../state/settings-slice.js";
 import { BUTTON_PRIMARY, SetupCard } from "./SetupCard.js";
 import { SetupError } from "./SetupRow.js";
+import { TelegramRow } from "./TelegramRow.js";
 import { TrainingRow } from "./TrainingRow.js";
 import settingsStyles from "../settings/SettingsView.module.css";
 
@@ -92,7 +91,7 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
       aria-busy={surface.loading ? "true" : undefined}
     >
       {props.placement === "gate" ? (
-        <header className="mb-[22px] flex flex-wrap items-end justify-between gap-5">
+        <header className="mb-[22px] flex flex-wrap items-end justify-between gap-x-5 gap-y-2">
           <div>
             <h1
               id="setup-panel-title"
@@ -101,7 +100,6 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
             >
               {SETUP_HEADING}
             </h1>
-            <p className="mt-2 max-w-[520px] text-[13.5px] text-ink-2">{SETUP_GATE_SUBTITLE}</p>
           </div>
           {gateUnavailable ? null : (
             <span
@@ -150,6 +148,7 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
         <SetupCard>
           <AiRow surface={surface} actions={actions} placement={props.placement} />
           <TrainingRow surface={surface} actions={actions} placement={props.placement} />
+          {props.placement === "gate" ? <TelegramRow /> : null}
           {props.placement === "settings" ? (
             <AdditionalCredentialRows
               primaryAiCredential={primaryAiCredential}
@@ -189,9 +188,6 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
       <p className="onboarding-error-announcer sr-only" role="status" aria-live="polite">
         {wizard.fixedError === null ? "" : ERROR_COPY[wizard.fixedError]}
       </p>
-      {props.placement === "gate" ? (
-        <p className="mt-5 text-[11px] leading-normal text-ink-2">{SETUP_DISCLAIMER}</p>
-      ) : null}
     </section>
   );
 }

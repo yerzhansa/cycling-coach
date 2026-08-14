@@ -154,6 +154,18 @@ describe("chat surface", () => {
   });
 
   describe("composer", () => {
+    it("places the medical disclaimer directly below the composer", () => {
+      render(<Harness />);
+
+      const disclaimer = screen.getByText(
+        "Not medical advice, and not a substitute for a doctor or a certified coach.",
+      );
+      const form = composer().closest("form");
+
+      expect(form?.nextElementSibling).toBe(disclaimer);
+      expect(disclaimer.parentElement).toHaveClass("composer-wrap");
+    });
+
     it("focuses the enabled composer when Chat mounts after required setup", () => {
       render(<Harness />);
 

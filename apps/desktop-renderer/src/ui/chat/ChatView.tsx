@@ -11,6 +11,8 @@ import { SpendNotice } from "./SpendNotice.js";
 import { Transcript } from "./Transcript.js";
 
 const COMPOSER_CLEARANCE_PROPERTY = "--chat-composer-clearance";
+const CHAT_DISCLAIMER =
+  "Not medical advice, and not a substitute for a doctor or a certified coach.";
 
 function FollowLatest(): null {
   const surface = useEnduragentStore((state) => state.chat);
@@ -122,6 +124,7 @@ export function ChatView(): ReactElement {
         <QuickActions />
         <QueuedMessages />
         <Composer handle={composer} />
+        <p className={styles.announcement}>{CHAT_DISCLAIMER}</p>
       </div>
       <NewConversationDialog
         onComposerReset={() => {

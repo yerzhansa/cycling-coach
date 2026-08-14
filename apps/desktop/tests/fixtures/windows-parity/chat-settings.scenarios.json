@@ -137,14 +137,14 @@
     {
       "id": "settings.setup.inventory",
       "surface": "settings",
-      "expected": "Setup appears first as a full-window gate containing the shipped coach provider, Intervals.icu and injury status rows, plus the Settings credential rows in the Settings placement; Telegram never appears in setup.",
+      "expected": "Setup appears first as a full-window gate containing the shipped coach provider, Intervals.icu, optional Telegram and injury status rows, plus the Settings credential rows in the Settings placement.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > renders every required row in order and adds no row for an injury answer"
+      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > renders every setup row in order and adds no row for an injury answer"
     },
     {
       "id": "settings.setup.readiness-gate",
       "surface": "settings",
-      "expected": "First-run coaching remains blocked until a supported coach provider, durable training data, and the required intake are ready; Telegram is never part of the gate.",
+      "expected": "First-run coaching remains blocked until a supported coach provider, durable training data, and the required intake are ready; Telegram never counts toward readiness.",
       "automation": "deterministic",
       "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > keeps Start coaching disabled until every requirement is met"
     },
@@ -226,7 +226,7 @@
       "surface": "settings",
       "expected": "A connected Intervals.icu account offers Delete rather than replacement, requires confirmation, and retains synced rides and past chats after deleting the saved connection.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > keeps AI changes quiet and gives connected Intervals only Delete"
+      "test": "apps/desktop-renderer/tests/onboarding-setup-card.test.tsx > outlines AI changes in the gate and gives connected Intervals only Delete"
     },
     {
       "id": "settings.telegram.delete-only",

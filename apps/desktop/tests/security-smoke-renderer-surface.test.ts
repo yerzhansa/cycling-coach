@@ -59,11 +59,11 @@ describe("desktop security smoke renderer surface", () => {
     expect(capture).toBeGreaterThan(rendererReturn);
   });
 
-  it("rejects an invalid surface and includes the non-secret summary in failures", async () => {
+  it("requires the fresh profile to show the setup gate and includes the non-secret summary in failures", async () => {
     const source = await readFile(smokeScript, "utf8");
 
     expect(source).toContain("rendererSurface: ready.rendererSurface");
-    expect(source).toContain('!["app", "setup-gate"].includes(summary.rendererSurface)');
+    expect(source).toContain('summary.rendererSurface !== "setup-gate"');
     expect(source).toContain("desktop security assertions failed: ${JSON.stringify(summary)}");
   });
 });

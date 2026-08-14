@@ -282,9 +282,6 @@ export function AiRow(props: {
     setPanelLane(null);
   }, [actions, repairRequired, restoreDraft]);
 
-  const revertLane = laneForProvider(restoreDraft?.provider.provider ?? null);
-  const revertLabel = revertLane === null ? "Cancel" : `Keep ${SETUP_LANE_LABELS[revertLane]}`;
-
   const save = (): void => {
     if (actions === null || controlsDisabled) return;
     setOperation("provider-requested");
@@ -339,7 +336,11 @@ export function AiRow(props: {
                 data-setup-trigger="ai"
                 disabled={controlsDisabled || chatGptActivating}
                 aria-label={hasDisplayedProvider ? AI_TRIGGER_LABELS.set : AI_TRIGGER_LABELS.unset}
-                className={!hasDisplayedProvider ? BUTTON_OUTLINE_SM : BUTTON_QUIET_SM}
+                className={
+                  props.placement === "gate" || !hasDisplayedProvider
+                    ? BUTTON_OUTLINE_SM
+                    : BUTTON_QUIET_SM
+                }
               >
                 {hasDisplayedProvider ? "Change" : "Choose"}
               </Menu.Trigger>
@@ -415,38 +416,41 @@ export function AiRow(props: {
       ) : null}
       {panel === "chatgpt" ? (
         <SetupSubPanel name="chatgpt">
-          <div className="flex flex-wrap items-center gap-2">
-            {autoChatGptPanel && !chatGptLoginPending ? null : (
+          <div className="flex min-w-0 flex-wrap items-center gap-x-7 gap-y-3">
+            <span className="min-w-52 flex-1 text-[11.5px] leading-normal text-ink-2">
+              {CHATGPT_PANEL_HINT}
+            </span>
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              {autoChatGptPanel && !chatGptLoginPending ? null : (
+                <button
+                  type="button"
+                  className={BUTTON_QUIET_SM}
+                  disabled={
+                    chatGptLoginPending ? surface.loading : controlsDisabled || chatGptActivating
+                  }
+                  {...(chatGptLoginPending
+                    ? { "aria-label": CHATGPT_CANCEL_SIGN_IN_LABEL }
+                    : { "aria-label": CHATGPT_CANCEL_LABEL })}
+                  onClick={() => {
+                    if (chatGptLoginPending) actions?.cancelChatGptLogin();
+                    else revert();
+                  }}
+                >
+                  {chatGptLoginPending ? CHATGPT_CANCEL_SIGN_IN_LABEL : "Cancel"}
+                </button>
+              )}
               <button
                 type="button"
-                className={BUTTON_QUIET_SM}
-                disabled={
-                  chatGptLoginPending ? surface.loading : controlsDisabled || chatGptActivating
-                }
-                {...(chatGptLoginPending
-                  ? { "aria-label": CHATGPT_CANCEL_SIGN_IN_LABEL }
-                  : revertLane === null
-                    ? { "aria-label": CHATGPT_CANCEL_LABEL }
-                    : {})}
+                className={BUTTON_SOLID_SM}
+                disabled={controlsDisabled || chatGptLoginPending || chatGptActivating}
                 onClick={() => {
-                  if (chatGptLoginPending) actions?.cancelChatGptLogin();
-                  else revert();
+                  if (chatGptStored) actions?.retryChatGptActivation();
+                  else login();
                 }}
               >
-                {chatGptLoginPending ? CHATGPT_CANCEL_SIGN_IN_LABEL : revertLabel}
+                {chatGptPrimaryLabel}
               </button>
-            )}
-            <button
-              type="button"
-              className={BUTTON_SOLID_SM}
-              disabled={controlsDisabled || chatGptLoginPending || chatGptActivating}
-              onClick={() => {
-                if (chatGptStored) actions?.retryChatGptActivation();
-                else login();
-              }}
-            >
-              {chatGptPrimaryLabel}
-            </button>
+            </div>
           </div>
           {chatGptStatusCopy === null ? null : (
             <p
@@ -464,7 +468,6 @@ export function AiRow(props: {
               {CHATGPT_REFUSAL_COPY[wizard.chatGptRefusal]}
             </p>
           ) : null}
-          <span className={SETUP_HINT_CLASS}>{CHATGPT_PANEL_HINT}</span>
           <SetupError surface={surface} section="provider" />
         </SetupSubPanel>
       ) : null}

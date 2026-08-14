@@ -144,6 +144,17 @@ describe("shell", () => {
     expect(screen.getByLabelText("Coaching conversation")).toBeInTheDocument();
   });
 
+  it("keeps focus on the Training navigation button while switching views", async () => {
+    const user = userEvent.setup();
+    render(<Shell onReady={() => {}} />);
+    const trainingButton = screen.getByRole("button", { name: "Training" });
+
+    await user.click(trainingButton);
+    await screen.findByRole("region", { name: "Training" });
+
+    expect(trainingButton).toHaveFocus();
+  });
+
   it("keeps the chat surface mounted while another view is shown", async () => {
     const user = userEvent.setup();
     const onReady = vi.fn<() => void>();
@@ -282,6 +293,53 @@ describe("shell", () => {
     expect(document.querySelector('[data-setup-host="settings"]')).toBeNull();
     expect(document.querySelector('[data-view="setup"]')).toBeNull();
   });
+
+  it.each([
+    {
+      activeView: "chat" as const,
+      focusTarget: () => screen.getByLabelText("Message your coach"),
+    },
+    {
+      activeView: "training" as const,
+      focusTarget: () => screen.getByRole("heading", { name: "Training", level: 1 }),
+    },
+    {
+      activeView: "settings" as const,
+      focusTarget: () => screen.getByRole("heading", { name: "Setup", level: 2 }),
+    },
+  ])(
+    "hands focus to the preserved $activeView view after setup finishes",
+    async ({ activeView, focusTarget }) => {
+      const user = userEvent.setup();
+      const finish = vi.fn(() => {
+        useEnduragentStore.setState({ onboarding: READY_ONBOARDING });
+      });
+      useEnduragentStore.setState({
+        activeView,
+        onboarding: {
+          ...READY_ONBOARDING,
+          open: true,
+          completionRequired: true,
+          wizard: {
+            ...READY_ONBOARDING.wizard,
+            intake: { injuryStatus: "none" },
+          },
+        },
+        onboardingActions: { finish } as unknown as OnboardingController,
+      });
+      render(<Shell onReady={() => {}} />);
+      const gate = document.querySelector('[data-setup-host="gate"]');
+
+      await user.click(screen.getByRole("button", { name: "Start coaching" }));
+
+      expect(finish).toHaveBeenCalledOnce();
+      expect(useEnduragentStore.getState().activeView).toBe(activeView);
+      await waitFor(() => {
+        expect(gate).not.toBeInTheDocument();
+        expect(focusTarget()).toHaveFocus();
+      });
+    },
+  );
 
   it("offers no dismiss, skip or close control on the gate", () => {
     useEnduragentStore.setState({ onboarding: REQUIRED_ONBOARDING });

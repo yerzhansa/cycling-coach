@@ -132,11 +132,11 @@ describe("mounted onboarding", () => {
     expect(document.activeElement).toBe(control("setup-panel-title"));
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
     expect(
-      screen.getByText(
+      screen.queryByText(
         "Not medical advice, and not a substitute for a doctor or a certified coach.",
       ),
-    ).toBeInTheDocument();
-    expect(document.querySelectorAll('[data-setup-row="telegram"]')).toHaveLength(0);
+    ).toBeNull();
+    expect(document.querySelectorAll('[data-setup-row="telegram"]')).toHaveLength(1);
     wizard.controller.dispose();
   });
 

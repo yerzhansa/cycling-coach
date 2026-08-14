@@ -64,12 +64,6 @@ export const CHATGPT_REFUSAL_COPY: Readonly<Record<ChatGptLoginRefusalReason, st
 export const SETUP_HEADING = "Get your coach running before you can chat";
 export const SETUP_SETTINGS_HEADING = "Setup";
 
-export const SETUP_GATE_SUBTITLE =
-  "Three answers and Enduragent can start coaching. You can change any of them later in Settings.";
-
-export const SETUP_DISCLAIMER =
-  "Not medical advice, and not a substitute for a doctor or a certified coach.";
-
 export const SETUP_STATUS_UNAVAILABLE_COPY =
   "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.";
 

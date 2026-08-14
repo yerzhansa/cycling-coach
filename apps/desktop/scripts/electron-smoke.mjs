@@ -342,7 +342,7 @@ async function security() {
     if (
       Object.values(summary.passes).some((value) => value !== true) ||
       summary.blockedOffPort !== true ||
-      !["app", "setup-gate"].includes(summary.rendererSurface) ||
+      summary.rendererSurface !== "setup-gate" ||
       summary.tokenAbsent !== true ||
       !existsSync(environment.screenshotPath)
     ) {

@@ -9,7 +9,6 @@ import {
   API_KEY_PANEL_HINT,
   FOOTER_NOTE,
   RETRY_INTAKE_SAVE_LABEL,
-  SETUP_DISCLAIMER,
   SETUP_MENU_LABEL,
 } from "../src/ui/onboarding/copy.js";
 import {
@@ -248,9 +247,10 @@ describe("setup card", () => {
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
     });
-    expect(
-      screen.getByRole("button", { name: "Change what powers your coach" }),
-    ).toBeInTheDocument();
+    const change = screen.getByRole("button", { name: "Change what powers your coach" });
+    expect(change.className).toBe(
+      screen.getByRole("button", { name: "Connect Intervals.icu" }).className,
+    );
     warm.controller.dispose();
   });
 
@@ -315,7 +315,11 @@ describe("setup card", () => {
     expect(primary).toBeInTheDocument();
     expect(setupCard().contains(primary)).toBe(false);
     expect(screen.getByText("Everything stays on this Mac.")).toBeInTheDocument();
-    expect(screen.getByText(SETUP_DISCLAIMER)).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Not medical advice, and not a substitute for a doctor or a certified coach.",
+      ),
+    ).toBeNull();
 
     chat.controller.dispose();
     chat.rendered.unmount();
@@ -326,7 +330,6 @@ describe("setup card", () => {
 
     expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
     expect(screen.queryByText("Everything stays on this Mac.")).toBeNull();
-    expect(screen.queryByText(SETUP_DISCLAIMER)).toBeNull();
     settings.controller.dispose();
   });
 
@@ -360,7 +363,7 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("keeps AI changes quiet and gives connected Intervals only Delete", async () => {
+  it("outlines AI changes in the gate and gives connected Intervals only Delete", async () => {
     bindCredentialPort();
     const wizard = mountWizard({ bridge: readyEverythingBridge() });
     await wizard.open();
@@ -369,7 +372,7 @@ describe("setup card", () => {
       expect(rowState("training")).toBe("ready");
     });
 
-    expect(trigger("ai").className).toContain("border-transparent");
+    expect(trigger("ai").className).toContain("border-ink-2");
     expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
     const remove = screen.getByRole("button", { name: "Delete the Intervals.icu connection" });
     expect(remove).toHaveTextContent("Delete");
@@ -566,9 +569,18 @@ describe("setup card", () => {
     );
     expect(
       Array.from(chatgpt?.querySelectorAll("button") ?? [], (entry) => entry.textContent),
-    ).toEqual(["Keep Claude Code", "Sign in with ChatGPT"]);
+    ).toEqual(["Cancel", "Sign in with ChatGPT"]);
+    expect(
+      screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement,
+    ).toHaveClass("justify-end");
+    expect(
+      screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement
+        ?.previousElementSibling,
+    ).toHaveTextContent(
+      "Opens OpenAI's sign-in page in your browser — you type your password there, not here.",
+    );
 
-    await user.click(screen.getByRole("button", { name: "Keep Claude Code" }));
+    await user.click(screen.getByRole("button", { name: "Cancel ChatGPT setup" }));
 
     await waitFor(() => {
       expect(rowState("ai")).toBe("ready");
@@ -761,26 +773,26 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("renders every required row in order and adds no row for an injury answer", async () => {
+  it("renders every setup row in order and adds no row for an injury answer", async () => {
     const user = userEvent.setup();
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
 
-    expect(rowIds()).toEqual(["ai", "training", "injury-status"]);
+    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
 
-    expect(rowIds()).toEqual(["ai", "training", "injury-status"]);
+    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
     expect(setupRow("injury-status").parentElement).toBe(setupCard());
     expect(document.querySelector('[data-setup-row="clinician-cleared"]')).toBeNull();
 
     await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
 
-    expect(rowIds()).toEqual(["ai", "training", "injury-status"]);
+    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
     wizard.controller.dispose();
   });
 
-  it("omits Telegram from the gate", async () => {
+  it("includes the optional Telegram connection in the gate", async () => {
     setTelegramSettings(
       readyTelegramSettings({
         channel: { desiredState: "enabled", state: "online" },
@@ -793,10 +805,10 @@ describe("setup card", () => {
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
 
-    expect(rowIds()).not.toContain("telegram");
-    expect(document.querySelector('[data-setup-row="telegram"]')).toBeNull();
-    expect(document.querySelector("[data-telegram-action]")).toBeNull();
-    expect(screen.queryByText("Telegram")).toBeNull();
+    expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
+    expect(setupRow("telegram")).toHaveTextContent("Telegram");
+    expect(setupRow("telegram")).toHaveTextContent("Optional");
+    expect(screen.getByRole("button", { name: "Delete the Telegram connection" })).toBeVisible();
     wizard.controller.dispose();
   });
 
@@ -1484,7 +1496,6 @@ describe("setup card accessibility", () => {
     const compactCopy = [
       setupRow("ai").querySelector("[data-setup-row-title]")?.nextElementSibling,
       screen.getByText(FOOTER_NOTE),
-      screen.getByText(SETUP_DISCLAIMER),
       document.querySelector("[data-info-tip]"),
     ];
     for (const element of compactCopy) {
