@@ -94,8 +94,31 @@ interface StagedCodexProfile {
   snapshot: StoredProfileSnapshot;
 }
 
+type ScenarioStage = "setup" | "turn" | "finish-replay" | "finish-record" | "cleanup";
+
+function safeScenarioId(value: string): string {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return "unknown";
+  if (/[0-9]{8,}/.test(value)) return "unknown";
+  return value;
+}
+
+function emitScenarioStage(
+  phase: "START" | "DONE",
+  scenarioId: string,
+  stage: ScenarioStage,
+  turnIndex?: number,
+): void {
+  const turn =
+    stage === "turn" && Number.isSafeInteger(turnIndex) && turnIndex! >= 0
+      ? ` turn=${turnIndex}`
+      : "";
+  console.log(`S8A_CHILD_STAGE ${phase} scenario=${scenarioId} stage=${stage}${turn}`);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  const diagnosticScenario = safeScenarioId(args.scenario);
+  emitScenarioStage("START", diagnosticScenario, "setup");
 
   const home = process.env.CYCLING_COACH_HOME;
   if (home === undefined || home === "") {
@@ -196,6 +219,7 @@ async function main(): Promise<void> {
       harnessError(`intervals tools absent: ${name} not in the constructed tool set — check spawn env`);
     }
   }
+  emitScenarioStage("DONE", diagnosticScenario, "setup");
 
   const replies: string[] = [];
   let exitCode = 0;
@@ -204,6 +228,7 @@ async function main(): Promise<void> {
       const turn = scenario.turns[turnIndex];
       recordHandle?.setCurrentTurn({ chatId: turn.chatId, turnIndex });
       replayHandle?.setCurrentTurn({ chatId: turn.chatId, turnIndex });
+      emitScenarioStage("START", diagnosticScenario, "turn", turnIndex);
       try {
         replies.push((await agent.chat({ chatId: turn.chatId, message: turn.userMessage })).text);
       } catch (err) {
@@ -214,34 +239,42 @@ async function main(): Promise<void> {
           `turn ${turnIndex} (${turn.chatId}) threw: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+      emitScenarioStage("DONE", diagnosticScenario, "turn", turnIndex);
       recordHandle?.setCurrentTurn(null);
       replayHandle?.setCurrentTurn(null);
     }
 
-    if (args.mode === "replay") {
-      exitCode = finishReplay({
-        scenario,
-        recording: recording!,
-        replayHandle: replayHandle!,
-        registry,
-        home,
-        runDir: args.runDir,
-        fixtureDir: args.fixtureDir,
-        msw,
-        replies,
-      });
-    } else {
-      exitCode = finishRecord({
-        scenario,
-        recordHandle: recordHandle!,
-        config: { provider, model: config.llm.model },
-        home,
-        fixtureDir: args.fixtureDir,
-        msw,
-        replies,
-      });
+    const finishStage = args.mode === "replay" ? "finish-replay" : "finish-record";
+    emitScenarioStage("START", diagnosticScenario, finishStage);
+    try {
+      if (args.mode === "replay") {
+        exitCode = finishReplay({
+          scenario,
+          recording: recording!,
+          replayHandle: replayHandle!,
+          registry,
+          home,
+          runDir: args.runDir,
+          fixtureDir: args.fixtureDir,
+          msw,
+          replies,
+        });
+      } else {
+        exitCode = finishRecord({
+          scenario,
+          recordHandle: recordHandle!,
+          config: { provider, model: config.llm.model },
+          home,
+          fixtureDir: args.fixtureDir,
+          msw,
+          replies,
+        });
+      }
+    } finally {
+      emitScenarioStage("DONE", diagnosticScenario, finishStage);
     }
   } finally {
+    emitScenarioStage("START", diagnosticScenario, "cleanup");
     msw.close();
     recordHandle?.restore();
     replayHandle?.restore();
@@ -269,6 +302,7 @@ async function main(): Promise<void> {
       exitCode = 2;
     }
     rmSync(home, { recursive: true, force: true });
+    emitScenarioStage("DONE", diagnosticScenario, "cleanup");
   }
 
   process.exit(exitCode);
