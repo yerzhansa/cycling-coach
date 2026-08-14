@@ -18,6 +18,7 @@ import {
 } from "../scripts/windows-installed-package.mjs";
 import {
   createSecuritySmokeStageObserver,
+  createPrimarySecondInstanceObserver,
   observeProcessExit,
   requireRunningPrimaryBeforeSecondLaunch,
   requestPackagedShutdown,
@@ -27,6 +28,7 @@ import {
   validatePackagedSecondLaunch,
   validateReadyFrame,
   validateSelfTestTerminal,
+  waitForPackagedSecondLaunchEvidence,
   waitForPackagedApplicationExit,
 } from "../scripts/verify-windows-packaged-self-test.mjs";
 
@@ -534,6 +536,106 @@ describe("packaged primary identity", () => {
         /^packaged Windows primary exited before second launch$/u,
       );
     }
+  });
+});
+
+describe("packaged primary second-instance evidence", () => {
+  const second = { code: 0, signal: null, stdout: "", stderr: "" };
+
+  it("parses one fragmented fixed primary acknowledgment", async () => {
+    const observer = createPrimarySecondInstanceObserver();
+    observer.write("harmless\nDESKTOP_SECURITY_PRIMARY_SECOND_");
+    observer.write("INSTANCE\n");
+    await expect(observer.acknowledgment).resolves.toBeUndefined();
+  });
+
+  it.each([
+    "DESKTOP_SECURITY_PRIMARY_SECOND_INSTANCE suffix\n",
+    "DESKTOP_SECURITY_PRIMARY_SECOND_INSTANCE\nDESKTOP_SECURITY_PRIMARY_SECOND_INSTANCE\n",
+  ])("rejects invalid primary acknowledgment evidence %#", async (source) => {
+    const observer = createPrimarySecondInstanceObserver();
+    observer.write(source);
+    await expect(observer.failure).resolves.toMatchObject({
+      message: "packaged Windows primary second-instance evidence was invalid",
+    });
+  });
+
+  it("requires both the primary acknowledgment and secondary result", async () => {
+    let acknowledge = () => {};
+    let finishSecond = (_result: typeof second) => {};
+    const primaryAcknowledgment = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const secondResult = new Promise<typeof second>((resolve) => {
+      finishSecond = resolve;
+    });
+    let settled = false;
+    const evidence = waitForPackagedSecondLaunchEvidence({
+      second: secondResult,
+      primaryAcknowledgment,
+      primaryAcknowledgmentFailure: new Promise(() => {}),
+      primaryExited: new Promise(() => {}),
+      deadline: performance.now() + 10_000,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    finishSecond(second);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    acknowledge();
+    await expect(evidence).resolves.toBe(second);
+  });
+
+  it("maps primary exit code 2 and every other exit without private data", async () => {
+    for (const [result, message] of [
+      [
+        { code: 2, signal: null },
+        "packaged Windows primary was terminated during second launch",
+      ],
+      [
+        { code: null, signal: "C:\\private\\signal" },
+        "packaged Windows primary exited during second launch",
+      ],
+    ] as const) {
+      await expect(
+        waitForPackagedSecondLaunchEvidence({
+          second: new Promise(() => {}),
+          primaryAcknowledgment: new Promise(() => {}),
+          primaryAcknowledgmentFailure: new Promise(() => {}),
+          primaryExited: Promise.resolve(result),
+          deadline: performance.now() + 10_000,
+        }),
+      ).rejects.toThrow(new RegExp(`^${message}$`, "u"));
+    }
+  });
+
+  it("does not expose primary acknowledgment evidence failures", async () => {
+    await expect(
+      waitForPackagedSecondLaunchEvidence({
+        second: new Promise(() => {}),
+        primaryAcknowledgment: new Promise(() => {}),
+        primaryAcknowledgmentFailure: Promise.resolve(
+          new Error("C:\\private\\primary-acknowledgment"),
+        ),
+        primaryExited: new Promise(() => {}),
+        deadline: performance.now() + 10_000,
+      }),
+    ).rejects.toThrow(/^packaged Windows primary second-instance evidence was invalid$/u);
+  });
+
+  it("fails at the absolute deadline when the secondary closes without a primary acknowledgment", async () => {
+    await expect(
+      waitForPackagedSecondLaunchEvidence({
+        second: Promise.resolve(second),
+        primaryAcknowledgment: new Promise(() => {}),
+        primaryAcknowledgmentFailure: new Promise(() => {}),
+        primaryExited: new Promise(() => {}),
+        deadline: performance.now(),
+      }),
+    ).rejects.toThrow(
+      /^packaged Windows primary second-instance acknowledgment timed out$/u,
+    );
   });
 });
 

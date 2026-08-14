@@ -59,6 +59,7 @@ import { requireDesktopDaemonHome } from "./daemon-home-binding.js";
 import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-config.js";
 import {
   waitForSecuritySmokeShutdown,
+  writeSecuritySmokePrimarySecondInstance,
   writeSecuritySmokeSecondInstance,
   writeSecuritySmokeShutdownStage,
   type SecuritySmokeShutdownStage,
@@ -176,8 +177,12 @@ async function runDesktop(): Promise<void> {
   let residency: DesktopResidency | undefined;
   const activation = createDesktopActivationRelay();
   app.on("second-instance", () => {
-    if (process.platform === "win32") activation.request();
-    else void residency?.showMainWindow();
+    if (process.platform === "win32") {
+      if (securitySmokeMode && desktopAcceptanceHidden) {
+        void writeSecuritySmokePrimarySecondInstance(process.stdout).catch(() => app.exit(1));
+      }
+      activation.request();
+    } else void residency?.showMainWindow();
   });
   app.on("activate", () => {
     if (process.platform === "win32") activation.request();
@@ -1026,6 +1031,7 @@ async function runDesktop(): Promise<void> {
       if (outputArgument !== undefined) {
         await writeFile(outputArgument.slice("--desktop-security-output=".length), screenshot);
       }
+      initialWindow.show();
       const result = {
         url: rendererResult.url,
         rpcUrl: daemonLifecycle.connection().url,

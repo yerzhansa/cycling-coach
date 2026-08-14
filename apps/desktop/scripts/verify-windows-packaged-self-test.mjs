@@ -16,6 +16,9 @@ const CLEAN_EXIT_TIMEOUT_MS = 30_000;
 const LISTENER_TIMEOUT_MS = 500;
 const CLEANUP_GRACE_MS = 5_000;
 const SECURITY_SMOKE_STAGE_PREFIX = "DESKTOP_SECURITY_STAGE ";
+const SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE = "DESKTOP_SECURITY_PRIMARY_SECOND_INSTANCE";
+const SECOND_LAUNCH_EVIDENCE_TIMEOUT =
+  "packaged Windows primary second-instance acknowledgment timed out";
 export const SECURITY_SMOKE_SHUTDOWN_STAGES = Object.freeze([
   "stdin-accepted",
   "residency-closed",
@@ -38,7 +41,13 @@ function delay(milliseconds) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
-function capture(file, args, options = {}) {
+function capture(
+  file,
+  args,
+  options = {},
+  deadline = performance.now() + COMMAND_TIMEOUT_MS,
+  timeoutMessage = "packaged self-test command timed out",
+) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(file, args, { stdio: ["ignore", "pipe", "pipe"], ...options });
     let stdout = "";
@@ -51,8 +60,8 @@ function capture(file, args, options = {}) {
     });
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      rejectRun(new Error("packaged self-test command timed out"));
-    }, COMMAND_TIMEOUT_MS);
+      rejectRun(new Error(timeoutMessage));
+    }, Math.max(0, deadline - performance.now()));
     child.once("error", () => {
       clearTimeout(timer);
       rejectRun(new Error("packaged self-test command process failed"));
@@ -152,6 +161,78 @@ export function createSecuritySmokeStageObserver() {
   });
 }
 
+export function createPrimarySecondInstanceObserver() {
+  let pending = "";
+  let acknowledged = false;
+  let invalid = false;
+  let resolveAcknowledged;
+  let resolveFailure;
+  const acknowledgment = new Promise((resolve) => {
+    resolveAcknowledged = resolve;
+  });
+  const failure = new Promise((resolve) => {
+    resolveFailure = resolve;
+  });
+  const fail = () => {
+    if (invalid) return;
+    invalid = true;
+    resolveFailure(new Error("packaged Windows primary second-instance evidence was invalid"));
+  };
+  return Object.freeze({
+    write(chunk) {
+      if (invalid) return;
+      pending += String(chunk);
+      const lines = pending.split(/\r?\n/u);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.includes(SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE)) continue;
+        if (line !== SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE || acknowledged) {
+          fail();
+          return;
+        }
+        acknowledged = true;
+        resolveAcknowledged();
+      }
+    },
+    acknowledgment,
+    failure,
+  });
+}
+
+export async function waitForPackagedSecondLaunchEvidence(input) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(
+      () => resolve({ type: "timeout" }),
+      Math.max(0, input.deadline - performance.now()),
+    );
+  });
+  try {
+    const outcome = await Promise.race([
+      Promise.all([input.second, input.primaryAcknowledgment]).then(([second]) => ({
+        type: "second",
+        second,
+      })),
+      input.primaryAcknowledgmentFailure.then((error) => ({ type: "evidence-failure", error })),
+      input.primaryExited.then((result) => ({ type: "primary-exit", result })),
+      deadline,
+    ]);
+    if (outcome.type === "timeout") throw new Error(SECOND_LAUNCH_EVIDENCE_TIMEOUT);
+    if (outcome.type === "evidence-failure") {
+      throw new Error("packaged Windows primary second-instance evidence was invalid");
+    }
+    if (outcome.type === "primary-exit") {
+      if (outcome.result.code === 2 && outcome.result.signal === null) {
+        throw new Error("packaged Windows primary was terminated during second launch");
+      }
+      throw new Error("packaged Windows primary exited during second launch");
+    }
+    return outcome.second;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function requestPackagedShutdown(input) {
   if (input === null || input === undefined || input.destroyed || input.writable === false) {
     return Promise.reject(new Error("packaged Windows shutdown input was unavailable"));
@@ -195,6 +276,7 @@ function launchApplication(executable, args, environment) {
   let resolveReady;
   let rejectReady;
   const stages = createSecuritySmokeStageObserver();
+  const primarySecondInstance = createPrimarySecondInstanceObserver();
   const ready = new Promise((resolvePromise, rejectPromise) => {
     resolveReady = resolvePromise;
     rejectReady = rejectPromise;
@@ -206,6 +288,7 @@ function launchApplication(executable, args, environment) {
   child.stdout.on("data", (chunk) => {
     const text = String(chunk);
     stages.write(text);
+    primarySecondInstance.write(text);
     stdout += text;
     pending += text;
     const lines = pending.split(/\r?\n/u);
@@ -224,7 +307,14 @@ function launchApplication(executable, args, environment) {
     stderr += String(chunk);
   });
   const exited = observeProcessExit(child);
-  return { child, ready, exited, stages, output: () => ({ stdout, stderr }) };
+  return {
+    child,
+    ready,
+    exited,
+    stages,
+    primarySecondInstance,
+    output: () => ({ stdout, stderr }),
+  };
 }
 
 function parseSingleJsonLine(result, label) {
@@ -498,9 +588,22 @@ export async function runWindowsPackagedSelfTest(input = {}) {
     const ready = validateReadyFrame(await running.ready);
     const token = (await readFile(join(security.configDirectory, "daemon.token"), "utf8")).trim();
     requireRunningPrimaryBeforeSecondLaunch(running.child);
-    const second = await capture(executable, launchArguments, {
-      cwd: dirname(executable),
-      env: launchEnvironment,
+    const secondDeadline = performance.now() + COMMAND_TIMEOUT_MS;
+    const second = await waitForPackagedSecondLaunchEvidence({
+      second: capture(
+        executable,
+        launchArguments,
+        {
+          cwd: dirname(executable),
+          env: launchEnvironment,
+        },
+        secondDeadline,
+        SECOND_LAUNCH_EVIDENCE_TIMEOUT,
+      ),
+      primaryAcknowledgment: running.primarySecondInstance.acknowledgment,
+      primaryAcknowledgmentFailure: running.primarySecondInstance.failure,
+      primaryExited: running.exited,
+      deadline: secondDeadline,
     });
     validatePackagedSecondLaunch(second, [security.athleteHome, token]);
     const command = await capture(

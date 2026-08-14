@@ -57,6 +57,22 @@ export interface SecuritySmokeStageObserver {
 
 export function createSecuritySmokeStageObserver(): SecuritySmokeStageObserver;
 
+export interface PrimarySecondInstanceObserver {
+  write(chunk: string | Buffer): void;
+  readonly acknowledgment: Promise<void>;
+  readonly failure: Promise<Error>;
+}
+
+export function createPrimarySecondInstanceObserver(): PrimarySecondInstanceObserver;
+
+export function waitForPackagedSecondLaunchEvidence(input: {
+  readonly second: Promise<PackagedSecondLaunchResult>;
+  readonly primaryAcknowledgment: Promise<void>;
+  readonly primaryAcknowledgmentFailure: Promise<Error>;
+  readonly primaryExited: Promise<ProcessExitResult>;
+  readonly deadline: number;
+}): Promise<PackagedSecondLaunchResult>;
+
 export interface PackagedShutdownInput {
   readonly destroyed: boolean;
   readonly writable: boolean;

@@ -1,5 +1,7 @@
 export const SECURITY_SMOKE_SHUTDOWN_FRAME = "shutdown\n";
 export const SECURITY_SMOKE_SECOND_INSTANCE_FRAME = "DESKTOP_SECURITY_SECOND_INSTANCE\n";
+export const SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FRAME =
+  "DESKTOP_SECURITY_PRIMARY_SECOND_INSTANCE\n";
 
 export const SECURITY_SMOKE_SHUTDOWN_STAGES = [
   "stdin-accepted",
@@ -133,6 +135,41 @@ export function writeSecuritySmokeSecondInstance(output: SecuritySmokeStageOutpu
     output.once("error", fail);
     try {
       output.write(SECURITY_SMOKE_SECOND_INSTANCE_FRAME, (error) => {
+        if (settled) return;
+        if (error) {
+          fail();
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve();
+      });
+    } catch {
+      fail();
+    }
+  });
+}
+
+export function writeSecuritySmokePrimarySecondInstance(
+  output: SecuritySmokeStageOutput,
+): Promise<void> {
+  if (output.destroyed || !output.writable) {
+    return Promise.reject(
+      new Error("security smoke primary second instance output was unavailable"),
+    );
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => output.removeListener("error", fail);
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("security smoke primary second instance output failed"));
+    };
+    output.once("error", fail);
+    try {
+      output.write(SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FRAME, (error) => {
         if (settled) return;
         if (error) {
           fail();

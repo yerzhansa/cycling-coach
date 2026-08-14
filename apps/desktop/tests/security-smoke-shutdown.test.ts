@@ -2,8 +2,10 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
+  SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FRAME,
   SECURITY_SMOKE_SECOND_INSTANCE_FRAME,
   waitForSecuritySmokeShutdown,
+  writeSecuritySmokePrimarySecondInstance,
   writeSecuritySmokeSecondInstance,
   writeSecuritySmokeShutdownStage,
 } from "../src/main/security-smoke-shutdown.js";
@@ -118,6 +120,30 @@ describe("security smoke shutdown control", () => {
     });
     await expect(writeSecuritySmokeSecondInstance(output as never)).rejects.toThrow(
       /^security smoke second instance output failed$/u,
+    );
+    expect(output.listenerCount("error")).toBe(0);
+  });
+
+  it("emits the exact primary second-instance frame and awaits write completion", async () => {
+    const output = new PassThrough();
+    let source = "";
+    output.on("data", (chunk) => {
+      source += String(chunk);
+    });
+    await expect(writeSecuritySmokePrimarySecondInstance(output)).resolves.toBeUndefined();
+    expect(source).toBe(SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FRAME);
+    expect(output.listenerCount("error")).toBe(0);
+  });
+
+  it("maps primary acknowledgment failures without retaining output listeners", async () => {
+    const output = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writable: true,
+      write: (_chunk: string, callback: (error?: Error | null) => void) =>
+        callback(new Error("C:\\private\\primary-instance")),
+    });
+    await expect(writeSecuritySmokePrimarySecondInstance(output as never)).rejects.toThrow(
+      /^security smoke primary second instance output failed$/u,
     );
     expect(output.listenerCount("error")).toBe(0);
   });

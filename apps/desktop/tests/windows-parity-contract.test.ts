@@ -148,6 +148,18 @@ describe("Windows parity automation contract", () => {
     expect(singleInstanceLock).toBeGreaterThan(evidenceFailureExit);
     expect(loserBranch).toBeGreaterThan(singleInstanceLock);
     expect(loserCall).toBeGreaterThan(loserBranch);
+    const screenshotCapture = desktopMain.indexOf("initialWindow.webContents.capturePage()");
+    const visibleSecurityWindow = desktopMain.indexOf("initialWindow.show();", screenshotCapture);
+    const readyFrame = desktopMain.indexOf("DESKTOP_SECURITY_READY", visibleSecurityWindow);
+    expect(screenshotCapture).toBeGreaterThanOrEqual(0);
+    expect(visibleSecurityWindow).toBeGreaterThan(screenshotCapture);
+    expect(readyFrame).toBeGreaterThan(visibleSecurityWindow);
+    const primaryAcknowledgment = desktopMain.indexOf(
+      "writeSecuritySmokePrimarySecondInstance(process.stdout)",
+    );
+    const primaryAcknowledgmentFailure = desktopMain.indexOf("app.exit(1)", primaryAcknowledgment);
+    expect(primaryAcknowledgment).toBeGreaterThanOrEqual(0);
+    expect(primaryAcknowledgmentFailure).toBeGreaterThan(primaryAcknowledgment);
     const packagedLaunchArguments = packagedSelfTest.slice(
       packagedSelfTest.indexOf("const launchArguments"),
       packagedSelfTest.indexOf("running = launchApplication"),
@@ -157,6 +169,13 @@ describe("Windows parity automation contract", () => {
     expect(packagedSelfTest).toContain('const windowsUserData = join(localAppData, "Enduragent");');
     expect(packagedSelfTest).toContain("mkdir(windowsUserData, { recursive: true })");
     expect(packagedSelfTest).toContain("requireRunningPrimaryBeforeSecondLaunch(running.child);");
+    expect(packagedSelfTest).toContain("waitForPackagedSecondLaunchEvidence({");
+    expect(packagedSelfTest).toContain(
+      "primaryAcknowledgment: running.primarySecondInstance.acknowledgment",
+    );
+    expect(packagedSelfTest).toContain("primaryExited: running.exited");
+    expect(packagedSelfTest).toContain("deadline: secondDeadline");
+    expect(packagedSelfTest).toContain("clearTimeout(timer)");
     const shutdownStart = desktopMain.indexOf("const shutdown = (): Promise<void> =>");
     const residencyClosed = desktopMain.indexOf(
       'reportSecuritySmokeShutdownStage("residency-closed")',
