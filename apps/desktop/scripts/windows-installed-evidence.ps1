@@ -13,7 +13,7 @@ function Get-UninstallRegistrations {
   $items = @(Get-ChildItem -LiteralPath $root | ForEach-Object {
     $value = Get-ItemProperty -LiteralPath $_.PSPath
     $matchesIdentity =
-      $value.DisplayName -eq $Request.productName -or
+      $value.DisplayName -eq "$($Request.productName) $($Request.version)" -or
       $_.PSChildName -eq $Request.guid -or
       $_.PSChildName -eq $Request.appId
     if ($matchesIdentity) {

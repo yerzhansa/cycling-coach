@@ -212,7 +212,7 @@ export function discoverInstalledPackage(evidence, expected) {
     (entry) =>
       exactRecord(entry) &&
       entry.keyName === expected.guid &&
-      entry.displayName === expected.productName &&
+      entry.displayName === `${expected.productName} ${expected.version}` &&
       entry.displayVersion === expected.version,
   );
   checked(matches.length === 1, `expected one uninstall registration, found ${matches.length}`);

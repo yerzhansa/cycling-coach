@@ -43,7 +43,7 @@ function registration(overrides: Record<string, unknown> = {}) {
   return {
     keyPath: "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\x",
     keyName: "80611707-2ddf-50e5-b3ec-95f38ab4a6fa",
-    displayName: "Enduragent",
+    displayName: "Enduragent 0.1.3",
     displayVersion: "0.1.3",
     installLocation: "C:\\Users\\runner\\AppData\\Local\\Programs\\Enduragent",
     uninstallString:
@@ -152,6 +152,7 @@ describe("installed registration discovery", () => {
       [registration({ quietUninstallString: '"C:\\other\\uninstall.exe" /currentuser /S' })],
     ],
     ["version", [registration({ displayVersion: "0.1.2" })]],
+    ["display-name", [registration({ displayName: "Enduragent" })]],
     ["identity", [registration({ keyName: "wrong-guid" })]],
     [
       "programs-root",
