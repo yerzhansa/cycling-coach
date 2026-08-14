@@ -176,7 +176,7 @@ export async function readWindowsBuilderAuthority(desktopRoot = canonicalDesktop
     }
     throw error;
   }
-  if (hook.toString("utf8") !== canonicalInstallerHook) {
+  if (hook.toString("utf8").replaceAll("\r\n", "\n") !== canonicalInstallerHook) {
     failWindows("installer-contract", "uninstall hook is invalid", ["build/installer.nsh"]);
   }
   return Object.freeze({

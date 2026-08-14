@@ -426,6 +426,21 @@ describe("Windows package verification", () => {
     expect(hook).not.toMatch(/RMDir|USERPROFILE|LOCALAPPDATA/u);
   });
 
+  it("accepts CRLF in the exact uninstall hook and rejects content drift", async () => {
+    const fixture = await syntheticWindowsPackage();
+    const hookPath = join(fixture.desktop, "build/installer.nsh");
+    const hook = await readFile(hookPath, "utf8");
+    await writeFile(hookPath, hook.replaceAll("\n", "\r\n"));
+    await expect(readWindowsBuilderAuthority(fixture.desktop)).resolves.toMatchObject({
+      installerHookPath: hookPath,
+    });
+
+    await writeFile(hookPath, hook.replace("DeleteRegValue", "DeleteRegKey"));
+    await expect(readWindowsBuilderAuthority(fixture.desktop)).rejects.toThrow(
+      'windows-package/installer-contract: uninstall hook is invalid: "build/installer.nsh"',
+    );
+  });
+
   it("fails closed with a stage code and the exact undeclared layout path", async () => {
     const fixture = await syntheticWindowsPackage();
     await writeFile(join(fixture.application, "unexpected.bin"), "unexpected\n");
