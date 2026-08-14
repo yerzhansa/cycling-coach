@@ -17,6 +17,8 @@
     "stage:extra-resources": "node scripts/stage-extra-resources.mjs",
     "test:self-test-resources": "vitest run tests/self-test-resources.test.ts",
     "test:packaged-self-test": "node scripts/verify-packaged-self-test.mjs",
+    "test:windows-installed-self-test": "node scripts/verify-windows-installed-self-test.mjs",
+    "test:windows-parity-contract": "vitest run tests/windows-parity-contract.test.ts",
     "verify:package-layout": "node scripts/verify-package-layout.mjs",
     "verify:win-package": "node scripts/verify-windows-package.mjs",
     "verify:mac-release": "node scripts/verify-macos-release.mjs",
