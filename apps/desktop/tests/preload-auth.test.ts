@@ -260,7 +260,6 @@ describe("desktop preload ChatGPT auth", () => {
         "onUpdateState",
         "pasteIntervalsApiKeyFromClipboard",
         "pasteTelegramTokenFromClipboard",
-        "pinSessionTimezone",
         "platform",
         "reconcileTelegram",
         "releaseNotes",

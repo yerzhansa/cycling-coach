@@ -99,7 +99,7 @@ function makeScript(): DesktopFixtureScript {
 
 async function launch(input: {
   readonly seedConfig: boolean;
-  readonly pinned: boolean;
+  readonly pinned: false | "embedded" | "legacy";
   readonly extraEnv?: Readonly<Record<string, string>>;
 }): Promise<RunningDesktopFixture> {
   const fixture = await launchDesktopFixture({
@@ -136,17 +136,11 @@ async function storedZone(fixture: RunningDesktopFixture): Promise<string | "abs
   }
 }
 
-async function pinFromRenderer(fixture: RunningDesktopFixture): Promise<string> {
-  return fixture.evaluate<string>(
-    "return JSON.stringify(await window.enduragentAuth.pinSessionTimezone());",
-  );
-}
-
 afterEach(async () => {
   await Promise.all(fixtures.splice(0).map((fixture) => fixture.close()));
 });
 
-describe.skipIf(process.platform !== "darwin" || !hasLoopback)(
+describe.skipIf((process.platform !== "darwin" && process.platform !== "win32") || !hasLoopback)(
   "desktop session timezone startup",
   () => {
     it("adopts this computer's timezone into an unpinned config at start", async () => {
@@ -160,10 +154,21 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)(
       expect(await persistedPin(fixture)).toEqual("absent");
     }, 90_000);
 
-    it("keeps a pinned timezone even when this computer reports a different one", async () => {
+    it("keeps a timezone pinned in config when this computer reports a different one", async () => {
       const fixture = await launch({
         seedConfig: true,
-        pinned: true,
+        pinned: "embedded",
+        extraEnv: { TZ: DEVICE_ZONE },
+      });
+
+      expect(await storedZone(fixture)).toEqual("UTC");
+      expect(await persistedPin(fixture)).toEqual("absent");
+    }, 90_000);
+
+    it("keeps a timezone pinned by the legacy sidecar", async () => {
+      const fixture = await launch({
+        seedConfig: true,
+        pinned: "legacy",
         extraEnv: { TZ: DEVICE_ZONE },
       });
 
@@ -180,19 +185,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)(
 
       expect(await storedZone(fixture)).toEqual("UTC");
       expect(await persistedPin(fixture)).toEqual("absent");
-      expect(await pinFromRenderer(fixture)).toEqual("false");
-      expect(await persistedPin(fixture)).toEqual("absent");
-    }, 90_000);
-
-    it("pins on request from the renderer and stops adopting afterwards", async () => {
-      const fixture = await launch({
-        seedConfig: true,
-        pinned: false,
-        extraEnv: { TZ: DEVICE_ZONE },
-      });
-
-      expect(await pinFromRenderer(fixture)).toEqual("true");
-      expect(await persistedPin(fixture)).toEqual('{"schemaVersion":1,"pinned":true}\n');
     }, 90_000);
   },
 );

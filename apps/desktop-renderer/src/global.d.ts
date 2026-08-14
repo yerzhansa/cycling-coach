@@ -56,7 +56,6 @@ interface EnduragentAuth {
   exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   releaseNotes(): Promise<ReleaseNotesResult>;
-  pinSessionTimezone(): Promise<boolean>;
   getUpdateState(): Promise<DesktopUpdateState>;
   checkForUpdates(): Promise<DesktopUpdateState>;
   restartToUpdate(): Promise<DesktopUpdateState>;

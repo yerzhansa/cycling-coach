@@ -255,7 +255,8 @@
         "apps/desktop/tests/first-run-config.test.ts > leaves an existing arbitrary configuration byte-identical",
         "apps/desktop/tests/first-run-config.test.ts > seeds and reopens a Windows configuration without POSIX mode assertions",
         "apps/desktop/tests/session-timezone.test.ts > rewrites the stored zone to the device zone when nothing is pinned",
-        "apps/desktop/tests/session-timezone.test.ts > never rewrites the stored zone once the athlete pinned one",
+        "apps/desktop/tests/session-timezone.test.ts > never rewrites the stored zone when config embeds the athlete pin",
+        "apps/desktop/tests/session-timezone-startup.integration.test.ts > adopts this computer's timezone into an unpinned config at start",
         "apps/desktop/tests/first-run-config.test.ts > prepares the home, seeds the config, and adopts the device timezone before constructing the daemon supervisor"
       ]
     },

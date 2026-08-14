@@ -9,7 +9,6 @@ import {
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_RELEASE_NOTES_CHANNEL,
-  DESKTOP_SESSION_TIMEZONE_PIN_CHANNEL,
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
@@ -1588,8 +1587,6 @@ contextBridge.exposeInMainWorld(
     },
     releaseNotes: async () =>
       parseReleaseNotes(await ipcRenderer.invoke(DESKTOP_RELEASE_NOTES_CHANNEL)),
-    pinSessionTimezone: async () =>
-      (await ipcRenderer.invoke(DESKTOP_SESSION_TIMEZONE_PIN_CHANNEL)) === true,
     getUpdateState: async () =>
       parseUpdateState(await ipcRenderer.invoke(DESKTOP_UPDATE_GET_CHANNEL)),
     checkForUpdates: async () =>

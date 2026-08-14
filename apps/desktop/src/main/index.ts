@@ -69,8 +69,7 @@ import {
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
 import { installDesktopReleaseNotesIpc } from "./release-notes-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
-import { installDesktopSessionTimezoneIpc } from "./session-timezone-ipc.js";
-import { adoptDeviceTimezoneAtStart, pinSessionTimezone } from "./session-timezone.js";
+import { adoptDeviceTimezoneAtStart } from "./session-timezone.js";
 import {
   BACKGROUND_AT_LOGIN_PREFERENCE_DIRECTORY_NAME,
   createBackgroundAtLoginPreferenceStore,
@@ -227,7 +226,6 @@ async function runDesktop(): Promise<void> {
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeAppearanceIpc: (() => void) | undefined;
   let disposeReleaseNotesIpc: (() => void) | undefined;
-  let disposeSessionTimezoneIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
   let disposeIntervalsIpc: (() => Promise<void>) | undefined;
   let disposeTelegramIpc: (() => Promise<void>) | undefined;
@@ -277,8 +275,6 @@ async function runDesktop(): Promise<void> {
       disposeAppearanceIpc = undefined;
       disposeReleaseNotesIpc?.();
       disposeReleaseNotesIpc = undefined;
-      disposeSessionTimezoneIpc?.();
-      disposeSessionTimezoneIpc = undefined;
       disposeUpdateIpc?.();
       disposeUpdateIpc = undefined;
       await telegramPower?.close();
@@ -912,11 +908,6 @@ async function runDesktop(): Promise<void> {
     disposeReleaseNotesIpc = installDesktopReleaseNotesIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
-    });
-    disposeSessionTimezoneIpc = installDesktopSessionTimezoneIpc({
-      ipcMain,
-      currentWindow: () => mainWindow.current() ?? undefined,
-      pin: () => pinSessionTimezone({ stateRoot: desktopPreferencesRoot, env: environment }),
     });
     disposeUpdateIpc = installDesktopUpdateIpc({
       ipcMain,

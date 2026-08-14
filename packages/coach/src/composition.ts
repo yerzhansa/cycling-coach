@@ -419,6 +419,7 @@ function persistRuntimeConfig(
         session[field] = candidate.session[field];
       }
     }
+    if (request.session.timezone !== undefined) session.timezonePinned = true;
     next.session = session;
   }
   replacePrivateFile(path, toYaml(next));
