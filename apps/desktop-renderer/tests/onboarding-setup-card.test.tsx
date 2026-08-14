@@ -863,13 +863,14 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("reads as required with the primary button off when nothing powers the coach", async () => {
-    const wizard = mountWizard({ bridge: claudeSignedOutBridge() });
+  it("keeps Claude unprobed while unrelated setup remains incomplete", async () => {
+    const bridge = claudeSignedOutBridge();
+    const wizard = mountWizard({ bridge });
     await wizard.open();
-    await waitFor(() => {
-      expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
-    });
 
+    expect(wizard.controller.state().claudeCliState).toBeNull();
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(bridge.claudeCliRecheck).not.toHaveBeenCalled();
     expect(rowState("ai")).toBe("pending");
     expect(setupRow("ai").querySelector('[data-setup-disc="pending"]')).not.toBeNull();
     expect(setupRow("ai").textContent).toContain("AI that powers your coach");
@@ -879,25 +880,37 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("drops an unavailable lane from the menu instead of listing it disabled", async () => {
+  it("offers Claude before probing and keeps it available after a signed-out result", async () => {
     const user = userEvent.setup();
-    const wizard = mountWizard({ bridge: claudeSignedOutBridge() });
+    const bridge = claudeSignedOutBridge();
+    const wizard = mountWizard({ bridge });
     await wizard.open();
-    await waitFor(() => {
-      expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
-    });
 
     await openLaneMenu(user);
 
-    expect(laneItems().map((item) => item.dataset.lane)).toEqual(["openai-codex", "api-key"]);
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(laneItems().map((item) => item.dataset.lane)).toEqual([
+      "claude-cli",
+      "openai-codex",
+      "api-key",
+    ]);
     for (const item of laneItems()) {
       expect(item.getAttribute("aria-disabled")).not.toBe("true");
       expect(item.hasAttribute("disabled")).toBe(false);
       expect(item.hasAttribute("data-disabled")).toBe(false);
     }
-    expect(
-      within(laneMenu() as HTMLElement).queryByRole("menuitemradio", { name: /Claude Code/u }),
-    ).toBeNull();
+
+    const claudeLane = within(laneMenu() as HTMLElement).getByRole("menuitemradio", {
+      name: /Claude Code/u,
+    });
+    await user.click(claudeLane);
+    await waitFor(() => {
+      expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
+      expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
+    });
+
+    await openLaneMenu(user);
+    expect(document.querySelector('[data-lane="claude-cli"]')).not.toBeNull();
     expect(claudeCliNoteText()).toContain("Claude Code CLI is not signed in.");
     wizard.controller.dispose();
   });
@@ -1271,21 +1284,33 @@ describe("setup card", () => {
     wizard.controller.dispose();
   });
 
-  it("names claude-cli in the menu only when it is signed in", async () => {
+  it("rechecks Claude only from the explicit recoverable menu action", async () => {
     const user = userEvent.setup();
     const bridge = claudeReadyBridge();
     bridge.llmConfiguration.mockResolvedValue({ ...CLAUDE_CONFIGURATION, active: null });
     bridge.claudeCliStatus.mockResolvedValue({ state: "not-logged-in" });
+    bridge.claudeCliRecheck.mockResolvedValue({ state: "not-logged-in" });
     const wizard = mountWizard({ bridge });
     await wizard.open();
+
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
+    expect(bridge.claudeCliRecheck).not.toHaveBeenCalled();
+
+    await chooseLane(user, "claude-cli");
     await waitFor(() => {
-      expect(bridge.claudeCliStatus).toHaveBeenCalled();
+      expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
+      expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
     });
 
     await openLaneMenu(user);
-
-    expect(document.querySelector('[data-lane="claude-cli"]')).toBeNull();
     expect(claudeCliNoteText()).toContain("Claude Code CLI is not signed in.");
+    await user.click(screen.getByRole("menuitem", { name: "Check again" }));
+
+    await waitFor(() => {
+      expect(bridge.claudeCliRecheck).toHaveBeenCalledOnce();
+    });
+    expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
+    expect(wizard.controller.state().claudeCliState).toBe("not-logged-in");
     wizard.controller.dispose();
   });
 });

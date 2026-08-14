@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { win32 } from "node:path";
 import type { AccountInfo, query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
@@ -7,20 +9,24 @@ import { ClaudeCliConfigError, windowsMcpConfigError } from "../../src/agent/cla
 import {
   ACCOUNT_PROBE_CACHE_TTL_MS,
   API_KEY_BILLING_IDENTITY_LINE,
-  claudeAccountProbeCacheKey,
+  claudeAccountProbeCacheKey as claudeAccountProbeCacheKeyImpl,
   claudeIdentityLine,
   classifyAccountInfo,
-  ensureClaudeCliReady,
+  ensureClaudeCliReady as ensureClaudeCliReadyImpl,
   invalidateClaudeAccountProbeCache,
-  probeClaudeAccount,
-  probeClaudeAccountCached,
+  probeClaudeAccount as probeClaudeAccountImpl,
+  probeClaudeAccountCached as probeClaudeAccountCachedImpl,
   readFallbackEmail,
-  recheckClaudeAccount,
+  recheckClaudeAccount as recheckClaudeAccountImpl,
   refusalForProbe,
 } from "../../src/agent/claude-cli/probe.js";
 import { createScriptedQuery } from "./helpers/frame-script.js";
+import type { ClaudeWorkingAreaPort } from "../../src/agent/claude-cli/working-area.js";
+import { fixedClaudeWorkingArea } from "./helpers/working-area.js";
 
 const SENTINEL = "sk-ant-sentinel-probe-0000";
+const WORKING_DIRECTORY = resolve(tmpdir(), "enduragent-claude-test-workspace");
+const WORKING_AREA = fixedClaudeWorkingArea(WORKING_DIRECTORY);
 
 const RUNTIME: ClaudeCliRuntime = {
   binaryPath: "/Users/tester/.local/bin/claude",
@@ -34,6 +40,66 @@ function baseEnv(): NodeJS.ProcessEnv {
     ANTHROPIC_API_KEY: SENTINEL,
     CLAUDE_CODE_OAUTH_TOKEN: SENTINEL,
   };
+}
+
+type TestAccountInput = Omit<
+  Parameters<typeof probeClaudeAccountImpl>[0],
+  "purpose" | "workingArea"
+> & {
+  purpose?: "account" | "account-recheck";
+  cwd?: string;
+  workingArea?: ClaudeWorkingAreaPort;
+};
+
+function accountInput(
+  input: TestAccountInput,
+  purpose: "account" | "account-recheck" = "account",
+): Parameters<typeof probeClaudeAccountImpl>[0] {
+  const { cwd, workingArea, purpose: requestedPurpose, ...rest } = input;
+  return {
+    ...rest,
+    purpose: requestedPurpose ?? purpose,
+    workingArea: workingArea ?? (cwd === undefined ? WORKING_AREA : fixedClaudeWorkingArea(cwd)),
+  };
+}
+
+function probeClaudeAccount(
+  input: TestAccountInput,
+  deps: Parameters<typeof probeClaudeAccountImpl>[1],
+) {
+  return probeClaudeAccountImpl(accountInput(input), deps);
+}
+
+function probeClaudeAccountCached(
+  input: TestAccountInput,
+  deps: Parameters<typeof probeClaudeAccountCachedImpl>[1],
+) {
+  return probeClaudeAccountCachedImpl(accountInput(input), deps);
+}
+
+function recheckClaudeAccount(
+  input: TestAccountInput,
+  deps: Parameters<typeof recheckClaudeAccountImpl>[1],
+) {
+  return recheckClaudeAccountImpl(accountInput(input, "account-recheck"), deps);
+}
+
+function claudeAccountProbeCacheKey(input: TestAccountInput): string {
+  return claudeAccountProbeCacheKeyImpl(accountInput(input));
+}
+
+type TestReadinessInput = Omit<Parameters<typeof ensureClaudeCliReadyImpl>[0], "workingArea"> & {
+  workingArea?: ClaudeWorkingAreaPort;
+};
+
+function ensureClaudeCliReady(
+  input: TestReadinessInput,
+  deps: Parameters<typeof ensureClaudeCliReadyImpl>[1],
+) {
+  return ensureClaudeCliReadyImpl(
+    { ...input, workingArea: input.workingArea ?? WORKING_AREA },
+    deps,
+  );
 }
 
 interface FakeQueryState {
@@ -233,6 +299,7 @@ describe("probeClaudeAccount", () => {
     expect(options.settingSources).toEqual([]);
     expect(options.strictMcpConfig).toBe(true);
     expect(options.persistSession).toBe(false);
+    expect(options.cwd).toBe(WORKING_DIRECTORY);
     expect(JSON.stringify(options.env)).not.toContain(SENTINEL);
   });
 

@@ -142,8 +142,18 @@ export {
 } from "./agent/claude-cli/cost.js";
 export {
   ClaudeCliConfigError,
+  ClaudeWorkingAreaError,
   type ClaudeCliConfigErrorKind,
+  type ClaudeWorkingAreaFailureCategory,
+  type ClaudeWorkingAreaStage,
 } from "./agent/claude-cli/errors.js";
+export {
+  createClaudeWorkingArea,
+  type ClaudeLaunchPurpose,
+  type ClaudeWorkingAreaBinding,
+  type ClaudeWorkingAreaPort,
+  type CreateClaudeWorkingAreaInput,
+} from "./agent/claude-cli/working-area.js";
 export {
   CODEX_AGENT_PRICE_TABLE,
   codexAgentCacheReadSavingsUsd,

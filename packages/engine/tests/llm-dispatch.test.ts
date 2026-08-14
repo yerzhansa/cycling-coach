@@ -2,16 +2,30 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { CODEX_AGENT_DISABLED_MESSAGE } from "@enduragent/coach-contract";
 
 import type { EngineConfig } from "../src/host-ports.js";
+import type { ClaudeWorkingAreaPort } from "../src/agent/claude-cli/working-area.js";
 import { llmTestPorts } from "./helpers/base-agent-config.js";
 import { createFakeCodex } from "./codex-agent/helpers/fake-codex.js";
 
-const MINIMAL_RESULT = { text: "ok", toolCalls: [], finishReason: "stop", usage: {}, totalUsage: {}, steps: [] };
+const MINIMAL_RESULT = {
+  text: "ok",
+  toolCalls: [],
+  finishReason: "stop",
+  usage: {},
+  totalUsage: {},
+  steps: [],
+};
 
 function codexConfig(): EngineConfig {
   return {
     dataSource: "platform",
     llm: { provider: "openai-codex", model: "gpt-5.4", apiKey: "", authProfile: "openai-codex" },
-    session: { historyTokenBudgetRatio: 0.3, idleMinutes: 0, dailyResetHour: 4, resetArchiveRetentionDays: 0, timezone: "" },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "",
+    },
     contextWindowTokens: 272_000,
     compactContextWindowTokens: 272_000,
   };
@@ -21,9 +35,73 @@ function anthropicConfig(): EngineConfig {
   return {
     dataSource: "platform",
     llm: { provider: "anthropic", model: "claude-test", apiKey: "test-key" },
-    session: { historyTokenBudgetRatio: 0.3, idleMinutes: 0, dailyResetHour: 4, resetArchiveRetentionDays: 0, timezone: "" },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "",
+    },
     contextWindowTokens: 272_000,
     compactContextWindowTokens: 272_000,
+  };
+}
+
+function claudeCliConfig(enabled = true): EngineConfig {
+  return {
+    dataSource: "platform",
+    llm: {
+      provider: "claude-cli",
+      model: "sonnet",
+      apiKey: "",
+      claudeCli: {
+        enabled,
+        binaryPath: "/configured/claude",
+        configDir: "/claude-config",
+        billing: "subscription",
+        cursorStorePath: "/data/claude-cli-sessions.json",
+      },
+    },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "",
+    },
+    contextWindowTokens: 200_000,
+    compactContextWindowTokens: 200_000,
+  };
+}
+
+async function loadClaudeCliLlm(readinessError?: Error) {
+  const ensureClaudeCliReady = vi.fn(async () => {
+    if (readinessError !== undefined) throw readinessError;
+    return {
+      binaryPath: "/checked/claude",
+      version: "2.1.80",
+      identityLine: "Claude subscription",
+      accountClass: "subscription" as const,
+    };
+  });
+  const claudeCliGenerateText = vi.fn(
+    async (_opts: unknown, _ports: { runtime: { binaryPath?: string } }) => MINIMAL_RESULT,
+  );
+  vi.doMock("../src/agent/claude-cli/probe.js", () => ({ ensureClaudeCliReady }));
+  vi.doMock("../src/agent/claude-cli/bridge.js", () => ({ claudeCliGenerateText }));
+  const workingArea: ClaudeWorkingAreaPort = {
+    cacheKey: "/cache/claude",
+    prepareForLaunch: vi.fn(async () => ({
+      cwd: "/cache/claude",
+      assertCurrent: () => undefined,
+    })),
+  };
+  const { LLM } = await import("../src/llm.js");
+  return {
+    LLM,
+    workingArea,
+    ensureClaudeCliReady,
+    claudeCliGenerateText,
   };
 }
 
@@ -34,16 +112,25 @@ type Captured = {
   called: number;
 };
 
-async function runCodex(opts: Parameters<import("../src/llm.js").LLM["generate"]>[0]): Promise<Captured> {
-  const captured: Captured = { stepLimit: undefined, cacheKey: undefined, signal: undefined, called: 0 };
+async function runCodex(
+  opts: Parameters<import("../src/llm.js").LLM["generate"]>[0],
+): Promise<Captured> {
+  const captured: Captured = {
+    stepLimit: undefined,
+    cacheKey: undefined,
+    signal: undefined,
+    called: 0,
+  };
   vi.doMock("../src/agent/codex-bridge.js", () => ({
-    codexGenerateText: vi.fn(async (o: { stepLimit?: number; cacheKey?: string; signal?: AbortSignal }) => {
-      captured.stepLimit = o.stepLimit;
-      captured.cacheKey = o.cacheKey;
-      captured.signal = o.signal;
-      captured.called++;
-      return MINIMAL_RESULT;
-    }),
+    codexGenerateText: vi.fn(
+      async (o: { stepLimit?: number; cacheKey?: string; signal?: AbortSignal }) => {
+        captured.stepLimit = o.stepLimit;
+        captured.cacheKey = o.cacheKey;
+        captured.signal = o.signal;
+        captured.called++;
+        return MINIMAL_RESULT;
+      },
+    ),
   }));
   const { LLM } = await import("../src/llm.js");
   const llm = new LLM(codexConfig(), llmTestPorts());
@@ -60,7 +147,9 @@ type AiSdkCaptured = {
   called: number;
 };
 
-async function runAiSdk(opts: Parameters<import("../src/llm.js").LLM["generate"]>[0]): Promise<AiSdkCaptured> {
+async function runAiSdk(
+  opts: Parameters<import("../src/llm.js").LLM["generate"]>[0],
+): Promise<AiSdkCaptured> {
   const captured: AiSdkCaptured = {
     abortSignal: undefined,
     maxRetries: undefined,
@@ -70,27 +159,46 @@ async function runAiSdk(opts: Parameters<import("../src/llm.js").LLM["generate"]
     called: 0,
   };
   vi.doMock("ai", () => ({
-    generateText: vi.fn(async (o: { abortSignal?: AbortSignal; maxRetries?: number; prompt?: string; messages?: unknown; experimental_context?: unknown }) => {
-      captured.abortSignal = o.abortSignal;
-      captured.maxRetries = o.maxRetries;
-      captured.prompt = o.prompt;
-      captured.messages = o.messages;
-      captured.experimentalContext = o.experimental_context;
-      captured.called++;
-      return MINIMAL_RESULT;
-    }),
-    streamText: vi.fn((o: { abortSignal?: AbortSignal; maxRetries?: number; prompt?: string; messages?: unknown; experimental_context?: unknown }) => {
-      captured.abortSignal = o.abortSignal;
-      captured.maxRetries = o.maxRetries;
-      captured.prompt = o.prompt;
-      captured.messages = o.messages;
-      captured.experimentalContext = o.experimental_context;
-      captured.called++;
-      return streamedResult([
-        { type: "text-delta", id: "text-1", text: "ok" },
-        { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: {} },
-      ], { text: "ok", steps: [] });
-    }),
+    generateText: vi.fn(
+      async (o: {
+        abortSignal?: AbortSignal;
+        maxRetries?: number;
+        prompt?: string;
+        messages?: unknown;
+        experimental_context?: unknown;
+      }) => {
+        captured.abortSignal = o.abortSignal;
+        captured.maxRetries = o.maxRetries;
+        captured.prompt = o.prompt;
+        captured.messages = o.messages;
+        captured.experimentalContext = o.experimental_context;
+        captured.called++;
+        return MINIMAL_RESULT;
+      },
+    ),
+    streamText: vi.fn(
+      (o: {
+        abortSignal?: AbortSignal;
+        maxRetries?: number;
+        prompt?: string;
+        messages?: unknown;
+        experimental_context?: unknown;
+      }) => {
+        captured.abortSignal = o.abortSignal;
+        captured.maxRetries = o.maxRetries;
+        captured.prompt = o.prompt;
+        captured.messages = o.messages;
+        captured.experimentalContext = o.experimental_context;
+        captured.called++;
+        return streamedResult(
+          [
+            { type: "text-delta", id: "text-1", text: "ok" },
+            { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: {} },
+          ],
+          { text: "ok", steps: [] },
+        );
+      },
+    ),
     stepCountIs: vi.fn((count: number) => ({ type: "step-count", count })),
   }));
   vi.doMock("@ai-sdk/anthropic", () => ({
@@ -108,6 +216,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("LLM dispatch — codex path forwards maxSteps to bridge", () => {
@@ -148,12 +257,86 @@ describe("LLM dispatch — codex path forwards maxSteps to bridge", () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
 
-    const captured = await runCodex({ messages: [{ role: "user", content: "hi" }], caller: "chat" });
+    const captured = await runCodex({
+      messages: [{ role: "user", content: "hi" }],
+      caller: "chat",
+    });
     const { CHAT_LLM_CALL_DEADLINE_MS } = await import("../src/llm.js");
 
     expect(timeoutSpy).toHaveBeenCalledWith(CHAT_LLM_CALL_DEADLINE_MS);
     expect(captured.signal).toBe(timeoutController.signal);
   });
+});
+
+describe("LLM dispatch — claude-cli readiness gate", () => {
+  it("checks the enabled guard before readiness or generation", async () => {
+    const harness = await loadClaudeCliLlm();
+    const llm = new harness.LLM(claudeCliConfig(false), {
+      ...llmTestPorts(),
+      claudeWorkingArea: harness.workingArea,
+    });
+
+    await expect(
+      llm.generate({ messages: [{ role: "user", content: "hi" }], caller: "chat" }),
+    ).rejects.toMatchObject({ name: "ClaudeCliDisabledError" });
+    expect(harness.ensureClaudeCliReady).not.toHaveBeenCalled();
+    expect(harness.claudeCliGenerateText).not.toHaveBeenCalled();
+  });
+
+  it("checks the kill switch before readiness or generation", async () => {
+    vi.stubEnv("ENDURAGENT_CLAUDE_CLI_DISABLED", "true");
+    const harness = await loadClaudeCliLlm();
+    const llm = new harness.LLM(claudeCliConfig(), {
+      ...llmTestPorts(),
+      claudeWorkingArea: harness.workingArea,
+    });
+
+    await expect(
+      llm.generate({ messages: [{ role: "user", content: "hi" }], caller: "chat" }),
+    ).rejects.toMatchObject({ name: "ClaudeCliDisabledError" });
+    expect(harness.ensureClaudeCliReady).not.toHaveBeenCalled();
+    expect(harness.claudeCliGenerateText).not.toHaveBeenCalled();
+  });
+
+  it("does not generate when readiness refuses the account", async () => {
+    const refusal = new Error("account refused");
+    const harness = await loadClaudeCliLlm(refusal);
+    const llm = new harness.LLM(claudeCliConfig(), {
+      ...llmTestPorts(),
+      claudeWorkingArea: harness.workingArea,
+    });
+
+    await expect(
+      llm.generate({ messages: [{ role: "user", content: "hi" }], caller: "chat" }),
+    ).rejects.toBe(refusal);
+    expect(harness.ensureClaudeCliReady).toHaveBeenCalledOnce();
+    expect(harness.claudeCliGenerateText).not.toHaveBeenCalled();
+  });
+
+  it.each(["chat", "flush", "compact"] as const)(
+    "checks readiness for the %s caller and launches the checked binary",
+    async (caller) => {
+      const harness = await loadClaudeCliLlm();
+      const llm = new harness.LLM(claudeCliConfig(), {
+        ...llmTestPorts(),
+        claudeWorkingArea: harness.workingArea,
+      });
+
+      await llm.generate({ messages: [{ role: "user", content: "hi" }], caller });
+
+      expect(harness.ensureClaudeCliReady).toHaveBeenCalledWith({
+        workingArea: harness.workingArea,
+        binaryPath: "/configured/claude",
+        configDir: "/claude-config",
+        billing: "subscription",
+        model: "sonnet",
+      });
+      expect(harness.claudeCliGenerateText).toHaveBeenCalledOnce();
+      expect(harness.claudeCliGenerateText.mock.calls[0]?.[1].runtime.binaryPath).toBe(
+        "/checked/claude",
+      );
+    },
+  );
 });
 
 describe("LLM dispatch — AI SDK path forwards abort signals", () => {
@@ -205,7 +388,11 @@ describe("LLM generate — per-call deadline bounded by opts.deadlineMs", () => 
       .spyOn(AbortSignal, "timeout")
       .mockReturnValue(new AbortController().signal);
 
-    await runAiSdk({ messages: [{ role: "user", content: "hi" }], caller: "chat", deadlineMs: 120_000 });
+    await runAiSdk({
+      messages: [{ role: "user", content: "hi" }],
+      caller: "chat",
+      deadlineMs: 120_000,
+    });
 
     expect(timeoutSpy).toHaveBeenCalledWith(120_000);
   });
@@ -215,7 +402,11 @@ describe("LLM generate — per-call deadline bounded by opts.deadlineMs", () => 
       .spyOn(AbortSignal, "timeout")
       .mockReturnValue(new AbortController().signal);
 
-    await runAiSdk({ messages: [{ role: "user", content: "hi" }], caller: "chat", deadlineMs: 999_999 });
+    await runAiSdk({
+      messages: [{ role: "user", content: "hi" }],
+      caller: "chat",
+      deadlineMs: 999_999,
+    });
     const { CHAT_LLM_CALL_DEADLINE_MS } = await import("../src/llm.js");
 
     expect(timeoutSpy).toHaveBeenCalledWith(CHAT_LLM_CALL_DEADLINE_MS);
@@ -414,7 +605,13 @@ describe("LLM dispatch — streaming roles and part mapping", () => {
       { type: "tool-call", toolCallId: "tool-1", toolName: "probe", input: {} },
       { type: "tool-call", toolCallId: "tool-1", toolName: "probe", input: {} },
       { type: "tool-result", toolCallId: "tool-1", toolName: "probe", input: {}, output: {} },
-      { type: "tool-error", toolCallId: "tool-2", toolName: "probe", input: {}, error: providerError },
+      {
+        type: "tool-error",
+        toolCallId: "tool-2",
+        toolName: "probe",
+        input: {},
+        error: providerError,
+      },
       { type: "tool-output-denied", toolCallId: "tool-3", toolName: "probe" },
       { type: "finish", finishReason: "stop", rawFinishReason: "stop", totalUsage: {} },
     ]);
@@ -440,9 +637,7 @@ describe("LLM dispatch — streaming roles and part mapping", () => {
   it("normalizes yielded aborts and preserves yielded provider errors", async () => {
     const providerError = new Error("provider stream error");
     const first = await loadStreamingLlm([{ type: "error", error: providerError }]);
-    await expect(
-      first.llm.generate({ messages: [], caller: "chat" }),
-    ).rejects.toBe(providerError);
+    await expect(first.llm.generate({ messages: [], caller: "chat" })).rejects.toBe(providerError);
 
     vi.resetModules();
     const second = await loadStreamingLlm([{ type: "abort", reason: "provider stopped" }]);
@@ -458,7 +653,14 @@ describe("LLM dispatch — chat stream watchdog", () => {
     "validates chatStreamTimeouts.%s synchronously",
     async (field) => {
       const { LLM } = await import("../src/llm.js");
-      for (const invalid of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      for (const invalid of [
+        0,
+        -1,
+        1.5,
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+        Number.NEGATIVE_INFINITY,
+      ]) {
         expect(
           () =>
             new LLM(anthropicConfig(), {
@@ -526,7 +728,13 @@ function codexAgentConfig(): EngineConfig {
       apiKey: "",
       codexAgent: { enabled: true, binaryPath: "/never/spawned/codex", reasoningEffort: "medium" },
     },
-    session: { historyTokenBudgetRatio: 0.3, idleMinutes: 0, dailyResetHour: 4, resetArchiveRetentionDays: 0, timezone: "" },
+    session: {
+      historyTokenBudgetRatio: 0.3,
+      idleMinutes: 0,
+      dailyResetHour: 4,
+      resetArchiveRetentionDays: 0,
+      timezone: "",
+    },
     contextWindowTokens: 1_050_000,
     compactContextWindowTokens: 1_050_000,
   };
@@ -595,7 +803,9 @@ describe("LLM dispatch — codex-agent provider gating (AC-3)", () => {
       codexAgentGenerateText: vi.fn(
         (o: { signal?: AbortSignal }) =>
           new Promise((resolve, reject) => {
-            o.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+            o.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
             setTimeout(() => resolve(MINIMAL_RESULT), 60_000);
           }),
       ),

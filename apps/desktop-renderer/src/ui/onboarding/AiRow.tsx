@@ -208,7 +208,7 @@ export function AiRow(props: {
         ? "api-key"
         : null;
   const lanes = offeredLanes(configuration, wizard, lane);
-  const note = claudeCliNote(configuration, wizard);
+  const note = claudeCliNote(configuration, wizard, lane);
   const copy = showsActiveProviderOutsideCatalogue
     ? {
         title: ONBOARDING_LLM_PROVIDER_LABELS[configuration.active!.provider],

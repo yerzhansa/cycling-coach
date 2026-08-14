@@ -185,11 +185,11 @@
       "expected": "Claude CLI shows checking, signed-in subscription, API-key billing, missing or outdated binary, signed-out, token-only, and disabled readiness truth with Check again recovery.",
       "automation": "deterministic",
       "tests": [
-        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > opens Setup before the account probe answers and explains it is still checking",
+        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > offers Claude before probing, then checks once and activates only after readiness",
         "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > offers the lane and carries the signed-in identity into the row",
         "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > falls back to the email alone when the probe reports no plan",
         "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > names API key billing instead of claiming a subscription",
-        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > leaves the lane out of the menu and explains $state in place",
+        "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > keeps the selected lane recoverable and explains $state in place",
         "apps/desktop-renderer/tests/onboarding-claude-cli-lane.test.tsx > rechecks the account from the menu note and never grows a key field"
       ]
     },

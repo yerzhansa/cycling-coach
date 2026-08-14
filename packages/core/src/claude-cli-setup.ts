@@ -1,4 +1,8 @@
-import { ensureClaudeCliReady } from "@enduragent/engine";
+import {
+  createClaudeWorkingArea,
+  ensureClaudeCliReady,
+  type ClaudeWorkingAreaPort,
+} from "@enduragent/engine";
 
 import type { ClaudeCliBilling } from "./runtime-config.js";
 
@@ -23,6 +27,8 @@ export interface ClaudeCliSetupDeps {
   readonly confirmApiKeyOptIn?: () => Promise<boolean>;
   readonly note?: (line: string) => void;
   readonly baseEnv?: NodeJS.ProcessEnv;
+  readonly workingArea?: ClaudeWorkingAreaPort;
+  readonly forbiddenRoots?: readonly string[];
 }
 
 export type ClaudeCliSetupOutcome =
@@ -54,13 +60,20 @@ export async function runClaudeCliSetupStep(
 ): Promise<ClaudeCliSetupOutcome> {
   const ensureReady = deps.ensureReady ?? ensureClaudeCliReady;
   const note = deps.note ?? ((line: string) => console.log(line));
+  let workingArea = deps.workingArea;
 
   const attempt = async (
     billing: ClaudeCliBilling,
     forceRecheck: boolean,
   ): Promise<ClaudeCliSetupOutcome> => {
     try {
+      workingArea ??= createClaudeWorkingArea({
+        ...(deps.baseEnv === undefined ? {} : { environment: deps.baseEnv }),
+        forbiddenRoots: deps.forbiddenRoots ?? [],
+        ...(input.configDir === undefined ? {} : { configDir: input.configDir }),
+      });
       const readiness = await ensureReady({
+        workingArea,
         ...(input.binaryPath === undefined ? {} : { binaryPath: input.binaryPath }),
         ...(input.configDir === undefined ? {} : { configDir: input.configDir }),
         billing,

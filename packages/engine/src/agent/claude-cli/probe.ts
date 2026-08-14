@@ -35,6 +35,7 @@ import {
   preflightWindowsMcpConfigTransform,
   type WindowsMcpConfigFileSystemDeps,
 } from "./session.js";
+import type { ClaudeWorkingAreaPort } from "./working-area.js";
 
 export const ACCOUNT_PROBE_TIMEOUT_MS = 25_000;
 export const ACCOUNT_PROBE_RETRY_DELAY_MS = 750;
@@ -187,11 +188,12 @@ function withTimeout<T>(
 
 export interface ProbeClaudeAccountInput {
   runtime: ClaudeCliRuntime;
+  workingArea: ClaudeWorkingAreaPort;
+  purpose: "account" | "account-recheck";
   baseEnv?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   home?: string;
   model?: string;
-  cwd?: string;
   timeoutMs?: number;
 }
 
@@ -223,11 +225,13 @@ async function probeOnce(
   input: ProbeClaudeAccountInput,
   deps: ProbeClaudeAccountDeps,
   sleep: (ms: number) => Promise<void>,
+  purpose: "account" | "account-recheck" | "retry",
 ): Promise<AccountInfo | null | typeof TIMED_OUT> {
   const run = deps.query ?? sdkQuery;
   const abortController = new AbortController();
   let active: Query | null = null;
   try {
+    const binding = await input.workingArea.prepareForLaunch(purpose);
     const options = buildQueryOptions({
       runtime: input.runtime,
       baseEnv: input.baseEnv ?? process.env,
@@ -239,11 +243,13 @@ async function probeOnce(
       persistSession: false,
       abortController,
       stderr: () => {},
+      cwd: binding.cwd,
+      assertWorkingArea: binding.assertCurrent,
       ...(deps.windowsMcpConfigFileSystem === undefined
         ? {}
         : { windowsMcpConfigFileSystem: deps.windowsMcpConfigFileSystem }),
-      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
     });
+    binding.assertCurrent();
     active = run({ prompt: pendingPrompt(abortController.signal), options });
     return await withTimeout(
       accountFromQuery(active),
@@ -251,9 +257,7 @@ async function probeOnce(
       sleep,
     );
   } catch (error) {
-    if ((input.platform ?? process.platform) === "win32" && error instanceof ClaudeCliConfigError) {
-      throw error;
-    }
+    if (error instanceof ClaudeCliConfigError) throw error;
     return null;
   } finally {
     abortController.abort();
@@ -271,10 +275,10 @@ export async function probeClaudeAccount(
 ): Promise<ClaudeAccountProbeResult> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  let account = await probeOnce(input, deps, sleep);
+  let account = await probeOnce(input, deps, sleep, input.purpose);
   if (account === TIMED_OUT) {
     await sleep(ACCOUNT_PROBE_RETRY_DELAY_MS);
-    account = await probeOnce(input, deps, sleep);
+    account = await probeOnce(input, deps, sleep, "retry");
   }
   if (account === TIMED_OUT) {
     return { verified: false, accountClass: "unrecognized", reason: "timeout" };
@@ -323,8 +327,7 @@ export async function probeClaudeAccount(
 
 export function claudeAccountProbeCacheKey(input: ProbeClaudeAccountInput): string {
   const configDir = input.runtime.configDir ?? "";
-  const cwd = input.cwd ?? process.cwd();
-  return `${input.runtime.binaryPath}\0${configDir}\0${cwd}`;
+  return `${input.runtime.binaryPath}\0${configDir}\0${input.workingArea.cacheKey}`;
 }
 
 interface ProbeCacheSlot {
@@ -402,6 +405,7 @@ export interface ClaudeCliReadiness {
 }
 
 export interface EnsureClaudeCliReadyInput {
+  workingArea: ClaudeWorkingAreaPort;
   binaryPath?: string;
   configDir?: string;
   billing?: ClaudeCliBilling;
@@ -409,7 +413,6 @@ export interface EnsureClaudeCliReadyInput {
   platform?: NodeJS.Platform;
   home?: string;
   model?: string;
-  cwd?: string;
   timeoutMs?: number;
   forceRecheck?: boolean;
 }
@@ -422,7 +425,7 @@ export interface EnsureClaudeCliReadyDeps extends CachedProbeDeps {
 }
 
 export async function ensureClaudeCliReady(
-  input: EnsureClaudeCliReadyInput = {},
+  input: EnsureClaudeCliReadyInput,
   deps: EnsureClaudeCliReadyDeps = {},
 ): Promise<ClaudeCliReadiness> {
   const platform = input.platform ?? process.platform;
@@ -450,6 +453,7 @@ export async function ensureClaudeCliReady(
   };
 
   const version = await readVersion(resolved, {
+    workingArea: input.workingArea,
     runtime,
     baseEnv,
     platform,
@@ -458,6 +462,9 @@ export async function ensureClaudeCliReady(
   assertVersionAtLeast(version, CLAUDE_CLI_VERSION_FLOOR, platform);
 
   if (platform === "win32" && win32.extname(resolved).toLowerCase() === ".cmd") {
+    const binding = await input.workingArea.prepareForLaunch(
+      input.forceRecheck === true ? "account-recheck" : "account",
+    );
     const preflightOptions = buildQueryOptions({
       runtime,
       baseEnv,
@@ -467,6 +474,8 @@ export async function ensureClaudeCliReady(
       allowedTools: [],
       mcpServers: {},
       persistSession: false,
+      cwd: binding.cwd,
+      assertWorkingArea: binding.assertCurrent,
       ...(deps.windowsMcpConfigFileSystem === undefined
         ? {}
         : { windowsMcpConfigFileSystem: deps.windowsMcpConfigFileSystem }),
@@ -484,11 +493,12 @@ export async function ensureClaudeCliReady(
   const result = await probeAccount(
     {
       runtime,
+      workingArea: input.workingArea,
+      purpose: input.forceRecheck === true ? "account-recheck" : "account",
       baseEnv,
       platform,
       ...(input.home === undefined ? {} : { home: input.home }),
       ...(input.model === undefined ? {} : { model: input.model }),
-      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
     },
     deps,

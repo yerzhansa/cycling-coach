@@ -365,6 +365,7 @@ export function createOnboardingController(
   const activeProviderIsReady = (): boolean => {
     const active = llmConfiguration?.active ?? null;
     if (active?.provider === "codex-agent" && options.codexAgentSupported === false) return false;
+    if (active?.provider === "claude-cli" && state.claudeCliState === null) return true;
     return selectedProviderReady(state, active, active);
   };
 
@@ -575,19 +576,6 @@ export function createOnboardingController(
     options.focusOpener();
   };
 
-  const applyClaudeCliStatus = (
-    expectedVisit: number,
-    result: Promise<BoundedResult<Awaited<ReturnType<OnboardingBridge["claudeCliStatus"]>>>>,
-  ): void => {
-    void result.then((settled) => {
-      if (settled.status !== "fulfilled" || disposed || visit !== expectedVisit || !presenting) {
-        return;
-      }
-      state = withClaudeCliStatus(state, settled.value);
-      publish();
-    });
-  };
-
   const refreshStatuses = async (expectedVisit: number): Promise<boolean> => {
     const expectedAuthGeneration = authGeneration;
     const refreshGeneration = ++statusRefreshGeneration;
@@ -751,6 +739,33 @@ export function createOnboardingController(
     else if (!selectedProviderIsReady()) state = withError(state, "model-runtime-unavailable");
     focusTitle();
     publish();
+  };
+
+  const checkClaudeCliForSelection = (forceRecheck: boolean): void => {
+    if (disposed || !presenting || setupStatusBlocksMutations() || state.busy) return;
+    const expectedVisit = visit;
+    actionStatus = null;
+    state = withBusy(state, true);
+    publish();
+    const request = forceRecheck
+      ? options.bridge.claudeCliRecheck()
+      : options.bridge.claudeCliStatus();
+    void request.then(
+      (status) => {
+        if (disposed || visit !== expectedVisit || !presenting) return;
+        state = withBusy(withClaudeCliStatus(state, status), false);
+        publish();
+        const ready = status.state === "ready" || status.state === "ready-api-key";
+        if (ready && llmDraft?.provider.provider === "claude-cli" && !selectedProviderIsReady()) {
+          void saveModelKey();
+        }
+      },
+      () => {
+        if (disposed || visit !== expectedVisit || !presenting) return;
+        state = withBusy(state, false);
+        publish();
+      },
+    );
   };
 
   const connectTrainingData = async (): Promise<void> => {
@@ -997,22 +1012,6 @@ export function createOnboardingController(
       finishUnavailableLoad();
       return;
     }
-    const claudeCliResultPromise = settleWithin(
-      options.bridge.claudeCliStatus(),
-      CLAUDE_CLI_STATUS_TRANSPORT_TIMEOUT_MS,
-    );
-    const activeClaudeCliResult =
-      configurationResult.value.active?.provider === "claude-cli"
-        ? await claudeCliResultPromise
-        : undefined;
-    if (disposed || visit !== openVisit) {
-      opening = false;
-      return;
-    }
-    if (activeClaudeCliResult?.status === "rejected") {
-      finishUnavailableLoad();
-      return;
-    }
     const statuses = statusesResult.value;
     const restoredChatGptStatus = chatGptResult.value;
     llmConfiguration = configurationResult.value;
@@ -1039,9 +1038,6 @@ export function createOnboardingController(
     );
     credentialStatuses = statuses;
     state = createOnboardingState(statuses, restoredChatGptStatus);
-    if (activeClaudeCliResult?.status === "fulfilled") {
-      state = withClaudeCliStatus(state, activeClaudeCliResult.value);
-    }
     if (hydrateAuthoritativeState) {
       state = withPersistedIntake(state, setupResult.value.intake);
       intakeSaved = setupResult.value.intake !== null;
@@ -1084,9 +1080,6 @@ export function createOnboardingController(
     opening = false;
     if (shouldResumeIntakePersistence) {
       void persistIntake(intakeRevision, toDesktopIntakeFlags(state.intake));
-    }
-    if (activeClaudeCliResult === undefined) {
-      applyClaudeCliStatus(openVisit, claudeCliResultPromise);
     }
   };
 
@@ -1342,23 +1335,7 @@ export function createOnboardingController(
       beginChatGptActivation(parsedSelection.selection, visit);
     },
     recheckClaudeCli(): void {
-      if (disposed || !presenting || setupStatusBlocksMutations() || state.busy) return;
-      const recheckVisit = visit;
-      actionStatus = null;
-      state = withBusy(state, true);
-      publish();
-      void options.bridge.claudeCliRecheck().then(
-        (status) => {
-          if (disposed || visit !== recheckVisit || !presenting) return;
-          state = withBusy(withClaudeCliStatus(state, status), false);
-          publish();
-        },
-        () => {
-          if (disposed || visit !== recheckVisit || !presenting) return;
-          state = withBusy(state, false);
-          publish();
-        },
-      );
+      checkClaudeCliForSelection(true);
     },
     chooseImportFiles(): void {
       if (
@@ -1392,7 +1369,11 @@ export function createOnboardingController(
       const canActivateWithoutInput =
         provider === "claude-cli" &&
         (state.claudeCliState === "ready" || state.claudeCliState === "ready-api-key");
-      if (canActivateWithoutInput && !selectedProviderIsReady()) void saveModelKey();
+      if (provider === "claude-cli" && !canActivateWithoutInput) {
+        checkClaudeCliForSelection(false);
+      } else if (canActivateWithoutInput && !selectedProviderIsReady()) {
+        void saveModelKey();
+      }
     },
     selectModel(model): void {
       if (setupStatusBlocksMutations() || llmDraft === undefined) return;

@@ -7,6 +7,7 @@ import { delimiter, isAbsolute, join, resolve as resolvePath, win32 } from "node
 import { buildChildEnv, expandTilde, readEnvironmentValue, type ClaudeCliRuntime } from "./env.js";
 import { ClaudeCliConfigError, binaryMissingError, versionBelowFloorError } from "./errors.js";
 import { buildClaudeCliSpawnInvocation } from "./session.js";
+import type { ClaudeWorkingAreaPort } from "./working-area.js";
 
 export const CLAUDE_CLI_VERSION_FLOOR = "2.1.220";
 
@@ -119,6 +120,7 @@ export async function resolveClaudeBinary(
 }
 
 export interface ProbeVersionOptions {
+  workingArea: ClaudeWorkingAreaPort;
   runtime?: ClaudeCliRuntime;
   baseEnv?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -157,7 +159,7 @@ export function assertVersionAtLeast(
 
 export async function probeVersion(
   binaryPath: string,
-  options: ProbeVersionOptions = {},
+  options: ProbeVersionOptions,
 ): Promise<string> {
   const platform = options.platform ?? process.platform;
   const timeoutMs = options.timeoutMs ?? VERSION_PROBE_TIMEOUT_MS;
@@ -177,9 +179,12 @@ export async function probeVersion(
     platform,
   });
   const launch = options.spawn ?? spawn;
+  const binding = await options.workingArea.prepareForLaunch("version");
 
   const raw = await new Promise<string>((resolve, reject) => {
+    binding.assertCurrent();
     const child = launch(invocation.command, [...invocation.args], {
+      cwd: binding.cwd,
       shell: invocation.shell,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: invocation.windowsHide,

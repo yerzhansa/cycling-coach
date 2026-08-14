@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ClaudeCliConfigError,
+  ClaudeWorkingAreaError,
   type ClaudeAccountProbeResult,
   type ClaudeCliReadiness,
+  type ClaudeWorkingAreaPort,
 } from "@enduragent/core";
 import {
   CLAUDE_CLI_STATUS_DEADLINE_MS,
@@ -18,6 +20,15 @@ import {
 
 const BINARY = "/opt/homebrew/bin/claude";
 type EnsureReady = NonNullable<ClaudeCliStatusDependencies["ensureReady"]>;
+
+function fixedWorkingArea(cwd: string): ClaudeWorkingAreaPort {
+  return {
+    cacheKey: cwd,
+    async prepareForLaunch() {
+      return { cwd, assertCurrent() {} };
+    },
+  };
+}
 
 function settings(overrides: Partial<ClaudeCliSettings> = {}): ClaudeCliSettings {
   return { enabled: true, billing: "subscription", ...overrides };
@@ -92,6 +103,7 @@ function harness(input: {
     environment: () => input.environment ?? {},
     ...(input.platform === undefined ? {} : { platform: input.platform }),
     applyRuntimeConfig,
+    workingArea: fixedWorkingArea("/private/tmp/enduragent-claude-status-test"),
     dependencies,
   });
   return {
@@ -198,6 +210,46 @@ describe("desktop claude-cli status controller", () => {
     expect(subject.probeAccount).not.toHaveBeenCalled();
   });
 
+  it("reports a private working-area failure without exposing its path", async () => {
+    const controller = createClaudeCliStatus({
+      settings: () => settings(),
+      environment: () => ({}),
+      applyRuntimeConfig: async () => {},
+      workingArea: {
+        cacheKey: "private-test-key",
+        async prepareForLaunch() {
+          throw new ClaudeWorkingAreaError("permission-check", "permissions");
+        },
+      },
+      dependencies: {
+        resolveBinary: async () => BINARY,
+      },
+    });
+
+    await expect(controller.status()).resolves.toEqual({ state: "working-area-unavailable" });
+  });
+
+  it("refuses before probing when the configured Claude directory overlaps the working area", async () => {
+    const probeAccount = vi.fn(async () => subscriptionProbe());
+    const workspace = "/private/tmp/synthetic-home/.cache/enduragent/claude/workspace";
+    const controller = createClaudeCliStatus({
+      settings: () => settings({ configDir: workspace }),
+      environment: () => ({
+        HOME: "/private/tmp/synthetic-home",
+        XDG_CACHE_HOME: "/private/tmp/synthetic-home/.cache",
+      }),
+      platform: "linux",
+      applyRuntimeConfig: async () => {},
+      dependencies: {
+        resolveBinary: async () => BINARY,
+        probeAccount,
+      },
+    });
+
+    await expect(controller.status()).resolves.toEqual({ state: "working-area-unavailable" });
+    expect(probeAccount).not.toHaveBeenCalled();
+  });
+
   it("runs Windows readiness against the desktop environment and resolved .cmd shim", async () => {
     const environment = {
       Path: "C:\\Windows\\System32",
@@ -268,6 +320,7 @@ describe("desktop claude-cli status controller", () => {
       settings: () => settings(),
       environment: () => environment,
       applyRuntimeConfig: async () => {},
+      workingArea: fixedWorkingArea("/private/tmp/enduragent-claude-status-test"),
       dependencies: {
         resolveBinary: async () => BINARY,
         probeVersion: async () => "2.9.0",
@@ -516,6 +569,24 @@ describe("desktop claude-cli status controller", () => {
     expect(subject.applyRuntimeConfig).toHaveBeenCalledWith({
       llm: { provider: "claude-cli", model: "sonnet" },
     });
+  });
+
+  it("reuses the verified status when activation immediately follows selection", async () => {
+    const subject = harness({});
+    const selection = {
+      provider: "claude-cli" as const,
+      model: "sonnet",
+      endpoint: { mode: "automatic" as const },
+    };
+
+    await expect(subject.controller.status()).resolves.toMatchObject({ state: "ready" });
+    await expect(subject.controller.activate(selection)).resolves.toEqual({
+      status: "configured",
+      runtimeReady: true,
+    });
+
+    expect(subject.probeVersion).toHaveBeenCalledOnce();
+    expect(subject.probeAccount).toHaveBeenCalledOnce();
   });
 
   it.each([

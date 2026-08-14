@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
+import { createClaudeWorkingArea } from "@enduragent/engine";
 
 import { scriptedPrompts, type ScriptedAnswers } from "./helpers/scripted-prompts.js";
 import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
@@ -243,6 +244,32 @@ describe("claude-cli setup wizard", () => {
 });
 
 describe("claude-cli setup step", () => {
+  it("refuses before probing when the configured Claude directory overlaps the working area", async () => {
+    const ensureReady = vi.fn(async () => readiness(SUBSCRIPTION_LINE));
+    const baseEnv = { HOME: tempHome, XDG_CACHE_HOME: join(tempHome, ".cache") };
+    const workspace = createClaudeWorkingArea({
+      environment: baseEnv,
+      homeDirectory: tempHome,
+    }).cacheKey;
+
+    const outcome = await runClaudeCliSetupStep(
+      {
+        billing: "subscription",
+        model: "sonnet",
+        configDir: workspace,
+      },
+      {
+        baseEnv,
+        ensureReady,
+        note: () => {},
+      },
+    );
+
+    expect(outcome).toMatchObject({ status: "refused", kind: "working-area-unavailable" });
+    expect(outcome.status === "refused" ? outcome.message : "").not.toContain(tempHome);
+    expect(ensureReady).not.toHaveBeenCalled();
+  });
+
   it("never re-probes in api-key mode when the subscription attempt succeeded", async () => {
     const notes: string[] = [];
     const outcome = await runClaudeCliSetupStep(

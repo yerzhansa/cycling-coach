@@ -71,14 +71,10 @@ describe("setup lanes", () => {
     expect(apiKeyProviders(null)).toEqual([]);
   });
 
-  it.each(CLAUDE_CLI_CASES)("offers claude-cli only when signed in: %s", (claudeCli) => {
+  it.each(CLAUDE_CLI_CASES)("offers claude-cli before checking readiness: %s", (claudeCli) => {
     const wizard = stateWith(claudeCli);
     const lanes = offeredLanes(FULL_CONFIGURATION, wizard);
-    const signedIn = claudeCli === "ready" || claudeCli === "ready-api-key";
-    expect(lanes.includes("claude-cli")).toBe(signedIn);
-    expect(lanes).toEqual(
-      signedIn ? ["claude-cli", "openai-codex", "api-key"] : ["openai-codex", "api-key"],
-    );
+    expect(lanes).toEqual(["claude-cli", "openai-codex", "api-key"]);
   });
 
   it("keeps a selected claude-cli lane listed even after it degrades", () => {
@@ -89,6 +85,7 @@ describe("setup lanes", () => {
       "api-key",
     ]);
     expect(offeredLanes(FULL_CONFIGURATION, wizard, "api-key")).toEqual([
+      "claude-cli",
       "openai-codex",
       "api-key",
     ]);
@@ -144,11 +141,15 @@ describe("setup lanes", () => {
     });
   });
 
-  it.each(CLAUDE_CLI_CASES)("explains an unoffered claude-cli lane: %s", (claudeCli) => {
+  it.each(CLAUDE_CLI_CASES)("explains a selected unready claude-cli lane: %s", (claudeCli) => {
     const wizard = stateWith(claudeCli);
-    const note = claudeCliNote(FULL_CONFIGURATION, wizard);
+    const note = claudeCliNote(FULL_CONFIGURATION, wizard, "claude-cli");
     if (claudeCli === "ready" || claudeCli === "ready-api-key") {
       expect(note).toBeNull();
+      return;
+    }
+    if (claudeCli === null) {
+      expect(note).toBe("Choose Check again to verify Claude Code on this Mac.");
       return;
     }
     expect(note).toBe(claudeCliPresentation(claudeCli).detail);
@@ -156,8 +157,14 @@ describe("setup lanes", () => {
   });
 
   it("stays silent about claude-cli when the daemon does not expose it", () => {
-    expect(claudeCliNote(NO_CLAUDE_CLI, stateWith("not-logged-in"))).toBeNull();
-    expect(claudeCliNote(null, stateWith("not-logged-in"))).toBeNull();
+    expect(claudeCliNote(NO_CLAUDE_CLI, stateWith("not-logged-in"), "claude-cli")).toBeNull();
+    expect(claudeCliNote(null, stateWith("not-logged-in"), "claude-cli")).toBeNull();
+  });
+
+  it("offers an explicit check without claiming an idle probe is running", () => {
+    expect(claudeCliNote(FULL_CONFIGURATION, stateWith(null), "claude-cli")).toBe(
+      "Choose Check again to verify Claude Code on this Mac.",
+    );
   });
 
   it("routes every error code to the row that owns it", () => {

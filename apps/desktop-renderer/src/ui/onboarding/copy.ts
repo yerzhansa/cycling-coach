@@ -78,7 +78,7 @@ export const SETUP_LANE_LABELS = {
 } as const satisfies Readonly<Record<SetupLane, string>>;
 
 export const SETUP_LANE_MENU_HINTS = {
-  "claude-cli": `Detected on ${PLATFORM_COPY.computer}`,
+  "claude-cli": "Checks your Claude subscription when selected",
   "openai-codex": "Use the plan you already pay for",
   "api-key": "9 providers · pay per use",
 } as const satisfies Readonly<Record<SetupLane, string>>;
