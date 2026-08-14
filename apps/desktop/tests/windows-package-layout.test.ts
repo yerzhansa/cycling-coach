@@ -260,6 +260,7 @@ async function syntheticWindowsPackage(): Promise<SyntheticWindowsPackage> {
   const hook = [
     "!macro customUnInstall",
     '  DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "icu.enduragent.desktop"',
+    '  DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run" "icu.enduragent.desktop"',
     "!macroend",
     "",
   ].join("\n");
@@ -422,6 +423,9 @@ describe("Windows package verification", () => {
     });
     expect(hook).toContain(
       'DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "icu.enduragent.desktop"',
+    );
+    expect(hook).toContain(
+      'DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run" "icu.enduragent.desktop"',
     );
     expect(hook).not.toMatch(/RMDir|USERPROFILE|LOCALAPPDATA/u);
   });
