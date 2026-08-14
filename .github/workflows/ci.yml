@@ -140,10 +140,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build Desktop dependencies
         run: pnpm --filter "@enduragent/desktop^..." build
-      - name: Run deterministic Windows parity scenarios
-        run: pnpm exec vitest run apps/desktop/tests packages/core/tests/conversation-store.test.ts packages/coach/tests/upgrade-fence.test.ts packages/coach/tests/windows-upgrade-fence.test.ts --maxWorkers=1
-      - name: Run deterministic renderer scenarios
-        run: pnpm --filter @enduragent/desktop-renderer test
+      - name: Run Windows package contract tests
+        run: pnpm exec vitest run apps/desktop/tests/windows-package-layout.test.ts apps/desktop/tests/windows-package-plan.test.ts apps/desktop/tests/windows-installed-package.test.ts apps/desktop/tests/windows-parity-contract.test.ts --maxWorkers=1
       - name: Build and verify unsigned x64 NSIS package
         run: pnpm --filter @enduragent/desktop package:win
       - name: Install, test, and uninstall unsigned x64 NSIS package

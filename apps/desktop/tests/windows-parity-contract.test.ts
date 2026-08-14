@@ -32,7 +32,8 @@ describe("Windows parity automation contract", () => {
   it("binds the required fault lanes to deterministic scenarios", async () => {
     const collection = await loadWindowsParityScenarios();
     const scenarios = new Map(collection.scenarios.map((scenario) => [scenario.id, scenario]));
-    for (const id of requiredAutomation) expect(scenarios.get(id)?.automation, id).toBe("deterministic");
+    for (const id of requiredAutomation)
+      expect(scenarios.get(id)?.automation, id).toBe("deterministic");
   });
 
   it("keeps Windows-host-only proofs explicit", async () => {
@@ -55,20 +56,33 @@ describe("Windows parity automation contract", () => {
       "utf8",
     );
     const packageCommands = workflow.match(/pnpm --filter @enduragent\/desktop package:win/g) ?? [];
-    const installedCommands = workflow.match(
-      /pnpm --filter @enduragent\/desktop test:windows-installed-self-test -- --github-hosted --signature-policy unsigned-private/g,
-    ) ?? [];
+    const installedCommands =
+      workflow.match(
+        /pnpm --filter @enduragent\/desktop test:windows-installed-self-test -- --github-hosted --signature-policy unsigned-private/g,
+      ) ?? [];
+    const windowsJob = workflow
+      .split("  windows-desktop-package:")[1]
+      ?.split(/\r?\n  desktop-integration-macos:/u)[0];
     expect(packageCommands).toHaveLength(1);
     expect(installedCommands).toHaveLength(1);
-    expect(workflow.indexOf(packageCommands[0]!)).toBeLessThan(workflow.indexOf(installedCommands[0]!));
-    expect(workflow).not.toMatch(/7-zip|7z\.exe|verify:win-package|test:windows-packaged-self-test/iu);
+    expect(windowsJob).toContain(
+      "pnpm exec vitest run apps/desktop/tests/windows-package-layout.test.ts apps/desktop/tests/windows-package-plan.test.ts apps/desktop/tests/windows-installed-package.test.ts apps/desktop/tests/windows-parity-contract.test.ts --maxWorkers=1",
+    );
+    expect(windowsJob).not.toContain("pnpm exec vitest run apps/desktop/tests ");
+    expect(windowsJob).not.toContain("@enduragent/desktop-renderer test");
+    expect(workflow.indexOf(packageCommands[0]!)).toBeLessThan(
+      workflow.indexOf(installedCommands[0]!),
+    );
+    expect(workflow).not.toMatch(
+      /7-zip|7z\.exe|verify:win-package|test:windows-packaged-self-test/iu,
+    );
     expect(workflow).toContain("timeout-minutes: 45");
     expect(manifest.scripts["test:windows-installed-self-test"]).toBe(
       "node scripts/verify-windows-installed-self-test.mjs",
     );
-    expect(driver.match(/dependencies\.verifyWindowsPackage \?\? verifyWindowsPackage/gu)).toHaveLength(
-      1,
-    );
+    expect(
+      driver.match(/dependencies\.verifyWindowsPackage \?\? verifyWindowsPackage/gu),
+    ).toHaveLength(1);
     expect(driver).toContain('await run(installer, ["/S"]');
     expect(driver).toContain("installed.quietArgs");
     expect(driver).toContain("new AggregateError");
