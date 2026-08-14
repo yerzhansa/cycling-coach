@@ -146,6 +146,23 @@ function validateSelfTestTerminal(value) {
   return value;
 }
 
+export function validatePackagedSecondLaunch(result, privateValues) {
+  checked(
+    result.code === 0 && result.signal === null,
+    "packaged second launch exited unsuccessfully",
+  );
+  const output = `${result.stdout}${result.stderr}`;
+  checked(
+    !output.includes("DESKTOP_SECURITY_READY"),
+    "packaged second launch emitted a readiness marker",
+  );
+  checked(
+    privateValues.every((value) => value.length > 0 && !output.includes(value)),
+    "packaged second launch output exposed private data",
+  );
+  return result;
+}
+
 function listenerClosed(url) {
   const target = new URL(url);
   return new Promise((resolveClosed) => {
@@ -229,21 +246,18 @@ export async function runWindowsPackagedSelfTest(input = {}) {
     const launchArguments = ["--desktop-security-smoke", ...security.extraArguments];
     running = launchApplication(executable, launchArguments, launchEnvironment);
     const ready = validateReadyFrame(await running.ready);
+    const token = (await readFile(join(security.configDirectory, "daemon.token"), "utf8")).trim();
     const second = await capture(executable, launchArguments, {
       cwd: dirname(executable),
       env: launchEnvironment,
     });
-    checked(
-      second.code === 0 && second.signal === null && second.stdout === "" && second.stderr === "",
-      "packaged second launch did not exit cleanly",
-    );
+    validatePackagedSecondLaunch(second, [security.athleteHome, token]);
     const command = await capture(
       process.execPath,
       ["--disable-warning=ExperimentalWarning", cliEntry, "self-test"],
       { cwd: repositoryRoot, env: launchEnvironment },
     );
     const terminal = validateSelfTestTerminal(parseSingleJsonLine(command, "self-test"));
-    const token = (await readFile(join(security.configDirectory, "daemon.token"), "utf8")).trim();
     checked(
       !command.stdout.includes(token) && !command.stdout.includes(security.athleteHome),
       "self-test output exposed private data",

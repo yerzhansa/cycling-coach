@@ -15,6 +15,7 @@ import {
   runWindowsInstalledPackage,
   validateSignaturePolicy,
 } from "../scripts/windows-installed-package.mjs";
+import { validatePackagedSecondLaunch } from "../scripts/verify-windows-packaged-self-test.mjs";
 
 const scratchRoots: string[] = [];
 
@@ -389,6 +390,68 @@ describe("native evidence result parsing", () => {
         "native Windows evidence evidence",
       ),
     ).toThrow(/^native Windows evidence evidence wrote stderr$/u);
+  });
+});
+
+describe("packaged second launch", () => {
+  const privateValues = ["C:\\private\\athlete-home", "private-daemon-token"];
+
+  it("accepts a clean loser with harmless captured output", () => {
+    expect(
+      validatePackagedSecondLaunch(
+        {
+          code: 0,
+          signal: null,
+          stdout: "diagnostic output\n",
+          stderr: "desktop-crash-reporter-unavailable\n",
+        },
+        privateValues,
+      ),
+    ).toMatchObject({ code: 0, signal: null });
+  });
+
+  it.each([
+    [{ code: 1, signal: null, stdout: "", stderr: "" }],
+    [{ code: null, signal: "SIGTERM", stdout: "", stderr: "" }],
+  ])("rejects an unclean loser without exposing its result", (result) => {
+    expect(() => validatePackagedSecondLaunch(result, privateValues)).toThrow(
+      /^packaged second launch exited unsuccessfully$/u,
+    );
+  });
+
+  it("rejects a readiness marker without exposing captured output", () => {
+    const output = "DESKTOP_SECURITY_READY C:\\private\\readiness";
+    expect(() =>
+      validatePackagedSecondLaunch(
+        { code: 0, signal: null, stdout: output, stderr: "" },
+        privateValues,
+      ),
+    ).toThrow(/^packaged second launch emitted a readiness marker$/u);
+    try {
+      validatePackagedSecondLaunch(
+        { code: 0, signal: null, stdout: output, stderr: "" },
+        privateValues,
+      );
+    } catch (error) {
+      expect(String(error)).not.toContain("C:\\private\\readiness");
+    }
+  });
+
+  it.each(privateValues)("rejects a supplied private value without exposing it", (privateValue) => {
+    expect(() =>
+      validatePackagedSecondLaunch(
+        { code: 0, signal: null, stdout: "", stderr: `diagnostic ${privateValue}` },
+        privateValues,
+      ),
+    ).toThrow(/^packaged second launch output exposed private data$/u);
+    try {
+      validatePackagedSecondLaunch(
+        { code: 0, signal: null, stdout: "", stderr: `diagnostic ${privateValue}` },
+        privateValues,
+      );
+    } catch (error) {
+      expect(String(error)).not.toContain(privateValue);
+    }
   });
 });
 
