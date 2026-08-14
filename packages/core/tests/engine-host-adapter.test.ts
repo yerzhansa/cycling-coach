@@ -80,6 +80,14 @@ const persistentRefreshCases: ReadonlyArray<readonly [RefreshFailureReason, numb
   ["reauth", 2],
 ];
 
+function codexAccessToken(accountId: string): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+  ).toString("base64url");
+  return `${header}.${payload}.sig`;
+}
+
 describe("engine host adapter", () => {
   let dataDir: string;
   afterEach(() => {
@@ -230,7 +238,7 @@ describe("engine host adapter", () => {
         JSON.stringify({
           "openai-codex": {
             type: "oauth",
-            access: "synthetic-expired-access",
+            access: codexAccessToken("synthetic-account"),
             refresh: "synthetic-refresh",
             expires: 0,
             accountId: "synthetic-account",
@@ -240,8 +248,12 @@ describe("engine host adapter", () => {
       );
       vi.stubEnv("CYCLING_COACH_HOME", dataDir);
       vi.resetModules();
+      const responsesEndpoint = "https://chatgpt.com/backend-api/codex/responses";
       const tokenEndpoint = "https://auth.openai.com/oauth/token";
-      const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input) === responsesEndpoint) {
+          return new Response("", { status: 401 });
+        }
         if (reason === "network") {
           throw Object.assign(new TypeError("Synthetic network failure"), {
             cause: { code: "ECONNRESET" },
@@ -269,9 +281,10 @@ describe("engine host adapter", () => {
       await vi.advanceTimersByTimeAsync(120_000);
       const failure = await settled;
 
+      const requestUrls = fetchStub.mock.calls.map(([input]) => String(input));
       expect(ports.classifyFailure(failure)).toBe(reason);
-      expect(fetchStub).toHaveBeenCalledTimes(expectedCalls);
-      expect(fetchStub.mock.calls.map(([input]) => String(input))).toEqual(
+      expect(requestUrls[0]).toBe(responsesEndpoint);
+      expect(requestUrls.filter((url) => url === tokenEndpoint)).toEqual(
         Array.from({ length: expectedCalls }, () => tokenEndpoint),
       );
     },
