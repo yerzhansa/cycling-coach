@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   aggregateExitCode,
@@ -12,6 +12,9 @@ import {
   parseRunFlags,
   resolveRecordLane,
   runDirName,
+  runSelfTestDeterminism,
+  spawnScenarioChild,
+  type ScenarioChildSpawn,
   usage,
 } from "./run.js";
 import { AUTH_PROFILES_SOURCE_ENV } from "./lib/codex-auth.js";
@@ -175,6 +178,141 @@ describe("child spawn env", () => {
     expect(env[AUTH_PROFILES_SOURCE_ENV]).toBe("/operator/config/auth-profiles.json");
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.HISTORY_TOKEN_BUDGET_RATIO).toBe("0.05");
+  });
+});
+
+describe("scenario child process", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const params = {
+    scenarioId: "turn-basic-wellness",
+    stage: "replay" as const,
+    mode: "replay" as const,
+    runDir: "/fixed/run",
+    provider: "openai-codex" as const,
+    llmModel: "gpt-5.6-sol",
+  };
+
+  function removeTempHome(options: Parameters<ScenarioChildSpawn>[2]): void {
+    const home = options.env.CYCLING_COACH_HOME;
+    if (home !== undefined) rmSync(home, { recursive: true, force: true });
+  }
+
+  it("applies the fixed deadline and preserves a normal verdict", () => {
+    const verdict: ScenarioVerdict = {
+      scenario: "turn-basic-wellness",
+      pass: false,
+      failures: [{ assertId: "A1", scenario: "turn-basic-wellness", detail: "drift" }],
+    };
+    const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+      removeTempHome(options);
+      return { stdout: `${JSON.stringify(verdict)}\n`, stderr: "fixed stderr", status: 1 };
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const outcome = spawnScenarioChild(params, spawnProcess);
+
+    expect(outcome).toEqual({ verdict, exitCode: 1, stderr: "fixed stderr" });
+    expect(spawnProcess).toHaveBeenCalledOnce();
+    expect(spawnProcess.mock.calls[0]?.[2]).toMatchObject({
+      timeout: 120_000,
+      killSignal: "SIGKILL",
+    });
+    expect(log.mock.calls.map(([line]) => line)).toEqual([
+      "S8A_CHILD START scenario=turn-basic-wellness stage=replay",
+      "S8A_CHILD DONE scenario=turn-basic-wellness stage=replay outcome=exit-1",
+    ]);
+  });
+
+  it("maps ETIMEDOUT to a stable path-free harness error", () => {
+    const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+      removeTempHome(options);
+      return {
+        stdout: null,
+        stderr: "/private/athlete-home/token",
+        status: null,
+        error: Object.assign(new Error("/private/athlete-home/token"), { code: "ETIMEDOUT" }),
+      };
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const outcome = spawnScenarioChild(
+      { ...params, scenarioId: "../../private/athlete-home" },
+      spawnProcess,
+    );
+
+    expect(outcome).toEqual({
+      verdict: null,
+      exitCode: 2,
+      stderr: "scenario child timed out: scenario=unknown stage=replay",
+    });
+    expect(JSON.stringify(outcome)).not.toContain("private/athlete-home");
+    expect(log.mock.calls.map(([line]) => line)).toEqual([
+      "S8A_CHILD START scenario=unknown stage=replay",
+      "S8A_CHILD DONE scenario=unknown stage=replay outcome=timeout",
+    ]);
+  });
+
+  it("stops determinism before the second child and diff after a timeout", () => {
+    const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+      removeTempHome(options);
+      return {
+        stdout: null,
+        stderr: null,
+        status: null,
+        error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+      };
+    });
+    const diffProcess = vi.fn(() => ({ status: 0, stdout: "" }));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const outcome = runSelfTestDeterminism(
+      {
+        probeDirs: ["/fixed/probe-1", "/fixed/probe-2"],
+        provider: "openai-codex",
+        llmModel: "gpt-5.6-sol",
+      },
+      spawnProcess,
+      diffProcess,
+    );
+
+    expect(outcome).toMatchObject({ kind: "harness-error", outcome: { exitCode: 2 } });
+    expect(spawnProcess).toHaveBeenCalledOnce();
+    expect(diffProcess).not.toHaveBeenCalled();
+  });
+
+  it("runs both determinism children before the diff", () => {
+    const verdict: ScenarioVerdict = {
+      scenario: "turn-basic-wellness",
+      pass: true,
+      failures: [],
+    };
+    const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+      removeTempHome(options);
+      return { stdout: `${JSON.stringify(verdict)}\n`, stderr: "", status: 0 };
+    });
+    const diffProcess = vi.fn(() => ({ status: 0, stdout: "" }));
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const outcome = runSelfTestDeterminism(
+      {
+        probeDirs: ["/fixed/probe-1", "/fixed/probe-2"],
+        provider: "openai-codex",
+        llmModel: "gpt-5.6-sol",
+      },
+      spawnProcess,
+      diffProcess,
+    );
+
+    expect(outcome).toEqual({ kind: "complete", deterministic: true, diffOutput: "" });
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+    expect(diffProcess).toHaveBeenCalledOnce();
+    expect(log.mock.calls.map(([line]) => line)).toEqual([
+      "S8A_CHILD START scenario=turn-basic-wellness stage=self-test-determinism-1",
+      "S8A_CHILD DONE scenario=turn-basic-wellness stage=self-test-determinism-1 outcome=exit-0",
+      "S8A_CHILD START scenario=turn-basic-wellness stage=self-test-determinism-2",
+      "S8A_CHILD DONE scenario=turn-basic-wellness stage=self-test-determinism-2 outcome=exit-0",
+    ]);
   });
 });
 
