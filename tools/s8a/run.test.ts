@@ -67,7 +67,7 @@ describe("scenario child stage diagnostics", () => {
     ).toBe("none");
   });
 
-  it.each(["i12345678", "12345678"])(
+  it.each(["i12345678", "12345678", "foo-i12345678-bar", "foo-12345678-bar"])(
     "keeps fixture-private scenario id %s out of diagnostics",
     (privateId) => {
       expect(safeScenarioDiagnosticId(privateId)).toBe("unknown");
@@ -123,8 +123,7 @@ describe("scenario child stage diagnostics", () => {
     const positions = markers.map((marker) => RUN_SCENARIO_SOURCE.indexOf(marker));
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
-    expect(RUN_SCENARIO_SOURCE).toContain("/^i[0-9]{8,9}$/");
-    expect(RUN_SCENARIO_SOURCE).toContain("/^[0-9]{8,}$/");
+    expect(RUN_SCENARIO_SOURCE).toContain("/[0-9]{8,}/");
   });
 });
 
