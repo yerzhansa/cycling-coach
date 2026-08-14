@@ -32,6 +32,50 @@ export function removeWindowsScratch(
   remove?: (path: string, options: WindowsScratchRemoveOptions) => Promise<void>,
 ): Promise<void>;
 
+export function throwPackagedCompletionFailures(
+  bodyFailure: unknown,
+  cleanupFailures: readonly ("process" | "scratch")[],
+): void;
+
+export type SecuritySmokeShutdownStage =
+  | "stdin-accepted"
+  | "residency-closed"
+  | "ipc-closed"
+  | "telegram-power-closed"
+  | "telegram-coordinator-closed"
+  | "daemon-closed"
+  | "exit-requested";
+
+export const SECURITY_SMOKE_SHUTDOWN_STAGES: readonly SecuritySmokeShutdownStage[];
+
+export interface SecuritySmokeStageObserver {
+  write(chunk: string | Buffer): void;
+  lastStage(): SecuritySmokeShutdownStage | "none";
+  readonly failure: Promise<Error>;
+  readonly terminal: Promise<"exit-requested">;
+}
+
+export function createSecuritySmokeStageObserver(): SecuritySmokeStageObserver;
+
+export interface PackagedShutdownInput {
+  readonly destroyed: boolean;
+  readonly writable: boolean;
+  once(event: "error", listener: () => void): unknown;
+  removeListener(event: "error", listener: () => void): unknown;
+  end(chunk: string, callback: (error?: Error | null) => void): unknown;
+}
+
+export function requestPackagedShutdown(input: PackagedShutdownInput | undefined): Promise<void>;
+
+export function waitForPackagedApplicationExit(
+  running: {
+    readonly child: { readonly stdin: PackagedShutdownInput | undefined };
+    readonly exited: Promise<ProcessExitResult>;
+    readonly stages: SecuritySmokeStageObserver;
+  },
+  timeoutMilliseconds?: number,
+): Promise<ProcessExitResult>;
+
 export interface PackagedSelfTestTerminal {
   readonly type: "self-test-terminal";
   readonly ok: true;

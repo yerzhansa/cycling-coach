@@ -59,6 +59,10 @@ describe("Windows parity automation contract", () => {
       join(repositoryRoot, "apps/desktop/scripts/verify-windows-packaged-self-test.mjs"),
       "utf8",
     );
+    const desktopMain = await readFile(
+      join(repositoryRoot, "apps/desktop/src/main/index.ts"),
+      "utf8",
+    );
     const packageCommands = workflow.match(/pnpm --filter @enduragent\/desktop package:win/g) ?? [];
     const installedCommands =
       workflow.match(
@@ -120,11 +124,50 @@ describe("Windows parity automation contract", () => {
     expect(nativeEvidence).toContain("Get-CimInstance Win32_Process -Filter");
     expect(nativeEvidence).not.toContain("[IO.Path]::GetFileName");
     expect(nativeEvidence).not.toContain("Invoke-Expression");
+    const shutdownStart = desktopMain.indexOf("const shutdown = (): Promise<void> =>");
+    const residencyClosed = desktopMain.indexOf(
+      'reportSecuritySmokeShutdownStage("residency-closed")',
+      shutdownStart,
+    );
+    const ipcClosed = desktopMain.indexOf(
+      'reportSecuritySmokeShutdownStage("ipc-closed")',
+      residencyClosed,
+    );
+    const telegramPowerClosed = desktopMain.indexOf(
+      'reportSecuritySmokeShutdownStage("telegram-power-closed")',
+      ipcClosed,
+    );
+    const telegramCoordinatorClosed = desktopMain.indexOf(
+      'reportSecuritySmokeShutdownStage("telegram-coordinator-closed")',
+      telegramPowerClosed,
+    );
+    const daemonClosed = desktopMain.indexOf(
+      'reportSecuritySmokeShutdownStage("daemon-closed")',
+      telegramCoordinatorClosed,
+    );
+    const shutdownAccepted = desktopMain.indexOf(
+      'reportSecuritySmokeShutdownStage("stdin-accepted")',
+      daemonClosed,
+    );
+    const shutdownAwaited = desktopMain.indexOf("await shutdown();", shutdownAccepted);
+    const exitRequested = desktopMain.indexOf(
+      'reportSecuritySmokeShutdownStage("exit-requested")',
+      shutdownAwaited,
+    );
+    expect(shutdownStart).toBeGreaterThanOrEqual(0);
+    expect(residencyClosed).toBeGreaterThan(shutdownStart);
+    expect(ipcClosed).toBeGreaterThan(residencyClosed);
+    expect(telegramPowerClosed).toBeGreaterThan(ipcClosed);
+    expect(telegramCoordinatorClosed).toBeGreaterThan(telegramPowerClosed);
+    expect(daemonClosed).toBeGreaterThan(telegramCoordinatorClosed);
+    expect(shutdownAccepted).toBeGreaterThan(daemonClosed);
+    expect(shutdownAwaited).toBeGreaterThan(shutdownAccepted);
+    expect(exitRequested).toBeGreaterThan(shutdownAwaited);
     const packagedRun = packagedSelfTest.indexOf("export async function runWindowsPackagedSelfTest");
-    const packagedFinally = packagedSelfTest.indexOf("  } finally {", packagedRun);
+    const packagedCatch = packagedSelfTest.indexOf("  } catch (error) {", packagedRun);
     const exitSettlement = packagedSelfTest.indexOf(
       "running.exited.then(() => true)",
-      packagedFinally,
+      packagedCatch,
     );
     const forcedExit = packagedSelfTest.indexOf(
       'running.child.kill("SIGKILL")',
@@ -136,8 +179,8 @@ describe("Windows parity automation contract", () => {
       forcedSettlement,
     );
     expect(packagedRun).toBeGreaterThanOrEqual(0);
-    expect(packagedFinally).toBeGreaterThan(packagedRun);
-    expect(exitSettlement).toBeGreaterThan(packagedFinally);
+    expect(packagedCatch).toBeGreaterThan(packagedRun);
+    expect(exitSettlement).toBeGreaterThan(packagedCatch);
     expect(forcedExit).toBeGreaterThan(exitSettlement);
     expect(forcedSettlement).toBeGreaterThan(forcedExit);
     expect(scratchCleanup).toBeGreaterThan(forcedSettlement);

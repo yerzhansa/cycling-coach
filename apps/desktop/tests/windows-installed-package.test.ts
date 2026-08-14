@@ -4,7 +4,7 @@ import { createReadStream } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectCanonicalTree,
@@ -17,10 +17,15 @@ import {
   validateSignaturePolicy,
 } from "../scripts/windows-installed-package.mjs";
 import {
+  createSecuritySmokeStageObserver,
   observeProcessExit,
+  requestPackagedShutdown,
   removeWindowsScratch,
+  SECURITY_SMOKE_SHUTDOWN_STAGES,
+  throwPackagedCompletionFailures,
   validatePackagedSecondLaunch,
   validateSelfTestTerminal,
+  waitForPackagedApplicationExit,
 } from "../scripts/verify-windows-packaged-self-test.mjs";
 
 const scratchRoots: string[] = [];
@@ -491,6 +496,147 @@ describe("packaged application process exit", () => {
   });
 });
 
+describe("packaged Windows shutdown diagnostics", () => {
+  const completeStages = (stages: ReturnType<typeof createSecuritySmokeStageObserver>) => {
+    stages.write(
+      SECURITY_SMOKE_SHUTDOWN_STAGES.map(
+        (stage) => `DESKTOP_SECURITY_STAGE ${stage}\n`,
+      ).join(""),
+    );
+  };
+
+  it("parses fragmented fixed stages in exact order", () => {
+    const stages = createSecuritySmokeStageObserver();
+    stages.write("DESKTOP_SECURITY_STAGE stdin-");
+    expect(stages.lastStage()).toBe("none");
+    stages.write("accepted\nDESKTOP_SECURITY_STAGE residency-closed\n");
+    expect(stages.lastStage()).toBe("residency-closed");
+  });
+
+  it("rejects duplicate and unknown stage frames without exposing output", async () => {
+    for (const frame of [
+      "DESKTOP_SECURITY_STAGE stdin-accepted\nDESKTOP_SECURITY_STAGE stdin-accepted\n",
+      "DESKTOP_SECURITY_STAGE C:\\private\\athlete-home\n",
+    ]) {
+      const stages = createSecuritySmokeStageObserver();
+      stages.write(frame);
+      const error = await stages.failure;
+      expect(error.message).toBe("packaged Windows shutdown stage evidence was invalid");
+      expect(String(error)).not.toContain("athlete-home");
+    }
+  });
+
+  it("observes shutdown write completion and rejects unavailable input", async () => {
+    const input = new PassThrough();
+    let source = "";
+    input.on("data", (chunk) => {
+      source += String(chunk);
+    });
+    await expect(requestPackagedShutdown(input)).resolves.toBeUndefined();
+    expect(source).toBe("shutdown\n");
+    expect(input.listenerCount("error")).toBe(0);
+    await expect(requestPackagedShutdown(undefined)).rejects.toThrow(
+      /^packaged Windows shutdown input was unavailable$/u,
+    );
+  });
+
+  it("maps callback, stream, and synchronous request failures without retaining listeners", async () => {
+    const callbackInput = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writable: true,
+      end: (_chunk: string, callback: (error?: Error | null) => void) =>
+        callback(new Error("C:\\private\\callback")),
+    });
+    await expect(requestPackagedShutdown(callbackInput as never)).rejects.toThrow(
+      /^packaged Windows shutdown request failed$/u,
+    );
+    expect(callbackInput.listenerCount("error")).toBe(0);
+
+    const streamInput = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writable: true,
+      end: () => undefined,
+    });
+    const streamFailure = requestPackagedShutdown(streamInput as never);
+    streamInput.emit("error", new Error("C:\\private\\stream"));
+    await expect(streamFailure).rejects.toThrow(/^packaged Windows shutdown request failed$/u);
+    expect(streamInput.listenerCount("error")).toBe(0);
+
+    const synchronousInput = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writable: true,
+      end: () => {
+        throw new Error("C:\\private\\end");
+      },
+    });
+    await expect(requestPackagedShutdown(synchronousInput as never)).rejects.toThrow(
+      /^packaged Windows shutdown request failed$/u,
+    );
+    expect(synchronousInput.listenerCount("error")).toBe(0);
+  });
+
+  it("waits for terminal evidence after root exit", async () => {
+    const stages = createSecuritySmokeStageObserver();
+    let settled = false;
+    const waiting = waitForPackagedApplicationExit(
+      {
+        child: { stdin: new PassThrough() },
+        exited: Promise.resolve({ code: 0, signal: null }),
+        stages,
+      },
+      100,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    completeStages(stages);
+    await expect(waiting).resolves.toEqual({ code: 0, signal: null });
+  });
+
+  it("waits for root exit after terminal evidence", async () => {
+    const stages = createSecuritySmokeStageObserver();
+    completeStages(stages);
+    let resolveExit!: (result: { code: number; signal: null }) => void;
+    const exited = new Promise<{ code: number; signal: null }>((resolve) => {
+      resolveExit = resolve;
+    });
+    let settled = false;
+    const waiting = waitForPackagedApplicationExit(
+      { child: { stdin: new PassThrough() }, exited, stages },
+      100,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    resolveExit({ code: 0, signal: null });
+    await expect(waiting).resolves.toEqual({ code: 0, signal: null });
+  });
+
+  it("reports only the last allowlisted stage at the absolute deadline", async () => {
+    const stages = createSecuritySmokeStageObserver();
+    stages.write("DESKTOP_SECURITY_STAGE stdin-accepted\n");
+    const privateValue = "C:\\private\\athlete-home";
+    const waiting = waitForPackagedApplicationExit(
+      {
+        child: { stdin: new PassThrough() },
+        exited: new Promise(() => undefined),
+        stages,
+      },
+      1,
+    );
+    await expect(waiting).rejects.toThrow(
+      /^packaged Windows application did not stop cleanly; last stage=stdin-accepted$/u,
+    );
+    await waiting.catch((error) => {
+      expect(String(error)).not.toContain(privateValue);
+    });
+  });
+});
+
 describe("packaged Windows scratch cleanup", () => {
   it("uses bounded native recursive removal options", async () => {
     const remove = vi.fn(async () => {});
@@ -515,6 +661,26 @@ describe("packaged Windows scratch cleanup", () => {
       expect(String(error)).not.toContain(privatePath);
     });
   });
+
+  it.each(["process", "scratch"] as const)(
+    "preserves the body diagnostic when %s cleanup also fails",
+    (cleanupStage) => {
+      const bodyFailure = new Error("packaged Windows shutdown failed at an allowlisted stage");
+      try {
+        throwPackagedCompletionFailures(bodyFailure, [cleanupStage]);
+        throw new Error("expected aggregate failure");
+      } catch (error) {
+        expect(error).toBeInstanceOf(AggregateError);
+        expect((error as AggregateError).message).toBe(
+          "packaged Windows verification and cleanup failed",
+        );
+        expect((error as AggregateError).errors[0]).toBe(bodyFailure);
+        expect((error as AggregateError).errors[1]).toEqual(
+          new Error(`packaged Windows ${cleanupStage} cleanup failed`),
+        );
+      }
+    },
+  );
 });
 
 describe("packaged self-test terminal", () => {

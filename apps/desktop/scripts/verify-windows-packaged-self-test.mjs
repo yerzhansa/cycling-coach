@@ -15,6 +15,16 @@ const COMMAND_TIMEOUT_MS = 120_000;
 const CLEAN_EXIT_TIMEOUT_MS = 30_000;
 const LISTENER_TIMEOUT_MS = 500;
 const CLEANUP_GRACE_MS = 5_000;
+const SECURITY_SMOKE_STAGE_PREFIX = "DESKTOP_SECURITY_STAGE ";
+export const SECURITY_SMOKE_SHUTDOWN_STAGES = Object.freeze([
+  "stdin-accepted",
+  "residency-closed",
+  "ipc-closed",
+  "telegram-power-closed",
+  "telegram-coordinator-closed",
+  "daemon-closed",
+  "exit-requested",
+]);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDirectory, "..");
 const repositoryRoot = resolve(desktopRoot, "../..");
@@ -82,6 +92,97 @@ export async function removeWindowsScratch(path, remove = rm) {
   }
 }
 
+export function throwPackagedCompletionFailures(bodyFailure, cleanupFailures) {
+  const cleanupErrors = cleanupFailures.map(
+    (stage) => new Error(`packaged Windows ${stage} cleanup failed`),
+  );
+  if (bodyFailure !== undefined && cleanupErrors.length > 0) {
+    throw new AggregateError(
+      [bodyFailure, ...cleanupErrors],
+      "packaged Windows verification and cleanup failed",
+    );
+  }
+  if (bodyFailure !== undefined) throw bodyFailure;
+  if (cleanupErrors.length === 1) throw cleanupErrors[0];
+  if (cleanupErrors.length > 1) {
+    throw new AggregateError(cleanupErrors, "packaged Windows cleanup failed");
+  }
+}
+
+export function createSecuritySmokeStageObserver() {
+  let pending = "";
+  let stageIndex = -1;
+  let lastStage = "none";
+  let invalid = false;
+  let resolveFailure;
+  let resolveTerminal;
+  const failure = new Promise((resolve) => {
+    resolveFailure = resolve;
+  });
+  const terminal = new Promise((resolve) => {
+    resolveTerminal = resolve;
+  });
+  const fail = () => {
+    if (invalid) return;
+    invalid = true;
+    resolveFailure(new Error("packaged Windows shutdown stage evidence was invalid"));
+  };
+  return Object.freeze({
+    write(chunk) {
+      if (invalid) return;
+      pending += String(chunk);
+      const lines = pending.split(/\r?\n/u);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith(SECURITY_SMOKE_STAGE_PREFIX)) continue;
+        const stage = line.slice(SECURITY_SMOKE_STAGE_PREFIX.length);
+        const nextIndex = stageIndex + 1;
+        if (stage !== SECURITY_SMOKE_SHUTDOWN_STAGES[nextIndex]) {
+          fail();
+          return;
+        }
+        stageIndex = nextIndex;
+        lastStage = stage;
+        if (stage === "exit-requested") resolveTerminal(stage);
+      }
+    },
+    lastStage: () => lastStage,
+    failure,
+    terminal,
+  });
+}
+
+export function requestPackagedShutdown(input) {
+  if (input === null || input === undefined || input.destroyed || input.writable === false) {
+    return Promise.reject(new Error("packaged Windows shutdown input was unavailable"));
+  }
+  return new Promise((resolveRequest, rejectRequest) => {
+    let settled = false;
+    const cleanup = () => input.removeListener("error", fail);
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      rejectRequest(new Error("packaged Windows shutdown request failed"));
+    };
+    input.once("error", fail);
+    try {
+      input.end("shutdown\n", (error) => {
+        if (settled) return;
+        if (error) {
+          fail();
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolveRequest();
+      });
+    } catch {
+      fail();
+    }
+  });
+}
+
 function launchApplication(executable, args, environment) {
   const child = spawn(executable, args, {
     cwd: dirname(executable),
@@ -93,6 +194,7 @@ function launchApplication(executable, args, environment) {
   let pending = "";
   let resolveReady;
   let rejectReady;
+  const stages = createSecuritySmokeStageObserver();
   const ready = new Promise((resolvePromise, rejectPromise) => {
     resolveReady = resolvePromise;
     rejectReady = rejectPromise;
@@ -103,6 +205,7 @@ function launchApplication(executable, args, environment) {
   );
   child.stdout.on("data", (chunk) => {
     const text = String(chunk);
+    stages.write(text);
     stdout += text;
     pending += text;
     const lines = pending.split(/\r?\n/u);
@@ -121,7 +224,7 @@ function launchApplication(executable, args, environment) {
     stderr += String(chunk);
   });
   const exited = observeProcessExit(child);
-  return { child, ready, exited, output: () => ({ stdout, stderr }) };
+  return { child, ready, exited, stages, output: () => ({ stdout, stderr }) };
 }
 
 function parseSingleJsonLine(result, label) {
@@ -228,13 +331,42 @@ function listenerClosed(url) {
   });
 }
 
+export async function waitForPackagedApplicationExit(
+  running,
+  timeoutMilliseconds = CLEAN_EXIT_TIMEOUT_MS,
+) {
+  let timeout;
+  const deadline = new Promise((resolveTimeout) => {
+    timeout = setTimeout(() => resolveTimeout({ type: "timeout" }), timeoutMilliseconds);
+  });
+  try {
+    const outcome = await Promise.race([
+      Promise.all([
+        requestPackagedShutdown(running.child.stdin),
+        running.stages.terminal,
+        running.exited,
+      ]).then(([, , result]) => ({ type: "exit", result })),
+      running.stages.failure.then((error) => ({ type: "failure", error })),
+      deadline,
+    ]);
+    if (outcome.type === "failure") throw outcome.error;
+    if (outcome.type === "timeout") {
+      throw new Error(
+        `packaged Windows application did not stop cleanly; last stage=${running.stages.lastStage()}`,
+      );
+    }
+    checked(
+      running.stages.lastStage() === "exit-requested",
+      `packaged Windows shutdown evidence was incomplete; last stage=${running.stages.lastStage()}`,
+    );
+    return outcome.result;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function waitForCleanExit(running, rpcUrl) {
-  if (!running.child.stdin.destroyed) running.child.stdin.end("shutdown\n");
-  const outcome = await Promise.race([
-    running.exited,
-    delay(CLEAN_EXIT_TIMEOUT_MS).then(() => undefined),
-  ]);
-  checked(outcome !== undefined, "packaged Windows application did not stop cleanly");
+  const outcome = await waitForPackagedApplicationExit(running);
   destroyProcessStdio(running.child);
   checked(
     outcome.code === 0 && outcome.signal === null,
@@ -265,6 +397,8 @@ export async function runWindowsPackagedSelfTest(input = {}) {
     USERPROFILE: security.operatorHome,
   };
   let running;
+  let bodyFailure;
+  let result;
   try {
     await Promise.all([
       mkdir(security.configDirectory, { recursive: true }),
@@ -309,9 +443,13 @@ export async function runWindowsPackagedSelfTest(input = {}) {
       "self-test output exposed private data",
     );
     await waitForCleanExit(running, ready.rpcUrl);
-    return Object.freeze({ successExit: 0, secondLaunchExit: 0, suites: terminal.suites });
-  } finally {
-    if (running !== undefined) {
+    result = Object.freeze({ successExit: 0, secondLaunchExit: 0, suites: terminal.suites });
+  } catch (error) {
+    bodyFailure = error;
+  }
+  const cleanupFailures = [];
+  if (running !== undefined) {
+    try {
       try {
         const settled = await Promise.race([
           running.exited.then(() => true),
@@ -324,9 +462,17 @@ export async function runWindowsPackagedSelfTest(input = {}) {
       } finally {
         destroyProcessStdio(running.child);
       }
+    } catch {
+      cleanupFailures.push("process");
     }
-    await removeWindowsScratch(scratch);
   }
+  try {
+    await removeWindowsScratch(scratch);
+  } catch {
+    cleanupFailures.push("scratch");
+  }
+  throwPackagedCompletionFailures(bodyFailure, cleanupFailures);
+  return result;
 }
 
 async function main() {
