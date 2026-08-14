@@ -91,8 +91,10 @@ describe("Windows parity automation contract", () => {
     expect(nativeEvidence).toContain("Get-AuthenticodeSignature");
     expect(nativeEvidence).toContain('$installRoot = "HKCU:\\Software\\$($Request.guid)"');
     expect(nativeEvidence).toContain(
-      "(Get-ItemProperty -LiteralPath $installRoot).InstallLocation",
+      "[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames",
     );
+    expect(nativeEvidence).toContain('code = "NATIVE_EVIDENCE_FAILED"');
+    expect(nativeEvidence).not.toContain("$_.Exception.Message");
     expect(nativeEvidence).toContain("installLocation = $installLocation");
     expect(nativeEvidence).toContain("WScript.Shell");
     expect(nativeEvidence).toContain("Get-CimInstance Win32_Process -Filter");

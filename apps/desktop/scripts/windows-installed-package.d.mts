@@ -149,6 +149,16 @@ export function executeWithGuaranteedUninstall(
   uninstall: () => Promise<void>,
 ): Promise<void>;
 
+export function parseNativeEvidenceResult(
+  result: {
+    readonly code: number | null;
+    readonly signal: NodeJS.Signals | null;
+    readonly stdout: string;
+    readonly stderr: string;
+  },
+  label: string,
+): unknown;
+
 export function runWindowsInstalledPackage(
   input?: {
     readonly args?: readonly string[];

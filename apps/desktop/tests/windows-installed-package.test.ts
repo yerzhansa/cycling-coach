@@ -10,6 +10,7 @@ import {
   compareInstalledTree,
   discoverInstalledPackage,
   executeWithGuaranteedUninstall,
+  parseNativeEvidenceResult,
   parseRegisteredUninstallCommands,
   runWindowsInstalledPackage,
   validateSignaturePolicy,
@@ -288,6 +289,84 @@ describe("guaranteed uninstall", () => {
     );
     await expect(failure).rejects.toBeInstanceOf(AggregateError);
     await expect(failure).rejects.toMatchObject({ errors: [new Error("runtime failed"), new Error("uninstall failed")] });
+  });
+});
+
+describe("native evidence result parsing", () => {
+  it("returns successful native evidence", () => {
+    const evidence = { ok: true, registrations: [] };
+    expect(
+      parseNativeEvidenceResult(
+        { code: 0, signal: null, stdout: `${JSON.stringify(evidence)}\n`, stderr: "" },
+        "native Windows evidence evidence",
+      ),
+    ).toEqual(evidence);
+  });
+
+  it("surfaces only a fixed native failure stage", () => {
+    const stdout = `${JSON.stringify({
+      ok: false,
+      error: { code: "NATIVE_EVIDENCE_FAILED", stage: "install-location" },
+    })}\n`;
+    expect(() =>
+      parseNativeEvidenceResult(
+        { code: 1, signal: null, stdout, stderr: "" },
+        "native Windows evidence evidence",
+      ),
+    ).toThrow("native Windows evidence evidence failed at install-location");
+  });
+
+  it.each([
+    { ok: false, error: { code: "NATIVE_EVIDENCE_FAILED", stage: "unknown" } },
+    { ok: false, error: { code: "RAW_EXCEPTION", stage: "evidence" } },
+    { ok: false, error: { code: "NATIVE_EVIDENCE_FAILED", stage: "evidence", path: "C:\\secret" } },
+  ])("rejects malformed native failure evidence", (failure) => {
+    expect(() =>
+      parseNativeEvidenceResult(
+        { code: 1, signal: null, stdout: `${JSON.stringify(failure)}\n`, stderr: "" },
+        "native Windows evidence evidence",
+      ),
+    ).toThrow(/^native Windows evidence evidence failed$/u);
+  });
+
+  it("rejects a failure envelope paired with a successful exit", () => {
+    const stdout = `${JSON.stringify({
+      ok: false,
+      error: { code: "NATIVE_EVIDENCE_FAILED", stage: "evidence" },
+    })}\n`;
+    expect(() =>
+      parseNativeEvidenceResult(
+        { code: 0, signal: null, stdout, stderr: "" },
+        "native Windows evidence evidence",
+      ),
+    ).toThrow(/^native Windows evidence evidence reported failure$/u);
+  });
+
+  it("rejects a signaled native failure without exposing its envelope", () => {
+    const stdout = `${JSON.stringify({
+      ok: false,
+      error: { code: "NATIVE_EVIDENCE_FAILED", stage: "evidence" },
+    })}\n`;
+    expect(() =>
+      parseNativeEvidenceResult(
+        { code: null, signal: "SIGTERM", stdout, stderr: "" },
+        "native Windows evidence evidence",
+      ),
+    ).toThrow(/^native Windows evidence evidence failed$/u);
+  });
+
+  it("rejects native stderr without exposing its contents", () => {
+    expect(() =>
+      parseNativeEvidenceResult(
+        {
+          code: 1,
+          signal: null,
+          stdout: "",
+          stderr: "registry failure at C:\\Users\\runneradmin\\secret",
+        },
+        "native Windows evidence evidence",
+      ),
+    ).toThrow(/^native Windows evidence evidence wrote stderr$/u);
   });
 });
 

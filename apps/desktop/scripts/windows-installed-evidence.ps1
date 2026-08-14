@@ -5,16 +5,36 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+$script:FailureStage = "request"
+
+function Get-InstallLocation {
+  param($Request)
+  $parentStage = $script:FailureStage
+  $script:FailureStage = "install-location"
+  $installRoot = "HKCU:\Software\$($Request.guid)"
+  if (-not (Test-Path -LiteralPath $installRoot)) {
+    $script:FailureStage = $parentStage
+    return $null
+  }
+  $key = Get-Item -LiteralPath $installRoot
+  if (-not ($key.GetValueNames() -contains "InstallLocation")) {
+    $script:FailureStage = $parentStage
+    return $null
+  }
+  $value = $key.GetValue(
+    "InstallLocation",
+    $null,
+    [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+  )
+  if ($value -isnot [string]) { throw "invalid install location value" }
+  $script:FailureStage = $parentStage
+  return [string]$value
+}
 
 function Get-UninstallRegistrations {
   param($Request)
   $root = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
-  $installRoot = "HKCU:\Software\$($Request.guid)"
-  $installLocation = if (Test-Path -LiteralPath $installRoot) {
-    (Get-ItemProperty -LiteralPath $installRoot).InstallLocation
-  } else {
-    $null
-  }
+  $installLocation = Get-InstallLocation -Request $Request
   if (-not (Test-Path -LiteralPath $root)) { return @() }
   $items = @(Get-ChildItem -LiteralPath $root | ForEach-Object {
     $value = Get-ItemProperty -LiteralPath $_.PSPath
@@ -162,10 +182,12 @@ function Get-Evidence {
 }
 
 try {
+  $script:FailureStage = "request"
   $requestFile = [IO.Path]::GetFullPath($RequestPath)
   if (-not (Test-Path -LiteralPath $requestFile -PathType Leaf)) { throw "request file is unavailable" }
   $request = Get-Content -LiteralPath $requestFile -Raw | ConvertFrom-Json
   if ($request.action -eq "seed-startup") {
+    $script:FailureStage = "seed-startup"
     $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     $startupKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
     New-Item -Path $runKey -Force | Out-Null
@@ -174,6 +196,7 @@ try {
     Set-ItemProperty -LiteralPath $startupKey -Name $request.appId -Value ([Convert]::FromBase64String($request.startupApprovedValueBase64)) -Type Binary
     $result = Get-Evidence -Request $request
   } elseif ($request.action -eq "terminate-installed") {
+    $script:FailureStage = "terminate-installed"
     $installRoot = [string]$request.installRoot
     if (-not [IO.Path]::IsPathRooted($installRoot) -or $installRoot -match '^[\\/](?![\\/])') { throw "install root is not absolute" }
     $processes = @(Get-MatchingProcesses -Request $request | Where-Object {
@@ -195,13 +218,19 @@ try {
     if ($remaining.Count -ne 0) { throw "installed processes remain after termination" }
     $result = [ordered]@{ ok = $true; terminated = $processes }
   } elseif ($request.action -eq "evidence") {
+    $script:FailureStage = "evidence"
     $result = Get-Evidence -Request $request
   } else {
     throw "unsupported native evidence action"
   }
   [Console]::Out.WriteLine(($result | ConvertTo-Json -Compress -Depth 8))
 } catch {
-  $result = [ordered]@{ ok = $false; error = $_.Exception.Message }
+  $allowedStages = @("request", "install-location", "evidence", "seed-startup", "terminate-installed")
+  $stage = if ($allowedStages -contains $script:FailureStage) { $script:FailureStage } else { "internal" }
+  $result = [ordered]@{
+    ok = $false
+    error = [ordered]@{ code = "NATIVE_EVIDENCE_FAILED"; stage = $stage }
+  }
   [Console]::Out.WriteLine(($result | ConvertTo-Json -Compress -Depth 8))
   exit 1
 }

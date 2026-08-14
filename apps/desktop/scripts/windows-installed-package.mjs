@@ -341,8 +341,16 @@ function requireSuccessful(result, label) {
   return result;
 }
 
-function parseSingleJson(result, label) {
-  requireSuccessful(result, label);
+const nativeFailureStages = new Set([
+  "request",
+  "install-location",
+  "evidence",
+  "seed-startup",
+  "terminate-installed",
+  "internal",
+]);
+
+export function parseNativeEvidenceResult(result, label) {
   checked(result.stderr === "", `${label} wrote stderr`);
   const lines = result.stdout.split(/\r?\n/u).filter((line) => line !== "");
   checked(lines.length === 1, `${label} did not emit exactly one JSON result`);
@@ -352,8 +360,22 @@ function parseSingleJson(result, label) {
   } catch {
     throw new Error(`${label} emitted malformed JSON`);
   }
-  checked(value?.ok === true, `${label} reported failure`);
-  return value;
+  if (result.code === 0 && result.signal === null) {
+    checked(value?.ok === true, `${label} reported failure`);
+    return value;
+  }
+  checked(
+    result.signal === null &&
+      exactRecord(value) &&
+      Object.keys(value).sort().join(",") === "error,ok" &&
+      value.ok === false &&
+      exactRecord(value.error) &&
+      Object.keys(value.error).sort().join(",") === "code,stage" &&
+      value.error.code === "NATIVE_EVIDENCE_FAILED" &&
+      nativeFailureStages.has(value.error.stage),
+    `${label} failed`,
+  );
+  throw new Error(`${label} failed at ${value.error.stage}`);
 }
 
 async function runNativeEvidence(request, scratch, dependencies = {}) {
@@ -375,7 +397,7 @@ async function runNativeEvidence(request, scratch, dependencies = {}) {
     ],
     WINDOWS_INSTALLED_LIMITS.commandMs,
   );
-  return parseSingleJson(result, `native Windows evidence ${request.action}`);
+  return parseNativeEvidenceResult(result, `native Windows evidence ${request.action}`);
 }
 
 function commonNativeRequest(expected, roots) {
