@@ -89,6 +89,12 @@ describe("Windows parity automation contract", () => {
     expect(driver).toContain('child.once("close"');
     expect(driver).toContain('"pwsh.exe"');
     expect(driver).not.toContain('"powershell.exe"');
+    const commonRequest = driver.slice(
+      driver.indexOf("function commonNativeRequest"),
+      driver.indexOf("function validateHostedEnvironment"),
+    );
+    expect(commonRequest).toContain("treeRoots: []");
+    expect(commonRequest).toContain("signaturePaths: []");
     expect(nativeEvidence).toContain("ConvertFrom-Json");
     expect(nativeEvidence).toContain("Get-AuthenticodeSignature");
     expect(nativeEvidence).toContain('$installRoot = "HKCU:\\Software\\$($Request.guid)"');

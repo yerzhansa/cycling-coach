@@ -418,6 +418,8 @@ function commonNativeRequest(expected, roots) {
     appData: roots.appData,
     userProfile: roots.userProfile,
     cleanupGraceMs: WINDOWS_INSTALLED_LIMITS.cleanupGraceMs,
+    treeRoots: [],
+    signaturePaths: [],
     programsRoot: win32.join(roots.localAppData, "Programs"),
     shortcutPath: win32.join(
       roots.appData,
