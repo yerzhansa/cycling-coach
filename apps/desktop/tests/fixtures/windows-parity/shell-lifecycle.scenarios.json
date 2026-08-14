@@ -215,12 +215,12 @@
     {
       "id": "package.nsis.verification",
       "surface": "windows-package",
-      "expected": "Packaging cleans output, builds one exact versioned installer, and verifies it before release; signed, renamed, non-NSIS, missing, or undeclared installer contents fail closed.",
+      "expected": "Packaging cleans output, builds one exact versioned installer, and verifies its PE/NSIS envelope plus retained application before release; signed, renamed, non-NSIS, missing, or changed retained contents fail closed.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop/tests/windows-package-plan.test.ts > cleans, builds, checks the singleton artifact, and verifies in order",
         "apps/desktop/tests/windows-package-layout.test.ts > rejects signed, renamed, and non-NSIS installer artifacts",
-        "apps/desktop/tests/windows-package-layout.test.ts > rejects undeclared and missing entries inside the installer"
+        "apps/desktop/tests/windows-package-layout.test.ts > changes artifact and retained-tree digests when one byte changes"
       ]
     },
     {

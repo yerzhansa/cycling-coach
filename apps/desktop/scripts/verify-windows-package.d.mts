@@ -2,13 +2,11 @@ import type { Stats } from "node:fs";
 
 export type WindowsPackageVerificationStage =
   | "artifact"
-  | "installer-inventory"
   | "installer-contract"
   | "application-inventory"
   | "resource-inventory"
   | "asar-inventory"
-  | "binary-platform"
-  | "cleanup";
+  | "binary-platform";
 
 export interface WindowsBuilderAuthority {
   readonly asarSourceRoot: string;
@@ -22,20 +20,27 @@ export interface WindowsPackageLayoutOptions {
 }
 
 export interface WindowsPackageVerificationOverrides {
-  readonly executeFile?: (
-    executable: string,
-    arguments_: readonly string[],
-  ) => Promise<{ readonly stdout: string | Buffer }>;
-  readonly extractInstaller?: (artifact: string, destination: string) => Promise<void>;
-  readonly extractApplication?: (archive: string, destination: string) => Promise<void>;
   readonly lstat?: (path: string) => Promise<Stats>;
-  readonly mkdtemp?: (prefix: string) => Promise<string>;
   readonly readFile?: (path: string) => Promise<Buffer>;
   readonly readVersionFile?: (path: string, encoding: "utf8") => Promise<string>;
-  readonly rm?: (
-    path: string,
-    options: { readonly recursive: true; readonly force: true },
-  ) => Promise<void>;
+}
+
+export interface WindowsApplicationEvidence {
+  readonly fileCount: number;
+  readonly directoryCount: number;
+  readonly manifestSha256: string;
+  readonly peMachine: 0x8664;
+}
+
+export interface WindowsPackageEvidence {
+  readonly artifact: {
+    readonly name: string;
+    readonly size: number;
+    readonly sha256: string;
+    readonly peMachine: 0x014c | 0x8664;
+    readonly nsisEnvelope: true;
+  };
+  readonly application: WindowsApplicationEvidence;
 }
 
 export class WindowsPackageVerificationError extends Error {
@@ -52,10 +57,11 @@ export function readWindowsBuilderAuthority(desktopRoot?: string): Promise<Windo
 export function verifyWindowsPackageLayout(
   application: string,
   options?: WindowsPackageLayoutOptions,
-): Promise<void>;
+): Promise<WindowsApplicationEvidence>;
 
 export function verifyWindowsPackage(
   artifact: string,
+  application: string,
   options?: WindowsPackageLayoutOptions,
   overrides?: WindowsPackageVerificationOverrides,
-): Promise<void>;
+): Promise<WindowsPackageEvidence>;

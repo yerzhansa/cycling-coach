@@ -5,12 +5,13 @@ import { dirname, join, resolve } from "node:path";
 import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { createPackage } from "@electron/asar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   WINDOWS_PACKAGE_GUID,
   windowsPackageArtifactName,
 } from "../scripts/windows-package-plan.mjs";
 import {
+  type WindowsPackageEvidence,
   WindowsPackageVerificationError,
   readWindowsBuilderAuthority,
   verifyWindowsPackage,
@@ -143,8 +144,6 @@ const telegramRuntimePackages = [
   },
 ] as const;
 
-type InstallerMutation = (installerRoot: string) => Promise<void>;
-
 type SyntheticWindowsPackage = {
   application: string;
   archiveSource: string;
@@ -152,7 +151,7 @@ type SyntheticWindowsPackage = {
   desktop: string;
   externalPackaged: string;
   rebuild: () => Promise<void>;
-  verifyArtifact: (mutation?: InstallerMutation, installerType?: string) => Promise<void>;
+  verifyArtifact: () => Promise<WindowsPackageEvidence>;
   writeArchive: (path: string, bytes?: string | Buffer) => Promise<void>;
 };
 
@@ -224,7 +223,12 @@ function builderYaml(): string {
   ].join("\n");
 }
 
-function windowsExecutable(machine = 0x8664, marker = ""): Buffer {
+const nsisOverlaySignature = Buffer.concat([
+  Buffer.from([0xef, 0xbe, 0xad, 0xde]),
+  Buffer.from("NullsoftInst", "latin1"),
+]);
+
+function windowsExecutable(machine = 0x8664, marker: string | Buffer = ""): Buffer {
   const header = 0x80;
   const optionalSize = machine === 0x014c ? 224 : 240;
   const bytes = Buffer.alloc(header + 24 + optionalSize);
@@ -235,19 +239,6 @@ function windowsExecutable(machine = 0x8664, marker = ""): Buffer {
   bytes.writeUInt16LE(optionalSize, header + 20);
   bytes.writeUInt16LE(machine === 0x014c ? 0x010b : 0x020b, header + 24);
   return Buffer.concat([bytes, Buffer.from(marker)]);
-}
-
-function sevenZipInstallerListing(type: string): string {
-  return [
-    "--",
-    "Path = Enduragent.exe",
-    `Type = ${type}`,
-    "SubType = NSIS-3 Unicode",
-    "",
-    "----------",
-    "Path = $PLUGINSDIR/app-64.7z",
-    "",
-  ].join("\n");
 }
 
 async function syntheticWindowsPackage(): Promise<SyntheticWindowsPackage> {
@@ -358,45 +349,10 @@ async function syntheticWindowsPackage(): Promise<SyntheticWindowsPackage> {
   };
   await rebuild();
   await cp(join(externalSource, "self-test"), externalPackaged, { recursive: true });
-  await writeFile(artifact, windowsExecutable(0x014c, "NullsoftInst"));
+  await writeFile(artifact, windowsExecutable(0x014c, nsisOverlaySignature));
 
-  const verifyArtifact = async (
-    mutation?: InstallerMutation,
-    installerType = "Nsis",
-  ): Promise<void> => {
-    await verifyWindowsPackage(
-      artifact,
-      { desktopRoot: desktop },
-      {
-        executeFile: async () => ({ stdout: sevenZipInstallerListing(installerType) }),
-        extractInstaller: async (_source, destination) => {
-          const pluginDirectory = join(destination, "$PLUGINSDIR");
-          const uninstallerDirectory = join(destination, "$R0");
-          await Promise.all([
-            mkdir(pluginDirectory, { recursive: true }),
-            mkdir(uninstallerDirectory, { recursive: true }),
-          ]);
-          await Promise.all([
-            writeFile(join(pluginDirectory, "System.dll"), windowsExecutable(0x014c)),
-            writeFile(join(pluginDirectory, "StdUtils.dll"), windowsExecutable(0x014c)),
-            writeFile(join(pluginDirectory, "SpiderBanner.dll"), windowsExecutable(0x014c)),
-            writeFile(join(pluginDirectory, "nsExec.dll"), windowsExecutable(0x014c)),
-            writeFile(join(pluginDirectory, "app-64.7z"), "synthetic archive\n"),
-            writeFile(join(pluginDirectory, "nsis7z.dll"), windowsExecutable(0x014c)),
-            writeFile(join(pluginDirectory, "WinShell.dll"), windowsExecutable(0x014c)),
-            writeFile(
-              join(uninstallerDirectory, "Uninstall Enduragent.exe"),
-              windowsExecutable(0x014c, "NullsoftInst"),
-            ),
-          ]);
-          await mutation?.(destination);
-        },
-        extractApplication: async (_source, destination) => {
-          await cp(application, destination, { recursive: true });
-        },
-      },
-    );
-  };
+  const verifyArtifact = async (): Promise<WindowsPackageEvidence> =>
+    verifyWindowsPackage(artifact, application, { desktopRoot: desktop });
 
   return {
     application,
@@ -413,11 +369,47 @@ async function syntheticWindowsPackage(): Promise<SyntheticWindowsPackage> {
 describe("Windows package verification", () => {
   it("accepts the exact x64 application and unsigned NSIS package", async () => {
     const fixture = await syntheticWindowsPackage();
-    await expect(
-      verifyWindowsPackageLayout(fixture.application, { desktopRoot: fixture.desktop }),
-    ).resolves.toBeUndefined();
-    await expect(fixture.verifyArtifact()).resolves.toBeUndefined();
-    await expect(fixture.verifyArtifact()).resolves.toBeUndefined();
+    const layout = await verifyWindowsPackageLayout(fixture.application, {
+      desktopRoot: fixture.desktop,
+    });
+    const evidence = await fixture.verifyArtifact();
+    const repeated = await fixture.verifyArtifact();
+    expect(layout).toEqual(evidence.application);
+    expect(evidence).toEqual(repeated);
+    expect(evidence).toMatchObject({
+      artifact: {
+        name: windowsPackageArtifactName(version),
+        peMachine: 0x014c,
+        nsisEnvelope: true,
+      },
+      application: { peMachine: 0x8664 },
+    });
+    expect(evidence.artifact.sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(evidence.application.manifestSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(evidence.artifact.size).toBe((await readFile(fixture.artifact)).length);
+    expect(evidence.application.fileCount).toBeGreaterThan(0);
+    expect(evidence.application.directoryCount).toBeGreaterThan(0);
+    expect(Object.isFrozen(layout)).toBe(true);
+    expect(Object.isFrozen(evidence)).toBe(true);
+    expect(Object.isFrozen(evidence.artifact)).toBe(true);
+    expect(Object.isFrozen(evidence.application)).toBe(true);
+  });
+
+  it("changes artifact and retained-tree digests when one byte changes", async () => {
+    const fixture = await syntheticWindowsPackage();
+    const before = await fixture.verifyArtifact();
+    await writeFile(
+      fixture.artifact,
+      Buffer.concat([await readFile(fixture.artifact), Buffer.from([0])]),
+    );
+    const artifactMutation = await fixture.verifyArtifact();
+    expect(artifactMutation.artifact.sha256).not.toBe(before.artifact.sha256);
+
+    await writeFile(join(fixture.application, "LICENSE.electron.txt"), "changed by one byte!\n");
+    const applicationMutation = await fixture.verifyArtifact();
+    expect(applicationMutation.application.manifestSha256).not.toBe(
+      before.application.manifestSha256,
+    );
   });
 
   it("validates the checked-in builder identity and uninstall hook", async () => {
@@ -608,7 +600,9 @@ describe("Windows package verification", () => {
     const renamed = await syntheticWindowsPackage();
     const wrongName = join(dirname(renamed.artifact), "Enduragent-9.9.9-x64.exe");
     await cp(renamed.artifact, wrongName);
-    await expect(verifyWindowsPackage(wrongName, { desktopRoot: renamed.desktop })).rejects.toThrow(
+    await expect(
+      verifyWindowsPackage(wrongName, renamed.application, { desktopRoot: renamed.desktop }),
+    ).rejects.toThrow(
       'windows-package/artifact: artifact name is invalid: "Enduragent-9.9.9-x64.exe"',
     );
 
@@ -619,49 +613,47 @@ describe("Windows package verification", () => {
     );
   });
 
-  it("rejects undeclared and missing entries inside the installer", async () => {
-    const undeclared = await syntheticWindowsPackage();
-    await expect(
-      undeclared.verifyArtifact(async (installerRoot) => {
-        await writeFile(join(installerRoot, "unexpected.bin"), "unexpected\n");
-      }),
-    ).rejects.toThrow(
-      'windows-package/installer-inventory: undeclared installer entry: "unexpected.bin"',
-    );
+  it("accepts x86 and x64 envelopes but rejects unsupported PE machines", async () => {
+    const x64 = await syntheticWindowsPackage();
+    await writeFile(x64.artifact, windowsExecutable(0x8664, nsisOverlaySignature));
+    await expect(x64.verifyArtifact()).resolves.toMatchObject({
+      artifact: { peMachine: 0x8664 },
+    });
 
-    const missing = await syntheticWindowsPackage();
-    await expect(
-      missing.verifyArtifact(async (installerRoot) => {
-        await rm(join(installerRoot, "$R0/Uninstall Enduragent.exe"), { force: true });
-      }),
-    ).rejects.toThrow(
-      'windows-package/installer-inventory: missing installer entry: "$R0/Uninstall Enduragent.exe"',
+    const unsupported = await syntheticWindowsPackage();
+    await writeFile(unsupported.artifact, windowsExecutable(0xaa64, nsisOverlaySignature));
+    await expect(unsupported.verifyArtifact()).rejects.toThrow(
+      `windows-package/artifact: installer is not a Windows executable: "${windowsPackageArtifactName(version)}"`,
     );
   });
 
-  it("requires the official 7-Zip NSIS type header", async () => {
-    const fixture = await syntheticWindowsPackage();
-    await expect(fixture.verifyArtifact(undefined, "PE")).rejects.toThrow(
-      `windows-package/artifact: 7-Zip did not identify installer as NSIS: "${windowsPackageArtifactName(version)}"`,
+  it("requires the contiguous NSIS overlay signature", async () => {
+    const textOnly = await syntheticWindowsPackage();
+    await writeFile(textOnly.artifact, windowsExecutable(0x014c, "NullsoftInst"));
+    await expect(textOnly.verifyArtifact()).rejects.toThrow(
+      `windows-package/artifact: installer is not an NSIS package: "${windowsPackageArtifactName(version)}"`,
     );
-  });
 
-  it("never cleans an extraction path outside its dedicated temporary directory", async () => {
-    const fixture = await syntheticWindowsPackage();
-    const remove = vi.fn(async () => undefined);
-    await expect(
-      verifyWindowsPackage(
-        fixture.artifact,
-        { desktopRoot: fixture.desktop },
-        {
-          mkdtemp: async () => dirname(fixture.artifact),
-          rm: remove,
-        },
+    const separated = await syntheticWindowsPackage();
+    await writeFile(
+      separated.artifact,
+      windowsExecutable(
+        0x014c,
+        Buffer.concat([Buffer.from([0xef, 0xbe, 0xad, 0xde, 0]), Buffer.from("NullsoftInst")]),
       ),
-    ).rejects.toThrow(
-      "windows-package/installer-inventory: temporary extraction directory is invalid",
     );
-    expect(remove).not.toHaveBeenCalled();
+    await expect(separated.verifyArtifact()).rejects.toThrow(
+      `windows-package/artifact: installer is not an NSIS package: "${windowsPackageArtifactName(version)}"`,
+    );
+  });
+
+  it("requires the retained application path explicitly", async () => {
+    const fixture = await syntheticWindowsPackage();
+    await expect(
+      verifyWindowsPackage(fixture.artifact, "win-unpacked", { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow(
+      "windows-package/application-inventory: application path must be absolute",
+    );
   });
 
   it("exposes only bounded stage-coded verification errors", async () => {
