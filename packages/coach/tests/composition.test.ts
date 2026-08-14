@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,6 +37,8 @@ import {
   type LocalStoreRuntimeOptions,
 } from "../src/composition.js";
 import { RuntimeAthleteOwnerRefusal } from "../src/backfill.js";
+import { readIntervalsStoreOwnerState } from "../src/account-identity.js";
+import { INTERVALS_CREDENTIAL_APPROVAL_TTL_MS } from "../src/intervals-credential-approval.js";
 import { checkHomeReadiness } from "../src/readiness.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 
@@ -140,6 +143,12 @@ function config(
     contextWindowTokens: 1000,
     dataDir: home.root,
   };
+}
+
+function intervalsAccountFingerprint(account: string): string {
+  return createHash("sha256")
+    .update(JSON.stringify(["store-owner-v1", account]))
+    .digest("hex");
 }
 
 function athleteData(): AthleteDataReaderPort {
@@ -272,6 +281,72 @@ function fakeContext(home: AthleteHome): CoachStoreWriterContext {
       },
     },
   };
+}
+
+async function intervalsApprovalFixture(
+  now: () => number,
+  options: {
+    athleteId?: string;
+    env?: Record<string, string | undefined>;
+    legacyData?: boolean;
+    ownerAccount?: string;
+    responseForPath?: (path: string) => Response | Promise<Response>;
+  } = {},
+) {
+  const home = await freshHome();
+  await mkdir(home.storeDir, { recursive: true });
+  const store = openSqliteStorage(join(home.storeDir, "store.db"));
+  stores.push(store);
+  await runMigrations(store, MIGRATIONS);
+  if (options.ownerAccount !== undefined) {
+    await store.run("INSERT INTO store_owner (singleton, account_fingerprint) VALUES (1, ?)", [
+      intervalsAccountFingerprint(options.ownerAccount),
+    ]);
+  }
+  if (options.legacyData === true) {
+    await store.run(
+      "INSERT INTO source_watermark (source, lane, watermark) VALUES ('intervals-icu', 'activities', 'synthetic-legacy-watermark')",
+    );
+  }
+  const fetchStub = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (options.responseForPath !== undefined) return options.responseForPath(url.pathname);
+    if (url.pathname !== "/api/v1/athlete/0") throw new Error("unexpected request");
+    return new Response(
+      JSON.stringify({
+        sportSettings: [
+          {
+            id: 1,
+            athlete_id: "synthetic-approved-owner",
+            types: ["Ride"],
+            updated: "2026-01-01",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  const ownerGuard = vi.fn(async () => {});
+  const lifecycle = await compose(
+    home,
+    {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: () => backend(),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+      assertRuntimeAthleteOwner: ownerGuard,
+      now,
+    },
+    { home, store, listener: inertWriterProtocolListener },
+    { apiKey: "", athleteId: options.athleteId ?? "" },
+    undefined,
+    { ENDURAGENT_HOME: home.root, ...options.env },
+  );
+  return { home, store, lifecycle, ownerGuard, fetchStub };
 }
 
 async function compose(
@@ -409,9 +484,9 @@ describe("local coach composition", () => {
     expect(policy!.requiresConfirmation({ chatId: "cli:default", toolName: "plan_save" })).toBe(
       false,
     );
-    expect(policy!.requiresConfirmation({ chatId: "cli:fresh:synthetic", toolName: "plan_save" })).toBe(
-      false,
-    );
+    expect(
+      policy!.requiresConfirmation({ chatId: "cli:fresh:synthetic", toolName: "plan_save" }),
+    ).toBe(false);
     expect(policy!.requiresConfirmation({ chatId: "unknown", toolName: "plan_save" })).toBe(true);
     expect(lifecycle.confirmations.peek("telegram:73")).toBeUndefined();
 
@@ -435,9 +510,7 @@ describe("local coach composition", () => {
     const replacement = lifecycle.operations.configureRuntime({
       llm: { model: "replacement-model", api_key: "obviously-fake-replacement-key" },
     });
-    await vi.waitFor(() =>
-      expect(lifecycle.confirmations.peek("telegram:73")).toBeUndefined(),
-    );
+    await vi.waitFor(() => expect(lifecycle.confirmations.peek("telegram:73")).toBeUndefined());
     expect(lifecycle.confirmations.cancel("telegram:73", pending!.nonce)).toBe("none");
     await replacement;
 
@@ -2297,6 +2370,362 @@ describe("local coach composition", () => {
     },
   );
 
+  it("uses a fresh daemon approval without repeating the owner guard request", async () => {
+    const { lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(() =>
+      Date.parse("2026-08-11T00:00:00.000Z"),
+    );
+    const verification = await lifecycle.operations.verify_intervals_credential!({
+      api_key: "candidate-key",
+    });
+    if (!("approval" in verification)) throw new Error("expected credential approval");
+
+    expect(fetchStub).toHaveBeenCalledOnce();
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: {
+          api_key: "candidate-key",
+          verification_approval: verification.approval,
+        },
+      }),
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+    expect(fetchStub).toHaveBeenCalledOnce();
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it("repairs a stale configured athlete selector from a verified current-athlete approval", async () => {
+    const requestPaths: string[] = [];
+    const account = "synthetic-repaired-owner";
+    const { home, store, lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(
+      () => Date.parse("2026-08-11T00:00:00.000Z"),
+      {
+        athleteId: "synthetic",
+        ownerAccount: account,
+        responseForPath: (path) => {
+          requestPaths.push(path);
+          if (path === "/api/v1/athlete/synthetic") {
+            return new Response(null, { status: 403 });
+          }
+          if (path !== "/api/v1/athlete/0") throw new Error("unexpected request");
+          return new Response(
+            JSON.stringify({
+              sportSettings: [
+                {
+                  id: 1,
+                  athlete_id: account,
+                  types: ["Ride"],
+                  updated: "2026-01-01",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    );
+    const verification = await lifecycle.operations.verify_intervals_credential!({
+      api_key: "candidate-key",
+    });
+    if (!("approval" in verification)) throw new Error("expected credential approval");
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: {
+          api_key: "candidate-key",
+          verification_approval: verification.approval,
+        },
+      }),
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      intervals: { athlete_id: "0", credential_configured: true },
+    });
+    expect(parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8"))).toMatchObject({
+      intervals: { athlete_id: "0" },
+    });
+    await expect(readIntervalsStoreOwnerState(store)).resolves.toEqual({
+      status: "owned",
+      fingerprint: intervalsAccountFingerprint(account),
+    });
+    expect(requestPaths).toEqual(["/api/v1/athlete/synthetic", "/api/v1/athlete/0"]);
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it("retains a working custom athlete selector without a fallback request", async () => {
+    const requestPaths: string[] = [];
+    const { lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(
+      () => Date.parse("2026-08-11T00:00:00.000Z"),
+      {
+        athleteId: "selected-athlete",
+        responseForPath: (path) => {
+          requestPaths.push(path);
+          if (path !== "/api/v1/athlete/selected-athlete") {
+            throw new Error("unexpected request");
+          }
+          return new Response(
+            JSON.stringify({
+              sportSettings: [
+                {
+                  id: 1,
+                  athlete_id: "synthetic-selected-owner",
+                  types: ["Ride"],
+                  updated: "2026-01-01",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    );
+    const verification = await lifecycle.operations.verify_intervals_credential!({
+      api_key: "candidate-key",
+    });
+    if (!("approval" in verification)) throw new Error("expected credential approval");
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: {
+          api_key: "candidate-key",
+          verification_approval: verification.approval,
+        },
+      }),
+    ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      intervals: { athlete_id: "selected-athlete", credential_configured: true },
+    });
+    expect(requestPaths).toEqual(["/api/v1/athlete/selected-athlete"]);
+    expect(fetchStub).toHaveBeenCalledOnce();
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it("rejects an invalid credential after checking the configured and current-athlete selectors", async () => {
+    const requestPaths: string[] = [];
+    const { store, lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(
+      () => Date.parse("2026-08-11T00:00:00.000Z"),
+      {
+        athleteId: "synthetic",
+        responseForPath: (path) => {
+          requestPaths.push(path);
+          return new Response(null, { status: 403 });
+        },
+      },
+    );
+
+    await expect(
+      lifecycle.operations.verify_intervals_credential!({ api_key: "invalid-key" }),
+    ).resolves.toEqual({ reason: "credential-rejected" });
+    expect(requestPaths).toEqual(["/api/v1/athlete/synthetic", "/api/v1/athlete/0"]);
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await expect(readIntervalsStoreOwnerState(store)).resolves.toEqual({ status: "unowned" });
+    await lifecycle.close();
+  });
+
+  it("refuses selector repair when the verified current athlete differs from the stored owner", async () => {
+    const requestPaths: string[] = [];
+    const existingAccount = "synthetic-existing-owner";
+    const { home, store, lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(
+      () => Date.parse("2026-08-11T00:00:00.000Z"),
+      {
+        athleteId: "synthetic",
+        ownerAccount: existingAccount,
+        responseForPath: (path) => {
+          requestPaths.push(path);
+          if (path === "/api/v1/athlete/synthetic") {
+            return new Response(null, { status: 403 });
+          }
+          if (path !== "/api/v1/athlete/0") throw new Error("unexpected request");
+          return new Response(
+            JSON.stringify({
+              sportSettings: [
+                {
+                  id: 1,
+                  athlete_id: "synthetic-different-owner",
+                  types: ["Ride"],
+                  updated: "2026-01-01",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    );
+    const initialYaml = "sentinel: unchanged\n";
+    await writeFile(join(home.configDir, "config.yaml"), initialYaml);
+    const before = await lifecycle.operations.getRuntimeConfig({});
+
+    await expect(
+      lifecycle.operations.verify_intervals_credential!({ api_key: "candidate-key" }),
+    ).resolves.toEqual({ reason: "training-account-mismatch" });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toEqual(before);
+    await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(initialYaml);
+    await expect(readIntervalsStoreOwnerState(store)).resolves.toEqual({
+      status: "owned",
+      fingerprint: intervalsAccountFingerprint(existingAccount),
+    });
+    expect(requestPaths).toEqual(["/api/v1/athlete/synthetic", "/api/v1/athlete/0"]);
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it.each([
+    { label: "bare unowned store", legacyData: false },
+    { label: "unowned store with legacy data", legacyData: true },
+  ])("refuses selector repair for a $label", async ({ legacyData }) => {
+    const requestPaths: string[] = [];
+    const { home, store, lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(
+      () => Date.parse("2026-08-11T00:00:00.000Z"),
+      {
+        athleteId: "synthetic",
+        legacyData,
+        responseForPath: (path) => {
+          requestPaths.push(path);
+          if (path === "/api/v1/athlete/synthetic") {
+            return new Response(null, { status: 403 });
+          }
+          if (path !== "/api/v1/athlete/0") throw new Error("unexpected request");
+          return new Response(
+            JSON.stringify({
+              sportSettings: [
+                {
+                  id: 1,
+                  athlete_id: "synthetic-unowned-owner",
+                  types: ["Ride"],
+                  updated: "2026-01-01",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    );
+    const initialYaml = "sentinel: unchanged\n";
+    await writeFile(join(home.configDir, "config.yaml"), initialYaml);
+    const before = await lifecycle.operations.getRuntimeConfig({});
+
+    await expect(
+      lifecycle.operations.verify_intervals_credential!({ api_key: "candidate-key" }),
+    ).resolves.toEqual({ reason: "owner-unresolved" });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toEqual(before);
+    await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(initialYaml);
+    await expect(readIntervalsStoreOwnerState(store)).resolves.toEqual({ status: "unowned" });
+    await expect(store.get("SELECT count(*) AS count FROM source_watermark")).resolves.toEqual({
+      count: legacyData ? 1 : 0,
+    });
+    expect(requestPaths).toEqual(["/api/v1/athlete/synthetic", "/api/v1/athlete/0"]);
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it("refuses selector repair when the athlete selector is managed by the environment", async () => {
+    const requestPaths: string[] = [];
+    const account = "synthetic-managed-owner";
+    const { home, store, lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(
+      () => Date.parse("2026-08-11T00:00:00.000Z"),
+      {
+        athleteId: "synthetic",
+        env: { INTERVALS_ATHLETE_ID: "synthetic" },
+        ownerAccount: account,
+        responseForPath: (path) => {
+          requestPaths.push(path);
+          if (path === "/api/v1/athlete/synthetic") {
+            return new Response(null, { status: 403 });
+          }
+          if (path !== "/api/v1/athlete/0") throw new Error("unexpected request");
+          return new Response(
+            JSON.stringify({
+              sportSettings: [
+                {
+                  id: 1,
+                  athlete_id: account,
+                  types: ["Ride"],
+                  updated: "2026-01-01",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    );
+    const initialYaml = "sentinel: unchanged\n";
+    await writeFile(join(home.configDir, "config.yaml"), initialYaml);
+    const before = await lifecycle.operations.getRuntimeConfig({});
+    const verification = await lifecycle.operations.verify_intervals_credential!({
+      api_key: "candidate-key",
+    });
+    if (!("approval" in verification)) throw new Error("expected credential approval");
+
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: {
+          api_key: "candidate-key",
+          verification_approval: verification.approval,
+        },
+      }),
+    ).resolves.toEqual({
+      schemaVersion: 3,
+      status: "refused",
+      reason: "managed-by-environment",
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toEqual(before);
+    await expect(readFile(join(home.configDir, "config.yaml"), "utf8")).resolves.toBe(initialYaml);
+    await expect(readIntervalsStoreOwnerState(store)).resolves.toEqual({
+      status: "owned",
+      fingerprint: intervalsAccountFingerprint(account),
+    });
+    expect(requestPaths).toEqual(["/api/v1/athlete/synthetic", "/api/v1/athlete/0"]);
+    expect(fetchStub).toHaveBeenCalledTimes(2);
+    expect(ownerGuard).not.toHaveBeenCalled();
+    await lifecycle.close();
+  });
+
+  it.each(["invalid", "expired", "reused"] as const)(
+    "falls back to the existing owner guard for an %s approval",
+    async (scenario) => {
+      let now = Date.parse("2026-08-11T00:00:00.000Z");
+      const { lifecycle, ownerGuard, fetchStub } = await intervalsApprovalFixture(() => now);
+      const verification = await lifecycle.operations.verify_intervals_credential!({
+        api_key: "candidate-key",
+      });
+      if (!("approval" in verification)) throw new Error("expected credential approval");
+      let approval = verification.approval;
+
+      if (scenario === "invalid") {
+        approval = `${approval[0] === "0" ? "1" : "0"}${approval.slice(1)}`;
+      } else if (scenario === "expired") {
+        now += INTERVALS_CREDENTIAL_APPROVAL_TTL_MS;
+      } else {
+        await expect(
+          lifecycle.operations.configureRuntime({
+            intervals: { api_key: "candidate-key", verification_approval: approval },
+          }),
+        ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+        await expect(
+          lifecycle.operations.configureRuntime({ intervals: { clear_credential: true } }),
+        ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+      }
+
+      const ownerCallsBefore = ownerGuard.mock.calls.length;
+      await expect(
+        lifecycle.operations.configureRuntime({
+          intervals: { api_key: "candidate-key", verification_approval: approval },
+        }),
+      ).resolves.toMatchObject({ status: "applied", applied: { intervals: true } });
+      expect(ownerGuard.mock.calls.length - ownerCallsBefore).toBe(1);
+      expect(fetchStub).toHaveBeenCalledOnce();
+      await lifecycle.close();
+    },
+  );
+
   it("refuses an environment-managed athlete field even when the requested value is unchanged", async () => {
     const home = await freshHome();
     const initialYaml = "sentinel: unchanged\n";
@@ -2638,6 +3067,7 @@ describe("local coach composition", () => {
     );
 
     expect(trace.slice(0, 3)).toEqual(["owner:0", "runtime:0", "window:0"]);
+    expect(assertRuntimeAthleteOwner).toHaveBeenCalledOnce();
     await lifecycle.close();
   });
 

@@ -23,6 +23,7 @@ import {
   type ClaudeCliSessionPool,
   type SessionKey,
 } from "./session-pool.js";
+import type { ClaudeLaunchPurpose, ClaudeWorkingAreaPort } from "./working-area.js";
 
 export const CLAUDE_CLI_MCP_SERVER_NAME = "coach";
 export const CLAUDE_CLI_TOOL_PREFIX = `mcp__${CLAUDE_CLI_MCP_SERVER_NAME}__`;
@@ -51,6 +52,7 @@ export interface ClaudeCliBridgeRuntime {
 
 export interface ClaudeCliBridgePorts {
   readonly runtime: ClaudeCliBridgeRuntime;
+  readonly workingArea: ClaudeWorkingAreaPort;
   readonly baseEnv?: NodeJS.ProcessEnv;
   readonly query?: typeof sdkQuery;
   readonly resolveBinary?: (explicitPath?: string) => Promise<string | null>;
@@ -514,6 +516,8 @@ export function buildGenerationOptions(
   surface: CoachToolSurface | null,
   abortController: AbortController,
   plan: GenerationPlan,
+  cwd: string,
+  assertWorkingArea: () => void,
 ): SanitizedQueryOptions {
   const toolNames = surface === null ? [] : surface.toolNames;
   return buildQueryOptions({
@@ -531,6 +535,8 @@ export function buildGenerationOptions(
     resume: plan.resume,
     sessionId: plan.sessionId,
     persistSession: plan.mode === "stateless" ? false : undefined,
+    cwd,
+    assertWorkingArea,
   });
 }
 
@@ -545,6 +551,7 @@ async function runGeneration(
   runtime: ClaudeCliRuntime,
   plan: GenerationPlan,
   hooks: GenerationHooks = {},
+  launchPurpose?: ClaudeLaunchPurpose,
 ): Promise<GenerateResult> {
   const baseEnv = ports.baseEnv ?? process.env;
   const stallMs = ports.stallMs ?? INTER_FRAME_STALL_MS;
@@ -561,7 +568,21 @@ async function runGeneration(
         });
 
   const { controller, release } = linkAbort(opts.signal);
-  const options = buildGenerationOptions(opts, runtime, baseEnv, surface, controller, plan);
+  const purpose =
+    launchPurpose ??
+    (plan.mode === "stateless" ? "maintenance" : plan.mode === "resume" ? "resume" : "rebuild");
+  const binding = await ports.workingArea.prepareForLaunch(purpose);
+  const options = buildGenerationOptions(
+    opts,
+    runtime,
+    baseEnv,
+    surface,
+    controller,
+    plan,
+    binding.cwd,
+    binding.assertCurrent,
+  );
+  binding.assertCurrent();
   const generation = startGeneration({ prompt: plan.prompt, options }, { query: ports.query });
 
   const collector: FrameCollector = {
@@ -685,7 +706,7 @@ export async function claudeCliGenerateText(
       return await runGeneration(opts, ports, runtime, plan);
     } catch (err) {
       if (!isSubprocessDeath(err) || opts.signal?.aborted === true) throw err;
-      return await runGeneration(opts, ports, runtime, plan);
+      return await runGeneration(opts, ports, runtime, plan, {}, "retry");
     }
   }
 
@@ -746,6 +767,6 @@ export async function claudeCliGenerateText(
     pool.invalidate(key);
     if (replayedAfterDeath || !isSubprocessDeath(err) || opts.signal?.aborted === true) throw err;
     observed = undefined;
-    return await settle(await runGeneration(opts, ports, runtime, rebuild(), hooks));
+    return await settle(await runGeneration(opts, ports, runtime, rebuild(), hooks, "retry"));
   }
 }

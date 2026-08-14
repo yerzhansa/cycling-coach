@@ -386,11 +386,6 @@ export async function runBinary(
     process.exit(1);
   }
 
-  if (config.llm.provider === "claude-cli") {
-    const { runClaudeCliStartupGate } = await import("./claude-cli-startup.js");
-    await runClaudeCliStartupGate({ settings: config.llm.claudeCli, model: config.llm.model });
-  }
-
   if (config.llm.provider === "codex-agent") {
     const { runCodexAgentStartupGate } = await import("./codex-agent-startup.js");
     await runCodexAgentStartupGate({ settings: config.llm.codexAgent, model: config.llm.model });

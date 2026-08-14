@@ -17,6 +17,7 @@ import {
 } from "../../src/agent/claude-cli/session.js";
 
 const SENTINEL = "sk-ant-sentinel-session-0000";
+const WORKING_DIRECTORY = "/private/tmp/enduragent-claude-test-workspace";
 
 const RUNTIME: ClaudeCliRuntime = {
   binaryPath: "/Users/tester/.local/bin/claude",
@@ -63,8 +64,8 @@ interface FakeWindowsMcpFileSystem {
 
 function fakeWindowsMcpFileSystem(
   failure: "write" | "cleanup" | null = null,
+  profile = "C:\\Users\\Rider",
 ): FakeWindowsMcpFileSystem {
-  const profile = "C:\\Users\\Rider";
   const root = win32.join(profile, ".enduragent");
   const temporary = win32.join(root, "claude-cli-mcp-ABC123");
   const file = win32.join(temporary, "mcp.json");
@@ -146,6 +147,8 @@ function options(overrides: Partial<Parameters<typeof buildQueryOptions>[0]> = {
     runtime: RUNTIME,
     baseEnv: baseEnv(),
     model: "haiku",
+    cwd: WORKING_DIRECTORY,
+    assertWorkingArea: () => undefined,
     ...overrides,
   });
 }
@@ -248,6 +251,8 @@ describe("buildQueryOptions", () => {
       runtime: { ...RUNTIME, billing: "api-key" },
       baseEnv: baseEnv(),
       model: "haiku",
+      cwd: WORKING_DIRECTORY,
+      assertWorkingArea: () => undefined,
     });
     expect(apiKey.env.ANTHROPIC_API_KEY).toBe(SENTINEL);
   });
@@ -273,6 +278,12 @@ describe("buildQueryOptions", () => {
     expect(built.cwd).toBe("/tmp/scratch");
   });
 
+  it("requires an explicit private working directory", () => {
+    expect(() => options({ cwd: "" })).toThrow(
+      expect.objectContaining({ kind: "working-area-unavailable" }),
+    );
+  });
+
   it("refuses an empty model", () => {
     expect(() => options({ model: "" })).toThrow(/explicit model/);
   });
@@ -287,7 +298,7 @@ describe("buildQueryOptions", () => {
     expect(() => options({ resume: "a", sessionId: "b" })).toThrow(/resume or sessionId/);
   });
 
-  it("keeps a Windows .exe on the direct shell-disabled SDK spawn path", () => {
+  it("keeps a Windows .exe on the verified direct shell-disabled spawn path", () => {
     const executable = "C:\\Program Files (x86)\\Claude\\claude.exe";
     const invocation = buildClaudeCliSpawnInvocation({
       binaryPath: executable,
@@ -307,7 +318,7 @@ describe("buildQueryOptions", () => {
       baseEnv: { Path: "C:\\Windows\\System32", userprofile: "C:\\Users\\Rider" },
       platform: "win32",
     });
-    expect(built.spawnClaudeCodeProcess).toBeUndefined();
+    expect(built.spawnClaudeCodeProcess).toEqual(expect.any(Function));
   });
 
   it("routes a validated Windows .cmd shim through cmd.exe with explicit quoting", () => {
@@ -345,6 +356,29 @@ describe("buildQueryOptions", () => {
     expect(built.env.CLAUDE_CONFIG_DIR).toBe("D:\\Profiles\\Rider\\claude-config");
   });
 
+  it("accepts Unicode Windows .cmd, argument, and system paths", () => {
+    const shim = "C:\\Users\\\u9a91\u624b\\AppData\\Roaming\\npm\\claude.cmd";
+    const invocation = buildClaudeCliSpawnInvocation({
+      binaryPath: shim,
+      args: ["--model", "\u041a\u043b\u043e\u0434 \u0421\u043e\u043d\u0435\u0442"],
+      env: { SystemRoot: "D:\\\u7cfb\u7edf" },
+      platform: "win32",
+    });
+
+    expect(invocation).toEqual({
+      command: "D:\\\u7cfb\u7edf\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        `""${shim}" "--model" "\u041a\u043b\u043e\u0434 \u0421\u043e\u043d\u0435\u0442""`,
+      ],
+      shell: false,
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("writes inline SDK MCP JSON privately and launches the .cmd shim with its file path", () => {
     const fileSystem = fakeWindowsMcpFileSystem();
     const child = fakeSpawnedChild();
@@ -367,6 +401,7 @@ describe("buildQueryOptions", () => {
         command: shim,
         args: ["--output-format", "stream-json", "--mcp-config", inline, "--strict-mcp-config"],
         env: { SystemRoot: "C:\\Windows", USERPROFILE: fileSystem.profile },
+        cwd: "C:\\Users\\Rider\\AppData\\Local\\Enduragent\\Claude\\workspace",
         signal: controller.signal,
       },
       {
@@ -397,6 +432,7 @@ describe("buildQueryOptions", () => {
       "C:\\Windows\\System32\\cmd.exe",
       expect.any(Array),
       expect.objectContaining({
+        cwd: "C:\\Users\\Rider\\AppData\\Local\\Enduragent\\Claude\\workspace",
         shell: false,
         windowsVerbatimArguments: true,
       }),
@@ -425,6 +461,24 @@ describe("buildQueryOptions", () => {
     expect(fileSystem.rmdir).toHaveBeenCalledOnce();
   });
 
+  it("preflights the private MCP transform under a Unicode Windows profile", () => {
+    const fileSystem = fakeWindowsMcpFileSystem(null, "C:\\Users\\\u9a91\u624b");
+
+    preflightWindowsMcpConfigTransform({
+      binaryPath: "C:\\Users\\\u9a91\u624b\\AppData\\Roaming\\npm\\claude.cmd",
+      env: { SystemRoot: "C:\\Windows", USERPROFILE: fileSystem.profile },
+      platform: "win32",
+      fileSystem: fileSystem.deps,
+    });
+
+    expect(fileSystem.mkdir).toHaveBeenCalledWith(fileSystem.root, {
+      recursive: true,
+      mode: 0o700,
+    });
+    expect(fileSystem.unlink).toHaveBeenCalledOnce();
+    expect(fileSystem.rmdir).toHaveBeenCalledOnce();
+  });
+
   it("fails closed with a private stage-coded error when the MCP file write fails", () => {
     const fileSystem = fakeWindowsMcpFileSystem("write");
     const launch = vi.fn();
@@ -439,6 +493,7 @@ describe("buildQueryOptions", () => {
             command: "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd",
             args: ["--mcp-config", inline],
             env: { SystemRoot: "C:\\Windows", USERPROFILE: fileSystem.profile },
+            cwd: "C:\\Users\\Rider\\AppData\\Local\\Enduragent\\Claude\\workspace",
             signal: new AbortController().signal,
           },
           {
@@ -476,6 +531,7 @@ describe("buildQueryOptions", () => {
         command: "C:\\Users\\Rider\\AppData\\Roaming\\npm\\claude.cmd",
         args: ["--mcp-config", inline],
         env: { SystemRoot: "C:\\Windows", USERPROFILE: fileSystem.profile },
+        cwd: "C:\\Users\\Rider\\AppData\\Local\\Enduragent\\Claude\\workspace",
         signal: new AbortController().signal,
       },
       {
@@ -501,9 +557,14 @@ describe("buildQueryOptions", () => {
 
   it.each([
     "C:\\Users\\Rider&Other\\npm\\claude.cmd",
+    "C:\\Users\\Rider|Other\\npm\\claude.cmd",
+    "C:\\Users\\Rider^Other\\npm\\claude.cmd",
+    "C:\\Users\\Rider!Other\\npm\\claude.cmd",
     "C:\\Users\\Rider%TEMP%\\npm\\claude.cmd",
     "C:\\Program Files (x86)\\npm\\claude.cmd",
     'C:\\Users\\Rider"Other\\npm\\claude.cmd',
+    "C:\\Users\\Rider\nOther\\npm\\claude.cmd",
+    "C:\\Users\\Rider\u0000Other\\npm\\claude.cmd",
   ])("rejects an unsafe Windows .cmd path without echoing it: %s", (shim) => {
     const failure = (() => {
       try {
@@ -522,12 +583,30 @@ describe("buildQueryOptions", () => {
     expect((failure as Error).message).not.toContain(shim);
   });
 
-  it("rejects shell metacharacters in Windows .cmd arguments before launch", () => {
+  it.each([
+    ["metacharacter", "sonnet&whoami"],
+    ["expansion", "%TEMP%"],
+    ["delayed expansion", "sonnet!whoami"],
+    ["quote", 'sonnet"whoami'],
+    ["line break", "sonnet\nwhoami"],
+    ["control", "sonnet\u0000whoami"],
+  ])("rejects %s in Windows .cmd arguments before launch", (_case, argument) => {
     expect(() =>
       buildClaudeCliSpawnInvocation({
         binaryPath: "C:\\Users\\Rider\\npm\\claude.cmd",
-        args: ["--model", "sonnet&whoami"],
+        args: ["--model", argument],
         env: { SystemRoot: "C:\\Windows" },
+        platform: "win32",
+      }),
+    ).toThrow(expect.objectContaining({ kind: "unsafe-windows-command-shim" }));
+  });
+
+  it("rejects unsafe Windows system paths", () => {
+    expect(() =>
+      buildClaudeCliSpawnInvocation({
+        binaryPath: "C:\\Users\\Rider\\npm\\claude.cmd",
+        args: ["--version"],
+        env: { SystemRoot: "C:\\Win%ROOT%" },
         platform: "win32",
       }),
     ).toThrow(expect.objectContaining({ kind: "unsafe-windows-command-shim" }));
@@ -589,7 +668,7 @@ describe("buildQueryOptions", () => {
         cwd: "C:\\Training",
         shell: false,
         signal: controller.signal,
-        stdio: ["pipe", "pipe", "ignore"],
+        stdio: ["pipe", "pipe", "pipe"],
         windowsVerbatimArguments: true,
       }),
     );

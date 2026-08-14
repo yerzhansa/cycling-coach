@@ -4,6 +4,7 @@ import { errorSection } from "../../onboarding/lanes.js";
 import { RETRY_INTAKE_SAVE_LABEL } from "./copy.js";
 import { SETUP_LINK_BUTTON, SETUP_SELECT_CLASS } from "./SetupCard.js";
 import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
+import type { SetupPlacement } from "./OnboardingWizard.js";
 
 const UNSET = "";
 
@@ -13,20 +14,6 @@ const INJURY_OPTIONS = [
   ["managing", "Managing an injury"],
   ["returning", "Returning after an injury"],
 ] as const;
-
-const YES_NO_OPTIONS = [
-  [UNSET, "Select…"],
-  ["no", "No"],
-  ["yes", "Yes"],
-] as const;
-
-function boolValue(value: boolean | null): string {
-  return value === null ? UNSET : value ? "yes" : "no";
-}
-
-function parseBool(value: string): boolean | null {
-  return value === "yes" ? true : value === "no" ? false : null;
-}
 
 function IntakeSelect(props: {
   readonly id: string;
@@ -59,13 +46,12 @@ function IntakeSelect(props: {
 export function IntakeRows(props: {
   readonly surface: OnboardingSurfaceState;
   readonly actions: OnboardingActions | null;
-  readonly placement: "chat" | "settings";
+  readonly placement: SetupPlacement;
 }): ReactElement {
   const { surface, actions } = props;
   const wizard = surface.wizard;
   const intake = wizard.intake;
   const controlsDisabled = wizard.busy || surface.loading || surface.loadUnavailable;
-  const needsClearance = intake.injuryStatus !== null && intake.injuryStatus !== "none";
   const ownsError = errorSection(wizard.fixedError, surface.lastCommit) === "intake";
   const describedBy = ownsError ? { describedBy: "onboarding-error" } : {};
 
@@ -94,29 +80,6 @@ export function IntakeRows(props: {
           />
         }
       />
-      {needsClearance ? (
-        <SetupRow
-          id="clinician-cleared"
-          status={intake.clinicianCleared === null ? "pending" : "ready"}
-          title="Cleared by a clinician"
-          subtitle="An answer is required before continuing."
-          titleFor="onboarding-clinician-cleared"
-          trailing={
-            <IntakeSelect
-              id="onboarding-clinician-cleared"
-              value={boolValue(intake.clinicianCleared)}
-              options={YES_NO_OPTIONS}
-              disabled={controlsDisabled}
-              {...describedBy}
-              onSelect={(value) => {
-                actions?.setIntake("clinicianCleared", parseBool(value), {
-                  persistWhenComplete: props.placement === "settings",
-                });
-              }}
-            />
-          }
-        />
-      ) : null}
       {ownsError ? (
         <SetupSubPanel name="intake-error">
           <SetupError surface={surface} section="intake" />

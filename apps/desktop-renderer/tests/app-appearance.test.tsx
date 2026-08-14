@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/app/App.js";
 import { EMPTY_CHAT_SURFACE } from "../src/state/chat-slice.js";
 import { resetChatStream } from "../src/state/chat-stream.js";
+import { READY_ONBOARDING } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { paletteCustomProperties, type ResolvedTheme } from "../src/theme/applyPalette.js";
 import { paletteById } from "../src/theme/palettes.js";
@@ -26,6 +27,7 @@ beforeEach(() => {
     runtimeReady: true,
     chat: EMPTY_CHAT_SURFACE,
     chatActions: null,
+    onboarding: READY_ONBOARDING,
     paletteId: PALETTE_ID,
     appearance: "system",
   });

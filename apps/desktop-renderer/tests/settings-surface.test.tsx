@@ -468,6 +468,7 @@ beforeEach(() => {
       },
     },
     onboardingActions: {
+      requireCompletion() {},
       selectProvider(selected: string) {
         useEnduragentStore.setState((state) => {
           const selectedProvider = state.onboarding.configuration?.providers.find(

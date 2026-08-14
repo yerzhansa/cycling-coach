@@ -331,6 +331,15 @@ export function TrainingView(): ReactElement {
   const status = trainingStatusCopy(training.status);
 
   useLayoutEffect(() => {
+    const element = title.current;
+    if (element === null) return;
+    const owner = element.ownerDocument;
+    const active = owner.activeElement;
+    if (active !== null && active !== owner.body && active !== owner.documentElement) return;
+    element.focus();
+  }, []);
+
+  useLayoutEffect(() => {
     const currentRideId = selectedRide?.id ?? null;
     if (currentRideId !== null && previousRideId.current !== currentRideId) {
       title.current?.focus();

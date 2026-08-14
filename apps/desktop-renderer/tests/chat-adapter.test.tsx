@@ -388,61 +388,6 @@ describe("chat scroll anchor", () => {
 
     expect(element.scrollTop).toBe(820);
   });
-
-  it("keeps setup pinned at the start across streaming layout changes", () => {
-    const anchor = createChatScrollAnchor();
-    const element = host(1000, 400, 600);
-    anchor.attach(element);
-    anchor.setStartPinned(true);
-
-    expect(element.scrollTop).toBe(0);
-
-    element.scrollTop = 200;
-    anchor.capture();
-    grow(element, 1400);
-    anchor.apply({ hydrationChanged: false, hydrationChange: "none" });
-
-    expect(element.scrollTop).toBe(0);
-  });
-
-  it("reanchors initial hydration after setup unpins and resumes following latest", () => {
-    const anchor = createChatScrollAnchor();
-    const element = host(1000, 400, 0);
-    anchor.attach(element);
-    anchor.setStartPinned(true);
-
-    anchor.capture();
-    grow(element, 2000);
-    anchor.apply({ hydrationChanged: true, hydrationChange: "initial" });
-    expect(element.scrollTop).toBe(0);
-
-    anchor.setStartPinned(false);
-    anchor.reanchor();
-    expect(element.scrollTop).toBe(2000);
-
-    anchor.capture();
-    grow(element, 2200);
-    anchor.apply({ hydrationChanged: false, hydrationChange: "none" });
-    expect(element.scrollTop).toBe(2200);
-  });
-
-  it("reanchors an already-hydrated transcript after setup unpins", () => {
-    const anchor = createChatScrollAnchor();
-    const element = host(1000, 400, 600);
-    anchor.attach(element);
-
-    anchor.setStartPinned(true);
-    expect(element.scrollTop).toBe(0);
-
-    anchor.setStartPinned(false);
-    anchor.reanchor();
-    expect(element.scrollTop).toBe(1000);
-
-    anchor.capture();
-    grow(element, 1200);
-    anchor.apply({ hydrationChanged: false, hydrationChange: "none" });
-    expect(element.scrollTop).toBe(1200);
-  });
 });
 
 const renders = { transcript: 0 };

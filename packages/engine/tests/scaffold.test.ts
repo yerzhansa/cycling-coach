@@ -1,11 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { CoachEngine as ContractCoachEngine } from "@enduragent/coach-contract";
-import type {
-  CoachEngine,
-  CreateCoachEngineInput,
-  EngineHostPorts,
-} from "@enduragent/engine";
+import type { CoachEngine, CreateCoachEngineInput, EngineHostPorts } from "@enduragent/engine";
 import type { Sport } from "@enduragent/engine/sport";
 
 // @ts-expect-error The export map must deny every engine-internal deep import.
@@ -41,6 +37,7 @@ describe("engine scaffold", () => {
       "CODEX_AGENT_PRICE_TABLE",
       "COMPACTION_SUMMARY_MARKER",
       "ClaudeCliConfigError",
+      "ClaudeWorkingAreaError",
       "CodexAgentConfigError",
       "DATE_KEY_RE",
       "EMPTY_PROVENANCE",
@@ -65,6 +62,7 @@ describe("engine scaffold", () => {
       "codexAgentCacheReadSavingsUsd",
       "codexIdentityLine",
       "contentDigest",
+      "createClaudeWorkingArea",
       "createCoachEngine",
       "dateKeySchema",
       "demoteSummaryHeadings",

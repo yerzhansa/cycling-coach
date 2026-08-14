@@ -75,6 +75,7 @@ export const CLAUDE_CLI_STATES = [
   "ready",
   "ready-api-key",
   "disabled",
+  "working-area-unavailable",
 ] as const;
 
 export type ClaudeCliState = (typeof CLAUDE_CLI_STATES)[number];

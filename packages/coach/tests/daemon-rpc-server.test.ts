@@ -955,6 +955,115 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     await client.close();
   });
 
+  it("dispatches strict intervals credential preflight results without echoing the candidate", async () => {
+    const token = "x".repeat(43);
+    let refuse = false;
+    const verifyIntervalsCredential = vi.fn(async () =>
+      refuse
+        ? ({ reason: "credential-rejected" as const })
+        : ({ approval: "a".repeat(64) }),
+    );
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, verify_intervals_credential: verifyIntervalsCredential },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "intervals-preflight",
+        method: "verify_intervals_credential",
+        params: { api_key: "synthetic-candidate-key" },
+      }),
+    );
+    const approved = parseCoachRpcEnvelope(await client.frames.next());
+    expect(approved).toEqual({
+      jsonrpc: "2.0",
+      id: "intervals-preflight",
+      result: { approval: "a".repeat(64) },
+    });
+    expect(JSON.stringify(approved)).not.toContain("synthetic-candidate-key");
+    expect(verifyIntervalsCredential).toHaveBeenLastCalledWith(
+      { api_key: "synthetic-candidate-key" },
+      expect.any(AbortSignal),
+    );
+
+    refuse = true;
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "intervals-refusal",
+        method: "verify_intervals_credential",
+        params: { api_key: "synthetic-candidate-key" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "intervals-refusal",
+      result: { reason: "credential-rejected" },
+    });
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "intervals-invalid",
+        method: "verify_intervals_credential",
+        params: { api_key: "synthetic-candidate-key", athlete_id: "synthetic-athlete" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "intervals-invalid",
+      error: { code: -32602, message: "Invalid params" },
+    });
+    expect(verifyIntervalsCredential).toHaveBeenCalledTimes(2);
+    await client.close();
+  });
+
+  it("aborts intervals credential preflight when its requesting connection detaches", async () => {
+    const token = "x".repeat(43);
+    const started = deferred<void>();
+    let operationSignal: AbortSignal | undefined;
+    const verifyIntervalsCredential = vi.fn(
+      async (_request, signal?: AbortSignal): Promise<never> => {
+        operationSignal = signal;
+        started.resolve(undefined);
+        return await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    );
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, verify_intervals_credential: verifyIntervalsCredential },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "intervals-preflight-detach",
+        method: "verify_intervals_credential",
+        params: { api_key: "synthetic-candidate-key" },
+      }),
+    );
+    await started.promise;
+
+    const closed = new Promise<void>((resolve) => client.ws.once("close", () => resolve()));
+    client.ws.close();
+    await closed;
+    await vi.waitFor(() => expect(operationSignal?.aborted).toBe(true));
+
+    await client.close();
+  });
+
   it("aborts activity analysis when its requesting connection detaches", async () => {
     const token = "x".repeat(43);
     const started = deferred<void>();

@@ -228,7 +228,7 @@ describe("desktop onboarding machine", () => {
   });
 
   it("maps every cycling intake branch to the landed strict DTO", () => {
-    expect(toDesktopIntakeFlags({ injuryStatus: "none", clinicianCleared: null })).toEqual({
+    expect(toDesktopIntakeFlags({ injuryStatus: "none" })).toEqual({
       swim_skill_floor: null,
       continuous_distance_capable: null,
       open_water_comfort: null,
@@ -237,18 +237,11 @@ describe("desktop onboarding machine", () => {
       injury_status: "none",
     });
     for (const injuryStatus of ["managing", "returning"] as const) {
-      for (const clinicianCleared of [false, true]) {
-        expect(toDesktopIntakeFlags({ injuryStatus, clinicianCleared })).toMatchObject({
-          injury_status: injuryStatus,
-          clinician_cleared: clinicianCleared,
-        });
-      }
+      expect(toDesktopIntakeFlags({ injuryStatus })).toMatchObject({
+        injury_status: injuryStatus,
+        clinician_cleared: null,
+      });
     }
-    expect(() => toDesktopIntakeFlags({ injuryStatus: null, clinicianCleared: null })).toThrow(
-      TypeError,
-    );
-    expect(() =>
-      toDesktopIntakeFlags({ injuryStatus: "managing", clinicianCleared: null }),
-    ).toThrow(TypeError);
+    expect(() => toDesktopIntakeFlags({ injuryStatus: null })).toThrow(TypeError);
   });
 });

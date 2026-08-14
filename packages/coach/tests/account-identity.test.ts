@@ -13,7 +13,10 @@ import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   assertRuntimeAthleteOwner,
+  assertRuntimeAthleteOwnerFromEvidence,
   checkIntervalsStoreOwnerAtPath,
+  verifyIntervalsCredentialAtPath,
+  verifyIntervalsCredentialAtPathWithEvidence,
 } from "../src/account-identity.js";
 import {
   runIntervalsBackfill,
@@ -37,6 +40,7 @@ describe("account identity", () => {
   }>;
   const roots: string[] = [];
   afterEach(() => {
+    vi.unstubAllGlobals();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
   async function fresh() {
@@ -748,6 +752,161 @@ describe("account identity", () => {
       expect(sync.result).toMatchObject({ pages: 2, artifacts: 0 });
       expect(saveFetch).toHaveBeenCalledOnce();
       expect(sync.baseFetch).toHaveBeenCalledOnce();
+    } finally {
+      await value.store.close();
+    }
+  });
+
+  it("returns verified fingerprint evidence with the observed owner state", async () => {
+    const compareOwner = vi.fn(async () => "matched" as const);
+    const result = await verifyIntervalsCredentialAtPathWithEvidence("synthetic-store", {
+      apiKey: "synthetic-key",
+      athleteId: "0",
+      historyNewestDate: "1900-12-31",
+      clock,
+      signal: new AbortController().signal,
+      sleep: async () => {},
+      baseFetch: profileFetch("synthetic-athlete"),
+      compareOwner,
+    });
+
+    expect(result).toEqual({
+      status: "verified",
+      evidence: {
+        verifiedFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+        ownerState: {
+          status: "owned",
+          fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+        },
+      },
+    });
+    if (result.status !== "verified" || result.evidence.ownerState.status !== "owned") {
+      throw new Error("expected owned verification evidence");
+    }
+    expect(result.evidence.ownerState.fingerprint).toBe(result.evidence.verifiedFingerprint);
+    expect(compareOwner).toHaveBeenCalledWith(
+      "synthetic-store",
+      result.evidence.verifiedFingerprint,
+    );
+  });
+
+  it.each([
+    {
+      reason: "credential-rejected" as const,
+      options: () => ({
+        baseFetch: vi.fn(async () => new Response(null, { status: 401 })),
+      }),
+    },
+    {
+      reason: "malformed-athlete-response" as const,
+      options: () => ({
+        baseFetch: vi.fn(
+          async () =>
+            new Response(JSON.stringify({ sportSettings: "invalid" }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+        ),
+      }),
+    },
+    {
+      reason: "validation-timeout" as const,
+      options: () => ({
+        baseFetch: vi.fn(async () => await new Promise<Response>(() => {})),
+        overallTimeoutMs: 5,
+      }),
+    },
+    {
+      reason: "validation-aborted" as const,
+      options: () => {
+        const controller = new AbortController();
+        controller.abort(new Error("synthetic shutdown"));
+        return { signal: controller.signal };
+      },
+    },
+    {
+      reason: "validation-unavailable" as const,
+      options: () => ({
+        baseFetch: vi.fn(async () => {
+          throw new Error("synthetic transport failure");
+        }),
+      }),
+    },
+    {
+      reason: "training-account-mismatch" as const,
+      options: () => ({
+        baseFetch: profileFetch("synthetic-athlete"),
+        compareOwner: vi.fn(async () => "mismatch" as const),
+      }),
+    },
+    {
+      reason: "owner-unresolved" as const,
+      options: () => ({ baseFetch: unresolvedProfileFetch() }),
+    },
+    {
+      reason: "store-unavailable" as const,
+      options: () => ({
+        baseFetch: profileFetch("synthetic-athlete"),
+        compareOwner: vi.fn(async () => "store-unavailable" as const),
+      }),
+    },
+  ])("keeps $reason refusal parity in the evidence verifier", async ({ reason, options }) => {
+    const run = async (
+      verify: typeof verifyIntervalsCredentialAtPath,
+    ) => {
+      const selected = options();
+      return await verify("synthetic-store", {
+        apiKey: "synthetic-key",
+        athleteId: "0",
+        historyNewestDate: "1900-12-31",
+        clock,
+        signal: new AbortController().signal,
+        sleep: async () => {},
+        compareOwner: async () => "matched",
+        ...selected,
+      });
+    };
+
+    const expected = { status: "refused", reason } as const;
+    await expect(run(verifyIntervalsCredentialAtPath)).resolves.toEqual(expected);
+    await expect(run(verifyIntervalsCredentialAtPathWithEvidence)).resolves.toEqual(expected);
+  });
+
+  it("compares and claims verified evidence locally without fetching", async () => {
+    const value = await fresh();
+    const baseFetch = vi.fn();
+    vi.stubGlobal("fetch", baseFetch);
+    const fingerprint = "a".repeat(64);
+    const signal = new AbortController().signal;
+    try {
+      const claim = await assertRuntimeAthleteOwnerFromEvidence(
+        value.store,
+        {
+          verifiedFingerprint: fingerprint,
+          ownerState: { status: "unowned" },
+        },
+        signal,
+      );
+
+      expect(baseFetch).not.toHaveBeenCalled();
+      expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+        count: 0,
+      });
+      await claim?.claim();
+      expect(await value.store.get("SELECT account_fingerprint FROM store_owner")).toEqual({
+        account_fingerprint: fingerprint,
+      });
+      await expect(
+        assertRuntimeAthleteOwnerFromEvidence(
+          value.store,
+          {
+            verifiedFingerprint: fingerprint,
+            ownerState: { status: "owned", fingerprint },
+          },
+          signal,
+        ),
+      ).resolves.toBeUndefined();
+      expect(baseFetch).not.toHaveBeenCalled();
     } finally {
       await value.store.close();
     }

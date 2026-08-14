@@ -111,10 +111,10 @@ function deleteConfirmation(): HTMLElement {
   return confirmation;
 }
 
-describe("Chat Telegram setup row", () => {
+describe("setup gate Telegram row", () => {
   afterEach(() => resetOnboardingStore());
 
-  it("sits after Training only in Chat and uses the approved logo-free clipboard flow", async () => {
+  it("sits after Training only in the gate and uses the approved logo-free clipboard flow", async () => {
     const user = userEvent.setup();
     const port = setTelegramSettings(readyTelegramSettings(UNCONFIGURED));
     const wizard = mountWizard({
@@ -134,9 +134,11 @@ describe("Chat Telegram setup row", () => {
     expect(row.querySelector('[data-setup-disc="pending"]')).not.toBeNull();
     expect(row.querySelector("img, input")).toBeNull();
     expect(screen.getByText(/required ready/u)).toBeVisible();
-    expect(screen.getByText(/Telegram is optional and never blocks Chat/u)).toBeVisible();
 
     const create = screen.getByRole("button", { name: "Create Telegram bot" });
+    expect(create.className).toBe(
+      screen.getByRole("button", { name: "Connect Intervals.icu" }).className,
+    );
     await user.click(create);
 
     const telegramPanel = panel("telegram");
@@ -176,7 +178,6 @@ describe("Chat Telegram setup row", () => {
     await settingsWizard.open();
 
     expect(document.querySelector('[data-setup-row="telegram"]')).toBeNull();
-    expect(screen.queryByText(/Telegram is optional and never blocks Chat/u)).toBeNull();
     expect(document.querySelector("[data-setup-readiness]")).toBeNull();
     settingsWizard.controller.dispose();
   });

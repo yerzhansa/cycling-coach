@@ -289,6 +289,8 @@ export {
 } from "./runtime-config.js";
 export {
   ClaudeCliConfigError,
+  ClaudeWorkingAreaError,
+  createClaudeWorkingArea,
   ensureClaudeCliReady,
   invalidateClaudeAccountProbeCache,
 } from "@enduragent/engine";
@@ -297,6 +299,7 @@ export type {
   ClaudeAccountProbeResult,
   ClaudeCliConfigErrorKind,
   ClaudeCliReadiness,
+  ClaudeWorkingAreaPort,
   EnsureClaudeCliReadyDeps,
   EnsureClaudeCliReadyInput,
   ProbeClaudeAccountInput,

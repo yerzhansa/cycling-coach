@@ -119,6 +119,7 @@ const CLAUDE_CLI_STATES = new Set([
   "not-logged-in",
   "api-key-token",
   "disabled",
+  "working-area-unavailable",
 ]);
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
 const ACTIVITY_EXPORT_FORMATS = new Set(["fit", "gpx"]);

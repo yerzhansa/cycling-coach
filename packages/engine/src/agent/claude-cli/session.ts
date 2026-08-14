@@ -30,6 +30,7 @@ import {
 import { buildChildEnv, readEnvironmentValue, type ClaudeCliRuntime } from "./env.js";
 import {
   ClaudeCliWindowsMcpConfigError,
+  ClaudeWorkingAreaError,
   normalizeClaudeCliError,
   unsafeWindowsCommandShimError,
   unsupportedWindowsExecutableError,
@@ -44,9 +45,7 @@ export type SanitizedQueryOptions = Options & {
   model: string;
 };
 
-const WINDOWS_COMMAND_SHIM_PATH_PATTERN = /^(?:[A-Za-z]:\\|\\\\)[A-Za-z0-9 ._\\-]+\.cmd$/i;
-const WINDOWS_COMMAND_ARGUMENT_PATTERN = /^[A-Za-z0-9 ._/:=,@\\-]*$/;
-const WINDOWS_SYSTEM_PATH_PATTERN = /^(?:[A-Za-z]:\\|\\\\)[A-Za-z0-9 ._\\-]+$/;
+const WINDOWS_COMMAND_UNSAFE_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f"&|<>^%!()]/u;
 const WINDOWS_MCP_CONFIG_FLAG = "--mcp-config";
 const WINDOWS_MCP_CONFIG_ROOT = ".enduragent";
 const WINDOWS_MCP_CONFIG_PREFIX = "claude-cli-mcp-";
@@ -103,6 +102,10 @@ function windowsMcpConfigFileSystem(
   deps: WindowsMcpConfigFileSystemDeps = {},
 ): WindowsMcpConfigFileSystem {
   return { ...nodeWindowsMcpConfigFileSystem, ...deps };
+}
+
+function safeWindowsCommandText(value: string): boolean {
+  return !WINDOWS_COMMAND_UNSAFE_CHARACTER_PATTERN.test(value);
 }
 
 function privatePathIdentity(metadata: Stats): WindowsPrivatePathIdentity {
@@ -285,7 +288,7 @@ export function createWindowsMcpConfigFile(
     if (
       profileParent === profile ||
       !win32.isAbsolute(profile) ||
-      !WINDOWS_SYSTEM_PATH_PATTERN.test(profile)
+      !safeWindowsCommandText(profile)
     ) {
       throw new Error("profile path");
     }
@@ -297,7 +300,7 @@ export function createWindowsMcpConfigFile(
     directory = observePrivateDirectory(rootBinding.path, temporary, fileSystem);
     filePath = win32.join(temporary, WINDOWS_MCP_CONFIG_FILE);
     const commandPath = filePath.replaceAll("\\", "/");
-    if (!WINDOWS_COMMAND_ARGUMENT_PATTERN.test(commandPath)) throw new Error("command path");
+    if (!safeWindowsCommandText(commandPath)) throw new Error("command path");
     stage = "content-write";
     descriptor = fileSystem.openSync(
       filePath,
@@ -392,7 +395,7 @@ function prepareWindowsCommandArguments(
     if (argument === WINDOWS_MCP_CONFIG_FLAG) {
       const value = args[index + 1];
       if (value === undefined || inlineIndex !== -1) throw unsafeWindowsCommandShimError();
-      if (WINDOWS_COMMAND_ARGUMENT_PATTERN.test(value)) {
+      if (safeWindowsCommandText(value)) {
         index += 1;
         continue;
       }
@@ -401,7 +404,7 @@ function prepareWindowsCommandArguments(
       index += 1;
       continue;
     }
-    if (!WINDOWS_COMMAND_ARGUMENT_PATTERN.test(argument)) {
+    if (!safeWindowsCommandText(argument)) {
       throw unsafeWindowsCommandShimError();
     }
   }
@@ -488,7 +491,7 @@ function directInvocation(binaryPath: string, args: readonly string[]): ClaudeCl
 
 function windowsCommandProcessor(env: NodeJS.ProcessEnv): string {
   const systemRoot = readEnvironmentValue(env, "SYSTEMROOT", "win32") ?? "C:\\Windows";
-  if (!win32.isAbsolute(systemRoot) || !WINDOWS_SYSTEM_PATH_PATTERN.test(systemRoot)) {
+  if (!win32.isAbsolute(systemRoot) || !safeWindowsCommandText(systemRoot)) {
     throw unsafeWindowsCommandShimError();
   }
   return win32.join(systemRoot, "System32", "cmd.exe");
@@ -510,8 +513,8 @@ export function buildClaudeCliSpawnInvocation(
   if (extension !== ".cmd") throw unsupportedWindowsExecutableError();
   if (
     !win32.isAbsolute(input.binaryPath) ||
-    !WINDOWS_COMMAND_SHIM_PATH_PATTERN.test(input.binaryPath) ||
-    input.args.some((argument) => !WINDOWS_COMMAND_ARGUMENT_PATTERN.test(argument))
+    !safeWindowsCommandText(input.binaryPath) ||
+    input.args.some((argument) => !safeWindowsCommandText(argument))
   ) {
     throw unsafeWindowsCommandShimError();
   }
@@ -536,12 +539,16 @@ export interface SpawnClaudeCliProcessDeps {
   readonly windowsMcpConfigFileSystem?: WindowsMcpConfigFileSystemDeps;
   readonly onWindowsMcpConfigCleanup?: (cleanup: () => void) => void;
   readonly onWindowsMcpConfigCleanupFailure?: (error: ClaudeCliWindowsMcpConfigError) => void;
+  readonly stderr?: (data: string) => void;
 }
 
 export function spawnClaudeCliProcess(
   options: SdkSpawnOptions,
   deps: SpawnClaudeCliProcessDeps = {},
 ): SpawnedProcess {
+  if (options.cwd === undefined || options.cwd === "") {
+    throw new ClaudeWorkingAreaError("spawn-check", "unavailable");
+  }
   const platform = deps.platform ?? process.platform;
   let prepared: PreparedWindowsCommandArguments = { args: options.args };
   if (platform === "win32" && win32.extname(options.command).toLowerCase() === ".cmd") {
@@ -582,15 +589,18 @@ export function spawnClaudeCliProcess(
 
   let child: SpawnedProcess;
   try {
-    child = (deps.spawn ?? nodeSpawn)(invocation.command, [...invocation.args], {
+    const launched = (deps.spawn ?? nodeSpawn)(invocation.command, [...invocation.args], {
       cwd: options.cwd,
       env: options.env,
       shell: invocation.shell,
       windowsHide: invocation.windowsHide,
       ...(invocation.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
       signal: options.signal,
-      stdio: ["pipe", "pipe", "ignore"],
-    }) as unknown as SpawnedProcess;
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    launched.stderr?.on("data", (chunk: Buffer) => deps.stderr?.(chunk.toString("utf8")));
+    if (deps.stderr === undefined) launched.stderr?.resume();
+    child = launched as unknown as SpawnedProcess;
   } catch (error) {
     try {
       prepared.cleanup?.();
@@ -651,7 +661,8 @@ export interface BuildQueryOptionsInput {
   maxTurns?: number;
   resume?: string;
   sessionId?: string;
-  cwd?: string;
+  cwd: string;
+  assertWorkingArea: () => void;
   persistSession?: boolean;
   includePartialMessages?: boolean;
   abortController?: AbortController;
@@ -667,6 +678,9 @@ export function buildQueryOptions(input: BuildQueryOptionsInput): SanitizedQuery
   }
   if (input.model === undefined || input.model === "") {
     throw new Error("Claude CLI query options require an explicit model.");
+  }
+  if (input.cwd === "") {
+    throw new ClaudeWorkingAreaError("spawn-check", "unavailable");
   }
   if (input.resume !== undefined && input.sessionId !== undefined) {
     throw new Error("Claude CLI query options accept either resume or sessionId, not both.");
@@ -696,23 +710,36 @@ export function buildQueryOptions(input: BuildQueryOptionsInput): SanitizedQuery
     mcpServers: input.mcpServers ?? {},
   };
 
-  if (platform === "win32" && win32.extname(binaryPath).toLowerCase() === ".cmd") {
+  const windowsCommandShim =
+    platform === "win32" && win32.extname(binaryPath).toLowerCase() === ".cmd";
+  if (windowsCommandShim) {
     const state: WindowsMcpConfigQueryState = { cleanupFailure: null };
     windowsMcpConfigQueryStates.set(options, state);
-    options.spawnClaudeCodeProcess = (spawnOptions) =>
-      spawnClaudeCliProcess(spawnOptions, {
-        platform,
-        ...(input.windowsMcpConfigFileSystem === undefined
-          ? {}
-          : { windowsMcpConfigFileSystem: input.windowsMcpConfigFileSystem }),
-        onWindowsMcpConfigCleanup: (cleanup) => {
-          state.cleanup = cleanup;
-        },
-        onWindowsMcpConfigCleanupFailure: (error) => {
-          state.cleanupFailure ??= error;
-        },
-      });
   }
+  options.spawnClaudeCodeProcess = (spawnOptions) => {
+    if (spawnOptions.cwd !== input.cwd) {
+      throw new ClaudeWorkingAreaError("spawn-check", "identity-changed");
+    }
+    input.assertWorkingArea();
+    const state = windowsMcpConfigQueryStates.get(options);
+    return spawnClaudeCliProcess(spawnOptions, {
+      platform,
+      stderr: input.stderr,
+      ...(input.windowsMcpConfigFileSystem === undefined
+        ? {}
+        : { windowsMcpConfigFileSystem: input.windowsMcpConfigFileSystem }),
+      ...(state === undefined
+        ? {}
+        : {
+            onWindowsMcpConfigCleanup: (cleanup: () => void) => {
+              state.cleanup = cleanup;
+            },
+            onWindowsMcpConfigCleanupFailure: (error: ClaudeCliWindowsMcpConfigError) => {
+              state.cleanupFailure ??= error;
+            },
+          }),
+    });
+  };
 
   if (input.systemPrompt !== undefined) options.systemPrompt = input.systemPrompt;
   if (input.tools !== undefined) options.tools = input.tools;
@@ -721,7 +748,7 @@ export function buildQueryOptions(input: BuildQueryOptionsInput): SanitizedQuery
   if (input.maxTurns !== undefined) options.maxTurns = input.maxTurns;
   if (input.resume !== undefined) options.resume = input.resume;
   if (input.sessionId !== undefined) options.sessionId = input.sessionId;
-  if (input.cwd !== undefined) options.cwd = input.cwd;
+  options.cwd = input.cwd;
   if (input.persistSession !== undefined) options.persistSession = input.persistSession;
   if (input.includePartialMessages !== undefined) {
     options.includePartialMessages = input.includePartialMessages;

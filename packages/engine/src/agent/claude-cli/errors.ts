@@ -7,6 +7,7 @@ export type ClaudeCliConfigErrorKind =
   | "unsafe-windows-command-shim"
   | "windows-mcp-config-write"
   | "windows-mcp-config-cleanup"
+  | "working-area-unavailable"
   | "not-signed-in"
   | "probe-timeout"
   | "api-key-identity"
@@ -63,6 +64,42 @@ export const API_KEY_IDENTITY_MESSAGE =
 
 export const API_KEY_UNAPPROVED_MESSAGE =
   "Your API key is not approved in the Claude CLI — run claude once with it and approve, or set llm.claude_cli.billing: subscription.";
+
+export const WORKING_AREA_UNAVAILABLE_MESSAGE =
+  "Claude could not be started because Enduragent could not prepare its private working area. Restart Enduragent and try again.";
+
+export type ClaudeWorkingAreaStage =
+  | "resolve"
+  | "prepare"
+  | "entry-check"
+  | "binding-check"
+  | "permission-check"
+  | "spawn-check";
+
+export type ClaudeWorkingAreaFailureCategory =
+  | "unavailable"
+  | "entry-type"
+  | "link-reparse"
+  | "root"
+  | "overlap"
+  | "owner"
+  | "permissions"
+  | "identity-changed"
+  | "not-empty"
+  | "repository"
+  | "io-failure";
+
+export class ClaudeWorkingAreaError extends ClaudeCliConfigError {
+  readonly stage: ClaudeWorkingAreaStage;
+  readonly category: ClaudeWorkingAreaFailureCategory;
+
+  constructor(stage: ClaudeWorkingAreaStage, category: ClaudeWorkingAreaFailureCategory) {
+    super("working-area-unavailable", WORKING_AREA_UNAVAILABLE_MESSAGE);
+    this.name = "ClaudeWorkingAreaError";
+    this.stage = stage;
+    this.category = category;
+  }
+}
 
 export function binaryMissingMessage(
   binaryPath: string,

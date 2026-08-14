@@ -146,6 +146,33 @@ interface ChildOutcome {
   stderr: string;
 }
 
+export type ScenarioChildStage =
+  | "record"
+  | "replay"
+  | "self-test-drift"
+  | "self-test-determinism-1"
+  | "self-test-determinism-2";
+
+export interface ScenarioChildSpawnResult {
+  stdout: string | null;
+  stderr: string | null;
+  status: number | null;
+  error?: Error & { code?: string };
+}
+
+export type ScenarioChildSpawn = (
+  command: string,
+  args: readonly string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    encoding: "utf-8";
+    maxBuffer: number;
+    timeout: number;
+    killSignal: "SIGKILL";
+  },
+) => ScenarioChildSpawnResult;
+
 export interface ChildEnvParams {
   base: Record<string, string | undefined>;
   tempHome: string;
@@ -181,18 +208,24 @@ export function buildChildEnv(params: ChildEnvParams): Record<string, string | u
   return env;
 }
 
-function spawnScenarioChild(params: {
-  scenarioId: string;
-  mode: "replay" | "record";
-  runDir: string;
-  fixtureDir?: string;
-  noSupersessions?: boolean;
-  scenarioEnv?: Record<string, string>;
-  provider: S8aProvider;
-  llmModel: string;
-  anthropicKey?: string;
-  authProfilesSource?: string;
-}): ChildOutcome {
+export function spawnScenarioChild(
+  params: {
+    scenarioId: string;
+    stage: ScenarioChildStage;
+    mode: "replay" | "record";
+    runDir: string;
+    fixtureDir?: string;
+    noSupersessions?: boolean;
+    scenarioEnv?: Record<string, string>;
+    provider: S8aProvider;
+    llmModel: string;
+    anthropicKey?: string;
+    authProfilesSource?: string;
+  },
+  spawnProcess: ScenarioChildSpawn = (command, args, options) => spawnSync(command, args, options),
+): ChildOutcome {
+  const safeScenarioId = safeScenarioDiagnosticId(params.scenarioId);
+  console.log(`S8A_CHILD START scenario=${safeScenarioId} stage=${params.stage}`);
   const tempHome = mkdtempSync(join(tmpdir(), "s8a-home-"));
   const childArgs = [
     join(HERE, "run-scenario.ts"),
@@ -212,12 +245,23 @@ function spawnScenarioChild(params: {
     scenarioEnv: params.scenarioEnv,
   });
 
-  const result = spawnSync(process.execPath, ["--import", "tsx", ...childArgs], {
+  const result = spawnProcess(process.execPath, ["--import", "tsx", ...childArgs], {
     cwd: REPO_ROOT,
     env,
     encoding: "utf-8",
     maxBuffer: 64 * 1024 * 1024,
+    timeout: 120_000,
+    killSignal: "SIGKILL",
   });
+  if (result.error?.code === "ETIMEDOUT") {
+    console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=timeout`);
+    const childStage = parseLastScenarioChildStage(result.stdout ?? "", safeScenarioId);
+    return {
+      verdict: null,
+      exitCode: 2,
+      stderr: `scenario child timed out: scenario=${safeScenarioId} stage=${params.stage} child-stage=${childStage}`,
+    };
+  }
   const stdoutLines = (result.stdout ?? "").split("\n").filter((l) => l.trim() !== "");
   let verdict: ScenarioVerdict | null = null;
   for (let i = stdoutLines.length - 1; i >= 0; i--) {
@@ -231,7 +275,87 @@ function spawnScenarioChild(params: {
       // Not the verdict line; keep scanning upward.
     }
   }
-  return { verdict, exitCode: result.status ?? 2, stderr: result.stderr ?? "" };
+  const exitCode = result.status ?? 2;
+  console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=exit-${exitCode}`);
+  return { verdict, exitCode, stderr: result.stderr ?? "" };
+}
+
+export function parseLastScenarioChildStage(output: string, scenarioId: string): string {
+  const maxDiagnosticTurnIndex = 99;
+  const safeScenarioId = safeScenarioDiagnosticId(scenarioId);
+  let last = "none";
+  for (const line of output.split("\n")) {
+    const match =
+      /^S8A_CHILD_STAGE (START|DONE) scenario=([a-z0-9]+(?:-[a-z0-9]+)*) stage=(setup|turn|finish-replay|finish-record|cleanup)(?: turn=(0|[1-9][0-9]*))?$/.exec(
+        line.trimEnd(),
+      );
+    if (match === null || match[2] !== safeScenarioId) continue;
+    const phase = match[1].toLowerCase();
+    const stage = match[3];
+    const turn = match[4];
+    if ((stage === "turn") !== (turn !== undefined)) continue;
+    if (turn !== undefined && Number.parseInt(turn, 10) > maxDiagnosticTurnIndex) continue;
+    last = stage === "turn" ? `turn-${turn}-${phase}` : `${stage}-${phase}`;
+  }
+  return last;
+}
+
+export function safeScenarioDiagnosticId(value: string): string {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return "unknown";
+  if (/[0-9]{8,}/.test(value)) return "unknown";
+  return value;
+}
+
+export type SelfTestDiffSpawn = (
+  command: string,
+  args: readonly string[],
+  options: { encoding: "utf-8" },
+) => { status: number | null; stdout: string | null };
+
+export function runSelfTestDeterminism(
+  params: {
+    probeDirs: readonly [string, string];
+    provider: S8aProvider;
+    llmModel: string;
+    anthropicKey?: string;
+  },
+  spawnProcess: ScenarioChildSpawn = (command, args, options) => spawnSync(command, args, options),
+  diffProcess: SelfTestDiffSpawn = (command, args, options) => spawnSync(command, args, options),
+):
+  | { kind: "harness-error"; outcome: ChildOutcome }
+  | { kind: "complete"; deterministic: boolean; diffOutput: string } {
+  const probes = [
+    { dir: params.probeDirs[0], stage: "self-test-determinism-1" },
+    { dir: params.probeDirs[1], stage: "self-test-determinism-2" },
+  ] as const;
+  for (const probe of probes) {
+    const outcome = spawnScenarioChild(
+      {
+        scenarioId: "turn-basic-wellness",
+        stage: probe.stage,
+        mode: "replay",
+        runDir: probe.dir,
+        noSupersessions: true,
+        provider: params.provider,
+        llmModel: params.llmModel,
+        anthropicKey: params.anthropicKey,
+      },
+      spawnProcess,
+    );
+    if (outcome.verdict === null || outcome.exitCode === 2) {
+      return { kind: "harness-error", outcome };
+    }
+  }
+  const diff = diffProcess(
+    "diff",
+    ["-r", join(params.probeDirs[0], "home"), join(params.probeDirs[1], "home")],
+    { encoding: "utf-8" },
+  );
+  return {
+    kind: "complete",
+    deterministic: diff.status === 0,
+    diffOutput: diff.stdout ?? "",
+  };
 }
 
 function gitSha(): string {
@@ -314,6 +438,7 @@ async function replayScenarios(params: {
     const lane = readRecordingLane(fixtureDir);
     const outcome = spawnScenarioChild({
       scenarioId: entry.id,
+      stage: "replay",
       mode: "replay",
       runDir: join(params.runDir, entry.id),
       noSupersessions: params.noSupersessions,
@@ -409,6 +534,7 @@ async function main(): Promise<void> {
     console.log(`recording lane: ${lane.provider} / ${lane.model}`);
     const outcome = spawnScenarioChild({
       scenarioId: entry.id,
+      stage: "record",
       mode: "record",
       runDir: join(runDir, entry.id),
       scenarioEnv: await loadScenarioEnv(entry),
@@ -433,6 +559,7 @@ async function main(): Promise<void> {
     const driftLane = readRecordingLane(join(HERE, "fixtures", "drift-must-fail"));
     const driftOutcome = spawnScenarioChild({
       scenarioId: "turn-basic-wellness",
+      stage: "self-test-drift",
       mode: "replay",
       runDir: join(runDir, "drift-must-fail"),
       fixtureDir: join(HERE, "fixtures", "drift-must-fail"),
@@ -455,30 +582,30 @@ async function main(): Promise<void> {
 
     // Probe (b): determinism — two fresh children, byte-compare the snapshotted
     // home trees. The byte-compare is the pass criterion, NOT the exit codes.
-    const probeDirs = ["turn-basic-wellness-probe1", "turn-basic-wellness-probe2"].map((d) => join(runDir, d));
+    const probeDirs = [
+      join(runDir, "turn-basic-wellness-probe1"),
+      join(runDir, "turn-basic-wellness-probe2"),
+    ] as const;
     const probeLane = readRecordingLane(join(HERE, "fixtures", "turn-basic-wellness"));
-    for (const dir of probeDirs) {
-      spawnScenarioChild({
-        scenarioId: "turn-basic-wellness",
-        mode: "replay",
-        runDir: dir,
-        noSupersessions: true,
-        provider: probeLane.provider,
-        llmModel: probeLane.model,
-        anthropicKey: probeLane.provider === "anthropic" ? REPLAY_DUMMY_KEY : undefined,
-      });
-    }
-    const diff = spawnSync("diff", ["-r", join(probeDirs[0], "home"), join(probeDirs[1], "home")], {
-      encoding: "utf-8",
+    const determinism = runSelfTestDeterminism({
+      probeDirs,
+      provider: probeLane.provider,
+      llmModel: probeLane.model,
+      anthropicKey: probeLane.provider === "anthropic" ? REPLAY_DUMMY_KEY : undefined,
     });
-    const deterministic = diff.status === 0;
+    if (determinism.kind === "harness-error") {
+      console.error(
+        `determinism probe harness error (exit ${determinism.outcome.exitCode}):\n${determinism.outcome.stderr}`,
+      );
+      process.exit(2);
+    }
     console.log(
-      deterministic
+      determinism.deterministic
         ? "determinism probe: PASS — two replay home trees byte-identical"
-        : `determinism probe: FAIL — trees differ:\n${diff.stdout}`,
+        : `determinism probe: FAIL — trees differ:\n${determinism.diffOutput}`,
     );
 
-    process.exit(driftPass && deterministic ? 0 : 1);
+    process.exit(driftPass && determinism.deterministic ? 0 : 1);
   }
 
   if (flags.kind === "rebaseline") {

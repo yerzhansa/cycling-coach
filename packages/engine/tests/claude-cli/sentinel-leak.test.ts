@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { tool, zodSchema, type ModelMessage, type ToolSet } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,8 +15,10 @@ import { buildChildEnv, type ClaudeCliBilling } from "../../src/agent/claude-cli
 import { probeVersion } from "../../src/agent/claude-cli/executable.js";
 import { createFakeClaude, FAIL_VERSION, type FakeClaude } from "./helpers/fake-claude.js";
 import { createScriptedQuery } from "./helpers/frame-script.js";
+import { fixedClaudeWorkingArea } from "./helpers/working-area.js";
 
 const SENTINEL = "sk-ant-sentinel-do-not-leak-0000";
+const WORKING_AREA = "/Users/tester/Library/Caches/Enduragent/claude";
 const BILLING_MODES: readonly ClaudeCliBilling[] = ["subscription", "api-key"];
 const CREDENTIAL_KEYS = [
   "ANTHROPIC_API_KEY",
@@ -142,6 +144,7 @@ describe.each(BILLING_MODES)("claude-cli sentinel leak scan (%s billing)", (bill
     const version = await probeVersion(fake.binaryPath, {
       baseEnv: pollutedEnv(),
       runtime: { binaryPath: fake.binaryPath, billing },
+      workingArea: fixedClaudeWorkingArea(dirname(fake.binaryPath)),
     });
 
     expect(version).toBe("2.1.220");
@@ -157,6 +160,7 @@ describe.each(BILLING_MODES)("claude-cli sentinel leak scan (%s billing)", (bill
     const failure = await probeVersion(fake.binaryPath, {
       baseEnv: pollutedEnv(),
       runtime: { binaryPath: fake.binaryPath, billing },
+      workingArea: fixedClaudeWorkingArea(dirname(fake.binaryPath)),
     }).then(
       () => null,
       (err: unknown) => err as Error,
@@ -175,6 +179,7 @@ describe.each(BILLING_MODES)("claude-cli sentinel leak scan (%s billing)", (bill
     const scripted = createScriptedQuery(["happy-turn"]);
     const ports: ClaudeCliBridgePorts = {
       runtime: { binaryPath: "/Users/tester/.local/bin/claude", billing },
+      workingArea: fixedClaudeWorkingArea(WORKING_AREA),
       baseEnv: pollutedEnv(),
       query: scripted.query,
     };
@@ -206,6 +211,7 @@ describe.each(BILLING_MODES)("claude-cli sentinel leak scan (%s billing)", (bill
       const scripted = createScriptedQuery([script]);
       const ports: ClaudeCliBridgePorts = {
         runtime: { binaryPath: "/Users/tester/.local/bin/claude", billing },
+        workingArea: fixedClaudeWorkingArea(WORKING_AREA),
         baseEnv: pollutedEnv(),
         query: scripted.query,
       };
@@ -239,6 +245,7 @@ describe.each(BILLING_MODES)("claude-cli sentinel leak scan (%s billing)", (bill
       const scripted = createScriptedQuery(["happy-turn"]);
       const ports: ClaudeCliBridgePorts = {
         runtime: { binaryPath: "/Users/tester/.local/bin/claude", billing },
+        workingArea: fixedClaudeWorkingArea(WORKING_AREA),
         baseEnv: pollutedEnv(),
         query: scripted.query,
       };
@@ -275,7 +282,7 @@ describe.each(BILLING_MODES)("claude-cli ledger and error surfaces (%s billing)"
   const originalCredentials = new Map<string, string | undefined>();
 
   beforeEach(() => {
-    tempHome = mkdtempSync(join(tmpdir(), "cc-sentinel-"));
+    tempHome = mkdtempSync(join(realpathSync(tmpdir()), "cc-sentinel-"));
     originalHome = process.env.HOME;
     process.env.HOME = tempHome;
     for (const key of CREDENTIAL_KEYS) {
@@ -310,6 +317,15 @@ describe.each(BILLING_MODES)("claude-cli ledger and error surfaces (%s billing)"
         name: options.name,
         instance: {},
       }),
+    }));
+    vi.doMock("../../src/agent/claude-cli/probe.js", () => ({
+      ensureClaudeCliReady: vi.fn(async (input: { binaryPath?: string; billing?: string }) => ({
+        binaryPath: input.binaryPath ?? "/Users/tester/.local/bin/claude",
+        version: "2.1.80",
+        identityLine: "Claude subscription",
+        accountClass:
+          input.billing === "api-key" ? ("api-key-token" as const) : ("subscription" as const),
+      })),
     }));
 
     const { CoachAgent } = await import("../../src/agent/coach-agent.js");
