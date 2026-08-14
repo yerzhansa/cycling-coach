@@ -58,7 +58,7 @@ describe("Windows parity automation contract", () => {
     const packageCommands = workflow.match(/pnpm --filter @enduragent\/desktop package:win/g) ?? [];
     const installedCommands =
       workflow.match(
-        /pnpm --filter @enduragent\/desktop test:windows-installed-self-test -- --github-hosted --signature-policy unsigned-private/g,
+        /pnpm --filter @enduragent\/desktop test:windows-installed-self-test --github-hosted --signature-policy unsigned-private/g,
       ) ?? [];
     const windowsJob = workflow
       .split("  windows-desktop-package:")[1]

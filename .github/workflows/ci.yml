@@ -145,7 +145,7 @@ jobs:
       - name: Build and verify unsigned x64 NSIS package
         run: pnpm --filter @enduragent/desktop package:win
       - name: Install, test, and uninstall unsigned x64 NSIS package
-        run: pnpm --filter @enduragent/desktop test:windows-installed-self-test -- --github-hosted --signature-policy unsigned-private
+        run: pnpm --filter @enduragent/desktop test:windows-installed-self-test --github-hosted --signature-policy unsigned-private
 
   desktop-integration-macos:
     runs-on: macos-latest
