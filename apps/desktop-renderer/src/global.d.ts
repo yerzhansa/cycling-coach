@@ -373,7 +373,8 @@ type ClaudeCliState =
   | "api-key-token"
   | "ready"
   | "ready-api-key"
-  | "disabled";
+  | "disabled"
+  | "working-area-unavailable";
 
 interface ClaudeCliStatus {
   readonly state: ClaudeCliState;

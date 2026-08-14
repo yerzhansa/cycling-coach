@@ -8,6 +8,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel, ModelMessage } from "ai";
 import { isKeylessProvider } from "@enduragent/coach-contract";
+import { dirname } from "node:path";
 
 import { splitSystemPromptAtBoundary } from "./agent/system-prompt.js";
 import { isPriced, priceUsage } from "./agent/codex/cost.js";
@@ -22,12 +23,18 @@ import { codexGenerateText } from "./agent/codex-bridge.js";
 import { claudeCliGenerateText } from "./agent/claude-cli/bridge.js";
 import { codexAgentGenerateText } from "./agent/codex-agent/bridge.js";
 import {
+  assertClaudeCliEnabled,
   createClaudeCliSessionPool,
   type ClaudeCliSessionPool,
 } from "./agent/claude-cli/session-pool.js";
+import { ensureClaudeCliReady } from "./agent/claude-cli/probe.js";
 import type { GenerateOpts, GenerateResult } from "./llm-types.js";
 import { cacheTokenDetails, usageFieldsFromResult } from "./llm-types.js";
 import type { ModelStreamActivity } from "./sport.js";
+import {
+  createClaudeWorkingArea,
+  type ClaudeWorkingAreaPort,
+} from "./agent/claude-cli/working-area.js";
 
 export type { GenerateOpts, GenerateResult } from "./llm-types.js";
 export const LLM_CALL_DEADLINE_MS = 300_000;
@@ -55,6 +62,7 @@ type LLMHostPorts = Pick<
   | "classifyFailure"
   | "modelTransportDecorator"
   | "chatStreamTimeouts"
+  | "claudeWorkingArea"
 >;
 
 // ============================================================================
@@ -98,6 +106,7 @@ export class LLM {
   private breakpointKey: "anthropic" | "openrouter" | undefined;
   private chatStreamTimeouts: ChatStreamTimeouts;
   private claudeCliPool: ClaudeCliSessionPool | null = null;
+  private claudeWorkingArea: ClaudeWorkingAreaPort | null;
 
   constructor(config: EngineConfig, ports: LLMHostPorts) {
     this.config = config;
@@ -108,6 +117,7 @@ export class LLM {
     this.chatStreamTimeouts = validateChatStreamTimeouts(
       ports.chatStreamTimeouts ?? DEFAULT_CHAT_STREAM_TIMEOUTS,
     );
+    this.claudeWorkingArea = ports.claudeWorkingArea ?? null;
     const canonical: ModelTransport = {
       generate: (request) => this.dispatch(request.options),
     };
@@ -197,11 +207,23 @@ export class LLM {
       if (claudeCli === undefined) {
         throw new Error("claude-cli provider requires llm.claudeCli configuration");
       }
+      assertClaudeCliEnabled(claudeCli.enabled);
       this.claudeCliPool ??= createClaudeCliSessionPool({
         config: {
           enabled: claudeCli.enabled,
           cursorStorePath: claudeCli.cursorStorePath,
         },
+      });
+      this.claudeWorkingArea ??= createClaudeWorkingArea({
+        forbiddenRoots: [dirname(claudeCli.cursorStorePath)],
+        configDir: claudeCli.configDir,
+      });
+      const readiness = await ensureClaudeCliReady({
+        workingArea: this.claudeWorkingArea,
+        billing: claudeCli.billing,
+        model: this.config.llm.model,
+        ...(claudeCli.binaryPath === undefined ? {} : { binaryPath: claudeCli.binaryPath }),
+        ...(claudeCli.configDir === undefined ? {} : { configDir: claudeCli.configDir }),
       });
       return claudeCliGenerateText(
         {
@@ -211,10 +233,11 @@ export class LLM {
         },
         {
           runtime: {
-            binaryPath: claudeCli.binaryPath,
+            binaryPath: readiness.binaryPath,
             configDir: claudeCli.configDir,
             billing: claudeCli.billing,
           },
+          workingArea: this.claudeWorkingArea,
           pool: this.claudeCliPool,
         },
       );

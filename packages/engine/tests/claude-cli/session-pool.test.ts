@@ -23,12 +23,14 @@ import {
 } from "../../src/agent/claude-cli/session-pool.js";
 import { readCursorStore } from "../../src/agent/claude-cli/cursor-store.js";
 import { createScriptedQuery, type ScriptedQueryState } from "./helpers/frame-script.js";
+import { fixedClaudeWorkingArea } from "./helpers/working-area.js";
 
 const BINARY = "/Users/tester/.local/bin/claude";
 const CHAT_HASH = "0123456789abcdef";
 const MODEL = "haiku";
 const KEY = claudeCliSessionKey(CHAT_HASH, CLAUDE_CLI_CHAT_LANE, MODEL);
 const HAPPY_SESSION = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+const WORKING_AREA = "/Users/tester/Library/Caches/Enduragent/claude";
 
 const scratch: string[] = [];
 
@@ -92,6 +94,7 @@ function bridgePorts(
   return {
     ports: {
       runtime: { binaryPath: BINARY, billing: "subscription" },
+      workingArea: fixedClaudeWorkingArea(WORKING_AREA),
       baseEnv: baseEnv(),
       query: scripted.query,
       pool,
@@ -324,6 +327,7 @@ describe("claude-cli pool wiring through the bridge", () => {
 
     expect(state.options[0].sessionId).toBe("minted-session-1");
     expect(state.options[0].resume).toBeUndefined();
+    expect(state.options[0].cwd).toBe(WORKING_AREA);
     expect(readCursorStore(path).cursors[KEY]?.sessionId).toBe(HAPPY_SESSION);
 
     await claudeCliGenerateText(turn(TURN_TWO), ports);
@@ -331,6 +335,7 @@ describe("claude-cli pool wiring through the bridge", () => {
     expect(state.calls).toBe(2);
     expect(state.options[1].resume).toBe(HAPPY_SESSION);
     expect(state.options[1].sessionId).toBeUndefined();
+    expect(state.options[1].cwd).toBe(WORKING_AREA);
     expect(state.prompts[1]).toBe("and tomorrow");
   });
 
@@ -367,14 +372,12 @@ describe("claude-cli pool wiring through the bridge", () => {
     expect(state.options[1].resume).toBeUndefined();
     expect(state.options[1].sessionId).toBe("minted-session-2");
     expect(state.options[0].sessionId).toBe("minted-session-1");
+    expect(state.options.map((options) => options.cwd)).toEqual([WORKING_AREA, WORKING_AREA]);
   });
 
   it("falls back to a rebuild when the resume is refused by the CLI", async () => {
     const { pool } = harness({ ids: ["minted-session-1", "minted-session-2"] });
-    const { ports, state } = bridgePorts(
-      ["happy-turn", "resume-conflict", "happy-turn"],
-      pool,
-    );
+    const { ports, state } = bridgePorts(["happy-turn", "resume-conflict", "happy-turn"], pool);
 
     await claudeCliGenerateText(turn(TURN_ONE), ports);
     const second = await claudeCliGenerateText(turn(TURN_TWO), ports);
@@ -383,6 +386,11 @@ describe("claude-cli pool wiring through the bridge", () => {
     expect(state.options[1].resume).toBe(HAPPY_SESSION);
     expect(state.options[2].resume).toBeUndefined();
     expect(state.options[2].sessionId).toBe("minted-session-2");
+    expect(state.options.map((options) => options.cwd)).toEqual([
+      WORKING_AREA,
+      WORKING_AREA,
+      WORKING_AREA,
+    ]);
     expect(state.prompts[2]).toContain("<conversation-transcript>");
     expect(second.text).toBe("Easy spin today.");
   });
@@ -464,6 +472,7 @@ describe("claude-cli pool wiring through the bridge", () => {
     expect(Object.keys(options.mcpServers as Record<string, unknown>)).toEqual([]);
     expect(options.resume).toBeUndefined();
     expect(options.sessionId).toBeUndefined();
+    expect(options.cwd).toBe(WORKING_AREA);
     expect(readCursorStore(path).cursors).toEqual({});
   });
 

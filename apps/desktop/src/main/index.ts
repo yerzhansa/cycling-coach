@@ -715,7 +715,8 @@ async function runDesktop(): Promise<void> {
     });
     const claudeCli = createClaudeCliStatus({
       settings: () => readClaudeCliSettings({ configPath: join(configDir, "config.yaml") }),
-      environment: () => process.env,
+      environment: () => environment,
+      forbiddenRoots: [selectedAthleteHome, app.getPath("userData"), process.resourcesPath],
       async applyRuntimeConfig(request) {
         const binding = activeRuntimeBinding!;
         const lifecycleState = daemonLifecycle?.snapshot();

@@ -52,10 +52,7 @@ export function offeredLanes(
 ): readonly SetupLane[] {
   if (configuration === null) return [];
   const lanes: SetupLane[] = [];
-  if (
-    offersProvider(configuration, "claude-cli") &&
-    (claudeCliReady(wizard) || currentLane === "claude-cli")
-  ) {
+  if (offersProvider(configuration, "claude-cli")) {
     lanes.push("claude-cli");
   }
   if (offersProvider(configuration, "openai-codex")) lanes.push("openai-codex");
@@ -72,9 +69,11 @@ export function aiRowCopy(
   const title = SETUP_LANE_LABELS[lane];
   if (!ready) {
     const pending =
-      lane === "openai-codex" && chatGptSignedIn(wizard)
-        ? "signed in · activation needed"
-        : AI_ROW_PENDING[lane];
+      lane === "claude-cli" && wizard.claudeCliState === null && wizard.busy
+        ? "checking Claude Code sign-in"
+        : lane === "openai-codex" && chatGptSignedIn(wizard)
+          ? "signed in · activation needed"
+          : AI_ROW_PENDING[lane];
     return { title, subtitle: `${AI_ROW_PREFIX} · ${pending}` };
   }
   if (lane === "claude-cli" && wizard.claudeCliIdentity !== null) {
@@ -86,9 +85,13 @@ export function aiRowCopy(
 export function claudeCliNote(
   configuration: OnboardingLlmConfiguration | null,
   wizard: OnboardingState,
+  currentLane: SetupLane | null = null,
 ): string | null {
   if (!offersProvider(configuration, "claude-cli")) return null;
-  if (offeredLanes(configuration, wizard).includes("claude-cli")) return null;
+  if (currentLane !== "claude-cli" || claudeCliReady(wizard)) return null;
+  if (wizard.claudeCliState === null && !wizard.busy) {
+    return "Choose Check again to verify Claude Code on this Mac.";
+  }
   return claudeCliPresentation(wizard.claudeCliState).detail;
 }
 

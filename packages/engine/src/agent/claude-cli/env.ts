@@ -116,7 +116,7 @@ export function expandTilde(value: string, options: ClaudeCliPathOptions = {}): 
   return value;
 }
 
-function resolveConfigDir(value: string, options: ClaudeCliPathOptions): string {
+export function resolveClaudeConfigDir(value: string, options: ClaudeCliPathOptions = {}): string {
   const platform = options.platform ?? process.platform;
   const expanded = expandTilde(value, options);
   if (platform === "win32") {
@@ -183,7 +183,7 @@ export function buildChildEnv(
   }
 
   if (rt.configDir !== undefined && rt.configDir !== "") {
-    out.CLAUDE_CONFIG_DIR = resolveConfigDir(rt.configDir, {
+    out.CLAUDE_CONFIG_DIR = resolveClaudeConfigDir(rt.configDir, {
       ...options,
       platform,
       env: options.env ?? base,

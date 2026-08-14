@@ -15,10 +15,12 @@ import {
   resolveClaudeBinary,
 } from "../../src/agent/claude-cli/executable.js";
 import { buildQueryOptions, startGeneration } from "../../src/agent/claude-cli/session.js";
+import { createClaudeWorkingArea } from "../../src/agent/claude-cli/working-area.js";
 
 const ENABLED = process.env.CLAUDE_CLI_E2E !== undefined && process.env.CLAUDE_CLI_E2E !== "";
 const MODEL = "haiku";
 const DEADLINE_MS = 120_000;
+const workingArea = createClaudeWorkingArea();
 
 async function withDeadline<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -76,7 +78,11 @@ describe.skipIf(!ENABLED)("real Claude Code CLI", () => {
     "runs a version pre-probe at or above the supported floor",
     async () => {
       const runtime = await resolveRuntime();
-      const version = await withDeadline(probeVersion(runtime.binaryPath), 30_000, "version probe");
+      const version = await withDeadline(
+        probeVersion(runtime.binaryPath, { workingArea }),
+        30_000,
+        "version probe",
+      );
       expect(compareVersions(version, CLAUDE_CLI_VERSION_FLOOR)).toBeGreaterThanOrEqual(0);
     },
     DEADLINE_MS,
@@ -87,6 +93,7 @@ describe.skipIf(!ENABLED)("real Claude Code CLI", () => {
     async () => {
       const runtime = await resolveRuntime();
       const controller = new AbortController();
+      const binding = await workingArea.prepareForLaunch("account");
       const options = buildQueryOptions({
         runtime,
         baseEnv: process.env,
@@ -97,6 +104,8 @@ describe.skipIf(!ENABLED)("real Claude Code CLI", () => {
         persistSession: false,
         abortController: controller,
         stderr: () => {},
+        cwd: binding.cwd,
+        assertWorkingArea: binding.assertCurrent,
       });
       const active = sdkQuery({ prompt: neverEndingPrompt(controller.signal), options });
       try {
@@ -116,6 +125,7 @@ describe.skipIf(!ENABLED)("real Claude Code CLI", () => {
     "gives a resumed session a fresh maxTurns budget",
     async () => {
       const runtime = await resolveRuntime();
+      const firstBinding = await workingArea.prepareForLaunch("generation");
       const first = startGeneration({
         prompt: "Reply with the single word OK.",
         options: buildQueryOptions({
@@ -127,12 +137,15 @@ describe.skipIf(!ENABLED)("real Claude Code CLI", () => {
           mcpServers: {},
           maxTurns: 1,
           stderr: () => {},
+          cwd: firstBinding.cwd,
+          assertWorkingArea: firstBinding.assertCurrent,
         }),
       });
       const firstFrames = await withDeadline(collect(first.frames()), 60_000, "first generation");
       const sessionId = sessionIdOf(firstFrames);
       expect(firstFrames.some((frame) => frame.type === "assistant")).toBe(true);
 
+      const resumeBinding = await workingArea.prepareForLaunch("resume");
       const second = startGeneration({
         prompt: "Reply with the single word OK.",
         options: buildQueryOptions({
@@ -145,6 +158,8 @@ describe.skipIf(!ENABLED)("real Claude Code CLI", () => {
           maxTurns: 1,
           resume: sessionId,
           stderr: () => {},
+          cwd: resumeBinding.cwd,
+          assertWorkingArea: resumeBinding.assertCurrent,
         }),
       });
       const secondFrames = await withDeadline(
@@ -163,6 +178,7 @@ describe.skipIf(!ENABLED)("real Claude Code CLI", () => {
     "accepts the session-persistence knob",
     async () => {
       const runtime = await resolveRuntime();
+      const binding = await workingArea.prepareForLaunch("maintenance");
       const options = buildQueryOptions({
         runtime,
         baseEnv: process.env,
@@ -173,6 +189,8 @@ describe.skipIf(!ENABLED)("real Claude Code CLI", () => {
         maxTurns: 1,
         persistSession: false,
         stderr: () => {},
+        cwd: binding.cwd,
+        assertWorkingArea: binding.assertCurrent,
       });
       expect(options.persistSession).toBe(false);
 

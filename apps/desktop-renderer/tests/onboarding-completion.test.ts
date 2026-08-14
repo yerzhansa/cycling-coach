@@ -726,14 +726,14 @@ describe("onboarding runtime completion gate", () => {
     const bridge = activationBridge(() => pending.promise);
     const harness = onboardingHarness(bridge);
     await harness.controller.open();
-    await vi.waitFor(() => {
-      expect(harness.controller.state().claudeCliState).toBe("ready");
-    });
+    expect(harness.controller.state().claudeCliState).toBeNull();
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
     harness.controller.setIntake("injuryStatus", "none");
 
     harness.controller.selectProvider("claude-cli");
 
     await vi.waitFor(() => {
+      expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
       expect(bridge.applyLlmSelection).toHaveBeenCalledWith({
         provider: "claude-cli",
         model: "sonnet",
@@ -773,14 +773,14 @@ describe("onboarding runtime completion gate", () => {
     }));
     const harness = onboardingHarness(bridge);
     await harness.controller.open();
-    await vi.waitFor(() => {
-      expect(harness.controller.state().claudeCliState).toBe("ready");
-    });
+    expect(harness.controller.state().claudeCliState).toBeNull();
+    expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
     harness.controller.setIntake("injuryStatus", "none");
 
     harness.controller.selectProvider("claude-cli");
 
     await vi.waitFor(() => {
+      expect(bridge.claudeCliStatus).toHaveBeenCalledOnce();
       expect(harness.controller.state()).toMatchObject({
         busy: false,
         fixedError: "model-runtime-unavailable",

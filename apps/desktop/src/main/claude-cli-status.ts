@@ -2,10 +2,12 @@ import { readFile } from "node:fs/promises";
 import {
   ClaudeCliConfigError,
   claudeCliPatchFrom,
+  createClaudeWorkingArea,
   ensureClaudeCliReady,
   invalidateClaudeAccountProbeCache,
   type ClaudeCliBilling,
   type ClaudeCliReadiness,
+  type ClaudeWorkingAreaPort,
   type EnsureClaudeCliReadyDeps,
 } from "@enduragent/core";
 import type { ConfigureRuntimeRpcParams } from "@enduragent/coach-contract";
@@ -25,6 +27,7 @@ export const CLAUDE_CLI_STATUS_STATES = [
   "not-logged-in",
   "api-key-token",
   "disabled",
+  "working-area-unavailable",
 ] as const;
 
 export const CLAUDE_CLI_STATUS_DEADLINE_MS = 72_000;
@@ -69,6 +72,8 @@ export interface CreateClaudeCliStatusOptions {
   readonly environment?: () => Readonly<Record<string, string | undefined>>;
   readonly platform?: NodeJS.Platform;
   readonly applyRuntimeConfig: (request: ConfigureRuntimeRpcParams) => Promise<void>;
+  readonly workingArea?: ClaudeWorkingAreaPort;
+  readonly forbiddenRoots?: readonly string[];
   readonly dependencies?: ClaudeCliStatusDependencies;
 }
 
@@ -133,6 +138,8 @@ function stateForFailure(error: unknown): ClaudeCliStatusState {
     case "windows-mcp-config-write":
     case "windows-mcp-config-cleanup":
       return "absent-binary";
+    case "working-area-unavailable":
+      return "working-area-unavailable";
     case "api-key-identity":
     case "api-key-unapproved":
     case "unrecognized-auth-source":
@@ -150,6 +157,17 @@ export function createClaudeCliStatus(
     options.dependencies?.invalidateProbeCache ?? invalidateClaudeAccountProbeCache;
   const environment = options.environment ?? (() => process.env);
   const platform = options.platform ?? process.platform;
+  const currentWorkingArea = (
+    baseEnv: NodeJS.ProcessEnv,
+    configDir: string | undefined,
+  ): ClaudeWorkingAreaPort =>
+    options.workingArea ??
+    createClaudeWorkingArea({
+      platform,
+      environment: baseEnv,
+      forbiddenRoots: options.forbiddenRoots ?? [],
+      ...(configDir === undefined ? {} : { configDir }),
+    });
   const probeDependencies: EnsureClaudeCliReadyDeps = {
     ...(options.dependencies?.resolveBinary === undefined
       ? {}
@@ -176,31 +194,42 @@ export function createClaudeCliStatus(
   let recheckGeneration = 0;
   let activeRead: ReadSlot | undefined;
   let queuedRecheck: ReadSlot | undefined;
+  let latestReadyStatus: ClaudeCliStatus | null = null;
 
   const read = async (forceRecheck: boolean): Promise<ClaudeCliStatus> => {
     let settings: ClaudeCliSettings;
     try {
       settings = await options.settings();
     } catch {
+      latestReadyStatus = null;
       return { state: "not-logged-in" };
     }
     const baseEnv = { ...environment() };
     if (!isClaudeCliLaneEligible({ environment: baseEnv, enabled: settings.enabled })) {
+      latestReadyStatus = null;
       return { state: "disabled" };
     }
-    return statusForReadiness(
-      await ensureReady(
-        {
-          ...(settings.binaryPath === undefined ? {} : { binaryPath: settings.binaryPath }),
-          ...(settings.configDir === undefined ? {} : { configDir: settings.configDir }),
-          billing: settings.billing,
-          baseEnv,
-          platform,
-          ...(forceRecheck ? { forceRecheck: true } : {}),
-        },
-        probeDependencies,
-      ),
-    );
+    try {
+      const status = statusForReadiness(
+        await ensureReady(
+          {
+            workingArea: currentWorkingArea(baseEnv, settings.configDir),
+            ...(settings.binaryPath === undefined ? {} : { binaryPath: settings.binaryPath }),
+            ...(settings.configDir === undefined ? {} : { configDir: settings.configDir }),
+            billing: settings.billing,
+            baseEnv,
+            platform,
+            ...(forceRecheck ? { forceRecheck: true } : {}),
+          },
+          probeDependencies,
+        ),
+      );
+      latestReadyStatus = status;
+      return status;
+    } catch (error) {
+      latestReadyStatus = null;
+      return { state: stateForFailure(error) };
+    }
   };
 
   const startRead = (forceRecheck: boolean): Promise<ClaudeCliStatus> => {
@@ -217,6 +246,7 @@ export function createClaudeCliStatus(
         try {
           invalidate();
         } catch {}
+        latestReadyStatus = null;
       };
       void rawTask
         .then(
@@ -264,6 +294,7 @@ export function createClaudeCliStatus(
           } catch {}
         }
         invalidate();
+        latestReadyStatus = null;
         return await startRead(true);
       })();
       queuedRecheck = { generation, task };
@@ -275,7 +306,10 @@ export function createClaudeCliStatus(
       void task.then(clear, clear);
       return task;
     },
-    invalidateProbeCache: () => invalidate(),
+    invalidateProbeCache: () => {
+      invalidate();
+      latestReadyStatus = null;
+    },
     async activate(input) {
       let selection: ReturnType<typeof parseClaudeCliLlmSelection>;
       try {
@@ -283,7 +317,7 @@ export function createClaudeCliStatus(
       } catch {
         return { status: "refused", reason: "invalid-input" };
       }
-      const current = await status();
+      const current = latestReadyStatus ?? (await status());
       if (current.state === "disabled") {
         return { status: "refused", reason: "runtime-unavailable" };
       }

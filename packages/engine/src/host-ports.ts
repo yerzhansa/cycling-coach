@@ -4,6 +4,7 @@ import type { EventInput, IntervalsClient } from "intervals-icu-api";
 import type { GenerateOptions, GenerateResult } from "./sport.js";
 import type { LedgerEventInput } from "./sport/ledger-event.js";
 import type { SourceProvenance } from "./provenance.js";
+import type { ClaudeWorkingAreaPort } from "./agent/claude-cli/working-area.js";
 
 export type EngineDataSource = "platform" | "store";
 
@@ -335,6 +336,7 @@ export interface EngineHostPorts {
   readonly now: () => number;
   readonly randomId: () => string;
   readonly chatStreamTimeouts?: ChatStreamTimeouts;
+  readonly claudeWorkingArea?: ClaudeWorkingAreaPort;
   readonly modelTransportDecorator?: ModelTransportDecorator;
   readonly onToolsAssembled?: (names: readonly string[]) => void;
   readonly toolConfirmations?: ToolConfirmationPort;

@@ -37,6 +37,12 @@ const CLAUDE_CLI_PRESENTATION: Readonly<Record<ClaudeCliState, ClaudeCliPresenta
     badge: "Turned off",
     detail: `The Claude subscription lane is turned off on ${PLATFORM_COPY.computer}. Choose another provider.`,
   },
+  "working-area-unavailable": {
+    runtimeState: "failed",
+    badge: "Could not start safely",
+    detail:
+      "Enduragent could not prepare Claude's private working area. Restart Enduragent, then choose Check again.",
+  },
 };
 
 const CLAUDE_CLI_UNKNOWN_PRESENTATION: ClaudeCliPresentation = {
