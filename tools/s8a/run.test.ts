@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import {
   buildHeader,
   distPreflight,
   parseRecordingLane,
+  parseLastScenarioChildStage,
   parseRunFlags,
   resolveRecordLane,
   runDirName,
@@ -19,6 +20,62 @@ import {
 } from "./run.js";
 import { AUTH_PROFILES_SOURCE_ENV } from "./lib/codex-auth.js";
 import type { ScenarioVerdict } from "./lib/types.js";
+
+const RUN_SCENARIO_SOURCE = readFileSync(new URL("./run-scenario.ts", import.meta.url), "utf-8");
+
+describe("scenario child stage diagnostics", () => {
+  it("returns only the last exact allowlisted marker for the expected scenario", () => {
+    const output = [
+      "S8A_CHILD_STAGE START scenario=inj-02 stage=setup",
+      "S8A_CHILD_STAGE DONE scenario=inj-02 stage=setup",
+      "S8A_CHILD_STAGE START scenario=inj-03 stage=cleanup",
+      "S8A_CHILD_STAGE START scenario=inj-02 stage=turn turn=0",
+      "S8A_CHILD_STAGE START scenario=inj-02 stage=private",
+    ].join("\n");
+    expect(parseLastScenarioChildStage(output, "inj-02")).toBe("turn-0-start");
+    expect(parseLastScenarioChildStage(output, "unsafe/path")).toBe("none");
+  });
+
+  it("rejects malformed, mismatched, and structurally invalid markers", () => {
+    expect(
+      parseLastScenarioChildStage("S8A_CHILD_STAGE START scenario=inj-02 stage=turn", "inj-02"),
+    ).toBe("none");
+    expect(
+      parseLastScenarioChildStage(
+        "S8A_CHILD_STAGE DONE scenario=inj-02 stage=setup turn=0",
+        "inj-02",
+      ),
+    ).toBe("none");
+    expect(
+      parseLastScenarioChildStage(
+        "prefix S8A_CHILD_STAGE START scenario=inj-02 stage=setup",
+        "inj-02",
+      ),
+    ).toBe("none");
+    expect(
+      parseLastScenarioChildStage(
+        "S8A_CHILD_STAGE START scenario=inj-03 stage=setup",
+        "inj-02",
+      ),
+    ).toBe("none");
+  });
+
+  it("binds every requested child boundary in execution order", () => {
+    const markers = [
+      'emitScenarioStage("START", diagnosticScenario, "setup")',
+      'emitScenarioStage("DONE", diagnosticScenario, "setup")',
+      'emitScenarioStage("START", diagnosticScenario, "turn", turnIndex)',
+      'emitScenarioStage("DONE", diagnosticScenario, "turn", turnIndex)',
+      'emitScenarioStage("START", diagnosticScenario, finishStage)',
+      'emitScenarioStage("DONE", diagnosticScenario, finishStage)',
+      'emitScenarioStage("START", diagnosticScenario, "cleanup")',
+      'emitScenarioStage("DONE", diagnosticScenario, "cleanup")',
+    ];
+    const positions = markers.map((marker) => RUN_SCENARIO_SOURCE.indexOf(marker));
+    expect(positions.every((position) => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((left, right) => left - right));
+  });
+});
 
 describe("flag parsing", () => {
   it("parses each supported invocation", () => {
@@ -228,7 +285,8 @@ describe("scenario child process", () => {
     const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
       removeTempHome(options);
       return {
-        stdout: null,
+        stdout:
+          "S8A_CHILD_STAGE START scenario=unknown stage=turn turn=3\n/private/athlete-home/token\n",
         stderr: "/private/athlete-home/token",
         status: null,
         error: Object.assign(new Error("/private/athlete-home/token"), { code: "ETIMEDOUT" }),
@@ -244,7 +302,7 @@ describe("scenario child process", () => {
     expect(outcome).toEqual({
       verdict: null,
       exitCode: 2,
-      stderr: "scenario child timed out: scenario=unknown stage=replay",
+      stderr: "scenario child timed out: scenario=unknown stage=replay child-stage=turn-3-start",
     });
     expect(JSON.stringify(outcome)).not.toContain("private/athlete-home");
     expect(log.mock.calls.map(([line]) => line)).toEqual([
