@@ -134,7 +134,7 @@ function validateReadyFrame(value) {
   return value;
 }
 
-function validateSelfTestTerminal(value) {
+export function validateSelfTestTerminal(value) {
   checked(value !== null && typeof value === "object", "self-test terminal was invalid");
   checked(value.type === "self-test-terminal" && value.ok === true, "packaged self-test failed");
   checked(value.runtime?.electron === "43.1.1", "packaged Electron version was unexpected");
@@ -142,7 +142,27 @@ function validateSelfTestTerminal(value) {
     typeof value.runtime?.node === "string" && Number(value.runtime.node.split(".")[0]) >= 24,
     "packaged Node version was unexpected",
   );
-  checked(Array.isArray(value.suites) && value.suites.length > 0, "packaged suites were absent");
+  const suites = value.suites;
+  checked(
+    suites !== null &&
+      typeof suites === "object" &&
+      !Array.isArray(suites) &&
+      JSON.stringify(Object.keys(suites).sort()) === JSON.stringify(["differential", "parity"]),
+    "packaged self-test suites were invalid",
+  );
+  for (const name of ["parity", "differential"]) {
+    const suite = suites[name];
+    checked(
+      suite !== null &&
+        typeof suite === "object" &&
+        !Array.isArray(suite) &&
+        JSON.stringify(Object.keys(suite).sort()) === JSON.stringify(["cases", "passed"]) &&
+        Number.isSafeInteger(suite.cases) &&
+        suite.cases > 0,
+      "packaged self-test suite counts were invalid",
+    );
+    checked(suite.passed === suite.cases, "packaged self-test suites did not pass");
+  }
   return value;
 }
 

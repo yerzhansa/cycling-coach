@@ -15,7 +15,10 @@ import {
   runWindowsInstalledPackage,
   validateSignaturePolicy,
 } from "../scripts/windows-installed-package.mjs";
-import { validatePackagedSecondLaunch } from "../scripts/verify-windows-packaged-self-test.mjs";
+import {
+  validatePackagedSecondLaunch,
+  validateSelfTestTerminal,
+} from "../scripts/verify-windows-packaged-self-test.mjs";
 
 const scratchRoots: string[] = [];
 
@@ -452,6 +455,58 @@ describe("packaged second launch", () => {
     } catch (error) {
       expect(String(error)).not.toContain(privateValue);
     }
+  });
+});
+
+describe("packaged self-test terminal", () => {
+  const valid = {
+    type: "self-test-terminal",
+    ok: true,
+    runtime: { node: "24.18.0", electron: "43.1.1" },
+    suites: {
+      parity: { cases: 2, passed: 2 },
+      differential: { cases: 3, passed: 3 },
+    },
+  } as const;
+
+  it("accepts the exact shipped suite object", () => {
+    expect(validateSelfTestTerminal(valid)).toBe(valid);
+  });
+
+  it.each([
+    [{ ...valid, suites: [] }, "packaged self-test suites were invalid"],
+    [
+      { ...valid, suites: { parity: valid.suites.parity } },
+      "packaged self-test suites were invalid",
+    ],
+    [
+      { ...valid, suites: { ...valid.suites, privateExtra: { cases: 1, passed: 1 } } },
+      "packaged self-test suites were invalid",
+    ],
+    [
+      {
+        ...valid,
+        suites: {
+          ...valid.suites,
+          parity: { ...valid.suites.parity, privateExtra: "C:\\private\\suite" },
+        },
+      },
+      "packaged self-test suite counts were invalid",
+    ],
+    [
+      { ...valid, suites: { ...valid.suites, parity: { cases: 1.5, passed: 1.5 } } },
+      "packaged self-test suite counts were invalid",
+    ],
+    [
+      { ...valid, suites: { ...valid.suites, differential: { cases: 0, passed: 0 } } },
+      "packaged self-test suite counts were invalid",
+    ],
+    [
+      { ...valid, suites: { ...valid.suites, parity: { cases: 2, passed: 1 } } },
+      "packaged self-test suites did not pass",
+    ],
+  ])("rejects malformed suite results with a fixed error", (terminal, message) => {
+    expect(() => validateSelfTestTerminal(terminal)).toThrow(new RegExp(`^${message}$`, "u"));
   });
 });
 
