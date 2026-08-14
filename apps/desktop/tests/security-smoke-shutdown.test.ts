@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  connectSecuritySmokeControlPipe,
+  parseSecuritySmokeControlPipeArgument,
   SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FRAME,
   SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FAILURE_FRAME,
   SECURITY_SMOKE_SECOND_INSTANCE_FRAME,
@@ -13,6 +15,52 @@ import {
 } from "../src/main/security-smoke-shutdown.js";
 
 describe("security smoke shutdown control", () => {
+  it("accepts one exact candidate-scoped Windows control pipe argument", () => {
+    const pipe = String.raw`\\.\pipe\enduragent-w17-eaw-aB09`;
+    expect(
+      parseSecuritySmokeControlPipeArgument([
+        "Enduragent.exe",
+        `--desktop-security-control-pipe=${pipe}`,
+      ]),
+    ).toBe(pipe);
+    for (const args of [
+      [],
+      ["--desktop-security-control-pipe=C:\\private"],
+      [
+        `--desktop-security-control-pipe=${pipe}`,
+        `--desktop-security-control-pipe=${pipe}`,
+      ],
+    ]) {
+      expect(() => parseSecuritySmokeControlPipeArgument(args)).toThrow(
+        /^security smoke control pipe argument was invalid$/u,
+      );
+    }
+  });
+
+  it("connects to the fixed control pipe without retaining setup listeners", async () => {
+    const socket = new PassThrough();
+    const connected = connectSecuritySmokeControlPipe("synthetic", (_path, listener) => {
+      queueMicrotask(listener);
+      return socket as never;
+    });
+    await expect(connected).resolves.toBe(socket);
+    expect(socket.listenerCount("error")).toBe(0);
+  });
+
+  it("maps control pipe connection failure without exposing its path", async () => {
+    const socket = Object.assign(new EventEmitter(), {
+      destroy: vi.fn(),
+    });
+    const connected = connectSecuritySmokeControlPipe(
+      String.raw`\\.\pipe\enduragent-w17-private`,
+      () => socket as never,
+    );
+    socket.emit("error", new Error("C:\\private\\control"));
+    await expect(connected).rejects.toThrow(/^security smoke control pipe connection failed$/u);
+    expect(socket.destroy).toHaveBeenCalledOnce();
+    expect(socket.listenerCount("error")).toBe(0);
+  });
+
   it("accepts only one exact fragmented newline-framed command", async () => {
     const input = new PassThrough();
     const accepted = waitForSecuritySmokeShutdown(input);

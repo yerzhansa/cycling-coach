@@ -58,6 +58,8 @@ import {
 import { requireDesktopDaemonHome } from "./daemon-home-binding.js";
 import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-config.js";
 import {
+  connectSecuritySmokeControlPipe,
+  parseSecuritySmokeControlPipeArgument,
   waitForSecuritySmokeShutdown,
   writeSecuritySmokePrimarySecondInstance,
   writeSecuritySmokePrimarySecondInstanceFailure,
@@ -248,6 +250,7 @@ async function runDesktop(): Promise<void> {
   let closeTelegramCoordinator: (() => Promise<void>) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
+  let securitySmokeControlPipe: import("node:net").Socket | undefined;
   let securitySmokeShutdownAccepted = false;
   const reportSecuritySmokeShutdownStage = async (
     stage: SecuritySmokeShutdownStage,
@@ -1035,6 +1038,16 @@ async function runDesktop(): Promise<void> {
         await writeFile(outputArgument.slice("--desktop-security-output=".length), screenshot);
       }
       initialWindow.show();
+      const useWindowsControlPipe = process.platform === "win32" && desktopAcceptanceHidden;
+      if (useWindowsControlPipe) {
+        securitySmokeControlPipe = await connectSecuritySmokeControlPipe(
+          parseSecuritySmokeControlPipeArgument(process.argv),
+        );
+      }
+      const controlShutdown =
+        securitySmokeControlPipe === undefined
+          ? undefined
+          : waitForSecuritySmokeShutdown(securitySmokeControlPipe);
       const result = {
         url: rendererResult.url,
         rpcUrl: daemonLifecycle.connection().url,
@@ -1063,7 +1076,7 @@ async function runDesktop(): Promise<void> {
           !screenshot.includes(daemonLifecycle.connection().token),
       };
       process.stdout.write(`DESKTOP_SECURITY_READY ${JSON.stringify(result)}\n`);
-      await waitForSecuritySmokeShutdown(process.stdin);
+      await (controlShutdown ?? waitForSecuritySmokeShutdown(process.stdin));
       securitySmokeShutdownAccepted = true;
       await reportSecuritySmokeShutdownStage("stdin-accepted");
       await shutdown();
@@ -1073,6 +1086,8 @@ async function runDesktop(): Promise<void> {
   } catch (error) {
     await shutdown();
     throw error;
+  } finally {
+    securitySmokeControlPipe?.destroy();
   }
 }
 

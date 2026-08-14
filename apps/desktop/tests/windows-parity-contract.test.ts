@@ -176,10 +176,45 @@ describe("Windows parity automation contract", () => {
       packagedSelfTest.indexOf("running = launchApplication"),
     );
     expect(packagedLaunchArguments).toContain("--desktop-security-output=");
+    expect(packagedLaunchArguments).toContain("--desktop-security-control-pipe=");
     expect(packagedLaunchArguments).not.toContain("--user-data-dir=");
     expect(packagedSelfTest).toContain('const windowsUserData = join(localAppData, "Enduragent");');
     expect(packagedSelfTest).toContain("mkdir(windowsUserData, { recursive: true })");
     expect(packagedSelfTest).toContain("requireRunningPrimaryBeforeSecondLaunch(running.child);");
+    const controlServer = packagedSelfTest.indexOf(
+      "controlPipe = await createWindowsSecurityControlPipe(controlPipeName)",
+    );
+    const primaryLaunch = packagedSelfTest.indexOf(
+      "running = launchApplication(executable, launchArguments, launchEnvironment)",
+      controlServer,
+    );
+    expect(controlServer).toBeGreaterThanOrEqual(0);
+    expect(primaryLaunch).toBeGreaterThan(controlServer);
+    expect(packagedSelfTest).toContain("controlPipe.connection");
+    expect(packagedSelfTest).toContain(
+      "validatePackagedSecondLaunch(second, [security.athleteHome, token, controlPipeName])",
+    );
+    expect(packagedSelfTest).toContain(
+      "requestPackagedShutdown(running.shutdownInput ?? running.child.stdin)",
+    );
+    expect(packagedSelfTest).toContain("await controlPipe.close()");
+    const controlConnect = desktopMain.indexOf("connectSecuritySmokeControlPipe(");
+    const controlWait = desktopMain.indexOf(
+      "waitForSecuritySmokeShutdown(securitySmokeControlPipe)",
+      controlConnect,
+    );
+    const controlReady = desktopMain.indexOf("DESKTOP_SECURITY_READY", controlWait);
+    const runDesktopStart = desktopMain.indexOf("async function runDesktop");
+    expect(controlConnect).toBeGreaterThan(runDesktopStart);
+    expect(controlConnect).toBeLessThan(secondaryExit);
+    expect(controlWait).toBeGreaterThan(controlConnect);
+    expect(controlReady).toBeGreaterThan(controlWait);
+    expect(desktopMain.slice(secondaryExit, singleInstanceLock)).not.toContain(
+      "desktop-security-control-pipe",
+    );
+    expect(desktopMain).toContain(
+      "controlShutdown ?? waitForSecuritySmokeShutdown(process.stdin)",
+    );
     expect(packagedSelfTest).toContain("waitForPackagedSecondLaunchEvidence({");
     expect(packagedSelfTest).toContain(
       "primaryAcknowledgment: running.primarySecondInstance.acknowledgment",

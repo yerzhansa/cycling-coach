@@ -20,6 +20,7 @@ import {
   createPrimaryAcknowledgmentFailureObserver,
   createSecuritySmokeStageObserver,
   createPrimarySecondInstanceObserver,
+  createWindowsSecurityControlPipeName,
   formatSafeProcessTerminal,
   observeProcessExit,
   requireRunningPrimaryBeforeSecondLaunch,
@@ -540,6 +541,19 @@ describe("packaged primary identity", () => {
     ]) {
       expect(() => requireRunningPrimaryBeforeSecondLaunch(child)).toThrow(
         /^packaged Windows primary exited before second launch$/u,
+      );
+    }
+  });
+});
+
+describe("packaged Windows control pipe", () => {
+  it("derives one private candidate-scoped local pipe name", () => {
+    expect(createWindowsSecurityControlPipeName("eaw-Ab09xy")).toBe(
+      String.raw`\\.\pipe\enduragent-w17-eaw-Ab09xy`,
+    );
+    for (const candidate of ["", "private/path", "x".repeat(65)]) {
+      expect(() => createWindowsSecurityControlPipeName(candidate)).toThrow(
+        /^packaged Windows control pipe candidate was invalid$/u,
       );
     }
   });

@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createSecuritySmokeEnvironment,
@@ -78,6 +78,90 @@ function checked(condition, message) {
 
 function delay(milliseconds) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+export function createWindowsSecurityControlPipeName(candidate) {
+  checked(
+    typeof candidate === "string" && /^[A-Za-z0-9-]{1,64}$/u.test(candidate),
+    "packaged Windows control pipe candidate was invalid",
+  );
+  return String.raw`\\.\pipe\enduragent-w17-${candidate}`;
+}
+
+export async function createWindowsSecurityControlPipe(pipeName, create = createServer) {
+  let accepted;
+  let resolveConnection;
+  let rejectConnection;
+  let connectionSettled = false;
+  let serverClose;
+  const connection = new Promise((resolve, reject) => {
+    resolveConnection = resolve;
+    rejectConnection = reject;
+  });
+  let server;
+  const stopServer = () => {
+    serverClose ??= new Promise((resolveClose, rejectClose) => {
+      if (!server.listening) {
+        resolveClose();
+        return;
+      }
+      server.close((error) => {
+        if (error) rejectClose(error);
+        else resolveClose();
+      });
+    });
+    return serverClose;
+  };
+  try {
+    server = create((socket) => {
+      if (accepted !== undefined) {
+        socket.destroy();
+        return;
+      }
+      accepted = socket;
+      connectionSettled = true;
+      resolveConnection(socket);
+      void stopServer().catch(() => {});
+    });
+    await new Promise((resolveListen, rejectListen) => {
+      const fail = () => {
+        server.removeListener("listening", ready);
+        rejectListen(new Error("packaged Windows control pipe setup failed"));
+      };
+      const ready = () => {
+        server.removeListener("error", fail);
+        resolveListen();
+      };
+      server.once("error", fail);
+      server.once("listening", ready);
+      server.listen(pipeName);
+    });
+  } catch {
+    accepted?.destroy();
+    try {
+      server?.close();
+    } catch {}
+    throw new Error("packaged Windows control pipe setup failed");
+  }
+  const failConnection = () => {
+    if (connectionSettled) return;
+    connectionSettled = true;
+    rejectConnection(new Error("packaged Windows control pipe connection failed"));
+  };
+  server.once("error", failConnection);
+  return Object.freeze({
+    connection,
+    async close() {
+      server.removeListener("error", failConnection);
+      if (!connectionSettled) failConnection();
+      accepted?.destroy();
+      try {
+        await stopServer();
+      } catch {
+        throw new Error("packaged Windows control pipe cleanup failed");
+      }
+    },
+  });
 }
 
 function capture(
@@ -546,7 +630,7 @@ export async function waitForPackagedApplicationExit(
   try {
     const outcome = await Promise.race([
       Promise.all([
-        requestPackagedShutdown(running.child.stdin),
+        requestPackagedShutdown(running.shutdownInput ?? running.child.stdin),
         running.stages.terminal,
         running.exited,
       ]).then(([, , result]) => ({ type: "exit", result })),
@@ -602,6 +686,7 @@ export async function runWindowsPackagedSelfTest(input = {}) {
     USERPROFILE: security.operatorHome,
   };
   let running;
+  let controlPipe;
   let bodyFailure;
   let result;
   try {
@@ -629,12 +714,20 @@ export async function runWindowsPackagedSelfTest(input = {}) {
         "",
       ].join("\n"),
     );
+    const controlPipeName = createWindowsSecurityControlPipeName(basename(scratch));
+    controlPipe = await createWindowsSecurityControlPipe(controlPipeName);
     const launchArguments = [
       "--desktop-security-smoke",
       `--desktop-security-output=${security.screenshotPath}`,
+      `--desktop-security-control-pipe=${controlPipeName}`,
     ];
     running = launchApplication(executable, launchArguments, launchEnvironment);
-    const ready = validateReadyFrame(await running.ready);
+    const [readyValue, shutdownInput] = await Promise.all([
+      running.ready,
+      controlPipe.connection,
+    ]);
+    running.shutdownInput = shutdownInput;
+    const ready = validateReadyFrame(readyValue);
     const token = (await readFile(join(security.configDirectory, "daemon.token"), "utf8")).trim();
     requireRunningPrimaryBeforeSecondLaunch(running.child);
     const secondDeadline = performance.now() + COMMAND_TIMEOUT_MS;
@@ -656,7 +749,7 @@ export async function runWindowsPackagedSelfTest(input = {}) {
       primaryExited: running.exited,
       deadline: secondDeadline,
     });
-    validatePackagedSecondLaunch(second, [security.athleteHome, token]);
+    validatePackagedSecondLaunch(second, [security.athleteHome, token, controlPipeName]);
     const command = await capture(
       process.execPath,
       ["--disable-warning=ExperimentalWarning", cliEntry, "self-test"],
@@ -689,6 +782,13 @@ export async function runWindowsPackagedSelfTest(input = {}) {
       }
     } catch {
       cleanupFailures.push("process");
+    }
+  }
+  if (controlPipe !== undefined) {
+    try {
+      await controlPipe.close();
+    } catch {
+      cleanupFailures.push("control-pipe");
     }
   }
   try {

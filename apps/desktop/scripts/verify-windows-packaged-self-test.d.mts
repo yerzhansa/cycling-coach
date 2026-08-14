@@ -20,6 +20,18 @@ export interface ProcessExitResult {
 
 export function observeProcessExit(child: ProcessExitSource): Promise<ProcessExitResult>;
 
+export function createWindowsSecurityControlPipeName(candidate: string): string;
+
+export interface WindowsSecurityControlPipe {
+  readonly connection: Promise<PackagedShutdownInput>;
+  close(): Promise<void>;
+}
+
+export function createWindowsSecurityControlPipe(
+  pipeName: string,
+  create?: (...args: readonly unknown[]) => unknown,
+): Promise<WindowsSecurityControlPipe>;
+
 export interface WindowsScratchRemoveOptions {
   readonly recursive: true;
   readonly force: true;
@@ -34,7 +46,7 @@ export function removeWindowsScratch(
 
 export function throwPackagedCompletionFailures(
   bodyFailure: unknown,
-  cleanupFailures: readonly ("process" | "scratch")[],
+  cleanupFailures: readonly ("process" | "control-pipe" | "scratch")[],
 ): void;
 
 export type SecuritySmokeShutdownStage =
@@ -98,6 +110,7 @@ export function requestPackagedShutdown(input: PackagedShutdownInput | undefined
 export function waitForPackagedApplicationExit(
   running: {
     readonly child: { readonly stdin: PackagedShutdownInput | undefined };
+    readonly shutdownInput?: PackagedShutdownInput;
     readonly exited: Promise<ProcessExitResult>;
     readonly stages: SecuritySmokeStageObserver;
   },

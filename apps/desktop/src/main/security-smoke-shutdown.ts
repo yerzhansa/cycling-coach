@@ -1,3 +1,5 @@
+import { connect, type Socket } from "node:net";
+
 export const SECURITY_SMOKE_SHUTDOWN_FRAME = "shutdown\n";
 export const SECURITY_SMOKE_SECOND_INSTANCE_FRAME = "DESKTOP_SECURITY_SECOND_INSTANCE\n";
 export const SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FRAME =
@@ -17,6 +19,9 @@ export const SECURITY_SMOKE_SHUTDOWN_STAGES = [
 
 export type SecuritySmokeShutdownStage = (typeof SECURITY_SMOKE_SHUTDOWN_STAGES)[number];
 
+const SECURITY_SMOKE_CONTROL_PIPE_ARGUMENT = "--desktop-security-control-pipe=";
+const SECURITY_SMOKE_CONTROL_PIPE_PREFIX = String.raw`\\.\pipe\enduragent-w17-`;
+
 interface SecuritySmokeShutdownInput {
   readonly destroyed: boolean;
   readonly readable: boolean;
@@ -34,6 +39,50 @@ interface SecuritySmokeStageOutput {
   once(event: "error", listener: () => void): unknown;
   removeListener(event: "error", listener: () => void): unknown;
   write(chunk: string, callback: (error?: Error | null) => void): unknown;
+}
+
+export function parseSecuritySmokeControlPipeArgument(args: readonly string[]): string {
+  const matches = args.filter((value) => value.startsWith(SECURITY_SMOKE_CONTROL_PIPE_ARGUMENT));
+  if (matches.length !== 1) throw new Error("security smoke control pipe argument was invalid");
+  const path = matches[0]!.slice(SECURITY_SMOKE_CONTROL_PIPE_ARGUMENT.length);
+  const candidate = path.slice(SECURITY_SMOKE_CONTROL_PIPE_PREFIX.length);
+  if (
+    path !== `${SECURITY_SMOKE_CONTROL_PIPE_PREFIX}${candidate}` ||
+    !/^[A-Za-z0-9-]{1,64}$/u.test(candidate)
+  ) {
+    throw new Error("security smoke control pipe argument was invalid");
+  }
+  return path;
+}
+
+export function connectSecuritySmokeControlPipe(
+  path: string,
+  open: (path: string, listener: () => void) => Socket = (target, listener) =>
+    connect(target, listener),
+): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    let socket: Socket | undefined;
+    let settled = false;
+    const cleanup = () => socket?.removeListener("error", fail);
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket?.destroy();
+      reject(new Error("security smoke control pipe connection failed"));
+    };
+    try {
+      socket = open(path, () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(socket!);
+      });
+      socket.once("error", fail);
+    } catch {
+      fail();
+    }
+  });
 }
 
 export function waitForSecuritySmokeShutdown(input: SecuritySmokeShutdownInput): Promise<void> {
