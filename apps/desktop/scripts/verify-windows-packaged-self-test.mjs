@@ -17,8 +17,47 @@ const LISTENER_TIMEOUT_MS = 500;
 const CLEANUP_GRACE_MS = 5_000;
 const SECURITY_SMOKE_STAGE_PREFIX = "DESKTOP_SECURITY_STAGE ";
 const SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE = "DESKTOP_SECURITY_PRIMARY_SECOND_INSTANCE";
+const SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FAILURE =
+  "DESKTOP_SECURITY_PRIMARY_SECOND_INSTANCE_FAILURE";
 const SECOND_LAUNCH_EVIDENCE_TIMEOUT =
   "packaged Windows primary second-instance acknowledgment timed out";
+const SAFE_PROCESS_SIGNALS = new Set([
+  "SIGABRT",
+  "SIGALRM",
+  "SIGBUS",
+  "SIGCHLD",
+  "SIGCONT",
+  "SIGFPE",
+  "SIGHUP",
+  "SIGILL",
+  "SIGINFO",
+  "SIGINT",
+  "SIGIO",
+  "SIGIOT",
+  "SIGKILL",
+  "SIGLOST",
+  "SIGPIPE",
+  "SIGPOLL",
+  "SIGPROF",
+  "SIGPWR",
+  "SIGQUIT",
+  "SIGSEGV",
+  "SIGSTKFLT",
+  "SIGSTOP",
+  "SIGSYS",
+  "SIGTERM",
+  "SIGTRAP",
+  "SIGTSTP",
+  "SIGTTIN",
+  "SIGTTOU",
+  "SIGURG",
+  "SIGUSR1",
+  "SIGUSR2",
+  "SIGVTALRM",
+  "SIGWINCH",
+  "SIGXCPU",
+  "SIGXFSZ",
+]);
 export const SECURITY_SMOKE_SHUTDOWN_STAGES = Object.freeze([
   "stdin-accepted",
   "residency-closed",
@@ -194,9 +233,42 @@ export function createPrimarySecondInstanceObserver() {
         resolveAcknowledged();
       }
     },
+    isAcknowledged: () => acknowledged,
     acknowledgment,
     failure,
   });
+}
+
+export function createPrimaryAcknowledgmentFailureObserver() {
+  let pending = "";
+  let resolveFailure;
+  const failure = new Promise((resolve) => {
+    resolveFailure = resolve;
+  });
+  return Object.freeze({
+    write(chunk) {
+      pending += String(chunk);
+      const lines = pending.split(/\r?\n/u);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line === SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FAILURE) {
+          resolveFailure(new Error("packaged Windows primary acknowledgment write failed"));
+        }
+      }
+    },
+    failure,
+  });
+}
+
+export function formatSafeProcessTerminal(result) {
+  const code = Number.isSafeInteger(result.code) ? String(result.code) : "unknown";
+  const signal =
+    result.signal === null
+      ? "none"
+      : SAFE_PROCESS_SIGNALS.has(result.signal)
+        ? result.signal
+        : "unknown";
+  return `code=${code}; signal=${signal}`;
 }
 
 export async function waitForPackagedSecondLaunchEvidence(input) {
@@ -213,19 +285,35 @@ export async function waitForPackagedSecondLaunchEvidence(input) {
         type: "second",
         second,
       })),
-      input.primaryAcknowledgmentFailure.then((error) => ({ type: "evidence-failure", error })),
+      input.primaryAcknowledgmentEvidenceFailure.then((error) => ({
+        type: "evidence-failure",
+        error,
+      })),
+      input.primaryAcknowledgmentWriteFailure.then((error) => ({
+        type: "write-failure",
+        error,
+      })),
       input.primaryExited.then((result) => ({ type: "primary-exit", result })),
       deadline,
     ]);
     if (outcome.type === "timeout") throw new Error(SECOND_LAUNCH_EVIDENCE_TIMEOUT);
+    if (outcome.type === "write-failure") {
+      throw new Error("packaged Windows primary acknowledgment write failed");
+    }
     if (outcome.type === "evidence-failure") {
       throw new Error("packaged Windows primary second-instance evidence was invalid");
     }
     if (outcome.type === "primary-exit") {
+      const terminal = formatSafeProcessTerminal(outcome.result);
+      const acknowledgment = input.primaryAcknowledged() ? "present" : "absent";
       if (outcome.result.code === 2 && outcome.result.signal === null) {
-        throw new Error("packaged Windows primary was terminated during second launch");
+        throw new Error(
+          `packaged Windows primary was terminated during second launch; ${terminal}; ack=${acknowledgment}`,
+        );
       }
-      throw new Error("packaged Windows primary exited during second launch");
+      throw new Error(
+        `packaged Windows primary exited during second launch; ${terminal}; ack=${acknowledgment}`,
+      );
     }
     return outcome.second;
   } finally {
@@ -277,6 +365,7 @@ function launchApplication(executable, args, environment) {
   let rejectReady;
   const stages = createSecuritySmokeStageObserver();
   const primarySecondInstance = createPrimarySecondInstanceObserver();
+  const primaryAcknowledgmentFailure = createPrimaryAcknowledgmentFailureObserver();
   const ready = new Promise((resolvePromise, rejectPromise) => {
     resolveReady = resolvePromise;
     rejectReady = rejectPromise;
@@ -304,7 +393,9 @@ function launchApplication(executable, args, environment) {
     }
   });
   child.stderr.on("data", (chunk) => {
-    stderr += String(chunk);
+    const text = String(chunk);
+    primaryAcknowledgmentFailure.write(text);
+    stderr += text;
   });
   const exited = observeProcessExit(child);
   return {
@@ -313,6 +404,7 @@ function launchApplication(executable, args, environment) {
     exited,
     stages,
     primarySecondInstance,
+    primaryAcknowledgmentFailure,
     output: () => ({ stdout, stderr }),
   };
 }
@@ -340,6 +432,7 @@ export function validateReadyFrame(value) {
   );
   for (const field of [
     "hasSingleInstanceLock",
+    "visibleForSecondLaunch",
     "noNodeGlobals",
     "rpcConnected",
     "blockedOffPort",
@@ -417,52 +510,8 @@ export function validatePackagedSecondLaunch(result, privateValues) {
         ? "present"
         : "invalid";
   if (result.code === 0 && result.signal === null && markerState === "present") return result;
-  const safeCode = Number.isSafeInteger(result.code) ? String(result.code) : "unknown";
-  const allowedSignals = new Set([
-    "SIGABRT",
-    "SIGALRM",
-    "SIGBUS",
-    "SIGCHLD",
-    "SIGCONT",
-    "SIGFPE",
-    "SIGHUP",
-    "SIGILL",
-    "SIGINFO",
-    "SIGINT",
-    "SIGIO",
-    "SIGIOT",
-    "SIGKILL",
-    "SIGLOST",
-    "SIGPIPE",
-    "SIGPOLL",
-    "SIGPROF",
-    "SIGPWR",
-    "SIGQUIT",
-    "SIGSEGV",
-    "SIGSTKFLT",
-    "SIGSTOP",
-    "SIGSYS",
-    "SIGTERM",
-    "SIGTRAP",
-    "SIGTSTP",
-    "SIGTTIN",
-    "SIGTTOU",
-    "SIGURG",
-    "SIGUSR1",
-    "SIGUSR2",
-    "SIGVTALRM",
-    "SIGWINCH",
-    "SIGXCPU",
-    "SIGXFSZ",
-  ]);
-  const safeSignal =
-    result.signal === null
-      ? "none"
-      : allowedSignals.has(result.signal)
-        ? result.signal
-        : "unknown";
   throw new Error(
-    `packaged second launch failed; code=${safeCode}; signal=${safeSignal}; marker=${markerState}`,
+    `packaged second launch failed; ${formatSafeProcessTerminal(result)}; marker=${markerState}`,
   );
 }
 
@@ -601,7 +650,9 @@ export async function runWindowsPackagedSelfTest(input = {}) {
         SECOND_LAUNCH_EVIDENCE_TIMEOUT,
       ),
       primaryAcknowledgment: running.primarySecondInstance.acknowledgment,
-      primaryAcknowledgmentFailure: running.primarySecondInstance.failure,
+      primaryAcknowledgmentEvidenceFailure: running.primarySecondInstance.failure,
+      primaryAcknowledgmentWriteFailure: running.primaryAcknowledgmentFailure.failure,
+      primaryAcknowledged: running.primarySecondInstance.isAcknowledged,
       primaryExited: running.exited,
       deadline: secondDeadline,
     });

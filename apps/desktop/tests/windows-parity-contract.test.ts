@@ -150,16 +150,27 @@ describe("Windows parity automation contract", () => {
     expect(loserCall).toBeGreaterThan(loserBranch);
     const screenshotCapture = desktopMain.indexOf("initialWindow.webContents.capturePage()");
     const visibleSecurityWindow = desktopMain.indexOf("initialWindow.show();", screenshotCapture);
-    const readyFrame = desktopMain.indexOf("DESKTOP_SECURITY_READY", visibleSecurityWindow);
+    const visibleEvidence = desktopMain.indexOf(
+      "visibleForSecondLaunch: initialWindow.isVisible()",
+      visibleSecurityWindow,
+    );
+    const readyFrame = desktopMain.indexOf("DESKTOP_SECURITY_READY", visibleEvidence);
     expect(screenshotCapture).toBeGreaterThanOrEqual(0);
     expect(visibleSecurityWindow).toBeGreaterThan(screenshotCapture);
-    expect(readyFrame).toBeGreaterThan(visibleSecurityWindow);
+    expect(visibleEvidence).toBeGreaterThan(visibleSecurityWindow);
+    expect(readyFrame).toBeGreaterThan(visibleEvidence);
     const primaryAcknowledgment = desktopMain.indexOf(
       "writeSecuritySmokePrimarySecondInstance(process.stdout)",
     );
-    const primaryAcknowledgmentFailure = desktopMain.indexOf("app.exit(1)", primaryAcknowledgment);
+    const primaryAcknowledgmentFailure = desktopMain.indexOf(
+      "writeSecuritySmokePrimarySecondInstanceFailure(process.stderr)",
+      primaryAcknowledgment,
+    );
     expect(primaryAcknowledgment).toBeGreaterThanOrEqual(0);
     expect(primaryAcknowledgmentFailure).toBeGreaterThan(primaryAcknowledgment);
+    expect(
+      desktopMain.slice(primaryAcknowledgment, primaryAcknowledgmentFailure),
+    ).not.toContain("app.exit(");
     const packagedLaunchArguments = packagedSelfTest.slice(
       packagedSelfTest.indexOf("const launchArguments"),
       packagedSelfTest.indexOf("running = launchApplication"),
@@ -174,6 +185,12 @@ describe("Windows parity automation contract", () => {
       "primaryAcknowledgment: running.primarySecondInstance.acknowledgment",
     );
     expect(packagedSelfTest).toContain("primaryExited: running.exited");
+    expect(packagedSelfTest).toContain(
+      "primaryAcknowledgmentWriteFailure: running.primaryAcknowledgmentFailure.failure",
+    );
+    expect(packagedSelfTest).toContain(
+      "primaryAcknowledged: running.primarySecondInstance.isAcknowledged",
+    );
     expect(packagedSelfTest).toContain("deadline: secondDeadline");
     expect(packagedSelfTest).toContain("clearTimeout(timer)");
     const shutdownStart = desktopMain.indexOf("const shutdown = (): Promise<void> =>");

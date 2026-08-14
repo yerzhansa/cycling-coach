@@ -59,16 +59,28 @@ export function createSecuritySmokeStageObserver(): SecuritySmokeStageObserver;
 
 export interface PrimarySecondInstanceObserver {
   write(chunk: string | Buffer): void;
+  isAcknowledged(): boolean;
   readonly acknowledgment: Promise<void>;
   readonly failure: Promise<Error>;
 }
 
 export function createPrimarySecondInstanceObserver(): PrimarySecondInstanceObserver;
 
+export interface PrimaryAcknowledgmentFailureObserver {
+  write(chunk: string | Buffer): void;
+  readonly failure: Promise<Error>;
+}
+
+export function createPrimaryAcknowledgmentFailureObserver(): PrimaryAcknowledgmentFailureObserver;
+
+export function formatSafeProcessTerminal(result: ProcessExitResult): string;
+
 export function waitForPackagedSecondLaunchEvidence(input: {
   readonly second: Promise<PackagedSecondLaunchResult>;
   readonly primaryAcknowledgment: Promise<void>;
-  readonly primaryAcknowledgmentFailure: Promise<Error>;
+  readonly primaryAcknowledgmentEvidenceFailure: Promise<Error>;
+  readonly primaryAcknowledgmentWriteFailure: Promise<Error>;
+  readonly primaryAcknowledged: () => boolean;
   readonly primaryExited: Promise<ProcessExitResult>;
   readonly deadline: number;
 }): Promise<PackagedSecondLaunchResult>;
@@ -111,6 +123,7 @@ export interface PackagedReadyFrame {
   readonly url: "enduragent://app/index.html";
   readonly rpcUrl: string;
   readonly hasSingleInstanceLock: true;
+  readonly visibleForSecondLaunch: true;
   readonly bridgeKeys: readonly unknown[];
   readonly noNodeGlobals: true;
   readonly rpcConnected: true;

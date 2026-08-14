@@ -60,6 +60,7 @@ import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-confi
 import {
   waitForSecuritySmokeShutdown,
   writeSecuritySmokePrimarySecondInstance,
+  writeSecuritySmokePrimarySecondInstanceFailure,
   writeSecuritySmokeSecondInstance,
   writeSecuritySmokeShutdownStage,
   type SecuritySmokeShutdownStage,
@@ -179,7 +180,9 @@ async function runDesktop(): Promise<void> {
   app.on("second-instance", () => {
     if (process.platform === "win32") {
       if (securitySmokeMode && desktopAcceptanceHidden) {
-        void writeSecuritySmokePrimarySecondInstance(process.stdout).catch(() => app.exit(1));
+        void writeSecuritySmokePrimarySecondInstance(process.stdout).catch(() => {
+          void writeSecuritySmokePrimarySecondInstanceFailure(process.stderr).catch(() => {});
+        });
       }
       activation.request();
     } else void residency?.showMainWindow();
@@ -1036,6 +1039,7 @@ async function runDesktop(): Promise<void> {
         url: rendererResult.url,
         rpcUrl: daemonLifecycle.connection().url,
         hasSingleInstanceLock: app.hasSingleInstanceLock(),
+        visibleForSecondLaunch: initialWindow.isVisible(),
         bridgeKeys: rendererResult.bridgeKeys,
         noNodeGlobals: rendererResult.noNodeGlobals,
         rpcConnected: rendererResult.rpcConnected,

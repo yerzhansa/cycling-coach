@@ -17,8 +17,10 @@ import {
   validateSignaturePolicy,
 } from "../scripts/windows-installed-package.mjs";
 import {
+  createPrimaryAcknowledgmentFailureObserver,
   createSecuritySmokeStageObserver,
   createPrimarySecondInstanceObserver,
+  formatSafeProcessTerminal,
   observeProcessExit,
   requireRunningPrimaryBeforeSecondLaunch,
   requestPackagedShutdown,
@@ -508,6 +510,7 @@ describe("packaged primary identity", () => {
     url: "enduragent://app/index.html",
     rpcUrl: "ws://127.0.0.1:18473",
     hasSingleInstanceLock: true,
+    visibleForSecondLaunch: true,
     bridgeKeys: ["desktop"],
     noNodeGlobals: true,
     rpcConnected: true,
@@ -521,6 +524,9 @@ describe("packaged primary identity", () => {
     expect(validateReadyFrame(ready)).toBe(ready);
     expect(() => validateReadyFrame({ ...ready, hasSingleInstanceLock: false })).toThrow(
       /^packaged security assertion failed at hasSingleInstanceLock$/u,
+    );
+    expect(() => validateReadyFrame({ ...ready, visibleForSecondLaunch: false })).toThrow(
+      /^packaged security assertion failed at visibleForSecondLaunch$/u,
     );
   });
 
@@ -547,6 +553,7 @@ describe("packaged primary second-instance evidence", () => {
     observer.write("harmless\nDESKTOP_SECURITY_PRIMARY_SECOND_");
     observer.write("INSTANCE\n");
     await expect(observer.acknowledgment).resolves.toBeUndefined();
+    expect(observer.isAcknowledged()).toBe(true);
   });
 
   it.each([
@@ -573,7 +580,9 @@ describe("packaged primary second-instance evidence", () => {
     const evidence = waitForPackagedSecondLaunchEvidence({
       second: secondResult,
       primaryAcknowledgment,
-      primaryAcknowledgmentFailure: new Promise(() => {}),
+      primaryAcknowledgmentEvidenceFailure: new Promise(() => {}),
+      primaryAcknowledgmentWriteFailure: new Promise(() => {}),
+      primaryAcknowledged: () => true,
       primaryExited: new Promise(() => {}),
       deadline: performance.now() + 10_000,
     }).then((result) => {
@@ -588,21 +597,25 @@ describe("packaged primary second-instance evidence", () => {
   });
 
   it("maps primary exit code 2 and every other exit without private data", async () => {
-    for (const [result, message] of [
+    for (const [result, acknowledged, message] of [
       [
         { code: 2, signal: null },
-        "packaged Windows primary was terminated during second launch",
+        false,
+        "packaged Windows primary was terminated during second launch; code=2; signal=none; ack=absent",
       ],
       [
         { code: null, signal: "C:\\private\\signal" },
-        "packaged Windows primary exited during second launch",
+        true,
+        "packaged Windows primary exited during second launch; code=unknown; signal=unknown; ack=present",
       ],
     ] as const) {
       await expect(
         waitForPackagedSecondLaunchEvidence({
           second: new Promise(() => {}),
           primaryAcknowledgment: new Promise(() => {}),
-          primaryAcknowledgmentFailure: new Promise(() => {}),
+          primaryAcknowledgmentEvidenceFailure: new Promise(() => {}),
+          primaryAcknowledgmentWriteFailure: new Promise(() => {}),
+          primaryAcknowledged: () => acknowledged,
           primaryExited: Promise.resolve(result),
           deadline: performance.now() + 10_000,
         }),
@@ -615,9 +628,11 @@ describe("packaged primary second-instance evidence", () => {
       waitForPackagedSecondLaunchEvidence({
         second: new Promise(() => {}),
         primaryAcknowledgment: new Promise(() => {}),
-        primaryAcknowledgmentFailure: Promise.resolve(
+        primaryAcknowledgmentEvidenceFailure: Promise.resolve(
           new Error("C:\\private\\primary-acknowledgment"),
         ),
+        primaryAcknowledgmentWriteFailure: new Promise(() => {}),
+        primaryAcknowledged: () => false,
         primaryExited: new Promise(() => {}),
         deadline: performance.now() + 10_000,
       }),
@@ -629,12 +644,49 @@ describe("packaged primary second-instance evidence", () => {
       waitForPackagedSecondLaunchEvidence({
         second: Promise.resolve(second),
         primaryAcknowledgment: new Promise(() => {}),
-        primaryAcknowledgmentFailure: new Promise(() => {}),
+        primaryAcknowledgmentEvidenceFailure: new Promise(() => {}),
+        primaryAcknowledgmentWriteFailure: new Promise(() => {}),
+        primaryAcknowledged: () => false,
         primaryExited: new Promise(() => {}),
         deadline: performance.now(),
       }),
     ).rejects.toThrow(
       /^packaged Windows primary second-instance acknowledgment timed out$/u,
+    );
+  });
+
+  it("observes only the exact fixed primary acknowledgment write failure frame", async () => {
+    const observer = createPrimaryAcknowledgmentFailureObserver();
+    observer.write("private C:\\athlete\nDESKTOP_SECURITY_PRIMARY_SECOND_INSTANCE_");
+    observer.write("FAILURE\n");
+    await expect(observer.failure).resolves.toMatchObject({
+      message: "packaged Windows primary acknowledgment write failed",
+    });
+  });
+
+  it("fails immediately on the fixed primary acknowledgment write failure", async () => {
+    await expect(
+      waitForPackagedSecondLaunchEvidence({
+        second: new Promise(() => {}),
+        primaryAcknowledgment: new Promise(() => {}),
+        primaryAcknowledgmentEvidenceFailure: new Promise(() => {}),
+        primaryAcknowledgmentWriteFailure: Promise.resolve(
+          new Error("C:\\private\\ack-write"),
+        ),
+        primaryAcknowledged: () => false,
+        primaryExited: new Promise(() => {}),
+        deadline: performance.now() + 10_000,
+      }),
+    ).rejects.toThrow(/^packaged Windows primary acknowledgment write failed$/u);
+  });
+
+  it("shares one path-free process terminal formatter", () => {
+    expect(formatSafeProcessTerminal({ code: 7, signal: null })).toBe("code=7; signal=none");
+    expect(formatSafeProcessTerminal({ code: null, signal: "SIGTERM" })).toBe(
+      "code=unknown; signal=SIGTERM",
+    );
+    expect(formatSafeProcessTerminal({ code: null, signal: "C:\\private" })).toBe(
+      "code=unknown; signal=unknown",
     );
   });
 });

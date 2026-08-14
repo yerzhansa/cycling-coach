@@ -3,9 +3,11 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
   SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FRAME,
+  SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FAILURE_FRAME,
   SECURITY_SMOKE_SECOND_INSTANCE_FRAME,
   waitForSecuritySmokeShutdown,
   writeSecuritySmokePrimarySecondInstance,
+  writeSecuritySmokePrimarySecondInstanceFailure,
   writeSecuritySmokeSecondInstance,
   writeSecuritySmokeShutdownStage,
 } from "../src/main/security-smoke-shutdown.js";
@@ -145,6 +147,17 @@ describe("security smoke shutdown control", () => {
     await expect(writeSecuritySmokePrimarySecondInstance(output as never)).rejects.toThrow(
       /^security smoke primary second instance output failed$/u,
     );
+    expect(output.listenerCount("error")).toBe(0);
+  });
+
+  it("emits the exact primary acknowledgment failure frame", async () => {
+    const output = new PassThrough();
+    let source = "";
+    output.on("data", (chunk) => {
+      source += String(chunk);
+    });
+    await expect(writeSecuritySmokePrimarySecondInstanceFailure(output)).resolves.toBeUndefined();
+    expect(source).toBe(SECURITY_SMOKE_PRIMARY_SECOND_INSTANCE_FAILURE_FRAME);
     expect(output.listenerCount("error")).toBe(0);
   });
 });
