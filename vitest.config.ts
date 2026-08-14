@@ -40,7 +40,13 @@ export default defineConfig({
     // to shared-globals `threads` would silently break it.
     pool: "forks",
     isolate: true,
-    exclude: [...configDefaults.exclude, "**/.claude/**", "**/.pnpm-store/**", "**/.worktrees/**"],
+    exclude: [
+      ...configDefaults.exclude,
+      "**/.claude/**",
+      "**/.codex/worktrees/**",
+      "**/.pnpm-store/**",
+      "**/.worktrees/**",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],
@@ -64,6 +70,7 @@ export default defineConfig({
           exclude: [
             ...configDefaults.exclude,
             "**/.claude/**",
+            "**/.codex/worktrees/**",
             "**/.pnpm-store/**",
             "**/.worktrees/**",
             "**/*.test.tsx",
