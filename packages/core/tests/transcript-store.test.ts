@@ -1334,7 +1334,7 @@ describe("TranscriptStore Windows private paths", () => {
     expect(readFileSync(path, "utf8")).toBe("{not-valid-json}\n");
   });
 
-  it("rejects a malformed orphan reset temp without deleting it during recovery", () => {
+  it("removes a malformed single-link orphan reset temp during recovery", () => {
     const dataDir = makeDataDir();
     const reset = intent("corrupt-orphan-temp");
     const digest = createHash("sha256").update(reset.chatId, "utf8").digest("hex");
@@ -1342,20 +1342,8 @@ describe("TranscriptStore Windows private paths", () => {
     const store = new TranscriptStore(dataDir, { platform: "win32" });
     writeFileSync(path, "{not-valid-json}\n", { mode: 0o600 });
 
-    let failure: unknown;
-    try {
-      store.readResetIntent(reset.chatId);
-    } catch (error) {
-      failure = error;
-    }
-
-    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
-    expect(failure).toMatchObject({ stage: "read-check", category: "corruption" });
-    expect(failure).not.toHaveProperty("path");
-    expect(failure).not.toHaveProperty("cause");
-    expect(String(failure)).not.toContain(path);
-    expect(JSON.stringify(failure)).not.toContain(path);
-    expect(readFileSync(path, "utf8")).toBe("{not-valid-json}\n");
+    expect(store.readResetIntent(reset.chatId)).toBeNull();
+    expect(existsSync(path)).toBe(false);
   });
 
   it("does not swallow a Windows sharing violation during file flush", () => {
