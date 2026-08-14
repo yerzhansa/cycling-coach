@@ -516,7 +516,7 @@ describe("packaged primary identity", () => {
     noNodeGlobals: true,
     rpcConnected: true,
     blockedOffPort: true,
-    syncChipPresent: true,
+    rendererSurface: "app",
     credentialStatusesMetadataOnly: true,
     tokenAbsentInRendererSurfaces: true,
   };
@@ -529,6 +529,25 @@ describe("packaged primary identity", () => {
     expect(() => validateReadyFrame({ ...ready, visibleForSecondLaunch: false })).toThrow(
       /^packaged security assertion failed at visibleForSecondLaunch$/u,
     );
+  });
+
+  it("accepts only known packaged renderer surfaces", () => {
+    expect(validateReadyFrame({ ...ready, rendererSurface: "app" })).toMatchObject({
+      rendererSurface: "app",
+    });
+    expect(validateReadyFrame({ ...ready, rendererSurface: "setup-gate" })).toMatchObject({
+      rendererSurface: "setup-gate",
+    });
+
+    const missingRendererSurface: Record<string, unknown> = { ...ready };
+    delete missingRendererSurface.rendererSurface;
+    for (const candidate of [
+      { ...ready, rendererSurface: null },
+      { ...ready, rendererSurface: "unknown" },
+      missingRendererSurface,
+    ]) {
+      expect(() => validateReadyFrame(candidate)).toThrow(/^packaged renderer surface was invalid$/u);
+    }
   });
 
   it("rejects an exited primary before starting the second process", () => {

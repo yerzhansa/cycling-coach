@@ -520,12 +520,15 @@ export function validateReadyFrame(value) {
     "noNodeGlobals",
     "rpcConnected",
     "blockedOffPort",
-    "syncChipPresent",
     "credentialStatusesMetadataOnly",
     "tokenAbsentInRendererSurfaces",
   ]) {
     checked(value[field] === true, `packaged security assertion failed at ${field}`);
   }
+  checked(
+    value.rendererSurface === "app" || value.rendererSurface === "setup-gate",
+    "packaged renderer surface was invalid",
+  );
   checked(Array.isArray(value.bridgeKeys) && value.bridgeKeys.length > 0, "preload bridge was absent");
   return value;
 }

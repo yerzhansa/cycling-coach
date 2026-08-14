@@ -141,7 +141,7 @@ export interface PackagedReadyFrame {
   readonly noNodeGlobals: true;
   readonly rpcConnected: true;
   readonly blockedOffPort: true;
-  readonly syncChipPresent: true;
+  readonly rendererSurface: "app" | "setup-gate";
   readonly credentialStatusesMetadataOnly: true;
   readonly tokenAbsentInRendererSurfaces: true;
 }
