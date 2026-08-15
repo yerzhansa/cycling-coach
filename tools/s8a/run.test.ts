@@ -1,7 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -30,6 +32,7 @@ import type { ScenarioVerdict } from "./lib/types.js";
 
 const RUN_SCENARIO_SOURCE = readFileSync(new URL("./run-scenario.ts", import.meta.url), "utf-8");
 const RUN_SOURCE = readFileSync(new URL("./run.ts", import.meta.url), "utf-8");
+const CAPTURE_NATIVE_EXIT_URL = new URL("./capture-native-exit.mjs", import.meta.url).href;
 
 describe("scenario child stage diagnostics", () => {
   it("returns only the last exact allowlisted marker for the expected scenario", () => {
@@ -160,6 +163,7 @@ describe("scenario child stage diagnostics", () => {
       'emitScenarioStage("START", diagnosticScenario, "cleanup")',
       'emitScenarioStage("DONE", diagnosticScenario, "cleanup")',
       'emitSynchronousScenarioStage(diagnosticScenario, "exit-intent")',
+      "  restoreCapturedNativeExit();",
       "process.exit(exitCode)",
     ];
     const positions = markers.map((marker) => RUN_SCENARIO_SOURCE.indexOf(marker));
@@ -171,7 +175,15 @@ describe("scenario child stage diagnostics", () => {
       'writeSync(process.stdout.fd, `${formatScenarioStage("DONE", scenarioId, stage)}\\n`)',
     );
     expect(RUN_SCENARIO_SOURCE).not.toContain("installExitPathProbes");
-    expect(RUN_SCENARIO_SOURCE).not.toContain("reallyExit");
+    expect(RUN_SCENARIO_SOURCE).toContain(
+      'Symbol.for("enduragent.s8a.nativeReallyExit")',
+    );
+    expect(RUN_SCENARIO_SOURCE).toContain(
+      'harnessError("native exit capture is unavailable")',
+    );
+    expect(RUN_SCENARIO_SOURCE).toContain(
+      "Object.getOwnPropertyDescriptor(globalThis, NATIVE_REALLY_EXIT_KEY)",
+    );
     expect(RUN_SCENARIO_SOURCE).not.toContain("rawListeners");
     expect(RUN_SCENARIO_SOURCE).not.toContain("getEventListeners");
     expect(RUN_SCENARIO_SOURCE).not.toContain(".listeners(");
@@ -307,6 +319,7 @@ describe("child spawn env", () => {
     [AUTH_PROFILES_SOURCE_ENV]: "/operator/auth-profiles.json",
     LLM_BASE_URL: "https://stray.example",
     HISTORY_TOKEN_BUDGET_RATIO: "0.9",
+    NODE_OPTIONS: "--import=/private/operator-hook.mjs",
   };
 
   it("carries zero credentials into a codex-lane replay child", () => {
@@ -324,6 +337,7 @@ describe("child spawn env", () => {
     expect(env.LLM_API_KEY).toBeUndefined();
     expect(env.LLM_BASE_URL).toBeUndefined();
     expect(env.HISTORY_TOKEN_BUDGET_RATIO).toBeUndefined();
+    expect(env.NODE_OPTIONS).toBeUndefined();
   });
 
   it("scrubs the operator's real key on an anthropic-lane replay child", () => {
@@ -386,6 +400,16 @@ describe("scenario child process", () => {
 
     expect(outcome).toEqual({ verdict, exitCode: 1, stderr: "fixed stderr" });
     expect(spawnProcess).toHaveBeenCalledOnce();
+    expect(spawnProcess.mock.calls[0]?.[1]).toEqual([
+      "--import",
+      CAPTURE_NATIVE_EXIT_URL,
+      "--import",
+      "tsx",
+      fileURLToPath(new URL("./run-scenario.ts", import.meta.url)),
+      "--scenario=turn-basic-wellness",
+      "--mode=replay",
+      "--run-dir=/fixed/run",
+    ]);
     expect(spawnProcess.mock.calls[0]?.[2]).toMatchObject({
       timeout: 120_000,
       killSignal: "SIGKILL",
@@ -487,6 +511,71 @@ describe("scenario child process", () => {
       "S8A_CHILD START scenario=turn-basic-wellness stage=self-test-determinism-2",
       "S8A_CHILD DONE scenario=turn-basic-wellness stage=self-test-determinism-2 outcome=exit-0",
     ]);
+  });
+});
+
+describe("native exit capture", () => {
+  let fixtureDir: string;
+
+  afterEach(() => rmSync(fixtureDir, { recursive: true, force: true }));
+
+  it("runs ordinary and signal-exit hooks while bypassing a late reallyExit wrapper", () => {
+    fixtureDir = mkdtempSync(join(tmpdir(), "s8a-native-exit-test-"));
+    const fixturePath = join(fixtureDir, "fixture.mjs");
+    const signalExitUrl = pathToFileURL(
+      fileURLToPath(
+        new URL(
+          "../../node_modules/.pnpm/signal-exit@4.1.0/node_modules/signal-exit/dist/mjs/index.js",
+          import.meta.url,
+        ),
+      ),
+    ).href;
+    writeFileSync(
+      fixturePath,
+      [
+        'import { writeSync } from "node:fs";',
+        `import { onExit } from ${JSON.stringify(signalExitUrl)};`,
+        'const key = Symbol.for("enduragent.s8a.nativeReallyExit");',
+        'process.on("exit", (code) => writeSync(process.stdout.fd, `ordinary:${code}\\n`));',
+        'onExit((code) => writeSync(process.stdout.fd, `signal-exit:${code}\\n`));',
+        'process.reallyExit = () => writeSync(process.stdout.fd, "late-wrapper\\n");',
+        'const captured = globalThis[key];',
+        'if (typeof captured !== "function") process.exit(2);',
+        'process.reallyExit = captured;',
+        'process.exit(7);',
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const result = spawnSync(process.execPath, ["--import", CAPTURE_NATIVE_EXIT_URL, fixturePath], {
+      encoding: "utf-8",
+    });
+
+    expect(result.status).toBe(7);
+    expect(result.stdout).toBe("ordinary:7\nsignal-exit:7\n");
+    expect(result.stdout).not.toContain("late-wrapper");
+    expect(result.stderr).toBe("");
+  });
+
+  it.each([
+    ["missing native exit", 'process.reallyExit = undefined;'],
+    [
+      "duplicate capture",
+      'Object.defineProperty(globalThis, Symbol.for("enduragent.s8a.nativeReallyExit"), { value: () => {}, configurable: false });',
+    ],
+  ])("fails path-free when capture starts with %s", (_label, setup) => {
+    fixtureDir = mkdtempSync(join(tmpdir(), "s8a-native-exit-test-"));
+    const setupUrl = `data:text/javascript,${encodeURIComponent(setup)}`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", setupUrl, "--import", CAPTURE_NATIVE_EXIT_URL, "--eval", ""],
+      { encoding: "utf-8" },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("s8a native exit capture failed\n");
+    expect(`${result.stdout}${result.stderr}`).not.toContain(fixtureDir);
   });
 });
 

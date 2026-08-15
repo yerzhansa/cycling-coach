@@ -415,6 +415,7 @@ export function buildChildEnv(params: ChildEnvParams): Record<string, string | u
   for (const key of SCRUBBED_ENV_KNOBS) {
     delete env[key];
   }
+  delete env.NODE_OPTIONS;
   if (params.scenarioEnv?.HISTORY_TOKEN_BUDGET_RATIO === undefined) {
     delete env.HISTORY_TOKEN_BUDGET_RATIO;
   }
@@ -462,14 +463,19 @@ export async function spawnScenarioChild(
     scenarioEnv: params.scenarioEnv,
   });
 
-  const result = await spawnProcess(process.execPath, ["--import", "tsx", ...childArgs], {
-    cwd: REPO_ROOT,
-    env,
-    encoding: "utf-8",
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: 120_000,
-    killSignal: "SIGKILL",
-  });
+  const captureNativeExitUrl = pathToFileURL(join(HERE, "capture-native-exit.mjs")).href;
+  const result = await spawnProcess(
+    process.execPath,
+    ["--import", captureNativeExitUrl, "--import", "tsx", ...childArgs],
+    {
+      cwd: REPO_ROOT,
+      env,
+      encoding: "utf-8",
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 120_000,
+      killSignal: "SIGKILL",
+    },
+  );
   if (result.error?.code === "ETIMEDOUT") {
     console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=timeout`);
     const childDiagnostic = parseLastScenarioChildStage(result.stdout ?? "", safeScenarioId);

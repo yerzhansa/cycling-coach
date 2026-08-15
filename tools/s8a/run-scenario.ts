@@ -56,6 +56,11 @@ import type {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCENARIO_STAGE_EPOCH = process.hrtime.bigint();
+const NATIVE_REALLY_EXIT_KEY = Symbol.for("enduragent.s8a.nativeReallyExit");
+
+type ProcessWithReallyExit = NodeJS.Process & {
+  reallyExit: (code?: number) => never;
+};
 
 function parseArgs(argv: string[]): {
   scenario: string;
@@ -96,6 +101,20 @@ function parseArgs(argv: string[]): {
 function harnessError(message: string): never {
   console.error(`s8a harness error: ${message}`);
   process.exit(2);
+}
+
+function restoreCapturedNativeExit(): void {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, NATIVE_REALLY_EXIT_KEY);
+  if (
+    descriptor === undefined ||
+    typeof descriptor.value !== "function" ||
+    descriptor.enumerable ||
+    descriptor.writable ||
+    descriptor.configurable
+  ) {
+    harnessError("native exit capture is unavailable");
+  }
+  (process as ProcessWithReallyExit).reallyExit = descriptor.value as (code?: number) => never;
 }
 
 interface StagedCodexProfile {
@@ -337,6 +356,7 @@ async function main(): Promise<void> {
   }
 
   emitSynchronousScenarioStage(diagnosticScenario, "exit-intent");
+  restoreCapturedNativeExit();
   process.exit(exitCode);
 }
 
