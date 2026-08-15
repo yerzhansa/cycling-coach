@@ -36,16 +36,21 @@ function Get-UninstallRegistrations {
   $root = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
   $installLocation = Get-InstallLocation -Request $Request
   if (-not (Test-Path -LiteralPath $root)) { return @() }
-  $items = @(Get-ChildItem -LiteralPath $root | ForEach-Object {
-    $value = Get-ItemProperty -LiteralPath $_.PSPath
+  $items = @()
+  foreach ($item in @(Get-ChildItem -LiteralPath $root)) {
+    try {
+      $value = Get-ItemProperty -LiteralPath $item.PSPath
+    } catch [System.Management.Automation.ItemNotFoundException] {
+      continue
+    }
     $matchesIdentity =
       $value.DisplayName -eq "$($Request.productName) $($Request.version)" -or
-      $_.PSChildName -eq $Request.guid -or
-      $_.PSChildName -eq $Request.appId
+      $item.PSChildName -eq $Request.guid -or
+      $item.PSChildName -eq $Request.appId
     if ($matchesIdentity) {
-      [ordered]@{
-        keyPath = $_.Name
-        keyName = $_.PSChildName
+      $items += [ordered]@{
+        keyPath = $item.Name
+        keyName = $item.PSChildName
         displayName = $value.DisplayName
         displayVersion = $value.DisplayVersion
         installLocation = $installLocation
@@ -53,7 +58,7 @@ function Get-UninstallRegistrations {
         quietUninstallString = $value.QuietUninstallString
       }
     }
-  })
+  }
   return $items
 }
 
