@@ -4,7 +4,16 @@
 // The parent's clock is never frozen: two consecutive runs always land in
 // distinct run dirs.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -184,6 +193,55 @@ export type ScenarioChildSpawn = (
   },
 ) => ScenarioChildSpawnResult;
 
+export const spawnScenarioChildCaptured: ScenarioChildSpawn = (command, args, options) => {
+  const ioDir = mkdtempSync(join(tmpdir(), "s8a-child-io-"));
+  const stdoutPath = join(ioDir, "stdout");
+  const stderrPath = join(ioDir, "stderr");
+  let stdoutFd: number | undefined;
+  let stderrFd: number | undefined;
+  try {
+    stdoutFd = openSync(stdoutPath, "w");
+    stderrFd = openSync(stderrPath, "w");
+    const result = spawnSync(command, [...args], {
+      cwd: options.cwd,
+      env: options.env,
+      timeout: options.timeout,
+      killSignal: options.killSignal,
+      stdio: ["ignore", stdoutFd, stderrFd],
+    });
+    return {
+      stdout: readFileSync(stdoutPath, options.encoding),
+      stderr: readFileSync(stderrPath, options.encoding),
+      status: result.status,
+      error: result.error,
+    };
+  } finally {
+    if (stdoutFd !== undefined) closeSync(stdoutFd);
+    if (stderrFd !== undefined) closeSync(stderrFd);
+    rmSync(ioDir, { recursive: true, force: true });
+  }
+};
+
+export function parseScenarioChildExit(output: string): 0 | 1 | 2 | null {
+  let exitCode: 0 | 1 | 2 | null = null;
+  for (const line of output.split("\n")) {
+    const match = /^S8A_CHILD_EXIT code=([012])$/.exec(line.trimEnd());
+    if (match !== null) exitCode = Number.parseInt(match[1], 10) as 0 | 1 | 2;
+  }
+  return exitCode;
+}
+
+function parseScenarioVerdict(output: string): ScenarioVerdict | null {
+  const stdoutLines = output.split("\n").filter((line) => line.trim() !== "");
+  for (let i = stdoutLines.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(stdoutLines[i]) as ScenarioVerdict;
+      if (typeof parsed.scenario === "string" && typeof parsed.pass === "boolean") return parsed;
+    } catch {}
+  }
+  return null;
+}
+
 export interface ChildEnvParams {
   base: Record<string, string | undefined>;
   tempHome: string;
@@ -233,7 +291,7 @@ export function spawnScenarioChild(
     anthropicKey?: string;
     authProfilesSource?: string;
   },
-  spawnProcess: ScenarioChildSpawn = (command, args, options) => spawnSync(command, args, options),
+  spawnProcess: ScenarioChildSpawn = spawnScenarioChildCaptured,
 ): ChildOutcome {
   const safeScenarioId = safeScenarioDiagnosticId(params.scenarioId);
   console.log(`S8A_CHILD START scenario=${safeScenarioId} stage=${params.stage}`);
@@ -261,30 +319,30 @@ export function spawnScenarioChild(
     env,
     encoding: "utf-8",
     maxBuffer: 64 * 1024 * 1024,
-    timeout: 120_000,
+    timeout: params.mode === "replay" ? 15_000 : 120_000,
     killSignal: "SIGKILL",
   });
+  const stdout = result.stdout ?? "";
+  const verdict = parseScenarioVerdict(stdout);
   if (result.error?.code === "ETIMEDOUT") {
+    const childStage = parseLastScenarioChildStage(stdout, safeScenarioId);
+    const logicalExitCode = parseScenarioChildExit(stdout);
+    if (
+      childStage === "cleanup-done" &&
+      logicalExitCode !== null &&
+      (logicalExitCode === 2 || verdict !== null)
+    ) {
+      console.log(
+        `S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=recovered-exit-${logicalExitCode}`,
+      );
+      return { verdict, exitCode: logicalExitCode, stderr: result.stderr ?? "" };
+    }
     console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=timeout`);
-    const childStage = parseLastScenarioChildStage(result.stdout ?? "", safeScenarioId);
     return {
       verdict: null,
       exitCode: 2,
       stderr: `scenario child timed out: scenario=${safeScenarioId} stage=${params.stage} child-stage=${childStage}`,
     };
-  }
-  const stdoutLines = (result.stdout ?? "").split("\n").filter((l) => l.trim() !== "");
-  let verdict: ScenarioVerdict | null = null;
-  for (let i = stdoutLines.length - 1; i >= 0; i--) {
-    try {
-      const parsed = JSON.parse(stdoutLines[i]) as ScenarioVerdict;
-      if (typeof parsed.scenario === "string" && typeof parsed.pass === "boolean") {
-        verdict = parsed;
-        break;
-      }
-    } catch {
-      // Not the verdict line; keep scanning upward.
-    }
   }
   const exitCode = result.status ?? 2;
   console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=exit-${exitCode}`);

@@ -1,7 +1,15 @@
 // Per-scenario child entry. One fresh process per scenario: the coach home env
 // var must be set BEFORE this process imports core, because the config dir is a
 // module-level constant resolved at import time.
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -305,6 +313,7 @@ async function main(): Promise<void> {
     emitScenarioStage("DONE", diagnosticScenario, "cleanup");
   }
 
+  writeSync(process.stdout.fd, `S8A_CHILD_EXIT code=${exitCode}\n`);
   process.exit(exitCode);
 }
 
