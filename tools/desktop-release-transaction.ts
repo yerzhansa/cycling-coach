@@ -134,6 +134,7 @@ export type NpmProvenanceBundleVerifier = (
 const desktopVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const npmVersionPattern = /^([1-9]\d{3})\.([1-9]|1[0-2])\.(0|[1-9]\d*)$/u;
 const desktopTagPrefix = "enduragent-desktop@";
+export const DESKTOP_STABLE_DMG_NAME = "Enduragent-arm64.dmg";
 const legacyDesktopBaselineTag = "cycling-coach@2026.8.8";
 const legacyDesktopBaselineVersion = "0.1.0";
 const commitPattern = /^[0-9a-f]{40}$/u;
@@ -1256,9 +1257,21 @@ function desktopReleaseVersion(release: GithubRelease, excludingTag?: string): s
   if (versions.length !== 1 || versions[0] !== tagVersion) return null;
   const version = versions[0];
   const expected = [...releaseFileNames(version)].sort();
-  const actual = release.assets.map((asset) => asset.name).sort();
-  return actual.length === expected.length &&
-    actual.every((name, index) => name === expected[index])
+  const actual = release.assets
+    .filter((asset) => asset.name !== DESKTOP_STABLE_DMG_NAME)
+    .map((asset) => asset.name)
+    .sort();
+  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
+    return null;
+  }
+  const stableDmg = release.assets.find((asset) => asset.name === DESKTOP_STABLE_DMG_NAME);
+  if (!stableDmg) return version;
+  const versionedDmg = release.assets.find((asset) => asset.name === releaseFileNames(version)[0]);
+  return versionedDmg &&
+    stableDmg.state === "uploaded" &&
+    stableDmg.size === versionedDmg.size &&
+    stableDmg.digest !== null &&
+    stableDmg.digest === versionedDmg.digest
     ? version
     : null;
 }
