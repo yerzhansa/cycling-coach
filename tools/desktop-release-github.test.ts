@@ -9,6 +9,7 @@ import {
   DESKTOP_FEED_URL,
   DESKTOP_MANIFEST,
   DESKTOP_PROVISIONAL_RELEASE_BODY,
+  DESKTOP_STABLE_DMG_NAME,
   GithubClient,
   activateDesktopRelease,
   compensateDesktopRelease,
@@ -1396,6 +1397,59 @@ describe("GitHub desktop release transaction", () => {
     expect(readFileSync(output, "utf8")).toContain("baseline_tag=cycling-coach@2026.8.8");
     expect(readFileSync(output, "utf8")).toContain("baseline_version=0.1.0");
     expect(readdirSync(target).sort()).toEqual([...releaseFileNames("0.1.0")].sort());
+  });
+
+  it("accepts a stable DMG alias only when it matches the versioned release asset", async () => {
+    const accepted = new FakeGithub();
+    const acceptedCandidate = await steadyCandidate(accepted);
+    const acceptedDmg = acceptedCandidate.baseline.assets.find((asset) =>
+      asset.name.endsWith("-arm64.dmg"),
+    )!;
+    accepted.addAsset(
+      acceptedCandidate.baseline,
+      DESKTOP_STABLE_DMG_NAME,
+      accepted.bytes.get(acceptedDmg.url)!,
+    );
+    const acceptedOutputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
+    const acceptedTarget = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
+    directories.push(acceptedOutputDirectory, acceptedTarget);
+    const acceptedOutput = join(acceptedOutputDirectory, "output");
+    writeFileSync(acceptedOutput, "");
+
+    await prepareDesktopBaseline(
+      acceptedTarget,
+      accepted.client(),
+      "steady",
+      candidateTag,
+      candidateVersion,
+      acceptedCandidate.baseline.tag_name,
+      acceptedOutput,
+    );
+
+    const rejected = new FakeGithub();
+    const rejectedCandidate = await steadyCandidate(rejected);
+    rejected.addAsset(
+      rejectedCandidate.baseline,
+      DESKTOP_STABLE_DMG_NAME,
+      Buffer.from("wrong-dmg"),
+    );
+    const rejectedOutputDirectory = mkdtempSync(join(tmpdir(), "desktop-baseline-output-"));
+    const rejectedTarget = mkdtempSync(join(tmpdir(), "desktop-baseline-target-"));
+    directories.push(rejectedOutputDirectory, rejectedTarget);
+    const rejectedOutput = join(rejectedOutputDirectory, "output");
+    writeFileSync(rejectedOutput, "");
+
+    await expect(
+      prepareDesktopBaseline(
+        rejectedTarget,
+        rejected.client(),
+        "steady",
+        candidateTag,
+        candidateVersion,
+        rejectedCandidate.baseline.tag_name,
+        rejectedOutput,
+      ),
+    ).rejects.toThrow("desktop baseline");
   });
 
   it.each([
