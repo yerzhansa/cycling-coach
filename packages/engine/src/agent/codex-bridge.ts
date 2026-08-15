@@ -3,6 +3,7 @@ import type { FinishReason, LanguageModelUsage, ModelMessage, ToolSet } from "ai
 
 import type { FailureReason } from "../host-ports.js";
 import type { GenerateOpts, GenerateResult } from "../llm-types.js";
+import { markProviderAuthFailure } from "../provider-auth-failure.js";
 import { codexResponses } from "./codex/responses.js";
 import type {
   CodexResponsesResult,
@@ -13,6 +14,7 @@ import type {
 import { PRICE_TABLE, priceUsage } from "./codex/cost.js";
 
 const DEFAULT_STEP_LIMIT = 10;
+const MAX_AUTH_REFRESH_ATTEMPTS = 1;
 
 const SERVER_ERROR_HTTP_STATUSES = new Set([500, 502, 503, 504]);
 
@@ -50,6 +52,9 @@ export function normalizeError(
   // A transient 5xx must take the short server-error backoff, not the rate-limit
   // ramp — split it out before the rate-limit pattern.
   const status = carried.httpStatus;
+  if (status === 401 || status === 403) {
+    return markProviderAuthFailure(err);
+  }
   if (status !== undefined && SERVER_ERROR_HTTP_STATUSES.has(status)) {
     const out = new Error(`Server error: ${msg}`) as Error & { retryAfterMs?: number };
     out.name = "ServerError";
@@ -241,7 +246,11 @@ export async function codexGenerateText(
     stepLimit?: number;
   },
   ports: {
-    getAccessToken: (profileName: string, signal?: AbortSignal) => Promise<string>;
+    getAccessToken: (
+      profileName: string,
+      signal?: AbortSignal,
+      rejectedAccessToken?: string,
+    ) => Promise<string>;
     classifyFailure: (error: unknown) => FailureReason;
   },
 ): Promise<GenerateResult> {
@@ -265,11 +274,8 @@ export async function codexGenerateText(
 
   const limit = stepLimit ?? DEFAULT_STEP_LIMIT;
 
-  // Fetch the token once per request. The step loop runs well within the
-  // 5-minute refresh threshold, so a refresh mid-loop is not a concern.
-  // Thread the per-call signal so a stalled token endpoint is bounded by the
-  // same deadline as the request rather than hanging the turn.
-  const accessToken = await getAccessToken(profileName, signal);
+  let accessToken = await getAccessToken(profileName, signal);
+  let authRefreshAttempts = 0;
 
   const toToolCallPart = (tc: CodexToolCall) => ({
     type: "tool-call" as const,
@@ -285,18 +291,27 @@ export async function codexGenerateText(
 
   for (let step = 0; step < limit; step++) {
     let result: CodexResponsesResult;
-    try {
-      result = await codexResponses({
-        modelId,
-        system,
-        messages: convo,
-        tools,
-        accessToken,
-        sessionId: cacheKey,
-        signal,
-      });
-    } catch (err) {
-      throw normalizeError(err, classifyFailure);
+    while (true) {
+      try {
+        result = await codexResponses({
+          modelId,
+          system,
+          messages: convo,
+          tools,
+          accessToken,
+          sessionId: cacheKey,
+          signal,
+        });
+        break;
+      } catch (err) {
+        const status = (err as { httpStatus?: unknown } | null)?.httpStatus;
+        if (status === 401 && authRefreshAttempts < MAX_AUTH_REFRESH_ATTEMPTS) {
+          authRefreshAttempts++;
+          accessToken = await getAccessToken(profileName, signal, accessToken);
+          continue;
+        }
+        throw normalizeError(err, classifyFailure);
+      }
     }
 
     if (result.stopReason === "error") {

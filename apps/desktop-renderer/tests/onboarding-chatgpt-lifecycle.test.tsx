@@ -1,6 +1,10 @@
 import { act, fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ONBOARDING_STATUS_COLD_START_TIMEOUT_MS,
+  ONBOARDING_STATUS_RETRY_BASE_DELAY_MS,
+} from "../src/onboarding/controller.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import {
   chooseLane,
@@ -298,13 +302,13 @@ describe("ChatGPT onboarding lifecycle", () => {
     await act(async () => {
       const opening = wizard.controller.open();
       await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.advanceTimersByTimeAsync(
+        ONBOARDING_STATUS_COLD_START_TIMEOUT_MS + ONBOARDING_STATUS_RETRY_BASE_DELAY_MS,
+      );
       await opening;
     });
     expect(wizard.controller.state().chatGptCredentialState).toBe("absent");
-    expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(true);
-
-    await act(async () => wizard.controller.refresh());
+    expect(bridge.chatGptStatus).toHaveBeenCalledTimes(2);
     expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(false);
 
     await act(async () => {

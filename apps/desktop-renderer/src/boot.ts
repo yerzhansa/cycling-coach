@@ -30,7 +30,7 @@ import { createUpdateSettingsAdapter } from "./state/adapters/update.js";
 import { credentialDrafts } from "./state/credential-drafts.js";
 import { restoreManualSyncFocus } from "./state/manual-sync-focus.js";
 import { useEnduragentStore, type EnduragentState } from "./state/store.js";
-import { setupBlocked, setupReady } from "./state/onboarding-slice.js";
+import { setupReady, setupSurfaceOnScreen } from "./state/onboarding-slice.js";
 import { nonTelegramSettingsMutationActive } from "./state/settings-slice.js";
 import { validateImportPaths, type OnboardingBridge } from "./onboarding/bridge.js";
 import { createOnboardingCompletionController } from "./onboarding/completion.js";
@@ -299,10 +299,7 @@ export function bootRenderer(): Disposer {
       store.getState().setRideImportSuppressed(presenting),
     focusOpener: () => {},
     onComplete: (completion) => onboardingCompletion.complete(completion),
-    ownsDroppedImportFiles: () => {
-      const state = store.getState();
-      return setupBlocked(state) || state.activeView === "settings";
-    },
+    ownsDroppedImportFiles: () => setupSurfaceOnScreen(store.getState()),
     credentialMutationsBlocked: () => onboardingCredentialMutationsBlocked(store.getState()),
     codexAgentSupported: platform.capabilities.codexAgent,
   });

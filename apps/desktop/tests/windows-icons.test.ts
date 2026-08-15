@@ -68,11 +68,14 @@ describe("Windows icon generation", () => {
     });
   });
 
-  it("keeps the runtime login value name aligned with the uninstall hook", async () => {
+  it("keeps the runtime login value names aligned with the uninstall hook", async () => {
     const installer = await readFile(join(desktopRoot, "build", "installer.nsh"), "utf8");
 
     expect(installer).toContain(
       `DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "${DESKTOP_APP_USER_MODEL_ID}"`,
+    );
+    expect(installer).toContain(
+      `DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run" "${DESKTOP_APP_USER_MODEL_ID}"`,
     );
   });
 

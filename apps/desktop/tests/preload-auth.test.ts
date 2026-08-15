@@ -60,6 +60,7 @@ interface AuthBridge {
   claudeCliStatus(): Promise<unknown>;
   claudeCliRecheck(): Promise<unknown>;
   telegramStatus(): Promise<unknown>;
+  setAppearance(appearance: "system" | "light" | "dark"): void;
   pasteIntervalsApiKeyFromClipboard(): Promise<unknown>;
   pasteTelegramTokenFromClipboard(): Promise<unknown>;
   enableTelegram(): Promise<unknown>;
@@ -73,6 +74,7 @@ interface AuthBridge {
   addTelegramAllowedSender(input: unknown): Promise<unknown>;
   removeTelegramAllowedSender(input: unknown): Promise<unknown>;
   acknowledgeTelegramGapWarning(): Promise<unknown>;
+  chooseImportFiles(): Promise<readonly string[]>;
   exportTrainingFile(input: unknown): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
@@ -266,11 +268,35 @@ describe("desktop preload ChatGPT auth", () => {
         "removeTelegramWebhook",
         "restartToUpdate",
         "retryFailedCredentials",
+        "setAppearance",
         "telegramStatus",
         "writeCredential",
       ].sort(),
     );
     expect(bridge).not.toHaveProperty("openExternal");
+  });
+
+  it("sends only the three supported appearances to the main process", () => {
+    bridge.setAppearance("system");
+    bridge.setAppearance("light");
+    bridge.setAppearance("dark");
+
+    expect(mocks.send.mock.calls).toEqual([
+      ["desktop:set-appearance", "system"],
+      ["desktop:set-appearance", "light"],
+      ["desktop:set-appearance", "dark"],
+    ]);
+  });
+
+  it("refuses an appearance outside the three supported values", () => {
+    for (const value of ["Dark", "auto", "", " dark", 1, null, undefined, { appearance: "dark" }]) {
+      expect(() => bridge.setAppearance(value as never)).toThrow(TypeError);
+    }
+    expect(() => (bridge.setAppearance as (...args: unknown[]) => void)("dark", "extra")).toThrow(
+      TypeError,
+    );
+
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it("keeps the release-gate smoke bridge list byte-equal to the sorted public bridge", () => {
@@ -306,6 +332,29 @@ describe("desktop preload ChatGPT auth", () => {
     await expect(bridge.exportTrainingFile(request)).rejects.toBeInstanceOf(TypeError);
     mocks.invoke.mockResolvedValue({ status: "refused", reason: "private-provider-detail" });
     await expect(bridge.exportTrainingFile(request)).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("accepts platform-absolute import paths and validates uppercase extensions", async () => {
+    const paths = [
+      "C:\\x\\ride.FIT",
+      "C:/x/second-ride.gpx",
+      "\\\\server\\share\\ride.gpx",
+      "/home/x/ride.tcx",
+    ] as const;
+    mocks.invoke.mockResolvedValue(paths);
+
+    await expect(bridge.chooseImportFiles()).resolves.toEqual(paths);
+    expect(mocks.invoke).toHaveBeenCalledWith("enduragent:onboarding:choose-import-files");
+  });
+
+  it.each([
+    ["a bad extension", ["/home/x/ride.txt"]],
+    ["duplicate paths", ["/home/x/ride.fit", "/home/x/ride.fit"]],
+    ["more than 256 paths", Array.from({ length: 257 }, (_, index) => `/home/x/ride-${index}.fit`)],
+  ])("rejects import results with %s", async (_case, paths) => {
+    mocks.invoke.mockResolvedValue(paths);
+
+    await expect(bridge.chooseImportFiles()).rejects.toBeInstanceOf(TypeError);
   });
 
   it("accepts closed workout archive ranges and rejects inverted ranges", async () => {

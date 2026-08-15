@@ -2,6 +2,7 @@ import type { CoachClient } from "@enduragent/coach-client";
 import { CoachClientDisconnectedError, connectCoachClient } from "@enduragent/coach-client";
 import {
   ImportFilesRpcParamsSchema,
+  PlatformAbsolutePathSchema,
   SaveIntakeRpcParamsSchema,
   type GetSetupStatusRpcResult,
   type CoachOperationProgressNotificationEnvelope,
@@ -205,7 +206,7 @@ export interface DesktopOnboardingAuth {
 }
 
 function extension(path: string): string {
-  const slash = path.lastIndexOf("/");
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   const dot = path.lastIndexOf(".");
   return dot > slash ? path.slice(dot).toLowerCase() : "";
 }
@@ -216,8 +217,7 @@ export function validateImportPaths(paths: readonly string[]): readonly string[]
     normalized.some(
       (path) =>
         typeof path !== "string" ||
-        !path.startsWith("/") ||
-        path.includes("\0") ||
+        !PlatformAbsolutePathSchema.safeParse(path).success ||
         !(SUPPORTED_IMPORT_EXTENSIONS as readonly string[]).includes(extension(path)),
     )
   ) {

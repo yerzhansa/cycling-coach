@@ -9,6 +9,7 @@ import type {
 } from "@enduragent/coach-contract";
 import { useEffect, useLayoutEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { rideImportStatusCopy } from "../../ride-import.js";
+import { rideImportStatusSuppressed } from "../../state/onboarding-slice.js";
 import {
   setManualSyncFocusFallback,
   setManualSyncFocusTarget,
@@ -278,7 +279,7 @@ function WellnessPanel(props: { readonly panel: WellnessTrendPanel }): ReactElem
 
 function RideImportPanel(): ReactElement {
   const state = useEnduragentStore((store) => store.rideImport);
-  const suppressed = useEnduragentStore((store) => store.rideImportSuppressed);
+  const suppressed = useEnduragentStore(rideImportStatusSuppressed);
   const actions = useEnduragentStore((store) => store.rideImportActions);
   const copy = suppressed ? "" : rideImportStatusCopy(state);
   const progress = state.status === "running" ? state.progress : null;

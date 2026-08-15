@@ -145,8 +145,10 @@ export async function runWindowsPackage(input = {}, dependencies = {}) {
     dependencies.verifyWindowsPackage ??
     (await import("./verify-windows-package.mjs")).verifyWindowsPackage;
   dependencies.reportStage?.("package-verification");
-  await verifyWindowsPackage(plan.artifactPath, { desktopRoot: plan.builderOptions.projectDir });
-  return Object.freeze({ artifacts, plan });
+  const evidence = await verifyWindowsPackage(plan.artifactPath, plan.applicationPath, {
+    desktopRoot: plan.builderOptions.projectDir,
+  });
+  return Object.freeze({ artifacts: Object.freeze([...artifacts]), evidence, plan });
 }
 
 async function main() {

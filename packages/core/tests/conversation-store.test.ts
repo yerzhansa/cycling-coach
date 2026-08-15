@@ -71,30 +71,56 @@ function seedSession(store: ChatStore, chatId: string): void {
   store.appendTurn(chatId, "athlete", "coach", LINEAGE);
 }
 
-function resetArchives(dataDir: string, chatId: string): string[] {
+function sessionName(chatId: string, platform = process.platform): string {
+  return platform === "win32" ? createHash("sha256").update(chatId, "utf8").digest("hex") : chatId;
+}
+
+function sessionPath(dataDir: string, chatId: string, platform = process.platform): string {
+  return join(dataDir, "sessions", `${sessionName(chatId, platform)}.jsonl`);
+}
+
+function resetArchives(dataDir: string, chatId: string, platform = process.platform): string[] {
   return readdirSync(join(dataDir, "sessions")).filter((name) =>
-    name.startsWith(`${chatId}.jsonl.reset.`),
+    name.startsWith(`${sessionName(chatId, platform)}.jsonl.reset.`),
   );
 }
 
 function windowsSessionPath(dataDir: string, chatId: string): string {
-  const digest = createHash("sha256").update(chatId, "utf8").digest("hex");
-  return join(dataDir, "sessions", `${digest}.jsonl`);
+  return sessionPath(dataDir, chatId, "win32");
 }
 
 function windowsResetArchives(dataDir: string, chatId: string): string[] {
-  const digest = createHash("sha256").update(chatId, "utf8").digest("hex");
-  return readdirSync(join(dataDir, "sessions")).filter((name) =>
-    name.startsWith(`${digest}.jsonl.reset.`),
-  );
+  return resetArchives(dataDir, chatId, "win32");
 }
 
-function resetArchivePath(dataDir: string, reset: ResetIntentRecord): string {
+function resetArchivePath(
+  dataDir: string,
+  reset: ResetIntentRecord,
+  platform = process.platform,
+): string {
   return join(
     dataDir,
     "sessions",
-    `${reset.chatId}.jsonl.reset.${reset.boundaryAt.replace(/:/g, "-")}.${reset.resetId}`,
+    `${sessionName(reset.chatId, platform)}.jsonl.reset.${reset.boundaryAt.replace(/:/g, "-")}.${reset.resetId}`,
   );
+}
+
+function boundaryLine(reset: ResetIntentRecord): Buffer {
+  return Buffer.from(
+    JSON.stringify({
+      version: 1,
+      kind: "conversation-boundary",
+      resetId: reset.resetId,
+      chatId: reset.chatId,
+      boundaryAt: reset.boundaryAt,
+      reason: reset.reason,
+    }),
+    "utf8",
+  );
+}
+
+function platformError(message: string): string | typeof WindowsPrivatePathPolicyError {
+  return process.platform === "win32" ? WindowsPrivatePathPolicyError : message;
 }
 
 function boundaryCount(dataDir: string, chatId: string, resetId = RESET_ID): number {
@@ -329,7 +355,7 @@ describe("ConversationStore reset transaction recovery", () => {
     seedSession(chat, reset.chatId);
     transcript.createResetIntent(reset);
     transcript.ensureConversationBoundary(reset);
-    const active = join(dataDir, "sessions", `${reset.chatId}.jsonl`);
+    const active = sessionPath(dataDir, reset.chatId);
     const archive = resetArchivePath(dataDir, reset);
     linkSync(active, archive);
     expect(lstatSync(active).nlink).toBe(2);
@@ -431,7 +457,7 @@ describe("ConversationStore reset transaction recovery", () => {
         boundaryAt: "2026-07-22T01:02:03.000Z",
         reason: "explicit-reset",
       }),
-    ).toThrow("Transcript append was incomplete.");
+    ).toThrow(platformError("Transcript append was incomplete."));
     expect(chat.hasSession(chatId)).toBe(true);
     expect(transcript.readResetIntent(chatId)).toBeNull();
     expect(boundaryCount(dataDir, chatId)).toBe(0);
@@ -468,7 +494,7 @@ describe("ConversationStore reset transaction recovery", () => {
         boundaryAt: "2026-07-22T01:02:03.000Z",
         reason: "explicit-reset",
       }),
-    ).toThrow("Transcript append was incomplete.");
+    ).toThrow(platformError("Transcript append was incomplete."));
     expect(chat.hasSession(chatId)).toBe(true);
     expect(transcript.readResetIntent(chatId)).not.toBeNull();
     expect(boundaryCount(dataDir, chatId)).toBe(0);
@@ -514,7 +540,7 @@ describe("ConversationStore reset transaction recovery", () => {
         boundaryAt: "2026-07-22T01:02:03.000Z",
         reason: "explicit-reset",
       }),
-    ).toThrow("Transcript append was incomplete.");
+    ).toThrow(platformError("Transcript append was incomplete."));
     expect(() => store.load(chatId)).toThrow(ConversationRecoveryError);
 
     expect(chat.hasSession(chatId)).toBe(true);
@@ -545,7 +571,7 @@ describe("ConversationStore reset transaction recovery", () => {
         boundaryAt: "2026-07-22T01:02:03.000Z",
         reason: "explicit-reset",
       }),
-    ).toThrow("synthetic archive failure");
+    ).toThrow(platformError("synthetic archive failure"));
     expect(chat.hasSession(chatId)).toBe(true);
     expect(transcript.readResetIntent(chatId)).not.toBeNull();
     expect(boundaryCount(dataDir, chatId)).toBe(1);
@@ -575,7 +601,7 @@ describe("ConversationStore reset transaction recovery", () => {
         boundaryAt: reset.boundaryAt,
         reason: reset.reason,
       }),
-    ).toThrow("Transcript contains duplicate reset boundaries.");
+    ).toThrow(platformError("Transcript contains duplicate reset boundaries."));
     expect(transcript.readResetIntent(chatId)).toEqual(reset);
     expect(chat.hasSession(chatId)).toBe(true);
     expect(() => store.load(chatId)).toThrow(ConversationRecoveryError);
@@ -603,7 +629,7 @@ describe("ConversationStore reset transaction recovery", () => {
         boundaryAt: "2026-07-22T01:02:03.000Z",
         reason: "explicit-reset",
       }),
-    ).toThrow("synthetic boundary fsync failure");
+    ).toThrow(platformError("synthetic boundary fsync failure"));
     expect(chat.hasSession(chatId)).toBe(true);
     expect(transcript.readResetIntent(chatId)).not.toBeNull();
     expect(boundaryCount(dataDir, chatId)).toBe(1);
@@ -614,91 +640,97 @@ describe("ConversationStore reset transaction recovery", () => {
     expect(fileSyncs).toBe(3);
   });
 
-  it("retries boundary directory fsync before removing a retained intent", () => {
-    const dataDir = makeDataDir();
-    new TranscriptStore(dataDir);
-    let directorySyncs = 0;
-    const transcript = new TranscriptStore(dataDir, {
-      syncDirectory: (descriptor) => {
-        directorySyncs += 1;
-        if (directorySyncs === 3) {
-          throw new Error("synthetic boundary directory sync failure");
-        }
-        fsyncSync(descriptor);
-      },
-    });
-    const originalRemove = transcript.removeResetIntent.bind(transcript);
-    let directorySyncsAtRemoval = 0;
-    vi.spyOn(transcript, "removeResetIntent").mockImplementation((reset) => {
-      directorySyncsAtRemoval = directorySyncs;
-      originalRemove(reset);
-    });
-    const chat = new ChatStore(dataDir);
-    const store = new ConversationStore(chat, transcript, () => RESET_ID);
-    const chatId = "boundary-directory-sync-failure";
-    seedSession(chat, chatId);
+  it.skipIf(process.platform === "win32")(
+    "retries boundary directory fsync before removing a retained intent",
+    () => {
+      const dataDir = makeDataDir();
+      new TranscriptStore(dataDir);
+      let directorySyncs = 0;
+      const transcript = new TranscriptStore(dataDir, {
+        syncDirectory: (descriptor) => {
+          directorySyncs += 1;
+          if (directorySyncs === 3) {
+            throw new Error("synthetic boundary directory sync failure");
+          }
+          fsyncSync(descriptor);
+        },
+      });
+      const originalRemove = transcript.removeResetIntent.bind(transcript);
+      let directorySyncsAtRemoval = 0;
+      vi.spyOn(transcript, "removeResetIntent").mockImplementation((reset) => {
+        directorySyncsAtRemoval = directorySyncs;
+        originalRemove(reset);
+      });
+      const chat = new ChatStore(dataDir);
+      const store = new ConversationStore(chat, transcript, () => RESET_ID);
+      const chatId = "boundary-directory-sync-failure";
+      seedSession(chat, chatId);
 
-    expect(() =>
-      store.resetConversation({
-        chatId,
-        boundaryAt: "2026-07-22T01:02:03.000Z",
-        reason: "explicit-reset",
-      }),
-    ).toThrow("synthetic boundary directory sync failure");
-    expect(boundaryCount(dataDir, chatId)).toBe(1);
-    expect(transcript.readResetIntent(chatId)).not.toBeNull();
-    expect(directorySyncs).toBe(3);
+      expect(() =>
+        store.resetConversation({
+          chatId,
+          boundaryAt: "2026-07-22T01:02:03.000Z",
+          reason: "explicit-reset",
+        }),
+      ).toThrow("synthetic boundary directory sync failure");
+      expect(boundaryCount(dataDir, chatId)).toBe(1);
+      expect(transcript.readResetIntent(chatId)).not.toBeNull();
+      expect(directorySyncs).toBe(3);
 
-    expect(store.load(chatId).messages).toEqual([]);
+      expect(store.load(chatId).messages).toEqual([]);
 
-    expect(directorySyncsAtRemoval).toBe(4);
-    expect(directorySyncs).toBe(5);
-    expect(transcript.readResetIntent(chatId)).toBeNull();
-    expect(chat.hasSession(chatId)).toBe(false);
-  });
+      expect(directorySyncsAtRemoval).toBe(4);
+      expect(directorySyncs).toBe(5);
+      expect(transcript.readResetIntent(chatId)).toBeNull();
+      expect(chat.hasSession(chatId)).toBe(false);
+    },
+  );
 
-  it("retries the sessions directory fsync after unlink before removing the intent", () => {
-    const dataDir = makeDataDir();
-    let directorySyncs = 0;
-    const chat = createChatStoreWithHooks(dataDir, 0, {
-      syncDirectory: (descriptor) => {
-        directorySyncs += 1;
-        if (directorySyncs === 2) {
-          throw new Error("synthetic post-unlink directory sync failure");
-        }
-        fsyncSync(descriptor);
-      },
-    });
-    const transcript = new TranscriptStore(dataDir);
-    const originalRemove = transcript.removeResetIntent.bind(transcript);
-    let sessionsSyncsAtRemoval = 0;
-    vi.spyOn(transcript, "removeResetIntent").mockImplementation((reset) => {
-      sessionsSyncsAtRemoval = directorySyncs;
-      originalRemove(reset);
-    });
-    const store = new ConversationStore(chat, transcript, () => RESET_ID);
-    const chatId = "session-directory-retry";
-    seedSession(chat, chatId);
+  it.skipIf(process.platform === "win32")(
+    "retries the sessions directory fsync after unlink before removing the intent",
+    () => {
+      const dataDir = makeDataDir();
+      let directorySyncs = 0;
+      const chat = createChatStoreWithHooks(dataDir, 0, {
+        syncDirectory: (descriptor) => {
+          directorySyncs += 1;
+          if (directorySyncs === 2) {
+            throw new Error("synthetic post-unlink directory sync failure");
+          }
+          fsyncSync(descriptor);
+        },
+      });
+      const transcript = new TranscriptStore(dataDir);
+      const originalRemove = transcript.removeResetIntent.bind(transcript);
+      let sessionsSyncsAtRemoval = 0;
+      vi.spyOn(transcript, "removeResetIntent").mockImplementation((reset) => {
+        sessionsSyncsAtRemoval = directorySyncs;
+        originalRemove(reset);
+      });
+      const store = new ConversationStore(chat, transcript, () => RESET_ID);
+      const chatId = "session-directory-retry";
+      seedSession(chat, chatId);
 
-    expect(() =>
-      store.resetConversation({
-        chatId,
-        boundaryAt: "2026-07-22T01:02:03.000Z",
-        reason: "explicit-reset",
-      }),
-    ).toThrow("synthetic post-unlink directory sync failure");
-    expect(chat.hasSession(chatId)).toBe(false);
-    expect(resetArchives(dataDir, chatId)).toHaveLength(1);
-    expect(transcript.readResetIntent(chatId)).not.toBeNull();
-    expect(directorySyncs).toBe(2);
+      expect(() =>
+        store.resetConversation({
+          chatId,
+          boundaryAt: "2026-07-22T01:02:03.000Z",
+          reason: "explicit-reset",
+        }),
+      ).toThrow("synthetic post-unlink directory sync failure");
+      expect(chat.hasSession(chatId)).toBe(false);
+      expect(resetArchives(dataDir, chatId)).toHaveLength(1);
+      expect(transcript.readResetIntent(chatId)).not.toBeNull();
+      expect(directorySyncs).toBe(2);
 
-    expect(store.load(chatId).messages).toEqual([]);
+      expect(store.load(chatId).messages).toEqual([]);
 
-    expect(sessionsSyncsAtRemoval).toBe(3);
-    expect(directorySyncs).toBe(3);
-    expect(transcript.readResetIntent(chatId)).toBeNull();
-    expect(resetArchives(dataDir, chatId)).toHaveLength(1);
-  });
+      expect(sessionsSyncsAtRemoval).toBe(3);
+      expect(directorySyncs).toBe(3);
+      expect(transcript.readResetIntent(chatId)).toBeNull();
+      expect(resetArchives(dataDir, chatId)).toHaveLength(1);
+    },
+  );
 
   it("keeps completed-turn transcript bytes stable across ChatStore compaction mutations", () => {
     const dataDir = makeDataDir();
@@ -762,6 +794,213 @@ describe("ConversationStore reset transaction recovery", () => {
 });
 
 describe("ConversationStore Windows restart recovery", () => {
+  it("removes an unparseable orphan reset temp on simulated Windows", () => {
+    const dataDir = makeDataDir();
+    const chat = new ChatStore(dataDir, 0, { platform: "win32" });
+    const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+    const reset = resetIntent("telegram:synthetic-orphan-temp");
+    seedSession(chat, reset.chatId);
+    const temp = intentTempPath(dataDir, reset.chatId, reset.resetId);
+    writeFileSync(temp, '{"version":1', { mode: 0o600 });
+
+    const recovered = new ConversationStore(chat, transcript);
+
+    expect(existsSync(temp)).toBe(false);
+    expect(recovered.hasSession(reset.chatId)).toBe(true);
+    expect(windowsResetArchives(dataDir, reset.chatId)).toHaveLength(0);
+  });
+
+  it("rejects a hardlinked orphan reset temp on simulated Windows", () => {
+    const dataDir = makeDataDir();
+    const chat = new ChatStore(dataDir, 0, { platform: "win32" });
+    const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+    const reset = resetIntent("telegram:synthetic-linked-orphan");
+    const temp = intentTempPath(dataDir, reset.chatId, reset.resetId);
+    const alias = join(dataDir, "synthetic-reset-temp-alias");
+    writeFileSync(temp, '{"version":1', { mode: 0o600 });
+    linkSync(temp, alias);
+
+    expect(() => new ConversationStore(chat, transcript)).toThrow(WindowsPrivatePathPolicyError);
+    expect(existsSync(temp)).toBe(true);
+    expect(existsSync(alias)).toBe(true);
+  });
+
+  it("recovers only an exact pending boundary prefix on simulated Windows", () => {
+    const dataDir = makeDataDir();
+    const chat = new ChatStore(dataDir, 0, { platform: "win32" });
+    const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+    const reset = resetIntent("telegram:synthetic-torn-boundary");
+    seedSession(chat, reset.chatId);
+    transcript.createResetIntent(reset);
+    transcript.appendCompletedTurn({
+      chatId: reset.chatId,
+      turnId: "old-turn",
+      completedAt: "2026-07-22T00:00:00.000Z",
+      athleteText: "old athlete",
+      coachText: "old coach",
+    });
+    const canonical = boundaryLine(reset);
+    appendFileSync(
+      transcriptPath(dataDir, reset.chatId),
+      canonical.subarray(0, Math.floor(canonical.length / 2)),
+    );
+
+    const recovered = new ConversationStore(chat, transcript);
+
+    expect(recovered.hasSession(reset.chatId)).toBe(false);
+    expect(transcript.readResetIntent(reset.chatId)).toBeNull();
+    expect(boundaryCount(dataDir, reset.chatId)).toBe(1);
+    expect(transcript.readCurrentConversation(reset.chatId)).toEqual([]);
+    expect(windowsResetArchives(dataDir, reset.chatId)).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "an unfenced canonical prefix",
+      (reset: ResetIntentRecord) => boundaryLine(reset).subarray(0, 7),
+    ],
+    ["an arbitrary malformed tail", () => Buffer.from('{"untrusted":', "utf8")],
+  ])("rejects %s on an ordinary simulated-Windows read", (_name, tail) => {
+    const dataDir = makeDataDir();
+    const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+    const reset = resetIntent("telegram:synthetic-unfenced-tail");
+    writeFileSync(transcriptPath(dataDir, reset.chatId), tail(reset), { mode: 0o600 });
+
+    expect(() => transcript.readCurrentConversation(reset.chatId)).toThrow(
+      WindowsPrivatePathPolicyError,
+    );
+  });
+
+  it.each(["resetId", "chatId"] as const)(
+    "rejects a torn boundary with the wrong %s on simulated Windows",
+    (field) => {
+      const dataDir = makeDataDir();
+      const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+      const pending = resetIntent("telegram:synthetic-wrong-boundary", "a".repeat(64));
+      const wrong = {
+        ...pending,
+        [field]: field === "resetId" ? "b".repeat(64) : "telegram:synthetic-other-chat",
+      };
+      transcript.createResetIntent(pending);
+      const canonical = boundaryLine(wrong);
+      writeFileSync(
+        transcriptPath(dataDir, pending.chatId),
+        canonical.subarray(0, canonical.length - 1),
+        { mode: 0o600 },
+      );
+
+      expect(() => transcript.ensureConversationBoundary(pending)).toThrow(
+        WindowsPrivatePathPolicyError,
+      );
+      expect(transcript.readResetIntent(pending.chatId)).toEqual(pending);
+      expect(boundaryCount(dataDir, pending.chatId)).toBe(0);
+    },
+  );
+
+  it("rejects recovery when the persisted intent does not match on simulated Windows", () => {
+    const dataDir = makeDataDir();
+    const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+    const persisted = resetIntent("telegram:synthetic-intent-mismatch", "a".repeat(64));
+    const requested = resetIntent(persisted.chatId, "b".repeat(64));
+    transcript.createResetIntent(persisted);
+    const canonical = boundaryLine(requested);
+    writeFileSync(
+      transcriptPath(dataDir, requested.chatId),
+      canonical.subarray(0, Math.floor(canonical.length / 2)),
+      { mode: 0o600 },
+    );
+
+    expect(() => transcript.ensureConversationBoundary(requested)).toThrow(
+      WindowsPrivatePathPolicyError,
+    );
+    expect(transcript.readResetIntent(persisted.chatId)).toEqual(persisted);
+  });
+
+  it("finishes a complete unterminated pending boundary on simulated Windows", () => {
+    const dataDir = makeDataDir();
+    const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+    const reset = resetIntent("telegram:synthetic-unclosed-boundary");
+    transcript.createResetIntent(reset);
+    writeFileSync(transcriptPath(dataDir, reset.chatId), boundaryLine(reset), { mode: 0o600 });
+
+    transcript.ensureConversationBoundary(reset);
+
+    expect(readFileSync(transcriptPath(dataDir, reset.chatId))).toEqual(
+      Buffer.concat([boundaryLine(reset), Buffer.from("\n", "utf8")]),
+    );
+    expect(boundaryCount(dataDir, reset.chatId)).toBe(1);
+  });
+
+  it("continues one canonical prefix after a short recovery append on simulated Windows", () => {
+    const dataDir = makeDataDir();
+    const reset = resetIntent("telegram:synthetic-recovery-short-write");
+    const original = new TranscriptStore(dataDir, { platform: "win32" });
+    original.createResetIntent(reset);
+    const canonical = boundaryLine(reset);
+    writeFileSync(
+      transcriptPath(dataDir, reset.chatId),
+      canonical.subarray(0, Math.floor(canonical.length / 3)),
+      { mode: 0o600 },
+    );
+    const interrupted = new TranscriptStore(dataDir, {
+      platform: "win32",
+      write: (descriptor, buffer, offset, length, position) =>
+        writeSync(descriptor, buffer, offset, Math.floor(length / 2), position),
+    });
+
+    expect(() => interrupted.ensureConversationBoundary(reset)).toThrow(
+      WindowsPrivatePathPolicyError,
+    );
+    const afterInterrupted = readFileSync(transcriptPath(dataDir, reset.chatId));
+    expect(afterInterrupted.length).toBeGreaterThan(Math.floor(canonical.length / 3));
+    expect(canonical.subarray(0, afterInterrupted.length).equals(afterInterrupted)).toBe(true);
+
+    const recovered = new TranscriptStore(dataDir, { platform: "win32" });
+    recovered.ensureConversationBoundary(reset);
+    expect(boundaryCount(dataDir, reset.chatId)).toBe(1);
+    expect(readFileSync(transcriptPath(dataDir, reset.chatId))).toEqual(
+      Buffer.concat([canonical, Buffer.from("\n", "utf8")]),
+    );
+  });
+
+  it("rejects a malformed prefix unless the next boundary is exact on simulated Windows", () => {
+    const dataDir = makeDataDir();
+    const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+    const first = resetIntent("telegram:synthetic-prefix-pair", "a".repeat(64));
+    const second = resetIntent(first.chatId, "b".repeat(64));
+    const firstLine = boundaryLine(first);
+    writeFileSync(
+      transcriptPath(dataDir, first.chatId),
+      Buffer.concat([
+        firstLine.subarray(0, Math.floor(firstLine.length / 2)),
+        Buffer.from("\n", "utf8"),
+        boundaryLine(second),
+        Buffer.from("\n", "utf8"),
+      ]),
+      { mode: 0o600 },
+    );
+
+    expect(() => transcript.readCurrentConversation(first.chatId)).toThrow(
+      WindowsPrivatePathPolicyError,
+    );
+  });
+
+  it("rejects duplicate boundaries on simulated Windows", () => {
+    const dataDir = makeDataDir();
+    const transcript = new TranscriptStore(dataDir, { platform: "win32" });
+    const reset = resetIntent("telegram:synthetic-duplicate-boundary");
+    const line = boundaryLine(reset);
+    writeFileSync(
+      transcriptPath(dataDir, reset.chatId),
+      Buffer.concat([line, Buffer.from("\n", "utf8"), line, Buffer.from("\n", "utf8")]),
+      { mode: 0o600 },
+    );
+
+    expect(() => transcript.readCurrentConversation(reset.chatId)).toThrow(
+      WindowsPrivatePathPolicyError,
+    );
+  });
+
   it("reopens completed archives without changing the recovered conversation", () => {
     const dataDir = makeDataDir();
     const chatId = "telegram:synthetic-windows-restart";

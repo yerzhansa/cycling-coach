@@ -11,6 +11,7 @@ import {
   READY_ONBOARDING,
   setupBlocked,
   setupRequired,
+  setupSurfaceOnScreen,
 } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 
@@ -188,7 +189,8 @@ describe("shell", () => {
 
   it("keeps an initialized state without a committed setup load neutral", () => {
     useEnduragentStore.setState({
-      onboarding: { ...CLOSED_ONBOARDING, initialized: true, loading: false },
+      activeView: "training",
+      onboarding: { ...CLOSED_ONBOARDING, open: true, initialized: true, loading: false },
     });
     render(<Shell onReady={() => {}} />);
 
@@ -273,6 +275,7 @@ describe("shell", () => {
     });
     render(<Shell onReady={() => {}} />);
 
+    expect(setupSurfaceOnScreen(useEnduragentStore.getState())).toBe(true);
     expect(screen.queryByRole("region", { name: "Training" })).toBeNull();
     expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
     expect(document.querySelector('[data-view="training"]')).not.toBeNull();

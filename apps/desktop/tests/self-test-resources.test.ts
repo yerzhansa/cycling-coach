@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { METRIC_REGISTRY } from "@enduragent/kernel/reference/registry";
 import { mean, pythonSum, sampleStdev } from "@enduragent/kernel/reference/metrics";
+import { deviationMap } from "../scripts/self-test-deviations.js";
 import { DIFFERENTIAL_OPERATIONS } from "../src/self-test/differential.js";
 
 const run = promisify(execFile);
@@ -38,6 +39,20 @@ function seeded(seed: number): () => number {
 }
 
 describe("packaged self-test resources", () => {
+  it("parses approved deviation paths identically with LF and CRLF", () => {
+    const source = [
+      "deviations:",
+      "  - metric: capability.dfa_a1_profile",
+      "    added_paths:",
+      "      - aet.foo",
+      "    status: approved-cite",
+      "",
+    ].join("\n");
+    const expected = [["capability.dfa_a1_profile", ["aet.foo"]]];
+    expect([...deviationMap(source)]).toEqual(expected);
+    expect([...deviationMap(source.replaceAll("\n", "\r\n"))]).toEqual(expected);
+  });
+
   it("generates a deterministic complete matrix and exact public bundle", async () => {
     const first = await generate();
     const second = await generate();
@@ -153,6 +168,14 @@ describe("packaged self-test resources", () => {
   );
 
   it("keeps generated artifacts outside tracked source", async () => {
+    try {
+      await lstat(join(repositoryRoot, ".git"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const ignoreRules = await readFile(join(repositoryRoot, ".gitignore"), "utf8");
+      expect(ignoreRules.split(/\r?\n/u)).toContain("dist/");
+      return;
+    }
     const ignore = await run("git", ["check-ignore", "apps/desktop/dist/self-test-asar"], {
       cwd: repositoryRoot,
     });

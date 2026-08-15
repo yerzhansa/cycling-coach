@@ -66,10 +66,14 @@ describe("desktop first-run configuration", () => {
 
     const configDirectory = join(home, "config");
     const configPath = join(configDirectory, "config.yaml");
-    for (const path of [dirname(home), home, configDirectory]) {
-      expect((await fileLstat(path)).mode & 0o777).toBe(FIRST_RUN_CONFIG_DIRECTORY_MODE);
+    if (process.platform === "win32") {
+      expect((await fileLstat(configPath)).nlink).toBe(1);
+    } else {
+      for (const path of [dirname(home), home, configDirectory]) {
+        expect((await fileLstat(path)).mode & 0o777).toBe(FIRST_RUN_CONFIG_DIRECTORY_MODE);
+      }
+      expect((await fileLstat(configPath)).mode & 0o777).toBe(FIRST_RUN_CONFIG_FILE_MODE);
     }
-    expect((await fileLstat(configPath)).mode & 0o777).toBe(FIRST_RUN_CONFIG_FILE_MODE);
     const contents = await readFile(configPath, "utf8");
     const parsed = parseYaml(contents) as Record<string, unknown>;
     expect(parsed).toMatchObject({
@@ -148,9 +152,22 @@ describe("desktop first-run configuration", () => {
     await expect(
       seedFirstRunConfig({
         env: { ENDURAGENT_HOME: home },
-        dependencies: { fileSystem, timezone: () => "UTC", createId: () => "atomic-seam" },
+        dependencies: {
+          fileSystem,
+          timezone: () => "UTC",
+          createId: () => "atomic-seam",
+          openFile: (async (path) => {
+            temporaryPath = path.toString();
+            await fileWrite(path, "partial", { flag: "wx", mode: 0o600 });
+            throw new Error("synthetic write failure");
+          }) as typeof fileOpen,
+        },
       }),
-    ).rejects.toThrow("synthetic write failure");
+    ).rejects.toThrow(
+      process.platform === "win32"
+        ? "Windows private path policy failed"
+        : "synthetic write failure",
+    );
     expect(temporaryPath).toBe(join(dirname(configPath), ".config.atomic-seam.tmp"));
     await expect(fileLstat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readdir(dirname(configPath))).toEqual([]);
@@ -266,14 +283,16 @@ describe("desktop first-run configuration", () => {
     });
   });
 
-  it("prepares the home before seeding and constructing the daemon supervisor", async () => {
+  it("prepares the home, seeds the config, and adopts the device timezone before constructing the daemon supervisor", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
     const prepareCall = source.indexOf("await prepareDesktopAthleteHome(environment)");
     const seedCall = source.indexOf("await seedFirstRunConfig({ env: environment });");
+    const adoptTimezoneCall = source.indexOf("await adoptDeviceTimezoneAtStart({");
     const supervisorConstruction = source.indexOf("new DesktopDaemonSupervisor(");
     expect(prepareCall).toBeGreaterThan(-1);
     expect(seedCall).toBeGreaterThan(prepareCall);
-    expect(supervisorConstruction).toBeGreaterThan(seedCall);
+    expect(adoptTimezoneCall).toBeGreaterThan(seedCall);
+    expect(supervisorConstruction).toBeGreaterThan(adoptTimezoneCall);
     expect(source).toContain('process.stderr.write("desktop-first-run-config-failure seed\\n");');
   });
 });

@@ -406,6 +406,27 @@ function tokenResponse(access: string, refresh = "synthetic-rotated-refresh"): R
   );
 }
 
+function codexTextResponse(text: string): Response {
+  const events = [
+    {
+      type: "response.output_item.done",
+      item: { type: "message", content: [{ type: "output_text", text }] },
+    },
+    {
+      type: "response.completed",
+      response: {
+        id: "synthetic-response",
+        status: "completed",
+        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+      },
+    },
+  ];
+  return new Response(
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n",
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 async function writeExpiredOAuthProfile(home: AthleteHome): Promise<void> {
   await writeFile(
     join(home.configDir, "auth-profiles.json"),
@@ -652,6 +673,95 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it.each([
+    { skewHours: -2, expiresFromServerNowMs: -60 * 60_000, rejectedByServer: true },
+    { skewHours: 2, expiresFromServerNowMs: 60 * 60_000, rejectedByServer: false },
+  ])(
+    "completes a ChatGPT-lane turn with a $skewHours-hour local clock skew",
+    async ({ skewHours, expiresFromServerNowMs, rejectedByServer }) => {
+      const home = await freshHome();
+      const serverNow = Date.parse("1998-07-18T12:00:00.000Z");
+      const storedAccess = codexAccessToken("synthetic-stored-account");
+      const refreshedAccess = codexAccessToken("synthetic-refreshed-account");
+      const profilesPath = join(home.configDir, "auth-profiles.json");
+      await writeFile(
+        profilesPath,
+        JSON.stringify({
+          "openai-codex": {
+            type: "oauth",
+            access: storedAccess,
+            refresh: "synthetic-refresh",
+            expires: serverNow + expiresFromServerNowMs,
+            accountId: "synthetic-stored-account",
+          },
+        }),
+        { mode: 0o600 },
+      );
+      let tokenRequests = 0;
+      const authorizations: string[] = [];
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url === "https://auth.openai.com/oauth/token") {
+          tokenRequests++;
+          return tokenResponse(refreshedAccess);
+        }
+        if (url === "https://chatgpt.com/backend-api/codex/responses") {
+          const authorization = new Headers(init?.headers).get("authorization") ?? "";
+          authorizations.push(authorization);
+          if (rejectedByServer && authorization === `Bearer ${storedAccess}`) {
+            return new Response(
+              JSON.stringify({ error: { code: "invalid_token", message: "expired" } }),
+              { status: 401 },
+            );
+          }
+          return codexTextResponse("clock-safe reply");
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+      const base = config(home);
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(),
+          createRuntime: () => runtime(),
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+          now: () => serverNow + skewHours * 60 * 60_000,
+          randomId: () => `synthetic-skew-${skewHours}`,
+        },
+        fakeContext(home),
+        undefined,
+        {
+          ...base,
+          llm: {
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            apiKey: "",
+            authProfile: "openai-codex",
+          },
+        },
+      );
+
+      try {
+        await expect(
+          lifecycle.engine.chat({ chatId: "desktop", message: "hello" }),
+        ).resolves.toEqual({ text: "clock-safe reply" });
+        expect(tokenRequests).toBe(rejectedByServer ? 1 : 0);
+        expect(authorizations[0]).toBe(`Bearer ${storedAccess}`);
+        expect(authorizations.length).toBeGreaterThan(0);
+        const acceptedAccess = rejectedByServer ? refreshedAccess : storedAccess;
+        expect(authorizations.slice(1).every((value) => value === `Bearer ${acceptedAccess}`)).toBe(
+          true,
+        );
+      } finally {
+        await lifecycle.close();
+      }
+    },
+  );
+
   it("carries an explicit refresh rejection through the composed desktop ports", async () => {
     const home = await freshHome();
     await writeExpiredOAuthProfile(home);
@@ -677,10 +787,12 @@ describe("local coach composition", () => {
     });
 
     vi.useFakeTimers();
-    const settled = received!.ports.getAccessToken("openai-codex").then(
-      () => null,
-      (error: unknown) => error,
-    );
+    const settled = received!.ports
+      .getAccessToken("openai-codex", undefined, "synthetic-expired-access")
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
     await vi.advanceTimersByTimeAsync(2_000);
     const failure = await settled;
 
@@ -713,7 +825,9 @@ describe("local coach composition", () => {
       now: () => 1_000,
     });
 
-    const failure = await received!.ports.getAccessToken("openai-codex").catch((error) => error);
+    const failure = await received!.ports
+      .getAccessToken("openai-codex", undefined, "synthetic-expired-access")
+      .catch((error) => error);
 
     expect(received!.ports.classifyFailure(failure)).toBe("server_error");
     expect(failure).toMatchObject({ refreshFailureReason: "server_error" });
@@ -752,8 +866,8 @@ describe("local coach composition", () => {
 
     await expect(
       Promise.all([
-        engineInput.ports.getAccessToken("openai-codex"),
-        engineInput.ports.getAccessToken("openai-codex"),
+        engineInput.ports.getAccessToken("openai-codex", undefined, "synthetic-expired-access"),
+        engineInput.ports.getAccessToken("openai-codex", undefined, "synthetic-expired-access"),
       ]),
     ).resolves.toEqual([refreshedAccess, refreshedAccess]);
 
@@ -797,7 +911,11 @@ describe("local coach composition", () => {
     const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
 
     vi.useFakeTimers();
-    const pending = engineInput.ports.getAccessToken("openai-codex");
+    const pending = engineInput.ports.getAccessToken(
+      "openai-codex",
+      undefined,
+      "synthetic-expired-access",
+    );
     await vi.advanceTimersByTimeAsync(2_000);
     await expect(pending).resolves.toBe(refreshedAccess);
 
@@ -825,10 +943,12 @@ describe("local coach composition", () => {
     const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
 
     vi.useFakeTimers();
-    const settled = engineInput.ports.getAccessToken("openai-codex").then(
-      () => null,
-      (error: unknown) => error,
-    );
+    const settled = engineInput.ports
+      .getAccessToken("openai-codex", undefined, "synthetic-expired-access")
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
     await vi.advanceTimersByTimeAsync(2_000);
     await expect(settled).resolves.toMatchObject({ message: "OAuth profile is invalid." });
 
@@ -853,10 +973,12 @@ describe("local coach composition", () => {
     const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
 
     vi.useFakeTimers();
-    const settled = engineInput.ports.getAccessToken("openai-codex").then(
-      () => null,
-      (error: unknown) => error,
-    );
+    const settled = engineInput.ports
+      .getAccessToken("openai-codex", undefined, "synthetic-expired-access")
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
     await vi.advanceTimersByTimeAsync(2_000);
     await expect(settled).resolves.toMatchObject({ message: "OAuth profile is invalid." });
 
@@ -878,10 +1000,12 @@ describe("local coach composition", () => {
     const abortReason = new Error("synthetic caller abort");
 
     vi.useFakeTimers();
-    const settled = engineInput.ports.getAccessToken("openai-codex", controller.signal).then(
-      () => null,
-      (error: unknown) => error,
-    );
+    const settled = engineInput.ports
+      .getAccessToken("openai-codex", controller.signal, "synthetic-expired-access")
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchStub).toHaveBeenCalledTimes(1);
     controller.abort(abortReason);
@@ -910,9 +1034,13 @@ describe("local coach composition", () => {
     const fetchStub = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
     const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
 
-    await expect(engineInput.ports.getAccessToken("openai-codex", controller.signal)).resolves.toBe(
-      refreshedAccess,
-    );
+    await expect(
+      engineInput.ports.getAccessToken(
+        "openai-codex",
+        controller.signal,
+        "synthetic-expired-access",
+      ),
+    ).resolves.toBe(refreshedAccess);
 
     expect(controller.signal.reason).toBe(abortReason);
     expect(fetchStub).toHaveBeenCalledTimes(1);
@@ -941,9 +1069,9 @@ describe("local coach composition", () => {
     });
     const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
 
-    await expect(engineInput.ports.getAccessToken("openai-codex")).resolves.toBe(
-      "synthetic-concurrent-access",
-    );
+    await expect(
+      engineInput.ports.getAccessToken("openai-codex", undefined, "synthetic-expired-access"),
+    ).resolves.toBe("synthetic-concurrent-access");
 
     expect(fetchStub).toHaveBeenCalledTimes(1);
     expect(JSON.parse(await readFile(profilesPath, "utf8"))["openai-codex"]).toEqual({
@@ -967,9 +1095,9 @@ describe("local coach composition", () => {
     });
     const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
 
-    await expect(engineInput.ports.getAccessToken("openai-codex")).rejects.toThrow(
-      "OAuth profile is invalid.",
-    );
+    await expect(
+      engineInput.ports.getAccessToken("openai-codex", undefined, "synthetic-expired-access"),
+    ).rejects.toThrow("OAuth profile is invalid.");
 
     expect(fetchStub).toHaveBeenCalledTimes(1);
     await expect(readFile(profilesPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
@@ -1785,6 +1913,15 @@ describe("local coach composition", () => {
       config(home),
     );
 
+    await lifecycle.operations.configureRuntime({ session: { idleMinutes: 12 } });
+    expect(
+      (
+        parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8")) as {
+          session: Record<string, unknown>;
+        }
+      ).session,
+    ).not.toHaveProperty("timezonePinned");
+
     await lifecycle.operations.configureRuntime({
       session: { timezone: "Europe/Berlin" },
     });
@@ -1794,10 +1931,11 @@ describe("local coach composition", () => {
       retained_top_level: { future: true },
       session: {
         historyTokenBudgetRatio: 0.3,
-        idleMinutes: 0,
+        idleMinutes: 12,
         dailyResetHour: 4,
         resetArchiveRetentionDays: 0,
         timezone: "Europe/Berlin",
+        timezonePinned: true,
         retained_session_field: { future: true },
       },
     });
@@ -1824,6 +1962,15 @@ describe("local coach composition", () => {
         }
       ).session.retained_session_field,
     ).toEqual({ future: true });
+    const persistedSession = (
+      parseYaml(await readFile(join(home.configDir, "config.yaml"), "utf8")) as {
+        session: Record<string, unknown>;
+      }
+    ).session;
+    expect(persistedSession.timezonePinned).toBe(true);
+    expect((await lifecycle.operations.getRuntimeConfig({})).session).not.toHaveProperty(
+      "timezonePinned",
+    );
     expect(runWindowAfter).not.toHaveBeenCalled();
     await lifecycle.close();
   });

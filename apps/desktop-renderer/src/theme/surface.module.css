@@ -106,15 +106,14 @@
   }
 
   .dangerous {
-    border-color: var(--line-2);
+    border-color: transparent;
     color: var(--danger);
-    background-color: var(--surface);
-    box-shadow: var(--edge), var(--elev-1);
+    background-color: transparent;
+    box-shadow: none;
   }
 
   .dangerous:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--danger) 32%, var(--line-2));
-    background-color: color-mix(in srgb, var(--danger) 6%, var(--surface));
+    background-color: color-mix(in srgb, var(--danger) 11%, transparent);
   }
 
   .linkish {

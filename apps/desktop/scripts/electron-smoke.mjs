@@ -322,6 +322,7 @@ async function security() {
             "removeTelegramWebhook",
             "restartToUpdate",
             "retryFailedCredentials",
+            "setAppearance",
             "telegramStatus",
             "writeCredential",
           ]),

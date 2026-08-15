@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { PlatformAbsolutePathSchema } from "@enduragent/coach-contract";
+import { parseDesktopAppearance } from "../main/appearance.js";
 import { desktopPlatformProjection } from "../main/platform-copy.js";
 import {
+  DESKTOP_APPEARANCE_CHANNEL,
   DESKTOP_CONNECTION_CHANNEL,
   DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
   DESKTOP_LIFECYCLE_CHANNEL,
@@ -1014,16 +1017,10 @@ function parsePaths(value: unknown): readonly string[] {
     throw new TypeError();
   }
   const paths = value.map((path) => {
-    if (
-      typeof path !== "string" ||
-      path.length === 0 ||
-      path.length > 4_096 ||
-      !path.startsWith("/") ||
-      path.includes("\0")
-    ) {
+    if (!PlatformAbsolutePathSchema.safeParse(path).success) {
       throw new TypeError();
     }
-    const slash = path.lastIndexOf("/");
+    const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
     const dot = path.lastIndexOf(".");
     if (dot <= slash || !IMPORT_EXTENSIONS.has(path.slice(dot).toLowerCase())) {
       throw new TypeError();
@@ -1574,6 +1571,12 @@ contextBridge.exposeInMainWorld(
     acknowledgeTelegramGapWarning: async (...args: unknown[]) => {
       requireZeroArguments(args);
       return invokeTelegramMutation(DESKTOP_TELEGRAM_ACKNOWLEDGE_GAP_WARNING_CHANNEL);
+    },
+    setAppearance: (input: unknown, ...args: unknown[]) => {
+      requireZeroArguments(args);
+      const appearance = parseDesktopAppearance(input);
+      if (appearance === undefined) throw new TypeError();
+      ipcRenderer.send(DESKTOP_APPEARANCE_CHANNEL, appearance);
     },
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),

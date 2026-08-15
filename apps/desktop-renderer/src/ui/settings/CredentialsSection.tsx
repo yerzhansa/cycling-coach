@@ -15,7 +15,7 @@ import {
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { SetupRow } from "../onboarding/SetupRow.js";
-import { BUTTON_DANGER_LINK_SM, BUTTON_QUIET_SM } from "../onboarding/SetupCard.js";
+import { BUTTON_DANGER_QUIET_SM, BUTTON_QUIET_SM } from "../onboarding/SetupCard.js";
 import { InlineConfirmation } from "../shared/InlineConfirmation.js";
 import { credentialRuntimeLabel } from "./copy.js";
 import styles from "./SettingsView.module.css";
@@ -107,7 +107,7 @@ export function CredentialDeleteButton(props: {
       type="button"
       ref={button}
       data-setup-delete={props.credential}
-      className={props.credential === "intervals-icu" ? BUTTON_DANGER_LINK_SM : styles.danger}
+      className={BUTTON_DANGER_QUIET_SM}
       disabled={
         port === null ||
         state.status === "loading" ||

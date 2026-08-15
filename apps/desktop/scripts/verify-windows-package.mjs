@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, readFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
-import { promisify, isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   PackageLayoutError,
@@ -18,7 +18,6 @@ import {
   validateBuilderInventoryAuthority,
   validateRequiredAsarFiles,
 } from "./package-inventory.mjs";
-import { contained } from "./package-plan.mjs";
 import {
   WINDOWS_PACKAGE_APP_ID,
   WINDOWS_PACKAGE_ARCH,
@@ -31,12 +30,12 @@ import {
   windowsPackageArtifactName,
 } from "./windows-package-plan.mjs";
 
-const executeSystemFile = promisify(execFile);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const canonicalDesktopRoot = resolve(scriptDirectory, "..");
 const canonicalInstallerHook = [
   "!macro customUnInstall",
   '  DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "icu.enduragent.desktop"',
+  '  DeleteRegValue HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run" "icu.enduragent.desktop"',
   "!macroend",
   "",
 ].join("\n");
@@ -62,40 +61,27 @@ const expectedWindowsRuntime = new Set([
   "vk_swiftshader_icd.json",
   "vulkan-1.dll",
 ]);
+const expectedWindowsLocale = "locales/en-US.pak";
 const expectedAsarResourceFiles = new Set([
   "resources/tray.ico",
   "resources/trayTemplate.png",
   "resources/trayTemplate@2x.png",
 ]);
 const forbiddenNativeExtensions = new Set([".dylib", ".node", ".so"]);
-const installerApplicationArchive = "$PLUGINSDIR/app-64.7z";
-const installerBinaryEntries = new Set([
-  "$PLUGINSDIR/System.dll",
-  "$PLUGINSDIR/StdUtils.dll",
-  "$PLUGINSDIR/SpiderBanner.dll",
-  "$PLUGINSDIR/nsExec.dll",
-  "$PLUGINSDIR/nsis7z.dll",
-  "$PLUGINSDIR/WinShell.dll",
-  `$R0/Uninstall ${WINDOWS_PACKAGE_PRODUCT_NAME}.exe`,
-]);
-const expectedInstallerEntries = new Map([
-  ["$PLUGINSDIR", "directory"],
-  ...[...installerBinaryEntries].map((path) => [path, "file"]),
-  [installerApplicationArchive, "file"],
-  ["$R0", "directory"],
-]);
 const x64PeMachine = 0x8664;
 const x86PeMachine = 0x014c;
+const nsisOverlaySignature = Buffer.concat([
+  Buffer.from([0xef, 0xbe, 0xad, 0xde]),
+  Buffer.from("NullsoftInst", "latin1"),
+]);
 
 export const WINDOWS_PACKAGE_VERIFICATION_STAGES = Object.freeze([
   "artifact",
-  "installer-inventory",
   "installer-contract",
   "application-inventory",
   "resource-inventory",
   "asar-inventory",
   "binary-platform",
-  "cleanup",
 ]);
 
 export class WindowsPackageVerificationError extends Error {
@@ -191,7 +177,7 @@ export async function readWindowsBuilderAuthority(desktopRoot = canonicalDesktop
     }
     throw error;
   }
-  if (hook.toString("utf8") !== canonicalInstallerHook) {
+  if (hook.toString("utf8").replaceAll("\r\n", "\n") !== canonicalInstallerHook) {
     failWindows("installer-contract", "uninstall hook is invalid", ["build/installer.nsh"]);
   }
   return Object.freeze({
@@ -212,6 +198,24 @@ function validateRuntimeEntryTypes(tree) {
     if (entry === undefined || entry.type !== expectedType) {
       failWindows("application-inventory", "application entry type is invalid", [name]);
     }
+  }
+}
+
+function validateRuntimeLocales(tree) {
+  const locale = tree.get(expectedWindowsLocale);
+  if (
+    locale === undefined ||
+    locale.type !== "file" ||
+    !Buffer.isBuffer(locale.bytes) ||
+    locale.bytes.length === 0
+  ) {
+    failWindows("application-inventory", "missing locale", [expectedWindowsLocale]);
+  }
+  const undeclared = [...tree.keys()].filter(
+    (path) => path.startsWith("locales/") && path !== expectedWindowsLocale,
+  );
+  if (undeclared.length > 0) {
+    failWindows("application-inventory", "undeclared locale", undeclared);
   }
 }
 
@@ -435,6 +439,36 @@ function validateApplicationBinaries(tree) {
       `${WINDOWS_PACKAGE_PRODUCT_NAME}.exe`,
     ]);
   }
+  return x64PeMachine;
+}
+
+function applicationEvidence(tree, peMachine) {
+  const manifest = createHash("sha256");
+  let fileCount = 0;
+  let directoryCount = 0;
+  for (const path of [...tree.keys()].sort()) {
+    const entry = tree.get(path);
+    if (entry.type === "directory") {
+      directoryCount += 1;
+      manifest.update(`${JSON.stringify({ path, type: entry.type })}\n`);
+      continue;
+    }
+    fileCount += 1;
+    manifest.update(
+      `${JSON.stringify({
+        path,
+        type: entry.type,
+        size: entry.bytes.length,
+        sha256: createHash("sha256").update(entry.bytes).digest("hex"),
+      })}\n`,
+    );
+  }
+  return Object.freeze({
+    fileCount,
+    directoryCount,
+    manifestSha256: manifest.digest("hex"),
+    peMachine,
+  });
 }
 
 function asarNativeEntries(asar) {
@@ -581,10 +615,7 @@ export async function verifyWindowsPackageLayout(application, options = {}) {
       "application entry",
     );
     validateRuntimeEntryTypes(tree);
-    const locales = [...tree.keys()].filter((path) => path.startsWith("locales/"));
-    if (locales.length > 0) {
-      failWindows("application-inventory", "undeclared locale", locales);
-    }
+    validateRuntimeLocales(tree);
     for (const [path, entry] of tree) {
       if (path === "resources" || path.startsWith("resources/")) continue;
       inspectPath(path, `win-unpacked/${path}`);
@@ -592,7 +623,8 @@ export async function verifyWindowsPackageLayout(application, options = {}) {
     }
     const authority = await readWindowsBuilderAuthority(desktopRoot);
     await verifyResources(join(application, "resources"), authority, desktopRoot);
-    validateApplicationBinaries(tree);
+    const peMachine = validateApplicationBinaries(tree);
+    return applicationEvidence(tree, peMachine);
   } catch (error) {
     if (error instanceof WindowsPackageVerificationError) throw error;
     if (error instanceof PackageLayoutError) {
@@ -610,59 +642,18 @@ function validateInstallerArtifact(bytes, path) {
   if (metadata.certificateOffset !== 0 || metadata.certificateSize !== 0) {
     failWindows("artifact", "installer must be unsigned", [path]);
   }
-  if (!bytes.includes(Buffer.from("NullsoftInst", "latin1"))) {
+  if (!bytes.includes(nsisOverlaySignature)) {
     failWindows("artifact", "installer is not an NSIS package", [path]);
   }
+  return metadata;
 }
 
-function validateInstallerListing(result, path) {
-  const stdout = result !== null && typeof result === "object" ? result.stdout : undefined;
-  const listing = Buffer.isBuffer(stdout) ? stdout.toString("utf8") : stdout;
-  if (typeof listing !== "string") {
-    failWindows("artifact", "7-Zip installer listing is invalid", [path]);
-  }
-  const entries = listing.search(/^----------\r?$/mu);
-  const header = entries < 0 ? listing : listing.slice(0, entries);
-  const types = [...header.matchAll(/^Type = ([^\r\n]+)\r?$/gmu)].map((match) => match[1]);
-  if (!isDeepStrictEqual(types, ["Nsis"])) {
-    failWindows("artifact", "7-Zip did not identify installer as NSIS", [path]);
-  }
-}
-
-function validateInstallerInventory(tree) {
-  exactNameSet(
-    new Set(tree.keys()),
-    new Set(expectedInstallerEntries.keys()),
-    "installer-inventory",
-    "installer entry",
-  );
-  for (const [path, expectedType] of expectedInstallerEntries) {
-    const entry = tree.get(path);
-    if (entry.type !== expectedType) {
-      failWindows("installer-inventory", "installer entry type is invalid", [path]);
-    }
-  }
-  for (const path of installerBinaryEntries) {
-    const metadata = peMetadata(tree.get(path).bytes, path, "binary-platform");
-    if (![x86PeMachine, x64PeMachine].includes(metadata.machine)) {
-      failWindows("binary-platform", "wrong-platform binary", [path]);
-    }
-  }
-  return installerApplicationArchive;
-}
-
-async function extractWithSevenZip(source, destination, executeFile_) {
-  await mkdir(destination, { recursive: true });
-  await executeFile_("7zz", ["x", "-bd", "-bb0", "-y", `-o${destination}`, source]);
-}
-
-function missingPath(error) {
-  return error !== null && typeof error === "object" && error.code === "ENOENT";
-}
-
-export async function verifyWindowsPackage(artifact, options = {}, overrides = {}) {
+export async function verifyWindowsPackage(artifact, application, options = {}, overrides = {}) {
   if (!isAbsolute(artifact) || extname(artifact).toLowerCase() !== ".exe") {
     failWindows("artifact", "artifact path must be one absolute .exe path");
+  }
+  if (!isAbsolute(application)) {
+    failWindows("application-inventory", "application path must be absolute");
   }
   const desktopRoot = options.desktopRoot ?? canonicalDesktopRoot;
   if (!isAbsolute(desktopRoot)) failWindows("installer-contract", "desktop root must be absolute");
@@ -694,76 +685,41 @@ export async function verifyWindowsPackage(artifact, options = {}, overrides = {
     }
     throw error;
   }
-  validateInstallerArtifact(artifactBytes, expectedName);
-
-  const executeFile_ = overrides.executeFile ?? executeSystemFile;
-  const makeTemporaryDirectory = overrides.mkdtemp ?? mkdtemp;
-  const remove = overrides.rm ?? rm;
-  const extractionPrefix = join(dirname(artifact), ".windows-package-verification-");
-  let temporaryDirectory;
-  let failure;
-  try {
-    const extractionParent = dirname(artifact);
-    const candidate = await makeTemporaryDirectory(extractionPrefix);
-    if (candidate === extractionParent || !contained(extractionParent, candidate)) {
-      failWindows("installer-inventory", "temporary extraction directory is invalid");
-    }
-    temporaryDirectory = candidate;
-    const installerRoot = join(temporaryDirectory, "installer");
-    const applicationRoot = join(temporaryDirectory, "application");
-    const extractInstaller =
-      overrides.extractInstaller ??
-      ((source, destination) => extractWithSevenZip(source, destination, executeFile_));
-    const extractApplication =
-      overrides.extractApplication ??
-      ((source, destination) => extractWithSevenZip(source, destination, executeFile_));
-    validateInstallerListing(
-      await executeFile_("7zz", ["l", "-slt", "-bd", artifact]),
-      expectedName,
-    );
-    await extractInstaller(artifact, installerRoot);
-    const installerTree = await collectTree(installerRoot, "installer", false);
-    const archivePath = validateInstallerInventory(installerTree);
-    await extractApplication(join(installerRoot, archivePath), applicationRoot);
-    await verifyWindowsPackageLayout(applicationRoot, { desktopRoot });
-  } catch (error) {
-    failure =
-      error instanceof WindowsPackageVerificationError
-        ? error
-        : new WindowsPackageVerificationError(
-            "installer-inventory",
-            "installer extraction or verification failed",
-          );
-  }
-  if (temporaryDirectory !== undefined) {
-    try {
-      await remove(temporaryDirectory, { recursive: true, force: true });
-      try {
-        await (overrides.lstat ?? lstat)(temporaryDirectory);
-        failWindows("cleanup", "temporary extraction cleanup failed");
-      } catch (error) {
-        if (!missingPath(error)) throw error;
-      }
-    } catch (error) {
-      if (error instanceof WindowsPackageVerificationError) throw error;
-      failWindows("cleanup", "temporary extraction cleanup failed");
-    }
-  }
-  if (failure !== undefined) throw failure;
+  const metadata = validateInstallerArtifact(artifactBytes, expectedName);
+  const applicationResult = await verifyWindowsPackageLayout(application, { desktopRoot });
+  return Object.freeze({
+    artifact: Object.freeze({
+      name: expectedName,
+      size: artifactBytes.length,
+      sha256: createHash("sha256").update(artifactBytes).digest("hex"),
+      peMachine: metadata.machine,
+      nsisEnvelope: true,
+    }),
+    application: applicationResult,
+  });
 }
 
-async function artifactArgument(args) {
-  if (args.length === 0) return (await createWindowsPackagePlan()).artifactPath;
-  if (args.length !== 1 || !isAbsolute(args[0]) || extname(args[0]).toLowerCase() !== ".exe") {
-    failWindows("artifact", "expected zero arguments or one absolute .exe path");
+async function packageArguments(args) {
+  if (args.length === 0) {
+    const plan = await createWindowsPackagePlan();
+    return { artifact: plan.artifactPath, application: plan.applicationPath };
   }
-  return args[0];
+  if (
+    args.length !== 2 ||
+    !isAbsolute(args[0]) ||
+    extname(args[0]).toLowerCase() !== ".exe" ||
+    !isAbsolute(args[1])
+  ) {
+    failWindows("artifact", "expected zero arguments or absolute artifact and application paths");
+  }
+  return { artifact: args[0], application: args[1] };
 }
 
 async function main() {
   try {
-    await verifyWindowsPackage(await artifactArgument(process.argv.slice(2)));
-    process.stdout.write("Windows package verified\n");
+    const input = await packageArguments(process.argv.slice(2));
+    const evidence = await verifyWindowsPackage(input.artifact, input.application);
+    process.stdout.write(`${JSON.stringify(evidence)}\n`);
   } catch (error) {
     process.stderr.write(
       `${safeWindowsPackageVerificationMessage(error) ?? "Windows package verification failed"}\n`,

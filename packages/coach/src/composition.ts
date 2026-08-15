@@ -434,6 +434,7 @@ function persistRuntimeConfig(
         session[field] = candidate.session[field];
       }
     }
+    if (request.session.timezone !== undefined) session.timezonePinned = true;
     next.session = session;
   }
   replacePrivateFile(path, toYaml(next));
@@ -620,10 +621,7 @@ function credential(value: unknown): OAuthCredential {
   return candidate as unknown as OAuthCredential;
 }
 
-function createAccessTokenReader(
-  configDir: string,
-  now: () => number,
-): EngineHostPorts["getAccessToken"] {
+function createAccessTokenReader(configDir: string): EngineHostPorts["getAccessToken"] {
   const path = join(configDir, "auth-profiles.json");
   const queues = new Map<string, Promise<string>>();
   const delay = (milliseconds: number, signal?: AbortSignal): Promise<void> => {
@@ -677,11 +675,15 @@ function createAccessTokenReader(
       }
     }
   };
-  const exclusive = async (profileName: string, signal?: AbortSignal): Promise<string> => {
+  const exclusive = async (
+    profileName: string,
+    signal?: AbortSignal,
+    rejectedAccessToken?: string,
+  ): Promise<string> => {
     const snapshot = loadStoredProfileSnapshot(path, profileName);
     if (snapshot === null) throw new TypeError("OAuth profile is invalid.");
     const current = credential(snapshot.profile);
-    if (Number.isFinite(current.expires) && now() <= current.expires - 300_000) {
+    if (rejectedAccessToken === undefined || current.access !== rejectedAccessToken) {
       return current.access;
     }
     const { refreshed, requestSnapshot, requestProfile } = await refresh(
@@ -703,11 +705,11 @@ function createAccessTokenReader(
     if (saved.status === "missing") throw new TypeError("OAuth profile is invalid.");
     return credential(saved.profile).access;
   };
-  return async (profileName, signal) => {
+  return async (profileName, signal, rejectedAccessToken) => {
     const previous = queues.get(profileName) ?? Promise.resolve("");
     const current = previous.then(
-      () => exclusive(profileName, signal),
-      () => exclusive(profileName, signal),
+      () => exclusive(profileName, signal, rejectedAccessToken),
+      () => exclusive(profileName, signal, rejectedAccessToken),
     );
     queues.set(profileName, current);
     try {
@@ -883,7 +885,7 @@ export async function createLocalCoachComposition(
     await runtime.runWindow();
     runtime.startScheduler();
     const logger = createSubsystemLogger("agent", input.home.root);
-    const getAccessToken = createAccessTokenReader(input.home.configDir, now);
+    const getAccessToken = createAccessTokenReader(input.home.configDir);
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
       input.context.store,
     );

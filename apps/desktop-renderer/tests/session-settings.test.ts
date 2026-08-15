@@ -253,6 +253,31 @@ describe("conversation and time settings controller", () => {
     expect(form(controller).dirtyFields.size).toBe(0);
   });
 
+  it("saves a changed timezone in one configure transaction", async () => {
+    const saved = vi.fn(async (method: string, request: unknown) => {
+      if (method === "configureRuntime") {
+        expect(request).toEqual({ session: { timezone: "Asia/Qyzylorda" } });
+        return {
+          schemaVersion: 3,
+          status: "applied",
+          applied: { llm: false, intervals: false, session: true },
+        };
+      }
+      return snapshot();
+    });
+    const timezoneEdit = createSubject({ client: clientWith(saved) });
+    await timezoneEdit.controller.activate();
+    timezoneEdit.subject.change("timezone", "Asia/Qyzylorda");
+    expect([...form(timezoneEdit.controller).dirtyFields]).toEqual(["timezone"]);
+    timezoneEdit.subject.save();
+    await vi.waitFor(() => expect(timezoneEdit.controller.state().status).toBe("saved"));
+    expect(saved.mock.calls.map(([method]) => method)).toEqual([
+      "getRuntimeConfig",
+      "configureRuntime",
+      "getRuntimeConfig",
+    ]);
+  });
+
   it("retains the draft when the daemon refuses to apply the session patch", async () => {
     const call = vi.fn(async (method: string) => {
       if (method === "getRuntimeConfig") return snapshot();

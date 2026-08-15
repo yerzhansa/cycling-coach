@@ -179,12 +179,26 @@ function setup(
   };
 }
 
-function testEncryption(options: { readonly available?: boolean; readonly backend?: string } = {}) {
+function testEncryption(
+  options: {
+    readonly available?: boolean;
+    readonly backend?: string;
+    readonly platform?: NodeJS.Platform;
+  } = {},
+) {
+  const platform = options.platform ?? process.platform;
   return {
     isEncryptionAvailable: () => options.available ?? true,
-    getSelectedStorageBackend: () => options.backend ?? "keychain",
-    encryptString: (value: string) => Buffer.from(`sealed:${value}`, "utf8"),
-    decryptString: (value: Buffer) => value.toString("utf8").slice("sealed:".length),
+    getSelectedStorageBackend: () =>
+      options.backend ?? (platform === "win32" ? "dpapi" : "keychain"),
+    encryptString: (value: string) =>
+      platform === "win32"
+        ? Buffer.from(Buffer.from(value, "utf8").map((byte) => byte ^ 0xa5))
+        : Buffer.from(`sealed:${value}`, "utf8"),
+    decryptString: (value: Buffer) =>
+      platform === "win32"
+        ? Buffer.from(Buffer.from(value).map((byte) => byte ^ 0xa5)).toString("utf8")
+        : value.toString("utf8").slice("sealed:".length),
   };
 }
 
@@ -192,6 +206,7 @@ async function temporaryVault(options: {
   readonly available?: boolean;
   readonly backend?: string;
   readonly encryption?: ReturnType<typeof testEncryption>;
+  readonly platform?: NodeJS.Platform;
   readonly trace?: string[];
 }) {
   const base = await mkdtemp(join(await realpath(tmpdir()), "intervals-ipc-"));
@@ -205,15 +220,17 @@ async function temporaryVault(options: {
     trace.push(`apply:${slot}:${value}`);
   });
   const root = join(base, "credentials-v1");
+  const platform = options.platform ?? process.platform;
   const runtimeState = new Map();
   const vault = createCredentialVault({
     root,
-    encryption: options.encryption ?? testEncryption(options),
+    encryption: options.encryption ?? testEncryption({ ...options, platform }),
+    platform,
     runtimeState,
     applyCredential,
     clearCredential,
   });
-  return { applyCredential, base, clearCredential, root, runtimeState, trace, vault };
+  return { applyCredential, base, clearCredential, platform, root, runtimeState, trace, vault };
 }
 
 function athleteResponse(account = "synthetic-athlete"): Response {
@@ -450,7 +467,7 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
     async (reason) => {
       const value = await temporaryVault({
         available: reason !== "encryption-unavailable",
-        ...(reason === "unsafe-backend" ? { backend: "basic_text" } : {}),
+        ...(reason === "unsafe-backend" ? { backend: "basic_text", platform: "darwin" } : {}),
       });
       try {
         const runtime = setup({ vault: value.vault });
@@ -489,7 +506,9 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
     }
   });
 
-  it.each(["encryption-unavailable", "unsafe-backend"] as const)(
+  it
+    .skipIf(process.platform === "win32")
+    .each(["encryption-unavailable", "unsafe-backend"] as const)(
     "preserves an existing key across the %s storage refusal",
     async (reason) => {
       const security = { available: true, backend: "keychain" };
@@ -601,34 +620,51 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
     expect(JSON.stringify(result)).not.toContain(API_KEY);
   });
 
-  it("keeps an existing encrypted key and runtime state unchanged after verification refusal", async () => {
-    const value = await temporaryVault({});
-    try {
-      await expect(
-        value.vault.writeCredential({ slot: "intervals-icu", value: EXISTING_API_KEY }),
-      ).resolves.toMatchObject({ status: "configured", runtimeReady: true });
-      const before = await readFile(join(value.root, "intervals-icu.bin"));
-      value.applyCredential.mockClear();
-      const runtime = setup({
-        vault: value.vault,
-        verification: { status: "refused", reason: "training-account-mismatch" },
-      });
+  for (const { platform, expectedCiphertext } of [
+    {
+      platform: "darwin",
+      expectedCiphertext: Buffer.from(`sealed:${EXISTING_API_KEY}`, "utf8"),
+    },
+    {
+      platform: "win32",
+      expectedCiphertext: Buffer.from(
+        Buffer.from(EXISTING_API_KEY, "utf8").map((byte) => byte ^ 0xa5),
+      ),
+    },
+  ] as const) {
+    it.skipIf(process.platform === "win32" && platform === "darwin")(
+      "keeps an existing encrypted key and runtime state unchanged after verification refusal",
+      async () => {
+        const value = await temporaryVault({ platform });
+        try {
+          await expect(
+            value.vault.writeCredential({ slot: "intervals-icu", value: EXISTING_API_KEY }),
+          ).resolves.toMatchObject({ status: "configured", runtimeReady: true });
+          const before = await readFile(join(value.root, "intervals-icu.bin"));
+          expect(before).toEqual(expectedCiphertext);
+          value.applyCredential.mockClear();
+          const runtime = setup({
+            vault: value.vault,
+            verification: { status: "refused", reason: "training-account-mismatch" },
+          });
 
-      await expect(runtime.invoke()).resolves.toEqual({
-        outcome: "refused",
-        reason: "training-account-mismatch",
-        current: status("configured", "active"),
-      });
+          await expect(runtime.invoke()).resolves.toEqual({
+            outcome: "refused",
+            reason: "training-account-mismatch",
+            current: status("configured", "active"),
+          });
 
-      expect(await readFile(join(value.root, "intervals-icu.bin"))).toEqual(before);
-      expect(value.applyCredential).not.toHaveBeenCalled();
-      await expect(value.vault.credentialStatuses()).resolves.toContainEqual(
-        status("configured", "active"),
-      );
-    } finally {
-      await rm(value.base, { recursive: true, force: true });
-    }
-  });
+          expect(await readFile(join(value.root, "intervals-icu.bin"))).toEqual(before);
+          expect(value.applyCredential).not.toHaveBeenCalled();
+          await expect(value.vault.credentialStatuses()).resolves.toContainEqual(
+            status("configured", "active"),
+          );
+        } finally {
+          await rm(value.base, { recursive: true, force: true });
+        }
+      },
+    );
+  }
 
   it("retains a coherent verified candidate when runtime application is uncertain", async () => {
     const value = await temporaryVault({});
@@ -653,9 +689,12 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
         current: status("configured", "failed"),
       });
       expect(await readFile(join(value.root, "intervals-icu.bin"))).not.toEqual(before);
-      expect(await readFile(join(value.root, "intervals-icu.bin"))).toEqual(
-        Buffer.from(`sealed:${API_KEY}`, "utf8"),
-      );
+      const ciphertext = await readFile(join(value.root, "intervals-icu.bin"));
+      if (value.platform === "win32") {
+        expect(ciphertext.includes(Buffer.from(API_KEY, "utf8"))).toBe(false);
+      } else {
+        expect(ciphertext).toEqual(Buffer.from(`sealed:${API_KEY}`, "utf8"));
+      }
       expect(appliedRuntimeKey).toBe(API_KEY);
       expect(value.applyCredential).toHaveBeenCalledOnce();
       await expect(value.vault.credentialStatuses()).resolves.toContainEqual(
@@ -683,9 +722,12 @@ describe("Desktop Intervals.icu clipboard IPC", () => {
         reason: "runtime-uncertain",
         current: status("configured", "failed"),
       });
-      expect(await readFile(join(value.root, "intervals-icu.bin"))).toEqual(
-        Buffer.from(`sealed:${API_KEY}`, "utf8"),
-      );
+      const ciphertext = await readFile(join(value.root, "intervals-icu.bin"));
+      if (value.platform === "win32") {
+        expect(ciphertext.includes(Buffer.from(API_KEY, "utf8"))).toBe(false);
+      } else {
+        expect(ciphertext).toEqual(Buffer.from(`sealed:${API_KEY}`, "utf8"));
+      }
       expect(ownerClaimed).toBe(true);
       expect(value.clearCredential).not.toHaveBeenCalled();
       await expect(value.vault.credentialStatuses()).resolves.toContainEqual(

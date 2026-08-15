@@ -83,7 +83,14 @@ describe("login-item residency", () => {
       status: "requires-approval",
     });
     expect(getLoginItemSettings).toHaveBeenCalledOnce();
-    expect(getLoginItemSettings).toHaveBeenCalledWith();
+    if (process.platform === "win32") {
+      expect(getLoginItemSettings).toHaveBeenCalledWith({
+        path: process.execPath,
+        args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+      });
+    } else {
+      expect(getLoginItemSettings).toHaveBeenCalledWith();
+    }
     expect(Object.keys(readLoginItemResidency(app))).toEqual([
       "openAtLogin",
       "executableWillLaunchAtLogin",
@@ -99,10 +106,34 @@ describe("login-item residency", () => {
     const app = { getLoginItemSettings, setLoginItemSettings } as never;
     expect(setLoginItemResidency(app, openAtLogin).openAtLogin).toBe(openAtLogin);
     expect(setLoginItemSettings).toHaveBeenCalledOnce();
-    expect(setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin });
-    expect(Object.keys(setLoginItemSettings.mock.calls[0]?.[0] ?? {})).toEqual(["openAtLogin"]);
+    if (process.platform === "win32") {
+      expect(setLoginItemSettings).toHaveBeenCalledWith({
+        openAtLogin,
+        path: process.execPath,
+        args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+        enabled: openAtLogin,
+        name: DESKTOP_APP_USER_MODEL_ID,
+      });
+      expect(Object.keys(setLoginItemSettings.mock.calls[0]?.[0] ?? {})).toEqual([
+        "openAtLogin",
+        "path",
+        "args",
+        "enabled",
+        "name",
+      ]);
+    } else {
+      expect(setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin });
+      expect(Object.keys(setLoginItemSettings.mock.calls[0]?.[0] ?? {})).toEqual(["openAtLogin"]);
+    }
     expect(getLoginItemSettings).toHaveBeenCalledOnce();
-    expect(getLoginItemSettings).toHaveBeenCalledWith();
+    if (process.platform === "win32") {
+      expect(getLoginItemSettings).toHaveBeenCalledWith({
+        path: process.execPath,
+        args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+      });
+    } else {
+      expect(getLoginItemSettings).toHaveBeenCalledWith();
+    }
   });
 
   it("accepts both clean statuses and rejects every active observation", () => {
@@ -207,8 +238,12 @@ describe("background-at-login preference", () => {
     });
 
     const target = join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME);
-    expect((await stat(root)).mode & 0o777).toBe(LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE);
-    expect((await stat(target)).mode & 0o777).toBe(LOGIN_ITEM_PREFERENCE_FILE_MODE);
+    if (process.platform === "win32") {
+      expect((await stat(target)).nlink).toBe(1);
+    } else {
+      expect((await stat(root)).mode & 0o777).toBe(LOGIN_ITEM_PREFERENCE_DIRECTORY_MODE);
+      expect((await stat(target)).mode & 0o777).toBe(LOGIN_ITEM_PREFERENCE_FILE_MODE);
+    }
     expect(JSON.parse(await readFile(target, "utf8"))).toEqual({
       schemaVersion: 2,
       enabled: true,
@@ -216,68 +251,81 @@ describe("background-at-login preference", () => {
     });
   });
 
-  it("anchors a newly created preference namespace before publishing state", async () => {
-    const root = join(await scratch(), "preferences");
-    const syncParentDirectory = vi.fn(async (path: string) => {
-      expect(path).toBe(dirname(root));
-      throw new TypeError("synthetic parent sync failure");
-    });
-    const store = createBackgroundAtLoginPreferenceStore({ root, syncParentDirectory });
+  it.skipIf(process.platform === "win32")(
+    "anchors a newly created preference namespace before publishing state",
+    async () => {
+      const root = join(await scratch(), "preferences");
+      const syncParentDirectory = vi.fn(async (path: string) => {
+        expect(path).toBe(dirname(root));
+        throw Object.assign(new Error("synthetic parent sync failure"), { code: "EIO" });
+      });
+      const store = createBackgroundAtLoginPreferenceStore({ root, syncParentDirectory });
 
-    await expect(store.set(true)).resolves.toEqual({ status: "refused" });
-    await expect(lstat(join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME))).rejects.toMatchObject(
-      {
+      await expect(store.set(true)).resolves.toEqual({ status: "refused" });
+      await expect(
+        lstat(join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME)),
+      ).rejects.toMatchObject({
         code: "ENOENT",
-      },
-    );
-    expect(syncParentDirectory).toHaveBeenCalledOnce();
-  });
+      });
+      expect(syncParentDirectory).toHaveBeenCalledOnce();
+    },
+  );
 
-  it("restores the previous preference before refusing a post-rename durability failure", async () => {
-    const root = join(await scratch(), "preferences");
-    const seed = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
-    await seed.set(false);
-    let syncCount = 0;
-    const store = createBackgroundAtLoginPreferenceStore({
-      root,
-      createId: () => `write-${syncCount}`,
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 2) throw new TypeError("synthetic replacement sync failure");
-        const directory = await open(root, "r");
-        try {
-          await directory.sync();
-        } finally {
-          await directory.close();
-        }
-      },
-    });
+  it.skipIf(process.platform === "win32")(
+    "restores the previous preference before refusing a post-rename durability failure",
+    async () => {
+      const root = join(await scratch(), "preferences");
+      const seed = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
+      await seed.set(false);
+      let syncCount = 0;
+      const store = createBackgroundAtLoginPreferenceStore({
+        root,
+        createId: () => `write-${syncCount}`,
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 2) {
+            throw Object.assign(new Error("synthetic replacement sync failure"), { code: "EIO" });
+          }
+          const directory = await open(root, "r");
+          try {
+            await directory.sync();
+          } finally {
+            await directory.close();
+          }
+        },
+      });
 
-    await expect(store.set(true)).resolves.toEqual({ status: "refused" });
-    await expect(store.read()).resolves.toEqual({
-      state: "configured",
-      enabled: false,
-      loginLaunchBehavior: "background",
-    });
-  });
+      await expect(store.set(true)).resolves.toEqual({ status: "refused" });
+      await expect(store.read()).resolves.toEqual({
+        state: "configured",
+        enabled: false,
+        loginLaunchBehavior: "background",
+      });
+    },
+  );
 
-  it("fails closed with explicit uncertainty when preference convergence cannot be proven", async () => {
-    const root = join(await scratch(), "preferences");
-    const seed = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
-    await seed.set(false);
-    const store = createBackgroundAtLoginPreferenceStore({
-      root,
-      createId: () => "never-durable",
-      syncDirectory: async () => {
-        throw new TypeError("synthetic persistent directory sync failure");
-      },
-    });
+  it.skipIf(process.platform === "win32")(
+    "fails closed with explicit uncertainty when preference convergence cannot be proven",
+    async () => {
+      const root = join(await scratch(), "preferences");
+      const seed = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
+      await seed.set(false);
+      const store = createBackgroundAtLoginPreferenceStore({
+        root,
+        createId: () => "never-durable",
+        syncDirectory: async () => {
+          throw Object.assign(new Error("synthetic persistent directory sync failure"), {
+            code: "EIO",
+          });
+        },
+      });
 
-    await expect(store.set(true)).resolves.toEqual({ status: "uncertain" });
-    await expect(store.read()).resolves.toEqual({ state: "uncertain", enabled: false });
-  });
+      await expect(store.set(true)).resolves.toEqual({ status: "uncertain" });
+      await expect(store.read()).resolves.toEqual({ state: "uncertain", enabled: false });
+    },
+  );
 
-  it.each([
+  it.skipIf(process.platform === "win32").each([
     ["prior", false],
     ["candidate", true],
   ] as const)(
@@ -305,26 +353,29 @@ describe("background-at-login preference", () => {
     },
   );
 
-  it("keeps an uncertain login launch in the background without trusting visible state", async () => {
-    const root = join(await scratch(), "preferences");
-    const seed = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
-    await expect(seed.set(false)).resolves.toEqual({ status: "stored", enabled: false });
-    await publishUnsyncedPreference(root, true);
-    const syncDirectory = vi.fn(async () => {
-      throw new TypeError("synthetic reopen sync failure");
-    });
-    const reopened = createBackgroundAtLoginPreferenceStore({ root, syncDirectory });
+  it.skipIf(process.platform === "win32")(
+    "keeps an uncertain login launch in the background without trusting visible state",
+    async () => {
+      const root = join(await scratch(), "preferences");
+      const seed = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
+      await expect(seed.set(false)).resolves.toEqual({ status: "stored", enabled: false });
+      await publishUnsyncedPreference(root, true);
+      const syncDirectory = vi.fn(async () => {
+        throw Object.assign(new Error("synthetic reopen sync failure"), { code: "EIO" });
+      });
+      const reopened = createBackgroundAtLoginPreferenceStore({ root, syncDirectory });
 
-    await expect(reopened.read()).resolves.toEqual({ state: "uncertain", enabled: false });
-    await expect(reopened.set(false)).resolves.toEqual({ status: "uncertain" });
-    await expect(
-      shouldStartInBackgroundAtLogin(
-        { getLoginItemSettings: () => ({ wasOpenedAtLogin: true }) } as never,
-        reopened,
-      ),
-    ).resolves.toBe(true);
-    expect(syncDirectory).toHaveBeenCalledOnce();
-  });
+      await expect(reopened.read()).resolves.toEqual({ state: "uncertain", enabled: false });
+      await expect(reopened.set(false)).resolves.toEqual({ status: "uncertain" });
+      await expect(
+        shouldStartInBackgroundAtLogin(
+          { getLoginItemSettings: () => ({ wasOpenedAtLogin: true }) } as never,
+          reopened,
+        ),
+      ).resolves.toBe(true);
+      expect(syncDirectory).toHaveBeenCalledOnce();
+    },
+  );
 
   it("cleans exact owned crash artifacts without touching namespace lookalikes", async () => {
     const root = join(await scratch(), "preferences");
@@ -434,14 +485,34 @@ describe("background-at-login preference", () => {
       wasOpenedAtLogin: false,
     });
 
-    await expect(shouldStartInBackgroundAtLogin(manualLaunch as never, { read })).resolves.toBe(
-      false,
-    );
+    const manualLaunchOptions =
+      process.platform === "win32" ? { commandLine: [process.execPath] } : undefined;
+    const loginLaunchOptions =
+      process.platform === "win32"
+        ? { commandLine: [process.execPath, WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT] }
+        : undefined;
+
+    await expect(
+      shouldStartInBackgroundAtLogin(manualLaunch as never, { read }, manualLaunchOptions),
+    ).resolves.toBe(false);
     expect(read).not.toHaveBeenCalled();
-    await expect(shouldStartInBackgroundAtLogin(loginLaunch as never, { read })).resolves.toBe(
-      true,
-    );
+    if (process.platform === "win32") {
+      expect(manualLaunch.getLoginItemSettings).not.toHaveBeenCalled();
+    } else {
+      expect(manualLaunch.getLoginItemSettings).toHaveBeenCalledWith();
+    }
+    await expect(
+      shouldStartInBackgroundAtLogin(loginLaunch as never, { read }, loginLaunchOptions),
+    ).resolves.toBe(true);
     expect(read).toHaveBeenCalledOnce();
+    if (process.platform === "win32") {
+      expect(loginLaunch.getLoginItemSettings).toHaveBeenCalledWith({
+        path: process.execPath,
+        args: [WINDOWS_BACKGROUND_AT_LOGIN_ARGUMENT],
+      });
+    } else {
+      expect(loginLaunch.getLoginItemSettings).toHaveBeenCalledWith();
+    }
   });
 
   it("starts in the Windows background only for the exact enabled login invocation", async () => {
@@ -511,15 +582,17 @@ describe("background-at-login preference", () => {
     ).resolves.toBe(false);
   });
 
-  it("fails closed for malformed, permissive, and non-boolean preference state", async () => {
+  it("fails closed for malformed and non-boolean state, plus permissive POSIX state", async () => {
     const root = join(await scratch(), "preferences");
     const first = createBackgroundAtLoginPreferenceStore({ root, createId: () => "seed" });
     await expect(first.set(true)).resolves.toEqual({ status: "stored", enabled: true });
     const target = join(root, BACKGROUND_AT_LOGIN_PREFERENCE_FILE_NAME);
 
-    await chmod(target, 0o644);
-    await expect(first.read()).resolves.toEqual({ state: "unavailable", enabled: false });
-    await chmod(target, LOGIN_ITEM_PREFERENCE_FILE_MODE);
+    if (process.platform !== "win32") {
+      await chmod(target, 0o644);
+      await expect(first.read()).resolves.toEqual({ state: "unavailable", enabled: false });
+      await chmod(target, LOGIN_ITEM_PREFERENCE_FILE_MODE);
+    }
     await writeFile(target, '{"schemaVersion":1,"enabled":"true"}\n', { mode: 0o600 });
     await expect(first.read()).resolves.toEqual({ state: "unavailable", enabled: false });
     await writeFile(

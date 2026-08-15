@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { CoachClient } from "@enduragent/coach-client";
 import type { RuntimeConfigSnapshot, SpendSummary } from "@enduragent/coach-contract";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
@@ -50,6 +52,7 @@ import type { DesktopUpdateState } from "../src/update/controller.js";
 import { createDesktopUpdateController } from "../src/update/controller.js";
 import { CONVERSATION_FIELDS } from "../src/ui/settings/copy.js";
 import { SettingsView } from "../src/ui/settings/SettingsView.js";
+import settingsStyles from "../src/ui/settings/SettingsView.module.css";
 import { testBridge } from "./onboarding-harness.js";
 
 interface Deferred<T> {
@@ -795,6 +798,25 @@ describe("conversation settings", () => {
     expect(subject.calls.find((call) => call.method === "configureRuntime")?.params).toEqual({
       session: { idleMinutes: 45 },
     });
+  });
+
+  it("keeps the timezone field editable and saves the zone in one runtime mutation", async () => {
+    const user = userEvent.setup();
+    const subject = await renderSettings();
+
+    const timezone = screen.getByLabelText("Timezone");
+    expect(timezone).toBeEnabled();
+    await user.clear(timezone);
+    await user.type(timezone, "Asia/Qyzylorda");
+    await user.click(screen.getByRole("button", { name: "Save conversation settings" }));
+
+    await waitFor(() => {
+      expect(useEnduragentStore.getState().settings.conversation.status).toBe("saved");
+    });
+    expect(subject.calls.find((call) => call.method === "configureRuntime")?.params).toEqual({
+      session: { timezone: "Asia/Qyzylorda" },
+    });
+    expect(subject.calls.filter((call) => call.method === "configureRuntime")).toHaveLength(1);
   });
 
   it("keeps a managed field read-only", async () => {
@@ -1600,6 +1622,29 @@ describe("coach route", () => {
     expect(
       coach.getByText("Active coach settings are unavailable or not configured."),
     ).toBeInTheDocument();
+  });
+
+  it("stacks the provider label title above its active-route detail", async () => {
+    await renderSettings();
+
+    const provider = screen.getByRole("combobox", { name: /Provider/u });
+    const label = document.querySelector<HTMLLabelElement>(`label[for="${provider.id}"]`);
+    expect(label).not.toBeNull();
+    expect(label?.querySelector(`.${settingsStyles.rowTitle}`)?.textContent).toBe("Provider");
+    expect(label?.querySelector(`.${settingsStyles.rowDetail}`)?.textContent).toMatch(
+      /^Currently active: /u,
+    );
+
+    const stylesheet = await readFile(
+      resolve(import.meta.dirname, "..", "src", "ui", "settings", "SettingsView.module.css"),
+      "utf8",
+    );
+    const rule = /^\.label\s*\{([^}]*)\}/mu.exec(stylesheet)?.[1] ?? "";
+    expect(rule).toMatch(/display:\s*flex;/u);
+    expect(rule).toMatch(/flex-direction:\s*column;/u);
+    expect(rule).toMatch(/align-items:\s*stretch;/u);
+    expect(rule).toMatch(/flex:\s*1;/u);
+    expect(rule).toMatch(/min-width:\s*0;/u);
   });
 });
 

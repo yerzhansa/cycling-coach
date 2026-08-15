@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { isDesktopUpdateReleaseEligible } from "../src/main/update-eligibility.js";
 
@@ -21,7 +22,7 @@ describe("desktop update release eligibility", () => {
   it("accepts only the marked packaged mac release with its exact stable version", () => {
     const readPackageJson = vi.fn(() => '{"version":"0.1.0","enduragentDesktopRelease":true}');
     expect(eligibility({ readPackageJson })).toBe(true);
-    expect(readPackageJson).toHaveBeenCalledWith(`${appPath}/package.json`);
+    expect(readPackageJson).toHaveBeenCalledWith(join(appPath, "package.json"));
   });
 
   it.each([

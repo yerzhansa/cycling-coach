@@ -330,7 +330,11 @@ export interface EngineHostPorts {
   readonly usage: UsagePort;
   readonly stateReader: AthleteStateReaderPort;
   readonly readReferenceState: () => ReferenceStateSnapshot;
-  readonly getAccessToken: (profileName: string, signal?: AbortSignal) => Promise<string>;
+  readonly getAccessToken: (
+    profileName: string,
+    signal?: AbortSignal,
+    rejectedAccessToken?: string,
+  ) => Promise<string>;
   readonly classifyFailure: (error: unknown) => FailureReason;
   readonly extractRetryAfterMs: (error: unknown) => number | null;
   readonly now: () => number;

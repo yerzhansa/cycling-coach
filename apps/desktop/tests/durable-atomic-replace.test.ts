@@ -9,6 +9,10 @@ import {
 } from "../src/main/durable-atomic-replace.js";
 
 const roots: string[] = [];
+const durabilityPlatforms = [
+  { name: "POSIX", platform: "darwin" },
+  { name: "Windows", platform: "win32" },
+] as const;
 
 async function temporaryRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "enduragent-durable-replace-"));
@@ -35,269 +39,385 @@ describe("durable atomic replace", () => {
     });
 
     expect(result).toEqual({ state: "durably-committed" });
-    expect((await stat(target)).mode & 0o777).toBe(0o600);
+    if (process.platform === "win32") {
+      await expect(readFile(target, "utf8")).resolves.toBe("candidate");
+    } else {
+      expect((await stat(target)).mode & 0o777).toBe(0o600);
+    }
   });
 
-  it("reports not committed when temporary creation fails", async () => {
-    const root = await temporaryRoot();
-    const target = join(root, "setting.json");
-    await writeFile(target, "old", { mode: 0o600 });
-    const removeFile = vi.fn(async () => undefined);
+  it.each(durabilityPlatforms)(
+    "reports the $name pre-commit outcome when temporary creation fails",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const target = join(root, "setting.json");
+      await writeFile(target, "old", { mode: 0o600 });
+      const removeFile = vi.fn(async () => undefined);
 
-    const result = await durableAtomicReplace({
-      root,
-      fileName: "setting.json",
-      contents: "candidate",
-      mode: 0o600,
-      createId: () => "create-failure",
-      openFile: vi.fn(async () => {
-        throw new TypeError("synthetic temporary create failure");
-      }) as never,
-      removeFile: removeFile as never,
-    });
+      const replacement = durableAtomicReplace({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        mode: 0o600,
+        platform,
+        createId: () => "create-failure",
+        openFile: vi.fn(async () => {
+          throw new TypeError("synthetic temporary create failure");
+        }) as never,
+        removeFile: removeFile as never,
+      });
 
-    expect(result).toEqual({ state: "not-committed" });
-    await expect(readFile(target, "utf8")).resolves.toBe("old");
-    expect(removeFile).toHaveBeenCalledWith(join(root, ".setting.json.create-failure.tmp"), {
-      force: true,
-    });
-  });
+      if (platform === "win32") {
+        await expect(replacement).rejects.toMatchObject({
+          message: "Windows private path policy failed",
+          stage: "content-write",
+        });
+      } else {
+        await expect(replacement).resolves.toEqual({ state: "not-committed" });
+      }
+      await expect(readFile(target, "utf8")).resolves.toBe("old");
+      expect(removeFile).toHaveBeenCalledWith(join(root, ".setting.json.create-failure.tmp"), {
+        force: true,
+      });
+    },
+  );
 
-  it("reports not committed when writing the temporary file fails", async () => {
-    const root = await temporaryRoot();
-    const target = join(root, "setting.json");
-    await writeFile(target, "old", { mode: 0o600 });
-    const sync = vi.fn(async () => undefined);
-    const close = vi.fn(async () => undefined);
+  it.each(durabilityPlatforms)(
+    "reports the $name pre-commit outcome when writing the temporary file fails",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const target = join(root, "setting.json");
+      await writeFile(target, "old", { mode: 0o600 });
+      const close = vi.fn(async () => undefined);
+      const sync = vi.fn(async () => undefined);
 
-    const result = await durableAtomicReplace({
-      root,
-      fileName: "setting.json",
-      contents: "candidate",
-      mode: 0o600,
-      createId: () => "write-failure",
-      openFile: vi.fn(async () => ({
-        writeFile: async () => {
-          throw new TypeError("synthetic temporary write failure");
+      const replacement = durableAtomicReplace({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        mode: 0o600,
+        platform,
+        createId: () => "write-failure",
+        openFile: (async (path, flags, mode) => {
+          const handle = await open(path, flags, mode);
+          return new Proxy(handle, {
+            get(target, property) {
+              if (property === "sync") return sync;
+              if (property === "writeFile") {
+                return async () => {
+                  throw new TypeError("synthetic temporary write failure");
+                };
+              }
+              if (property === "close") {
+                return async () => {
+                  await close();
+                  await handle.close();
+                };
+              }
+              const value = Reflect.get(target, property);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        }) as typeof open,
+      });
+
+      if (platform === "win32") {
+        await expect(replacement).rejects.toMatchObject({
+          message: "Windows private path policy failed",
+          stage: "content-write",
+        });
+      } else {
+        await expect(replacement).resolves.toEqual({ state: "not-committed" });
+        expect(sync).not.toHaveBeenCalled();
+      }
+      await expect(readFile(target, "utf8")).resolves.toBe("old");
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(durabilityPlatforms)(
+    "reports the $name pre-commit outcome when syncing the temporary file fails",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const target = join(root, "setting.json");
+      await writeFile(target, "old", { mode: 0o600 });
+      const close = vi.fn(async () => undefined);
+      const sync = vi.fn(async () => {
+        throw new TypeError("synthetic temporary file sync failure");
+      });
+
+      const replacement = durableAtomicReplace({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        mode: 0o600,
+        platform,
+        createId: () => "file-sync-failure",
+        openFile: (async (path, flags, mode) => {
+          const handle = await open(path, flags, mode);
+          return new Proxy(handle, {
+            get(target, property) {
+              if (property === "sync") return sync;
+              if (property === "close") {
+                return async () => {
+                  await close();
+                  await handle.close();
+                };
+              }
+              const value = Reflect.get(target, property);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        }) as typeof open,
+      });
+
+      if (platform === "win32") {
+        await expect(replacement).rejects.toMatchObject({
+          message: "Windows private path policy failed",
+          stage: "file-flush",
+        });
+      } else {
+        await expect(replacement).resolves.toEqual({ state: "not-committed" });
+      }
+      await expect(readFile(target, "utf8")).resolves.toBe("old");
+      expect(sync).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(durabilityPlatforms)(
+    "keeps the $name pre-rename outcome truthful when temporary cleanup also fails",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const target = join(root, "setting.json");
+      const temporary = join(root, ".setting.json.cleanup-failure.tmp");
+      await writeFile(target, "old", { mode: 0o600 });
+      const removeFile = vi.fn(async () => {
+        throw new TypeError("synthetic temporary cleanup failure");
+      });
+
+      const replacement = durableAtomicReplace({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        mode: 0o600,
+        platform,
+        createId: () => "cleanup-failure",
+        renameFile: async () => {
+          throw new TypeError("synthetic rename failure");
         },
-        sync,
-        close,
-      })) as never,
-    });
+        removeFile: removeFile as never,
+      });
 
-    expect(result).toEqual({ state: "not-committed" });
-    await expect(readFile(target, "utf8")).resolves.toBe("old");
-    expect(sync).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledOnce();
-  });
+      if (platform === "win32") {
+        await expect(replacement).rejects.toMatchObject({
+          message: "Windows private path policy failed",
+          stage: "rename",
+        });
+      } else {
+        await expect(replacement).resolves.toEqual({ state: "not-committed" });
+      }
+      await expect(readFile(target, "utf8")).resolves.toBe("old");
+      await expect(readFile(temporary, "utf8")).resolves.toBe("candidate");
+      expect(removeFile).toHaveBeenCalledWith(temporary, { force: true });
+    },
+  );
 
-  it("reports not committed when syncing the temporary file fails", async () => {
-    const root = await temporaryRoot();
-    const target = join(root, "setting.json");
-    await writeFile(target, "old", { mode: 0o600 });
-    const close = vi.fn(async () => undefined);
-    const sync = vi.fn(async () => {
-      throw new TypeError("synthetic temporary file sync failure");
-    });
+  it.each(durabilityPlatforms)(
+    "reports the $name outcome when rename published the candidate but directory sync failed",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const target = join(root, "setting.json");
+      await writeFile(target, "old", { mode: 0o600 });
 
-    const result = await durableAtomicReplace({
-      root,
-      fileName: "setting.json",
-      contents: "candidate",
-      mode: 0o600,
-      createId: () => "file-sync-failure",
-      openFile: vi.fn(async () => ({
-        writeFile: async () => undefined,
-        chmod: async () => undefined,
-        sync,
-        close,
-      })) as never,
-    });
+      const result = await durableAtomicReplace({
+        root,
+        fileName: "setting.json",
+        contents: Buffer.from("candidate"),
+        mode: 0o600,
+        platform,
+        createId: () => "uncertain",
+        syncDirectory: async () => {
+          throw new TypeError("synthetic directory sync failure");
+        },
+      });
 
-    expect(result).toEqual({ state: "not-committed" });
-    await expect(readFile(target, "utf8")).resolves.toBe("old");
-    expect(sync).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
-  });
+      expect(result).toEqual({
+        state: platform === "win32" ? "durably-committed" : "commit-uncertain",
+      });
+      await expect(readFile(target, "utf8")).resolves.toBe("candidate");
+      const directory = await open(root, "r");
+      await directory.close();
+    },
+  );
 
-  it("keeps a pre-rename refusal truthful when temporary cleanup also fails", async () => {
-    const root = await temporaryRoot();
-    const target = join(root, "setting.json");
-    const temporary = join(root, ".setting.json.cleanup-failure.tmp");
-    await writeFile(target, "old", { mode: 0o600 });
-    const removeFile = vi.fn(async () => {
-      throw new TypeError("synthetic temporary cleanup failure");
-    });
+  it.each(durabilityPlatforms)(
+    "distinguishes the $name pre-rename outcome from a durable replacement",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const target = join(root, "setting.json");
+      await writeFile(target, "old", { mode: 0o600 });
+      const refused = durableAtomicReplace({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        mode: 0o600,
+        platform,
+        createId: () => "refused",
+        renameFile: async () => {
+          throw new TypeError("synthetic rename failure");
+        },
+        syncDirectory: async () => undefined,
+      });
+      if (platform === "win32") {
+        await expect(refused).rejects.toMatchObject({
+          message: "Windows private path policy failed",
+          stage: "rename",
+        });
+      } else {
+        await expect(refused).resolves.toEqual({ state: "not-committed" });
+      }
+      await expect(readFile(target, "utf8")).resolves.toBe("old");
 
-    const result = await durableAtomicReplace({
-      root,
-      fileName: "setting.json",
-      contents: "candidate",
-      mode: 0o600,
-      createId: () => "cleanup-failure",
-      renameFile: async () => {
-        throw new TypeError("synthetic rename failure");
-      },
-      removeFile: removeFile as never,
-    });
+      const committed = await durableAtomicReplace({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        mode: 0o600,
+        platform,
+        createId: () => "committed",
+        syncDirectory: async () => undefined,
+      });
+      expect(committed).toEqual({ state: "durably-committed" });
+      await expect(readFile(target, "utf8")).resolves.toBe("candidate");
+    },
+  );
 
-    expect(result).toEqual({ state: "not-committed" });
-    await expect(readFile(target, "utf8")).resolves.toBe("old");
-    await expect(readFile(temporary, "utf8")).resolves.toBe("candidate");
-    expect(removeFile).toHaveBeenCalledWith(temporary, { force: true });
-  });
+  it.each(durabilityPlatforms)(
+    "does not retroactively change a $name durable result during directory cleanup",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const close = vi.fn(async () => {
+        throw new TypeError("synthetic close failure");
+      });
+      const result = await durableAtomicReplace({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        mode: 0o600,
+        platform,
+        createId: () => "close-failure",
+        openDirectory: vi.fn(async () => ({ sync: async () => {}, close })) as never,
+      });
 
-  it("reports commit uncertainty when rename published the candidate but directory sync failed", async () => {
-    const root = await temporaryRoot();
-    const target = join(root, "setting.json");
-    await writeFile(target, "old", { mode: 0o600 });
+      expect(result).toEqual({ state: "durably-committed" });
+      if (platform === "win32") {
+        expect(close).not.toHaveBeenCalled();
+      } else {
+        expect(close).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
-    const result = await durableAtomicReplace({
-      root,
-      fileName: "setting.json",
-      contents: Buffer.from("candidate"),
-      mode: 0o600,
-      createId: () => "uncertain",
-      syncDirectory: async () => {
-        throw new TypeError("synthetic directory sync failure");
-      },
-    });
+  it.each(durabilityPlatforms)(
+    "resolves the $name uncertain replacement against the prior bytes",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const target = join(root, "setting.json");
+      const prior = Buffer.from("old");
+      const candidate = Buffer.from("candidate");
+      await writeFile(target, prior, { mode: 0o600 });
+      let syncCount = 0;
 
-    expect(result).toEqual({ state: "commit-uncertain" });
-    await expect(readFile(target, "utf8")).resolves.toBe("candidate");
-    const directory = await open(root, "r");
-    await directory.close();
-  });
+      const result = await durablyReplaceReversible({
+        root,
+        fileName: "setting.json",
+        contents: candidate,
+        previousContents: prior,
+        mode: 0o600,
+        platform,
+        createId: () => `attempt-${syncCount}`,
+        renameFile: rename,
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 1) throw new TypeError("synthetic first directory sync failure");
+        },
+      });
 
-  it("distinguishes pre-rename refusal from a durable replacement", async () => {
-    const root = await temporaryRoot();
-    const target = join(root, "setting.json");
-    await writeFile(target, "old", { mode: 0o600 });
-    const refused = await durableAtomicReplace({
-      root,
-      fileName: "setting.json",
-      contents: "candidate",
-      mode: 0o600,
-      createId: () => "refused",
-      renameFile: async () => {
-        throw new TypeError("synthetic rename failure");
-      },
-    });
-    expect(refused).toEqual({ state: "not-committed" });
-    await expect(readFile(target, "utf8")).resolves.toBe("old");
+      expect(result).toEqual({ state: platform === "win32" ? "applied" : "refused" });
+      await expect(readFile(target, "utf8")).resolves.toBe(
+        platform === "win32" ? "candidate" : "old",
+      );
+    },
+  );
 
-    const committed = await durableAtomicReplace({
-      root,
-      fileName: "setting.json",
-      contents: "candidate",
-      mode: 0o600,
-      createId: () => "committed",
-    });
-    expect(committed).toEqual({ state: "durably-committed" });
-    await expect(readFile(target, "utf8")).resolves.toBe("candidate");
-  });
+  it.each(durabilityPlatforms)(
+    "returns the $name result without requesting a second id after the candidate became visible",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const target = join(root, "setting.json");
+      await writeFile(target, "old", { mode: 0o600 });
+      let idCalls = 0;
 
-  it("does not retroactively change a durable result when directory descriptor cleanup fails", async () => {
-    const root = await temporaryRoot();
-    const close = vi.fn(async () => {
-      throw new TypeError("synthetic close failure");
-    });
-    const result = await durableAtomicReplace({
-      root,
-      fileName: "setting.json",
-      contents: "candidate",
-      mode: 0o600,
-      createId: () => "close-failure",
-      openDirectory: vi.fn(async () => ({ sync: async () => {}, close })) as never,
-    });
+      const result = await durablyReplaceReversible({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        previousContents: Buffer.from("old"),
+        mode: 0o600,
+        platform,
+        createId: () => {
+          idCalls += 1;
+          if (idCalls === 1) return "initial";
+          throw new TypeError("synthetic compensation id failure");
+        },
+        syncDirectory: async () => {
+          throw new TypeError("synthetic directory sync failure");
+        },
+      });
 
-    expect(result).toEqual({ state: "durably-committed" });
-    expect(close).toHaveBeenCalledOnce();
-  });
+      expect(result).toEqual({ state: platform === "win32" ? "applied" : "uncertain" });
+      if (platform === "win32") {
+        await expect(readFile(target, "utf8")).resolves.toBe("candidate");
+      } else {
+        expect(["old", "candidate"]).toContain(await readFile(target, "utf8"));
+      }
+      expect(idCalls).toBe(1);
+    },
+  );
 
-  it("durably restores the prior bytes before refusing an uncertain replacement", async () => {
-    const root = await temporaryRoot();
-    const target = join(root, "setting.json");
-    const prior = Buffer.from("old");
-    const candidate = Buffer.from("candidate");
-    await writeFile(target, prior, { mode: 0o600 });
-    let syncCount = 0;
+  it.each(durabilityPlatforms)(
+    "reuses one $name operation id while first-write convergence cleans its tombstone",
+    async ({ platform }) => {
+      const root = await temporaryRoot();
+      const target = join(root, "setting.json");
+      let syncCount = 0;
+      let idCount = 0;
 
-    const result = await durablyReplaceReversible({
-      root,
-      fileName: "setting.json",
-      contents: candidate,
-      previousContents: prior,
-      mode: 0o600,
-      createId: () => `attempt-${syncCount}`,
-      renameFile: rename,
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 1) throw new TypeError("synthetic first directory sync failure");
-        const directory = await open(root, "r");
-        try {
-          await directory.sync();
-        } finally {
-          await directory.close();
-        }
-      },
-    });
+      const result = await durablyReplaceReversible({
+        root,
+        fileName: "setting.json",
+        contents: "candidate",
+        previousContents: undefined,
+        mode: 0o600,
+        platform,
+        createId: () => `operation-${++idCount}`,
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount <= 2) throw new TypeError("synthetic directory sync failure");
+        },
+      });
 
-    expect(result).toEqual({ state: "refused" });
-    await expect(readFile(target, "utf8")).resolves.toBe("old");
-  });
-
-  it("returns uncertainty without requesting a second id after the candidate became visible", async () => {
-    const root = await temporaryRoot();
-    const target = join(root, "setting.json");
-    await writeFile(target, "old", { mode: 0o600 });
-    let idCalls = 0;
-
-    const result = await durablyReplaceReversible({
-      root,
-      fileName: "setting.json",
-      contents: "candidate",
-      previousContents: Buffer.from("old"),
-      mode: 0o600,
-      createId: () => {
-        idCalls += 1;
-        if (idCalls === 1) return "initial";
-        throw new TypeError("synthetic compensation id failure");
-      },
-      syncDirectory: async () => {
-        throw new TypeError("synthetic directory sync failure");
-      },
-    });
-
-    expect(result).toEqual({ state: "uncertain" });
-    expect(["old", "candidate"]).toContain(await readFile(target, "utf8"));
-    expect(idCalls).toBe(1);
-  });
-
-  it("reuses one operation id so first-write convergence cleans its original tombstone", async () => {
-    const root = await temporaryRoot();
-    const target = join(root, "setting.json");
-    let syncCount = 0;
-    let idCount = 0;
-
-    const result = await durablyReplaceReversible({
-      root,
-      fileName: "setting.json",
-      contents: "candidate",
-      previousContents: undefined,
-      mode: 0o600,
-      createId: () => `operation-${++idCount}`,
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount <= 2) throw new TypeError("synthetic directory sync failure");
-      },
-    });
-
-    expect(result).toEqual({ state: "refused" });
-    await expect(readFile(target, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await readdir(root)).filter((entry) => entry.endsWith(".deleted"))).toEqual([]);
-    expect(idCount).toBe(1);
-  });
+      expect(result).toEqual({ state: platform === "win32" ? "applied" : "refused" });
+      if (platform === "win32") {
+        await expect(readFile(target, "utf8")).resolves.toBe("candidate");
+      } else {
+        await expect(readFile(target, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect((await readdir(root)).filter((entry) => entry.endsWith(".deleted"))).toEqual([]);
+      expect(idCount).toBe(1);
+    },
+  );
 
   it("uses the Windows durability taxonomy without chmod or directory sync", async () => {
     const root = await temporaryRoot();
