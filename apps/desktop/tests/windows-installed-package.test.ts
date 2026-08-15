@@ -15,6 +15,7 @@ import {
   parseRegisteredUninstallCommands,
   runWindowsInstalledPackage,
   validateSignaturePolicy,
+  waitForCleanupEvidence,
 } from "../scripts/windows-installed-package.mjs";
 import {
   createPrimaryAcknowledgmentFailureObserver,
@@ -70,6 +71,21 @@ function registration(overrides: Record<string, unknown> = {}) {
       '"C:\\Users\\runner\\AppData\\Local\\Programs\\Enduragent\\Uninstall Enduragent.exe" /currentuser',
     quietUninstallString:
       '"C:\\Users\\runner\\AppData\\Local\\Programs\\Enduragent\\Uninstall Enduragent.exe" /currentuser /S',
+    ...overrides,
+  };
+}
+
+function cleanCleanupEvidence(overrides: Record<string, unknown> = {}) {
+  return {
+    ok: true as const,
+    registrations: [],
+    programResidues: [],
+    processes: [],
+    shortcut: { path: "shortcut", exists: false, targetPath: null, arguments: null, workingDirectory: null },
+    run: { exists: false, value: null },
+    startupApproved: { exists: false, valueBase64: null },
+    reparsePaths: [],
+    signatures: [],
     ...overrides,
   };
 }
@@ -308,6 +324,42 @@ describe("guaranteed uninstall", () => {
     );
     await expect(failure).rejects.toBeInstanceOf(AggregateError);
     await expect(failure).rejects.toMatchObject({ errors: [new Error("runtime failed"), new Error("uninstall failed")] });
+  });
+});
+
+describe("uninstall cleanup convergence", () => {
+  it("polls the complete native cleanup evidence until it converges", async () => {
+    const clean = cleanCleanupEvidence();
+    const readEvidence = vi
+      .fn()
+      .mockResolvedValueOnce(
+        cleanCleanupEvidence({
+          registrations: [registration()],
+          run: { exists: true, value: "Enduragent.exe" },
+        }),
+      )
+      .mockResolvedValueOnce(clean);
+    const delay = vi.fn(async () => {});
+
+    await expect(
+      waitForCleanupEvidence(readEvidence, { delay, now: vi.fn(() => 0) }),
+    ).resolves.toEqual(clean);
+    expect(readEvidence).toHaveBeenCalledTimes(2);
+    expect(delay).toHaveBeenCalledOnce();
+    expect(delay).toHaveBeenCalledWith(500);
+  });
+
+  it("fails with the fixed cleanup diagnostic at the existing deadline", async () => {
+    const dirty = cleanCleanupEvidence({ registrations: [registration()] });
+    const readEvidence = vi.fn(async () => dirty);
+    const delay = vi.fn(async () => {});
+    const now = vi.fn().mockReturnValueOnce(0).mockReturnValue(30_000);
+
+    await expect(waitForCleanupEvidence(readEvidence, { delay, now })).rejects.toThrow(
+      /^uninstall registration remains$/u,
+    );
+    expect(readEvidence).toHaveBeenCalledOnce();
+    expect(delay).not.toHaveBeenCalled();
   });
 });
 
