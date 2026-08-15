@@ -198,7 +198,7 @@ describe("desktop training export IPC", () => {
     expect(subject.exporter.export).not.toHaveBeenCalled();
   });
 
-  it("logs stable failure stages without exposing exception details", async () => {
+  it("redacts dialog, daemon, and malformed-result failures", async () => {
     const request = {
       kind: "activity",
       canonicalActivityId: "a".repeat(64),
