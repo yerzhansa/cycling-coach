@@ -4,7 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "@enduragent/coach-client";
 import { checkIntervalsStoreOwnerAtPath } from "@enduragent/coach/account-identity";
-import { prepareDesktopAthleteHome } from "@enduragent/coach/enduragent";
+import {
+  prepareDesktopAthleteHome,
+  startDesktopDaemonInitialRefresh,
+} from "@enduragent/coach/enduragent";
 import { AthleteHomeIdentitySchema } from "@enduragent/coach-contract";
 import {
   app,
@@ -21,6 +24,10 @@ import {
 import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
 import { createClaudeCliStatus, readClaudeCliSettings } from "./claude-cli-status.js";
 import { installDesktopConnectionIpc } from "./connection-ipc.js";
+import {
+  createDesktopInitialRefreshCoordinator,
+  shouldReleaseInitialRefreshAfterLoadFailure,
+} from "./initial-refresh.js";
 import { bindDesktopAppUserModelId, createDesktopActivationRelay } from "./desktop-lifecycle.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
@@ -134,6 +141,7 @@ function disableChromiumMediaSessionIntegration(): void {
 let desktopIsClosing = false;
 let desktopStartedInBackground = false;
 const desktopAcceptanceHidden = process.env.ENDURAGENT_ACCEPTANCE_HIDDEN === "1";
+const INITIAL_REFRESH_RELEASE_RETRY_DELAY_MS = 1_000;
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const utilityEntry = resolve(mainDirectory, "daemon-utility.js");
@@ -184,6 +192,15 @@ async function runDesktop(): Promise<void> {
   desktopStartedInBackground =
     !securitySmokeMode && (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
   const controller = new AbortController();
+  const scheduleInitialRefreshRetry = (operation: () => void): void => {
+    if (controller.signal.aborted) return;
+    const timer = setTimeout(() => {
+      controller.signal.removeEventListener("abort", cancel);
+      operation();
+    }, INITIAL_REFRESH_RELEASE_RETRY_DELAY_MS);
+    const cancel = (): void => clearTimeout(timer);
+    controller.signal.addEventListener("abort", cancel, { once: true });
+  };
   const environment = { ...process.env };
   const rendererSource = resolveDesktopRendererSource(
     app.isPackaged,
@@ -220,6 +237,14 @@ async function runDesktop(): Promise<void> {
   let telegramPower: DesktopTelegramPowerLifecycle | undefined;
   let closeTelegramCoordinator: (() => Promise<void>) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
+  const initialRefreshCoordinator = createDesktopInitialRefreshCoordinator({
+    currentConnection: () => daemonLifecycle!.connection(),
+    startInitialRefresh: startDesktopDaemonInitialRefresh,
+    reportFailure: () => {
+      process.stderr.write("desktop-initial-refresh-release-failure\n");
+    },
+    scheduleRetry: scheduleInitialRefreshRetry,
+  });
   let shutdownPromise: Promise<void> | undefined;
   const updateController = createDesktopUpdateController({
     releaseEligible: isDesktopUpdateReleaseEligible({
@@ -470,10 +495,20 @@ async function runDesktop(): Promise<void> {
           );
           preparedRuntimeBindings.delete(current.generation);
         }
-        if (new URL(previous.url).port === new URL(current.url).port) return;
         const visibleWindow = currentWindow();
-        if (visibleWindow === null) return;
-        visibleWindow.webContents.reload();
+        if (current.owner !== "app-supervised") return;
+        const recovery = initialRefreshCoordinator.prepareRecovery({
+          previous,
+          current,
+          rendererPresent: visibleWindow !== null,
+        });
+        if (recovery === "reload-required") {
+          try {
+            visibleWindow!.webContents.reload();
+          } catch {
+            void initialRefreshCoordinator.releaseCurrent();
+          }
+        }
       },
     });
     const configDir = join(selectedAthleteHome, "config");
@@ -843,12 +878,24 @@ async function runDesktop(): Promise<void> {
               isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
           });
           created.once("closed", () => {
+            void initialRefreshCoordinator.releaseCurrent();
             if (window === created) {
               window = null;
               disposeOnboarding?.();
               disposeOnboarding = undefined;
             }
           });
+          created.webContents.on("render-process-gone", () => {
+            void initialRefreshCoordinator.releaseCurrent();
+          });
+          created.webContents.on(
+            "did-fail-load",
+            (_event, errorCode, _description, _url, mainFrame) => {
+              if (shouldReleaseInitialRefreshAfterLoadFailure(errorCode, mainFrame)) {
+                void initialRefreshCoordinator.releaseCurrent();
+              }
+            },
+          );
           await created.loadURL(DESKTOP_RENDERER_URL);
           if (!desktopAcceptanceHidden) {
             if (created.isMinimized()) created.restore();
@@ -867,6 +914,8 @@ async function runDesktop(): Promise<void> {
       currentWindow: () => mainWindow.current() ?? undefined,
       expectedAthleteHome: selectedAthleteHome,
       runtime: daemonLifecycle,
+      initialSetupStatusSettled: (generation) =>
+        initialRefreshCoordinator.initialSetupStatusSettled(generation),
     });
     disposeTranscriptIpc = installDesktopTranscriptIpc({
       ipcMain,
@@ -924,6 +973,10 @@ async function runDesktop(): Promise<void> {
       power: telegramPower,
       isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
     });
+    const initialRefreshConnection = daemonLifecycle.connection();
+    if (initialRefreshConnection.owner === "app-supervised") {
+      initialRefreshCoordinator.arm(initialRefreshConnection);
+    }
     residency = createDesktopResidency({
       app,
       mainWindow,
@@ -952,6 +1005,9 @@ async function runDesktop(): Promise<void> {
     });
     if (process.platform === "win32") await activation.bind(residency);
     await residency.start();
+    if (desktopStartedInBackground && initialRefreshConnection.owner === "app-supervised") {
+      void initialRefreshCoordinator.releaseCurrent();
+    }
     const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();
     void updateController.start();
 

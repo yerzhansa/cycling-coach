@@ -177,7 +177,7 @@ export class StoreRuntime {
   runWindow(): Promise<StoreWindowResult> {
     if (this.closed) return Promise.reject(new Error("Store runtime is closed."));
     if (this.activeWindow !== undefined) return this.activeWindow;
-    const task = this.runExclusive(() => this.runWindowInternal());
+    const task = this.runExclusive((signal) => this.runWindowInternal(signal));
     this.installActiveWindow(task);
     return task;
   }
@@ -191,7 +191,7 @@ export class StoreRuntime {
       try {
         await work(signal);
         signal.throwIfAborted();
-        return await this.runWindowInternal();
+        return await this.runWindowInternal(signal);
       } finally {
         this.activeBeforeWindowController = undefined;
       }
@@ -369,9 +369,12 @@ LIMIT 1`,
       .catch(() => {});
   }
 
-  private async runWindowInternal(): Promise<StoreWindowResult> {
+  private async runWindowInternal(admissionSignal: AbortSignal): Promise<StoreWindowResult> {
     const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
     const controller = new AbortController();
+    const abortWindow = (): void => controller.abort(admissionSignal.reason);
+    if (admissionSignal.aborted) abortWindow();
+    else admissionSignal.addEventListener("abort", abortWindow, { once: true });
     this.activeLedger = ledger;
     this.activeController = controller;
     const now = this.dependencies.now();
@@ -385,6 +388,7 @@ LIMIT 1`,
       maxArtifacts: STORE_MAX_ARTIFACTS,
     };
     try {
+      controller.signal.throwIfAborted();
       const config = this.options.readConfig?.() ?? this.options.config;
       const capturePromise =
         config.intervals.apiKey.length === 0
@@ -407,11 +411,12 @@ LIMIT 1`,
                 ? {}
                 : { platform: this.options.platform }),
             });
-      const legacyPromise = this.options.reference.runScheduledOnce();
+      const legacyPromise = this.options.reference.runScheduledOnce(controller.signal);
       const [captureResult, legacyResult] = await Promise.allSettled([
         capturePromise,
         legacyPromise,
       ]);
+      controller.signal.throwIfAborted();
       let published = false;
       if (captureResult.status === "fulfilled" && captureResult.value !== undefined) {
         try {
@@ -444,6 +449,7 @@ LIMIT 1`,
           legacyResult.status === "fulfilled" && legacyResult.value.kind !== "failed",
       });
     } finally {
+      admissionSignal.removeEventListener("abort", abortWindow);
       if (this.activeLedger === ledger) this.activeLedger = undefined;
       if (this.activeController === controller) this.activeController = undefined;
     }

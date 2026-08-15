@@ -306,6 +306,7 @@ async function security() {
             "getDaemonConnection",
             "getTranscriptPage",
             "getUpdateState",
+            "initialSetupStatusSettled",
             "listArchivedConversations",
             "listTelegramAllowedSenders",
             "llmConfiguration",

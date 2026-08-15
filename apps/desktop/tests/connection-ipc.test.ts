@@ -7,7 +7,11 @@ vi.mock("electron", () => ({
 }));
 
 import { installDesktopConnectionIpc } from "../src/main/connection-ipc.js";
-import { DESKTOP_CONNECTION_CHANNEL, DESKTOP_RENDERER_URL } from "../src/main/constants.js";
+import {
+  DESKTOP_CONNECTION_CHANNEL,
+  DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL,
+  DESKTOP_RENDERER_URL,
+} from "../src/main/constants.js";
 
 type Handler = (event: unknown, request?: unknown) => unknown;
 
@@ -57,14 +61,16 @@ function setup(athleteHome = "/synthetic/athlete") {
       return connection;
     }),
   };
+  const initialSetupStatusSettled = vi.fn(async () => {});
   const dispose = installDesktopConnectionIpc({
     ipcMain: ipcMain as never,
     currentWindow: () => window as never,
     expectedAthleteHome: "/synthetic/athlete",
     runtime,
+    initialSetupStatusSettled,
   });
   const trusted = { sender: webContents, senderFrame: mainFrame };
-  return { dispose, handlers, ipcMain, runtime, trusted };
+  return { dispose, handlers, ipcMain, runtime, initialSetupStatusSettled, trusted };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -142,10 +148,33 @@ describe("desktop connection IPC", () => {
     expect(runtime.recover).not.toHaveBeenCalled();
   });
 
+  it("accepts only a trusted strict generation settlement", async () => {
+    const { handlers, initialSetupStatusSettled, trusted } = setup();
+    const settled = handlers.get(DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL)!;
+
+    await expect(settled(trusted, { generation: 3 })).resolves.toBeUndefined();
+    expect(initialSetupStatusSettled).toHaveBeenCalledWith(3);
+    for (const request of [undefined, null, {}, { generation: 0 }, { generation: 1.5 }, {
+      generation: 1,
+      extra: true,
+    }]) {
+      await expect(settled(trusted, request)).rejects.toThrow(
+        "invalid initial setup status settlement",
+      );
+    }
+    await expect(
+      settled({ sender: {}, senderFrame: { url: DESKTOP_RENDERER_URL } }, { generation: 3 }),
+    ).rejects.toThrow("untrusted desktop connection request");
+    expect(initialSetupStatusSettled).toHaveBeenCalledOnce();
+  });
+
   it("removes the trusted connection channel during shutdown", () => {
     const { dispose, handlers, ipcMain } = setup();
     dispose();
     expect(handlers.size).toBe(0);
     expect(ipcMain.removeHandler).toHaveBeenCalledWith(DESKTOP_CONNECTION_CHANNEL);
+    expect(ipcMain.removeHandler).toHaveBeenCalledWith(
+      DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL,
+    );
   });
 });

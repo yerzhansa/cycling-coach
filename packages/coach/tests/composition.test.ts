@@ -356,6 +356,7 @@ async function compose(
   intervals?: Config["intervals"],
   configOverride?: Config,
   env: Record<string, string | undefined> = { ENDURAGENT_HOME: home.root },
+  deferInitialRefresh?: boolean,
 ) {
   const coreConfig = configOverride ?? config(home, intervals);
   return createLocalCoachComposition(
@@ -365,6 +366,7 @@ async function compose(
       context,
       config: coreConfig,
       engineConfig: engineConfigFromConfig(coreConfig),
+      ...(deferInitialRefresh === undefined ? {} : { deferInitialRefresh }),
     },
     {
       assertRuntimeAthleteOwner: async () => {},
@@ -1031,6 +1033,424 @@ describe("local coach composition", () => {
     ).rejects.toBe(failure);
     expect(createBackend).not.toHaveBeenCalled();
     expect(trace).toEqual(["run-window", "reference-stop", "runtime-close"]);
+  });
+
+  it("defers the daemon refresh, tracks one start, and schedules retries after capture failure", async () => {
+    const home = await freshHome();
+    const failure = new Error("synthetic persistence failure");
+    const trace: string[] = [];
+    const ownerGuard = vi.fn(async () => {
+      trace.push("owner-ready");
+    });
+    const selectedRuntime = runtime(trace, {
+      runWindow: async () => {
+        trace.push("run-window");
+        throw failure;
+      },
+    });
+    const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(trace),
+        createRuntime: () => ({ ...selectedRuntime, runWindowAfter }),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner: ownerGuard,
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "configured-key", athleteId: "configured-athlete" }),
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    expect(ownerGuard).not.toHaveBeenCalled();
+    expect(runWindowAfter).not.toHaveBeenCalled();
+    expect(trace).toEqual([]);
+
+    const first = lifecycle.startInitialRefresh();
+    const second = lifecycle.startInitialRefresh();
+    expect(second).toBe(first);
+    await expect(first).rejects.toBe(failure);
+
+    expect(ownerGuard).toHaveBeenCalledOnce();
+    expect(runWindowAfter).toHaveBeenCalledOnce();
+    expect(trace).toEqual(["owner-ready", "run-window", "start-scheduler"]);
+    await lifecycle.close();
+  });
+
+  it("does not capture or schedule when deferred owner verification fails", async () => {
+    const home = await freshHome();
+    const failure = new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+    const trace: string[] = [];
+    const selectedRuntime = runtime(trace);
+    const runWindow = vi.fn(selectedRuntime.runWindow);
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(trace),
+        createRuntime: () => ({ ...selectedRuntime, runWindow }),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner: async () => {
+          throw failure;
+        },
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "configured-key", athleteId: "configured-athlete" }),
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    await expect(lifecycle.startInitialRefresh()).rejects.toBe(failure);
+    expect(runWindow).not.toHaveBeenCalled();
+    expect(trace).toEqual([]);
+    await lifecycle.close();
+  });
+
+  it("rechecks a same-value credential after deferred owner failure without capturing", async () => {
+    const home = await freshHome();
+    const failure = new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+    const selectedRuntime = runtime();
+    const runWindow = vi.fn(selectedRuntime.runWindow);
+    const runWindowAfter = vi.fn(selectedRuntime.runWindowAfter);
+    const assertRuntimeAthleteOwner = vi.fn(async () => {
+      throw failure;
+    });
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => ({ ...selectedRuntime, runWindow, runWindowAfter }),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner,
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "configured-key", athleteId: "configured-athlete" }),
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    await expect(lifecycle.startInitialRefresh()).rejects.toBe(failure);
+    await expect(
+      lifecycle.operations.configureRuntime({
+        intervals: { api_key: "configured-key", athlete_id: "configured-athlete" },
+      }),
+    ).resolves.toEqual({
+      schemaVersion: 3,
+      status: "refused",
+      reason: "ownership-unavailable",
+    });
+    expect(assertRuntimeAthleteOwner).toHaveBeenCalledTimes(2);
+    expect(runWindow).not.toHaveBeenCalled();
+    expect(runWindowAfter).toHaveBeenCalledOnce();
+    await lifecycle.close();
+  });
+
+  it("retains an LLM replacement that lands while deferred owner verification is stalled", async () => {
+    const home = await freshHome();
+    let releaseOwner!: () => void;
+    let markOwnerEntered!: () => void;
+    const ownerEntered = new Promise<void>((resolve) => {
+      markOwnerEntered = resolve;
+    });
+    const ownerGate = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+    const received: CreateCoachEngineInput[] = [];
+    let runtimeOptions: LocalStoreRuntimeOptions | undefined;
+    let readReferenceIntervals:
+      | (() => { readonly apiKey: string; readonly athleteId?: string })
+      | undefined;
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async (options) => {
+          readReferenceIntervals = options.readIntervals;
+          return reference();
+        },
+        createRuntime: (options) => {
+          runtimeOptions = options;
+          return runtime();
+        },
+        createBackend: (input) => {
+          received.push(input);
+          return backend();
+        },
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner: async () => {
+          markOwnerEntered();
+          await ownerGate;
+        },
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "configured-key", athleteId: "configured-athlete" }),
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    expect(runtimeOptions?.config.intervals.apiKey).toBe("");
+    expect(runtimeOptions?.readConfig?.().intervals.apiKey).toBe("");
+    expect(readReferenceIntervals?.().apiKey).toBe("");
+    expect(received.at(-1)?.ports.platform.legacyClient).toBeNull();
+
+    const initialization = lifecycle.startInitialRefresh();
+    await ownerEntered;
+    await expect(
+      lifecycle.operations.configureRuntime({ llm: { model: "retained-model" } }),
+    ).resolves.toMatchObject({ status: "applied", applied: { llm: true } });
+    expect(received.at(-1)?.ports.config.llm.model).toBe("retained-model");
+    expect(received.at(-1)?.ports.platform.legacyClient).toBeNull();
+
+    releaseOwner();
+    await expect(initialization).resolves.toBeUndefined();
+    expect(received.at(-1)?.ports.config.llm.model).toBe("retained-model");
+    expect(received.at(-1)?.ports.platform.legacyClient).not.toBeNull();
+    expect(runtimeOptions?.readConfig?.().intervals.apiKey).toBe("configured-key");
+    expect(readReferenceIntervals?.().apiKey).toBe("configured-key");
+    await lifecycle.close();
+  });
+
+  it("keeps manual sync keyless before deferred owner approval", async () => {
+    const home = await freshHome();
+    const context = fakeContext(home);
+    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [] }));
+    let runtimeOptions: LocalStoreRuntimeOptions | undefined;
+    let readReferenceIntervals:
+      | (() => { readonly apiKey: string; readonly athleteId?: string })
+      | undefined;
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async (options) => {
+          readReferenceIntervals = options.readIntervals;
+          return reference();
+        },
+        createRuntime: (options) => {
+          runtimeOptions = options;
+          return runtime();
+        },
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        operationsDependencies: { backfill },
+      },
+      context,
+      undefined,
+      config(home, { apiKey: "unapproved-key", athleteId: "configured-athlete" }),
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    const fetchStub = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network used"));
+    await expect(lifecycle.operations.sync({})).resolves.toMatchObject({ published: true });
+    if (lifecycle.operations.exportTrainingFile === undefined) {
+      throw new Error("Expected training export support.");
+    }
+    await expect(
+      lifecycle.operations.exportTrainingFile({
+        kind: "workout-archive",
+        oldest: "1998-07-01",
+        newest: "1998-07-18",
+        format: "zwo",
+        destinationPath: join(home.root, "training.zip"),
+      }),
+    ).resolves.toEqual({ status: "refused", reason: "not-configured" });
+    expect(backfill).not.toHaveBeenCalled();
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(runtimeOptions?.readConfig?.().intervals.apiKey).toBe("");
+    expect(readReferenceIntervals?.().apiKey).toBe("");
+    await lifecycle.close();
+  });
+
+  it("applies a queued credential before deferred owner claim and captures only on explicit start", async () => {
+    const home = await freshHome();
+    let releaseTurn!: () => void;
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    let markTurnEntered!: () => void;
+    const turnEntered = new Promise<void>((resolve) => {
+      markTurnEntered = resolve;
+    });
+    const windows: Config["intervals"][] = [];
+    let runtimeOptions: LocalStoreRuntimeOptions | undefined;
+    const ownerCandidates: Config["intervals"][] = [];
+    const counts = createPhysicalRequestLedger({
+      storeLimit: 64,
+      legacyLimit: 15,
+      totalLimit: 79,
+    }).snapshot();
+    const selectedRuntime = runtime();
+    const runWindowAfter = vi.fn<LocalStoreRuntime["runWindowAfter"]>((work) =>
+      selectedRuntime.runExclusive(async (signal) => {
+        await work(signal);
+        const current = runtimeOptions?.readConfig?.();
+        if (current === undefined) throw new Error("Expected live runtime configuration.");
+        windows.push({ ...current.intervals });
+        return { published: true, counts, legacySucceeded: true };
+      }),
+    );
+    let holdTurn = true;
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: (options) => {
+          runtimeOptions = options;
+          return { ...selectedRuntime, runWindowAfter };
+        },
+        createBackend: () =>
+          backend({
+            chat: async () => {
+              if (holdTurn) {
+                holdTurn = false;
+                markTurnEntered();
+                await turnGate;
+              }
+              return { text: "ok" };
+            },
+          }),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner: async (_store, options) => {
+          ownerCandidates.push({
+            apiKey: options.candidate.apiKey,
+            athleteId: options.candidate.athleteId,
+          });
+        },
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "old-key", athleteId: "old-athlete" }),
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    const activeTurn = lifecycle.engine.chat({ chatId: "race", message: "hold" });
+    await turnEntered;
+    const replacement = lifecycle.operations.configureRuntime({
+      intervals: { api_key: "new-key", athlete_id: "new-athlete" },
+    });
+    await vi.waitFor(() => expect(ownerCandidates).toHaveLength(1));
+    await Promise.resolve();
+    const initialization = lifecycle.startInitialRefresh();
+
+    releaseTurn();
+    await activeTurn;
+    await expect(replacement).resolves.toMatchObject({ status: "applied" });
+    await expect(initialization).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(windows).toHaveLength(1));
+
+    expect(windows).toEqual([{ apiKey: "new-key", athleteId: "new-athlete" }]);
+    expect(ownerCandidates).toEqual([
+      { apiKey: "new-key", athleteId: "new-athlete" },
+      { apiKey: "new-key", athleteId: "new-athlete" },
+    ]);
+    await lifecycle.close();
+  });
+
+  it("aborts and awaits deferred initialization during lifecycle close", async () => {
+    const home = await freshHome();
+    const shutdownFailure = new Error("synthetic lifecycle close");
+    let windowController: AbortController | undefined;
+    let activeWindow: Promise<{
+      published: boolean;
+      counts: ReturnType<ReturnType<typeof createPhysicalRequestLedger>["snapshot"]>;
+      legacySucceeded: boolean;
+    }> | undefined;
+    let markOwnerEntered!: () => void;
+    const ownerEntered = new Promise<void>((resolve) => {
+      markOwnerEntered = resolve;
+    });
+    let ownerSettled = false;
+    const counts = createPhysicalRequestLedger({
+      storeLimit: 64,
+      legacyLimit: 15,
+      totalLimit: 79,
+    }).snapshot();
+    const selectedRuntime = runtime();
+    const runWindowAfter = vi.fn<LocalStoreRuntime["runWindowAfter"]>((work) => {
+      windowController = new AbortController();
+      activeWindow = (async () => {
+        await work(windowController!.signal);
+        return { published: true, counts, legacySucceeded: true };
+      })();
+      return activeWindow;
+    });
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => ({
+          ...selectedRuntime,
+          runWindowAfter,
+          async close() {
+            windowController?.abort(shutdownFailure);
+            await activeWindow?.catch(() => {});
+          },
+        }),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner: async (_store, options) => {
+          markOwnerEntered();
+          try {
+            await new Promise<void>((_resolve, reject) => {
+              options.signal.addEventListener("abort", () => reject(options.signal.reason), {
+                once: true,
+              });
+            });
+          } finally {
+            ownerSettled = true;
+          }
+        },
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "configured-key", athleteId: "configured-athlete" }),
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    const initializationOutcome = lifecycle.startInitialRefresh().catch((error) => error);
+    await ownerEntered;
+    await expect(lifecycle.close()).resolves.toBeUndefined();
+
+    await expect(initializationOutcome).resolves.toMatchObject({
+      message: "Coach lifecycle closed.",
+    });
+    expect(ownerSettled).toBe(true);
   });
 
   it("backs all four methods with a real writer store, repository, resolver, and persisted render", async () => {

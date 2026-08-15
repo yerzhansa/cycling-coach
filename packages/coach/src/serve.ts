@@ -66,6 +66,11 @@ export async function runCoachServe(
         appVersion: input.appVersion,
       }),
     });
+    const owner = input.owner ?? "unmanaged-foreground";
+    const scheduleInitialRefresh = (): void => {
+      const refresh = input.lifecycle.startInitialRefresh();
+      void refresh.catch(() => {});
+    };
     const rpc = dependencies.createRpcServer({
       engine: input.lifecycle.engine,
       operations: input.lifecycle.operations,
@@ -76,7 +81,7 @@ export async function runCoachServe(
       selfTestOperations: { selfTest: createPackagedSelfTestOperation() },
       telegram,
       token: token.value,
-      owner: input.owner ?? "unmanaged-foreground",
+      owner,
       athleteHome: input.lifecycle.home.root,
       healthState,
       invocations,
@@ -87,6 +92,7 @@ export async function runCoachServe(
       afterInvocationDrainRefusal: async () => {
         await telegram.resumePolling();
       },
+      scheduleInitialRefresh,
     });
     let quiescePromise: Promise<void> | undefined;
     const quiesce = (): Promise<void> => {
@@ -161,6 +167,11 @@ export async function runCoachServe(
       await rpc.close().catch(() => {});
       await telegram.close().catch(() => {});
       throw error;
+    }
+    if (!aborted && owner !== "app-supervised") {
+      try {
+        scheduleInitialRefresh();
+      } catch {}
     }
     if (!aborted) await Promise.race([abortPromise, rpc.shutdownRequested]);
     const cleanupErrors: unknown[] = [];

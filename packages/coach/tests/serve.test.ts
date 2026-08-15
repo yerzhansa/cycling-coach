@@ -174,6 +174,9 @@ function harness(
       return options.bind ?? binding;
     },
   };
+  const startInitialRefresh = vi.fn(async () => {
+    trace.push("initial-refresh");
+  });
   const lifecycle: LocalCoachLifecycle = {
     home,
     engine,
@@ -188,6 +191,7 @@ function harness(
       cancel: vi.fn(),
     },
     listener,
+    startInitialRefresh,
     async close() {
       trace.push("lifecycle-close");
     },
@@ -301,6 +305,7 @@ function harness(
     ensureToken,
     createRpcServer,
     createHealthzHandler,
+    startInitialRefresh,
     rpcClose,
     createInvocations,
     createTelegramController,
@@ -332,6 +337,7 @@ describe("runCoachServe", () => {
       "rpc-created",
       "health-handler-created",
       "protocol-bind",
+      "initial-refresh",
     ]);
     expect(test.handlers()?.upgrade).toBe(
       test.createRpcServer.mock.results[0]?.value.handleUpgrade,
@@ -348,6 +354,7 @@ describe("runCoachServe", () => {
       createRuntime: test.createTelegramRuntimeFactory.mock.results[0]?.value,
     });
     expect(test.ensureToken).toHaveBeenCalledWith(test.lifecycle.home.configDir);
+    expect(test.startInitialRefresh).toHaveBeenCalledOnce();
     controller.abort();
     await expect(result).resolves.toBe(EXIT_SUCCESS);
     expect(test.trace).toEqual([
@@ -355,6 +362,7 @@ describe("runCoachServe", () => {
       "rpc-created",
       "health-handler-created",
       "protocol-bind",
+      "initial-refresh",
       "admission-close",
       "telegram-stop",
       "telegram-drain",
@@ -364,6 +372,48 @@ describe("runCoachServe", () => {
       "protocol-closed",
       "telegram-close",
     ]);
+  });
+
+  it("keeps serving when the post-publication initial refresh fails", async () => {
+    const controller = new AbortController();
+    const failure = new Error("synthetic persistence failure");
+    const test = harness();
+    test.startInitialRefresh.mockRejectedValueOnce(failure);
+    let settled = false;
+
+    const result = runCoachServe(
+      { ...test.input, signal: controller.signal },
+      test.dependencies,
+    ).finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(test.startInitialRefresh).toHaveBeenCalledOnce());
+    await Promise.resolve();
+
+    expect(test.handlers()).toBeDefined();
+    expect(settled).toBe(false);
+    controller.abort();
+    await expect(result).resolves.toBe(EXIT_SUCCESS);
+  });
+
+  it("waits for privileged release when app-supervised and keeps serving after refresh rejection", async () => {
+    const controller = new AbortController();
+    const test = harness();
+    test.startInitialRefresh.mockRejectedValueOnce(new Error("synthetic refresh failure"));
+    const result = runCoachServe(
+      { ...test.input, owner: "app-supervised", signal: controller.signal },
+      test.dependencies,
+    );
+    await vi.waitFor(() => expect(test.rpcInput()).toBeDefined());
+
+    expect(test.startInitialRefresh).not.toHaveBeenCalled();
+    expect(test.rpcInput()?.scheduleInitialRefresh).toEqual(expect.any(Function));
+    expect(() => test.rpcInput()?.scheduleInitialRefresh?.()).not.toThrow();
+    await Promise.resolve();
+    expect(test.startInitialRefresh).toHaveBeenCalledOnce();
+
+    controller.abort();
+    await expect(result).resolves.toBe(EXIT_SUCCESS);
   });
 
   it("wires the invocation-drain callbacks to stop, drain, and resume Telegram", async () => {

@@ -14,6 +14,7 @@ export interface LocalCoachLifecycle {
   readonly spendMeter: SpendMeterService;
   readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   readonly listener: WriterProtocolListener;
+  startInitialRefresh(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -24,6 +25,7 @@ export type LocalCoachRunResult<T> =
 export interface WithLocalCoachInput<T> {
   readonly env: Record<string, string | undefined>;
   readonly home: AthleteHome;
+  readonly deferInitialRefresh?: boolean;
   readonly operation: (lifecycle: LocalCoachLifecycle) => Promise<T>;
 }
 
@@ -82,6 +84,9 @@ export async function withLocalCoach<T>(
             context,
             config: compositionConfig,
             engineConfig: readiness.engineConfig,
+            ...(input.deferInitialRefresh === undefined
+              ? {}
+              : { deferInitialRefresh: input.deferInitialRefresh }),
           });
           const publishedLifecycle = lifecycle;
           try {
@@ -94,6 +99,7 @@ export async function withLocalCoach<T>(
                 spendMeter: publishedLifecycle.spendMeter,
                 confirmations: publishedLifecycle.confirmations,
                 listener: context.listener,
+                startInitialRefresh: () => publishedLifecycle.startInitialRefresh(),
                 close: () => publishedLifecycle.close(),
               }),
             };

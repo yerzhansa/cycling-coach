@@ -128,7 +128,9 @@ it("opens upgrade control against an exact protocol-11 accepted frame", async ()
       }
 
       const method = request.method;
-      expect(method).toMatch(/^daemon\.(reserveUpgrade|shutdownForUpgrade)$/);
+      expect(method).toMatch(
+        /^daemon\.(reserveUpgrade|shutdownForUpgrade|startInitialRefresh)$/,
+      );
       controlRequests.push({ method: String(method), params: request.params });
       const status = method === "daemon.reserveUpgrade" ? "reserved" : "accepted";
       queueMicrotask(() =>
@@ -168,9 +170,11 @@ it("opens upgrade control against an exact protocol-11 accepted frame", async ()
     };
     await expect(control.reserveUpgrade(handoff)).resolves.toEqual({ status: "reserved" });
     await expect(control.shutdownForUpgrade(handoff)).resolves.toEqual({ status: "accepted" });
+    await expect(control.startInitialRefresh()).resolves.toEqual({ status: "accepted" });
     expect(controlRequests).toEqual([
       { method: "daemon.reserveUpgrade", params: handoff },
       { method: "daemon.shutdownForUpgrade", params: handoff },
+      { method: "daemon.startInitialRefresh", params: {} },
     ]);
     await control.close();
     await expect(
@@ -471,6 +475,7 @@ function resolverHarness(owner: DaemonOwner, clientVersion: number, serverVersio
           ),
     reserveUpgrade: vi.fn(async () => ({ status: "reserved" as const })),
     shutdownForUpgrade: vi.fn(async () => ({ status: "accepted" as const })),
+    startInitialRefresh: vi.fn(async () => ({ status: "accepted" as const })),
     close: vi.fn(async () => {}),
   };
   const acquireFence = vi.fn<ResolveSecondStarterDependencies["acquireUpgradeFence"]>(async () => ({

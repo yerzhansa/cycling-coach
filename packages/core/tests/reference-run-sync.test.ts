@@ -60,6 +60,44 @@ describe("createRunSync", () => {
     expect(mutex.isHeld()).toBe(false);
   });
 
+  it("settles an external abort while fetch ignores cancellation without persisting diagnostics", async () => {
+    const controller = new AbortController();
+    let releaseFetch!: (value: FetchedReference) => void;
+    let fetchSignal!: AbortSignal;
+    const syncHistory = vi.fn();
+    const atomicWrite = vi.fn(async () => {});
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: (signal) => {
+        fetchSignal = signal;
+        return new Promise<FetchedReference>((resolve) => {
+          releaseFetch = resolve;
+        });
+      },
+      atomicWrite,
+      syncHistory,
+    });
+
+    const running = runSync({ caller: "scheduled", signal: controller.signal });
+    while (fetchSignal === undefined) await Promise.resolve();
+    controller.abort(new Error("store runtime closed"));
+
+    await expect(running).rejects.toThrow("store runtime closed");
+    expect(fetchSignal.aborted).toBe(true);
+    expect(syncHistory).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(() => readFileSync(join(dir, "error_state.json"), "utf8")).toThrow();
+
+    releaseFetch(emptyFetched);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(syncHistory).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
   it("writes 5 cache files first then .scheduler.json (commit-marker) and returns kind:ran with the refreshed list", async () => {
     const mutex = new AsyncMutex();
     const cooldown = new Cooldown();

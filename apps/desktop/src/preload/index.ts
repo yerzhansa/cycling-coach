@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { desktopPlatformProjection } from "../main/platform-copy.js";
 import {
   DESKTOP_CONNECTION_CHANNEL,
+  DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL,
   DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
@@ -1438,6 +1439,21 @@ contextBridge.exposeInMainWorld(
         DESKTOP_CONNECTION_CHANNEL,
         ...(failedGeneration === undefined ? [] : [{ generation: failedGeneration }]),
       );
+    },
+    initialSetupStatusSettled: (...args: unknown[]) => {
+      if (args.length !== 1) throw new TypeError();
+      const input = args[0];
+      if (
+        !record(input) ||
+        !exactKeys(input, ["generation"]) ||
+        !Number.isSafeInteger(input.generation) ||
+        (input.generation as number) < 1
+      ) {
+        throw new TypeError();
+      }
+      return ipcRenderer.invoke(DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL, {
+        generation: input.generation,
+      });
     },
     getTranscriptPage: async (input: unknown) => {
       const request = parseTranscriptPageRequest(input);

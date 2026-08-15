@@ -1598,7 +1598,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-17 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-18 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1606,8 +1606,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 17,
-      serverProtocolVersion: 17,
+      clientProtocolVersion: 18,
+      serverProtocolVersion: 18,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1662,9 +1662,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 17 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 18 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(17);
+    expect(client.clientProtocolVersion).toBe(18);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -1794,7 +1794,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version seventeen", () => {
-    expect(PROTOCOL_VERSION).toBe(17);
+  it("uses protocol version eighteen", () => {
+    expect(PROTOCOL_VERSION).toBe(18);
   });
 });

@@ -412,6 +412,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "getDaemonConnection",
       "getTranscriptPage",
       "getUpdateState",
+      "initialSetupStatusSettled",
       "listArchivedConversations",
       "listTelegramAllowedSenders",
       "llmConfiguration",

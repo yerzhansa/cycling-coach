@@ -13,6 +13,7 @@ import {
   EXIT_VERSION_MISMATCH,
   JsonRpcSuccessResponseEnvelopeSchema,
   SelfTestCommandTerminalSchema,
+  PROTOCOL_VERSION,
   type AthleteState,
   type CoachEngine,
   type CoachOperations,
@@ -31,6 +32,7 @@ import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   runAppSupervisedEnduragent,
   runEnduragent,
+  startDesktopDaemonInitialRefresh,
   type EnduragentDependencies,
   type RunEnduragentInput,
 } from "../src/enduragent.js";
@@ -279,6 +281,32 @@ afterEach(async () => {
 });
 
 describe("enduragent executable composition", () => {
+  it("starts initial refresh through one authenticated control socket and closes it", async () => {
+    expect(PROTOCOL_VERSION).toBe(18);
+    const startInitialRefresh = vi.fn(async () => ({ status: "accepted" as const }));
+    const close = vi.fn(async () => {});
+    const openControl = vi.fn(async () => ({ startInitialRefresh, close }));
+
+    await expect(
+      startDesktopDaemonInitialRefresh(
+        {
+          url: "ws://127.0.0.1:45010/rpc",
+          token: "x".repeat(43),
+          owner: "app-supervised",
+        },
+        openControl as never,
+      ),
+    ).resolves.toEqual({ status: "accepted" });
+    expect(openControl).toHaveBeenCalledWith({
+      port: 45_010,
+      token: "x".repeat(43),
+      incumbentProtocolVersion: PROTOCOL_VERSION,
+      expectedOwner: "app-supervised",
+    });
+    expect(startInitialRefresh).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("short-circuits version without resolving or composing", async () => {
     let homeCalls = 0;
     let runnerCalls = 0;
@@ -620,6 +648,7 @@ describe("enduragent executable composition", () => {
       spendMeter,
       confirmations,
       listener: inertWriterProtocolListener,
+      async startInitialRefresh() {},
       close: async () => {
         trace.push("lifecycle-close");
       },
@@ -705,6 +734,7 @@ describe("enduragent executable composition", () => {
               spendMeter,
               confirmations,
               listener: inertWriterProtocolListener,
+              async startInitialRefresh() {},
               async close() {},
             });
             return { status: "completed", value };
@@ -716,6 +746,7 @@ describe("enduragent executable composition", () => {
     expect(captured).toMatchObject({
       env,
       home: preparedHome,
+      deferInitialRefresh: true,
     });
     expect(io.stdout.read()).toBe("");
     expect(io.stderr.read()).toBe("");
@@ -947,6 +978,7 @@ describe("enduragent executable composition", () => {
         spendMeter,
         confirmations,
         listener: inertWriterProtocolListener,
+        async startInitialRefresh() {},
         close: async () => {
           trace.push("lifecycle-close");
         },
@@ -1059,6 +1091,7 @@ describe("enduragent executable composition", () => {
                 spendMeter,
                 confirmations,
                 listener: inertWriterProtocolListener,
+                async startInitialRefresh() {},
                 async close() {},
               }),
             };

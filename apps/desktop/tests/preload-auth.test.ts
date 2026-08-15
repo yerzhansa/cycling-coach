@@ -43,6 +43,7 @@ vi.mock("electron", () => ({
 interface AuthBridge {
   readonly platform: unknown;
   getDaemonConnection(failedGeneration?: number): Promise<unknown>;
+  initialSetupStatusSettled(input: unknown): Promise<unknown>;
   getTranscriptPage(input: unknown): Promise<unknown>;
   listArchivedConversations(): Promise<unknown>;
   getArchivedTranscriptPage(input: unknown): Promise<unknown>;
@@ -212,6 +213,27 @@ describe("desktop preload ChatGPT auth", () => {
     ]);
   });
 
+  it("forwards only a strict positive initial setup generation", async () => {
+    mocks.invoke.mockResolvedValue(undefined);
+    await expect(bridge.initialSetupStatusSettled({ generation: 4 })).resolves.toBeUndefined();
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:initial-setup-status-settled", {
+      generation: 4,
+    });
+    for (const request of [undefined, null, {}, { generation: 0 }, { generation: 1.5 }, {
+      generation: 1,
+      extra: true,
+    }]) {
+      expect(() => bridge.initialSetupStatusSettled(request)).toThrow(TypeError);
+    }
+    expect(() =>
+      (bridge.initialSetupStatusSettled as (...args: unknown[]) => Promise<unknown>)(
+        { generation: 1 },
+        { generation: 2 },
+      ),
+    ).toThrow(TypeError);
+    expect(mocks.invoke).toHaveBeenCalledOnce();
+  });
+
   it("forwards only closed lifecycle states to the renderer", () => {
     const listener = mocks.on.mock.calls.find(
       ([channel]) => channel === "desktop:daemon-lifecycle",
@@ -248,6 +270,7 @@ describe("desktop preload ChatGPT auth", () => {
         "getUpdateState",
         "getDaemonConnection",
         "getTranscriptPage",
+        "initialSetupStatusSettled",
         "listArchivedConversations",
         "listTelegramAllowedSenders",
         "getArchivedTranscriptPage",

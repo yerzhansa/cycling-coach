@@ -28,7 +28,7 @@ export const INITIAL_SYNC_FAILED_LOG_PREFIX = "Reference: initial sync failed";
 export interface ReferenceRuntime {
   readonly services: ReferenceServices;
   readonly scheduler: Scheduler;
-  runScheduledOnce(): Promise<import("./sync/run-sync.js").SyncResult>;
+  runScheduledOnce(signal?: AbortSignal): Promise<import("./sync/run-sync.js").SyncResult>;
 }
 
 export interface BootstrapReferenceDeps {
@@ -130,6 +130,7 @@ export async function bootstrapReference(
   return {
     services,
     scheduler,
-    runScheduledOnce: () => runSyncInternal({ caller: "scheduled" }),
+    runScheduledOnce: (signal) =>
+      runSyncInternal({ caller: "scheduled", ...(signal === undefined ? {} : { signal }) }),
   };
 }

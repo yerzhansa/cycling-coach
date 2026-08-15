@@ -604,6 +604,91 @@ async function openSocket(
 }
 
 describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
+  it("keeps initial refresh scheduling in the strict privileged control namespace", async () => {
+    const token = "x".repeat(43);
+    const scheduleInitialRefresh = vi.fn();
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "app-supervised",
+      engine: engine(),
+      scheduleInitialRefresh,
+    });
+    const privileged = await openSocket(rpc);
+    privileged.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await privileged.frames.next();
+
+    privileged.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "initial-refresh",
+        method: "daemon.startInitialRefresh",
+        params: {},
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await privileged.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "initial-refresh",
+      result: { status: "accepted" },
+    });
+    expect(scheduleInitialRefresh).toHaveBeenCalledOnce();
+
+    for (const params of [undefined, [], { extra: true }]) {
+      privileged.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: `invalid-${JSON.stringify(params)}`,
+          method: "daemon.startInitialRefresh",
+          ...(params === undefined ? {} : { params }),
+        }),
+      );
+      expect(parseCoachRpcEnvelope(await privileged.frames.next())).toMatchObject({
+        error: { code: params === undefined ? -32600 : -32602 },
+      });
+    }
+    expect(scheduleInitialRefresh).toHaveBeenCalledOnce();
+
+    scheduleInitialRefresh.mockImplementationOnce(() => {
+      throw new Error("synthetic scheduling failure");
+    });
+    privileged.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "scheduling-failed",
+        method: "daemon.startInitialRefresh",
+        params: {},
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await privileged.frames.next())).toMatchObject({
+      id: "scheduling-failed",
+      error: { code: -32603, message: "Internal error" },
+    });
+    expect(scheduleInitialRefresh).toHaveBeenCalledTimes(2);
+
+    const renderer = await openSocket(rpc);
+    renderer.ws.send(
+      JSON.stringify(
+        createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+      ),
+    );
+    await renderer.frames.next();
+    renderer.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "renderer-initial-refresh",
+        method: "daemon.startInitialRefresh",
+        params: {},
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await renderer.frames.next())).toMatchObject({
+      id: "renderer-initial-refresh",
+      error: { code: -32601, message: "Method not found" },
+    });
+    expect(scheduleInitialRefresh).toHaveBeenCalledTimes(2);
+
+    await renderer.close();
+    await privileged.close();
+  });
+
   it("accepts the first-frame token and projects engine plus activity-analysis methods", async () => {
     const token = "x".repeat(43);
     const calls: string[] = [];

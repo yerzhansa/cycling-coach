@@ -39,6 +39,7 @@ export interface RunSyncOpts {
   readonly forceFresh?: boolean;
   readonly extendRetentionUntil?: string;
   readonly caller?: SyncCaller;
+  readonly signal?: AbortSignal;
   /** Required when `caller === "/sync"` for per-chat cooldown gating. */
   readonly chatId?: string;
 }
@@ -161,6 +162,7 @@ interface CacheWriteSpec {
 
 /** Shared between runtime + tests so the warn-after-timeout string stays in sync. */
 export const BODY_AFTER_TIMEOUT_LOG_PREFIX = "Reference: body threw after outer timeout";
+const BODY_AFTER_ABORT_LOG_PREFIX = "Reference: body threw after external abort";
 
 /** Per-cache-file Zod schema, so the prior-read routes through the same
  *  `safeReadJson` boundary every other Reference read uses (CONTEXT.md: Reference
@@ -249,6 +251,7 @@ export function createRunSync(
   const syncHistory = deps.syncHistory ?? createSyncHistoryWriter(deps.dataDir);
 
   return async (opts = {}) => {
+    opts.signal?.throwIfAborted();
     const startedAt = now();
     // The outcome line is a best-effort diagnostics trail: a write (or a
     // misbehaving injected writer) must never alter or break the tick it
@@ -278,6 +281,7 @@ export function createRunSync(
     if (opts.caller === "/sync" && opts.chatId !== undefined) {
       const c = deps.cooldown.check(opts.chatId, deps.cooldownWindowMs);
       if (!c.ok) {
+        opts.signal?.throwIfAborted();
         return emitOutcome({
           kind: "skipped",
           reason: "cooldown",
@@ -292,6 +296,7 @@ export function createRunSync(
     // caller deliberately keeps queue-and-wait semantics (it has no one waiting
     // on a reply), so this branch is /sync-only.
     if (opts.caller === "/sync" && deps.mutex.isHeld()) {
+      opts.signal?.throwIfAborted();
       return emitOutcome({ kind: "skipped", reason: "mutex_held" });
     }
 
@@ -300,6 +305,20 @@ export function createRunSync(
       mutexResult = await deps.mutex.runExclusive(
         async (): Promise<SyncResult> => {
         const controller = new AbortController();
+        let removeExternalAbort = (): void => {};
+        const externalAbort = new Promise<"external_abort">((resolve) => {
+          if (opts.signal === undefined) return;
+          const abort = (): void => {
+            controller.abort(opts.signal?.reason);
+            resolve("external_abort");
+          };
+          if (opts.signal.aborted) {
+            abort();
+            return;
+          }
+          opts.signal.addEventListener("abort", abort, { once: true });
+          removeExternalAbort = () => opts.signal?.removeEventListener("abort", abort);
+        });
         let phase: ErrorPhase = "fetching";
         // Set synchronously the instant this cycle classifies the bundle as
         // unusable, before the (async) error_state write. The outer-timeout path
@@ -495,9 +514,23 @@ export function createRunSync(
         const winner = await Promise.race([
           bodySettled.then(() => "body" as const),
           timerFired.then(() => "timeout" as const),
+          externalAbort,
         ]);
 
         if (timerHandle !== undefined) clearTimeoutFn(timerHandle);
+        removeExternalAbort();
+
+        if (winner === "external_abort") {
+          void bodySettled.then(() => {
+            if (bodyError !== undefined) {
+              console.warn(
+                `${BODY_AFTER_ABORT_LOG_PREFIX} — ${bodyError instanceof Error ? bodyError.message : String(bodyError)}`,
+              );
+            }
+          });
+          opts.signal?.throwIfAborted();
+          throw new Error("Reference sync aborted.");
+        }
 
         if (winner === "timeout") {
           controller.abort();
@@ -538,6 +571,7 @@ export function createRunSync(
         },
       );
     } catch (err) {
+      if (opts.signal?.aborted === true) throw err;
       // The mutex body re-throws an unguarded error (e.g. a gate or cache-write
       // throw) out of `runExclusive`. The ticket's invariant is that EVERY tick
       // leaves exactly one history line, so stamp a `failed` line before letting
@@ -548,10 +582,12 @@ export function createRunSync(
     }
 
     if (mutexResult.kind === "timeout") {
+      opts.signal?.throwIfAborted();
       return emitOutcome({ kind: "skipped", reason: "mutex_held" });
     }
 
     const result = mutexResult.value;
+    opts.signal?.throwIfAborted();
     if (result.kind === "ran" && opts.caller === "/sync" && opts.chatId !== undefined) {
       deps.cooldown.record(opts.chatId);
     }

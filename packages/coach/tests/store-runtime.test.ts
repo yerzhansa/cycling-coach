@@ -590,10 +590,19 @@ describe("StoreRuntime", () => {
     roots.push(root);
     const handle = { unref: vi.fn() } as unknown as ReturnType<typeof setTimeout>;
     let signal!: AbortSignal;
+    let referenceSignal!: AbortSignal;
     const reference = {
       scheduler: { stop: vi.fn() },
       services: {},
-      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })),
+      runScheduledOnce: vi.fn(
+        (selectedSignal: AbortSignal) =>
+          new Promise<never>((_, reject) => {
+            referenceSignal = selectedSignal;
+            selectedSignal.addEventListener("abort", () => reject(selectedSignal.reason), {
+              once: true,
+            });
+          }),
+      ),
     } as unknown as ReferenceRuntime;
     const runtime = createStoreRuntime({
       env: {},
@@ -630,6 +639,7 @@ describe("StoreRuntime", () => {
     const rejectedWindow = expect(window).rejects.toThrow("Store runtime closed.");
     const close = runtime.close();
     expect(signal.aborted).toBe(true);
+    expect(referenceSignal.aborted).toBe(true);
     await expect(close).resolves.toBeUndefined();
     await rejectedWindow;
     expect(runtime.currentSnapshot()).toBeUndefined();

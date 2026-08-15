@@ -315,6 +315,7 @@ export interface CoachRpcServerInput {
   readonly invocations?: InvocationCoordinator;
   readonly beforeInvocationDrain?: () => Promise<void>;
   readonly afterInvocationDrainRefusal?: () => Promise<void>;
+  readonly scheduleInitialRefresh?: () => void;
 }
 
 export interface SpendRpcHandlers {
@@ -616,6 +617,15 @@ function controlParams(value: unknown):
   };
 }
 
+function emptyControlParams(value: unknown): value is Record<string, never> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
+}
+
 function refuseUpgrade(
   socket: Parameters<WriterProtocolHandlers["upgrade"]>[1],
   response: string,
@@ -727,10 +737,28 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     }
     if (
       generic.data.method === "daemon.reserveUpgrade" ||
-      generic.data.method === "daemon.shutdownForUpgrade"
+      generic.data.method === "daemon.shutdownForUpgrade" ||
+      generic.data.method === "daemon.startInitialRefresh"
     ) {
       if (state.authority !== "privileged") {
         void enqueueSerialized(state, ordinaryError(generic.data.id, -32601, "Method not found"));
+        return;
+      }
+      if (generic.data.method === "daemon.startInitialRefresh") {
+        if (!emptyControlParams(generic.data.params)) {
+          void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
+          return;
+        }
+        try {
+          if (input.scheduleInitialRefresh === undefined) {
+            throw new Error("initial refresh scheduling unavailable");
+          }
+          input.scheduleInitialRefresh();
+        } catch (error) {
+          void enqueueSerialized(state, internalError(generic.data.id, error));
+          return;
+        }
+        void enqueueSerialized(state, ordinarySuccess(generic.data.id, { status: "accepted" }));
         return;
       }
       const params = controlParams(generic.data.params);

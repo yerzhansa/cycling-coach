@@ -135,6 +135,7 @@ export interface AuthenticatedDaemonControl {
     readonly targetProtocolVersion: number;
     readonly handoffCapability: string;
   }): Promise<{ readonly status: "accepted" }>;
+  startInitialRefresh(): Promise<{ readonly status: "accepted" }>;
   close(): Promise<void>;
 }
 
@@ -535,8 +536,11 @@ export async function openAuthenticatedDaemonControl(
   socket.addEventListener("close", onTerminal);
 
   const call = (
-    method: "daemon.reserveUpgrade" | "daemon.shutdownForUpgrade",
-    params: { readonly targetProtocolVersion: number; readonly handoffCapability: string },
+    method:
+      | "daemon.reserveUpgrade"
+      | "daemon.shutdownForUpgrade"
+      | "daemon.startInitialRefresh",
+    params: unknown,
     expectedStatus: "reserved" | "accepted",
   ): Promise<{ readonly status: "reserved" | "accepted" }> => {
     if (closed || socket.readyState !== WebSocket.OPEN) {
@@ -574,6 +578,10 @@ export async function openAuthenticatedDaemonControl(
     },
     async shutdownForUpgrade(params) {
       const result = await call("daemon.shutdownForUpgrade", params, "accepted");
+      return { status: result.status as "accepted" };
+    },
+    async startInitialRefresh() {
+      const result = await call("daemon.startInitialRefresh", {}, "accepted");
       return { status: result.status as "accepted" };
     },
     async close() {

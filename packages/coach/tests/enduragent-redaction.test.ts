@@ -220,6 +220,7 @@ describe.skipIf(!hasLoopback)("local CLI redaction boundary", () => {
             cancel: () => "none",
           },
           listener: context.listener,
+          startInitialRefresh: async () => {},
           close: async () => {},
         }),
       );
