@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +20,7 @@ import {
   spawnScenarioChild,
   spawnScenarioProcess,
   type ScenarioChildCaptureDependencies,
+  type ScenarioChildProcess,
   type ScenarioChildSpawn,
   type ScenarioChildSpawnOptions,
   usage,
@@ -27,6 +29,7 @@ import { AUTH_PROFILES_SOURCE_ENV } from "./lib/codex-auth.js";
 import type { ScenarioVerdict } from "./lib/types.js";
 
 const RUN_SCENARIO_SOURCE = readFileSync(new URL("./run-scenario.ts", import.meta.url), "utf-8");
+const RUN_SOURCE = readFileSync(new URL("./run.ts", import.meta.url), "utf-8");
 
 describe("scenario child stage diagnostics", () => {
   it("returns only the last exact allowlisted marker for the expected scenario", () => {
@@ -89,30 +92,24 @@ describe("scenario child stage diagnostics", () => {
     },
   );
 
-  it("distinguishes each synchronous exit-path boundary", () => {
+  it("keeps the synchronous exit-intent boundary", () => {
     const output = [
       "S8A_CHILD_STAGE DONE scenario=inj-02 stage=cleanup elapsed-ms=119001",
       "S8A_CHILD_STAGE DONE scenario=inj-02 stage=exit-intent elapsed-ms=119002",
-      "S8A_CHILD_STAGE DONE scenario=inj-02 stage=exit-listeners elapsed-ms=119003",
-      "S8A_CHILD_STAGE DONE scenario=inj-02 stage=really-exit elapsed-ms=119004",
     ].join("\n");
     expect(parseLastScenarioChildStage(output.split("\n")[0], "inj-02")).toEqual({
       stage: "cleanup-done",
       elapsedMs: 119001,
     });
     expect(parseLastScenarioChildStage(output, "inj-02")).toEqual({
-      stage: "really-exit-done",
-      elapsedMs: 119004,
-    });
-    expect(parseLastScenarioChildStage(output.split("\n").slice(0, 3).join("\n"), "inj-02")).toEqual({
-      stage: "exit-listeners-done",
-      elapsedMs: 119003,
+      stage: "exit-intent-done",
+      elapsedMs: 119002,
     });
   });
 
   it.each(["i12345678", "12345678", "foo-i12345678-bar", "foo-12345678-bar"])(
     "keeps fixture-private scenario id %s out of diagnostics",
-    (privateId) => {
+    async (privateId) => {
       expect(safeScenarioDiagnosticId(privateId)).toBe("unknown");
       expect(
         parseLastScenarioChildStage(
@@ -121,7 +118,7 @@ describe("scenario child stage diagnostics", () => {
         ),
       ).toEqual({ stage: "none", elapsedMs: null });
 
-      const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+      const spawnProcess = vi.fn<ScenarioChildSpawn>(async (_command, _args, options) => {
         const home = options.env.CYCLING_COACH_HOME;
         if (home !== undefined) rmSync(home, { recursive: true, force: true });
         return {
@@ -132,7 +129,7 @@ describe("scenario child stage diagnostics", () => {
         };
       });
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-      const outcome = spawnScenarioChild(
+      const outcome = await spawnScenarioChild(
         {
           scenarioId: privateId,
           stage: "replay",
@@ -162,7 +159,6 @@ describe("scenario child stage diagnostics", () => {
       'emitScenarioStage("DONE", diagnosticScenario, finishStage)',
       'emitScenarioStage("START", diagnosticScenario, "cleanup")',
       'emitScenarioStage("DONE", diagnosticScenario, "cleanup")',
-      "installExitPathProbes(diagnosticScenario)",
       'emitSynchronousScenarioStage(diagnosticScenario, "exit-intent")',
       "process.exit(exitCode)",
     ];
@@ -174,21 +170,25 @@ describe("scenario child stage diagnostics", () => {
     expect(RUN_SCENARIO_SOURCE).toContain(
       'writeSync(process.stdout.fd, `${formatScenarioStage("DONE", scenarioId, stage)}\\n`)',
     );
-    expect(RUN_SCENARIO_SOURCE).toContain('process.on("exit", () => {');
-    expect(RUN_SCENARIO_SOURCE).toContain(
-      'emitSynchronousScenarioStage(scenarioId, "exit-listeners")',
-    );
-    expect(RUN_SCENARIO_SOURCE).toContain("const currentReallyExit = processWithReallyExit.reallyExit");
-    expect(RUN_SCENARIO_SOURCE).toContain(
-      'emitSynchronousScenarioStage(scenarioId, "really-exit")',
-    );
-    expect(RUN_SCENARIO_SOURCE).toContain(
-      "return Reflect.apply(currentReallyExit, this, args) as never",
-    );
+    expect(RUN_SCENARIO_SOURCE).not.toContain("installExitPathProbes");
+    expect(RUN_SCENARIO_SOURCE).not.toContain("reallyExit");
     expect(RUN_SCENARIO_SOURCE).not.toContain("rawListeners");
     expect(RUN_SCENARIO_SOURCE).not.toContain("getEventListeners");
     expect(RUN_SCENARIO_SOURCE).not.toContain(".listeners(");
     expect(RUN_SCENARIO_SOURCE).not.toContain(".toString(");
+  });
+
+  it("awaits every real scenario-child lane without synchronous scenario spawning", () => {
+    const spawnProcessSource = RUN_SOURCE.slice(
+      RUN_SOURCE.indexOf("export async function spawnScenarioProcess("),
+      RUN_SOURCE.indexOf("export interface ChildEnvParams"),
+    );
+    expect(spawnProcessSource).not.toContain("spawnSync");
+    expect(RUN_SOURCE).toContain("export async function spawnScenarioProcess(");
+    expect(RUN_SOURCE).toContain("export async function spawnScenarioChild(");
+    expect(RUN_SOURCE).toContain("export async function runSelfTestDeterminism(");
+    expect(RUN_SOURCE.match(/await spawnScenarioChild\(/g)).toHaveLength(4);
+    expect(RUN_SOURCE).toContain("const determinism = await runSelfTestDeterminism({");
   });
 });
 
@@ -370,19 +370,19 @@ describe("scenario child process", () => {
     if (home !== undefined) rmSync(home, { recursive: true, force: true });
   }
 
-  it("applies the fixed deadline and preserves a normal verdict", () => {
+  it("applies the fixed deadline and preserves a normal verdict", async () => {
     const verdict: ScenarioVerdict = {
       scenario: "turn-basic-wellness",
       pass: false,
       failures: [{ assertId: "A1", scenario: "turn-basic-wellness", detail: "drift" }],
     };
-    const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+    const spawnProcess = vi.fn<ScenarioChildSpawn>(async (_command, _args, options) => {
       removeTempHome(options);
       return { stdout: `${JSON.stringify(verdict)}\n`, stderr: "fixed stderr", status: 1 };
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const outcome = spawnScenarioChild(params, spawnProcess);
+    const outcome = await spawnScenarioChild(params, spawnProcess);
 
     expect(outcome).toEqual({ verdict, exitCode: 1, stderr: "fixed stderr" });
     expect(spawnProcess).toHaveBeenCalledOnce();
@@ -396,8 +396,8 @@ describe("scenario child process", () => {
     ]);
   });
 
-  it("maps ETIMEDOUT to a stable path-free harness error", () => {
-    const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+  it("maps ETIMEDOUT to a stable path-free harness error", async () => {
+    const spawnProcess = vi.fn<ScenarioChildSpawn>(async (_command, _args, options) => {
       removeTempHome(options);
       return {
         stdout:
@@ -409,7 +409,7 @@ describe("scenario child process", () => {
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const outcome = spawnScenarioChild(
+    const outcome = await spawnScenarioChild(
       { ...params, scenarioId: "../../private/athlete-home" },
       spawnProcess,
     );
@@ -427,8 +427,8 @@ describe("scenario child process", () => {
     ]);
   });
 
-  it("stops determinism before the second child and diff after a timeout", () => {
-    const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+  it("stops determinism before the second child and diff after a timeout", async () => {
+    const spawnProcess = vi.fn<ScenarioChildSpawn>(async (_command, _args, options) => {
       removeTempHome(options);
       return {
         stdout: null,
@@ -440,7 +440,7 @@ describe("scenario child process", () => {
     const diffProcess = vi.fn(() => ({ status: 0, stdout: "" }));
     vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const outcome = runSelfTestDeterminism(
+    const outcome = await runSelfTestDeterminism(
       {
         probeDirs: ["/fixed/probe-1", "/fixed/probe-2"],
         provider: "openai-codex",
@@ -455,20 +455,20 @@ describe("scenario child process", () => {
     expect(diffProcess).not.toHaveBeenCalled();
   });
 
-  it("runs both determinism children before the diff", () => {
+  it("runs both determinism children before the diff", async () => {
     const verdict: ScenarioVerdict = {
       scenario: "turn-basic-wellness",
       pass: true,
       failures: [],
     };
-    const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+    const spawnProcess = vi.fn<ScenarioChildSpawn>(async (_command, _args, options) => {
       removeTempHome(options);
       return { stdout: `${JSON.stringify(verdict)}\n`, stderr: "", status: 0 };
     });
     const diffProcess = vi.fn(() => ({ status: 0, stdout: "" }));
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const outcome = runSelfTestDeterminism(
+    const outcome = await runSelfTestDeterminism(
       {
         probeDirs: ["/fixed/probe-1", "/fixed/probe-2"],
         provider: "openai-codex",
@@ -509,60 +509,111 @@ describe("scenario child file capture", () => {
     captureParent = mkdtempSync(join(tmpdir(), "s8a-capture-test-"));
   }
 
-  it("passes file descriptors to the child, reads both streams, and removes the files", () => {
-    makeCaptureParent();
-    const spawnProcess = vi.fn<CaptureSpawn>((_command, _args, spawnOptions) => {
-      expect(spawnOptions.stdio[0]).toBe("ignore");
-      expect(spawnOptions.stdio[1]).toEqual(expect.any(Number));
-      expect(spawnOptions.stdio[2]).toEqual(expect.any(Number));
-      writeFileSync(spawnOptions.stdio[1], "fixed stdout", "utf-8");
-      writeFileSync(spawnOptions.stdio[2], "fixed stderr", "utf-8");
-      return { status: 0 };
+  function emittedChild(
+    outcome: { status: number | null } | { error: Error & { code?: string } },
+    kill = vi.fn(() => true),
+  ): ScenarioChildProcess {
+    const events = new EventEmitter();
+    const child = Object.assign(events, { kill }) as unknown as ScenarioChildProcess;
+    queueMicrotask(() => {
+      if ("error" in outcome) events.emit("error", outcome.error);
+      else events.emit("exit", outcome.status);
     });
+    return child;
+  }
 
-    const result = spawnScenarioProcess("node", ["child.js"], options, {
-      captureParent,
-      spawnProcess,
-    });
-
-    expect(result).toEqual({ stdout: "fixed stdout", stderr: "fixed stderr", status: 0 });
-    expect(spawnProcess).toHaveBeenCalledOnce();
-    expect(readdirSync(captureParent)).toEqual([]);
-  });
-
-  it.each(["ETIMEDOUT", "ENOENT"])(
-    "preserves the %s code with path-free output and removes the files",
-    (code) => {
+  it.each([0, 1] as const)(
+    "passes file descriptors through direct exit %i and removes the files",
+    async (status) => {
       makeCaptureParent();
-      const result = spawnScenarioProcess("node", ["child.js"], options, {
-        captureParent,
-        spawnProcess: (_command, _args, spawnOptions) => {
-          writeFileSync(spawnOptions.stdio[1], "fixed stage", "utf-8");
-          return {
-            status: null,
-            error: Object.assign(new Error("/private/athlete-home/token"), { code }),
-          };
-        },
+      const spawnProcess = vi.fn<CaptureSpawn>((_command, _args, spawnOptions) => {
+        expect(spawnOptions.stdio[0]).toBe("ignore");
+        expect(spawnOptions.stdio[1]).toEqual(expect.any(Number));
+        expect(spawnOptions.stdio[2]).toEqual(expect.any(Number));
+        writeFileSync(spawnOptions.stdio[1], "fixed stdout", "utf-8");
+        writeFileSync(spawnOptions.stdio[2], "fixed stderr", "utf-8");
+        return emittedChild({ status });
       });
 
-      expect(result).toMatchObject({
-        stdout: "fixed stage",
-        stderr: "",
-        status: null,
-        error: { message: "scenario child process failed", code },
+      const result = await spawnScenarioProcess("node", ["child.js"], options, {
+        captureParent,
+        spawnProcess,
       });
-      expect(JSON.stringify(result)).not.toContain("private/athlete-home");
+
+      expect(result).toEqual({ stdout: "fixed stdout", stderr: "fixed stderr", status });
+      expect(spawnProcess).toHaveBeenCalledOnce();
       expect(readdirSync(captureParent)).toEqual([]);
     },
   );
 
-  it("rejects oversized output without reading or retaining it", () => {
+  it("preserves a spawn failure code with path-free output and removes the files", async () => {
     makeCaptureParent();
-    const result = spawnScenarioProcess("node", ["child.js"], { ...options, maxBuffer: 4 }, {
+    const result = await spawnScenarioProcess("node", ["child.js"], options, {
+      captureParent,
+      spawnProcess: (_command, _args, spawnOptions) => {
+        writeFileSync(spawnOptions.stdio[1], "fixed stage", "utf-8");
+        return emittedChild({
+          error: Object.assign(new Error("/private/athlete-home/token"), { code: "ENOENT" }),
+        });
+      },
+    });
+
+    expect(result).toMatchObject({
+      stdout: "fixed stage",
+      stderr: "",
+      status: null,
+      error: { message: "scenario child process failed", code: "ENOENT" },
+    });
+    expect(JSON.stringify(result)).not.toContain("private/athlete-home");
+    expect(readdirSync(captureParent)).toEqual([]);
+  });
+
+  it("kills once and returns ETIMEDOUT at the fixed deadline", async () => {
+    makeCaptureParent();
+    vi.useFakeTimers();
+    const events = new EventEmitter();
+    const kill = vi.fn(() => true);
+    const child = Object.assign(events, { kill }) as unknown as ScenarioChildProcess;
+    try {
+      const resultPromise = spawnScenarioProcess("node", ["child.js"], options, {
+        captureParent,
+        spawnProcess: () => child,
+      });
+      let settled = false;
+      void resultPromise.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      events.emit(
+        "error",
+        Object.assign(new Error("/private/athlete-home/token"), { code: "EIO" }),
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(readdirSync(captureParent)).toHaveLength(1);
+      events.emit("exit", null);
+      const result = await resultPromise;
+
+      expect(kill).toHaveBeenCalledOnce();
+      expect(kill).toHaveBeenCalledWith("SIGKILL");
+      expect(result).toMatchObject({
+        status: null,
+        error: { message: "scenario child process failed", code: "ETIMEDOUT" },
+      });
+      expect(JSON.stringify(result)).not.toContain("private/athlete-home");
+      expect(readdirSync(captureParent)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects oversized output without reading or retaining it", async () => {
+    makeCaptureParent();
+    const result = await spawnScenarioProcess("node", ["child.js"], { ...options, maxBuffer: 4 }, {
       captureParent,
       spawnProcess: (_command, _args, spawnOptions) => {
         writeFileSync(spawnOptions.stdio[1], "12345", "utf-8");
-        return { status: 0 };
+        return emittedChild({ status: 0 });
       },
     });
 
@@ -575,7 +626,7 @@ describe("scenario child file capture", () => {
     expect(readdirSync(captureParent)).toEqual([]);
   });
 
-  it("returns after the direct child exits while its descendant still holds stdio", () => {
+  it("returns after the direct child exits while its descendant still holds stdio", async () => {
     makeCaptureParent();
     let descendantPid: number | undefined;
     const descendantScript =
@@ -588,7 +639,7 @@ describe("scenario child file capture", () => {
     ].join(";");
 
     try {
-      const result = spawnScenarioProcess(
+      const result = await spawnScenarioProcess(
         process.execPath,
         ["-e", script],
         { ...options, cwd: captureParent, env: process.env },

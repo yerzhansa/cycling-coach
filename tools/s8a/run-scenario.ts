@@ -109,15 +109,7 @@ type ScenarioStage =
   | "finish-replay"
   | "finish-record"
   | "cleanup"
-  | "exit-intent"
-  | "exit-listeners"
-  | "really-exit";
-
-type ProcessReallyExit = (code?: number) => never;
-
-interface ProcessWithReallyExit extends NodeJS.Process {
-  reallyExit: ProcessReallyExit;
-}
+  | "exit-intent";
 
 function safeScenarioId(value: string): string {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return "unknown";
@@ -152,21 +144,6 @@ function emitSynchronousScenarioStage(scenarioId: string, stage: ScenarioStage):
   try {
     writeSync(process.stdout.fd, `${formatScenarioStage("DONE", scenarioId, stage)}\n`);
   } catch {}
-}
-
-function installExitPathProbes(scenarioId: string): void {
-  const processWithReallyExit = process as ProcessWithReallyExit;
-  const currentReallyExit = processWithReallyExit.reallyExit;
-  process.on("exit", () => {
-    emitSynchronousScenarioStage(scenarioId, "exit-listeners");
-  });
-  processWithReallyExit.reallyExit = function (
-    this: NodeJS.Process,
-    ...args: Parameters<ProcessReallyExit>
-  ): never {
-    emitSynchronousScenarioStage(scenarioId, "really-exit");
-    return Reflect.apply(currentReallyExit, this, args) as never;
-  };
 }
 
 async function main(): Promise<void> {
@@ -359,7 +336,6 @@ async function main(): Promise<void> {
     emitScenarioStage("DONE", diagnosticScenario, "cleanup");
   }
 
-  installExitPathProbes(diagnosticScenario);
   emitSynchronousScenarioStage(diagnosticScenario, "exit-intent");
   process.exit(exitCode);
 }

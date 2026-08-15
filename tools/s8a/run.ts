@@ -3,7 +3,7 @@
 // config dir is resolved at import time) and never constructs the agent itself.
 // The parent's clock is never frozen: two consecutive runs always land in
 // distinct run dirs.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -195,7 +195,13 @@ export type ScenarioChildSpawn = (
   command: string,
   args: readonly string[],
   options: ScenarioChildSpawnOptions,
-) => ScenarioChildSpawnResult;
+) => Promise<ScenarioChildSpawnResult>;
+
+export interface ScenarioChildProcess {
+  once(event: "error", listener: (error: Error & { code?: string }) => void): ScenarioChildProcess;
+  once(event: "exit", listener: (code: number | null) => void): ScenarioChildProcess;
+  kill(signal: "SIGKILL"): boolean;
+}
 
 export interface ScenarioChildCaptureDependencies {
   captureParent?: string;
@@ -205,11 +211,9 @@ export interface ScenarioChildCaptureDependencies {
     options: {
       cwd: string;
       env: NodeJS.ProcessEnv;
-      timeout: number;
-      killSignal: "SIGKILL";
       stdio: ["ignore", number, number];
     },
-  ) => { status: number | null; error?: Error & { code?: string } };
+  ) => ScenarioChildProcess;
 }
 
 function readCapturedOutput(
@@ -234,12 +238,12 @@ function readCapturedOutput(
   }
 }
 
-export function spawnScenarioProcess(
+export async function spawnScenarioProcess(
   command: string,
   args: readonly string[],
   options: ScenarioChildSpawnOptions,
   dependencies: ScenarioChildCaptureDependencies = {},
-): ScenarioChildSpawnResult {
+): Promise<ScenarioChildSpawnResult> {
   let captureDir: string;
   try {
     captureDir = mkdtempSync(join(dependencies.captureParent ?? tmpdir(), "s8a-child-capture-"));
@@ -267,14 +271,45 @@ export function spawnScenarioProcess(
     const spawnOptions = {
       cwd: options.cwd,
       env: options.env,
-      timeout: options.timeout,
-      killSignal: options.killSignal,
       stdio: ["ignore", stdoutFd, stderrFd] as ["ignore", number, number],
     };
-    const spawned =
+    const spawned: ScenarioChildProcess =
       dependencies.spawnProcess === undefined
-        ? spawnSync(command, [...args], spawnOptions)
+        ? (spawn(command, [...args], spawnOptions) as ScenarioChildProcess)
         : dependencies.spawnProcess(command, args, spawnOptions);
+    const processOutcome = await new Promise<{
+      status: number | null;
+      error?: Error & { code?: string };
+    }>((resolveProcess) => {
+      let settled = false;
+      let timedOut = false;
+      const finish = (result: { status: number | null; error?: Error & { code?: string } }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolveProcess(result);
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        spawned.kill(options.killSignal);
+      }, options.timeout);
+      spawned.once("error", (error) => {
+        if (timedOut) return;
+        finish({ status: null, error });
+      });
+      spawned.once("exit", (status) =>
+        finish(
+          timedOut
+            ? {
+                status: null,
+                error: Object.assign(new Error("scenario child timed out"), {
+                  code: "ETIMEDOUT",
+                }),
+              }
+            : { status },
+        ),
+      );
+    });
     closeSync(stdoutFd);
     stdoutFd = undefined;
     closeSync(stderrFd);
@@ -292,16 +327,16 @@ export function spawnScenarioProcess(
       };
     } else {
       const processErrorCode =
-        spawned.error !== undefined &&
-        "code" in spawned.error &&
-        typeof spawned.error.code === "string"
-          ? spawned.error.code
+        processOutcome.error !== undefined &&
+        "code" in processOutcome.error &&
+        typeof processOutcome.error.code === "string"
+          ? processOutcome.error.code
           : undefined;
       outcome = {
         stdout: capturedStdout.output,
         stderr: capturedStderr.output,
-        status: spawned.status,
-        ...(spawned.error === undefined
+        status: processOutcome.status,
+        ...(processOutcome.error === undefined
           ? {}
           : {
               error: Object.assign(new Error("scenario child process failed"), {
@@ -390,7 +425,7 @@ export function buildChildEnv(params: ChildEnvParams): Record<string, string | u
   return env;
 }
 
-export function spawnScenarioChild(
+export async function spawnScenarioChild(
   params: {
     scenarioId: string;
     stage: ScenarioChildStage;
@@ -405,7 +440,7 @@ export function spawnScenarioChild(
     authProfilesSource?: string;
   },
   spawnProcess: ScenarioChildSpawn = spawnScenarioProcess,
-): ChildOutcome {
+): Promise<ChildOutcome> {
   const safeScenarioId = safeScenarioDiagnosticId(params.scenarioId);
   console.log(`S8A_CHILD START scenario=${safeScenarioId} stage=${params.stage}`);
   const tempHome = mkdtempSync(join(tmpdir(), "s8a-home-"));
@@ -427,7 +462,7 @@ export function spawnScenarioChild(
     scenarioEnv: params.scenarioEnv,
   });
 
-  const result = spawnProcess(process.execPath, ["--import", "tsx", ...childArgs], {
+  const result = await spawnProcess(process.execPath, ["--import", "tsx", ...childArgs], {
     cwd: REPO_ROOT,
     env,
     encoding: "utf-8",
@@ -476,7 +511,7 @@ export function parseLastScenarioChildStage(
   let last: ScenarioChildDiagnostic = { stage: "none", elapsedMs: null };
   for (const line of output.split("\n")) {
     const match =
-      /^S8A_CHILD_STAGE (START|DONE) scenario=([a-z0-9]+(?:-[a-z0-9]+)*) stage=(setup|turn|finish-replay|finish-record|cleanup|exit-intent|exit-listeners|really-exit)(?: turn=(0|[1-9][0-9]*))? elapsed-ms=(0|[1-9][0-9]{0,6})$/.exec(
+      /^S8A_CHILD_STAGE (START|DONE) scenario=([a-z0-9]+(?:-[a-z0-9]+)*) stage=(setup|turn|finish-replay|finish-record|cleanup|exit-intent)(?: turn=(0|[1-9][0-9]*))? elapsed-ms=(0|[1-9][0-9]{0,6})$/.exec(
         line.trimEnd(),
       );
     if (match === null || match[2] !== safeScenarioId) continue;
@@ -506,7 +541,7 @@ export type SelfTestDiffSpawn = (
   options: { encoding: "utf-8" },
 ) => { status: number | null; stdout: string | null };
 
-export function runSelfTestDeterminism(
+export async function runSelfTestDeterminism(
   params: {
     probeDirs: readonly [string, string];
     provider: S8aProvider;
@@ -515,15 +550,16 @@ export function runSelfTestDeterminism(
   },
   spawnProcess: ScenarioChildSpawn = spawnScenarioProcess,
   diffProcess: SelfTestDiffSpawn = (command, args, options) => spawnSync(command, args, options),
-):
+): Promise<
   | { kind: "harness-error"; outcome: ChildOutcome }
-  | { kind: "complete"; deterministic: boolean; diffOutput: string } {
+  | { kind: "complete"; deterministic: boolean; diffOutput: string }
+> {
   const probes = [
     { dir: params.probeDirs[0], stage: "self-test-determinism-1" },
     { dir: params.probeDirs[1], stage: "self-test-determinism-2" },
   ] as const;
   for (const probe of probes) {
-    const outcome = spawnScenarioChild(
+    const outcome = await spawnScenarioChild(
       {
         scenarioId: "turn-basic-wellness",
         stage: probe.stage,
@@ -630,7 +666,7 @@ async function replayScenarios(params: {
   for (const entry of params.entries) {
     const fixtureDir = join(HERE, "fixtures", entry.id);
     const lane = readRecordingLane(fixtureDir);
-    const outcome = spawnScenarioChild({
+    const outcome = await spawnScenarioChild({
       scenarioId: entry.id,
       stage: "replay",
       mode: "replay",
@@ -727,7 +763,7 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     console.log(`recording lane: ${lane.provider} / ${lane.model}`);
-    const outcome = spawnScenarioChild({
+    const outcome = await spawnScenarioChild({
       scenarioId: entry.id,
       stage: "record",
       mode: "record",
@@ -752,7 +788,7 @@ async function main(): Promise<void> {
     // Probe (a): drift inversion. Every self-test child runs --no-supersessions
     // so no registry entry can ever downgrade a seeded failure to WARN.
     const driftLane = readRecordingLane(join(HERE, "fixtures", "drift-must-fail"));
-    const driftOutcome = spawnScenarioChild({
+    const driftOutcome = await spawnScenarioChild({
       scenarioId: "turn-basic-wellness",
       stage: "self-test-drift",
       mode: "replay",
@@ -782,7 +818,7 @@ async function main(): Promise<void> {
       join(runDir, "turn-basic-wellness-probe2"),
     ] as const;
     const probeLane = readRecordingLane(join(HERE, "fixtures", "turn-basic-wellness"));
-    const determinism = runSelfTestDeterminism({
+    const determinism = await runSelfTestDeterminism({
       probeDirs,
       provider: probeLane.provider,
       llmModel: probeLane.model,
