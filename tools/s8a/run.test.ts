@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,10 @@ import {
   runSelfTestDeterminism,
   safeScenarioDiagnosticId,
   spawnScenarioChild,
+  spawnScenarioProcess,
+  type ScenarioChildCaptureDependencies,
   type ScenarioChildSpawn,
+  type ScenarioChildSpawnOptions,
   usage,
 } from "./run.js";
 import { AUTH_PROFILES_SOURCE_ENV } from "./lib/codex-auth.js";
@@ -422,6 +425,128 @@ describe("scenario child process", () => {
       "S8A_CHILD START scenario=turn-basic-wellness stage=self-test-determinism-2",
       "S8A_CHILD DONE scenario=turn-basic-wellness stage=self-test-determinism-2 outcome=exit-0",
     ]);
+  });
+});
+
+describe("scenario child file capture", () => {
+  let captureParent: string;
+  type CaptureSpawn = NonNullable<ScenarioChildCaptureDependencies["spawnProcess"]>;
+
+  afterEach(() => rmSync(captureParent, { recursive: true, force: true }));
+
+  const options: ScenarioChildSpawnOptions = {
+    cwd: "/fixed/repo",
+    env: { FIXED: "value" },
+    encoding: "utf-8",
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 120_000,
+    killSignal: "SIGKILL",
+  };
+
+  function makeCaptureParent(): void {
+    captureParent = mkdtempSync(join(tmpdir(), "s8a-capture-test-"));
+  }
+
+  it("passes file descriptors to the child, reads both streams, and removes the files", () => {
+    makeCaptureParent();
+    const spawnProcess = vi.fn<CaptureSpawn>((_command, _args, spawnOptions) => {
+      expect(spawnOptions.stdio[0]).toBe("ignore");
+      expect(spawnOptions.stdio[1]).toEqual(expect.any(Number));
+      expect(spawnOptions.stdio[2]).toEqual(expect.any(Number));
+      writeFileSync(spawnOptions.stdio[1], "fixed stdout", "utf-8");
+      writeFileSync(spawnOptions.stdio[2], "fixed stderr", "utf-8");
+      return { status: 0 };
+    });
+
+    const result = spawnScenarioProcess("node", ["child.js"], options, {
+      captureParent,
+      spawnProcess,
+    });
+
+    expect(result).toEqual({ stdout: "fixed stdout", stderr: "fixed stderr", status: 0 });
+    expect(spawnProcess).toHaveBeenCalledOnce();
+    expect(readdirSync(captureParent)).toEqual([]);
+  });
+
+  it.each(["ETIMEDOUT", "ENOENT"])(
+    "preserves the %s code with path-free output and removes the files",
+    (code) => {
+      makeCaptureParent();
+      const result = spawnScenarioProcess("node", ["child.js"], options, {
+        captureParent,
+        spawnProcess: (_command, _args, spawnOptions) => {
+          writeFileSync(spawnOptions.stdio[1], "fixed stage", "utf-8");
+          return {
+            status: null,
+            error: Object.assign(new Error("/private/athlete-home/token"), { code }),
+          };
+        },
+      });
+
+      expect(result).toMatchObject({
+        stdout: "fixed stage",
+        stderr: "",
+        status: null,
+        error: { message: "scenario child process failed", code },
+      });
+      expect(JSON.stringify(result)).not.toContain("private/athlete-home");
+      expect(readdirSync(captureParent)).toEqual([]);
+    },
+  );
+
+  it("rejects oversized output without reading or retaining it", () => {
+    makeCaptureParent();
+    const result = spawnScenarioProcess("node", ["child.js"], { ...options, maxBuffer: 4 }, {
+      captureParent,
+      spawnProcess: (_command, _args, spawnOptions) => {
+        writeFileSync(spawnOptions.stdio[1], "12345", "utf-8");
+        return { status: 0 };
+      },
+    });
+
+    expect(result).toMatchObject({
+      stdout: null,
+      stderr: null,
+      status: null,
+      error: { message: "scenario child output exceeded limit", code: "ENOBUFS" },
+    });
+    expect(readdirSync(captureParent)).toEqual([]);
+  });
+
+  it("returns after the direct child exits while its descendant still holds stdio", () => {
+    makeCaptureParent();
+    let descendantPid: number | undefined;
+    const descendantScript =
+      'setTimeout(() => process.stdout.write("descendant-finished"), 30000)';
+    const script = [
+      'const { spawn } = require("node:child_process")',
+      `const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], { stdio: ["ignore", 1, 2] })`,
+      'process.stdout.write(`direct-complete:${child.pid}\\n`)',
+      "process.exit(0)",
+    ].join(";");
+
+    try {
+      const result = spawnScenarioProcess(
+        process.execPath,
+        ["-e", script],
+        { ...options, cwd: captureParent, env: process.env },
+        { captureParent },
+      );
+      const pidMatch = /^direct-complete:([0-9]+)\n$/.exec(result.stdout ?? "");
+      descendantPid = pidMatch === null ? undefined : Number.parseInt(pidMatch[1], 10);
+
+      expect(result.status).toBe(0);
+      expect(result.error).toBeUndefined();
+      expect(Number.isSafeInteger(descendantPid)).toBe(true);
+      expect(result.stdout).not.toContain("descendant-finished");
+      expect(readdirSync(captureParent)).toEqual([]);
+    } finally {
+      if (descendantPid !== undefined) {
+        try {
+          process.kill(descendantPid, "SIGKILL");
+        } catch {}
+      }
+    }
   });
 });
 

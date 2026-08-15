@@ -4,7 +4,18 @@
 // The parent's clock is never frozen: two consecutive runs always land in
 // distinct run dirs.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -171,18 +182,178 @@ export interface ScenarioChildSpawnResult {
   error?: Error & { code?: string };
 }
 
+export interface ScenarioChildSpawnOptions {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  encoding: "utf-8";
+  maxBuffer: number;
+  timeout: number;
+  killSignal: "SIGKILL";
+}
+
 export type ScenarioChildSpawn = (
   command: string,
   args: readonly string[],
-  options: {
-    cwd: string;
-    env: NodeJS.ProcessEnv;
-    encoding: "utf-8";
-    maxBuffer: number;
-    timeout: number;
-    killSignal: "SIGKILL";
-  },
+  options: ScenarioChildSpawnOptions,
 ) => ScenarioChildSpawnResult;
+
+export interface ScenarioChildCaptureDependencies {
+  captureParent?: string;
+  spawnProcess?: (
+    command: string,
+    args: readonly string[],
+    options: {
+      cwd: string;
+      env: NodeJS.ProcessEnv;
+      timeout: number;
+      killSignal: "SIGKILL";
+      stdio: ["ignore", number, number];
+    },
+  ) => { status: number | null; error?: Error & { code?: string } };
+}
+
+function readCapturedOutput(
+  path: string,
+  encoding: "utf-8",
+  maxBuffer: number,
+): { output: string | null; overflow: boolean } {
+  const fd = openSync(path, "r");
+  try {
+    const length = fstatSync(fd).size;
+    if (length > maxBuffer) return { output: null, overflow: true };
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const bytesRead = readSync(fd, buffer, offset, length - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    return { output: buffer.subarray(0, offset).toString(encoding), overflow: false };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function spawnScenarioProcess(
+  command: string,
+  args: readonly string[],
+  options: ScenarioChildSpawnOptions,
+  dependencies: ScenarioChildCaptureDependencies = {},
+): ScenarioChildSpawnResult {
+  let captureDir: string;
+  try {
+    captureDir = mkdtempSync(join(dependencies.captureParent ?? tmpdir(), "s8a-child-capture-"));
+  } catch {
+    return {
+      stdout: null,
+      stderr: null,
+      status: null,
+      error: Object.assign(new Error("scenario child capture failed"), { code: "EIO" }),
+    };
+  }
+  const stdoutPath = join(captureDir, "stdout");
+  const stderrPath = join(captureDir, "stderr");
+  let stdoutFd: number | undefined;
+  let stderrFd: number | undefined;
+  let outcome: ScenarioChildSpawnResult = {
+    stdout: null,
+    stderr: null,
+    status: null,
+    error: Object.assign(new Error("scenario child capture failed"), { code: "EIO" }),
+  };
+  try {
+    stdoutFd = openSync(stdoutPath, "w");
+    stderrFd = openSync(stderrPath, "w");
+    const spawnOptions = {
+      cwd: options.cwd,
+      env: options.env,
+      timeout: options.timeout,
+      killSignal: options.killSignal,
+      stdio: ["ignore", stdoutFd, stderrFd] as ["ignore", number, number],
+    };
+    const spawned =
+      dependencies.spawnProcess === undefined
+        ? spawnSync(command, [...args], spawnOptions)
+        : dependencies.spawnProcess(command, args, spawnOptions);
+    closeSync(stdoutFd);
+    stdoutFd = undefined;
+    closeSync(stderrFd);
+    stderrFd = undefined;
+    const capturedStdout = readCapturedOutput(stdoutPath, options.encoding, options.maxBuffer);
+    const capturedStderr = readCapturedOutput(stderrPath, options.encoding, options.maxBuffer);
+    if (capturedStdout.overflow || capturedStderr.overflow) {
+      outcome = {
+        stdout: null,
+        stderr: null,
+        status: null,
+        error: Object.assign(new Error("scenario child output exceeded limit"), {
+          code: "ENOBUFS",
+        }),
+      };
+    } else {
+      const processErrorCode =
+        spawned.error !== undefined &&
+        "code" in spawned.error &&
+        typeof spawned.error.code === "string"
+          ? spawned.error.code
+          : undefined;
+      outcome = {
+        stdout: capturedStdout.output,
+        stderr: capturedStderr.output,
+        status: spawned.status,
+        ...(spawned.error === undefined
+          ? {}
+          : {
+              error: Object.assign(new Error("scenario child process failed"), {
+                code: processErrorCode,
+              }),
+            }),
+      };
+    }
+  } catch {
+    outcome = {
+      stdout: null,
+      stderr: null,
+      status: null,
+      error: Object.assign(new Error("scenario child capture failed"), { code: "EIO" }),
+    };
+  } finally {
+    let closeFailed = false;
+    if (stdoutFd !== undefined) {
+      try {
+        closeSync(stdoutFd);
+      } catch {
+        closeFailed = true;
+      }
+    }
+    if (stderrFd !== undefined) {
+      try {
+        closeSync(stderrFd);
+      } catch {
+        closeFailed = true;
+      }
+    }
+    if (closeFailed) {
+      outcome = {
+        stdout: null,
+        stderr: null,
+        status: null,
+        error: Object.assign(new Error("scenario child capture cleanup failed"), { code: "EIO" }),
+      };
+    }
+    try {
+      rmSync(captureDir, { recursive: true, force: true });
+    } catch {
+      outcome = {
+        stdout: null,
+        stderr: null,
+        status: null,
+        error: Object.assign(new Error("scenario child capture cleanup failed"), { code: "EIO" }),
+      };
+    }
+  }
+  return outcome;
+}
 
 export interface ChildEnvParams {
   base: Record<string, string | undefined>;
@@ -233,7 +404,7 @@ export function spawnScenarioChild(
     anthropicKey?: string;
     authProfilesSource?: string;
   },
-  spawnProcess: ScenarioChildSpawn = (command, args, options) => spawnSync(command, args, options),
+  spawnProcess: ScenarioChildSpawn = spawnScenarioProcess,
 ): ChildOutcome {
   const safeScenarioId = safeScenarioDiagnosticId(params.scenarioId);
   console.log(`S8A_CHILD START scenario=${safeScenarioId} stage=${params.stage}`);
@@ -330,7 +501,7 @@ export function runSelfTestDeterminism(
     llmModel: string;
     anthropicKey?: string;
   },
-  spawnProcess: ScenarioChildSpawn = (command, args, options) => spawnSync(command, args, options),
+  spawnProcess: ScenarioChildSpawn = spawnScenarioProcess,
   diffProcess: SelfTestDiffSpawn = (command, args, options) => spawnSync(command, args, options),
 ):
   | { kind: "harness-error"; outcome: ChildOutcome }
