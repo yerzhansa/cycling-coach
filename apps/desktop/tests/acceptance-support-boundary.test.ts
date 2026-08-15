@@ -88,4 +88,21 @@ describe("Desktop acceptance support boundary", () => {
 
     expect(violations).toEqual([]);
   });
+
+  it("captures a new desktop release id from the creation response", () => {
+    const workflow = readFileSync(
+      resolve(repositoryRoot, ".github/workflows/version-pr.yml"),
+      "utf8",
+    );
+
+    expect(workflow).toContain(
+      'CREATED_RELEASE=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases"',
+    );
+    expect(workflow).toContain(
+      'DRAFT_ID=$(printf \'%s\' "$CREATED_RELEASE" | jq -er \'.id | tostring\')',
+    );
+    expect(workflow).not.toContain(
+      'DRAFT_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100"',
+    );
+  });
 });

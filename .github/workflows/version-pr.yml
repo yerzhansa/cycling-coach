@@ -160,14 +160,15 @@ jobs:
             test "$EXISTING_BODY_SHA256" = "$RELEASE_BODY_SHA256"
             echo "::notice::Reusing desktop draft release $DRAFT_ID for $DESKTOP_TAG"
           else
-            gh release create "$DESKTOP_TAG" \
-              --draft \
-              --latest=false \
-              --target "$RELEASE_COMMIT" \
-              --title "Enduragent Desktop $DESKTOP_VERSION" \
-              --notes "$RELEASE_BODY"
-            DRAFT_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              --jq "[.[] | select(.tag_name == \"$DESKTOP_TAG\")] | first | .id | tostring")
+            CREATED_RELEASE=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$DESKTOP_TAG" \
+              -f target_commitish="$RELEASE_COMMIT" \
+              -f name="Enduragent Desktop $DESKTOP_VERSION" \
+              -f body="$RELEASE_BODY" \
+              -F draft=true \
+              -F prerelease=false \
+              -f make_latest=false)
+            DRAFT_ID=$(printf '%s' "$CREATED_RELEASE" | jq -er '.id | tostring')
             printf '%s' "$DRAFT_ID" | grep -Eq '^[1-9][0-9]*$'
             echo "::notice::Created desktop draft release $DRAFT_ID for $DESKTOP_TAG"
           fi

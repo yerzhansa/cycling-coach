@@ -1,5 +1,14 @@
 # cycling-coach
 
+## 2026.8.15
+
+### Patch Changes
+
+- f59bf52: User-facing: Deleting the Telegram connection now completes while offline and cancels any pending pairing.
+- bb3ccce: User-facing: Update alerts now link to the Enduragent desktop app for macOS.
+- 846b0d8: User-facing: Claude Code now starts only for Claude work and uses a private Enduragent folder with none of your files.
+- 8971c2e: User-facing: Connecting intervals.icu after pasting an API key is now faster while keeping account verification in place.
+
 ## 2026.8.11
 
 ### Patch Changes
