@@ -99,12 +99,6 @@ function refusedWrite(): DesktopTrainingExportResult {
   return { status: "refused", reason: "write-failed" };
 }
 
-function describeWriteFailure(error: unknown): string {
-  const name = error instanceof Error ? error.name : "NonError";
-  const message = error instanceof Error ? error.message : String(error);
-  return `desktop-training-export-write-failed name=${JSON.stringify(name)} message=${JSON.stringify(message)}`;
-}
-
 export function installDesktopTrainingExportIpc(input: {
   readonly ipcMain: Pick<IpcMain, "handle" | "removeHandler">;
   readonly currentWindow: () => BrowserWindow | undefined;
@@ -128,8 +122,8 @@ export function installDesktopTrainingExportIpc(input: {
       let selection: Awaited<ReturnType<TrainingExportDialogPort["showSaveDialog"]>>;
       try {
         selection = await input.dialog.showSaveDialog(window, saveDialogOptions(parsed.data));
-      } catch (error) {
-        log(describeWriteFailure(error));
+      } catch {
+        log("desktop-training-export-failed stage=dialog");
         return refusedWrite();
       }
       if (selection.canceled || selection.filePath === undefined) return { status: "cancelled" };
@@ -145,8 +139,8 @@ export function installDesktopTrainingExportIpc(input: {
             ? { status: "saved", byteLength: result.byteLength }
             : result,
         );
-      } catch (error) {
-        log(describeWriteFailure(error));
+      } catch {
+        log("desktop-training-export-failed stage=operation");
         return refusedWrite();
       }
     },
