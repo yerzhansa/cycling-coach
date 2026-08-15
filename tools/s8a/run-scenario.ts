@@ -1,7 +1,15 @@
 // Per-scenario child entry. One fresh process per scenario: the coach home env
 // var must be set BEFORE this process imports core, because the config dir is a
 // module-level constant resolved at import time.
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,6 +55,7 @@ import type {
 } from "./lib/types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const SCENARIO_STAGE_EPOCH = process.hrtime.bigint();
 
 function parseArgs(argv: string[]): {
   scenario: string;
@@ -94,12 +103,32 @@ interface StagedCodexProfile {
   snapshot: StoredProfileSnapshot;
 }
 
-type ScenarioStage = "setup" | "turn" | "finish-replay" | "finish-record" | "cleanup";
+type ScenarioStage =
+  | "setup"
+  | "turn"
+  | "finish-replay"
+  | "finish-record"
+  | "cleanup"
+  | "exit-intent";
 
 function safeScenarioId(value: string): string {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return "unknown";
   if (/[0-9]{8,}/.test(value)) return "unknown";
   return value;
+}
+
+function formatScenarioStage(
+  phase: "START" | "DONE",
+  scenarioId: string,
+  stage: ScenarioStage,
+  turnIndex?: number,
+): string {
+  const turn =
+    stage === "turn" && Number.isSafeInteger(turnIndex) && turnIndex! >= 0
+      ? ` turn=${turnIndex}`
+      : "";
+  const elapsedMs = Number((process.hrtime.bigint() - SCENARIO_STAGE_EPOCH) / 1_000_000n);
+  return `S8A_CHILD_STAGE ${phase} scenario=${scenarioId} stage=${stage}${turn} elapsed-ms=${elapsedMs}`;
 }
 
 function emitScenarioStage(
@@ -108,11 +137,13 @@ function emitScenarioStage(
   stage: ScenarioStage,
   turnIndex?: number,
 ): void {
-  const turn =
-    stage === "turn" && Number.isSafeInteger(turnIndex) && turnIndex! >= 0
-      ? ` turn=${turnIndex}`
-      : "";
-  console.log(`S8A_CHILD_STAGE ${phase} scenario=${scenarioId} stage=${stage}${turn}`);
+  console.log(formatScenarioStage(phase, scenarioId, stage, turnIndex));
+}
+
+function emitExitIntent(scenarioId: string): void {
+  try {
+    writeSync(process.stdout.fd, `${formatScenarioStage("DONE", scenarioId, "exit-intent")}\n`);
+  } catch {}
 }
 
 async function main(): Promise<void> {
@@ -305,6 +336,7 @@ async function main(): Promise<void> {
     emitScenarioStage("DONE", diagnosticScenario, "cleanup");
   }
 
+  emitExitIntent(diagnosticScenario);
   process.exit(exitCode);
 }
 

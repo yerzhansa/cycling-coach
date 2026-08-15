@@ -437,11 +437,11 @@ export function spawnScenarioChild(
   });
   if (result.error?.code === "ETIMEDOUT") {
     console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=timeout`);
-    const childStage = parseLastScenarioChildStage(result.stdout ?? "", safeScenarioId);
+    const childDiagnostic = parseLastScenarioChildStage(result.stdout ?? "", safeScenarioId);
     return {
       verdict: null,
       exitCode: 2,
-      stderr: `scenario child timed out: scenario=${safeScenarioId} stage=${params.stage} child-stage=${childStage}`,
+      stderr: `scenario child timed out: scenario=${safeScenarioId} stage=${params.stage} child-stage=${childDiagnostic.stage} child-elapsed-ms=${childDiagnostic.elapsedMs ?? "none"}`,
     };
   }
   const stdoutLines = (result.stdout ?? "").split("\n").filter((l) => l.trim() !== "");
@@ -462,22 +462,34 @@ export function spawnScenarioChild(
   return { verdict, exitCode, stderr: result.stderr ?? "" };
 }
 
-export function parseLastScenarioChildStage(output: string, scenarioId: string): string {
+export interface ScenarioChildDiagnostic {
+  stage: string;
+  elapsedMs: number | null;
+}
+
+export function parseLastScenarioChildStage(
+  output: string,
+  scenarioId: string,
+): ScenarioChildDiagnostic {
   const maxDiagnosticTurnIndex = 99;
   const safeScenarioId = safeScenarioDiagnosticId(scenarioId);
-  let last = "none";
+  let last: ScenarioChildDiagnostic = { stage: "none", elapsedMs: null };
   for (const line of output.split("\n")) {
     const match =
-      /^S8A_CHILD_STAGE (START|DONE) scenario=([a-z0-9]+(?:-[a-z0-9]+)*) stage=(setup|turn|finish-replay|finish-record|cleanup)(?: turn=(0|[1-9][0-9]*))?$/.exec(
+      /^S8A_CHILD_STAGE (START|DONE) scenario=([a-z0-9]+(?:-[a-z0-9]+)*) stage=(setup|turn|finish-replay|finish-record|cleanup|exit-intent)(?: turn=(0|[1-9][0-9]*))? elapsed-ms=(0|[1-9][0-9]{0,6})$/.exec(
         line.trimEnd(),
       );
     if (match === null || match[2] !== safeScenarioId) continue;
     const phase = match[1].toLowerCase();
     const stage = match[3];
     const turn = match[4];
+    const elapsedMs = Number.parseInt(match[5], 10);
     if ((stage === "turn") !== (turn !== undefined)) continue;
     if (turn !== undefined && Number.parseInt(turn, 10) > maxDiagnosticTurnIndex) continue;
-    last = stage === "turn" ? `turn-${turn}-${phase}` : `${stage}-${phase}`;
+    last = {
+      stage: stage === "turn" ? `turn-${turn}-${phase}` : `${stage}-${phase}`,
+      elapsedMs,
+    };
   }
   return last;
 }

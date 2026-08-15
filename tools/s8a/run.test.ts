@@ -31,44 +31,77 @@ const RUN_SCENARIO_SOURCE = readFileSync(new URL("./run-scenario.ts", import.met
 describe("scenario child stage diagnostics", () => {
   it("returns only the last exact allowlisted marker for the expected scenario", () => {
     const output = [
-      "S8A_CHILD_STAGE START scenario=inj-02 stage=setup",
-      "S8A_CHILD_STAGE DONE scenario=inj-02 stage=setup",
-      "S8A_CHILD_STAGE START scenario=inj-03 stage=cleanup",
-      "S8A_CHILD_STAGE START scenario=inj-02 stage=turn turn=0",
-      "S8A_CHILD_STAGE START scenario=inj-02 stage=private",
+      "S8A_CHILD_STAGE START scenario=inj-02 stage=setup elapsed-ms=0",
+      "S8A_CHILD_STAGE DONE scenario=inj-02 stage=setup elapsed-ms=7",
+      "S8A_CHILD_STAGE START scenario=inj-03 stage=cleanup elapsed-ms=8",
+      "S8A_CHILD_STAGE START scenario=inj-02 stage=turn turn=0 elapsed-ms=11",
+      "S8A_CHILD_STAGE START scenario=inj-02 stage=private elapsed-ms=12",
     ].join("\n");
-    expect(parseLastScenarioChildStage(output, "inj-02")).toBe("turn-0-start");
-    expect(parseLastScenarioChildStage(output, "unsafe/path")).toBe("none");
+    expect(parseLastScenarioChildStage(output, "inj-02")).toEqual({
+      stage: "turn-0-start",
+      elapsedMs: 11,
+    });
+    expect(parseLastScenarioChildStage(output, "unsafe/path")).toEqual({
+      stage: "none",
+      elapsedMs: null,
+    });
   });
 
   it("rejects malformed, mismatched, and structurally invalid markers", () => {
     expect(
       parseLastScenarioChildStage("S8A_CHILD_STAGE START scenario=inj-02 stage=turn", "inj-02"),
-    ).toBe("none");
+    ).toEqual({ stage: "none", elapsedMs: null });
     expect(
       parseLastScenarioChildStage(
-        "S8A_CHILD_STAGE DONE scenario=inj-02 stage=setup turn=0",
+        "S8A_CHILD_STAGE DONE scenario=inj-02 stage=setup turn=0 elapsed-ms=2",
         "inj-02",
       ),
-    ).toBe("none");
+    ).toEqual({ stage: "none", elapsedMs: null });
     expect(
       parseLastScenarioChildStage(
-        "prefix S8A_CHILD_STAGE START scenario=inj-02 stage=setup",
+        "prefix S8A_CHILD_STAGE START scenario=inj-02 stage=setup elapsed-ms=2",
         "inj-02",
       ),
-    ).toBe("none");
+    ).toEqual({ stage: "none", elapsedMs: null });
     expect(
       parseLastScenarioChildStage(
-        "S8A_CHILD_STAGE START scenario=inj-03 stage=setup",
+        "S8A_CHILD_STAGE START scenario=inj-03 stage=setup elapsed-ms=2",
         "inj-02",
       ),
-    ).toBe("none");
+    ).toEqual({ stage: "none", elapsedMs: null });
     expect(
       parseLastScenarioChildStage(
-        "S8A_CHILD_STAGE START scenario=inj-02 stage=turn turn=123456789",
+        "S8A_CHILD_STAGE START scenario=inj-02 stage=turn turn=123456789 elapsed-ms=2",
         "inj-02",
       ),
-    ).toBe("none");
+    ).toEqual({ stage: "none", elapsedMs: null });
+  });
+
+  it.each(["-1", "1.5", "0000001", "12345678"])(
+    "rejects unsafe elapsed value %s",
+    (elapsedMs) => {
+      expect(
+        parseLastScenarioChildStage(
+          `S8A_CHILD_STAGE DONE scenario=inj-02 stage=cleanup elapsed-ms=${elapsedMs}`,
+          "inj-02",
+        ),
+      ).toEqual({ stage: "none", elapsedMs: null });
+    },
+  );
+
+  it("distinguishes cleanup completion from synchronous exit intent", () => {
+    const output = [
+      "S8A_CHILD_STAGE DONE scenario=inj-02 stage=cleanup elapsed-ms=119001",
+      "S8A_CHILD_STAGE DONE scenario=inj-02 stage=exit-intent elapsed-ms=119002",
+    ].join("\n");
+    expect(parseLastScenarioChildStage(output.split("\n")[0], "inj-02")).toEqual({
+      stage: "cleanup-done",
+      elapsedMs: 119001,
+    });
+    expect(parseLastScenarioChildStage(output, "inj-02")).toEqual({
+      stage: "exit-intent-done",
+      elapsedMs: 119002,
+    });
   });
 
   it.each(["i12345678", "12345678", "foo-i12345678-bar", "foo-12345678-bar"])(
@@ -77,16 +110,16 @@ describe("scenario child stage diagnostics", () => {
       expect(safeScenarioDiagnosticId(privateId)).toBe("unknown");
       expect(
         parseLastScenarioChildStage(
-          `S8A_CHILD_STAGE START scenario=${privateId} stage=setup`,
+          `S8A_CHILD_STAGE START scenario=${privateId} stage=setup elapsed-ms=1`,
           privateId,
         ),
-      ).toBe("none");
+      ).toEqual({ stage: "none", elapsedMs: null });
 
       const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
         const home = options.env.CYCLING_COACH_HOME;
         if (home !== undefined) rmSync(home, { recursive: true, force: true });
         return {
-          stdout: "S8A_CHILD_STAGE START scenario=unknown stage=setup\n",
+          stdout: "S8A_CHILD_STAGE START scenario=unknown stage=setup elapsed-ms=1\n",
           stderr: privateId,
           status: null,
           error: Object.assign(new Error(privateId), { code: "ETIMEDOUT" }),
@@ -107,7 +140,7 @@ describe("scenario child stage diagnostics", () => {
       const surfaced = JSON.stringify({ outcome, logs: log.mock.calls });
       expect(surfaced).not.toContain(privateId);
       expect(outcome.stderr).toBe(
-        "scenario child timed out: scenario=unknown stage=replay child-stage=setup-start",
+        "scenario child timed out: scenario=unknown stage=replay child-stage=setup-start child-elapsed-ms=1",
       );
       log.mockRestore();
     },
@@ -123,11 +156,16 @@ describe("scenario child stage diagnostics", () => {
       'emitScenarioStage("DONE", diagnosticScenario, finishStage)',
       'emitScenarioStage("START", diagnosticScenario, "cleanup")',
       'emitScenarioStage("DONE", diagnosticScenario, "cleanup")',
+      "emitExitIntent(diagnosticScenario)",
     ];
     const positions = markers.map((marker) => RUN_SCENARIO_SOURCE.indexOf(marker));
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
     expect(RUN_SCENARIO_SOURCE).toContain("/[0-9]{8,}/");
+    expect(RUN_SCENARIO_SOURCE).toContain("process.hrtime.bigint()");
+    expect(RUN_SCENARIO_SOURCE).toContain(
+      'writeSync(process.stdout.fd, `${formatScenarioStage("DONE", scenarioId, "exit-intent")}\\n`)',
+    );
   });
 });
 
@@ -340,7 +378,7 @@ describe("scenario child process", () => {
       removeTempHome(options);
       return {
         stdout:
-          "S8A_CHILD_STAGE START scenario=unknown stage=turn turn=3\n/private/athlete-home/token\n",
+          "S8A_CHILD_STAGE START scenario=unknown stage=turn turn=3 elapsed-ms=119000\n/private/athlete-home/token\n",
         stderr: "/private/athlete-home/token",
         status: null,
         error: Object.assign(new Error("/private/athlete-home/token"), { code: "ETIMEDOUT" }),
@@ -356,7 +394,8 @@ describe("scenario child process", () => {
     expect(outcome).toEqual({
       verdict: null,
       exitCode: 2,
-      stderr: "scenario child timed out: scenario=unknown stage=replay child-stage=turn-3-start",
+      stderr:
+        "scenario child timed out: scenario=unknown stage=replay child-stage=turn-3-start child-elapsed-ms=119000",
     });
     expect(JSON.stringify(outcome)).not.toContain("private/athlete-home");
     expect(log.mock.calls.map(([line]) => line)).toEqual([
