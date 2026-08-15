@@ -15,7 +15,6 @@ import {
   parseRegisteredUninstallCommands,
   runWindowsInstalledPackage,
   validateSignaturePolicy,
-  waitForCleanupEvidence,
 } from "../scripts/windows-installed-package.mjs";
 import {
   createPrimaryAcknowledgmentFailureObserver,
@@ -75,27 +74,6 @@ function registration(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function cleanCleanupEvidence(overrides: Record<string, unknown> = {}) {
-  return {
-    ok: true as const,
-    registrations: [],
-    programResidues: [],
-    processes: [],
-    shortcut: {
-      path: "shortcut",
-      exists: false,
-      targetPath: null,
-      arguments: null,
-      workingDirectory: null,
-    },
-    run: { exists: false, value: null },
-    startupApproved: { exists: false, valueBase64: null },
-    reparsePaths: [],
-    signatures: [],
-    ...overrides,
-  };
-}
-
 describe("canonical installed package manifests", () => {
   it("streams regular files into ordinal normalized manifests", async () => {
     const root = await mkdtemp(join(tmpdir(), "w17-manifest-"));
@@ -104,9 +82,7 @@ describe("canonical installed package manifests", () => {
     await writeFile(join(root, "a.bin"), "alpha");
     const manifest = await collectCanonicalTree(root, { createReadStream });
     expect(manifest.map((entry) => entry.path)).toEqual(["a.bin", "b.bin"]);
-    expect(manifest.every((entry) => entry.type === "file" && entry.sha256?.length === 64)).toBe(
-      true,
-    );
+    expect(manifest.every((entry) => entry.type === "file" && entry.sha256?.length === 64)).toBe(true);
   });
 
   it("rejects case-fold collisions", async () => {
@@ -121,11 +97,10 @@ describe("canonical installed package manifests", () => {
   it("rejects reparse points", async () => {
     await expect(
       collectCanonicalTree("/synthetic", {
-        lstat: vi.fn(
-          async (path: string) =>
-            directoryStat(
-              path === join("/synthetic", "link") ? { isSymbolicLink: () => true } : {},
-            ) as never,
+        lstat: vi.fn(async (path: string) =>
+          directoryStat(
+            path === join("/synthetic", "link") ? { isSymbolicLink: () => true } : {},
+          ) as never,
         ),
         readdir: vi.fn(async (path: string) => (path === "/synthetic" ? ["link"] : [])),
       }),
@@ -135,9 +110,9 @@ describe("canonical installed package manifests", () => {
   it("accepts an exact installed tree with one exact uninstaller", () => {
     const retained = [directory("resources"), file("resources/app.asar", "one", 3)];
     const installed = [...retained, file("Uninstall Enduragent.exe", "two", 7)];
-    expect(
-      compareInstalledTree(retained, installed, "Uninstall Enduragent.exe").uninstaller,
-    ).toEqual(file("Uninstall Enduragent.exe", "two", 7));
+    expect(compareInstalledTree(retained, installed, "Uninstall Enduragent.exe").uninstaller).toEqual(
+      file("Uninstall Enduragent.exe", "two", 7),
+    );
   });
 
   it("compares paths case-insensitively while preserving collision rejection", () => {
@@ -146,9 +121,9 @@ describe("canonical installed package manifests", () => {
       file("resources/app.asar", "one", 3),
       file("uninstall enduragent.exe", "two", 7),
     ];
-    expect(
-      compareInstalledTree(retained, installed, "Uninstall Enduragent.exe").uninstaller.path,
-    ).toBe("uninstall enduragent.exe");
+    expect(compareInstalledTree(retained, installed, "Uninstall Enduragent.exe").uninstaller.path).toBe(
+      "uninstall enduragent.exe",
+    );
     expect(() =>
       compareInstalledTree(
         [file("A", "one"), file("a", "one")],
@@ -160,11 +135,7 @@ describe("canonical installed package manifests", () => {
 
   it.each([
     ["missing", [file("a", "one")], [file("Uninstall Enduragent.exe", "u")]],
-    [
-      "extra",
-      [file("a", "one")],
-      [file("a", "one"), file("extra", "x"), file("Uninstall Enduragent.exe", "u")],
-    ],
+    ["extra", [file("a", "one")], [file("a", "one"), file("extra", "x"), file("Uninstall Enduragent.exe", "u")]],
     ["hash", [file("a", "one")], [file("a", "two"), file("Uninstall Enduragent.exe", "u")]],
     ["type", [file("a", "one")], [directory("a"), file("Uninstall Enduragent.exe", "u")]],
   ])("rejects a %s tree mismatch", (_label, retained, installed) => {
@@ -194,15 +165,7 @@ describe("installed registration discovery", () => {
     ["zero", []],
     ["duplicate", [registration(), registration({ keyPath: "second" })]],
     ["identity-alias", [registration(), registration({ keyName: "icu.enduragent.desktop" })]],
-    [
-      "outside",
-      [
-        registration({
-          installLocation: "C:\\Outside",
-          uninstallString: '"C:\\Outside\\uninstall.exe"',
-        }),
-      ],
-    ],
+    ["outside", [registration({ installLocation: "C:\\Outside", uninstallString: '"C:\\Outside\\uninstall.exe"' })]],
     ["malformed", [registration({ uninstallString: "cmd.exe /c destructive" })]],
     [
       "different-quiet-path",
@@ -216,8 +179,7 @@ describe("installed registration discovery", () => {
       [
         registration({
           installLocation: "c:\\users\\runner\\appdata\\local\\programs",
-          uninstallString:
-            '"c:\\users\\runner\\appdata\\local\\programs\\uninstall.exe" /currentuser',
+          uninstallString: '"c:\\users\\runner\\appdata\\local\\programs\\uninstall.exe" /currentuser',
           quietUninstallString:
             '"c:\\users\\runner\\appdata\\local\\programs\\uninstall.exe" /currentuser /S',
         }),
@@ -293,10 +255,7 @@ describe("unsigned private signature policy", () => {
   it.each(["HashMismatch", "NotTrusted", "UnknownError"])("rejects vendor %s", (status) => {
     expect(() =>
       validateSignaturePolicy(
-        [
-          ...owned.map((path) => ({ path, status: "NotSigned" })),
-          { path: "C:\\installed\\vendor.dll", status },
-        ],
+        [...owned.map((path) => ({ path, status: "NotSigned" })), { path: "C:\\installed\\vendor.dll", status }],
         "unsigned-private",
         owned,
         [...owned, "C:\\installed\\vendor.dll"],
@@ -318,10 +277,7 @@ describe("unsigned private signature policy", () => {
   it("rejects extra signature evidence", () => {
     expect(() =>
       validateSignaturePolicy(
-        [
-          ...owned.map((path) => ({ path, status: "NotSigned" })),
-          { path: "C:\\extra.dll", status: "Valid" },
-        ],
+        [...owned.map((path) => ({ path, status: "NotSigned" })), { path: "C:\\extra.dll", status: "Valid" }],
         "unsigned-private",
         owned,
         owned,
@@ -351,45 +307,7 @@ describe("guaranteed uninstall", () => {
       },
     );
     await expect(failure).rejects.toBeInstanceOf(AggregateError);
-    await expect(failure).rejects.toMatchObject({
-      errors: [new Error("runtime failed"), new Error("uninstall failed")],
-    });
-  });
-});
-
-describe("uninstall cleanup convergence", () => {
-  it("polls the complete native cleanup evidence until it converges", async () => {
-    const clean = cleanCleanupEvidence();
-    const readEvidence = vi
-      .fn()
-      .mockResolvedValueOnce(
-        cleanCleanupEvidence({
-          registrations: [registration()],
-          run: { exists: true, value: "Enduragent.exe" },
-        }),
-      )
-      .mockResolvedValueOnce(clean);
-    const delay = vi.fn(async () => {});
-
-    await expect(
-      waitForCleanupEvidence(readEvidence, { delay, now: vi.fn(() => 0) }),
-    ).resolves.toEqual(clean);
-    expect(readEvidence).toHaveBeenCalledTimes(2);
-    expect(delay).toHaveBeenCalledOnce();
-    expect(delay).toHaveBeenCalledWith(500);
-  });
-
-  it("fails with the fixed cleanup diagnostic at the existing deadline", async () => {
-    const dirty = cleanCleanupEvidence({ registrations: [registration()] });
-    const readEvidence = vi.fn(async () => dirty);
-    const delay = vi.fn(async () => {});
-    const now = vi.fn().mockReturnValueOnce(0).mockReturnValue(30_000);
-
-    await expect(waitForCleanupEvidence(readEvidence, { delay, now })).rejects.toThrow(
-      /^uninstall registration remains$/u,
-    );
-    expect(readEvidence).toHaveBeenCalledOnce();
-    expect(delay).not.toHaveBeenCalled();
+    await expect(failure).rejects.toMatchObject({ errors: [new Error("runtime failed"), new Error("uninstall failed")] });
   });
 });
 
@@ -628,9 +546,7 @@ describe("packaged primary identity", () => {
       { ...ready, rendererSurface: "unknown" },
       missingRendererSurface,
     ]) {
-      expect(() => validateReadyFrame(candidate)).toThrow(
-        /^packaged renderer surface was invalid$/u,
-      );
+      expect(() => validateReadyFrame(candidate)).toThrow(/^packaged renderer surface was invalid$/u);
     }
   });
 
@@ -767,7 +683,9 @@ describe("packaged primary second-instance evidence", () => {
         primaryExited: new Promise(() => {}),
         deadline: performance.now(),
       }),
-    ).rejects.toThrow(/^packaged Windows primary second-instance acknowledgment timed out$/u);
+    ).rejects.toThrow(
+      /^packaged Windows primary second-instance acknowledgment timed out$/u,
+    );
   });
 
   it("observes only the exact fixed primary acknowledgment write failure frame", async () => {
@@ -785,7 +703,9 @@ describe("packaged primary second-instance evidence", () => {
         second: new Promise(() => {}),
         primaryAcknowledgment: new Promise(() => {}),
         primaryAcknowledgmentEvidenceFailure: new Promise(() => {}),
-        primaryAcknowledgmentWriteFailure: Promise.resolve(new Error("C:\\private\\ack-write")),
+        primaryAcknowledgmentWriteFailure: Promise.resolve(
+          new Error("C:\\private\\ack-write"),
+        ),
         primaryAcknowledged: () => false,
         primaryExited: new Promise(() => {}),
         deadline: performance.now() + 10_000,
@@ -837,7 +757,9 @@ describe("packaged application process exit", () => {
 describe("packaged Windows shutdown diagnostics", () => {
   const completeStages = (stages: ReturnType<typeof createSecuritySmokeStageObserver>) => {
     stages.write(
-      SECURITY_SMOKE_SHUTDOWN_STAGES.map((stage) => `DESKTOP_SECURITY_STAGE ${stage}\n`).join(""),
+      SECURITY_SMOKE_SHUTDOWN_STAGES.map(
+        (stage) => `DESKTOP_SECURITY_STAGE ${stage}\n`,
+      ).join(""),
     );
   };
 
@@ -1140,13 +1062,7 @@ describe("installed driver binding", () => {
       registrations: [],
       programResidues: [],
       processes: [],
-      shortcut: {
-        path: "shortcut",
-        exists: false,
-        targetPath: null,
-        arguments: null,
-        workingDirectory: null,
-      },
+      shortcut: { path: "shortcut", exists: false, targetPath: null, arguments: null, workingDirectory: null },
       run: { exists: false, value: null },
       startupApproved: { exists: false, valueBase64: null },
       reparsePaths: [],
@@ -1180,12 +1096,7 @@ describe("installed driver binding", () => {
         peMachine: 0x8664 as const,
         nsisEnvelope: true as const,
       },
-      application: {
-        fileCount: 0,
-        directoryCount: 0,
-        manifestSha256: "x",
-        peMachine: 0x8664 as const,
-      },
+      application: { fileCount: 0, directoryCount: 0, manifestSha256: "x", peMachine: 0x8664 as const },
     }));
     await expect(
       runWindowsInstalledPackage(

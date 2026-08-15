@@ -80,11 +80,12 @@ export async function collectCanonicalTree(root, dependencies = {}) {
       folded.set(foldedPath, manifestPath);
       const absolutePath = join(directory, name);
       const metadata = await inspect(absolutePath);
-      checked(!metadata.isSymbolicLink(), `manifest reparse point: ${manifestPath}`);
+      checked(
+        !metadata.isSymbolicLink(),
+        `manifest reparse point: ${manifestPath}`,
+      );
       if (metadata.isDirectory()) {
-        entries.push(
-          Object.freeze({ path: manifestPath, type: "directory", size: 0, sha256: null }),
-        );
+        entries.push(Object.freeze({ path: manifestPath, type: "directory", size: 0, sha256: null }));
         await visit(absolutePath, childSegments);
       } else if (metadata.isFile()) {
         entries.push(
@@ -157,10 +158,7 @@ export function compareInstalledTree(retainedEntries, installedEntries, uninstal
   );
   const uninstaller = installed.get(uninstallerKey);
   checked(uninstaller?.type === "file", "installed uninstaller is not a regular file");
-  checked(
-    uninstaller.size > 0 && typeof uninstaller.sha256 === "string",
-    "installed uninstaller is invalid",
-  );
+  checked(uninstaller.size > 0 && typeof uninstaller.sha256 === "string", "installed uninstaller is invalid");
   return Object.freeze({ uninstaller: Object.freeze({ ...uninstaller }) });
 }
 
@@ -256,10 +254,7 @@ export function validateSignaturePolicy(evidence, policy, ownedPaths, expectedPa
     checked(!seen.has(path), `duplicate signature evidence: ${signature.path}`);
     seen.add(path);
     if (owned.has(path)) {
-      checked(
-        signature.status === "NotSigned",
-        `Enduragent-owned binary signature is ${signature.status}`,
-      );
+      checked(signature.status === "NotSigned", `Enduragent-owned binary signature is ${signature.status}`);
     } else {
       checked(
         signature.status === "Valid" || signature.status === "NotSigned",
@@ -269,7 +264,10 @@ export function validateSignaturePolicy(evidence, policy, ownedPaths, expectedPa
   }
   for (const path of owned) checked(seen.has(path), `signature evidence is missing: ${path}`);
   for (const path of expected) {
-    checked(seen.has(path), `signature evidence is missing: ${path}`);
+    checked(
+      seen.has(path),
+      `signature evidence is missing: ${path}`,
+    );
   }
   return true;
 }
@@ -299,14 +297,9 @@ function parseDriverArguments(args) {
     throw new Error(`unsupported argument: ${argument}`);
   }
   checked(result.githubHosted === true, "--github-hosted is required");
-  checked(
-    result.signaturePolicy === "unsigned-private",
-    "--signature-policy unsigned-private is required",
-  );
-  if (result.installer !== undefined)
-    checked(isAbsolute(result.installer), "installer path must be absolute");
-  if (result.application !== undefined)
-    checked(isAbsolute(result.application), "application path must be absolute");
+  checked(result.signaturePolicy === "unsigned-private", "--signature-policy unsigned-private is required");
+  if (result.installer !== undefined) checked(isAbsolute(result.installer), "installer path must be absolute");
+  if (result.application !== undefined) checked(isAbsolute(result.application), "application path must be absolute");
   return result;
 }
 
@@ -395,9 +388,7 @@ export function parseNativeEvidenceResult(result, label) {
 
 async function runNativeEvidence(request, scratch, dependencies = {}) {
   const requestPath = join(scratch, `native-${randomUUID()}.json`);
-  await (dependencies.writeFile ?? writeFile)(requestPath, JSON.stringify(request), {
-    mode: 0o600,
-  });
+  await (dependencies.writeFile ?? writeFile)(requestPath, JSON.stringify(request), { mode: 0o600 });
   const run = dependencies.capture ?? capture;
   const result = await run(
     "pwsh.exe",
@@ -445,10 +436,7 @@ function validateHostedEnvironment(environment, platform, arch) {
   checked(platform === "win32", "installed Windows package test requires Windows");
   checked(arch === "x64", "installed Windows package test requires x64 Node");
   checked(environment.GITHUB_ACTIONS === "true", "GITHUB_ACTIONS=true is required");
-  checked(
-    environment.RUNNER_ENVIRONMENT === "github-hosted",
-    "RUNNER_ENVIRONMENT=github-hosted is required",
-  );
+  checked(environment.RUNNER_ENVIRONMENT === "github-hosted", "RUNNER_ENVIRONMENT=github-hosted is required");
   const roots = {
     userProfile: environment.USERPROFILE,
     localAppData: environment.LOCALAPPDATA,
@@ -461,24 +449,12 @@ function validateHostedEnvironment(environment, platform, arch) {
 }
 
 function assertCleanPreflight(evidence) {
-  checked(
-    Array.isArray(evidence.registrations) && evidence.registrations.length === 0,
-    "pre-existing app registration",
-  );
-  checked(
-    Array.isArray(evidence.programResidues) && evidence.programResidues.length === 0,
-    "pre-existing app install",
-  );
-  checked(
-    Array.isArray(evidence.processes) && evidence.processes.length === 0,
-    "pre-existing app process",
-  );
+  checked(Array.isArray(evidence.registrations) && evidence.registrations.length === 0, "pre-existing app registration");
+  checked(Array.isArray(evidence.programResidues) && evidence.programResidues.length === 0, "pre-existing app install");
+  checked(Array.isArray(evidence.processes) && evidence.processes.length === 0, "pre-existing app process");
   checked(evidence.shortcut?.exists === false, "pre-existing app shortcut");
   checked(evidence.run?.exists === false, "pre-existing app Run registration");
-  checked(
-    evidence.startupApproved?.exists === false,
-    "pre-existing app StartupApproved registration",
-  );
+  checked(evidence.startupApproved?.exists === false, "pre-existing app StartupApproved registration");
 }
 
 async function assertSafeInstallRoot(programsRoot, installRoot, dependencies = {}) {
@@ -501,19 +477,13 @@ async function assertSafeInstallRoot(programsRoot, installRoot, dependencies = {
   for (const segment of remainder.split(win32.sep)) {
     current = win32.join(current, segment);
     const metadata = await inspect(current);
-    checked(
-      metadata.isDirectory() && !metadata.isSymbolicLink(),
-      `install ancestor is a reparse point: ${current}`,
-    );
+    checked(metadata.isDirectory() && !metadata.isSymbolicLink(), `install ancestor is a reparse point: ${current}`);
   }
 }
 
 function assertNoReparsePoints(evidence) {
   checked(Array.isArray(evidence.reparsePaths), "reparse evidence is malformed");
-  checked(
-    evidence.reparsePaths.length === 0,
-    `package contains reparse points: ${evidence.reparsePaths.join(", ")}`,
-  );
+  checked(evidence.reparsePaths.length === 0, `package contains reparse points: ${evidence.reparsePaths.join(", ")}`);
 }
 
 function signatureInventory(installedEntries, installRoot) {
@@ -527,9 +497,7 @@ function signatureInventory(installedEntries, installRoot) {
 
 async function waitForPathState(path, expected, dependencies = {}) {
   const inspect = dependencies.lstat ?? lstat;
-  const delay =
-    dependencies.delay ??
-    ((milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)));
+  const delay = dependencies.delay ?? ((milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)));
   const deadline = performance.now() + WINDOWS_INSTALLED_LIMITS.filesystemMs;
   while (performance.now() < deadline) {
     let exists = true;
@@ -559,10 +527,7 @@ export async function executeWithGuaranteedUninstall(primary, uninstall) {
     cleanupError = error;
   }
   if (primaryError !== undefined && cleanupError !== undefined) {
-    throw new AggregateError(
-      [primaryError, cleanupError],
-      "installed package test and uninstall both failed",
-    );
+    throw new AggregateError([primaryError, cleanupError], "installed package test and uninstall both failed");
   }
   if (primaryError !== undefined) throw primaryError;
   if (cleanupError !== undefined) throw cleanupError;
@@ -597,10 +562,7 @@ async function verifyDurableRoots(sentinels) {
 }
 
 function assertSeededStartup(evidence, expected) {
-  checked(
-    evidence.run?.exists === true && evidence.run.value === expected.runValue,
-    "Run sentinel was not seeded exactly",
-  );
+  checked(evidence.run?.exists === true && evidence.run.value === expected.runValue, "Run sentinel was not seeded exactly");
   checked(
     evidence.startupApproved?.exists === true &&
       evidence.startupApproved.valueBase64 === expected.startupApprovedValueBase64,
@@ -620,28 +582,7 @@ function assertCleanupEvidence(evidence) {
   );
   checked(evidence.run?.exists === false, "Run registration remains");
   checked(evidence.startupApproved?.exists === false, "StartupApproved registration remains");
-  checked(
-    Array.isArray(evidence.processes) && evidence.processes.length === 0,
-    "installed process remains",
-  );
-}
-
-export async function waitForCleanupEvidence(readEvidence, dependencies = {}) {
-  const delay =
-    dependencies.delay ??
-    ((milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)));
-  const now = dependencies.now ?? (() => performance.now());
-  const deadline = now() + WINDOWS_INSTALLED_LIMITS.filesystemMs;
-  while (true) {
-    const evidence = await readEvidence();
-    try {
-      assertCleanupEvidence(evidence);
-      return evidence;
-    } catch (error) {
-      if (now() >= deadline) throw error;
-    }
-    await delay(WINDOWS_INSTALLED_LIMITS.listenerMs);
-  }
+  checked(Array.isArray(evidence.processes) && evidence.processes.length === 0, "installed process remains");
 }
 
 export async function runWindowsInstalledPackage(input = {}, dependencies = {}) {
@@ -653,21 +594,11 @@ export async function runWindowsInstalledPackage(input = {}, dependencies = {}) 
     input.arch ?? process.arch,
   );
   const desktopRoot = input.desktopRoot ?? canonicalDesktopRoot;
-  const plan = await (dependencies.createWindowsPackagePlan ?? createWindowsPackagePlan)({
-    desktopRoot,
-  });
-  const installer =
-    options.installer === undefined ? plan.artifactPath : resolve(options.installer);
-  const application =
-    options.application === undefined ? plan.applicationPath : resolve(options.application);
-  checked(
-    basename(installer) === plan.artifactName,
-    "installer does not match the frozen package plan",
-  );
-  checked(
-    application === plan.applicationPath,
-    "retained win-unpacked does not match the frozen package plan",
-  );
+  const plan = await (dependencies.createWindowsPackagePlan ?? createWindowsPackagePlan)({ desktopRoot });
+  const installer = options.installer === undefined ? plan.artifactPath : resolve(options.installer);
+  const application = options.application === undefined ? plan.applicationPath : resolve(options.application);
+  checked(basename(installer) === plan.artifactName, "installer does not match the frozen package plan");
+  checked(application === plan.applicationPath, "retained win-unpacked does not match the frozen package plan");
   const scratchBase = await realpath(tmpdir());
   const scratch = await mkdtemp(join(scratchBase, "enduragent-w17-"));
   const expected = {
@@ -686,11 +617,7 @@ export async function runWindowsInstalledPackage(input = {}, dependencies = {}) 
   let installerDigest;
   let uninstallerDigest;
   try {
-    const preflight = await runNative(
-      { ...common, action: "evidence", treeRoots: [], signaturePaths: [] },
-      scratch,
-      dependencies,
-    );
+    const preflight = await runNative({ ...common, action: "evidence", treeRoots: [], signaturePaths: [] }, scratch, dependencies);
     assertCleanPreflight(preflight);
     const packageEvidence = await (dependencies.verifyWindowsPackage ?? verifyWindowsPackage)(
       installer,
@@ -825,34 +752,27 @@ export async function runWindowsInstalledPackage(input = {}, dependencies = {}) 
           ),
         );
         await attempt(() => waitForPathState(installed.installRoot, false, dependencies));
-        await attempt(() =>
-          waitForCleanupEvidence(
-            () =>
-              runNative(
-                {
-                  ...common,
-                  action: "evidence",
-                  installRoot: installed.installRoot,
-                  treeRoots: [],
-                  signaturePaths: [],
-                },
-                scratch,
-                dependencies,
-              ),
+        await attempt(async () => {
+          const cleanup = await runNative(
+            {
+              ...common,
+              action: "evidence",
+              installRoot: installed.installRoot,
+              treeRoots: [],
+              signaturePaths: [],
+            },
+            scratch,
             dependencies,
-          ),
-        );
+          );
+          assertCleanupEvidence(cleanup);
+        });
         if (sentinels !== undefined) await attempt(() => verifyDurableRoots(sentinels));
         await attempt(async () => {
           const finalInstallerDigest = await streamSha256(installer, dependencies);
-          checked(
-            finalInstallerDigest === installerDigest,
-            "installer changed during installed test",
-          );
+          checked(finalInstallerDigest === installerDigest, "installer changed during installed test");
         });
         if (failures.length === 1) throw failures[0];
-        if (failures.length > 1)
-          throw new AggregateError(failures, "installed package cleanup failed");
+        if (failures.length > 1) throw new AggregateError(failures, "installed package cleanup failed");
       },
     );
     return Object.freeze({
@@ -873,9 +793,7 @@ export async function main() {
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     const errors = error instanceof AggregateError ? error.errors : [error];
-    process.stderr.write(
-      `${errors.map((entry) => (entry instanceof Error ? entry.message : String(entry))).join("; ")}\n`,
-    );
+    process.stderr.write(`${errors.map((entry) => entry instanceof Error ? entry.message : String(entry)).join("; ")}\n`);
     process.exitCode = 1;
   }
 }
