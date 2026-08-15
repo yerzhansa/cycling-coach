@@ -585,6 +585,24 @@ function assertCleanupEvidence(evidence) {
   checked(Array.isArray(evidence.processes) && evidence.processes.length === 0, "installed process remains");
 }
 
+export async function waitForCleanupEvidence(readEvidence, dependencies = {}) {
+  const delay =
+    dependencies.delay ??
+    ((milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds)));
+  const now = dependencies.now ?? (() => performance.now());
+  const deadline = now() + WINDOWS_INSTALLED_LIMITS.filesystemMs;
+  while (true) {
+    const evidence = await readEvidence();
+    try {
+      assertCleanupEvidence(evidence);
+      return evidence;
+    } catch (error) {
+      if (now() >= deadline) throw error;
+    }
+    await delay(WINDOWS_INSTALLED_LIMITS.listenerMs);
+  }
+}
+
 export async function runWindowsInstalledPackage(input = {}, dependencies = {}) {
   const args = input.args ?? process.argv.slice(2);
   const options = parseDriverArguments(args);
@@ -752,20 +770,23 @@ export async function runWindowsInstalledPackage(input = {}, dependencies = {}) 
           ),
         );
         await attempt(() => waitForPathState(installed.installRoot, false, dependencies));
-        await attempt(async () => {
-          const cleanup = await runNative(
-            {
-              ...common,
-              action: "evidence",
-              installRoot: installed.installRoot,
-              treeRoots: [],
-              signaturePaths: [],
-            },
-            scratch,
+        await attempt(() =>
+          waitForCleanupEvidence(
+            () =>
+              runNative(
+                {
+                  ...common,
+                  action: "evidence",
+                  installRoot: installed.installRoot,
+                  treeRoots: [],
+                  signaturePaths: [],
+                },
+                scratch,
+                dependencies,
+              ),
             dependencies,
-          );
-          assertCleanupEvidence(cleanup);
-        });
+          ),
+        );
         if (sentinels !== undefined) await attempt(() => verifyDurableRoots(sentinels));
         await attempt(async () => {
           const finalInstallerDigest = await streamSha256(installer, dependencies);
