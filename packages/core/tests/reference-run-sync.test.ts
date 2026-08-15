@@ -98,6 +98,116 @@ describe("createRunSync", () => {
     expect(atomicWrite).not.toHaveBeenCalled();
   });
 
+  it("settles an external abort while queued for the mutex without starting sync work", async () => {
+    const mutex = new AsyncMutex();
+    let releaseHolder!: () => void;
+    let markHolderEntered!: () => void;
+    const holderEntered = new Promise<void>((resolve) => {
+      markHolderEntered = resolve;
+    });
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    const holder = mutex.runExclusive(
+      async () => {
+        markHolderEntered();
+        await holderGate;
+      },
+      { acquireTimeoutMs: 1_000, hotWarnMs: 500, caller: "holder" },
+    );
+    await holderEntered;
+
+    const controller = new AbortController();
+    const reason = new Error("store runtime closed while queued");
+    const fetchReferenceData = vi.fn().mockResolvedValue(emptyFetched);
+    const atomicWrite = vi.fn(async () => {});
+    const syncHistory = vi.fn();
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData,
+      atomicWrite,
+      syncHistory,
+      timing: { acquireTimeoutMs: 1_000, hotWarnMs: 500 },
+    });
+    const running = runSync({ caller: "scheduled", signal: controller.signal });
+    const observed = running.then(
+      (value) => ({ kind: "value" as const, value }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+
+    controller.abort(reason);
+    const early = await Promise.race([
+      observed,
+      new Promise<{ kind: "pending" }>((resolve) => {
+        setImmediate(() => resolve({ kind: "pending" }));
+      }),
+    ]);
+    releaseHolder();
+    await holder;
+    const outcome = await observed;
+
+    expect(early).toEqual({ kind: "error", error: reason });
+    expect(outcome).toEqual({ kind: "error", error: reason });
+    expect(fetchReferenceData).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(syncHistory).not.toHaveBeenCalled();
+    expect(mutex.isHeld()).toBe(false);
+  });
+
+  it("waits for an active timeout record before settling a later external abort", async () => {
+    const mutex = new AsyncMutex();
+    const controller = new AbortController();
+    const reason = new Error("store runtime closed during timeout write");
+    let releaseWrite!: () => void;
+    let markWriteEntered!: () => void;
+    const writeEntered = new Promise<void>((resolve) => {
+      markWriteEntered = resolve;
+    });
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const atomicWrite = vi.fn(async () => {
+      markWriteEntered();
+      await writeGate;
+    });
+    const syncHistory = vi.fn();
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: async () => await new Promise<FetchedReference>(() => {}),
+      atomicWrite,
+      syncHistory,
+      timing: { outerTimeoutMs: 10 },
+    });
+    const running = runSync({ caller: "scheduled", signal: controller.signal });
+    const observed = running.then(
+      (value) => ({ kind: "value" as const, value }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+
+    await writeEntered;
+    controller.abort(reason);
+    const early = await Promise.race([
+      observed,
+      new Promise<{ kind: "pending" }>((resolve) => {
+        setImmediate(() => resolve({ kind: "pending" }));
+      }),
+    ]);
+    releaseWrite();
+    const outcome = await observed;
+
+    expect(early).toEqual({ kind: "pending" });
+    expect(outcome).toEqual({ kind: "error", error: reason });
+    expect(atomicWrite).toHaveBeenCalledOnce();
+    expect(syncHistory).not.toHaveBeenCalled();
+    expect(mutex.isHeld()).toBe(false);
+  });
+
   it("writes 5 cache files first then .scheduler.json (commit-marker) and returns kind:ran with the refreshed list", async () => {
     const mutex = new AsyncMutex();
     const cooldown = new Cooldown();

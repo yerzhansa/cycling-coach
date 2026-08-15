@@ -1161,6 +1161,13 @@ export async function createLocalCoachComposition(
         () => {
           signal.throwIfAborted();
           const latestCandidate = mergedRuntimeConfig(activeConfig, effectiveRequest);
+          if (
+            intervalsOwnerApproved &&
+            (latestCandidate.intervals.apiKey !== candidate.intervals.apiKey ||
+              latestCandidate.intervals.athleteId !== candidate.intervals.athleteId)
+          ) {
+            throw new Error("Intervals configuration changed during ownership verification.");
+          }
           const latestIntervalsChanged =
             latestCandidate.intervals.apiKey !== activeConfig.intervals.apiKey ||
             latestCandidate.intervals.athleteId !== activeConfig.intervals.athleteId;
@@ -1250,7 +1257,7 @@ export async function createLocalCoachComposition(
           ]);
           initializationSignal.throwIfAborted();
           const initialIntervals = { ...activeConfig.intervals };
-          if (initialIntervals.apiKey.length > 0) {
+          if (initialIntervals.apiKey.length > 0 && !intervalsOwnerReady) {
             const ownerClaim = await assertIntervalsOwner(
               initialIntervals,
               initialIntervals,

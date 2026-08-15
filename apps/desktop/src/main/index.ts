@@ -496,7 +496,15 @@ async function runDesktop(): Promise<void> {
           preparedRuntimeBindings.delete(current.generation);
         }
         const visibleWindow = currentWindow();
-        if (current.owner !== "app-supervised") return;
+        if (current.owner !== "app-supervised") {
+          if (
+            visibleWindow !== null &&
+            new URL(previous.url).port !== new URL(current.url).port
+          ) {
+            visibleWindow.webContents.reload();
+          }
+          return;
+        }
         const recovery = initialRefreshCoordinator.prepareRecovery({
           previous,
           current,

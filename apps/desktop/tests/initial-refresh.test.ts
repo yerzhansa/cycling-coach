@@ -56,6 +56,12 @@ describe("desktop initial refresh coordinator", () => {
       residencyReady,
     );
     const initialShow = source.indexOf("await mainWindow.show()", backgroundRelease);
+    const serviceManagedRecovery = source.indexOf('if (current.owner !== "app-supervised") {');
+    const serviceManagedReload = source.indexOf(
+      "visibleWindow.webContents.reload()",
+      serviceManagedRecovery,
+    );
+    const serviceManagedReturn = source.indexOf("return;", serviceManagedReload);
     const recoveryArm = source.indexOf("initialRefreshCoordinator.prepareRecovery({");
     const recoveryReload = source.indexOf("visibleWindow!.webContents.reload()", recoveryArm);
     const windowClose = source.indexOf('created.once("closed"');
@@ -78,6 +84,9 @@ describe("desktop initial refresh coordinator", () => {
     expect(residencyReady).toBeGreaterThan(initialArm);
     expect(backgroundRelease).toBeGreaterThan(residencyReady);
     expect(initialShow).toBeGreaterThan(backgroundRelease);
+    expect(serviceManagedReload).toBeGreaterThan(serviceManagedRecovery);
+    expect(serviceManagedReturn).toBeGreaterThan(serviceManagedReload);
+    expect(recoveryArm).toBeGreaterThan(serviceManagedReturn);
     expect(recoveryReload).toBeGreaterThan(recoveryArm);
     expect(closeRelease).toBeGreaterThan(windowClose);
     expect(goneRelease).toBeGreaterThan(renderGone);

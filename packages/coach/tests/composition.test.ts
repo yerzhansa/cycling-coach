@@ -1287,7 +1287,7 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
-  it("applies a queued credential before deferred owner claim and captures only on explicit start", async () => {
+  it("reuses queued credential approval when explicit startup reaches the refresh window", async () => {
     const home = await freshHome();
     let releaseTurn!: () => void;
     const turnGate = new Promise<void>((resolve) => {
@@ -1298,6 +1298,7 @@ describe("local coach composition", () => {
       markTurnEntered = resolve;
     });
     const windows: Config["intervals"][] = [];
+    const trace: string[] = [];
     let runtimeOptions: LocalStoreRuntimeOptions | undefined;
     const ownerCandidates: Config["intervals"][] = [];
     const counts = createPhysicalRequestLedger({
@@ -1305,7 +1306,7 @@ describe("local coach composition", () => {
       legacyLimit: 15,
       totalLimit: 79,
     }).snapshot();
-    const selectedRuntime = runtime();
+    const selectedRuntime = runtime(trace);
     const runWindowAfter = vi.fn<LocalStoreRuntime["runWindowAfter"]>((work) =>
       selectedRuntime.runExclusive(async (signal) => {
         await work(signal);
@@ -1341,6 +1342,9 @@ describe("local coach composition", () => {
         }),
         createResolver: () => missingResolver(),
         assertRuntimeAthleteOwner: async (_store, options) => {
+          if (ownerCandidates.length > 0) {
+            throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+          }
           ownerCandidates.push({
             apiKey: options.candidate.apiKey,
             athleteId: options.candidate.athleteId,
@@ -1370,10 +1374,8 @@ describe("local coach composition", () => {
     await vi.waitFor(() => expect(windows).toHaveLength(1));
 
     expect(windows).toEqual([{ apiKey: "new-key", athleteId: "new-athlete" }]);
-    expect(ownerCandidates).toEqual([
-      { apiKey: "new-key", athleteId: "new-athlete" },
-      { apiKey: "new-key", athleteId: "new-athlete" },
-    ]);
+    expect(ownerCandidates).toEqual([{ apiKey: "new-key", athleteId: "new-athlete" }]);
+    expect(trace).toContain("start-scheduler");
     await lifecycle.close();
   });
 
