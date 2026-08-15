@@ -1,3 +1,5 @@
+import type { WindowsPackageEvidence } from "./verify-windows-package.mjs";
+
 export interface WindowsPackageInput {
   readonly desktopRoot?: string;
 }
@@ -73,8 +75,9 @@ export interface WindowsPackageDependencies {
   readonly build?: (options: WindowsPackageBuilderOptions) => Promise<readonly string[]>;
   readonly verifyWindowsPackage?: (
     artifactPath: string,
+    applicationPath: string,
     options: { readonly desktopRoot: string },
-  ) => Promise<void>;
+  ) => Promise<WindowsPackageEvidence>;
   readonly reportStage?: (stage: WindowsPackageStage) => void;
 }
 
@@ -114,5 +117,6 @@ export function runWindowsPackage(
   dependencies?: WindowsPackageDependencies,
 ): Promise<{
   readonly artifacts: readonly string[];
+  readonly evidence: WindowsPackageEvidence;
   readonly plan: WindowsPackagePlan;
 }>;

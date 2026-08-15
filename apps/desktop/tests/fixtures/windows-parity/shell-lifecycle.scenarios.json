@@ -58,12 +58,12 @@
     {
       "id": "shell.login.registration",
       "surface": "shell-login",
-      "expected": "Login start reads, writes, and verifies the named per-user Windows registration for the installed executable and background argument, and uninstall deletes the matching HKCU Run value.",
+      "expected": "Login start reads, writes, and verifies the named per-user Windows registration for the installed executable and background argument, and uninstall deletes the matching HKCU Run and StartupApproved Run values.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop/tests/login-item.test.ts > reads the exact argument-marked Windows registration",
         "apps/desktop/tests/login-item.test.ts > writes and verifies the named per-user Windows registration when enabled=%s",
-        "apps/desktop/tests/windows-icons.test.ts > keeps the runtime login value name aligned with the uninstall hook"
+        "apps/desktop/tests/windows-icons.test.ts > keeps the runtime login value names aligned with the uninstall hook"
       ]
     },
     {
@@ -215,12 +215,12 @@
     {
       "id": "package.nsis.verification",
       "surface": "windows-package",
-      "expected": "Packaging cleans output, builds one exact versioned installer, and verifies it before release; signed, renamed, non-NSIS, missing, or undeclared installer contents fail closed.",
+      "expected": "Packaging cleans output, builds one exact versioned installer, and verifies its PE/NSIS envelope plus retained application before release; signed, renamed, non-NSIS, missing, or changed retained contents fail closed.",
       "automation": "deterministic",
       "tests": [
         "apps/desktop/tests/windows-package-plan.test.ts > cleans, builds, checks the singleton artifact, and verifies in order",
         "apps/desktop/tests/windows-package-layout.test.ts > rejects signed, renamed, and non-NSIS installer artifacts",
-        "apps/desktop/tests/windows-package-layout.test.ts > rejects undeclared and missing entries inside the installer"
+        "apps/desktop/tests/windows-package-layout.test.ts > changes artifact and retained-tree digests when one byte changes"
       ]
     },
     {
@@ -304,7 +304,7 @@
     {
       "id": "uninstall.windows.integration-cleanup",
       "surface": "windows-uninstall",
-      "expected": "After seeded use, uninstall removes the program directory, Start menu shortcut, Apps list entry, uninstaller, tray process, and owned HKCU Run value without deleting athlete or user-data roots. This remains VM-only because it requires executing the real NSIS uninstaller and inspecting Windows shell and registry state.",
+      "expected": "After seeded use, uninstall removes the program directory, Start menu shortcut, Apps list entry, uninstaller, tray process, and owned HKCU Run and StartupApproved Run values while preserving %USERPROFILE%\\.enduragent and %LOCALAPPDATA%\\Enduragent. This remains VM-only because it requires executing the real NSIS uninstaller and inspecting Windows shell and registry state.",
       "automation": "vm-only"
     },
     {

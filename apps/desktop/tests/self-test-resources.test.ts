@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { METRIC_REGISTRY } from "@enduragent/kernel/reference/registry";
 import { mean, pythonSum, sampleStdev } from "@enduragent/kernel/reference/metrics";
+import { deviationMap } from "../scripts/self-test-deviations.js";
 import { DIFFERENTIAL_OPERATIONS } from "../src/self-test/differential.js";
 
 const run = promisify(execFile);
@@ -38,6 +39,20 @@ function seeded(seed: number): () => number {
 }
 
 describe("packaged self-test resources", () => {
+  it("parses approved deviation paths identically with LF and CRLF", () => {
+    const source = [
+      "deviations:",
+      "  - metric: capability.dfa_a1_profile",
+      "    added_paths:",
+      "      - aet.foo",
+      "    status: approved-cite",
+      "",
+    ].join("\n");
+    const expected = [["capability.dfa_a1_profile", ["aet.foo"]]];
+    expect([...deviationMap(source)]).toEqual(expected);
+    expect([...deviationMap(source.replaceAll("\n", "\r\n"))]).toEqual(expected);
+  });
+
   it("generates a deterministic complete matrix and exact public bundle", async () => {
     const first = await generate();
     const second = await generate();

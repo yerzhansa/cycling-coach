@@ -690,7 +690,7 @@ describe("desktop residency", () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
     expect(source).toContain("desktop-residency-failure ${operation}\\n");
     expect(source).toContain("const primaryInstance = app.requestSingleInstanceLock();");
-    expect(source).toContain("if (!primaryInstance) {\n  app.exit(0);");
+    expect(source).toContain("if (!primaryInstance) {\n  void exitSecondaryDesktop();");
     mocks.app.requestSingleInstanceLock.mockReturnValueOnce(false);
     await import("../src/main/index.js");
     expect(mocks.crashReporter.start).toHaveBeenCalledWith({ uploadToServer: false });

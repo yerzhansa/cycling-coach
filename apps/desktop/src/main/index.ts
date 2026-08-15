@@ -60,6 +60,16 @@ import {
 import { requireDesktopDaemonHome } from "./daemon-home-binding.js";
 import { resolveDesktopAthleteHome, seedFirstRunConfig } from "./first-run-config.js";
 import {
+  connectSecuritySmokeControlPipe,
+  parseSecuritySmokeControlPipeArgument,
+  waitForSecuritySmokeShutdown,
+  writeSecuritySmokePrimarySecondInstance,
+  writeSecuritySmokePrimarySecondInstanceFailure,
+  writeSecuritySmokeSecondInstance,
+  writeSecuritySmokeShutdownStage,
+  type SecuritySmokeShutdownStage,
+} from "./security-smoke-shutdown.js";
+import {
   lifecycleErrorCopy,
   startupRefusalCopy,
   unexpectedStartupCopy,
@@ -172,8 +182,14 @@ async function runDesktop(): Promise<void> {
   let residency: DesktopResidency | undefined;
   const activation = createDesktopActivationRelay();
   app.on("second-instance", () => {
-    if (process.platform === "win32") activation.request();
-    else void residency?.showMainWindow();
+    if (process.platform === "win32") {
+      if (securitySmokeMode && desktopAcceptanceHidden) {
+        void writeSecuritySmokePrimarySecondInstance(process.stdout).catch(() => {
+          void writeSecuritySmokePrimarySecondInstanceFailure(process.stderr).catch(() => {});
+        });
+      }
+      activation.request();
+    } else void residency?.showMainWindow();
   });
   app.on("activate", () => {
     if (process.platform === "win32") activation.request();
@@ -236,6 +252,14 @@ async function runDesktop(): Promise<void> {
   let closeTelegramCoordinator: (() => Promise<void>) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
   let shutdownPromise: Promise<void> | undefined;
+  let securitySmokeControlPipe: import("node:net").Socket | undefined;
+  let securitySmokeShutdownAccepted = false;
+  const reportSecuritySmokeShutdownStage = async (
+    stage: SecuritySmokeShutdownStage,
+  ): Promise<void> => {
+    if (!securitySmokeShutdownAccepted) return;
+    await writeSecuritySmokeShutdownStage(process.stdout, stage);
+  };
   const updateController = createDesktopUpdateController({
     releaseEligible: isDesktopUpdateReleaseEligible({
       isPackaged: app.isPackaged,
@@ -263,7 +287,9 @@ async function runDesktop(): Promise<void> {
       const telegramIpcClose = disposeTelegramIpc?.();
       disposeTelegramIpc = undefined;
       await residencyClose;
+      await reportSecuritySmokeShutdownStage("residency-closed");
       await Promise.all([intervalsIpcClose, telegramIpcClose]);
+      await reportSecuritySmokeShutdownStage("ipc-closed");
       controller.abort();
       disposeConnectionIpc?.();
       disposeConnectionIpc = undefined;
@@ -281,8 +307,10 @@ async function runDesktop(): Promise<void> {
       disposeUpdateIpc = undefined;
       await telegramPower?.close();
       telegramPower = undefined;
+      await reportSecuritySmokeShutdownStage("telegram-power-closed");
       await closeTelegramCoordinator?.();
       closeTelegramCoordinator = undefined;
+      await reportSecuritySmokeShutdownStage("telegram-coordinator-closed");
       updateController.close();
       disposeOnboarding?.();
       disposeOnboarding = undefined;
@@ -291,6 +319,7 @@ async function runDesktop(): Promise<void> {
         protocolInstalled = false;
       }
       await (daemonLifecycle?.close() ?? supervisor.close());
+      await reportSecuritySmokeShutdownStage("daemon-closed");
     })();
     return shutdownPromise;
   };
@@ -1034,9 +1063,22 @@ async function runDesktop(): Promise<void> {
       if (outputArgument !== undefined) {
         await writeFile(outputArgument.slice("--desktop-security-output=".length), screenshot);
       }
+      initialWindow.show();
+      const useWindowsControlPipe = process.platform === "win32" && desktopAcceptanceHidden;
+      if (useWindowsControlPipe) {
+        securitySmokeControlPipe = await connectSecuritySmokeControlPipe(
+          parseSecuritySmokeControlPipeArgument(process.argv),
+        );
+      }
+      const controlShutdown =
+        securitySmokeControlPipe === undefined
+          ? undefined
+          : waitForSecuritySmokeShutdown(securitySmokeControlPipe);
       const result = {
         url: rendererResult.url,
         rpcUrl: daemonLifecycle.connection().url,
+        hasSingleInstanceLock: app.hasSingleInstanceLock(),
+        visibleForSecondLaunch: initialWindow.isVisible(),
         bridgeKeys: rendererResult.bridgeKeys,
         noNodeGlobals: rendererResult.noNodeGlobals,
         rpcConnected: rendererResult.rpcConnected,
@@ -1060,23 +1102,40 @@ async function runDesktop(): Promise<void> {
           !screenshot.includes(daemonLifecycle.connection().token),
       };
       process.stdout.write(`DESKTOP_SECURITY_READY ${JSON.stringify(result)}\n`);
-      await new Promise<void>((resolveRelease) => {
-        process.stdin.once("data", () => resolveRelease());
-        process.stdin.resume();
-      });
+      await (controlShutdown ?? waitForSecuritySmokeShutdown(process.stdin));
+      securitySmokeShutdownAccepted = true;
+      await reportSecuritySmokeShutdownStage("stdin-accepted");
       await shutdown();
+      await reportSecuritySmokeShutdownStage("exit-requested");
       app.exit(0);
     }
   } catch (error) {
     await shutdown();
     throw error;
+  } finally {
+    securitySmokeControlPipe?.destroy();
+  }
+}
+
+async function exitSecondaryDesktop(): Promise<void> {
+  const evidenceRequired =
+    process.argv.includes("--desktop-security-smoke") && desktopAcceptanceHidden;
+  if (!evidenceRequired) {
+    app.exit(0);
+    return;
+  }
+  try {
+    await writeSecuritySmokeSecondInstance(process.stdout);
+    app.exit(0);
+  } catch {
+    app.exit(1);
   }
 }
 
 const primaryInstance = app.requestSingleInstanceLock();
 
 if (!primaryInstance) {
-  app.exit(0);
+  void exitSecondaryDesktop();
 } else {
   disableChromiumMediaSessionIntegration();
   const runPrimaryDesktop = process.argv.includes("--desktop-runtime-smoke")
