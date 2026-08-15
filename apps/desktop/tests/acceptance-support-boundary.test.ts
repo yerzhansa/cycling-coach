@@ -99,10 +99,24 @@ describe("Desktop acceptance support boundary", () => {
       'CREATED_RELEASE=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases"',
     );
     expect(workflow).toContain(
-      'DRAFT_ID=$(printf \'%s\' "$CREATED_RELEASE" | jq -er \'.id | tostring\')',
+      "DRAFT_ID=$(printf '%s' \"$CREATED_RELEASE\" | jq -er '.id | tostring')",
     );
     expect(workflow).not.toContain(
       'DRAFT_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100"',
     );
+  });
+
+  it("publishes and verifies a stable latest-release DMG alias", () => {
+    const workflow = readFileSync(
+      resolve(repositoryRoot, ".github/workflows/desktop-release.yml"),
+      "utf8",
+    );
+
+    expect(workflow).toContain('STABLE_DMG="$RUNNER_TEMP/Enduragent-arm64.dmg"');
+    const uploadStart = workflow.indexOf('gh release upload "$RELEASE_TAG"');
+    const assetCheck = workflow.indexOf("EXPECTED_ASSETS=", uploadStart);
+    expect(workflow.slice(uploadStart, assetCheck)).toContain('"$STABLE_DMG"');
+    expect(workflow).toContain('test "$STABLE_DMG_DIGEST" = "$VERSIONED_DMG_DIGEST"');
+    expect(workflow).toContain("releases/latest/download/Enduragent-arm64.dmg");
   });
 });
