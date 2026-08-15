@@ -12,6 +12,7 @@ import {
   openSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -209,6 +210,16 @@ export const spawnScenarioChildCaptured: ScenarioChildSpawn = (command, args, op
       killSignal: options.killSignal,
       stdio: ["ignore", stdoutFd, stderrFd],
     });
+    const stdoutSize = statSync(stdoutPath).size;
+    const stderrSize = statSync(stderrPath).size;
+    if (stdoutSize > options.maxBuffer || stderrSize > options.maxBuffer) {
+      return {
+        stdout: stdoutSize <= options.maxBuffer ? readFileSync(stdoutPath, options.encoding) : null,
+        stderr: stderrSize <= options.maxBuffer ? readFileSync(stderrPath, options.encoding) : null,
+        status: null,
+        error: Object.assign(new Error(`spawnSync ${command} ENOBUFS`), { code: "ENOBUFS" }),
+      };
+    }
     return {
       stdout: readFileSync(stdoutPath, options.encoding),
       stderr: readFileSync(stderrPath, options.encoding),
@@ -388,7 +399,7 @@ export function runSelfTestDeterminism(
     llmModel: string;
     anthropicKey?: string;
   },
-  spawnProcess: ScenarioChildSpawn = (command, args, options) => spawnSync(command, args, options),
+  spawnProcess: ScenarioChildSpawn = spawnScenarioChildCaptured,
   diffProcess: SelfTestDiffSpawn = (command, args, options) => spawnSync(command, args, options),
 ):
   | { kind: "harness-error"; outcome: ChildOutcome }

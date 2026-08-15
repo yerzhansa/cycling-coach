@@ -339,6 +339,24 @@ describe("scenario child process", () => {
     }
   });
 
+  it("rejects captured output larger than maxBuffer", () => {
+    const result = spawnScenarioChildCaptured(
+      process.execPath,
+      ["-e", 'process.stdout.write("123456789")'],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        encoding: "utf-8",
+        maxBuffer: 8,
+        timeout: 1_000,
+        killSignal: "SIGKILL",
+      },
+    );
+
+    expect(result).toMatchObject({ stdout: null, stderr: "", status: null });
+    expect(result.error?.code).toBe("ENOBUFS");
+  });
+
   it("applies the fixed deadline and preserves a normal verdict", () => {
     const verdict: ScenarioVerdict = {
       scenario: "turn-basic-wellness",
