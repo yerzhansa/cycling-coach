@@ -4,17 +4,7 @@
 // The parent's clock is never frozen: two consecutive runs always land in
 // distinct run dirs.
 import { spawnSync } from "node:child_process";
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,6 +28,7 @@ const REPO_ROOT = resolve(HERE, "..", "..");
 const RECORD_PROVIDER_DEFAULT: S8aProvider = "openai-codex";
 const LEGACY_HEADER_PROVIDER: S8aProvider = "anthropic";
 const REPLAY_DUMMY_KEY = "s8a-replay-dummy";
+const CAPTURE_HELPER_SHUTDOWN_GRACE_MS = 5_000;
 
 // Stray operator knobs would silently change the child's model lane, budgets,
 // or session policy and break replay determinism. Source of truth for what
@@ -196,39 +187,64 @@ export type ScenarioChildSpawn = (
 
 export const spawnScenarioChildCaptured: ScenarioChildSpawn = (command, args, options) => {
   const ioDir = mkdtempSync(join(tmpdir(), "s8a-child-io-"));
+  const requestPath = join(ioDir, "request.json");
+  const resultPath = join(ioDir, "result.json");
   const stdoutPath = join(ioDir, "stdout");
   const stderrPath = join(ioDir, "stderr");
-  let stdoutFd: number | undefined;
-  let stderrFd: number | undefined;
   try {
-    stdoutFd = openSync(stdoutPath, "w");
-    stderrFd = openSync(stderrPath, "w");
-    const result = spawnSync(command, [...args], {
-      cwd: options.cwd,
-      env: options.env,
-      timeout: options.timeout,
-      killSignal: options.killSignal,
-      stdio: ["ignore", stdoutFd, stderrFd],
-    });
-    const stdoutSize = statSync(stdoutPath).size;
-    const stderrSize = statSync(stderrPath).size;
-    if (stdoutSize > options.maxBuffer || stderrSize > options.maxBuffer) {
+    writeFileSync(
+      requestPath,
+      JSON.stringify({
+        command,
+        args,
+        cwd: options.cwd,
+        maxBuffer: options.maxBuffer,
+        timeout: options.timeout,
+        killSignal: options.killSignal,
+      }),
+      { encoding: "utf-8", mode: 0o600 },
+    );
+    const helper = spawnSync(
+      process.execPath,
+      [join(HERE, "spawn-captured.mjs"), requestPath, resultPath, stdoutPath, stderrPath],
+      {
+        cwd: options.cwd,
+        env: options.env,
+        timeout: options.timeout + CAPTURE_HELPER_SHUTDOWN_GRACE_MS,
+        killSignal: options.killSignal,
+        stdio: "ignore",
+      },
+    );
+    if (!existsSync(resultPath)) {
       return {
-        stdout: stdoutSize <= options.maxBuffer ? readFileSync(stdoutPath, options.encoding) : null,
-        stderr: stderrSize <= options.maxBuffer ? readFileSync(stderrPath, options.encoding) : null,
+        stdout: null,
+        stderr: null,
         status: null,
-        error: Object.assign(new Error(`spawnSync ${command} ENOBUFS`), { code: "ENOBUFS" }),
+        error:
+          helper.error ??
+          Object.assign(new Error(`spawnSync ${command} EHELPER`), { code: "EHELPER" }),
       };
     }
+    const metadata = JSON.parse(readFileSync(resultPath, "utf-8")) as {
+      status: number | null;
+      errorCode?: string;
+      overflowStream?: "stdout" | "stderr";
+    };
+    const error =
+      metadata.errorCode === undefined
+        ? undefined
+        : Object.assign(new Error(`spawnSync ${command} ${metadata.errorCode}`), {
+            code: metadata.errorCode,
+          });
     return {
-      stdout: readFileSync(stdoutPath, options.encoding),
-      stderr: readFileSync(stderrPath, options.encoding),
-      status: result.status,
-      error: result.error,
+      stdout:
+        metadata.overflowStream === "stdout" ? null : readFileSync(stdoutPath, options.encoding),
+      stderr:
+        metadata.overflowStream === "stderr" ? null : readFileSync(stderrPath, options.encoding),
+      status: metadata.status,
+      error,
     };
   } finally {
-    if (stdoutFd !== undefined) closeSync(stdoutFd);
-    if (stderrFd !== undefined) closeSync(stderrFd);
     rmSync(ioDir, { recursive: true, force: true });
   }
 };

@@ -342,7 +342,7 @@ describe("scenario child process", () => {
   it("rejects captured output larger than maxBuffer", () => {
     const result = spawnScenarioChildCaptured(
       process.execPath,
-      ["-e", 'process.stdout.write("123456789")'],
+      ["-e", 'process.stdout.write("123456789"); setInterval(() => {}, 1_000)'],
       {
         cwd: process.cwd(),
         env: process.env,
