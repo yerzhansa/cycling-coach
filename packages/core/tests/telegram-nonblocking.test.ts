@@ -3,7 +3,6 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cyclingBinary } from "./helpers/cycling-binary-fixture.js";
-import { CHAT_COALESCE_MS } from "../src/channels/telegram.js";
 
 let dataDir: string;
 
@@ -49,6 +48,7 @@ interface BuildBotResult {
   bot: FakeBot;
   agent: StubAgent;
   drainPending: () => Promise<void>;
+  chatCoalesceMs: number;
 }
 
 async function buildBot(opts?: { reference?: StubReference }): Promise<BuildBotResult> {
@@ -78,7 +78,7 @@ async function buildBot(opts?: { reference?: StubReference }): Promise<BuildBotR
     getAthleteState: vi.fn(),
   };
 
-  const [{ createTelegramBot }, { createNpmTelegramHost }] = await Promise.all([
+  const [{ createTelegramBot, CHAT_COALESCE_MS }, { createNpmTelegramHost }] = await Promise.all([
     import("../src/channels/telegram.js"),
     import("../src/channels/npm-telegram-host.js"),
   ]);
@@ -100,7 +100,7 @@ async function buildBot(opts?: { reference?: StubReference }): Promise<BuildBotR
     dataDir,
   });
 
-  return { bot, agent, drainPending };
+  return { bot, agent, drainPending, chatCoalesceMs: CHAT_COALESCE_MS };
 }
 
 function getCommand(bot: FakeBot, name: string) {
@@ -223,7 +223,7 @@ describe("non-blocking dispatch", () => {
   });
 
   it("same-chat dispatches reach agent.chat in send order; ordering is the agent's lock, not a channel lock", async () => {
-    const { bot, agent, drainPending } = await buildBot();
+    const { bot, agent, drainPending, chatCoalesceMs } = await buildBot();
     const chatOrder: string[] = [];
     agent.chat.mockImplementation(async ({ message }: { message: string }) => {
       chatOrder.push(message);
@@ -239,9 +239,9 @@ describe("non-blocking dispatch", () => {
     vi.useFakeTimers();
     try {
       await getMessageText(bot)(ctxA);
-      await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
+      await vi.advanceTimersByTimeAsync(chatCoalesceMs);
       await getMessageText(bot)(ctxB);
-      await vi.advanceTimersByTimeAsync(CHAT_COALESCE_MS);
+      await vi.advanceTimersByTimeAsync(chatCoalesceMs);
       await drainPending();
     } finally {
       vi.useRealTimers();
