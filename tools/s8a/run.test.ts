@@ -7,6 +7,7 @@ import {
   aggregateExitCode,
   buildChildEnv,
   buildHeader,
+  classifyReplayOutcome,
   distPreflight,
   parseRecordingLane,
   parseLastScenarioChildStage,
@@ -421,6 +422,42 @@ describe("scenario child process", () => {
       "S8A_CHILD START scenario=turn-basic-wellness stage=self-test-determinism-2",
       "S8A_CHILD DONE scenario=turn-basic-wellness stage=self-test-determinism-2 outcome=exit-0",
     ]);
+  });
+});
+
+describe("replay harness errors", () => {
+  it("stops after a missing verdict or harness exit", () => {
+    expect(classifyReplayOutcome({ verdict: null, exitCode: 2, stderr: "timeout" })).toEqual({
+      kind: "harness-error",
+      verdict: null,
+    });
+    expect(
+      classifyReplayOutcome({
+        verdict: { scenario: "a", pass: false, failures: [] },
+        exitCode: 2,
+        stderr: "harness error",
+      }),
+    ).toEqual({
+      kind: "harness-error",
+      verdict: { scenario: "a", pass: false, failures: [] },
+    });
+  });
+
+  it("continues after a normal pass or assertion failure", () => {
+    expect(
+      classifyReplayOutcome({
+        verdict: { scenario: "a", pass: true, failures: [] },
+        exitCode: 0,
+        stderr: "",
+      }),
+    ).toEqual({ kind: "verdict", verdict: { scenario: "a", pass: true, failures: [] } });
+    expect(
+      classifyReplayOutcome({
+        verdict: { scenario: "a", pass: false, failures: [] },
+        exitCode: 1,
+        stderr: "",
+      }),
+    ).toEqual({ kind: "verdict", verdict: { scenario: "a", pass: false, failures: [] } });
   });
 });
 
