@@ -4,7 +4,7 @@
 // The parent's clock is never frozen: two consecutive runs always land in
 // distinct run dirs.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -28,6 +28,7 @@ const REPO_ROOT = resolve(HERE, "..", "..");
 const RECORD_PROVIDER_DEFAULT: S8aProvider = "openai-codex";
 const LEGACY_HEADER_PROVIDER: S8aProvider = "anthropic";
 const REPLAY_DUMMY_KEY = "s8a-replay-dummy";
+const CAPTURE_HELPER_SHUTDOWN_GRACE_MS = 5_000;
 
 // Stray operator knobs would silently change the child's model lane, budgets,
 // or session policy and break replay determinism. Source of truth for what
@@ -184,6 +185,90 @@ export type ScenarioChildSpawn = (
   },
 ) => ScenarioChildSpawnResult;
 
+export const spawnScenarioChildCaptured: ScenarioChildSpawn = (command, args, options) => {
+  const ioDir = mkdtempSync(join(tmpdir(), "s8a-child-io-"));
+  const requestPath = join(ioDir, "request.json");
+  const resultPath = join(ioDir, "result.json");
+  const stdoutPath = join(ioDir, "stdout");
+  const stderrPath = join(ioDir, "stderr");
+  try {
+    writeFileSync(
+      requestPath,
+      JSON.stringify({
+        command,
+        args,
+        cwd: options.cwd,
+        maxBuffer: options.maxBuffer,
+        timeout: options.timeout,
+        killSignal: options.killSignal,
+      }),
+      { encoding: "utf-8", mode: 0o600 },
+    );
+    const helper = spawnSync(
+      process.execPath,
+      [join(HERE, "spawn-captured.mjs"), requestPath, resultPath, stdoutPath, stderrPath],
+      {
+        cwd: options.cwd,
+        env: options.env,
+        timeout: options.timeout + CAPTURE_HELPER_SHUTDOWN_GRACE_MS,
+        killSignal: options.killSignal,
+        stdio: "ignore",
+      },
+    );
+    if (!existsSync(resultPath)) {
+      return {
+        stdout: null,
+        stderr: null,
+        status: null,
+        error:
+          helper.error ??
+          Object.assign(new Error(`spawnSync ${command} EHELPER`), { code: "EHELPER" }),
+      };
+    }
+    const metadata = JSON.parse(readFileSync(resultPath, "utf-8")) as {
+      status: number | null;
+      errorCode?: string;
+      overflowStream?: "stdout" | "stderr";
+    };
+    const error =
+      metadata.errorCode === undefined
+        ? undefined
+        : Object.assign(new Error(`spawnSync ${command} ${metadata.errorCode}`), {
+            code: metadata.errorCode,
+          });
+    return {
+      stdout:
+        metadata.overflowStream === "stdout" ? null : readFileSync(stdoutPath, options.encoding),
+      stderr:
+        metadata.overflowStream === "stderr" ? null : readFileSync(stderrPath, options.encoding),
+      status: metadata.status,
+      error,
+    };
+  } finally {
+    rmSync(ioDir, { recursive: true, force: true });
+  }
+};
+
+export function parseScenarioChildExit(output: string): 0 | 1 | 2 | null {
+  let exitCode: 0 | 1 | 2 | null = null;
+  for (const line of output.split("\n")) {
+    const match = /^S8A_CHILD_EXIT code=([012])$/.exec(line.trimEnd());
+    if (match !== null) exitCode = Number.parseInt(match[1], 10) as 0 | 1 | 2;
+  }
+  return exitCode;
+}
+
+function parseScenarioVerdict(output: string): ScenarioVerdict | null {
+  const stdoutLines = output.split("\n").filter((line) => line.trim() !== "");
+  for (let i = stdoutLines.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(stdoutLines[i]) as ScenarioVerdict;
+      if (typeof parsed.scenario === "string" && typeof parsed.pass === "boolean") return parsed;
+    } catch {}
+  }
+  return null;
+}
+
 export interface ChildEnvParams {
   base: Record<string, string | undefined>;
   tempHome: string;
@@ -233,7 +318,7 @@ export function spawnScenarioChild(
     anthropicKey?: string;
     authProfilesSource?: string;
   },
-  spawnProcess: ScenarioChildSpawn = (command, args, options) => spawnSync(command, args, options),
+  spawnProcess: ScenarioChildSpawn = spawnScenarioChildCaptured,
 ): ChildOutcome {
   const safeScenarioId = safeScenarioDiagnosticId(params.scenarioId);
   console.log(`S8A_CHILD START scenario=${safeScenarioId} stage=${params.stage}`);
@@ -261,30 +346,30 @@ export function spawnScenarioChild(
     env,
     encoding: "utf-8",
     maxBuffer: 64 * 1024 * 1024,
-    timeout: 120_000,
+    timeout: params.mode === "replay" ? 15_000 : 120_000,
     killSignal: "SIGKILL",
   });
+  const stdout = result.stdout ?? "";
+  const verdict = parseScenarioVerdict(stdout);
   if (result.error?.code === "ETIMEDOUT") {
+    const childStage = parseLastScenarioChildStage(stdout, safeScenarioId);
+    const logicalExitCode = parseScenarioChildExit(stdout);
+    if (
+      childStage === "cleanup-done" &&
+      logicalExitCode !== null &&
+      (logicalExitCode === 2 || verdict !== null)
+    ) {
+      console.log(
+        `S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=recovered-exit-${logicalExitCode}`,
+      );
+      return { verdict, exitCode: logicalExitCode, stderr: result.stderr ?? "" };
+    }
     console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=timeout`);
-    const childStage = parseLastScenarioChildStage(result.stdout ?? "", safeScenarioId);
     return {
       verdict: null,
       exitCode: 2,
       stderr: `scenario child timed out: scenario=${safeScenarioId} stage=${params.stage} child-stage=${childStage}`,
     };
-  }
-  const stdoutLines = (result.stdout ?? "").split("\n").filter((l) => l.trim() !== "");
-  let verdict: ScenarioVerdict | null = null;
-  for (let i = stdoutLines.length - 1; i >= 0; i--) {
-    try {
-      const parsed = JSON.parse(stdoutLines[i]) as ScenarioVerdict;
-      if (typeof parsed.scenario === "string" && typeof parsed.pass === "boolean") {
-        verdict = parsed;
-        break;
-      }
-    } catch {
-      // Not the verdict line; keep scanning upward.
-    }
   }
   const exitCode = result.status ?? 2;
   console.log(`S8A_CHILD DONE scenario=${safeScenarioId} stage=${params.stage} outcome=exit-${exitCode}`);
@@ -330,7 +415,7 @@ export function runSelfTestDeterminism(
     llmModel: string;
     anthropicKey?: string;
   },
-  spawnProcess: ScenarioChildSpawn = (command, args, options) => spawnSync(command, args, options),
+  spawnProcess: ScenarioChildSpawn = spawnScenarioChildCaptured,
   diffProcess: SelfTestDiffSpawn = (command, args, options) => spawnSync(command, args, options),
 ):
   | { kind: "harness-error"; outcome: ChildOutcome }
