@@ -10,6 +10,7 @@ import {
   classifyReplayOutcome,
   distPreflight,
   parseRecordingLane,
+  parseScenarioChildExit,
   parseLastScenarioChildStage,
   parseRunFlags,
   resolveRecordLane,
@@ -17,6 +18,7 @@ import {
   runSelfTestDeterminism,
   safeScenarioDiagnosticId,
   spawnScenarioChild,
+  spawnScenarioChildCaptured,
   type ScenarioChildSpawn,
   usage,
 } from "./run.js";
@@ -125,6 +127,12 @@ describe("scenario child stage diagnostics", () => {
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
     expect(RUN_SCENARIO_SOURCE).toContain("/[0-9]{8,}/");
+    expect(RUN_SCENARIO_SOURCE).toContain("S8A_CHILD_EXIT code=${exitCode}");
+  });
+
+  it("accepts only the last exact logical-exit sentinel", () => {
+    expect(parseScenarioChildExit("S8A_CHILD_EXIT code=0\nnoise\nS8A_CHILD_EXIT code=1\n")).toBe(1);
+    expect(parseScenarioChildExit("prefix S8A_CHILD_EXIT code=0\nS8A_CHILD_EXIT code=3\n")).toBeNull();
   });
 });
 
@@ -306,6 +314,49 @@ describe("scenario child process", () => {
     if (home !== undefined) rmSync(home, { recursive: true, force: true });
   }
 
+  it("does not wait for a descendant that inherited output", () => {
+    const script = [
+      'const { spawn } = require("node:child_process")',
+      'const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], { detached: true, stdio: ["ignore", 1, 2] })',
+      "child.unref()",
+      "console.log(child.pid)",
+    ].join(";");
+    const result = spawnScenarioChildCaptured(process.execPath, ["-e", script], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: "utf-8",
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 1_000,
+      killSignal: "SIGKILL",
+    });
+    const descendantPid = Number.parseInt(result.stdout?.trim() ?? "", 10);
+    try {
+      expect(result.status).toBe(0);
+      expect(result.error).toBeUndefined();
+      expect(Number.isSafeInteger(descendantPid)).toBe(true);
+    } finally {
+      if (Number.isSafeInteger(descendantPid)) process.kill(descendantPid, "SIGKILL");
+    }
+  });
+
+  it("rejects captured output larger than maxBuffer", () => {
+    const result = spawnScenarioChildCaptured(
+      process.execPath,
+      ["-e", 'process.stdout.write("123456789")'],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        encoding: "utf-8",
+        maxBuffer: 8,
+        timeout: 1_000,
+        killSignal: "SIGKILL",
+      },
+    );
+
+    expect(result).toMatchObject({ stdout: null, stderr: "", status: null });
+    expect(result.error?.code).toBe("ENOBUFS");
+  });
+
   it("applies the fixed deadline and preserves a normal verdict", () => {
     const verdict: ScenarioVerdict = {
       scenario: "turn-basic-wellness",
@@ -323,7 +374,7 @@ describe("scenario child process", () => {
     expect(outcome).toEqual({ verdict, exitCode: 1, stderr: "fixed stderr" });
     expect(spawnProcess).toHaveBeenCalledOnce();
     expect(spawnProcess.mock.calls[0]?.[2]).toMatchObject({
-      timeout: 120_000,
+      timeout: 15_000,
       killSignal: "SIGKILL",
     });
     expect(log.mock.calls.map(([line]) => line)).toEqual([
@@ -360,6 +411,36 @@ describe("scenario child process", () => {
       "S8A_CHILD START scenario=unknown stage=replay",
       "S8A_CHILD DONE scenario=unknown stage=replay outcome=timeout",
     ]);
+  });
+
+  it("recovers a completed replay from an exit stall", () => {
+    const verdict: ScenarioVerdict = {
+      scenario: "turn-basic-wellness",
+      pass: true,
+      failures: [],
+    };
+    const spawnProcess = vi.fn<ScenarioChildSpawn>((_command, _args, options) => {
+      removeTempHome(options);
+      return {
+        stdout: [
+          JSON.stringify(verdict),
+          "S8A_CHILD_STAGE DONE scenario=turn-basic-wellness stage=cleanup",
+          "S8A_CHILD_EXIT code=0",
+          "",
+        ].join("\n"),
+        stderr: "",
+        status: null,
+        error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+      };
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const outcome = spawnScenarioChild(params, spawnProcess);
+
+    expect(outcome).toEqual({ verdict, exitCode: 0, stderr: "" });
+    expect(log.mock.calls.at(-1)?.[0]).toBe(
+      "S8A_CHILD DONE scenario=turn-basic-wellness stage=replay outcome=recovered-exit-0",
+    );
   });
 
   it("stops determinism before the second child and diff after a timeout", () => {
