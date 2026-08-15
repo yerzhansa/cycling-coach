@@ -140,10 +140,21 @@ export function aggregateExitCode(verdicts: ScenarioVerdict[]): 0 | 1 {
   return verdicts.every((v) => v.pass) ? 0 : 1;
 }
 
-interface ChildOutcome {
+export interface ChildOutcome {
   verdict: ScenarioVerdict | null;
   exitCode: number;
   stderr: string;
+}
+
+export function classifyReplayOutcome(
+  outcome: ChildOutcome,
+):
+  | { kind: "harness-error"; verdict: ScenarioVerdict | null }
+  | { kind: "verdict"; verdict: ScenarioVerdict } {
+  if (outcome.verdict === null || outcome.exitCode === 2) {
+    return { kind: "harness-error", verdict: outcome.verdict };
+  }
+  return { kind: "verdict", verdict: outcome.verdict };
 }
 
 export type ScenarioChildStage =
@@ -447,13 +458,14 @@ async function replayScenarios(params: {
       llmModel: lane.model,
       anthropicKey: lane.provider === "anthropic" ? REPLAY_DUMMY_KEY : undefined,
     });
-    if (outcome.verdict === null || outcome.exitCode === 2) {
+    const classified = classifyReplayOutcome(outcome);
+    if (classified.kind === "harness-error") {
       console.error(`harness error in scenario ${entry.id} (exit ${outcome.exitCode}):\n${outcome.stderr}`);
       harnessError = true;
-      if (outcome.verdict !== null) verdicts.push(outcome.verdict);
-      continue;
+      if (classified.verdict !== null) verdicts.push(classified.verdict);
+      break;
     }
-    verdicts.push(outcome.verdict);
+    verdicts.push(classified.verdict);
   }
   return { verdicts, harnessError };
 }
