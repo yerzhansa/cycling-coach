@@ -476,7 +476,7 @@ export function parseLastScenarioChildStage(
   let last: ScenarioChildDiagnostic = { stage: "none", elapsedMs: null };
   for (const line of output.split("\n")) {
     const match =
-      /^S8A_CHILD_STAGE (START|DONE) scenario=([a-z0-9]+(?:-[a-z0-9]+)*) stage=(setup|turn|finish-replay|finish-record|cleanup|exit-intent)(?: turn=(0|[1-9][0-9]*))? elapsed-ms=(0|[1-9][0-9]{0,6})$/.exec(
+      /^S8A_CHILD_STAGE (START|DONE) scenario=([a-z0-9]+(?:-[a-z0-9]+)*) stage=(setup|turn|finish-replay|finish-record|cleanup|exit-intent|exit-listeners|really-exit)(?: turn=(0|[1-9][0-9]*))? elapsed-ms=(0|[1-9][0-9]{0,6})$/.exec(
         line.trimEnd(),
       );
     if (match === null || match[2] !== safeScenarioId) continue;

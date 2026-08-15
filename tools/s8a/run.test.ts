@@ -89,18 +89,24 @@ describe("scenario child stage diagnostics", () => {
     },
   );
 
-  it("distinguishes cleanup completion from synchronous exit intent", () => {
+  it("distinguishes each synchronous exit-path boundary", () => {
     const output = [
       "S8A_CHILD_STAGE DONE scenario=inj-02 stage=cleanup elapsed-ms=119001",
       "S8A_CHILD_STAGE DONE scenario=inj-02 stage=exit-intent elapsed-ms=119002",
+      "S8A_CHILD_STAGE DONE scenario=inj-02 stage=exit-listeners elapsed-ms=119003",
+      "S8A_CHILD_STAGE DONE scenario=inj-02 stage=really-exit elapsed-ms=119004",
     ].join("\n");
     expect(parseLastScenarioChildStage(output.split("\n")[0], "inj-02")).toEqual({
       stage: "cleanup-done",
       elapsedMs: 119001,
     });
     expect(parseLastScenarioChildStage(output, "inj-02")).toEqual({
-      stage: "exit-intent-done",
-      elapsedMs: 119002,
+      stage: "really-exit-done",
+      elapsedMs: 119004,
+    });
+    expect(parseLastScenarioChildStage(output.split("\n").slice(0, 3).join("\n"), "inj-02")).toEqual({
+      stage: "exit-listeners-done",
+      elapsedMs: 119003,
     });
   });
 
@@ -156,7 +162,9 @@ describe("scenario child stage diagnostics", () => {
       'emitScenarioStage("DONE", diagnosticScenario, finishStage)',
       'emitScenarioStage("START", diagnosticScenario, "cleanup")',
       'emitScenarioStage("DONE", diagnosticScenario, "cleanup")',
-      "emitExitIntent(diagnosticScenario)",
+      "installExitPathProbes(diagnosticScenario)",
+      'emitSynchronousScenarioStage(diagnosticScenario, "exit-intent")',
+      "process.exit(exitCode)",
     ];
     const positions = markers.map((marker) => RUN_SCENARIO_SOURCE.indexOf(marker));
     expect(positions.every((position) => position >= 0)).toBe(true);
@@ -164,8 +172,23 @@ describe("scenario child stage diagnostics", () => {
     expect(RUN_SCENARIO_SOURCE).toContain("/[0-9]{8,}/");
     expect(RUN_SCENARIO_SOURCE).toContain("process.hrtime.bigint()");
     expect(RUN_SCENARIO_SOURCE).toContain(
-      'writeSync(process.stdout.fd, `${formatScenarioStage("DONE", scenarioId, "exit-intent")}\\n`)',
+      'writeSync(process.stdout.fd, `${formatScenarioStage("DONE", scenarioId, stage)}\\n`)',
     );
+    expect(RUN_SCENARIO_SOURCE).toContain('process.on("exit", () => {');
+    expect(RUN_SCENARIO_SOURCE).toContain(
+      'emitSynchronousScenarioStage(scenarioId, "exit-listeners")',
+    );
+    expect(RUN_SCENARIO_SOURCE).toContain("const currentReallyExit = processWithReallyExit.reallyExit");
+    expect(RUN_SCENARIO_SOURCE).toContain(
+      'emitSynchronousScenarioStage(scenarioId, "really-exit")',
+    );
+    expect(RUN_SCENARIO_SOURCE).toContain(
+      "return Reflect.apply(currentReallyExit, this, args) as never",
+    );
+    expect(RUN_SCENARIO_SOURCE).not.toContain("rawListeners");
+    expect(RUN_SCENARIO_SOURCE).not.toContain("getEventListeners");
+    expect(RUN_SCENARIO_SOURCE).not.toContain(".listeners(");
+    expect(RUN_SCENARIO_SOURCE).not.toContain(".toString(");
   });
 });
 
