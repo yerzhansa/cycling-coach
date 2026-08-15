@@ -93,27 +93,29 @@ describe("desktop training export IPC", () => {
     expect(result).not.toHaveProperty("contentType");
   });
 
-  it("passes a Windows save-dialog destination to the exporter", async () => {
-    const subject = setup();
-    const destinationPath = "C:\\Users\\x\\Documents\\ride.fit";
-    subject.dialog.showSaveDialog.mockResolvedValueOnce({
-      canceled: false,
-      filePath: destinationPath,
-    });
+  it.each(["C:\\Users\\x\\Documents\\ride.fit", "C:/Users/x/Documents/ride.fit"])(
+    "passes the Windows save-dialog destination %s to the exporter",
+    async (destinationPath) => {
+      const subject = setup();
+      subject.dialog.showSaveDialog.mockResolvedValueOnce({
+        canceled: false,
+        filePath: destinationPath,
+      });
 
-    await expect(
-      subject.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(subject.trusted, {
-        kind: "activity",
-        canonicalActivityId: "a".repeat(64),
-        localDate: "1998-07-19",
-        format: "fit",
-      }),
-    ).resolves.toEqual({ status: "saved", byteLength: 4_096 });
-    expect(subject.exporter.export).toHaveBeenCalledWith(
-      expect.objectContaining({ destinationPath }),
-    );
-    expect(subject.log).not.toHaveBeenCalled();
-  });
+      await expect(
+        subject.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(subject.trusted, {
+          kind: "activity",
+          canonicalActivityId: "a".repeat(64),
+          localDate: "1998-07-19",
+          format: "fit",
+        }),
+      ).resolves.toEqual({ status: "saved", byteLength: 4_096 });
+      expect(subject.exporter.export).toHaveBeenCalledWith(
+        expect.objectContaining({ destinationPath }),
+      );
+      expect(subject.log).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes a closed workout archive request and handles cancellation without daemon work", async () => {
     const subject = setup();

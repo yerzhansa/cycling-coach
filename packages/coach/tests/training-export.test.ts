@@ -1,6 +1,6 @@
 import { mkdtemp, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TrustedActivitySourceResolver } from "@enduragent/kernel/store";
 import {
@@ -600,6 +600,7 @@ describe("durable training export writer", () => {
 
       const writer = createDurableTrainingExportWriter({
         platform,
+        pathApi: posix,
         createTemporaryId: () => `committed-${platform}`,
         renameFile: rename,
         syncDirectory,
@@ -611,6 +612,57 @@ describe("durable training export writer", () => {
       expect(await readFile(destinationPath)).toEqual(Buffer.from([2]));
     },
   );
+
+  it("normalizes slash-form Windows drive paths before atomic commit", async () => {
+    const handle = {
+      writeFile: vi.fn(async () => {}),
+      chmod: vi.fn(async () => {}),
+      sync: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    const openFile = vi.fn(async () => handle);
+    const renameFile = vi.fn(async () => {});
+    const removeFile = vi.fn(async () => {}) as never;
+    const writer = createDurableTrainingExportWriter({
+      platform: "win32",
+      createTemporaryId: () => "slash-form",
+      openFile: openFile as never,
+      renameFile,
+      removeFile,
+    });
+    const temporary = "C:\\Users\\x\\Documents\\.enduragent-export-slash-form.tmp";
+    const destination = "C:\\Users\\x\\Documents\\ride.fit";
+
+    await expect(
+      writer.write({
+        destinationPath: "C:/Users/x/Documents/ride.fit",
+        bytes: Uint8Array.from([1, 2, 3]),
+      }),
+    ).resolves.toBe("committed");
+    expect(openFile).toHaveBeenCalledWith(temporary, "wx", 0o600);
+    expect(renameFile).toHaveBeenCalledWith(temporary, destination);
+    expect(removeFile).toHaveBeenCalledWith(temporary, { force: true });
+
+  });
+
+  it.each([
+    "C:relative/ride.fit",
+    "C:/Users//x/ride.fit",
+    "C:/Users/x/./ride.fit",
+    "C:/Users/x/../ride.fit",
+  ])("rejects the noncanonical Windows path %s", async (destinationPath) => {
+    const openFile = vi.fn();
+    const writer = createDurableTrainingExportWriter({
+      platform: "win32",
+      createTemporaryId: () => "invalid-path",
+      openFile: openFile as never,
+    });
+
+    await expect(
+      writer.write({ destinationPath, bytes: Uint8Array.from([1]) }),
+    ).resolves.toBe("failed");
+    expect(openFile).not.toHaveBeenCalled();
+  });
 
   it("does not rename when cancellation is observed before the commit point", async () => {
     const controller = new AbortController();

@@ -335,7 +335,12 @@ describe("desktop preload ChatGPT auth", () => {
   });
 
   it("accepts platform-absolute import paths and validates uppercase extensions", async () => {
-    const paths = ["C:\\x\\ride.FIT", "\\\\server\\share\\ride.gpx", "/home/x/ride.tcx"] as const;
+    const paths = [
+      "C:\\x\\ride.FIT",
+      "C:/x/second-ride.gpx",
+      "\\\\server\\share\\ride.gpx",
+      "/home/x/ride.tcx",
+    ] as const;
     mocks.invoke.mockResolvedValue(paths);
 
     await expect(bridge.chooseImportFiles()).resolves.toEqual(paths);
