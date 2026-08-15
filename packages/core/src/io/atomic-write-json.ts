@@ -1,4 +1,5 @@
-import { open, rename, unlink } from "node:fs/promises";
+import { renameSync } from "node:fs";
+import { open, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import {
   classifyWindowsPrivatePathFailure,
@@ -52,7 +53,7 @@ export async function atomicWriteJson(
       return;
     }
     stage = "rename";
-    await rename(tempPath, path);
+    renameSync(tempPath, path);
   } catch (err) {
     if (fh !== null) {
       try {

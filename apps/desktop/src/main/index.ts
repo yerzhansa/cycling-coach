@@ -506,7 +506,6 @@ async function runDesktop(): Promise<void> {
           return;
         }
         const recovery = initialRefreshCoordinator.prepareRecovery({
-          previous,
           current,
           rendererPresent: visibleWindow !== null,
         });

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { unlink } from "node:fs/promises";
+import { unlinkSync } from "node:fs";
 import {
   ERROR_STATE_SCHEMA_VERSION,
   type ErrorPhase,
@@ -64,7 +64,7 @@ export async function clearErrorState(
 ): Promise<void> {
   if (opts?.signal?.aborted === true) return;
   try {
-    await unlink(join(dataDir, "error_state.json"));
+    unlinkSync(join(dataDir, "error_state.json"));
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
   }

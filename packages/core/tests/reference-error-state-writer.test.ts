@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -100,6 +100,28 @@ describe("clearErrorState", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("deletes the canonical target through the synchronous unlink primitive", async () => {
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const unlinkSync = vi.fn((...args: Parameters<typeof actual.unlinkSync>) =>
+      actual.unlinkSync(...args),
+    );
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({ ...actual, unlinkSync }));
+    try {
+      const {
+        clearErrorState: isolatedClearErrorState,
+        writeErrorState: isolatedWriteErrorState,
+      } = await import("../src/reference/sync/error-state-writer.js");
+      await isolatedWriteErrorState(dir, { step: "gate_rejected", detail: "x" });
+      await isolatedClearErrorState(dir);
+      expect(unlinkSync).toHaveBeenCalledOnce();
+      expect(existsSync(join(dir, "error_state.json"))).toBe(false);
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+    }
+  });
+
   it("skips the unlink when the signal is aborted (B3)", async () => {
     await writeErrorState(dir, { step: "gate_rejected", detail: "x" });
     expect(existsSync(join(dir, "error_state.json"))).toBe(true);
@@ -111,6 +133,12 @@ describe("clearErrorState", () => {
 
     await clearErrorState(dir);
     expect(existsSync(join(dir, "error_state.json"))).toBe(false);
+  });
+
+  it("swallows a missing error state and rejects other unlink failures", async () => {
+    await expect(clearErrorState(dir)).resolves.toBeUndefined();
+    mkdirSync(join(dir, "error_state.json"));
+    await expect(clearErrorState(dir)).rejects.toThrow();
   });
 });
 

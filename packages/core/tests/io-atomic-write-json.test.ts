@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   mkdtempSync,
   rmSync,
@@ -7,6 +7,7 @@ import {
   readdirSync,
   existsSync,
   statSync,
+  mkdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,9 +101,43 @@ describe("atomicWriteJson — happy path", () => {
     expect(String(failure)).not.toContain(target);
     expect(JSON.stringify(failure)).not.toContain(target);
   });
+
+  it("keeps Windows rename failures path-free and stage-coded", async () => {
+    const target = join(tempDir, "existing-directory");
+    mkdirSync(target);
+    const failure = await atomicWriteJson(target, { private: true }, { platform: "win32" }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(WindowsPrivatePathPolicyError);
+    expect(failure).toMatchObject({ stage: "rename", category: "io-failure" });
+    expect(String(failure)).not.toContain(target);
+    expect(JSON.stringify(failure)).not.toContain(target);
+  });
 });
 
 describe("atomicWriteJson — atomicity invariant", () => {
+  it("commits the canonical target through the synchronous rename primitive", async () => {
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const renameSync = vi.fn((...args: Parameters<typeof actual.renameSync>) =>
+      actual.renameSync(...args),
+    );
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({ ...actual, renameSync }));
+    try {
+      const { atomicWriteJson: isolatedAtomicWriteJson } = await import(
+        "../src/io/atomic-write-json.js"
+      );
+      const target = join(tempDir, "synchronous-commit.json");
+      await isolatedAtomicWriteJson(target, { committed: true });
+      expect(renameSync).toHaveBeenCalledOnce();
+      expect(JSON.parse(readFileSync(target, "utf-8"))).toEqual({ committed: true });
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+    }
+  });
+
   it("writes via a temp sibling so the original is never partial mid-write", async () => {
     // We can't reliably crash mid-rename in a unit test, but we can assert the
     // canonical pattern: between the moment data is committed to disk and the

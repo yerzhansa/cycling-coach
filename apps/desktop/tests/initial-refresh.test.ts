@@ -131,7 +131,6 @@ describe("desktop initial refresh coordinator", () => {
     test.setCurrent(successor);
     expect(
       test.coordinator.prepareRecovery({
-        previous: connection(1),
         current: successor,
         rendererPresent: true,
       }),
@@ -145,32 +144,42 @@ describe("desktop initial refresh coordinator", () => {
     expect(test.startInitialRefresh).toHaveBeenLastCalledWith(successor);
   });
 
-  it("releases recovery immediately when the port is unchanged or no renderer exists", async () => {
+  it("waits for the recovered renderer generation even when the port is unchanged", async () => {
     const samePort = harness();
+    samePort.coordinator.arm(connection(1, 45_001));
     const samePortSuccessor = connection(2, 45_001);
     samePort.setCurrent(samePortSuccessor);
     expect(
       samePort.coordinator.prepareRecovery({
-        previous: connection(1, 45_001),
         current: samePortSuccessor,
         rendererPresent: true,
       }),
-    ).toBe("released");
-    await Promise.resolve();
-    expect(samePort.startInitialRefresh).toHaveBeenCalledWith(samePortSuccessor);
+    ).toBe("reload-required");
+    expect(samePort.startInitialRefresh).not.toHaveBeenCalled();
 
-    const noRenderer = harness();
-    const changedPortSuccessor = connection(2, 45_010);
-    noRenderer.setCurrent(changedPortSuccessor);
-    expect(
-      noRenderer.coordinator.prepareRecovery({
-        previous: connection(1),
-        current: changedPortSuccessor,
-        rendererPresent: false,
-      }),
-    ).toBe("released");
-    await Promise.resolve();
-    expect(noRenderer.startInitialRefresh).toHaveBeenCalledWith(changedPortSuccessor);
+    await samePort.coordinator.initialSetupStatusSettled(1);
+    expect(samePort.startInitialRefresh).not.toHaveBeenCalled();
+    await Promise.all([
+      samePort.coordinator.initialSetupStatusSettled(2),
+      samePort.coordinator.initialSetupStatusSettled(2),
+    ]);
+    expect(samePort.startInitialRefresh).toHaveBeenCalledOnce();
+    expect(samePort.startInitialRefresh).toHaveBeenCalledWith(samePortSuccessor);
+  });
+
+  it("releases recovery immediately when no renderer exists", async () => {
+    for (const successor of [connection(2, 45_001), connection(2, 45_010)]) {
+      const noRenderer = harness();
+      noRenderer.setCurrent(successor);
+      expect(
+        noRenderer.coordinator.prepareRecovery({
+          current: successor,
+          rendererPresent: false,
+        }),
+      ).toBe("released");
+      await Promise.resolve();
+      expect(noRenderer.startInitialRefresh).toHaveBeenCalledWith(successor);
+    }
   });
 
   it("releases when the current window closes or its render process exits", async () => {

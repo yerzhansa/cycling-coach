@@ -9,7 +9,6 @@ type InitialRefreshConnection = Pick<
 export interface DesktopInitialRefreshCoordinator {
   arm(connection: InitialRefreshConnection): void;
   prepareRecovery(input: {
-    readonly previous: InitialRefreshConnection;
     readonly current: InitialRefreshConnection;
     readonly rendererPresent: boolean;
   }): "reload-required" | "released";
@@ -96,14 +95,9 @@ export function createDesktopInitialRefreshCoordinator(input: {
 
   return {
     arm,
-    prepareRecovery({ previous, current, rendererPresent }) {
+    prepareRecovery({ current, rendererPresent }) {
       arm(current);
-      if (
-        new URL(previous.url).port !== new URL(current.url).port &&
-        rendererPresent
-      ) {
-        return "reload-required";
-      }
+      if (rendererPresent) return "reload-required";
       void release(current.generation);
       return "released";
     },
