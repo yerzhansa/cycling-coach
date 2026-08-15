@@ -90,6 +90,7 @@ export interface WindowsInstalledPackageDependencies extends CanonicalTreeDepend
     readonly stderr: string;
   }>;
   readonly delay?: (milliseconds: number) => Promise<void>;
+  readonly now?: () => number;
 }
 
 export const WINDOWS_INSTALLED_LIMITS: {
@@ -148,6 +149,11 @@ export function executeWithGuaranteedUninstall(
   primary: () => Promise<void>,
   uninstall: () => Promise<void>,
 ): Promise<void>;
+
+export function waitForCleanupEvidence(
+  readEvidence: () => Promise<NativeInstalledEvidence>,
+  dependencies?: Pick<WindowsInstalledPackageDependencies, "delay" | "now">,
+): Promise<NativeInstalledEvidence>;
 
 export function parseNativeEvidenceResult(
   result: {
