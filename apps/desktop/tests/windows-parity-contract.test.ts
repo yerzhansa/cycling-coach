@@ -120,6 +120,9 @@ describe("Windows parity automation contract", () => {
       /if \(\(\$child\.Attributes -band \[IO\.FileAttributes\]::ReparsePoint\) -ne 0\) \{\s+\$paths \+= \$child\.FullName\s+\} elseif \(\$child\.PSIsContainer\) \{\s+\$pending\.Push\(\$child\.FullName\)\s+\}/u,
     );
     expect(nativeEvidence).toContain("installLocation = $installLocation");
+    expect(nativeEvidence).toMatch(
+      /catch \[System\.Management\.Automation\.ItemNotFoundException\] \{\s+continue\s+\}/u,
+    );
     expect(nativeEvidence).toContain("WScript.Shell");
     expect(nativeEvidence).toContain("Get-CimInstance Win32_Process -Filter");
     expect(nativeEvidence).not.toContain("[IO.Path]::GetFileName");
