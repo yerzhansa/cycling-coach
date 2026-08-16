@@ -55,6 +55,7 @@ describe("desktop initial refresh coordinator", () => {
       "void initialRefreshCoordinator.releaseCurrent()",
       residencyReady,
     );
+    const backgroundWindowGuard = source.indexOf("mainWindow.current() === null", residencyReady);
     const initialShow = source.indexOf("await mainWindow.show()", backgroundRelease);
     const serviceManagedRecovery = source.indexOf('if (current.owner !== "app-supervised") {');
     const serviceManagedPrepare = source.indexOf(
@@ -94,6 +95,8 @@ describe("desktop initial refresh coordinator", () => {
 
     expect(initialArm).toBeGreaterThan(-1);
     expect(residencyReady).toBeGreaterThan(initialArm);
+    expect(backgroundWindowGuard).toBeGreaterThan(residencyReady);
+    expect(backgroundWindowGuard).toBeLessThan(backgroundRelease);
     expect(backgroundRelease).toBeGreaterThan(residencyReady);
     expect(initialShow).toBeGreaterThan(backgroundRelease);
     expect(source).not.toContain(".reload()");

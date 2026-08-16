@@ -5,12 +5,27 @@ export function settleInitialSetupStatus(input: {
   readonly reportSettled: (generation: number) => Promise<void>;
   readonly reportFailure: () => void;
 }): void {
-  const generation = input.captureGeneration();
+  let generation: Promise<number | undefined>;
+  try {
+    generation = input.captureGeneration().then(
+      (value) => value,
+      () => {
+        input.reportFailure();
+        return undefined;
+      },
+    );
+  } catch {
+    input.reportFailure();
+    generation = Promise.resolve(undefined);
+  }
   void input
     .open()
     .finally(() => {
       input.markSettled();
-      void generation.then(input.reportSettled).catch(input.reportFailure);
+      void generation.then((value) => {
+        if (value === undefined) return;
+        void input.reportSettled(value).catch(input.reportFailure);
+      });
     })
     .catch(() => {});
 }

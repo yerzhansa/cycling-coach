@@ -58,4 +58,30 @@ describe("renderer initial setup settlement", () => {
     await opening.promise.catch(() => {});
     await vi.waitFor(() => expect(reportFailure).toHaveBeenCalledOnce());
   });
+
+  it("observes a failed generation capture while onboarding remains pending", async () => {
+    const opening = deferred<void>();
+    const capture = deferred<number>();
+    const markSettled = vi.fn();
+    const reportSettled = vi.fn(async () => {});
+    const reportFailure = vi.fn();
+    settleInitialSetupStatus({
+      captureGeneration: () => capture.promise,
+      open: () => opening.promise,
+      markSettled,
+      reportSettled,
+      reportFailure,
+    });
+
+    capture.reject(new Error("synthetic generation failure"));
+    await vi.waitFor(() => expect(reportFailure).toHaveBeenCalledOnce());
+    expect(markSettled).not.toHaveBeenCalled();
+    expect(reportSettled).not.toHaveBeenCalled();
+
+    opening.resolve();
+    await opening.promise;
+    await vi.waitFor(() => expect(markSettled).toHaveBeenCalledOnce());
+    expect(reportFailure).toHaveBeenCalledOnce();
+    expect(reportSettled).not.toHaveBeenCalled();
+  });
 });

@@ -1045,7 +1045,11 @@ async function runDesktop(): Promise<void> {
     });
     if (process.platform === "win32") await activation.bind(residency);
     await residency.start();
-    if (desktopStartedInBackground && initialRefreshConnection.owner === "app-supervised") {
+    if (
+      desktopStartedInBackground &&
+      initialRefreshConnection.owner === "app-supervised" &&
+      mainWindow.current() === null
+    ) {
       void initialRefreshCoordinator.releaseCurrent();
     }
     const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();
