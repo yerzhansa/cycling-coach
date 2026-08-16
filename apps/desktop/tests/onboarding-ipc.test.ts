@@ -19,7 +19,7 @@ import {
   registerOnboardingIpc,
   runtimeConfigurationForCredential,
 } from "../src/main/onboarding-ipc.js";
-import { DESKTOP_RENDERER_URL } from "../src/main/constants.js";
+import { createDesktopRendererUrl } from "../src/main/renderer-navigation.js";
 import {
   runtimeConfigurationForExistingSelection,
   type OnboardingLlmSelection,
@@ -30,6 +30,8 @@ import type {
   CredentialWriteBehavior,
   CredentialWriteInput,
 } from "../src/main/credential-vault.js";
+
+const RENDERER_URL = createDesktopRendererUrl("A".repeat(43));
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 type OwnershipCheck = (
@@ -163,7 +165,7 @@ function harness(
   const trustedEvent = {
     sender: {
       isDestroyed: () => false,
-      mainFrame: { url: DESKTOP_RENDERER_URL },
+      mainFrame: { url: RENDERER_URL },
       send: progressSend,
     },
   } as unknown as IpcMainInvokeEvent;
@@ -1044,7 +1046,7 @@ describe("desktop onboarding IPC", () => {
     publish("waiting-for-browser");
     expect(subject.progressSend).not.toHaveBeenCalled();
 
-    (subject.trustedEvent.sender.mainFrame as { url: string }).url = DESKTOP_RENDERER_URL;
+    (subject.trustedEvent.sender.mainFrame as { url: string }).url = RENDERER_URL;
     subject.dispose();
     publish("completing-sign-in");
     expect(subject.progressSend).not.toHaveBeenCalled();

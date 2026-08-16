@@ -15,7 +15,7 @@ import {
   type ChatGptLoginResult,
   type ChatGptStatus,
 } from "./chatgpt-auth.js";
-import { DESKTOP_RENDERER_URL } from "./constants.js";
+import { isDesktopRendererUrl } from "./renderer-navigation.js";
 import {
   DESKTOP_CREDENTIAL_SLOTS,
   type CredentialSlotStatus,
@@ -322,7 +322,7 @@ export function registerOnboardingIpc(options: RegisterOnboardingIpcOptions): ()
     phase: ChatGptLoginProgressPhase,
   ): void => {
     try {
-      if (disposed || sender.isDestroyed() || sender.mainFrame.url !== DESKTOP_RENDERER_URL) {
+      if (disposed || sender.isDestroyed() || !isDesktopRendererUrl(sender.mainFrame.url)) {
         return;
       }
       sender.send(DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL, {

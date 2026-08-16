@@ -23,7 +23,10 @@ import {
 } from "electron";
 import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
 import { createClaudeCliStatus, readClaudeCliSettings } from "./claude-cli-status.js";
-import { installDesktopConnectionIpc } from "./connection-ipc.js";
+import {
+  installDesktopConnectionIpc,
+  type DesktopConnectionIpcController,
+} from "./connection-ipc.js";
 import {
   createDesktopInitialRefreshCoordinator,
   shouldReleaseInitialRefreshAfterLoadFailure,
@@ -31,6 +34,7 @@ import {
 import { bindDesktopAppUserModelId, createDesktopActivationRelay } from "./desktop-lifecycle.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
+import { isDesktopRendererUrl } from "./renderer-navigation.js";
 import {
   createDesktopIntervalsCredentialVerifier,
   installDesktopIntervalsIpc,
@@ -225,7 +229,7 @@ async function runDesktop(): Promise<void> {
   );
   let quitRequested = false;
   let protocolInstalled = false;
-  let disposeConnectionIpc: (() => void) | undefined;
+  let connectionIpc: DesktopConnectionIpcController | undefined;
   let disposeTranscriptIpc: (() => void) | undefined;
   let disposeTrainingExportIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
@@ -275,8 +279,8 @@ async function runDesktop(): Promise<void> {
       await residencyClose;
       await Promise.all([intervalsIpcClose, telegramIpcClose]);
       controller.abort();
-      disposeConnectionIpc?.();
-      disposeConnectionIpc = undefined;
+      connectionIpc?.dispose();
+      connectionIpc = undefined;
       disposeTranscriptIpc?.();
       disposeTranscriptIpc = undefined;
       disposeTrainingExportIpc?.();
@@ -497,24 +501,39 @@ async function runDesktop(): Promise<void> {
         }
         const visibleWindow = currentWindow();
         if (current.owner !== "app-supervised") {
-          if (
-            visibleWindow !== null &&
-            new URL(previous.url).port !== new URL(current.url).port
-          ) {
-            visibleWindow.webContents.reload();
+          if (visibleWindow !== null) {
+            const portChanged = new URL(previous.url).port !== new URL(current.url).port;
+            const advanced =
+              !portChanged &&
+              (connectionIpc?.advanceCurrentDocumentGeneration(current.generation) ?? false);
+            if (!advanced) {
+              const navigationUrl = connectionIpc!.prepareDocumentNavigation(
+                visibleWindow,
+                current.generation,
+              );
+              void visibleWindow.loadURL(navigationUrl).catch(() => {
+                if (connectionIpc?.isCurrentDocumentNavigation(visibleWindow, navigationUrl)) {
+                  void initialRefreshCoordinator.releaseCurrent();
+                }
+              });
+            }
           }
           return;
         }
+        const navigationUrl =
+          visibleWindow === null
+            ? undefined
+            : connectionIpc!.prepareDocumentNavigation(visibleWindow, current.generation);
         const recovery = initialRefreshCoordinator.prepareRecovery({
           current,
           rendererPresent: visibleWindow !== null,
         });
         if (recovery === "reload-required") {
-          try {
-            visibleWindow!.webContents.reload();
-          } catch {
-            void initialRefreshCoordinator.releaseCurrent();
-          }
+          void visibleWindow!.loadURL(navigationUrl!).catch(() => {
+            if (connectionIpc?.isCurrentDocumentNavigation(visibleWindow!, navigationUrl!)) {
+              void initialRefreshCoordinator.releaseCurrent();
+            }
+          });
         }
       },
     });
@@ -897,13 +916,27 @@ async function runDesktop(): Promise<void> {
           });
           created.webContents.on(
             "did-fail-load",
-            (_event, errorCode, _description, _url, mainFrame) => {
-              if (shouldReleaseInitialRefreshAfterLoadFailure(errorCode, mainFrame)) {
+            (_event, errorCode, _description, failedUrl, mainFrame) => {
+              if (
+                shouldReleaseInitialRefreshAfterLoadFailure(errorCode, mainFrame) &&
+                connectionIpc?.isCurrentDocumentNavigation(created, failedUrl)
+              ) {
                 void initialRefreshCoordinator.releaseCurrent();
               }
             },
           );
-          await created.loadURL(DESKTOP_RENDERER_URL);
+          const navigationUrl = connectionIpc!.prepareDocumentNavigation(
+            created,
+            daemonLifecycle!.connection().generation,
+          );
+          try {
+            await created.loadURL(navigationUrl);
+          } catch (error) {
+            if (connectionIpc?.isCurrentDocumentNavigation(created, navigationUrl)) {
+              void initialRefreshCoordinator.releaseCurrent();
+            }
+            throw error;
+          }
           if (!desktopAcceptanceHidden) {
             if (created.isMinimized()) created.restore();
             created.show();
@@ -916,7 +949,7 @@ async function runDesktop(): Promise<void> {
         return windowCreation;
       },
     };
-    disposeConnectionIpc = installDesktopConnectionIpc({
+    connectionIpc = installDesktopConnectionIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
       expectedAthleteHome: selectedAthleteHome,
@@ -1081,7 +1114,8 @@ async function runDesktop(): Promise<void> {
         await writeFile(outputArgument.slice("--desktop-security-output=".length), screenshot);
       }
       const result = {
-        url: rendererResult.url,
+        url: DESKTOP_RENDERER_URL,
+        rendererNavigationValid: isDesktopRendererUrl(rendererResult.url),
         rpcUrl: daemonLifecycle.connection().url,
         bridgeKeys: rendererResult.bridgeKeys,
         noNodeGlobals: rendererResult.noNodeGlobals,

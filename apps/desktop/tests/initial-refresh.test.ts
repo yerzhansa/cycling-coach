@@ -57,13 +57,21 @@ describe("desktop initial refresh coordinator", () => {
     );
     const initialShow = source.indexOf("await mainWindow.show()", backgroundRelease);
     const serviceManagedRecovery = source.indexOf('if (current.owner !== "app-supervised") {');
-    const serviceManagedReload = source.indexOf(
-      "visibleWindow.webContents.reload()",
+    const serviceManagedPrepare = source.indexOf(
+      "connectionIpc!.prepareDocumentNavigation",
       serviceManagedRecovery,
     );
-    const serviceManagedReturn = source.indexOf("return;", serviceManagedReload);
+    const serviceManagedLoad = source.indexOf(
+      "visibleWindow.loadURL(navigationUrl)",
+      serviceManagedPrepare,
+    );
+    const serviceManagedReturn = source.indexOf("return;", serviceManagedLoad);
+    const recoveryPrepare = source.indexOf(
+      "connectionIpc!.prepareDocumentNavigation(visibleWindow, current.generation)",
+      serviceManagedReturn,
+    );
     const recoveryArm = source.indexOf("initialRefreshCoordinator.prepareRecovery({");
-    const recoveryReload = source.indexOf("visibleWindow!.webContents.reload()", recoveryArm);
+    const recoveryLoad = source.indexOf("visibleWindow!.loadURL(navigationUrl!)", recoveryArm);
     const windowClose = source.indexOf('created.once("closed"');
     const closeRelease = source.indexOf(
       "void initialRefreshCoordinator.releaseCurrent()",
@@ -75,22 +83,30 @@ describe("desktop initial refresh coordinator", () => {
       renderGone,
     );
     const failedLoad = source.indexOf('created.webContents.on("did-fail-load"');
+    const failedLoadQualification = source.indexOf(
+      "connectionIpc?.isCurrentDocumentNavigation(created, failedUrl)",
+      failedLoad,
+    );
     const failedLoadRelease = source.indexOf(
       "void initialRefreshCoordinator.releaseCurrent()",
-      failedLoad,
+      failedLoadQualification,
     );
 
     expect(initialArm).toBeGreaterThan(-1);
     expect(residencyReady).toBeGreaterThan(initialArm);
     expect(backgroundRelease).toBeGreaterThan(residencyReady);
     expect(initialShow).toBeGreaterThan(backgroundRelease);
-    expect(serviceManagedReload).toBeGreaterThan(serviceManagedRecovery);
-    expect(serviceManagedReturn).toBeGreaterThan(serviceManagedReload);
-    expect(recoveryArm).toBeGreaterThan(serviceManagedReturn);
-    expect(recoveryReload).toBeGreaterThan(recoveryArm);
+    expect(source).not.toContain(".reload()");
+    expect(serviceManagedPrepare).toBeGreaterThan(serviceManagedRecovery);
+    expect(serviceManagedLoad).toBeGreaterThan(serviceManagedPrepare);
+    expect(serviceManagedReturn).toBeGreaterThan(serviceManagedLoad);
+    expect(recoveryPrepare).toBeGreaterThan(serviceManagedReturn);
+    expect(recoveryArm).toBeGreaterThan(recoveryPrepare);
+    expect(recoveryLoad).toBeGreaterThan(recoveryArm);
     expect(closeRelease).toBeGreaterThan(windowClose);
     expect(goneRelease).toBeGreaterThan(renderGone);
-    expect(failedLoadRelease).toBeGreaterThan(failedLoad);
+    expect(failedLoadQualification).toBeGreaterThan(failedLoad);
+    expect(failedLoadRelease).toBeGreaterThan(failedLoadQualification);
   });
 
   it("keeps an initial visible generation armed until its renderer settles", async () => {

@@ -4,8 +4,8 @@ import {
   DESKTOP_UPDATE_GET_CHANNEL,
   DESKTOP_UPDATE_RESTART_CHANNEL,
   DESKTOP_UPDATE_STATE_CHANNEL,
-  DESKTOP_RENDERER_URL,
 } from "./constants.js";
+import { isDesktopRendererUrl } from "./renderer-navigation.js";
 import {
   copyDesktopUpdateState,
   type DesktopUpdateController,
@@ -57,7 +57,7 @@ export function installDesktopUpdateIpc(input: {
       window === undefined ||
       window.isDestroyed() ||
       window.webContents.isDestroyed() ||
-      window.webContents.mainFrame.url !== DESKTOP_RENDERER_URL
+      !isDesktopRendererUrl(window.webContents.mainFrame.url)
     ) {
       return;
     }

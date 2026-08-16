@@ -612,7 +612,14 @@ describe("desktop residency", () => {
   it("presents the initial window only after its renderer URL loads", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
     const creationStart = source.indexOf("windowCreation = (async () => {");
-    const load = source.indexOf("await created.loadURL(DESKTOP_RENDERER_URL);", creationStart);
+    const prepare = source.indexOf("connectionIpc!.prepareDocumentNavigation", creationStart);
+    const load = source.indexOf("await created.loadURL(navigationUrl);", prepare);
+    const failedLoadCatch = source.indexOf("} catch (error) {", load);
+    const failedLoadQualification = source.indexOf(
+      "connectionIpc?.isCurrentDocumentNavigation(created, navigationUrl)",
+      failedLoadCatch,
+    );
+    const rethrow = source.indexOf("throw error;", failedLoadQualification);
     const restore = source.indexOf("if (created.isMinimized()) created.restore();", load);
     const show = source.indexOf("created.show();", load);
     const focus = source.indexOf("created.focus();", load);
@@ -625,12 +632,15 @@ describe("desktop residency", () => {
 
     expect(source).not.toContain('created.once("ready-to-show"');
     expect(creationStart).toBeGreaterThanOrEqual(0);
-    expect(load).toBeGreaterThan(creationStart);
+    expect(prepare).toBeGreaterThan(creationStart);
+    expect(load).toBeGreaterThan(prepare);
+    expect(failedLoadCatch).toBeGreaterThan(load);
+    expect(failedLoadQualification).toBeGreaterThan(failedLoadCatch);
+    expect(rethrow).toBeGreaterThan(failedLoadQualification);
     expect(restore).toBeGreaterThan(load);
     expect(show).toBeGreaterThan(restore);
     expect(focus).toBeGreaterThan(show);
     expect(creationEnd).toBeGreaterThan(focus);
-    expect(source.slice(load, creationEnd)).not.toMatch(/\bcatch\b/);
     expect(residencyStart).toBeGreaterThan(creationEnd);
     expect(initialShow).toBeGreaterThan(residencyStart);
   });

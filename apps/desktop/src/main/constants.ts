@@ -4,6 +4,8 @@ export const DESKTOP_HOST = "app" as const;
 export const DESKTOP_RENDERER_ORIGIN = "enduragent://app" as const;
 export const DESKTOP_RENDERER_URL = "enduragent://app/index.html" as const;
 export const DESKTOP_CONNECTION_CHANNEL = "desktop:get-daemon-connection" as const;
+export const DESKTOP_DOCUMENT_REGISTRATION_CHANNEL =
+  "desktop:register-document-navigation" as const;
 export const DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL =
   "desktop:initial-setup-status-settled" as const;
 export const DESKTOP_TRANSCRIPT_PAGE_CHANNEL = "desktop:get-transcript-page" as const;

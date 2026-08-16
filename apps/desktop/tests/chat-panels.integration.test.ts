@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { isDesktopRendererUrl } from "../src/main/renderer-navigation.js";
 import {
   launchDesktopFixture,
   type DesktopFixtureScript,
@@ -1018,8 +1019,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       };
     `);
+    expect(isDesktopRendererUrl(initial.location)).toBe(true);
     expect(initial).toEqual({
-      location: "enduragent://app/index.html",
+      location: expect.any(String),
       bridgeKeys: [
         "acknowledgeTelegramGapWarning",
         "addTelegramAllowedSender",
