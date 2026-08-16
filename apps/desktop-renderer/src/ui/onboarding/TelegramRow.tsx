@@ -18,7 +18,7 @@ import {
   TELEGRAM_VERIFIED_PREFIX,
 } from "./copy.js";
 import {
-  BUTTON_DANGER_OUTLINE_SM,
+  BUTTON_DANGER_QUIET_SM,
   BUTTON_OUTLINE_SM,
   BUTTON_QUIET_SM,
   BUTTON_SOLID_SM,
@@ -470,7 +470,7 @@ export function TelegramRow(): ReactElement {
             <button
               ref={trigger}
               type="button"
-              className={BUTTON_DANGER_OUTLINE_SM}
+              className={BUTTON_DANGER_QUIET_SM}
               data-setup-delete="telegram"
               disabled={busy || (authoritativeCheckRequired && attempt?.action === "paste-token")}
               aria-expanded={panel === "delete"}

@@ -58,7 +58,7 @@ export const CONVERSATION_FIELDS: readonly ConversationFieldDefinition[] = [
   {
     field: "timezone",
     label: "Timezone",
-    help: "Use an IANA timezone, such as Europe/London. This is the current system truth.",
+    help: "Use an IANA timezone, such as Europe/London. Enduragent follows this computer’s timezone until you save one here, and keeps yours after that.",
     type: "text",
   },
   {

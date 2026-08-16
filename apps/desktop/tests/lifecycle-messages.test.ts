@@ -39,7 +39,15 @@ describe("desktop lifecycle messages", () => {
       "The background service could not start or its saved connection state could not be read. Quit Enduragent and reopen it. If the problem continues, restart your Mac before trying again.",
     ],
   ] as const)("gives %s a specific recovery path", (classification, title, content) => {
-    expect(startupRefusalCopy(classification)).toEqual({ title, content });
+    expect(startupRefusalCopy(classification, "darwin")).toEqual({ title, content });
+  });
+
+  it("uses Windows recovery guidance for an unpublished background service", () => {
+    expect(startupRefusalCopy("never-published", "win32")).toEqual({
+      title: "Enduragent couldn’t start its background service",
+      content:
+        "The background service could not start or its saved connection state could not be read. Quit Enduragent and reopen it. If the problem continues, restart your PC before trying again.",
+    });
   });
 
   it("keeps internal and sensitive details out of every refusal", () => {

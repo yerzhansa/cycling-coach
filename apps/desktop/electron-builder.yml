@@ -2,7 +2,7 @@ appId: icu.enduragent.desktop
 productName: Enduragent
 asar: true
 electronLanguages:
-  - en
+  - en-US
 directories:
   output: dist
 files:

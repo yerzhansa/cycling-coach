@@ -586,13 +586,36 @@ jobs:
           test "$ACTUAL_FILES" = "$EXPECTED_FILES"
           test "$(grep -c '^version:' "$PUBLIC_ENVELOPE/latest-mac.yml")" = '1'
           grep -q "^version: $DESKTOP_VERSION\$" "$PUBLIC_ENVELOPE/latest-mac.yml"
+          STABLE_DMG="$RUNNER_TEMP/Enduragent-arm64.dmg"
+          cp "$PUBLIC_ENVELOPE/Enduragent-$DESKTOP_VERSION-arm64.dmg" "$STABLE_DMG"
+          cmp -s "$PUBLIC_ENVELOPE/Enduragent-$DESKTOP_VERSION-arm64.dmg" "$STABLE_DMG"
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             "$PUBLIC_ENVELOPE/Enduragent-$DESKTOP_VERSION-arm64.dmg" \
             "$PUBLIC_ENVELOPE/Enduragent-$DESKTOP_VERSION-arm64.zip" \
             "$PUBLIC_ENVELOPE/Enduragent-$DESKTOP_VERSION-arm64.zip.blockmap" \
-            "$PUBLIC_ENVELOPE/latest-mac.yml"
-          ASSET_COUNT=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID" --jq '.assets | length')
-          test "$ASSET_COUNT" = '4'
+            "$PUBLIC_ENVELOPE/latest-mac.yml" \
+            "$STABLE_DMG"
+          EXPECTED_ASSETS=$(printf '%s\n' \
+            "Enduragent-$DESKTOP_VERSION-arm64.dmg" \
+            "Enduragent-$DESKTOP_VERSION-arm64.zip" \
+            "Enduragent-$DESKTOP_VERSION-arm64.zip.blockmap" \
+            Enduragent-arm64.dmg \
+            latest-mac.yml | LC_ALL=C sort)
+          RELEASE_ASSETS=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID")
+          ACTUAL_ASSETS=$(printf '%s' "$RELEASE_ASSETS" | jq -r '.assets[].name' | LC_ALL=C sort)
+          test "$ACTUAL_ASSETS" = "$EXPECTED_ASSETS"
+          VERSIONED_DMG_ASSET=$(printf '%s' "$RELEASE_ASSETS" | jq -er \
+            --arg name "Enduragent-$DESKTOP_VERSION-arm64.dmg" \
+            '.assets[] | select(.name == $name)')
+          STABLE_DMG_ASSET=$(printf '%s' "$RELEASE_ASSETS" | jq -er \
+            --arg name Enduragent-arm64.dmg \
+            '.assets[] | select(.name == $name)')
+          VERSIONED_DMG_DIGEST=$(printf '%s' "$VERSIONED_DMG_ASSET" | jq -er '.digest')
+          STABLE_DMG_DIGEST=$(printf '%s' "$STABLE_DMG_ASSET" | jq -er '.digest')
+          printf '%s' "$VERSIONED_DMG_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          test "$STABLE_DMG_DIGEST" = "$VERSIONED_DMG_DIGEST"
+          test "$(printf '%s' "$STABLE_DMG_ASSET" | jq -er '.size')" = \
+            "$(printf '%s' "$VERSIONED_DMG_ASSET" | jq -er '.size')"
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID" \
             -F draft=false --jq '.draft' | grep -q '^false$'
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_DRAFT_ID" \
@@ -607,8 +630,9 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
             SERVED=$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest-mac.yml" | sed -n 's/^version: //p' | head -1) || SERVED=''
-            if [ "$SERVED" = "$DESKTOP_VERSION" ]; then
-              echo "Production feed serves $SERVED"
+            if [ "$SERVED" = "$DESKTOP_VERSION" ] && \
+              curl -fsSIL "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/Enduragent-arm64.dmg" >/dev/null; then
+              echo "Production feed and stable DMG serve $SERVED"
               exit 0
             fi
             sleep 30

@@ -27,12 +27,29 @@ import {
 } from "../src/main/credential-vault.js";
 
 const roots: string[] = [];
+const posixIt = it.skipIf(process.platform === "win32");
 const VERIFICATION_APPROVAL = "b".repeat(64);
 
 async function temporaryRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "desktop-vault-"));
   roots.push(root);
   return join(root, "credentials-v1");
+}
+
+async function createSymlinkOrReturnWindowsCapabilityReason(
+  target: string,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    await symlink(target, path);
+    return undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
+      return `Windows symlink capability unavailable (${code})`;
+    }
+    throw error;
+  }
 }
 
 function encryption(): CredentialEncryptionPort {
@@ -58,9 +75,14 @@ async function storeEncryptedCredential(
   value: string,
   encryptionPort: CredentialEncryptionPort,
 ): Promise<void> {
-  await mkdir(root, { recursive: true, mode: CREDENTIAL_DIRECTORY_MODE });
-  await writeFile(join(root, `${slot}.bin`), encryptionPort.encryptString(value), {
-    mode: CREDENTIAL_FILE_MODE,
+  const vault = createCredentialVault({
+    root,
+    encryption: encryptionPort,
+    applyCredential: vi.fn(async () => undefined),
+  });
+  await expect(vault.writeCredential({ slot, value }, { activate: false })).resolves.toMatchObject({
+    slot,
+    status: "configured",
   });
 }
 
@@ -186,8 +208,10 @@ describe("desktop credential vault", () => {
     const path = join(root, "anthropic.bin");
     const file = await lstat(path);
     const ciphertext = await readFile(path);
-    expect(directory.mode & 0o777).toBe(CREDENTIAL_DIRECTORY_MODE);
-    expect(file.mode & 0o777).toBe(CREDENTIAL_FILE_MODE);
+    if (process.platform !== "win32") {
+      expect(directory.mode & 0o777).toBe(CREDENTIAL_DIRECTORY_MODE);
+      expect(file.mode & 0o777).toBe(CREDENTIAL_FILE_MODE);
+    }
     expect(ciphertext.length).toBeGreaterThan(0);
     expect(ciphertext.includes(Buffer.from(sentinel))).toBe(false);
     expect(await readdir(root)).toEqual(["anthropic.bin"]);
@@ -199,7 +223,7 @@ describe("desktop credential vault", () => {
     });
   });
 
-  it("anchors the credential namespace in its parent before publishing a credential", async () => {
+  posixIt("anchors the credential namespace in its parent before publishing a credential", async () => {
     const root = await temporaryRoot();
     let parentSyncAvailable = false;
     const syncCredentialParentDirectory = vi.fn(async (path: string) => {
@@ -233,7 +257,7 @@ describe("desktop credential vault", () => {
     expect(syncCredentialParentDirectory).toHaveBeenCalledTimes(2);
   });
 
-  it("zeros encryption and rollback buffers after success, refusal, and compensation", async () => {
+  posixIt("zeros encryption and rollback buffers after success, refusal, and compensation", async () => {
     const scenarios = ["success", "pre-rename", "compensation"] as const;
     for (const scenario of scenarios) {
       const root = await temporaryRoot();
@@ -324,13 +348,19 @@ describe("desktop credential vault", () => {
       status: "configured",
       runtimeReady: true,
     });
-    expect(openCredentialDirectory).toHaveBeenCalledWith(root, "r");
-    expect(sync).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
+    if (process.platform === "win32") {
+      expect(openCredentialDirectory).not.toHaveBeenCalled();
+      expect(sync).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+    } else {
+      expect(openCredentialDirectory).toHaveBeenCalledWith(root, "r");
+      expect(sync).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+    }
     expect(applyCredential).toHaveBeenCalledWith("anthropic", "synthetic-candidate");
   });
 
-  it("restores the previous ciphertext before refusing a post-rename durability failure", async () => {
+  posixIt("restores the previous ciphertext before refusing a post-rename durability failure", async () => {
     const root = await temporaryRoot();
     const encryptionPort = encryption();
     const seed = createCredentialVault({
@@ -370,7 +400,7 @@ describe("desktop credential vault", () => {
     expect(applyCredential).not.toHaveBeenCalled();
   });
 
-  it("reports uncertainty and blocks replay when credential convergence cannot be proven", async () => {
+  posixIt("reports uncertainty and blocks replay when credential convergence cannot be proven", async () => {
     const root = await temporaryRoot();
     const encryptionPort = encryption();
     const seed = createCredentialVault({
@@ -420,39 +450,29 @@ describe("desktop credential vault", () => {
     const root = await temporaryRoot();
     const encryptionPort = encryption();
     await storeEncryptedCredential(root, "anthropic", "synthetic-old", encryptionPort);
-    let releaseCandidateSync!: () => void;
-    const candidateSyncBlocked = new Promise<void>((resolve) => {
-      releaseCandidateSync = resolve;
+    let releaseReplacement!: () => void;
+    const replacementBlocked = new Promise<void>((resolve) => {
+      releaseReplacement = resolve;
     });
-    let candidateVisible!: () => void;
-    const candidateWasVisible = new Promise<void>((resolve) => {
-      candidateVisible = resolve;
+    let replacementStarted!: () => void;
+    const replacementWasStarted = new Promise<void>((resolve) => {
+      replacementStarted = resolve;
     });
-    let syncCount = 0;
     const writer = createCredentialVault({
       root,
       encryption: encryptionPort,
       applyCredential: vi.fn(async () => undefined),
-      syncCredentialDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 2) {
-          candidateVisible();
-          await candidateSyncBlocked;
-          throw new TypeError("synthetic candidate directory sync failure");
-        }
-        const directory = await open(root, "r");
-        try {
-          await directory.sync();
-        } finally {
-          await directory.close();
-        }
-      },
+      renameCredentialFile: (async () => {
+        replacementStarted();
+        await replacementBlocked;
+        throw new TypeError("synthetic replacement rename failure");
+      }) as never,
     });
     const write = writer.writeCredential({
       slot: "anthropic",
       value: "synthetic-candidate",
     });
-    await candidateWasVisible;
+    await replacementWasStarted;
 
     const applySuccessorCredential = vi.fn(async () => undefined);
     const successor = createCredentialVault({
@@ -470,7 +490,7 @@ describe("desktop credential vault", () => {
     expect(replaySettled).toBe(false);
     expect(applySuccessorCredential).not.toHaveBeenCalled();
 
-    releaseCandidateSync();
+    releaseReplacement();
     await expect(write).resolves.toEqual({
       slot: "anthropic",
       status: "refused",
@@ -500,7 +520,7 @@ describe("desktop credential vault", () => {
     await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("reopens a visible old credential only after cleaning owned transients and syncing", async () => {
+  posixIt("reopens a visible old credential only after cleaning owned transients and syncing", async () => {
     const root = await temporaryRoot();
     const baseEncryption = encryption();
     await leaveAmbiguousCredential(root, "old", baseEncryption);
@@ -540,7 +560,7 @@ describe("desktop credential vault", () => {
     expect(syncCredentialDirectory).toHaveBeenCalledOnce();
   });
 
-  it("reopens a visible candidate only after syncing even when no transient remains", async () => {
+  posixIt("reopens a visible candidate only after syncing even when no transient remains", async () => {
     const root = await temporaryRoot();
     const baseEncryption = encryption();
     await leaveAmbiguousCredential(root, "candidate", baseEncryption);
@@ -570,7 +590,7 @@ describe("desktop credential vault", () => {
     expect(syncCredentialDirectory).toHaveBeenCalledOnce();
   });
 
-  it("keeps a reopened vault indeterminate when its durability barrier fails", async () => {
+  posixIt("keeps a reopened vault indeterminate when its durability barrier fails", async () => {
     const root = await temporaryRoot();
     const baseEncryption = encryption();
     await leaveAmbiguousCredential(root, "candidate", baseEncryption);
@@ -846,7 +866,7 @@ describe("desktop credential vault", () => {
     });
   });
 
-  it("reports deletion uncertainty when neither the visible delete nor restoration is durable", async () => {
+  posixIt("reports deletion uncertainty when neither the visible delete nor restoration is durable", async () => {
     const root = await temporaryRoot();
     const encryptionPort = encryption();
     await storeEncryptedCredential(root, "openrouter", "synthetic-old", encryptionPort);
@@ -886,22 +906,36 @@ describe("desktop credential vault", () => {
     expect((await readdir(root)).some((entry) => entry.endsWith(".deleted"))).toBe(true);
   });
 
-  it("fails closed for insecure directories and targets", async () => {
+  it("fails closed for insecure directories and targets", async ({ skip }) => {
     const root = await temporaryRoot();
     await mkdir(root, { mode: 0o755 });
     const vault = createCredentialVault({
       root,
       encryption: encryption(),
       applyCredential: vi.fn(),
+      clearCredential: vi.fn(async () => "cleared" as const),
     });
-    await expect(
-      vault.writeCredential({ slot: "anthropic", value: "synthetic" }),
-    ).resolves.toMatchObject({
-      status: "refused",
-      reason: "storage-failed",
+    const permissiveDirectoryWrite = vault.writeCredential({
+      slot: "anthropic",
+      value: "synthetic",
     });
-    await chmod(root, 0o700);
-    await symlink(join(root, "missing"), join(root, "anthropic.bin"));
+    if (process.platform === "win32") {
+      await expect(permissiveDirectoryWrite).resolves.toMatchObject({ status: "configured" });
+      await expect(vault.deleteCredential("anthropic")).resolves.toMatchObject({
+        status: "deleted",
+      });
+    } else {
+      await expect(permissiveDirectoryWrite).resolves.toMatchObject({
+        status: "refused",
+        reason: "storage-failed",
+      });
+      await chmod(root, 0o700);
+    }
+    const symlinkCapabilityReason = await createSymlinkOrReturnWindowsCapabilityReason(
+      join(root, "missing"),
+      join(root, "anthropic.bin"),
+    );
+    if (symlinkCapabilityReason) return skip(symlinkCapabilityReason);
     await expect(
       vault.writeCredential({ slot: "anthropic", value: "synthetic" }),
     ).resolves.toMatchObject({
@@ -926,12 +960,24 @@ describe("desktop credential vault", () => {
     });
     await rm(join(root, "anthropic.bin"), { recursive: true });
     await writeFile(join(root, "anthropic.bin"), "ciphertext", { mode: 0o644 });
-    await expect(
-      vault.writeCredential({ slot: "anthropic", value: "synthetic" }),
-    ).resolves.toMatchObject({
-      status: "refused",
-      reason: "storage-failed",
+    const permissiveFileWrite = vault.writeCredential({
+      slot: "anthropic",
+      value: "synthetic",
     });
+    if (process.platform === "win32") {
+      await expect(permissiveFileWrite).resolves.toMatchObject({ status: "configured" });
+      expect((await readFile(join(root, "anthropic.bin"))).includes("synthetic")).toBe(false);
+      await expect(vault.credentialStatuses()).resolves.toContainEqual({
+        slot: "anthropic",
+        state: "configured",
+        runtimeState: "active",
+      });
+    } else {
+      await expect(permissiveFileWrite).resolves.toMatchObject({
+        status: "refused",
+        reason: "storage-failed",
+      });
+    }
   });
 
   it("minimizes encryption backend failures without touching storage", async () => {

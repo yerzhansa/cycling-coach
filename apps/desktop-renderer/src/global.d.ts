@@ -52,6 +52,7 @@ interface EnduragentAuth {
     readonly senderId: number;
   }): Promise<DesktopTelegramAllowedSendersMutationResult>;
   acknowledgeTelegramGapWarning(): Promise<DesktopTelegramMutationResult>;
+  setAppearance(appearance: "system" | "light" | "dark"): void;
   chooseImportFiles(): Promise<readonly string[]>;
   exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;

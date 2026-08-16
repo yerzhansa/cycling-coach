@@ -80,6 +80,12 @@ interface FileIdentity {
   readonly ino: number | bigint;
 }
 
+interface TranscriptBoundaryRecovery {
+  readonly line: Buffer;
+  readonly resetId: string;
+  readonly tailLength: number;
+}
+
 class IncompleteTranscriptWriteError extends Error {
   constructor(readonly bytesWritten: number) {
     super("Transcript append was incomplete.");
@@ -407,6 +413,30 @@ function serializeTranscriptRecord(record: TranscriptRecord): Buffer {
     throw new TranscriptRecordTooLargeError();
   }
   return bytes;
+}
+
+function canonicalBoundaryLine(record: TranscriptConversationBoundaryRecord): Buffer {
+  const bytes = serializeTranscriptRecord(record);
+  return bytes.subarray(0, bytes.length - 1);
+}
+
+function isCanonicalBoundaryPrefix(prefix: Buffer, complete: Buffer): boolean {
+  return (
+    prefix.length > 0 &&
+    prefix.length <= complete.length &&
+    complete.subarray(0, prefix.length).equals(prefix)
+  );
+}
+
+function sameResetIntent(left: ResetIntentRecord, right: ResetIntentRecord): boolean {
+  return (
+    left.version === right.version &&
+    left.kind === right.kind &&
+    left.resetId === right.resetId &&
+    left.chatId === right.chatId &&
+    left.boundaryAt === right.boundaryAt &&
+    left.reason === right.reason
+  );
 }
 
 function parseCurrentWindow(contents: Buffer, chatId: string): CurrentTranscriptWindow {
@@ -1093,7 +1123,7 @@ export class TranscriptStore implements TranscriptWriterPort {
   ensureConversationBoundary(input: ResetIntentRecord): void {
     const intent = resetIntentRecord(input);
     const bytes = serializeTranscriptRecord(conversationBoundaryRecord(intent));
-    const before = this.boundaryCount(intent.chatId, intent.resetId);
+    const before = this.boundaryCount(intent.chatId, intent.resetId, intent);
     if (before > 1) {
       throw this.unsafeTarget("Transcript contains duplicate reset boundaries.");
     }
@@ -1101,20 +1131,30 @@ export class TranscriptStore implements TranscriptWriterPort {
       this.syncTranscriptFileAndDirectory(intent.chatId);
       return;
     }
-    this.appendRecord(intent.chatId, bytes, true);
+    this.appendRecord(intent.chatId, bytes, true, intent);
     if (this.boundaryCount(intent.chatId, intent.resetId) !== 1) {
       throw this.unsafeTarget("Conversation boundary was not durably persisted exactly once.");
     }
   }
 
-  private boundaryCount(chatId: string, resetId: string): number {
+  private boundaryCount(
+    chatId: string,
+    resetId: string,
+    recoveryIntent?: ResetIntentRecord,
+  ): number {
     return this.withDirectory((directoryDescriptor) => {
       const path = this.transcriptPath(chatId);
       const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);
       if (descriptor === null) return 0;
       try {
         const contents = this.readOpenedFile(directoryDescriptor, descriptor, path);
-        if (this.platform === "win32") this.assertWindowsTranscriptContent(contents, chatId);
+        if (this.platform === "win32") {
+          const recovery =
+            recoveryIntent === undefined
+              ? undefined
+              : this.authorizeBoundaryRecovery(directoryDescriptor, contents, recoveryIntent);
+          this.assertWindowsTranscriptContent(contents, chatId, recovery);
+        }
         let count = 0;
         let lineStart = 0;
         for (let index = 0; index < contents.length; index += 1) {
@@ -1143,25 +1183,35 @@ export class TranscriptStore implements TranscriptWriterPort {
     chatId: string,
     recordBytes: Buffer,
     classifyUnchangedBoundaryFailure = false,
+    recoveryIntent?: ResetIntentRecord,
   ): void {
     this.withDirectory((directoryDescriptor) => {
       const path = this.transcriptPath(chatId);
       const { descriptor, created } = this.openForAppend(directoryDescriptor, path);
       const beforeAppend = fstatSync(descriptor);
       try {
+        let recovery: TranscriptBoundaryRecovery | undefined;
         if (this.platform === "win32") {
           const existing = this.readSnapshot(directoryDescriptor, descriptor, path);
-          this.assertWindowsTranscriptContent(existing, chatId);
+          recovery =
+            recoveryIntent === undefined
+              ? undefined
+              : this.authorizeBoundaryRecovery(directoryDescriptor, existing, recoveryIntent);
+          this.assertWindowsTranscriptContent(existing, chatId, recovery);
         }
         let prefix = "";
-        if (beforeAppend.size > 0) {
+        if (beforeAppend.size > 0 && recovery === undefined) {
           const tail = Buffer.allocUnsafe(1);
           const bytesRead = readSync(descriptor, tail, 0, 1, beforeAppend.size - 1);
           if (bytesRead !== 1) throw new Error("Transcript tail could not be read.");
           if (tail[0] !== 0x0a) prefix = "\n";
         }
         const bytes =
-          prefix === "" ? recordBytes : Buffer.concat([Buffer.from(prefix), recordBytes]);
+          recovery !== undefined
+            ? recordBytes.subarray(recovery.tailLength)
+            : prefix === ""
+              ? recordBytes
+              : Buffer.concat([Buffer.from(prefix), recordBytes]);
         if (this.platform === "win32") {
           this.assertWindowsTranscriptSize(beforeAppend.size + bytes.length);
         }
@@ -1300,8 +1350,12 @@ export class TranscriptStore implements TranscriptWriterPort {
     });
   }
 
-  private assertWindowsTranscriptContent(contents: Buffer, chatId: string): void {
-    let contentValid = contents.length === 0;
+  private assertWindowsTranscriptContent(
+    contents: Buffer,
+    chatId: string,
+    recovery?: TranscriptBoundaryRecovery,
+  ): void {
+    let contentValid = true;
     let lineStart = 0;
     const resetIds = new Set<string>();
     for (let index = 0; index < contents.length; index += 1) {
@@ -1322,13 +1376,37 @@ export class TranscriptStore implements TranscriptWriterPort {
       }
       contentValid = true;
     }
-    if (lineStart !== contents.length) contentValid = false;
+    if (contentValid && lineStart !== contents.length) {
+      const tail = contents.subarray(lineStart);
+      contentValid =
+        recovery !== undefined &&
+        !resetIds.has(recovery.resetId) &&
+        isCanonicalBoundaryPrefix(tail, recovery.line);
+    }
     assertWindowsPrivatePathRead({
       bounded: contents.length <= MAX_TRANSCRIPT_FILE_BYTES,
       identityStable: true,
       contentValid,
       authenticatedHomeBinding: true,
     });
+  }
+
+  private authorizeBoundaryRecovery(
+    directoryDescriptor: DirectoryDescriptor,
+    contents: Buffer,
+    intent: ResetIntentRecord,
+  ): TranscriptBoundaryRecovery | undefined {
+    const line = canonicalBoundaryLine(conversationBoundaryRecord(intent));
+    const lastNewline = contents.lastIndexOf(0x0a);
+    const tail = contents.subarray(lastNewline + 1);
+    if (!isCanonicalBoundaryPrefix(tail, line)) return undefined;
+    const persisted = this.readIntentPath(
+      directoryDescriptor,
+      this.intentPath(intent.chatId),
+      intent.chatId,
+    );
+    if (persisted === null || !sameResetIntent(persisted, intent)) return undefined;
+    return { line, resetId: intent.resetId, tailLength: tail.length };
   }
 
   private readOpenedFile(
@@ -1720,24 +1798,7 @@ export class TranscriptStore implements TranscriptWriterPort {
       );
       if (descriptor === null) throw this.unsafeTarget();
       if (targetStats === null) {
-        if (this.platform === "win32") {
-          try {
-            const intent = parseResetIntent(
-              this.readOpenedFile(directoryDescriptor, descriptor, tempPath, allowedLinks),
-            );
-            if (
-              intent === null ||
-              this.chatDigest(intent.chatId) !== match[1] ||
-              intent.resetId !== match[2]
-            ) {
-              throw this.unsafeTarget();
-            }
-          } finally {
-            closeSync(descriptor);
-          }
-        } else {
-          closeSync(descriptor);
-        }
+        closeSync(descriptor);
         if (allowedLinks !== 1) throw this.unsafeTarget();
         this.unlinkPrivateFileIfPresent(directoryDescriptor, tempPath, 1);
         continue;

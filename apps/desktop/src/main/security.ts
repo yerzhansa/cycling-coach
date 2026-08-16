@@ -9,6 +9,7 @@ import {
   type Session,
   type WebContents,
 } from "electron";
+import { desktopWindowBackgroundColor, type DesktopResolvedTheme } from "./appearance.js";
 import {
   DESKTOP_HOST,
   DESKTOP_SCHEME,
@@ -128,7 +129,10 @@ export async function installDesktopProtocol(input: {
   });
 }
 
-export function desktopWindowOptions(preload: string): Electron.BrowserWindowConstructorOptions {
+export function desktopWindowOptions(
+  preload: string,
+  theme: DesktopResolvedTheme,
+): Electron.BrowserWindowConstructorOptions {
   if (!isAbsolute(preload)) throw new TypeError("preload path must be absolute");
   return {
     width: DESKTOP_WINDOW_WIDTH,
@@ -136,7 +140,7 @@ export function desktopWindowOptions(preload: string): Electron.BrowserWindowCon
     minWidth: DESKTOP_WINDOW_MIN_WIDTH,
     minHeight: DESKTOP_WINDOW_MIN_HEIGHT,
     show: false,
-    backgroundColor: "#f4f6f5",
+    backgroundColor: desktopWindowBackgroundColor(theme),
     webPreferences: {
       preload,
       contextIsolation: true,

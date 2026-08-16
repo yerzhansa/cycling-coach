@@ -22,6 +22,21 @@ const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const syntheticVersion = "2026.8.11";
 const readSyntheticManifest = async (_path: string, _encoding: "utf8"): Promise<string> =>
   `${JSON.stringify({ name: "@enduragent/desktop", version: syntheticVersion })}\n`;
+const verificationEvidence = Object.freeze({
+  artifact: Object.freeze({
+    name: `Enduragent-${syntheticVersion}-x64.exe`,
+    size: 4096,
+    sha256: "a".repeat(64),
+    peMachine: 0x014c as const,
+    nsisEnvelope: true as const,
+  }),
+  application: Object.freeze({
+    fileCount: 20,
+    directoryCount: 2,
+    manifestSha256: "b".repeat(64),
+    peMachine: 0x8664 as const,
+  }),
+});
 
 describe("Windows NSIS package plan", () => {
   it("seals every frozen identity value in the unsigned x64 NSIS plan", async () => {
@@ -148,7 +163,7 @@ describe("Windows NSIS package plan", () => {
     );
     const remove = vi.fn(async () => undefined);
     const build = vi.fn(async () => [expectedArtifact]);
-    const verifyWindowsPackage = vi.fn(async () => undefined);
+    const verifyWindowsPackage = vi.fn(async () => verificationEvidence);
     const stages: string[] = [];
     const result = await runWindowsPackage(
       { desktopRoot },
@@ -173,7 +188,14 @@ describe("Windows NSIS package plan", () => {
       force: true,
     });
     expect(build).toHaveBeenCalledWith(result.plan.builderOptions);
-    expect(verifyWindowsPackage).toHaveBeenCalledWith(expectedArtifact, { desktopRoot });
+    expect(verifyWindowsPackage).toHaveBeenCalledWith(
+      expectedArtifact,
+      join(desktopRoot, WINDOWS_PACKAGE_OUTPUT_DIRECTORY, "win-unpacked"),
+      { desktopRoot },
+    );
+    expect(result.evidence).toBe(verificationEvidence);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.artifacts)).toBe(true);
     expect(remove.mock.invocationCallOrder[0]).toBeLessThan(build.mock.invocationCallOrder[0]!);
     expect(build.mock.invocationCallOrder[0]).toBeLessThan(
       verifyWindowsPackage.mock.invocationCallOrder[0]!,
@@ -181,7 +203,7 @@ describe("Windows NSIS package plan", () => {
   });
 
   it("fails closed before verification when builder returns any other artifact set", async () => {
-    const verifyWindowsPackage = vi.fn(async () => undefined);
+    const verifyWindowsPackage = vi.fn(async () => verificationEvidence);
     await expect(
       runWindowsPackage(
         { desktopRoot },

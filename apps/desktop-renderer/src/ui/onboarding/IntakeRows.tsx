@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 import type { OnboardingActions, OnboardingSurfaceState } from "../../onboarding/controller.js";
 import { errorSection } from "../../onboarding/lanes.js";
 import { RETRY_INTAKE_SAVE_LABEL } from "./copy.js";
-import { SETUP_FIELD_CLASS, SETUP_LINK_BUTTON } from "./SetupCard.js";
+import { SETUP_LINK_BUTTON, SETUP_SELECT_CLASS } from "./SetupCard.js";
 import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
 import type { SetupPlacement } from "./OnboardingWizard.js";
 
@@ -26,7 +26,7 @@ function IntakeSelect(props: {
   return (
     <select
       id={props.id}
-      className={`${SETUP_FIELD_CLASS} w-[180px]`}
+      className={`${SETUP_SELECT_CLASS} w-[180px]`}
       disabled={props.disabled}
       value={props.value}
       aria-describedby={props.describedBy}

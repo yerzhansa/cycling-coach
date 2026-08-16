@@ -42,17 +42,20 @@ function setup(result: unknown = EXPORTED) {
     ),
   };
   const exporter = { export: vi.fn(async () => result) };
+  const log = vi.fn();
   const dispose = installDesktopTrainingExportIpc({
     ipcMain: ipcMain as never,
     currentWindow: () => window as never,
     dialog,
     exporter: () => exporter as never,
+    log,
   });
   return {
     handlers,
     ipcMain,
     dialog,
     exporter,
+    log,
     dispose,
     trusted: { sender: webContents, senderFrame: mainFrame },
   };
@@ -92,6 +95,30 @@ describe("desktop training export IPC", () => {
     expect(result).not.toHaveProperty("suggestedFilename");
     expect(result).not.toHaveProperty("contentType");
   });
+
+  it.each(["C:\\Users\\x\\Documents\\ride.fit", "C:/Users/x/Documents/ride.fit"])(
+    "passes the Windows save-dialog destination %s to the exporter",
+    async (destinationPath) => {
+      const subject = setup();
+      subject.dialog.showSaveDialog.mockResolvedValueOnce({
+        canceled: false,
+        filePath: destinationPath,
+      });
+
+      await expect(
+        subject.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(subject.trusted, {
+          kind: "activity",
+          canonicalActivityId: "a".repeat(64),
+          localDate: "1998-07-19",
+          format: "fit",
+        }),
+      ).resolves.toEqual({ status: "saved", byteLength: 4_096 });
+      expect(subject.exporter.export).toHaveBeenCalledWith(
+        expect.objectContaining({ destinationPath }),
+      );
+      expect(subject.log).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes a closed workout archive request and handles cancellation without daemon work", async () => {
     const subject = setup();
@@ -185,17 +212,20 @@ describe("desktop training export IPC", () => {
     await expect(
       malformed.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(malformed.trusted, request),
     ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(malformed.log).toHaveBeenCalledWith("desktop-training-export-failed stage=operation");
 
     const failed = setup();
     failed.exporter.export.mockRejectedValueOnce(new Error("private provider response"));
     await expect(
       failed.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(failed.trusted, request),
     ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(failed.log).toHaveBeenLastCalledWith("desktop-training-export-failed stage=operation");
 
     failed.dialog.showSaveDialog.mockRejectedValueOnce(new Error("private filesystem path"));
     await expect(
       failed.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(failed.trusted, request),
     ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(failed.log).toHaveBeenLastCalledWith("desktop-training-export-failed stage=dialog");
 
     failed.dialog.showSaveDialog.mockResolvedValueOnce({
       canceled: false,
@@ -203,6 +233,51 @@ describe("desktop training export IPC", () => {
     });
     await expect(
       failed.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(failed.trusted, request),
+    ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(failed.log).toHaveBeenLastCalledWith("desktop-training-export-failed stage=operation");
+    expect(failed.log).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify([...malformed.log.mock.calls, ...failed.log.mock.calls])).not.toContain(
+      "private",
+    );
+  });
+
+  it("does not inspect rejected values or let logging failures escape", async () => {
+    const request = {
+      kind: "activity",
+      canonicalActivityId: "a".repeat(64),
+      localDate: "1998-07-19",
+      format: "fit",
+    } as const;
+    const subject = setup();
+    const hostileError = new Error();
+    Object.defineProperty(hostileError, "message", {
+      get() {
+        throw new Error("message getter was inspected");
+      },
+    });
+    subject.exporter.export.mockRejectedValueOnce(hostileError);
+
+    await expect(
+      subject.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(subject.trusted, request),
+    ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(subject.log).toHaveBeenLastCalledWith("desktop-training-export-failed stage=operation");
+
+    subject.dialog.showSaveDialog.mockRejectedValueOnce({
+      toString() {
+        throw new Error("string conversion was attempted");
+      },
+    });
+    await expect(
+      subject.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(subject.trusted, request),
+    ).resolves.toEqual({ status: "refused", reason: "write-failed" });
+    expect(subject.log).toHaveBeenLastCalledWith("desktop-training-export-failed stage=dialog");
+
+    subject.log.mockImplementationOnce(() => {
+      throw new Error("logger unavailable");
+    });
+    subject.dialog.showSaveDialog.mockRejectedValueOnce(new Error("dialog unavailable"));
+    await expect(
+      subject.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!(subject.trusted, request),
     ).resolves.toEqual({ status: "refused", reason: "write-failed" });
   });
 

@@ -160,6 +160,31 @@ describe("per-turn outcome line", () => {
     expect(lines[0].rateLimitAttempts).toBe(MAX_RATE_LIMIT_ATTEMPTS);
   });
 
+  it("a server token rejection emits exactly one auth failure outcome", async () => {
+    const complete = vi.fn(async () => {
+      throw Object.assign(new Error("unauthorized"), { httpStatus: 401 });
+    });
+    const agent = await setupAgent(complete);
+
+    const outcome = await agent.chat("auth-fail-chat", "hello").then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(complete).toHaveBeenCalledTimes(2);
+    const lines = readOutcomeLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      chatId: "auth-fail-chat",
+      ok: false,
+      error_class: "auth",
+      overflowAttempts: 0,
+      timeoutAttempts: 0,
+      rateLimitAttempts: 0,
+    });
+  });
+
   it("a retried-then-succeeded turn emits one ok:true line with the recovery counters", async () => {
     let mainCalls = 0;
     const complete = vi.fn(async (params: { system?: string }) => {
@@ -298,4 +323,3 @@ describe("per-turn outcome line", () => {
     await expect(agent.chat("sink-chat", "hello")).resolves.toBe("all good");
   });
 });
-

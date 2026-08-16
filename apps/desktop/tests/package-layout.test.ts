@@ -118,6 +118,22 @@ afterEach(async () => {
   );
 });
 
+async function createSymlinkOrReturnWindowsCapabilityReason(
+  target: string,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    await symlink(target, path);
+    return undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) {
+      return `Windows symlink capability unavailable (${code})`;
+    }
+    throw error;
+  }
+}
+
 function checksum(bytes: Buffer): Buffer {
   return Buffer.from(`${createHash("sha256").update(bytes).digest("hex")}  matrix.json\n`);
 }
@@ -131,7 +147,7 @@ function builderYaml(
     "productName: Enduragent",
     "asar: true",
     "electronLanguages:",
-    "  - en",
+    "  - en-US",
     "directories:",
     "  output: dist",
     "files:",
@@ -575,7 +591,7 @@ describe("desktop package layout", () => {
 
   it("pins the sole audited Electron locale", async () => {
     const fixture = await syntheticPackage();
-    const yaml = builderYaml().replace("electronLanguages:\n  - en\n", "");
+    const yaml = builderYaml().replace("electronLanguages:\n  - en-US\n", "");
     await writeFile(join(fixture.desktop, "electron-builder.yml"), yaml);
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
@@ -583,7 +599,15 @@ describe("desktop package layout", () => {
 
     await writeFile(
       join(fixture.desktop, "electron-builder.yml"),
-      builderYaml().replace("  - en\n", "  - en\n  - fr\n"),
+      builderYaml().replace("  - en-US\n", "  - en-US\n  - fr\n"),
+    );
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("invalid builder packaging authority");
+
+    await writeFile(
+      join(fixture.desktop, "electron-builder.yml"),
+      builderYaml().replace("  - en-US\n", "  - en\n"),
     );
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
@@ -874,7 +898,7 @@ describe("desktop package layout", () => {
     ).rejects.toThrow("undeclared package resource");
   });
 
-  it("rejects undeclared locale directories and locale symlinks", async () => {
+  it("rejects undeclared locale directories and locale symlinks", async ({ skip }) => {
     const undeclared = await syntheticPackage();
     await mkdir(join(undeclared.resources, "fr.lproj"));
     await expect(
@@ -883,29 +907,38 @@ describe("desktop package layout", () => {
 
     const linked = await syntheticPackage();
     await rm(join(linked.resources, "en.lproj"), { recursive: true });
-    await symlink(linked.resources, join(linked.resources, "en.lproj"));
+    const symlinkCapabilityReason = await createSymlinkOrReturnWindowsCapabilityReason(
+      linked.resources,
+      join(linked.resources, "en.lproj"),
+    );
+    if (symlinkCapabilityReason) return skip(symlinkCapabilityReason);
     await expect(verifyPackageLayout(linked.app, { desktopRoot: linked.desktop })).rejects.toThrow(
       "symbolic links are forbidden",
     );
   });
 
-  it("requires app.asar to be a regular nonsymlink file", async () => {
+  it("requires app.asar to be a regular nonsymlink file", async ({ skip }) => {
     const fixture = await syntheticPackage();
     const archive = join(fixture.resources, "app.asar");
     const target = join(dirname(fixture.app), "saved.asar");
     await rename(archive, target);
-    await symlink(target, archive);
+    const symlinkCapabilityReason = await createSymlinkOrReturnWindowsCapabilityReason(
+      target,
+      archive,
+    );
+    if (symlinkCapabilityReason) return skip(symlinkCapabilityReason);
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
     ).rejects.toThrow("symbolic links are forbidden");
   });
 
-  it("recursively rejects external and unpacked symlinks", async () => {
+  it("recursively rejects external and unpacked symlinks", async ({ skip }) => {
     const external = await syntheticPackage();
-    await symlink(
+    const externalSymlinkCapabilityReason = await createSymlinkOrReturnWindowsCapabilityReason(
       join(external.externalPackaged, "matrix.json"),
       join(external.externalPackaged, "matrix-link.json"),
     );
+    if (externalSymlinkCapabilityReason) return skip(externalSymlinkCapabilityReason);
     await expect(
       verifyPackageLayout(external.app, { desktopRoot: external.desktop }),
     ).rejects.toThrow("symbolic links are forbidden");
@@ -913,7 +946,11 @@ describe("desktop package layout", () => {
     const unpacked = await syntheticPackage();
     const unpackedRoot = join(unpacked.resources, "app.asar.unpacked");
     await mkdir(unpackedRoot);
-    await symlink(unpackedRoot, join(unpackedRoot, "loop"));
+    const unpackedSymlinkCapabilityReason = await createSymlinkOrReturnWindowsCapabilityReason(
+      unpackedRoot,
+      join(unpackedRoot, "loop"),
+    );
+    if (unpackedSymlinkCapabilityReason) return skip(unpackedSymlinkCapabilityReason);
     await expect(
       verifyPackageLayout(unpacked.app, { desktopRoot: unpacked.desktop }),
     ).rejects.toThrow("symbolic links are forbidden");

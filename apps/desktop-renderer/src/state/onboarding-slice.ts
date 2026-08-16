@@ -70,6 +70,18 @@ export function setupBlocked(state: Pick<EnduragentState, "onboarding" | "settin
   return setupDisposition(state) !== "satisfied";
 }
 
+export function setupSurfaceOnScreen(
+  state: Pick<EnduragentState, "activeView" | "onboarding" | "settings">,
+): boolean {
+  return setupBlocked(state) || state.activeView === "settings";
+}
+
+export function rideImportStatusSuppressed(
+  state: Pick<EnduragentState, "activeView" | "onboarding" | "rideImportSuppressed" | "settings">,
+): boolean {
+  return state.rideImportSuppressed && setupSurfaceOnScreen(state);
+}
+
 export const createOnboardingSlice: StateCreator<EnduragentState, [], [], OnboardingSlice> = (
   set,
 ) => ({

@@ -300,12 +300,11 @@ describe("Desktop Telegram IPC", () => {
     expect(runtime.coordinator.replace).toHaveBeenCalledWith(TOKEN);
   });
 
-  it.each([
-    ["encryption-unavailable" as const, false, undefined],
-    ["unsafe-backend" as const, true, "basic_text"],
-  ])(
-    "routes a reopened real-vault %s paste through replacement",
-    async (reason, available, backend) => {
+  for (const [run, reason, available, backend] of [
+    [it, "encryption-unavailable" as const, false, undefined],
+    [it.skipIf(process.platform === "win32"), "unsafe-backend" as const, true, "basic_text"],
+  ] as const) {
+    run(`routes a reopened real-vault ${reason} paste through replacement`, async () => {
       const base = await mkdtemp(join(await realpath(tmpdir()), "telegram-ipc-secure-storage-"));
       try {
         const homePath = join(base, "athlete-home");
@@ -332,6 +331,7 @@ describe("Desktop Telegram IPC", () => {
         ).resolves.toMatchObject({ outcome: "applied" });
         const reopened = createTelegramCredentialVault({
           ...value,
+          ...(backend === undefined ? {} : { platform: "linux" as const }),
           encryption: {
             ...encryption,
             isEncryptionAvailable: () => available,
@@ -356,8 +356,8 @@ describe("Desktop Telegram IPC", () => {
       } finally {
         await rm(base, { recursive: true, force: true });
       }
-    },
-  );
+    });
+  }
 
   it("passes through refused and uncertain credential outcomes without inferring success from health", async () => {
     const refused = setup({ configured: true });

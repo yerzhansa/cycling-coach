@@ -1,6 +1,11 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  onboardingStatusRetryDelayMs,
+  ONBOARDING_STATUS_COLD_START_TIMEOUT_MS,
+  ONBOARDING_STATUS_LOAD_ATTEMPTS,
+  ONBOARDING_STATUS_RETRY_BASE_DELAY_MS,
+} from "../src/onboarding/controller.js";
 import { setupReady } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { SetupPanel } from "../src/ui/onboarding/OnboardingWizard.js";
@@ -21,6 +26,12 @@ const savedIntake = {
   clinician_cleared: false,
   injury_status: "managing",
 } as const;
+
+const COLD_START_WINDOW_MS =
+  ONBOARDING_STATUS_COLD_START_TIMEOUT_MS * ONBOARDING_STATUS_LOAD_ATTEMPTS +
+  Array.from({ length: ONBOARDING_STATUS_LOAD_ATTEMPTS }, (_unused, attempt) =>
+    onboardingStatusRetryDelayMs(attempt),
+  ).reduce((total, delay) => total + delay, 0);
 
 function readinessBadge(): HTMLElement {
   const badge = document.querySelector<HTMLElement>("[data-setup-readiness]");
@@ -358,57 +369,113 @@ describe("authoritative setup readiness", () => {
     wizard.controller.dispose();
   });
 
-  it("shows only gate recovery for unavailable setup status and keeps Settings rows", async () => {
-    const user = userEvent.setup();
-    const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
-    bridge.getSetupStatus = vi
-      .fn()
-      .mockRejectedValueOnce(new TypeError("synthetic setup read failure"))
-      .mockResolvedValueOnce({
-        schemaVersion: 1 as const,
-        intake: savedIntake,
-        durableTrainingData: true,
+  it("retries a cold start before it calls setup status unavailable, and recovers through Retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+      let setupReadFails = true;
+      bridge.getSetupStatus = vi.fn(async () => {
+        if (setupReadFails) throw new TypeError("synthetic setup read failure");
+        return { schemaVersion: 1 as const, intake: savedIntake, durableTrainingData: true };
       });
-    const wizard = mountWizard({ bridge });
-    await wizard.open();
+      const wizard = mountWizard({ bridge });
 
-    expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(true);
-    expect(setupReady(useEnduragentStore.getState())).toBe(false);
-    expect(
-      screen.getByText(
-        "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.",
-      ),
-    ).toBeInTheDocument();
-    expect(document.querySelector("[data-setup-readiness]")).toBeNull();
-    expect(document.querySelector("[data-setup-card]")).toBeNull();
-    expect(document.querySelector("[data-setup-row]")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
-    expect(screen.queryByText("Loading saved credentials…")).toBeNull();
+      await act(async () => {
+        const opening = wizard.controller.open();
+        await vi.advanceTimersByTimeAsync(COLD_START_WINDOW_MS);
+        await opening;
+      });
 
-    wizard.rendered.rerender(<SetupPanel placement="settings" />);
+      expect(bridge.getSetupStatus).toHaveBeenCalledTimes(ONBOARDING_STATUS_LOAD_ATTEMPTS);
+      expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(true);
+      expect(setupReady(useEnduragentStore.getState())).toBe(false);
+      expect(
+        screen.getByText(
+          "Setup status couldn’t be loaded. Check that Enduragent is running, then try again.",
+        ),
+      ).toBeInTheDocument();
+      expect(document.querySelector("[data-setup-readiness]")).toBeNull();
+      expect(document.querySelector("[data-setup-card]")).toBeNull();
+      expect(document.querySelector("[data-setup-row]")).toBeNull();
+      expect(document.querySelector('[data-setup-trigger="ai"]')).toBeNull();
+      expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
+      expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
+      expect(screen.queryByText("Loading saved credentials…")).toBeNull();
 
-    expect(document.querySelector("[data-setup-card]")).not.toBeNull();
-    expect(document.querySelector<HTMLButtonElement>('[data-setup-trigger="ai"]')).toBeDisabled();
-    expect(
-      document.querySelector<HTMLButtonElement>('[data-setup-trigger="training"]'),
-    ).toBeDisabled();
-    expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
+      wizard.rendered.rerender(<SetupPanel placement="settings" />);
 
-    await user.click(screen.getByRole("button", { name: "Retry setup status" }));
+      expect(document.querySelector("[data-setup-card]")).not.toBeNull();
+      expect(document.querySelector('[data-setup-trigger="ai"]')).toBeNull();
+      expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
+      expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
 
-    await waitFor(() => {
+      setupReadFails = false;
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry setup status" }));
+        await vi.advanceTimersByTimeAsync(COLD_START_WINDOW_MS);
+      });
+
       expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(false);
       expect(setupReady(useEnduragentStore.getState())).toBe(true);
-    });
-    expect(bridge.getSetupStatus).toHaveBeenCalledTimes(2);
-    expect(screen.queryByRole("button", { name: "Retry setup status" })).toBeNull();
-    expect(document.querySelector<HTMLButtonElement>('[data-setup-trigger="ai"]')).toBeEnabled();
-    expect(
-      document.querySelector<HTMLButtonElement>('[data-setup-trigger="training"]'),
-    ).toBeEnabled();
-    expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeEnabled();
-    wizard.controller.dispose();
+      expect(bridge.getSetupStatus).toHaveBeenCalledTimes(ONBOARDING_STATUS_LOAD_ATTEMPTS + 1);
+      expect(screen.queryByRole("button", { name: "Retry setup status" })).toBeNull();
+      expect(document.querySelector<HTMLButtonElement>('[data-setup-trigger="ai"]')).toBeEnabled();
+      expect(
+        document.querySelector<HTMLButtonElement>('[data-setup-trigger="training"]'),
+      ).toBeEnabled();
+      expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeEnabled();
+      wizard.controller.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reaches the configured state with no user input when the daemon answers late", async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
+      let daemonStarting = true;
+      const getSetupStatus = vi.fn(async () => {
+        if (daemonStarting) throw new TypeError("coach daemon is still starting");
+        return { schemaVersion: 1 as const, intake: savedIntake, durableTrainingData: true };
+      });
+      bridge.getSetupStatus = getSetupStatus;
+      const wizard = mountWizard({ bridge });
+
+      const opening = act(async () => {
+        await wizard.controller.open();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ONBOARDING_STATUS_RETRY_BASE_DELAY_MS);
+      });
+
+      expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(false);
+      expect(document.querySelector('[data-setup-row="ai"]')).toHaveAttribute("data-state", "none");
+      expect(document.querySelector('[data-setup-row="training"]')).toHaveAttribute(
+        "data-state",
+        "none",
+      );
+      expect(document.body.textContent).not.toContain("Required · where your rides come from");
+      expect(document.body.textContent).not.toContain("Required — Enduragent doesn't include one");
+      expect(readinessBadge()).toHaveTextContent("Checking setup…");
+      expect(readinessBadge()).not.toHaveTextContent("0 of 3 required ready");
+
+      daemonStarting = false;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(COLD_START_WINDOW_MS);
+      });
+      await opening;
+
+      expect(useEnduragentStore.getState().onboarding.loadUnavailable).toBe(false);
+      expect(setupReady(useEnduragentStore.getState())).toBe(true);
+      expect(readinessBadge()).toHaveTextContent("3 of 3 required ready");
+      expect(screen.queryByRole("button", { name: "Retry setup status" })).toBeNull();
+      expect(getSetupStatus.mock.calls.length).toBeGreaterThan(1);
+      wizard.controller.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retains unsaved provider and intake drafts across an unavailable refresh and retry", async () => {

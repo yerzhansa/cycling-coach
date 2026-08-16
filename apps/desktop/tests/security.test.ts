@@ -256,7 +256,7 @@ describe("desktop security boundary", () => {
   });
 
   it("uses the exact hardened BrowserWindow preferences", () => {
-    expect(desktopWindowOptions("/synthetic/out/preload/index.cjs")).toEqual({
+    expect(desktopWindowOptions("/synthetic/out/preload/index.cjs", "light")).toEqual({
       width: 1180,
       height: 820,
       minWidth: 760,
@@ -272,6 +272,15 @@ describe("desktop security boundary", () => {
         allowRunningInsecureContent: false,
       },
     });
+  });
+
+  it("paints the window with the resolved theme background before first paint", () => {
+    expect(desktopWindowOptions("/synthetic/out/preload/index.cjs", "dark").backgroundColor).toBe(
+      "#0f1520",
+    );
+    expect(desktopWindowOptions("/synthetic/out/preload/index.cjs", "light").backgroundColor).toBe(
+      "#f4f6f5",
+    );
   });
 
   it("always denies renderer navigation, new windows, and permissions", () => {

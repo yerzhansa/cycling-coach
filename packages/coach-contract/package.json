@@ -14,7 +14,7 @@
   ],
   "license": "MIT",
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && tsc --emitDeclarationOnly",
     "check": "tsc --noEmit",
     "test": "vitest run"
   },

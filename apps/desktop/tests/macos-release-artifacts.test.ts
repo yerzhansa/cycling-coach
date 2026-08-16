@@ -68,7 +68,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("safe macOS release verification diagnostics", () => {
+describe.skipIf(process.platform === "win32")("safe macOS release verification diagnostics", () => {
   it("reports only failures created by the release verifier", async () => {
     let verificationFailure: unknown;
     try {
@@ -348,7 +348,7 @@ async function signedIdentityFixture() {
   return { baseline, candidate, executeFile, extractAsarFile, metadata };
 }
 
-describe("macOS signed identity continuity", () => {
+describe.skipIf(process.platform === "win32")("macOS signed identity continuity", () => {
   it("inspects one marked release application through the canonical native identity pipeline", async () => {
     const fixture = await signedIdentityFixture();
     const uncacheAsar = vi.fn(uncache);
@@ -1365,7 +1365,7 @@ async function packagedApplicationFixture(
   };
 }
 
-describe("macOS packaged application identity binding", () => {
+describe.skipIf(process.platform === "win32")("macOS packaged application identity binding", () => {
   it("binds both mandatory packaged applications to the loose candidate before cleanup", async () => {
     const fixture = await packagedApplicationFixture();
 
@@ -1835,7 +1835,7 @@ describe("macOS packaged application identity binding", () => {
   });
 });
 
-describe("macOS release artifact envelope", () => {
+describe.skipIf(process.platform === "win32")("macOS release artifact envelope", () => {
   it("verifies artifacts, the loose candidate, and packaged applications as one envelope", async () => {
     const fixture = await releaseFixture();
     const baselineApplication = "/synthetic/baseline/Enduragent.app";

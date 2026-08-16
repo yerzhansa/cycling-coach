@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, type ReactElement } from "react";
-import { BUTTON_COMPACT_QUIET_SM, BUTTON_DANGER_OUTLINE_SM } from "./buttons.js";
+import { BUTTON_COMPACT_QUIET_SM, BUTTON_DANGER_SOLID_SM } from "./buttons.js";
 
 export type InlineConfirmationFocus = "cancel" | "confirm" | null;
 
@@ -90,7 +90,7 @@ export function InlineConfirmation(props: {
           <button
             type="button"
             ref={confirm}
-            className={`${BUTTON_DANGER_OUTLINE_SM} aria-disabled:opacity-50`}
+            className={BUTTON_DANGER_SOLID_SM}
             disabled={props.confirmBusy ? false : props.confirmDisabled}
             aria-disabled={props.confirmBusy ? "true" : undefined}
             aria-label={props.confirmAriaLabel}

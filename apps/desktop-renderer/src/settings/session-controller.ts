@@ -243,6 +243,11 @@ function reconcileDraft(
   return next;
 }
 
+function saveErrorReason(error: unknown): "request-failed" | "not-applied" {
+  if (error instanceof CoachClientProtocolError) return "not-applied";
+  return "request-failed";
+}
+
 function buildSessionPatch(
   form: SessionSettingsFormState,
 ): NonNullable<ConfigureRuntimeRpcParams["session"]> {
@@ -379,7 +384,7 @@ export function createSessionSettingsController(input: {
             ...editable,
             status: "error",
             kind: "save",
-            reason: error instanceof CoachClientProtocolError ? "not-applied" : "request-failed",
+            reason: saveErrorReason(error),
           });
         },
       )

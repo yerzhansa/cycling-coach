@@ -7,15 +7,10 @@
  *
  * Usage: tsx tools/generate-sport-skills.ts <pkgDir>
  */
-import { readdirSync, writeFileSync, renameSync, mkdtempSync } from "node:fs";
-import { join, basename } from "node:path";
-import { tmpdir } from "node:os";
+import { readdirSync, writeFileSync, renameSync, mkdtempSync, rmSync } from "node:fs";
+import { join, basename, dirname } from "node:path";
 
-const pkgDir = process.argv[2];
-if (!pkgDir) {
-  console.error("usage: generate-sport-skills.ts <packageDirectory>");
-  process.exit(1);
-}
+const pkgDir = process.argv[2] ?? process.cwd();
 
 const skillsDir = join(pkgDir, "skills");
 const targetFile = join(pkgDir, "src", "skills.generated.ts");
@@ -43,9 +38,13 @@ ${arr}
 
 // Atomic write (PG-14): tmp file + rename so a partial write never leaves
 // a half-baked skills.generated.ts on disk.
-const tmpDir = mkdtempSync(join(tmpdir(), "sport-skills-"));
-const tmpFile = join(tmpDir, "skills.generated.ts");
-writeFileSync(tmpFile, content, "utf-8");
-renameSync(tmpFile, targetFile);
+const tmpDir = mkdtempSync(join(dirname(targetFile), ".sport-skills-"));
+try {
+  const tmpFile = join(tmpDir, "skills.generated.ts");
+  writeFileSync(tmpFile, content, "utf-8");
+  renameSync(tmpFile, targetFile);
+} finally {
+  rmSync(tmpDir, { recursive: true, force: true });
+}
 
 console.log(`Wrote ${skills.length} skills to ${targetFile}`);
