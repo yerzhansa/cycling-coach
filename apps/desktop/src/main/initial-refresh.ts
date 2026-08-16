@@ -23,6 +23,20 @@ export function shouldReleaseInitialRefreshAfterLoadFailure(
   return mainFrame && errorCode !== -3;
 }
 
+export function shouldReleaseInitialRefreshAfterLoadRejection(error: unknown): boolean {
+  if (error === null || typeof error !== "object") return true;
+  const rejection = error as { readonly code?: unknown; readonly errno?: unknown };
+  return rejection.errno !== -3 && rejection.code !== "ERR_ABORTED";
+}
+
+export function shouldReleaseInitialRefreshForWindowEvent<Window>(
+  currentWindow: Window | null,
+  eventWindow: Window,
+  currentDocument = true,
+): boolean {
+  return currentWindow === eventWindow && currentDocument;
+}
+
 export function createDesktopInitialRefreshCoordinator(input: {
   readonly currentConnection: () => InitialRefreshConnection;
   readonly startInitialRefresh: (

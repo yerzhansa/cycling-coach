@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDesktopInitialRefreshCoordinator,
   shouldReleaseInitialRefreshAfterLoadFailure,
+  shouldReleaseInitialRefreshAfterLoadRejection,
+  shouldReleaseInitialRefreshForWindowEvent,
 } from "../src/main/initial-refresh.js";
 
 function connection(generation: number, port = 45_000 + generation) {
@@ -47,6 +49,30 @@ describe("desktop initial refresh coordinator", () => {
     expect(shouldReleaseInitialRefreshAfterLoadFailure(-105, false)).toBe(false);
   });
 
+  it("releases only for genuine load promise rejections", () => {
+    expect(
+      shouldReleaseInitialRefreshAfterLoadRejection(
+        Object.assign(new Error("aborted"), { errno: -3, code: "ERR_ABORTED" }),
+      ),
+    ).toBe(false);
+    expect(shouldReleaseInitialRefreshAfterLoadRejection({ errno: -3 })).toBe(false);
+    expect(shouldReleaseInitialRefreshAfterLoadRejection({ code: "ERR_ABORTED" })).toBe(false);
+    expect(shouldReleaseInitialRefreshAfterLoadRejection(new Error("failed"))).toBe(true);
+  });
+
+  it("releases window events only for the current window and document", () => {
+    const oldWindow = {};
+    const currentWindow = {};
+
+    expect(shouldReleaseInitialRefreshForWindowEvent(currentWindow, oldWindow)).toBe(false);
+    expect(shouldReleaseInitialRefreshForWindowEvent(currentWindow, currentWindow, false)).toBe(
+      false,
+    );
+    expect(shouldReleaseInitialRefreshForWindowEvent(currentWindow, currentWindow, true)).toBe(
+      true,
+    );
+  });
+
   it("wires the visible, background, recovery, close, and render-gone barriers in main", () => {
     const source = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
     const initialArm = source.indexOf("initialRefreshCoordinator.arm(initialRefreshConnection)");
@@ -63,7 +89,7 @@ describe("desktop initial refresh coordinator", () => {
       serviceManagedRecovery,
     );
     const serviceManagedLoad = source.indexOf(
-      "visibleWindow.loadURL(navigationUrl)",
+      "startRendererNavigation(visibleWindow, navigationUrl)",
       serviceManagedPrepare,
     );
     const serviceManagedReturn = source.indexOf("return;", serviceManagedLoad);
@@ -72,16 +98,28 @@ describe("desktop initial refresh coordinator", () => {
       serviceManagedReturn,
     );
     const recoveryArm = source.indexOf("initialRefreshCoordinator.prepareRecovery({");
-    const recoveryLoad = source.indexOf("visibleWindow!.loadURL(navigationUrl!)", recoveryArm);
+    const recoveryLoad = source.indexOf(
+      "startRendererNavigation(visibleWindow!, navigationUrl!)",
+      recoveryArm,
+    );
     const windowClose = source.indexOf('created.once("closed"');
     const closeRelease = source.indexOf(
       "void initialRefreshCoordinator.releaseCurrent()",
       windowClose,
     );
+    const closeWindowGuard = source.indexOf("if (window === created)", windowClose);
     const renderGone = source.indexOf('created.webContents.on("render-process-gone"');
+    const goneWindowGuard = source.indexOf(
+      "shouldReleaseInitialRefreshForWindowEvent(",
+      renderGone,
+    );
+    const goneDocumentGuard = source.indexOf(
+      "connectionIpc?.isCurrentDocumentNavigation(",
+      goneWindowGuard,
+    );
     const goneRelease = source.indexOf(
       "void initialRefreshCoordinator.releaseCurrent()",
-      renderGone,
+      goneDocumentGuard,
     );
     const failedLoad = source.indexOf('created.webContents.on("did-fail-load"');
     const failedLoadQualification = source.indexOf(
@@ -100,14 +138,18 @@ describe("desktop initial refresh coordinator", () => {
     expect(backgroundRelease).toBeGreaterThan(residencyReady);
     expect(initialShow).toBeGreaterThan(backgroundRelease);
     expect(source).not.toContain(".reload()");
+    expect(source).toContain("shouldReleaseInitialRefreshAfterLoadRejection(error)");
     expect(serviceManagedPrepare).toBeGreaterThan(serviceManagedRecovery);
     expect(serviceManagedLoad).toBeGreaterThan(serviceManagedPrepare);
     expect(serviceManagedReturn).toBeGreaterThan(serviceManagedLoad);
     expect(recoveryPrepare).toBeGreaterThan(serviceManagedReturn);
     expect(recoveryArm).toBeGreaterThan(recoveryPrepare);
     expect(recoveryLoad).toBeGreaterThan(recoveryArm);
-    expect(closeRelease).toBeGreaterThan(windowClose);
-    expect(goneRelease).toBeGreaterThan(renderGone);
+    expect(closeWindowGuard).toBeGreaterThan(windowClose);
+    expect(closeRelease).toBeGreaterThan(closeWindowGuard);
+    expect(goneWindowGuard).toBeGreaterThan(renderGone);
+    expect(goneDocumentGuard).toBeGreaterThan(goneWindowGuard);
+    expect(goneRelease).toBeGreaterThan(goneDocumentGuard);
     expect(failedLoadQualification).toBeGreaterThan(failedLoad);
     expect(failedLoadRelease).toBeGreaterThan(failedLoadQualification);
   });

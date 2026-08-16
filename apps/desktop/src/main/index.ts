@@ -30,11 +30,17 @@ import {
 import {
   createDesktopInitialRefreshCoordinator,
   shouldReleaseInitialRefreshAfterLoadFailure,
+  shouldReleaseInitialRefreshAfterLoadRejection,
+  shouldReleaseInitialRefreshForWindowEvent,
 } from "./initial-refresh.js";
 import { bindDesktopAppUserModelId, createDesktopActivationRelay } from "./desktop-lifecycle.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import { isDesktopRendererUrl } from "./renderer-navigation.js";
+import {
+  createDesktopRendererNavigationTracker,
+  type DesktopRendererNavigation,
+} from "./renderer-navigation-load.js";
 import {
   createDesktopIntervalsCredentialVerifier,
   installDesktopIntervalsIpc,
@@ -387,8 +393,26 @@ async function runDesktop(): Promise<void> {
     });
     let window: BrowserWindow | null = null;
     let windowCreation: Promise<BrowserWindow> | undefined;
+    const rendererNavigationTracker = createDesktopRendererNavigationTracker<BrowserWindow>();
     const currentWindow = (): BrowserWindow | null =>
       window !== null && !window.isDestroyed() ? window : null;
+    const startRendererNavigation = (
+      target: BrowserWindow,
+      navigationUrl: string,
+    ): DesktopRendererNavigation<BrowserWindow> => {
+      const navigation = rendererNavigationTracker.start(target, navigationUrl, () =>
+        target.loadURL(navigationUrl),
+      );
+      void navigation.task.catch((error: unknown) => {
+        if (
+          shouldReleaseInitialRefreshAfterLoadRejection(error) &&
+          connectionIpc?.isCurrentDocumentNavigation(target, navigationUrl)
+        ) {
+          void initialRefreshCoordinator.releaseCurrent();
+        }
+      });
+      return navigation;
+    };
     type RuntimeBinding = {
       readonly authority: RuntimeConfigurationAuthority;
       readonly credentials: CredentialRuntimeApplication;
@@ -511,11 +535,7 @@ async function runDesktop(): Promise<void> {
                 visibleWindow,
                 current.generation,
               );
-              void visibleWindow.loadURL(navigationUrl).catch(() => {
-                if (connectionIpc?.isCurrentDocumentNavigation(visibleWindow, navigationUrl)) {
-                  void initialRefreshCoordinator.releaseCurrent();
-                }
-              });
+              startRendererNavigation(visibleWindow, navigationUrl);
             }
           }
           return;
@@ -529,11 +549,7 @@ async function runDesktop(): Promise<void> {
           rendererPresent: visibleWindow !== null,
         });
         if (recovery === "reload-required") {
-          void visibleWindow!.loadURL(navigationUrl!).catch(() => {
-            if (connectionIpc?.isCurrentDocumentNavigation(visibleWindow!, navigationUrl!)) {
-              void initialRefreshCoordinator.releaseCurrent();
-            }
-          });
+          startRendererNavigation(visibleWindow!, navigationUrl!);
         }
       },
     });
@@ -904,15 +920,26 @@ async function runDesktop(): Promise<void> {
               isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
           });
           created.once("closed", () => {
-            void initialRefreshCoordinator.releaseCurrent();
             if (window === created) {
               window = null;
               disposeOnboarding?.();
               disposeOnboarding = undefined;
+              void initialRefreshCoordinator.releaseCurrent();
             }
           });
           created.webContents.on("render-process-gone", () => {
-            void initialRefreshCoordinator.releaseCurrent();
+            if (
+              shouldReleaseInitialRefreshForWindowEvent(
+                currentWindow(),
+                created,
+                connectionIpc?.isCurrentDocumentNavigation(
+                  created,
+                  created.webContents.getURL(),
+                ) ?? false,
+              )
+            ) {
+              void initialRefreshCoordinator.releaseCurrent();
+            }
           });
           created.webContents.on(
             "did-fail-load",
@@ -929,14 +956,8 @@ async function runDesktop(): Promise<void> {
             created,
             daemonLifecycle!.connection().generation,
           );
-          try {
-            await created.loadURL(navigationUrl);
-          } catch (error) {
-            if (connectionIpc?.isCurrentDocumentNavigation(created, navigationUrl)) {
-              void initialRefreshCoordinator.releaseCurrent();
-            }
-            throw error;
-          }
+          const initialNavigation = startRendererNavigation(created, navigationUrl);
+          await rendererNavigationTracker.waitForCurrent(initialNavigation);
           if (!desktopAcceptanceHidden) {
             if (created.isMinimized()) created.restore();
             created.show();
