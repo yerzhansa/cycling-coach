@@ -29,8 +29,13 @@ export class AsyncMutex {
   }
 
   async runExclusive<T>(
-    fn: () => Promise<T>,
-    opts: { acquireTimeoutMs: number; hotWarnMs: number; caller: string },
+    fn: (lease: AbortSignal) => Promise<T>,
+    opts: {
+      acquireTimeoutMs: number;
+      hotWarnMs: number;
+      caller: string;
+      signal?: AbortSignal;
+    },
   ): Promise<{ kind: "ran"; value: T } | { kind: "timeout" }> {
     // Fail-loud at the boundary so future horizontal layers (Decision,
     // Heartbeat, Coaching Loop) can't silently misconfigure timing.
@@ -51,6 +56,7 @@ export class AsyncMutex {
         `AsyncMutex: hotWarnMs (${opts.hotWarnMs}) must be less than acquireTimeoutMs (${opts.acquireTimeoutMs}); the warn would never fire before the timeout`,
       );
     }
+    opts.signal?.throwIfAborted();
 
     const enqueuedAt = this.clock.now();
     const waiter: Waiter = {
@@ -66,26 +72,49 @@ export class AsyncMutex {
         hotWarnHandle = null;
       }
     };
+    let removeAbortListener = (): void => {};
+    const clearAcquireTimer = () => {
+      if (waiter.timeoutHandle !== null) {
+        this.clock.clearTimeout(waiter.timeoutHandle);
+        waiter.timeoutHandle = null;
+      }
+    };
+    const dequeueWaiter = () => {
+      const idx = this.waiters.indexOf(waiter);
+      if (idx >= 0) this.waiters.splice(idx, 1);
+    };
 
-    const acquired = await new Promise<boolean>((resolve) => {
+    const acquired = await new Promise<boolean>((resolve, reject) => {
       waiter.signalAcquired = () => {
         if (waiter.timedOut) return;
         waiter.acquired = true;
-        if (waiter.timeoutHandle !== null) {
-          this.clock.clearTimeout(waiter.timeoutHandle);
-          waiter.timeoutHandle = null;
-        }
+        clearAcquireTimer();
         clearHotWarn();
+        removeAbortListener();
         resolve(true);
       };
       waiter.timeoutHandle = this.clock.setTimeout(() => {
         if (waiter.acquired) return;
         waiter.timedOut = true;
         clearHotWarn();
-        const idx = this.waiters.indexOf(waiter);
-        if (idx >= 0) this.waiters.splice(idx, 1);
+        removeAbortListener();
+        dequeueWaiter();
         resolve(false);
       }, opts.acquireTimeoutMs);
+
+      const signal = opts.signal;
+      if (signal !== undefined) {
+        const onAbort = (): void => {
+          if (waiter.acquired || waiter.timedOut) return;
+          waiter.timedOut = true;
+          clearAcquireTimer();
+          clearHotWarn();
+          dequeueWaiter();
+          reject(signal.reason);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+      }
 
       if (this.heldBy === null) {
         this.heldBy = waiter;
@@ -107,10 +136,27 @@ export class AsyncMutex {
 
     if (!acquired) return { kind: "timeout" };
 
+    const lease = new AbortController();
+    let removeLeaseForward = (): void => {};
+    const signal = opts.signal;
+    if (signal !== undefined) {
+      const forward = (): void => lease.abort(signal.reason);
+      if (signal.aborted) {
+        forward();
+      } else {
+        signal.addEventListener("abort", forward, { once: true });
+        removeLeaseForward = () => signal.removeEventListener("abort", forward);
+      }
+    }
+
     try {
-      const value = await fn();
+      const value = await fn(lease.signal);
       return { kind: "ran", value };
     } finally {
+      removeLeaseForward();
+      if (!lease.signal.aborted) {
+        lease.abort(new Error(`AsyncMutex: lease released (caller=${opts.caller})`));
+      }
       if (this.heldBy === waiter) {
         this.heldBy = null;
         const next = this.waiters.shift();

@@ -302,39 +302,20 @@ export function createRunSync(
 
     let mutexResult;
     try {
-      let removeMutexAbort = (): void => {};
-      const mutexAbort = new Promise<"external_abort">((resolve) => {
-        if (opts.signal === undefined) return;
-        const abort = (): void => resolve("external_abort");
-        if (opts.signal.aborted) {
-          abort();
-          return;
-        }
-        opts.signal.addEventListener("abort", abort, { once: true });
-        removeMutexAbort = () => opts.signal?.removeEventListener("abort", abort);
-      });
-      let markMutexAcquired!: () => void;
-      const mutexAcquired = new Promise<"acquired">((resolve) => {
-        markMutexAcquired = () => resolve("acquired");
-      });
-      const mutexTask = deps.mutex.runExclusive(
-        async (): Promise<SyncResult> => {
-        markMutexAcquired();
+      mutexResult = await deps.mutex.runExclusive(
+        async (lease): Promise<SyncResult> => {
         opts.signal?.throwIfAborted();
         const controller = new AbortController();
-        let removeExternalAbort = (): void => {};
         const externalAbort = new Promise<"external_abort">((resolve) => {
-          if (opts.signal === undefined) return;
           const abort = (): void => {
-            controller.abort(opts.signal?.reason);
+            controller.abort(lease.reason);
             resolve("external_abort");
           };
-          if (opts.signal.aborted) {
+          if (lease.aborted) {
             abort();
             return;
           }
-          opts.signal.addEventListener("abort", abort, { once: true });
-          removeExternalAbort = () => opts.signal?.removeEventListener("abort", abort);
+          lease.addEventListener("abort", abort, { once: true });
         });
         let phase: ErrorPhase = "fetching";
         // Set synchronously the instant this cycle classifies the bundle as
@@ -535,7 +516,6 @@ export function createRunSync(
         ]);
 
         if (timerHandle !== undefined) clearTimeoutFn(timerHandle);
-        removeExternalAbort();
 
         if (winner === "external_abort") {
           void bodySettled.then(() => {
@@ -585,25 +565,9 @@ export function createRunSync(
           acquireTimeoutMs,
           hotWarnMs,
           caller: opts.caller ?? "scheduled",
+          signal: opts.signal,
         },
       );
-      const mutexOutcome = mutexTask.then(
-        (value) => ({ kind: "value" as const, value }),
-        (error: unknown) => ({ kind: "error" as const, error }),
-      );
-      let mutexWinner = await Promise.race([
-        mutexOutcome,
-        mutexAcquired.then(() => ({ kind: "acquired" as const })),
-        mutexAbort.then(() => ({ kind: "external_abort" as const })),
-      ]);
-      removeMutexAbort();
-      if (mutexWinner.kind === "external_abort") {
-        opts.signal?.throwIfAborted();
-        throw new Error("Reference sync aborted.");
-      }
-      if (mutexWinner.kind === "acquired") mutexWinner = await mutexOutcome;
-      if (mutexWinner.kind === "error") throw mutexWinner.error;
-      mutexResult = mutexWinner.value;
     } catch (err) {
       if (opts.signal?.aborted === true) throw err;
       // The mutex body re-throws an unguarded error (e.g. a gate or cache-write

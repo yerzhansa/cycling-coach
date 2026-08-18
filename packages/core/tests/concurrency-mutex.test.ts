@@ -194,6 +194,102 @@ describe("AsyncMutex.runExclusive", () => {
   });
 });
 
+describe("AsyncMutex.runExclusive — abort signal", () => {
+  it("rejects with the abort reason and never runs the body when the signal is pre-aborted", async () => {
+    const mutex = new AsyncMutex();
+    const controller = new AbortController();
+    const reason = new Error("pre-aborted");
+    controller.abort(reason);
+    const body = vi.fn(async () => "x");
+
+    await expect(
+      mutex.runExclusive(body, { ...opts, signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(body).not.toHaveBeenCalled();
+    expect(mutex.isHeld()).toBe(false);
+  });
+
+  it("rejects a queued waiter with the abort reason and removes it from the queue", async () => {
+    const mutex = new AsyncMutex();
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    const holder = mutex.runExclusive(async () => {
+      await holderGate;
+      return "holder";
+    }, opts);
+
+    const controller = new AbortController();
+    const reason = new Error("aborted while queued");
+    const queuedBody = vi.fn(async () => "queued");
+    const queued = mutex.runExclusive(queuedBody, { ...opts, signal: controller.signal });
+    const after = mutex.runExclusive(async () => "after", opts);
+
+    controller.abort(reason);
+    await expect(queued).rejects.toBe(reason);
+    expect(queuedBody).not.toHaveBeenCalled();
+
+    releaseHolder();
+    expect(await holder).toEqual({ kind: "ran", value: "holder" });
+    expect(await after).toEqual({ kind: "ran", value: "after" });
+    expect(mutex.isHeld()).toBe(false);
+  });
+
+  it("aborts the lease with the external reason mid-body without rejecting the run", async () => {
+    const mutex = new AsyncMutex();
+    const controller = new AbortController();
+    const reason = new Error("aborted mid-body");
+    let observedAborted: boolean | null = null;
+    let observedReason: unknown = null;
+
+    const result = await mutex.runExclusive(
+      async (lease) => {
+        expect(lease.aborted).toBe(false);
+        controller.abort(reason);
+        observedAborted = lease.aborted;
+        observedReason = lease.reason;
+        return "done";
+      },
+      { ...opts, signal: controller.signal },
+    );
+
+    expect(result).toEqual({ kind: "ran", value: "done" });
+    expect(observedAborted).toBe(true);
+    expect(observedReason).toBe(reason);
+    expect(mutex.isHeld()).toBe(false);
+  });
+
+  it("aborts the lease when the lock is released after a clean body", async () => {
+    const mutex = new AsyncMutex();
+    let lease!: AbortSignal;
+
+    const result = await mutex.runExclusive(async (l) => {
+      lease = l;
+      expect(l.aborted).toBe(false);
+      return "clean";
+    }, opts);
+
+    expect(result).toEqual({ kind: "ran", value: "clean" });
+    expect(lease.aborted).toBe(true);
+  });
+
+  it("aborts the lease when the lock is released after a throwing body", async () => {
+    const mutex = new AsyncMutex();
+    let lease!: AbortSignal;
+
+    await expect(
+      mutex.runExclusive(async (l) => {
+        lease = l;
+        throw new Error("body fail");
+      }, opts),
+    ).rejects.toThrow("body fail");
+
+    expect(lease.aborted).toBe(true);
+    expect(mutex.isHeld()).toBe(false);
+  });
+});
+
 describe("AsyncMutex.runExclusive — input validation (B2 from QA review)", () => {
   it("throws when acquireTimeoutMs is zero", async () => {
     const mutex = new AsyncMutex();
