@@ -1,10 +1,25 @@
-import { renameSync } from "node:fs";
-import { open, unlink } from "node:fs/promises";
+import { open, rename, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import {
   classifyWindowsPrivatePathFailure,
   type WindowsPrivatePathPolicyStage,
 } from "./windows-private-path-policy.js";
+
+const commitQueues = new Map<string, Promise<void>>();
+
+export async function enqueueCommit<T>(path: string, task: () => Promise<T>): Promise<T> {
+  const prev = commitQueues.get(path) ?? Promise.resolve();
+  const run = prev.then(task);
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  commitQueues.set(path, settled);
+  void settled.then(() => {
+    if (commitQueues.get(path) === settled) commitQueues.delete(path);
+  });
+  return run;
+}
 
 /**
  * Atomically write a JSON-serialized value to `path` via write-to-temp +
@@ -44,16 +59,16 @@ export async function atomicWriteJson(
     // live file mid-successor-cycle. So if aborted, drop the temp sibling and
     // return cleanly — the skip is a successful no-op, not an error. Checking
     // earlier would race the abort against the in-flight writeFile/sync.
-    if (opts?.signal?.aborted === true) {
-      try {
-        await unlink(tempPath);
-      } catch {
-        // Temp file may already be gone; best-effort cleanup.
-      }
+    stage = "rename";
+    const committed = await enqueueCommit(path, async () => {
+      if (opts?.signal?.aborted === true) return false;
+      await rename(tempPath, path);
+      return true;
+    });
+    if (!committed) {
+      await unlink(tempPath).catch(() => undefined);
       return;
     }
-    stage = "rename";
-    renameSync(tempPath, path);
   } catch (err) {
     if (fh !== null) {
       try {

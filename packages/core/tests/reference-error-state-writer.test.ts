@@ -10,6 +10,7 @@ import {
   clearErrorState,
   writeErrorState,
 } from "../src/reference/sync/error-state-writer.js";
+import { enqueueCommit } from "../src/io/atomic-write-json.js";
 
 describe("writeErrorState", () => {
   let dir: string;
@@ -100,26 +101,45 @@ describe("clearErrorState", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("deletes the canonical target through the synchronous unlink primitive", async () => {
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const unlinkSync = vi.fn((...args: Parameters<typeof actual.unlinkSync>) =>
-      actual.unlinkSync(...args),
-    );
+  it("deletes the canonical target through the asynchronous unlink primitive", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const unlink = vi.fn((...args: Parameters<typeof actual.unlink>) => actual.unlink(...args));
     vi.resetModules();
-    vi.doMock("node:fs", () => ({ ...actual, unlinkSync }));
+    vi.doMock("node:fs/promises", () => ({ ...actual, unlink }));
     try {
       const {
         clearErrorState: isolatedClearErrorState,
         writeErrorState: isolatedWriteErrorState,
       } = await import("../src/reference/sync/error-state-writer.js");
       await isolatedWriteErrorState(dir, { step: "gate_rejected", detail: "x" });
+      unlink.mockClear();
       await isolatedClearErrorState(dir);
-      expect(unlinkSync).toHaveBeenCalledOnce();
+      expect(unlink).toHaveBeenCalledOnce();
       expect(existsSync(join(dir, "error_state.json"))).toBe(false);
     } finally {
-      vi.doUnmock("node:fs");
+      vi.doUnmock("node:fs/promises");
       vi.resetModules();
     }
+  });
+
+  it("skips a queued unlink whose signal aborted while an earlier commit was in flight", async () => {
+    await writeErrorState(dir, { step: "gate_rejected", detail: "x" });
+    const path = join(dir, "error_state.json");
+
+    let releaseQueue!: () => void;
+    const queueGate = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    const blocked = enqueueCommit(path, () => queueGate);
+
+    const controller = new AbortController();
+    const clearing = clearErrorState(dir, { signal: controller.signal });
+    controller.abort();
+    releaseQueue();
+    await blocked;
+    await expect(clearing).resolves.toBeUndefined();
+
+    expect(existsSync(path)).toBe(true);
   });
 
   it("skips the unlink when the signal is aborted (B3)", async () => {

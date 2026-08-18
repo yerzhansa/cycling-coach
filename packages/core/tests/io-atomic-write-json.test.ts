@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { atomicWriteJson } from "../src/io/atomic-write-json.js";
+import { atomicWriteJson, enqueueCommit } from "../src/io/atomic-write-json.js";
 import { WindowsPrivatePathPolicyError } from "../src/io/windows-private-path-policy.js";
 
 let tempDir: string;
@@ -117,25 +117,80 @@ describe("atomicWriteJson — happy path", () => {
 });
 
 describe("atomicWriteJson — atomicity invariant", () => {
-  it("commits the canonical target through the synchronous rename primitive", async () => {
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-    const renameSync = vi.fn((...args: Parameters<typeof actual.renameSync>) =>
-      actual.renameSync(...args),
-    );
+  it("commits the canonical target through the asynchronous rename primitive", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const rename = vi.fn((...args: Parameters<typeof actual.rename>) => actual.rename(...args));
     vi.resetModules();
-    vi.doMock("node:fs", () => ({ ...actual, renameSync }));
+    vi.doMock("node:fs/promises", () => ({ ...actual, rename }));
     try {
       const { atomicWriteJson: isolatedAtomicWriteJson } = await import(
         "../src/io/atomic-write-json.js"
       );
-      const target = join(tempDir, "synchronous-commit.json");
+      const target = join(tempDir, "asynchronous-commit.json");
       await isolatedAtomicWriteJson(target, { committed: true });
-      expect(renameSync).toHaveBeenCalledOnce();
+      expect(rename).toHaveBeenCalledOnce();
       expect(JSON.parse(readFileSync(target, "utf-8"))).toEqual({ committed: true });
     } finally {
-      vi.doUnmock("node:fs");
+      vi.doUnmock("node:fs/promises");
       vi.resetModules();
     }
+  });
+
+  it("serializes same-path commits so an in-flight rename blocks a later writer's commit", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let renameCalls = 0;
+    const rename = vi.fn(async (...args: Parameters<typeof actual.rename>) => {
+      renameCalls += 1;
+      if (renameCalls === 1) await firstGate;
+      return actual.rename(...args);
+    });
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({ ...actual, rename }));
+    try {
+      const { atomicWriteJson: isolatedAtomicWriteJson } = await import(
+        "../src/io/atomic-write-json.js"
+      );
+      const target = join(tempDir, "serialized.json");
+      const first = isolatedAtomicWriteJson(target, { gen: 1 });
+      await vi.waitFor(() => expect(rename).toHaveBeenCalledTimes(1));
+      const second = isolatedAtomicWriteJson(target, { gen: 2 });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(rename).toHaveBeenCalledTimes(1);
+      releaseFirst();
+      await Promise.all([first, second]);
+      expect(rename).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(readFileSync(target, "utf-8"))).toEqual({ gen: 2 });
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("skips a queued commit whose signal aborted while an earlier commit was in flight", async () => {
+    const target = join(tempDir, "fenced.json");
+    await atomicWriteJson(target, { live: true });
+
+    let releaseQueue!: () => void;
+    const queueGate = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    const blocked = enqueueCommit(target, () => queueGate);
+
+    const controller = new AbortController();
+    const stale = atomicWriteJson(target, { stale: true }, { signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    controller.abort();
+    releaseQueue();
+    await blocked;
+    await expect(stale).resolves.toBeUndefined();
+
+    expect(JSON.parse(readFileSync(target, "utf-8"))).toEqual({ live: true });
+    const orphans = readdirSync(tempDir).filter((e) => e.includes(".tmp."));
+    expect(orphans).toEqual([]);
   });
 
   it("writes via a temp sibling so the original is never partial mid-write", async () => {
