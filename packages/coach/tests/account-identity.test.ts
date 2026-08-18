@@ -2,11 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createSyncStateRepository,
-  dumpStore,
-  runMigrations,
-} from "@enduragent/kernel/store";
+import { createSyncStateRepository, dumpStore, runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
@@ -18,10 +14,7 @@ import {
   verifyIntervalsCredentialAtPath,
   verifyIntervalsCredentialAtPathWithEvidence,
 } from "../src/account-identity.js";
-import {
-  runIntervalsBackfill,
-  runIntervalsBackfillInWriter,
-} from "../src/backfill.js";
+import { runIntervalsBackfill, runIntervalsBackfillInWriter } from "../src/backfill.js";
 
 const complete = JSON.stringify({
   v: 1,
@@ -63,9 +56,7 @@ describe("account identity", () => {
       if (url.pathname === profilePath) {
         requests.push({ endpoint: "profile", url });
         body = {
-          sportSettings: [
-            { id: 1, athlete_id: account, types: ["Ride"], updated: "2010-01-01" },
-          ],
+          sportSettings: [{ id: 1, athlete_id: account, types: ["Ride"], updated: "2010-01-01" }],
         };
       } else if (url.pathname === `${profilePath}/activities`) {
         requests.push({ endpoint: "activities", url });
@@ -356,7 +347,10 @@ describe("account identity", () => {
             },
             resolveFingerprint,
           ),
-        ).rejects.toMatchObject({ reason: "candidate-unresolved" });
+        ).rejects.toMatchObject({
+          reason: "candidate-unresolved",
+          transient: failure !== "null",
+        });
         expect(await value.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
           count: 0,
         });
@@ -502,7 +496,9 @@ describe("account identity", () => {
           resolveFingerprint,
         ),
       ).rejects.toMatchObject({ reason: "candidate-unresolved" });
-      expect(await candidateUnresolved.store.get("SELECT count(*) AS count FROM store_owner")).toEqual({
+      expect(
+        await candidateUnresolved.store.get("SELECT count(*) AS count FROM store_owner"),
+      ).toEqual({
         count: 0,
       });
     } finally {
@@ -594,10 +590,15 @@ describe("account identity", () => {
     try {
       expect(await upgraded.get("PRAGMA user_version")).toEqual({ user_version: 11 });
       expect(await upgraded.get("SELECT count(*) AS count FROM store_owner")).toEqual({ count: 1 });
-      expect(await upgraded.all("SELECT * FROM workout ORDER BY workout_key")).toEqual(beforeWorkouts);
-      expect(await upgraded.all("SELECT * FROM session ORDER BY session_key")).toEqual(beforeSessions);
-      expect(await upgraded.get("SELECT count(*) AS count FROM analytics_curve_generation"))
-        .toEqual({ count: 0 });
+      expect(await upgraded.all("SELECT * FROM workout ORDER BY workout_key")).toEqual(
+        beforeWorkouts,
+      );
+      expect(await upgraded.all("SELECT * FROM session ORDER BY session_key")).toEqual(
+        beforeSessions,
+      );
+      expect(
+        await upgraded.get("SELECT count(*) AS count FROM analytics_curve_generation"),
+      ).toEqual({ count: 0 });
     } finally {
       await upgraded.close();
     }
@@ -621,9 +622,9 @@ describe("account identity", () => {
       const mismatchRequests: BackfillRequest[] = [];
       const mismatchFetch = profileFetch("synthetic-athlete-other", mismatchRequests);
 
-      await expect(
-        syncInWriterWithFetch(value, "synthetic-other", mismatchFetch),
-      ).rejects.toThrow("training account mismatch");
+      await expect(syncInWriterWithFetch(value, "synthetic-other", mismatchFetch)).rejects.toThrow(
+        "training account mismatch",
+      );
 
       expect(mismatchRequests.filter(({ endpoint }) => endpoint === "profile")).toHaveLength(1);
       expect(mismatchRequests.filter(({ endpoint }) => endpoint === "activities")).toHaveLength(0);
@@ -851,9 +852,7 @@ describe("account identity", () => {
       }),
     },
   ])("keeps $reason refusal parity in the evidence verifier", async ({ reason, options }) => {
-    const run = async (
-      verify: typeof verifyIntervalsCredentialAtPath,
-    ) => {
+    const run = async (verify: typeof verifyIntervalsCredentialAtPath) => {
       const selected = options();
       return await verify("synthetic-store", {
         apiKey: "synthetic-key",
@@ -911,5 +910,4 @@ describe("account identity", () => {
       await value.store.close();
     }
   });
-
 });

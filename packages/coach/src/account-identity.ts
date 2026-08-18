@@ -50,17 +50,23 @@ export type RuntimeAthleteOwnerRefusalReason =
 
 export class RuntimeAthleteOwnerRefusal extends Error {
   readonly reason: RuntimeAthleteOwnerRefusalReason;
+  readonly transient: boolean;
 
-  constructor(reason: RuntimeAthleteOwnerRefusalReason) {
+  constructor(
+    reason: RuntimeAthleteOwnerRefusalReason,
+    options?: { transient?: boolean; cause?: unknown },
+  ) {
     super(
       reason === "mismatch"
         ? "training account mismatch"
         : reason === "current-credential-missing"
           ? "active training credential is unavailable"
           : "training account owner unresolved",
+      options?.cause === undefined ? undefined : { cause: options.cause },
     );
     this.name = "RuntimeAthleteOwnerRefusal";
     this.reason = reason;
+    this.transient = options?.transient === true;
   }
 }
 
@@ -116,12 +122,24 @@ const lookupArchiveResult: ArchiveWriteResult = Object.freeze({
 });
 
 const lookupArchive: ArchiveManager = Object.freeze({
-  async writeArtifact() { return lookupArchiveResult; },
-  async writeSnapshot() { return lookupArchiveResult; },
-  async quarantine() { return lookupArchiveResult; },
-  async readArtifact() { throw new Error("lookup archive is write-only"); },
-  async readSnapshot() { throw new Error("lookup archive is write-only"); },
-  async has() { return false; },
+  async writeArtifact() {
+    return lookupArchiveResult;
+  },
+  async writeSnapshot() {
+    return lookupArchiveResult;
+  },
+  async quarantine() {
+    return lookupArchiveResult;
+  },
+  async readArtifact() {
+    throw new Error("lookup archive is write-only");
+  },
+  async readSnapshot() {
+    throw new Error("lookup archive is write-only");
+  },
+  async has() {
+    return false;
+  },
 });
 
 const CLAIM_STORE_OWNER_SQL =
@@ -206,7 +224,8 @@ export async function resolveIntervalsStoreOwnerFingerprint(
   )) {
     if (artifact.kind !== "snapshot" || artifact.lane !== "settings") continue;
     const payload = artifact.payload;
-    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) throw new TypeError();
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload))
+      throw new TypeError();
     const value = (payload as Record<string, unknown>).athlete_id;
     if (typeof value !== "string" || value.length === 0) throw new TypeError();
     resolved.add(value);
@@ -255,8 +274,8 @@ export async function assertRuntimeAthleteOwner(
       signal.throwIfAborted();
       fingerprint = await resolveFingerprint({ ...selected, signal, budget });
       signal.throwIfAborted();
-    } catch {
-      throw new RuntimeAthleteOwnerRefusal(reason);
+    } catch (error) {
+      throw new RuntimeAthleteOwnerRefusal(reason, { transient: true, cause: error });
     }
     if (fingerprint === null) throw new RuntimeAthleteOwnerRefusal(reason);
     return fingerprint;
@@ -272,8 +291,8 @@ export async function assertRuntimeAthleteOwner(
       async claim() {
         try {
           signal.throwIfAborted();
-        } catch {
-          throw new RuntimeAthleteOwnerRefusal(reason);
+        } catch (error) {
+          throw new RuntimeAthleteOwnerRefusal(reason, { transient: true, cause: error });
         }
         await store.run(CLAIM_STORE_OWNER_SQL, [fingerprint]);
       },
@@ -318,8 +337,11 @@ export async function assertRuntimeAthleteOwner(
     const ownership = await compareStoreOwner(store, candidateFingerprint);
     try {
       signal.throwIfAborted();
-    } catch {
-      throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+    } catch (error) {
+      throw new RuntimeAthleteOwnerRefusal("candidate-unresolved", {
+        transient: true,
+        cause: error,
+      });
     }
     if (ownership !== "matched") {
       throw new RuntimeAthleteOwnerRefusal("mismatch");
@@ -343,14 +365,20 @@ export async function assertRuntimeAthleteOwnerFromEvidence(
   }
   try {
     signal.throwIfAborted();
-  } catch {
-    throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+  } catch (error) {
+    throw new RuntimeAthleteOwnerRefusal("candidate-unresolved", {
+      transient: true,
+      cause: error,
+    });
   }
   const ownership = await compareStoreOwner(store, evidence.verifiedFingerprint);
   try {
     signal.throwIfAborted();
-  } catch {
-    throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+  } catch (error) {
+    throw new RuntimeAthleteOwnerRefusal("candidate-unresolved", {
+      transient: true,
+      cause: error,
+    });
   }
   if (ownership === "mismatch") throw new RuntimeAthleteOwnerRefusal("mismatch");
   if (ownership === "matched") return undefined;
@@ -358,8 +386,11 @@ export async function assertRuntimeAthleteOwnerFromEvidence(
     async claim() {
       try {
         signal.throwIfAborted();
-      } catch {
-        throw new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+      } catch (error) {
+        throw new RuntimeAthleteOwnerRefusal("candidate-unresolved", {
+          transient: true,
+          cause: error,
+        });
       }
       await store.run(CLAIM_STORE_OWNER_SQL, [evidence.verifiedFingerprint]);
     },

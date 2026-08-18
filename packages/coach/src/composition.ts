@@ -1321,7 +1321,10 @@ export async function createLocalCoachComposition(
               failure: serializeBoundaryError(error),
             });
             initialRefreshPromise = undefined;
-            if (!ownerSucceeded && !(error instanceof RuntimeAthleteOwnerRefusal)) {
+            if (
+              !ownerSucceeded &&
+              (!(error instanceof RuntimeAthleteOwnerRefusal) || error.transient)
+            ) {
               scheduleInitialRefreshRetry();
             }
           }

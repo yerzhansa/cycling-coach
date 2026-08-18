@@ -1304,6 +1304,58 @@ describe("local coach composition", () => {
     }
   });
 
+  it("retries deferred owner verification after a transient refusal and recovers", async () => {
+    vi.useFakeTimers();
+    try {
+      const home = await freshHome();
+      const trace: string[] = [];
+      let runtimeOptions: LocalStoreRuntimeOptions | undefined;
+      const ownerGuard = vi
+        .fn(async () => {})
+        .mockRejectedValueOnce(
+          new RuntimeAthleteOwnerRefusal("candidate-unresolved", {
+            transient: true,
+            cause: new Error("synthetic lookup outage"),
+          }),
+        );
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(trace),
+          createRuntime: (options) => {
+            runtimeOptions = options;
+            return runtime(trace);
+          },
+          createBackend: () => backend(),
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+          assertRuntimeAthleteOwner: ownerGuard,
+        },
+        fakeContext(home),
+        undefined,
+        config(home, { apiKey: "configured-key", athleteId: "configured-athlete" }),
+        { ENDURAGENT_HOME: home.root },
+        true,
+      );
+
+      await expect(lifecycle.startInitialRefresh()).rejects.toThrow(
+        "training account owner unresolved",
+      );
+      expect(trace).not.toContain("start-scheduler");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(ownerGuard).toHaveBeenCalledTimes(2);
+      expect(trace).toContain("start-scheduler");
+      expect(runtimeOptions?.readConfig?.().intervals.apiKey).toBe("configured-key");
+      await lifecycle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("kicks a refresh for credentials saved while the deferred refresh interleaves", async () => {
     const home = await freshHome();
     const trace: string[] = [];

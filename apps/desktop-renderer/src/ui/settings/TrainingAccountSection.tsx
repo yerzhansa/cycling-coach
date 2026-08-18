@@ -56,6 +56,10 @@ export function TrainingAccountSection(): ReactElement {
     state.status === "closed";
   const externallyManaged = editable?.effective.managedByEnvironment.athleteId === true;
   const credentialMissing = editable !== null && !editable.effective.credential_configured;
+  const verificationPending =
+    editable !== null &&
+    editable.effective.credential_configured &&
+    editable.effective.credential_verification_pending === true;
   const locked = editable === null || credentialMissing || externallyManaged;
   const saving = state.status === "saving";
   const retryVisible = state.status === "error" && (state.kind === "load" || state.kind === "save");
@@ -69,6 +73,7 @@ export function TrainingAccountSection(): ReactElement {
     "athlete-id-help",
     ...(externallyManaged ? ["athlete-id-managed"] : []),
     ...(credentialMissing ? ["athlete-id-credential"] : []),
+    ...(verificationPending ? ["athlete-id-verifying"] : []),
     ...(validation.length > 0 ? ["athlete-id-validation"] : []),
   ].join(" ");
 
@@ -109,7 +114,14 @@ export function TrainingAccountSection(): ReactElement {
             ) : null}
             {credentialMissing ? (
               <p className={styles.help} id="athlete-id-credential">
-                No training account credential is connected. Use the setup area above to connect one.
+                No training account credential is connected. Use the setup area above to connect
+                one.
+              </p>
+            ) : null}
+            {verificationPending ? (
+              <p className={styles.help} id="athlete-id-verifying">
+                Verifying the connected training account… Training data stays paused until it
+                completes.
               </p>
             ) : null}
             <p className={styles.error} id="athlete-id-validation" aria-live="polite">

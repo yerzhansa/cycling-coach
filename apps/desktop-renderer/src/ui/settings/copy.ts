@@ -114,6 +114,7 @@ export function conversationSaveErrorCopy(
 
 export function credentialRuntimeLabel(state: CredentialSettingsEntry["runtimeState"]): string {
   if (state === "active") return "Active";
+  if (state === "verifying") return "Verifying…";
   if (state === "stored-inactive") return "Saved, not active";
   return "Needs attention";
 }
