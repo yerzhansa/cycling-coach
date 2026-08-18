@@ -19,6 +19,7 @@ function connection(generation: number, port = 45_000 + generation) {
 function harness() {
   let current = connection(1);
   const retries: Array<() => void> = [];
+  const watchdogs: Array<() => void> = [];
   const startInitialRefresh = vi.fn(async () => ({ status: "accepted" as const }));
   const reportFailure = vi.fn();
   const coordinator = createDesktopInitialRefreshCoordinator({
@@ -26,6 +27,7 @@ function harness() {
     startInitialRefresh,
     reportFailure,
     scheduleRetry: (operation) => retries.push(operation),
+    scheduleWatchdog: (operation) => watchdogs.push(operation),
   });
   return {
     coordinator,
@@ -38,6 +40,13 @@ function harness() {
       const retry = retries.shift();
       if (retry === undefined) throw new Error("Expected a scheduled initial-refresh retry.");
       retry();
+    },
+    runWatchdog() {
+      const watchdog = watchdogs.shift();
+      if (watchdog === undefined) {
+        throw new Error("Expected a scheduled initial-refresh watchdog.");
+      }
+      watchdog();
     },
   };
 }
@@ -93,14 +102,18 @@ describe("desktop initial refresh coordinator", () => {
       serviceManagedPrepare,
     );
     const serviceManagedReturn = source.indexOf("return;", serviceManagedLoad);
-    const recoveryPrepare = source.indexOf(
-      "connectionIpc!.prepareDocumentNavigation(visibleWindow, current.generation)",
-      serviceManagedReturn,
-    );
     const recoveryArm = source.indexOf("initialRefreshCoordinator.prepareRecovery({");
-    const recoveryLoad = source.indexOf(
-      "startRendererNavigation(visibleWindow!, navigationUrl!)",
+    const recoveryPrepare = source.indexOf(
+      "connectionIpc!.prepareDocumentNavigation",
       recoveryArm,
+    );
+    const recoveryLoad = source.indexOf(
+      "startRendererNavigation(visibleWindow!, navigationUrl)",
+      recoveryPrepare,
+    );
+    const recoveryFallbackRelease = source.indexOf(
+      "void initialRefreshCoordinator.releaseCurrent()",
+      recoveryLoad,
     );
     const windowClose = source.indexOf('created.once("closed"');
     const closeRelease = source.indexOf(
@@ -142,9 +155,12 @@ describe("desktop initial refresh coordinator", () => {
     expect(serviceManagedPrepare).toBeGreaterThan(serviceManagedRecovery);
     expect(serviceManagedLoad).toBeGreaterThan(serviceManagedPrepare);
     expect(serviceManagedReturn).toBeGreaterThan(serviceManagedLoad);
-    expect(recoveryPrepare).toBeGreaterThan(serviceManagedReturn);
-    expect(recoveryArm).toBeGreaterThan(recoveryPrepare);
-    expect(recoveryLoad).toBeGreaterThan(recoveryArm);
+    expect(recoveryArm).toBeGreaterThan(serviceManagedReturn);
+    expect(recoveryPrepare).toBeGreaterThan(recoveryArm);
+    expect(recoveryLoad).toBeGreaterThan(recoveryPrepare);
+    expect(recoveryFallbackRelease).toBeGreaterThan(recoveryLoad);
+    expect(source).toContain("scheduleWatchdog: (operation) =>");
+    expect(source).toContain("INITIAL_REFRESH_SETTLE_WATCHDOG_MS = 30_000");
     expect(closeWindowGuard).toBeGreaterThan(windowClose);
     expect(closeRelease).toBeGreaterThan(closeWindowGuard);
     expect(goneWindowGuard).toBeGreaterThan(renderGone);
@@ -253,6 +269,37 @@ describe("desktop initial refresh coordinator", () => {
     gone.coordinator.arm(connection(1));
     await gone.coordinator.releaseCurrent();
     expect(gone.startInitialRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("releases an armed generation from the watchdog when no settle report arrives", async () => {
+    const test = harness();
+    test.coordinator.arm(connection(1));
+    expect(test.startInitialRefresh).not.toHaveBeenCalled();
+
+    test.runWatchdog();
+    await vi.waitFor(() => expect(test.startInitialRefresh).toHaveBeenCalledOnce());
+    expect(test.startInitialRefresh).toHaveBeenCalledWith(connection(1));
+
+    await test.coordinator.initialSetupStatusSettled(1);
+    expect(test.startInitialRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a stale watchdog away from a later armed generation", async () => {
+    const test = harness();
+    test.coordinator.arm(connection(1));
+    await test.coordinator.initialSetupStatusSettled(1);
+    expect(test.startInitialRefresh).toHaveBeenCalledOnce();
+
+    const successor = connection(2);
+    test.setCurrent(successor);
+    test.coordinator.arm(successor);
+    test.runWatchdog();
+    await Promise.resolve();
+    expect(test.startInitialRefresh).toHaveBeenCalledOnce();
+
+    test.runWatchdog();
+    await vi.waitFor(() => expect(test.startInitialRefresh).toHaveBeenCalledTimes(2));
+    expect(test.startInitialRefresh).toHaveBeenLastCalledWith(successor);
   });
 
   it("retries a failed release without poisoning the current or a future generation", async () => {

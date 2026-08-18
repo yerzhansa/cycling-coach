@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { createDesktopRendererNavigationTracker } from "../src/main/renderer-navigation-load.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createDesktopRendererNavigationTracker,
+  RENDERER_NAVIGATION_LOAD_ATTEMPTS,
+} from "../src/main/renderer-navigation-load.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -61,5 +64,60 @@ describe("desktop renderer navigation tracker", () => {
     firstLoad.reject(failure);
 
     await expect(waiting).rejects.toBe(failure);
+  });
+
+  it("retries a transient load failure until it succeeds", async () => {
+    const retryDelay = vi.fn(async () => {});
+    const tracker = createDesktopRendererNavigationTracker<object>({ retryDelay });
+    const load = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("transient load failure"))
+      .mockResolvedValueOnce(undefined);
+    const navigation = tracker.start({}, "first", load);
+
+    await expect(tracker.waitForCurrent(navigation)).resolves.toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(retryDelay).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops retrying after the attempt budget and rejects with the last failure", async () => {
+    const tracker = createDesktopRendererNavigationTracker<object>({
+      retryDelay: async () => {},
+    });
+    const failure = new Error("persistent load failure");
+    const load = vi.fn<() => Promise<void>>().mockRejectedValue(failure);
+    const navigation = tracker.start({}, "first", load);
+
+    await expect(tracker.waitForCurrent(navigation)).rejects.toBe(failure);
+    expect(load).toHaveBeenCalledTimes(RENDERER_NAVIGATION_LOAD_ATTEMPTS);
+  });
+
+  it("does not retry an aborted navigation", async () => {
+    const tracker = createDesktopRendererNavigationTracker<object>({
+      retryDelay: async () => {},
+    });
+    const abort = Object.assign(new Error("aborted"), { errno: -3, code: "ERR_ABORTED" });
+    const load = vi.fn<() => Promise<void>>().mockRejectedValue(abort);
+    const navigation = tracker.start({}, "first", load);
+
+    await expect(navigation.task).rejects.toBe(abort);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a navigation superseded during its retry delay", async () => {
+    const delayGate = deferred<void>();
+    const tracker = createDesktopRendererNavigationTracker<object>({
+      retryDelay: () => delayGate.promise,
+    });
+    const window = {};
+    const failure = new Error("transient load failure");
+    const load = vi.fn<() => Promise<void>>().mockRejectedValue(failure);
+    const first = tracker.start(window, "first", load);
+    await Promise.resolve();
+
+    tracker.start(window, "second", async () => {});
+    delayGate.resolve();
+    await expect(first.task).rejects.toBe(failure);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });

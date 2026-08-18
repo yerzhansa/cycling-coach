@@ -1,3 +1,6 @@
+export const RENDERER_NAVIGATION_LOAD_ATTEMPTS = 3;
+export const RENDERER_NAVIGATION_LOAD_RETRY_DELAY_MS = 250;
+
 export interface DesktopRendererNavigation<Window> {
   readonly window: Window;
   readonly url: string;
@@ -13,17 +16,56 @@ export interface DesktopRendererNavigationTracker<Window> {
   waitForCurrent(navigation: DesktopRendererNavigation<Window>): Promise<void>;
 }
 
-export function createDesktopRendererNavigationTracker<Window>(): DesktopRendererNavigationTracker<Window> {
+export interface DesktopRendererNavigationTrackerOptions {
+  readonly attempts?: number;
+  readonly retryDelay?: () => Promise<void>;
+}
+
+function isAbortedNavigationRejection(error: unknown): boolean {
+  if (error === null || typeof error !== "object") return false;
+  const rejection = error as { readonly code?: unknown; readonly errno?: unknown };
+  return rejection.errno === -3 || rejection.code === "ERR_ABORTED";
+}
+
+function attemptLoad(load: () => Promise<void>): Promise<void> {
+  try {
+    return load();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
+export function createDesktopRendererNavigationTracker<Window>(
+  options: DesktopRendererNavigationTrackerOptions = {},
+): DesktopRendererNavigationTracker<Window> {
+  const attempts = options.attempts ?? RENDERER_NAVIGATION_LOAD_ATTEMPTS;
+  const retryDelay =
+    options.retryDelay ??
+    (() =>
+      new Promise<void>((resolve) =>
+        setTimeout(resolve, RENDERER_NAVIGATION_LOAD_RETRY_DELAY_MS),
+      ));
   let current: DesktopRendererNavigation<Window> | undefined;
 
   return {
     start(window, url, load) {
-      let task: Promise<void>;
-      try {
-        task = load();
-      } catch (error) {
-        task = Promise.reject(error);
-      }
+      let remainingAttempts = attempts;
+      const guard = (task: Promise<void>): Promise<void> => {
+        remainingAttempts -= 1;
+        return task.catch(async (error: unknown) => {
+          if (
+            remainingAttempts < 1 ||
+            current !== navigation ||
+            isAbortedNavigationRejection(error)
+          ) {
+            throw error;
+          }
+          await retryDelay();
+          if (current !== navigation) throw error;
+          return guard(attemptLoad(load));
+        });
+      };
+      const task = guard(attemptLoad(load));
       const navigation = { window, url, task };
       current = navigation;
       void task.catch(() => {});

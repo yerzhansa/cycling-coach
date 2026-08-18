@@ -44,6 +44,7 @@ export function createDesktopInitialRefreshCoordinator(input: {
   ) => Promise<{ readonly status: "accepted" }>;
   readonly reportFailure: (error: unknown) => void;
   readonly scheduleRetry: (operation: () => void) => void;
+  readonly scheduleWatchdog: (operation: () => void) => void;
 }): DesktopInitialRefreshCoordinator {
   let armed:
     | {
@@ -104,7 +105,11 @@ export function createDesktopInitialRefreshCoordinator(input: {
       throw new TypeError("invalid desktop daemon generation");
     }
     if (armed !== undefined && sameConnection(armed.connection, connection)) return;
-    armed = { connection, releaseStarted: false };
+    const target = { connection, releaseStarted: false };
+    armed = target;
+    input.scheduleWatchdog(() => {
+      if (armed === target) void release(connection.generation);
+    });
   };
 
   return {

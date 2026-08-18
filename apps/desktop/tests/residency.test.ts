@@ -631,7 +631,7 @@ describe("desktop residency", () => {
     const restore = source.indexOf("if (created.isMinimized()) created.restore();", load);
     const show = source.indexOf("created.show();", load);
     const focus = source.indexOf("created.focus();", load);
-    const creationEnd = source.indexOf("})().finally(() => {", focus);
+    const creationEnd = source.indexOf("windowCreation = undefined;", focus);
     const residencyStart = source.indexOf("await residency.start();", creationEnd);
     const initialShow = source.indexOf(
       "const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();",

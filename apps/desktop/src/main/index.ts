@@ -171,6 +171,7 @@ let desktopIsClosing = false;
 let desktopStartedInBackground = false;
 const desktopAcceptanceHidden = process.env.ENDURAGENT_ACCEPTANCE_HIDDEN === "1";
 const INITIAL_REFRESH_RELEASE_RETRY_DELAY_MS = 1_000;
+const INITIAL_REFRESH_SETTLE_WATCHDOG_MS = 30_000;
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const utilityEntry = resolve(mainDirectory, "daemon-utility.js");
@@ -227,12 +228,12 @@ async function runDesktop(): Promise<void> {
   desktopStartedInBackground =
     !securitySmokeMode && (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
   const controller = new AbortController();
-  const scheduleInitialRefreshRetry = (operation: () => void): void => {
+  const scheduleInitialRefreshOperation = (delayMs: number, operation: () => void): void => {
     if (controller.signal.aborted) return;
     const timer = setTimeout(() => {
       controller.signal.removeEventListener("abort", cancel);
       operation();
-    }, INITIAL_REFRESH_RELEASE_RETRY_DELAY_MS);
+    }, delayMs);
     const cancel = (): void => clearTimeout(timer);
     controller.signal.addEventListener("abort", cancel, { once: true });
   };
@@ -284,7 +285,10 @@ async function runDesktop(): Promise<void> {
     reportFailure: () => {
       process.stderr.write("desktop-initial-refresh-release-failure\n");
     },
-    scheduleRetry: scheduleInitialRefreshRetry,
+    scheduleRetry: (operation) =>
+      scheduleInitialRefreshOperation(INITIAL_REFRESH_RELEASE_RETRY_DELAY_MS, operation),
+    scheduleWatchdog: (operation) =>
+      scheduleInitialRefreshOperation(INITIAL_REFRESH_SETTLE_WATCHDOG_MS, operation),
   });
   let shutdownPromise: Promise<void> | undefined;
   let securitySmokeControlPipe: import("node:net").Socket | undefined;
@@ -441,7 +445,9 @@ async function runDesktop(): Promise<void> {
     let windowCreation: Promise<BrowserWindow> | undefined;
     const rendererNavigationTracker = createDesktopRendererNavigationTracker<BrowserWindow>();
     const currentWindow = (): BrowserWindow | null =>
-      window !== null && !window.isDestroyed() ? window : null;
+      window !== null && !window.isDestroyed() && !window.webContents.isDestroyed()
+        ? window
+        : null;
     const startRendererNavigation = (
       target: BrowserWindow,
       navigationUrl: string,
@@ -577,25 +583,31 @@ async function runDesktop(): Promise<void> {
               !portChanged &&
               (connectionIpc?.advanceCurrentDocumentGeneration(current.generation) ?? false);
             if (!advanced) {
-              const navigationUrl = connectionIpc!.prepareDocumentNavigation(
-                visibleWindow,
-                current.generation,
-              );
-              startRendererNavigation(visibleWindow, navigationUrl);
+              try {
+                const navigationUrl = connectionIpc!.prepareDocumentNavigation(
+                  visibleWindow,
+                  current.generation,
+                );
+                startRendererNavigation(visibleWindow, navigationUrl);
+              } catch {}
             }
           }
           return;
         }
-        const navigationUrl =
-          visibleWindow === null
-            ? undefined
-            : connectionIpc!.prepareDocumentNavigation(visibleWindow, current.generation);
         const recovery = initialRefreshCoordinator.prepareRecovery({
           current,
           rendererPresent: visibleWindow !== null,
         });
         if (recovery === "reload-required") {
-          startRendererNavigation(visibleWindow!, navigationUrl!);
+          try {
+            const navigationUrl = connectionIpc!.prepareDocumentNavigation(
+              visibleWindow!,
+              current.generation,
+            );
+            startRendererNavigation(visibleWindow!, navigationUrl);
+          } catch {
+            void initialRefreshCoordinator.releaseCurrent();
+          }
         }
       },
     });
@@ -893,7 +905,9 @@ async function runDesktop(): Promise<void> {
           }
           return Promise.resolve(current);
         }
+        let creating: BrowserWindow | undefined;
         windowCreation = (async () => {
+          const navigationGeneration = daemonLifecycle!.connection().generation;
           const windowOptions = desktopWindowOptions(
             preloadEntry,
             nativeTheme.shouldUseDarkColors ? "dark" : "light",
@@ -905,6 +919,7 @@ async function runDesktop(): Promise<void> {
             };
           }
           const created = new BrowserWindow(windowOptions);
+          creating = created;
           window = created;
           residency?.manageMainWindow(created);
           rendererConsoleCapture.attach(created.webContents);
@@ -992,7 +1007,7 @@ async function runDesktop(): Promise<void> {
           );
           const navigationUrl = connectionIpc!.prepareDocumentNavigation(
             created,
-            daemonLifecycle!.connection().generation,
+            navigationGeneration,
           );
           const initialNavigation = startRendererNavigation(created, navigationUrl);
           await rendererNavigationTracker.waitForCurrent(initialNavigation);
@@ -1002,9 +1017,31 @@ async function runDesktop(): Promise<void> {
             created.focus();
           }
           return created;
-        })().finally(() => {
-          windowCreation = undefined;
-        });
+        })()
+          .catch((error: unknown) => {
+            const created = creating;
+            if (created !== undefined) {
+              if (window === created) {
+                window = null;
+                disposeOnboarding?.();
+                disposeOnboarding = undefined;
+              }
+              if (!created.isDestroyed()) created.destroy();
+            }
+            const lifecycleState = daemonLifecycle?.snapshot();
+            if (
+              lifecycleState?.status === "terminal" &&
+              !desktopAcceptanceHidden &&
+              !desktopIsClosing
+            ) {
+              const copy = lifecycleErrorCopy(lifecycleState);
+              if (copy !== undefined) dialog.showErrorBox(copy.title, copy.content);
+            }
+            throw error;
+          })
+          .finally(() => {
+            windowCreation = undefined;
+          });
         return windowCreation;
       },
     };
