@@ -217,6 +217,9 @@ export type LocalStoreRuntimeOptions = Omit<StoreRuntimeOptions, "reference"> & 
   readonly reference: LocalReferenceRuntime;
 };
 
+export const INITIAL_REFRESH_RETRY_BASE_DELAY_MS = 1_000;
+export const INITIAL_REFRESH_RETRY_MAX_DELAY_MS = 300_000;
+
 function copyConfig(config: Config): Config {
   return {
     ...config,
@@ -474,6 +477,7 @@ function runtimeConfigSnapshot(
   config: Config,
   environment: Readonly<Record<string, string | undefined>>,
   timezone: string,
+  intervalsVerificationPending: boolean,
 ): GetRuntimeConfigRpcResult {
   return {
     schemaVersion: 3,
@@ -485,6 +489,7 @@ function runtimeConfigSnapshot(
     intervals: {
       athlete_id: config.intervals.athleteId,
       credential_configured: config.intervals.apiKey.length > 0,
+      credential_verification_pending: intervalsVerificationPending,
       managedByEnvironment: {
         athleteId: environment.INTERVALS_ATHLETE_ID !== undefined,
       },
@@ -795,11 +800,14 @@ export async function createLocalCoachComposition(
     );
     return approval ?? undefined;
   };
-  let activeConfig = copyConfig(input.config);
-  if (activeConfig.intervals.apiKey.length > 0 && activeConfig.intervals.athleteId.length === 0) {
-    activeConfig = {
-      ...activeConfig,
-      intervals: { ...activeConfig.intervals, athleteId: "0" },
+  let unapprovedConfig = copyConfig(input.config);
+  if (
+    unapprovedConfig.intervals.apiKey.length > 0 &&
+    unapprovedConfig.intervals.athleteId.length === 0
+  ) {
+    unapprovedConfig = {
+      ...unapprovedConfig,
+      intervals: { ...unapprovedConfig.intervals, athleteId: "0" },
     };
   }
   const verifyIntervalsCredential = async (
@@ -807,7 +815,7 @@ export async function createLocalCoachComposition(
     signal: AbortSignal,
   ): Promise<VerifyIntervalsCredentialRpcResult> => {
     const configuredAthleteSelector = normalizeIntervalsAthleteSelector(
-      activeConfig.intervals.athleteId,
+      unapprovedConfig.intervals.athleteId,
     );
     const configRevision = intervalsConfigRevision;
     let athleteSelector = configuredAthleteSelector;
@@ -859,17 +867,23 @@ export async function createLocalCoachComposition(
   let runtime: LocalStoreRuntime | undefined;
   let reference: LocalReferenceRuntime | undefined;
   let initialRefreshPromise: Promise<void> | undefined;
+  let initialRefreshRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let initialRefreshFailedAttempts = 0;
   const initialRefreshController = new AbortController();
-  let intervalsOwnerReady = activeConfig.intervals.apiKey.length === 0;
+  let intervalsOwnerReady = unapprovedConfig.intervals.apiKey.length === 0;
+  const approvedConfig = (): Config => approvedRuntimeConfig(unapprovedConfig, intervalsOwnerReady);
+  const intervalsVerificationPending = (): boolean =>
+    unapprovedConfig.intervals.apiKey.length > 0 && !intervalsOwnerReady;
   let initialRefreshStarted = !input.deferInitialRefresh;
+  let initialRefreshConfigCaptured = !input.deferInitialRefresh;
   let schedulerStarted = false;
   let closing = false;
   let closePromise: Promise<void> | undefined;
   try {
-    if (!input.deferInitialRefresh && activeConfig.intervals.apiKey.length > 0) {
+    if (!input.deferInitialRefresh && unapprovedConfig.intervals.apiKey.length > 0) {
       const startupOwnerClaim = await assertIntervalsOwner(
-        activeConfig.intervals,
-        activeConfig.intervals,
+        unapprovedConfig.intervals,
+        unapprovedConfig.intervals,
         new AbortController().signal,
       );
       await startupOwnerClaim?.claim();
@@ -877,8 +891,8 @@ export async function createLocalCoachComposition(
     }
     reference = await (dependencies.bootstrap ?? bootstrapReference)({
       dataDir: input.home.root,
-      intervals: approvedRuntimeConfig(activeConfig, intervalsOwnerReady).intervals,
-      readIntervals: () => approvedRuntimeConfig(activeConfig, intervalsOwnerReady).intervals,
+      intervals: approvedConfig().intervals,
+      readIntervals: () => approvedConfig().intervals,
       sport: cyclingSport,
       startScheduler: false,
       attemptLedgerForRun: () => {
@@ -889,8 +903,8 @@ export async function createLocalCoachComposition(
     });
     const runtimeOptions: LocalStoreRuntimeOptions = {
       env: input.env,
-      config: approvedRuntimeConfig(activeConfig, intervalsOwnerReady),
-      readConfig: () => approvedRuntimeConfig(activeConfig, intervalsOwnerReady),
+      config: approvedConfig(),
+      readConfig: () => approvedConfig(),
       home: input.home,
       reference,
       writerContext: input.context,
@@ -1006,7 +1020,7 @@ export async function createLocalCoachComposition(
         }),
       };
     };
-    const initialBundle = buildBundle(approvedRuntimeConfig(activeConfig, intervalsOwnerReady));
+    const initialBundle = buildBundle(approvedConfig());
     let activeTimezone = initialBundle.timezone;
     const reconfigurable = createReconfigurableRuntimeBundle(initialBundle);
     const persistConfig = dependencies.persistRuntimeConfig ?? persistRuntimeConfig;
@@ -1020,16 +1034,15 @@ export async function createLocalCoachComposition(
       signal: AbortSignal,
     ): Promise<ConfigureRuntimeRpcRefusalReason | void> => {
       signal.throwIfAborted();
-      const refreshAlreadyStarted = initialRefreshStarted;
       if (
         request.llm?.clear_credential === true &&
-        request.llm.provider !== activeConfig.llm.provider
+        request.llm.provider !== unapprovedConfig.llm.provider
       ) {
         return "credential-required";
       }
       if (
         request.llm?.clear_credential === true &&
-        llmCredentialManagedByEnvironment(input.env, activeConfig.llm.provider)
+        llmCredentialManagedByEnvironment(input.env, unapprovedConfig.llm.provider)
       ) {
         return "managed-by-environment";
       }
@@ -1062,7 +1075,7 @@ export async function createLocalCoachComposition(
       let effectiveRequest = request;
       let verificationEvidence: IntervalsCredentialVerificationEvidence | undefined;
       if (request.intervals?.verification_approval !== undefined) {
-        const preliminaryCandidate = mergedRuntimeConfig(activeConfig, request);
+        const preliminaryCandidate = mergedRuntimeConfig(unapprovedConfig, request);
         let ownerState: Awaited<ReturnType<typeof readIntervalsStoreOwnerState>> | undefined;
         try {
           ownerState = await readIntervalsStoreOwnerState(input.context.store);
@@ -1072,7 +1085,7 @@ export async function createLocalCoachComposition(
             approval: request.intervals.verification_approval,
             credentialDigest: digestIntervalsCredential(preliminaryCandidate.intervals.apiKey),
             configuredAthleteSelector: normalizeIntervalsAthleteSelector(
-              activeConfig.intervals.athleteId,
+              unapprovedConfig.intervals.athleteId,
             ),
             ...(request.intervals.athlete_id === undefined
               ? {}
@@ -1100,9 +1113,11 @@ export async function createLocalCoachComposition(
           }
         }
       }
-      const candidate = mergedRuntimeConfig(activeConfig, effectiveRequest);
+      const candidate = mergedRuntimeConfig(unapprovedConfig, effectiveRequest);
       const activeAthleteId =
-        activeConfig.intervals.athleteId.length === 0 ? "0" : activeConfig.intervals.athleteId;
+        unapprovedConfig.intervals.athleteId.length === 0
+          ? "0"
+          : unapprovedConfig.intervals.athleteId;
       const candidateAthleteId =
         candidate.intervals.athleteId.length === 0 ? "0" : candidate.intervals.athleteId;
       const athleteIdChanged =
@@ -1111,7 +1126,7 @@ export async function createLocalCoachComposition(
       const apiKeyChanged =
         (effectiveRequest.intervals?.api_key !== undefined ||
           effectiveRequest.intervals?.clear_credential === true) &&
-        candidate.intervals.apiKey !== activeConfig.intervals.apiKey;
+        candidate.intervals.apiKey !== unapprovedConfig.intervals.apiKey;
       let pendingOwnerClaim: RuntimeAthleteOwnerClaim | undefined;
       let intervalsOwnerApproved = false;
       if (
@@ -1130,10 +1145,10 @@ export async function createLocalCoachComposition(
         }
         try {
           pendingOwnerClaim = await assertIntervalsOwner(
-            activeConfig.intervals,
+            unapprovedConfig.intervals,
             candidate.intervals,
             signal,
-            activeConfig.intervals.apiKey.length === 0 && candidate.intervals.apiKey.length > 0,
+            unapprovedConfig.intervals.apiKey.length === 0 && candidate.intervals.apiKey.length > 0,
             verificationEvidence,
           );
           intervalsOwnerApproved = true;
@@ -1157,12 +1172,12 @@ export async function createLocalCoachComposition(
         );
       }
       const chatGptProfileClear =
-        request.llm?.clear_credential === true && activeConfig.llm.provider === "openai-codex";
+        request.llm?.clear_credential === true && unapprovedConfig.llm.provider === "openai-codex";
       signal.throwIfAborted();
       await reconfigurable.replace(
         () => {
           signal.throwIfAborted();
-          const latestCandidate = mergedRuntimeConfig(activeConfig, effectiveRequest);
+          const latestCandidate = mergedRuntimeConfig(unapprovedConfig, effectiveRequest);
           if (
             intervalsOwnerApproved &&
             (latestCandidate.intervals.apiKey !== candidate.intervals.apiKey ||
@@ -1171,8 +1186,8 @@ export async function createLocalCoachComposition(
             throw new Error("Intervals configuration changed during ownership verification.");
           }
           const latestIntervalsChanged =
-            latestCandidate.intervals.apiKey !== activeConfig.intervals.apiKey ||
-            latestCandidate.intervals.athleteId !== activeConfig.intervals.athleteId;
+            latestCandidate.intervals.apiKey !== unapprovedConfig.intervals.apiKey ||
+            latestCandidate.intervals.athleteId !== unapprovedConfig.intervals.athleteId;
           const replacementOwnerReady =
             latestCandidate.intervals.apiKey.length === 0 ||
             intervalsOwnerApproved ||
@@ -1181,24 +1196,22 @@ export async function createLocalCoachComposition(
             latestCandidate,
             latestIntervalsChanged,
             replacementOwnerReady,
-            replacement: buildBundle(
-              approvedRuntimeConfig(latestCandidate, replacementOwnerReady),
-            ),
+            replacement: buildBundle(approvedRuntimeConfig(latestCandidate, replacementOwnerReady)),
           };
         },
-        async ({
-          latestCandidate,
-          latestIntervalsChanged,
-          replacementOwnerReady,
-          replacement,
-        }) => {
+        async ({ latestCandidate, latestIntervalsChanged, replacementOwnerReady, replacement }) => {
           signal.throwIfAborted();
           const previousConfigFile =
             pendingOwnerClaim === undefined && !chatGptProfileClear
               ? undefined
               : captureRuntimeConfigFile(input.home.configDir);
           try {
-            persistConfig(input.home.configDir, latestCandidate, effectiveRequest, activeConfig);
+            persistConfig(
+              input.home.configDir,
+              latestCandidate,
+              effectiveRequest,
+              unapprovedConfig,
+            );
             if (chatGptProfileClear) {
               deleteStoredProfile(join(input.home.configDir, "auth-profiles.json"), "openai-codex");
             }
@@ -1216,7 +1229,7 @@ export async function createLocalCoachComposition(
             }
             throw error;
           }
-          activeConfig = latestCandidate;
+          unapprovedConfig = latestCandidate;
           if (latestIntervalsChanged) intervalsConfigRevision += 1;
           intervalsOwnerReady = replacementOwnerReady;
           activeTimezone = replacement.timezone;
@@ -1224,23 +1237,35 @@ export async function createLocalCoachComposition(
         },
       );
       if (request.intervals !== undefined && candidate.intervals.apiKey.length > 0) {
-        if (refreshAlreadyStarted && intervalsOwnerReady) {
+        if (initialRefreshStarted && initialRefreshConfigCaptured && intervalsOwnerReady) {
           ensureSchedulerStarted();
           const refreshRevision = intervalsConfigRevision;
-          void runtime!.runWindowAfter(() => Promise.resolve()).catch((error) =>
-            logger.error("runtime_intervals_refresh_failed", undefined, {
-              configRevision: refreshRevision,
-              failure: serializeBoundaryError(error),
-            }),
-          );
+          void runtime!
+            .runWindowAfter(() => Promise.resolve())
+            .catch((error) =>
+              logger.error("runtime_intervals_refresh_failed", undefined, {
+                configRevision: refreshRevision,
+                failure: serializeBoundaryError(error),
+              }),
+            );
         }
-      } else if (
-        request.intervals !== undefined &&
-        refreshAlreadyStarted &&
-        intervalsOwnerReady
-      ) {
+      } else if (request.intervals !== undefined && initialRefreshStarted && intervalsOwnerReady) {
         ensureSchedulerStarted();
       }
+    };
+    const scheduleInitialRefreshRetry = (): void => {
+      if (closing || initialRefreshRetryTimer !== undefined) return;
+      initialRefreshFailedAttempts += 1;
+      const delay = Math.min(
+        INITIAL_REFRESH_RETRY_BASE_DELAY_MS * 2 ** (initialRefreshFailedAttempts - 1),
+        INITIAL_REFRESH_RETRY_MAX_DELAY_MS,
+      );
+      const timer = setTimeout(() => {
+        if (initialRefreshRetryTimer === timer) initialRefreshRetryTimer = undefined;
+        if (!closing) void startInitialRefresh().catch(() => {});
+      }, delay);
+      timer.unref?.();
+      initialRefreshRetryTimer = timer;
     };
     const startInitialRefresh = (): Promise<void> => {
       if (initialRefreshPromise !== undefined) return initialRefreshPromise;
@@ -1248,17 +1273,19 @@ export async function createLocalCoachComposition(
         initialRefreshPromise = Promise.resolve();
         return initialRefreshPromise;
       }
+      if (initialRefreshRetryTimer !== undefined) {
+        clearTimeout(initialRefreshRetryTimer);
+        initialRefreshRetryTimer = undefined;
+      }
       initialRefreshStarted = true;
       const refreshRevision = intervalsConfigRevision;
       let ownerSucceeded = false;
       initialRefreshPromise = runtime!
         .runWindowAfter(async (signal) => {
-          const initializationSignal = AbortSignal.any([
-            signal,
-            initialRefreshController.signal,
-          ]);
+          const initializationSignal = AbortSignal.any([signal, initialRefreshController.signal]);
           initializationSignal.throwIfAborted();
-          const initialIntervals = { ...activeConfig.intervals };
+          initialRefreshConfigCaptured = true;
+          const initialIntervals = { ...unapprovedConfig.intervals };
           if (initialIntervals.apiKey.length > 0 && !intervalsOwnerReady) {
             const ownerClaim = await assertIntervalsOwner(
               initialIntervals,
@@ -1272,7 +1299,7 @@ export async function createLocalCoachComposition(
           await reconfigurable.replace(
             () => {
               initializationSignal.throwIfAborted();
-              return buildBundle(approvedRuntimeConfig(activeConfig, true));
+              return buildBundle(approvedRuntimeConfig(unapprovedConfig, true));
             },
             (replacement) => {
               initializationSignal.throwIfAborted();
@@ -1293,6 +1320,10 @@ export async function createLocalCoachComposition(
               configRevision: refreshRevision,
               failure: serializeBoundaryError(error),
             });
+            initialRefreshPromise = undefined;
+            if (!ownerSucceeded && !(error instanceof RuntimeAthleteOwnerRefusal)) {
+              scheduleInitialRefreshRetry();
+            }
           }
           throw error;
         });
@@ -1300,9 +1331,7 @@ export async function createLocalCoachComposition(
     };
     const liveIntervals = Object.freeze({
       async read() {
-        return Object.freeze({
-          ...approvedRuntimeConfig(activeConfig, intervalsOwnerReady).intervals,
-        });
+        return Object.freeze({ ...approvedConfig().intervals });
       },
     });
     const options = Object.freeze({ liveIntervals });
@@ -1386,8 +1415,15 @@ export async function createLocalCoachComposition(
             reconfigurable.getArchivedTranscriptPage(request),
           applyRuntimeConfig,
           verifyIntervalsCredential,
+          intervalsVerificationPending,
           readRuntimeConfig: () =>
-            runtimeConfigSnapshot(input.home.configDir, activeConfig, input.env, activeTimezone),
+            runtimeConfigSnapshot(
+              input.home.configDir,
+              unapprovedConfig,
+              input.env,
+              activeTimezone,
+              intervalsVerificationPending(),
+            ),
         },
         dependencies.operationsDependencies,
       ),
@@ -1404,6 +1440,10 @@ export async function createLocalCoachComposition(
       close() {
         closePromise ??= (async () => {
           closing = true;
+          if (initialRefreshRetryTimer !== undefined) {
+            clearTimeout(initialRefreshRetryTimer);
+            initialRefreshRetryTimer = undefined;
+          }
           initialRefreshController.abort(new Error("Coach lifecycle closed."));
           let failure: { readonly error: unknown } | undefined;
           const attempt = async (operation: () => void | Promise<void>): Promise<void> => {

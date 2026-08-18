@@ -619,6 +619,19 @@ describe("coach request and event projection", () => {
       requests: { store: 2, reference: 1, total: 3 },
     } as const;
     expect(SyncRpcResultSchema.parse(syncResult)).toEqual(syncResult);
+    for (const backfill of [
+      "completed",
+      "skipped-no-credential",
+      "pending-verification",
+    ] as const) {
+      expect(SyncRpcResultSchema.parse({ ...syncResult, backfill })).toEqual({
+        ...syncResult,
+        backfill,
+      });
+    }
+    expect(SyncRpcResultSchema.safeParse({ ...syncResult, backfill: "skipped" }).success).toBe(
+      false,
+    );
     expect(
       SyncRpcResultSchema.safeParse({
         ...syncResult,
@@ -821,12 +834,10 @@ describe("coach request and event projection", () => {
       }).success,
     ).toBe(false);
     expect(JSON.stringify(result)).not.toContain("placeholder");
-    expect(IntervalsCredentialApprovalSchema.parse(INTERVALS_APPROVAL)).toBe(
-      INTERVALS_APPROVAL,
-    );
-    expect(
-      VerifyIntervalsCredentialRpcParamsSchema.parse({ api_key: "placeholder" }),
-    ).toEqual({ api_key: "placeholder" });
+    expect(IntervalsCredentialApprovalSchema.parse(INTERVALS_APPROVAL)).toBe(INTERVALS_APPROVAL);
+    expect(VerifyIntervalsCredentialRpcParamsSchema.parse({ api_key: "placeholder" })).toEqual({
+      api_key: "placeholder",
+    });
     for (const invalid of [
       {},
       { api_key: "" },
@@ -876,6 +887,21 @@ describe("coach request and event projection", () => {
       },
     } as const;
     expect(GetRuntimeConfigRpcResultSchema.parse(snapshot)).toEqual(snapshot);
+    expect(
+      GetRuntimeConfigRpcResultSchema.parse({
+        ...snapshot,
+        intervals: { ...snapshot.intervals, credential_verification_pending: true },
+      }),
+    ).toEqual({
+      ...snapshot,
+      intervals: { ...snapshot.intervals, credential_verification_pending: true },
+    });
+    expect(
+      GetRuntimeConfigRpcResultSchema.safeParse({
+        ...snapshot,
+        intervals: { ...snapshot.intervals, credential_verification_pending: "true" },
+      }).success,
+    ).toBe(false);
     expect(
       GetRuntimeConfigRpcResultSchema.parse({
         ...snapshot,
@@ -1674,11 +1700,7 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual(
       accepted,
     );
-    const oldClient = createVersionMismatchServerHandshakeFrame(
-      "ephemeral-client-started",
-      14,
-      15,
-    );
+    const oldClient = createVersionMismatchServerHandshakeFrame("ephemeral-client-started", 14, 15);
     const oldServer = createVersionMismatchServerHandshakeFrame("unmanaged-foreground", 16, 15);
     expect(ServerHandshakeFrameSchema.parse(oldClient)).toEqual(oldClient);
     expect(oldClient.direction).toBe("client-older");

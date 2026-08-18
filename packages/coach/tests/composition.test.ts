@@ -1212,6 +1212,169 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it("retries deferred owner verification after a transient failure and recovers", async () => {
+    vi.useFakeTimers();
+    try {
+      const home = await freshHome();
+      const trace: string[] = [];
+      let runtimeOptions: LocalStoreRuntimeOptions | undefined;
+      const ownerGuard = vi
+        .fn(async () => {})
+        .mockRejectedValueOnce(new Error("synthetic network outage"));
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(trace),
+          createRuntime: (options) => {
+            runtimeOptions = options;
+            return runtime(trace);
+          },
+          createBackend: () => backend(),
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+          assertRuntimeAthleteOwner: ownerGuard,
+        },
+        fakeContext(home),
+        undefined,
+        config(home, { apiKey: "configured-key", athleteId: "configured-athlete" }),
+        { ENDURAGENT_HOME: home.root },
+        true,
+      );
+
+      await expect(lifecycle.startInitialRefresh()).rejects.toThrow("synthetic network outage");
+      expect(trace).not.toContain("start-scheduler");
+      expect(runtimeOptions?.readConfig?.().intervals.apiKey).toBe("");
+      await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+        intervals: { credential_verification_pending: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(ownerGuard).toHaveBeenCalledTimes(2);
+      expect(trace).toContain("start-scheduler");
+      expect(runtimeOptions?.readConfig?.().intervals.apiKey).toBe("configured-key");
+      await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+        intervals: { credential_verification_pending: false },
+      });
+      await lifecycle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not schedule an automatic retry after a deferred owner refusal", async () => {
+    vi.useFakeTimers();
+    try {
+      const home = await freshHome();
+      const failure = new RuntimeAthleteOwnerRefusal("candidate-unresolved");
+      const ownerGuard = vi.fn(async () => {
+        throw failure;
+      });
+      const lifecycle = await compose(
+        home,
+        {
+          bootstrap: async () => reference(),
+          createRuntime: () => runtime(),
+          createBackend: () => backend(),
+          createRepository: () => ({
+            insertIfAbsent: async () => false,
+            readCurrent: async () => undefined,
+          }),
+          createResolver: () => missingResolver(),
+          assertRuntimeAthleteOwner: ownerGuard,
+        },
+        fakeContext(home),
+        undefined,
+        config(home, { apiKey: "configured-key", athleteId: "configured-athlete" }),
+        { ENDURAGENT_HOME: home.root },
+        true,
+      );
+
+      await expect(lifecycle.startInitialRefresh()).rejects.toBe(failure);
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(ownerGuard).toHaveBeenCalledOnce();
+
+      await expect(lifecycle.startInitialRefresh()).rejects.toBe(failure);
+      expect(ownerGuard).toHaveBeenCalledTimes(2);
+      await lifecycle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("kicks a refresh for credentials saved while the deferred refresh interleaves", async () => {
+    const home = await freshHome();
+    const trace: string[] = [];
+    const windows: Config["intervals"][] = [];
+    let runtimeOptions: LocalStoreRuntimeOptions | undefined;
+    let releaseOwner!: () => void;
+    const ownerGate = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+    let markOwnerEntered!: () => void;
+    const ownerEntered = new Promise<void>((resolve) => {
+      markOwnerEntered = resolve;
+    });
+    const counts = createPhysicalRequestLedger({
+      storeLimit: 64,
+      legacyLimit: 15,
+      totalLimit: 79,
+    }).snapshot();
+    const selectedRuntime = runtime(trace);
+    const runWindowAfter = vi.fn<LocalStoreRuntime["runWindowAfter"]>(async (work) => {
+      await work(new AbortController().signal);
+      const current = runtimeOptions?.readConfig?.();
+      if (current === undefined) throw new Error("Expected live runtime configuration.");
+      windows.push({ ...current.intervals });
+      return { published: true, counts, legacySucceeded: true };
+    });
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(trace),
+        createRuntime: (options) => {
+          runtimeOptions = options;
+          return { ...selectedRuntime, runWindowAfter };
+        },
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+        assertRuntimeAthleteOwner: async () => {
+          markOwnerEntered();
+          await ownerGate;
+        },
+      },
+      fakeContext(home),
+      undefined,
+      config(home, { apiKey: "", athleteId: "" }),
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    const replacement = lifecycle.operations.configureRuntime({
+      intervals: { api_key: "fresh-key", athlete_id: "fresh-athlete" },
+    });
+    await ownerEntered;
+    await expect(lifecycle.startInitialRefresh()).resolves.toBeUndefined();
+    expect(windows).toEqual([{ apiKey: "", athleteId: "" }]);
+
+    releaseOwner();
+    await expect(replacement).resolves.toMatchObject({ status: "applied" });
+    await vi.waitFor(() =>
+      expect(windows).toEqual([
+        { apiKey: "", athleteId: "" },
+        { apiKey: "fresh-key", athleteId: "fresh-athlete" },
+      ]),
+    );
+    expect(trace).toContain("start-scheduler");
+    await lifecycle.close();
+  });
+
   it("does not capture or schedule when deferred owner verification fails", async () => {
     const home = await freshHome();
     const failure = new RuntimeAthleteOwnerRefusal("candidate-unresolved");
@@ -1395,7 +1558,16 @@ describe("local coach composition", () => {
     );
 
     const fetchStub = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network used"));
-    await expect(lifecycle.operations.sync({})).resolves.toMatchObject({ published: true });
+    await expect(lifecycle.operations.sync({})).resolves.toMatchObject({
+      published: true,
+      backfill: "pending-verification",
+    });
+    await expect(lifecycle.operations.getRuntimeConfig({})).resolves.toMatchObject({
+      intervals: {
+        credential_configured: true,
+        credential_verification_pending: true,
+      },
+    });
     if (lifecycle.operations.exportTrainingFile === undefined) {
       throw new Error("Expected training export support.");
     }
@@ -1511,11 +1683,13 @@ describe("local coach composition", () => {
     const home = await freshHome();
     const shutdownFailure = new Error("synthetic lifecycle close");
     let windowController: AbortController | undefined;
-    let activeWindow: Promise<{
-      published: boolean;
-      counts: ReturnType<ReturnType<typeof createPhysicalRequestLedger>["snapshot"]>;
-      legacySucceeded: boolean;
-    }> | undefined;
+    let activeWindow:
+      | Promise<{
+          published: boolean;
+          counts: ReturnType<ReturnType<typeof createPhysicalRequestLedger>["snapshot"]>;
+          legacySucceeded: boolean;
+        }>
+      | undefined;
     let markOwnerEntered!: () => void;
     const ownerEntered = new Promise<void>((resolve) => {
       markOwnerEntered = resolve;
@@ -4456,6 +4630,7 @@ describe("local coach composition", () => {
       intervals: {
         athlete_id: "previous-athlete",
         credential_configured: true,
+        credential_verification_pending: false,
         managedByEnvironment: { athleteId: false },
       },
       session: {
