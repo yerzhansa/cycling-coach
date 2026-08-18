@@ -144,6 +144,7 @@ import {
   createProviderActivityPowerHeartRateReader,
 } from "./activity-power-heart-rate.js";
 import { createTrainingExportService } from "./training-export.js";
+import { serializeBoundaryError } from "./daemon/error-boundary.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -159,6 +160,7 @@ export interface LocalCoachComposition {
   readonly operations: CoachOperations;
   readonly spendMeter: SpendMeterService;
   readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
+  startInitialRefresh(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -168,6 +170,7 @@ export interface LocalCoachCompositionInput {
   readonly context: CoachStoreWriterContext;
   readonly config: Config;
   readonly engineConfig: EngineConfig;
+  readonly deferInitialRefresh?: boolean;
 }
 
 export interface LocalCoachCompositionDependencies {
@@ -194,7 +197,7 @@ export interface LocalCoachCompositionDependencies {
 
 export interface LocalReferenceRuntime {
   readonly scheduler: { stop(): void };
-  runScheduledOnce(): ReturnType<ReferenceRuntime["runScheduledOnce"]>;
+  runScheduledOnce(signal?: AbortSignal): ReturnType<ReferenceRuntime["runScheduledOnce"]>;
 }
 
 export interface LocalStoreRuntime {
@@ -214,6 +217,9 @@ export type LocalStoreRuntimeOptions = Omit<StoreRuntimeOptions, "reference"> & 
   readonly reference: LocalReferenceRuntime;
 };
 
+export const INITIAL_REFRESH_RETRY_BASE_DELAY_MS = 1_000;
+export const INITIAL_REFRESH_RETRY_MAX_DELAY_MS = 300_000;
+
 function copyConfig(config: Config): Config {
   return {
     ...config,
@@ -221,6 +227,14 @@ function copyConfig(config: Config): Config {
     intervals: { ...config.intervals },
     telegram: { ...config.telegram },
     session: { ...config.session },
+  };
+}
+
+function approvedRuntimeConfig(config: Config, intervalsOwnerReady: boolean): Config {
+  if (intervalsOwnerReady || config.intervals.apiKey.length === 0) return config;
+  return {
+    ...config,
+    intervals: { ...config.intervals, apiKey: "" },
   };
 }
 
@@ -463,6 +477,7 @@ function runtimeConfigSnapshot(
   config: Config,
   environment: Readonly<Record<string, string | undefined>>,
   timezone: string,
+  intervalsVerificationPending: boolean,
 ): GetRuntimeConfigRpcResult {
   return {
     schemaVersion: 3,
@@ -474,6 +489,7 @@ function runtimeConfigSnapshot(
     intervals: {
       athlete_id: config.intervals.athleteId,
       credential_configured: config.intervals.apiKey.length > 0,
+      credential_verification_pending: intervalsVerificationPending,
       managedByEnvironment: {
         athleteId: environment.INTERVALS_ATHLETE_ID !== undefined,
       },
@@ -508,7 +524,10 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
   readonly getArchivedTranscriptPage: (
     request: GetArchivedTranscriptPageRpcParams,
   ) => Promise<GetArchivedTranscriptPageRpcResult>;
-  replace(create: () => RuntimeBundle | Promise<RuntimeBundle>): Promise<void>;
+  replace<T>(
+    prepare: () => T | Promise<T>,
+    commit: (prepared: T) => RuntimeBundle | Promise<RuntimeBundle>,
+  ): Promise<void>;
 } {
   let active = initial;
   let admission = Promise.resolve();
@@ -557,7 +576,7 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
       run(async (bundle) =>
         bundle.chatStore.readArchivedConversationPage("desktop", boundaryRef, request),
       ),
-    async replace(create) {
+    async replace(prepare, commit) {
       pendingReplacements += 1;
       const previousAdmission = admission;
       let release!: () => void;
@@ -567,10 +586,11 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
       admission = previousAdmission.then(() => barrier);
       await previousAdmission;
       try {
+        const prepared = await prepare();
         if (activeCalls > 0) {
           await new Promise<void>((resolve) => drainWaiters.add(resolve));
         }
-        active = await create();
+        active = await commit(prepared);
       } finally {
         pendingReplacements -= 1;
         release();
@@ -780,11 +800,14 @@ export async function createLocalCoachComposition(
     );
     return approval ?? undefined;
   };
-  let activeConfig = copyConfig(input.config);
-  if (activeConfig.intervals.apiKey.length > 0 && activeConfig.intervals.athleteId.length === 0) {
-    activeConfig = {
-      ...activeConfig,
-      intervals: { ...activeConfig.intervals, athleteId: "0" },
+  let unapprovedConfig = copyConfig(input.config);
+  if (
+    unapprovedConfig.intervals.apiKey.length > 0 &&
+    unapprovedConfig.intervals.athleteId.length === 0
+  ) {
+    unapprovedConfig = {
+      ...unapprovedConfig,
+      intervals: { ...unapprovedConfig.intervals, athleteId: "0" },
     };
   }
   const verifyIntervalsCredential = async (
@@ -792,7 +815,7 @@ export async function createLocalCoachComposition(
     signal: AbortSignal,
   ): Promise<VerifyIntervalsCredentialRpcResult> => {
     const configuredAthleteSelector = normalizeIntervalsAthleteSelector(
-      activeConfig.intervals.athleteId,
+      unapprovedConfig.intervals.athleteId,
     );
     const configRevision = intervalsConfigRevision;
     let athleteSelector = configuredAthleteSelector;
@@ -843,20 +866,33 @@ export async function createLocalCoachComposition(
   };
   let runtime: LocalStoreRuntime | undefined;
   let reference: LocalReferenceRuntime | undefined;
+  let initialRefreshPromise: Promise<void> | undefined;
+  let initialRefreshRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let initialRefreshFailedAttempts = 0;
+  const initialRefreshController = new AbortController();
+  let intervalsOwnerReady = unapprovedConfig.intervals.apiKey.length === 0;
+  const approvedConfig = (): Config => approvedRuntimeConfig(unapprovedConfig, intervalsOwnerReady);
+  const intervalsVerificationPending = (): boolean =>
+    unapprovedConfig.intervals.apiKey.length > 0 && !intervalsOwnerReady;
+  let initialRefreshStarted = !input.deferInitialRefresh;
+  let initialRefreshConfigCaptured = !input.deferInitialRefresh;
+  let schedulerStarted = false;
+  let closing = false;
   let closePromise: Promise<void> | undefined;
   try {
-    if (activeConfig.intervals.apiKey.length > 0) {
+    if (!input.deferInitialRefresh && unapprovedConfig.intervals.apiKey.length > 0) {
       const startupOwnerClaim = await assertIntervalsOwner(
-        activeConfig.intervals,
-        activeConfig.intervals,
+        unapprovedConfig.intervals,
+        unapprovedConfig.intervals,
         new AbortController().signal,
       );
       await startupOwnerClaim?.claim();
+      intervalsOwnerReady = true;
     }
     reference = await (dependencies.bootstrap ?? bootstrapReference)({
       dataDir: input.home.root,
-      intervals: activeConfig.intervals,
-      readIntervals: () => activeConfig.intervals,
+      intervals: approvedConfig().intervals,
+      readIntervals: () => approvedConfig().intervals,
       sport: cyclingSport,
       startScheduler: false,
       attemptLedgerForRun: () => {
@@ -867,8 +903,8 @@ export async function createLocalCoachComposition(
     });
     const runtimeOptions: LocalStoreRuntimeOptions = {
       env: input.env,
-      config: activeConfig,
-      readConfig: () => activeConfig,
+      config: approvedConfig(),
+      readConfig: () => approvedConfig(),
       home: input.home,
       reference,
       writerContext: input.context,
@@ -882,8 +918,11 @@ export async function createLocalCoachComposition(
             reference: reference as ReferenceRuntime,
           })
         : dependencies.createRuntime(runtimeOptions);
-    await runtime.runWindow();
-    runtime.startScheduler();
+    if (!input.deferInitialRefresh) {
+      await runtime.runWindow();
+      runtime.startScheduler();
+      schedulerStarted = true;
+    }
     const logger = createSubsystemLogger("agent", input.home.root);
     const getAccessToken = createAccessTokenReader(input.home.configDir);
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
@@ -981,10 +1020,15 @@ export async function createLocalCoachComposition(
         }),
       };
     };
-    const initialBundle = buildBundle(activeConfig);
+    const initialBundle = buildBundle(approvedConfig());
     let activeTimezone = initialBundle.timezone;
     const reconfigurable = createReconfigurableRuntimeBundle(initialBundle);
     const persistConfig = dependencies.persistRuntimeConfig ?? persistRuntimeConfig;
+    const ensureSchedulerStarted = (): void => {
+      if (schedulerStarted || closing) return;
+      runtime!.startScheduler();
+      schedulerStarted = true;
+    };
     const applyRuntimeConfig = async (
       request: ConfigureRuntimeRpcParams,
       signal: AbortSignal,
@@ -992,13 +1036,13 @@ export async function createLocalCoachComposition(
       signal.throwIfAborted();
       if (
         request.llm?.clear_credential === true &&
-        request.llm.provider !== activeConfig.llm.provider
+        request.llm.provider !== unapprovedConfig.llm.provider
       ) {
         return "credential-required";
       }
       if (
         request.llm?.clear_credential === true &&
-        llmCredentialManagedByEnvironment(input.env, activeConfig.llm.provider)
+        llmCredentialManagedByEnvironment(input.env, unapprovedConfig.llm.provider)
       ) {
         return "managed-by-environment";
       }
@@ -1031,7 +1075,7 @@ export async function createLocalCoachComposition(
       let effectiveRequest = request;
       let verificationEvidence: IntervalsCredentialVerificationEvidence | undefined;
       if (request.intervals?.verification_approval !== undefined) {
-        const preliminaryCandidate = mergedRuntimeConfig(activeConfig, request);
+        const preliminaryCandidate = mergedRuntimeConfig(unapprovedConfig, request);
         let ownerState: Awaited<ReturnType<typeof readIntervalsStoreOwnerState>> | undefined;
         try {
           ownerState = await readIntervalsStoreOwnerState(input.context.store);
@@ -1041,7 +1085,7 @@ export async function createLocalCoachComposition(
             approval: request.intervals.verification_approval,
             credentialDigest: digestIntervalsCredential(preliminaryCandidate.intervals.apiKey),
             configuredAthleteSelector: normalizeIntervalsAthleteSelector(
-              activeConfig.intervals.athleteId,
+              unapprovedConfig.intervals.athleteId,
             ),
             ...(request.intervals.athlete_id === undefined
               ? {}
@@ -1069,9 +1113,11 @@ export async function createLocalCoachComposition(
           }
         }
       }
-      const candidate = mergedRuntimeConfig(activeConfig, effectiveRequest);
+      const candidate = mergedRuntimeConfig(unapprovedConfig, effectiveRequest);
       const activeAthleteId =
-        activeConfig.intervals.athleteId.length === 0 ? "0" : activeConfig.intervals.athleteId;
+        unapprovedConfig.intervals.athleteId.length === 0
+          ? "0"
+          : unapprovedConfig.intervals.athleteId;
       const candidateAthleteId =
         candidate.intervals.athleteId.length === 0 ? "0" : candidate.intervals.athleteId;
       const athleteIdChanged =
@@ -1080,14 +1126,15 @@ export async function createLocalCoachComposition(
       const apiKeyChanged =
         (effectiveRequest.intervals?.api_key !== undefined ||
           effectiveRequest.intervals?.clear_credential === true) &&
-        candidate.intervals.apiKey !== activeConfig.intervals.apiKey;
-      const intervalsConfigChanged =
-        candidate.intervals.apiKey !== activeConfig.intervals.apiKey ||
-        candidate.intervals.athleteId !== activeConfig.intervals.athleteId;
+        candidate.intervals.apiKey !== unapprovedConfig.intervals.apiKey;
       let pendingOwnerClaim: RuntimeAthleteOwnerClaim | undefined;
+      let intervalsOwnerApproved = false;
       if (
         athleteIdChanged ||
-        (apiKeyChanged && effectiveRequest.intervals?.clear_credential !== true)
+        (apiKeyChanged && effectiveRequest.intervals?.clear_credential !== true) ||
+        (effectiveRequest.intervals !== undefined &&
+          candidate.intervals.apiKey.length > 0 &&
+          !intervalsOwnerReady)
       ) {
         if (
           apiKeyChanged &&
@@ -1098,12 +1145,13 @@ export async function createLocalCoachComposition(
         }
         try {
           pendingOwnerClaim = await assertIntervalsOwner(
-            activeConfig.intervals,
+            unapprovedConfig.intervals,
             candidate.intervals,
             signal,
-            activeConfig.intervals.apiKey.length === 0 && candidate.intervals.apiKey.length > 0,
+            unapprovedConfig.intervals.apiKey.length === 0 && candidate.intervals.apiKey.length > 0,
             verificationEvidence,
           );
+          intervalsOwnerApproved = true;
         } catch (error) {
           if (!(error instanceof RuntimeAthleteOwnerRefusal)) throw error;
           if (error.reason === "current-credential-missing") return "credential-required";
@@ -1123,47 +1171,170 @@ export async function createLocalCoachComposition(
           )?.profile,
         );
       }
-      const replacement = buildBundle(candidate);
       const chatGptProfileClear =
-        request.llm?.clear_credential === true && activeConfig.llm.provider === "openai-codex";
+        request.llm?.clear_credential === true && unapprovedConfig.llm.provider === "openai-codex";
       signal.throwIfAborted();
-      await reconfigurable.replace(async () => {
-        signal.throwIfAborted();
-        const previousConfigFile =
-          pendingOwnerClaim === undefined && !chatGptProfileClear
-            ? undefined
-            : captureRuntimeConfigFile(input.home.configDir);
-        try {
-          persistConfig(input.home.configDir, candidate, effectiveRequest, activeConfig);
-          if (chatGptProfileClear) {
-            deleteStoredProfile(join(input.home.configDir, "auth-profiles.json"), "openai-codex");
+      await reconfigurable.replace(
+        () => {
+          signal.throwIfAborted();
+          const latestCandidate = mergedRuntimeConfig(unapprovedConfig, effectiveRequest);
+          if (
+            intervalsOwnerApproved &&
+            (latestCandidate.intervals.apiKey !== candidate.intervals.apiKey ||
+              latestCandidate.intervals.athleteId !== candidate.intervals.athleteId)
+          ) {
+            throw new Error("Intervals configuration changed during ownership verification.");
           }
-          await pendingOwnerClaim?.claim();
-        } catch (error) {
-          if (previousConfigFile !== undefined) {
-            try {
-              restoreRuntimeConfigFile(input.home.configDir, previousConfigFile);
-            } catch (rollbackError) {
-              throw new AggregateError(
-                [error, rollbackError],
-                "Runtime account claim failed and configuration rollback was unsuccessful.",
-              );
+          const latestIntervalsChanged =
+            latestCandidate.intervals.apiKey !== unapprovedConfig.intervals.apiKey ||
+            latestCandidate.intervals.athleteId !== unapprovedConfig.intervals.athleteId;
+          const replacementOwnerReady =
+            latestCandidate.intervals.apiKey.length === 0 ||
+            intervalsOwnerApproved ||
+            (!latestIntervalsChanged && intervalsOwnerReady);
+          return {
+            latestCandidate,
+            latestIntervalsChanged,
+            replacementOwnerReady,
+            replacement: buildBundle(approvedRuntimeConfig(latestCandidate, replacementOwnerReady)),
+          };
+        },
+        async ({ latestCandidate, latestIntervalsChanged, replacementOwnerReady, replacement }) => {
+          signal.throwIfAborted();
+          const previousConfigFile =
+            pendingOwnerClaim === undefined && !chatGptProfileClear
+              ? undefined
+              : captureRuntimeConfigFile(input.home.configDir);
+          try {
+            persistConfig(
+              input.home.configDir,
+              latestCandidate,
+              effectiveRequest,
+              unapprovedConfig,
+            );
+            if (chatGptProfileClear) {
+              deleteStoredProfile(join(input.home.configDir, "auth-profiles.json"), "openai-codex");
+            }
+            await pendingOwnerClaim?.claim();
+          } catch (error) {
+            if (previousConfigFile !== undefined) {
+              try {
+                restoreRuntimeConfigFile(input.home.configDir, previousConfigFile);
+              } catch (rollbackError) {
+                throw new AggregateError(
+                  [error, rollbackError],
+                  "Runtime account claim failed and configuration rollback was unsuccessful.",
+                );
+              }
+            }
+            throw error;
+          }
+          unapprovedConfig = latestCandidate;
+          if (latestIntervalsChanged) intervalsConfigRevision += 1;
+          intervalsOwnerReady = replacementOwnerReady;
+          activeTimezone = replacement.timezone;
+          return replacement;
+        },
+      );
+      if (request.intervals !== undefined && candidate.intervals.apiKey.length > 0) {
+        if (initialRefreshStarted && initialRefreshConfigCaptured && intervalsOwnerReady) {
+          ensureSchedulerStarted();
+          const refreshRevision = intervalsConfigRevision;
+          void runtime!
+            .runWindowAfter(() => Promise.resolve())
+            .catch((error) =>
+              logger.error("runtime_intervals_refresh_failed", undefined, {
+                configRevision: refreshRevision,
+                failure: serializeBoundaryError(error),
+              }),
+            );
+        }
+      } else if (request.intervals !== undefined && initialRefreshStarted && intervalsOwnerReady) {
+        ensureSchedulerStarted();
+      }
+    };
+    const scheduleInitialRefreshRetry = (): void => {
+      if (closing || initialRefreshRetryTimer !== undefined) return;
+      initialRefreshFailedAttempts += 1;
+      const delay = Math.min(
+        INITIAL_REFRESH_RETRY_BASE_DELAY_MS * 2 ** (initialRefreshFailedAttempts - 1),
+        INITIAL_REFRESH_RETRY_MAX_DELAY_MS,
+      );
+      const timer = setTimeout(() => {
+        if (initialRefreshRetryTimer === timer) initialRefreshRetryTimer = undefined;
+        if (!closing) void startInitialRefresh().catch(() => {});
+      }, delay);
+      timer.unref?.();
+      initialRefreshRetryTimer = timer;
+    };
+    const startInitialRefresh = (): Promise<void> => {
+      if (initialRefreshPromise !== undefined) return initialRefreshPromise;
+      if (!input.deferInitialRefresh) {
+        initialRefreshPromise = Promise.resolve();
+        return initialRefreshPromise;
+      }
+      if (initialRefreshRetryTimer !== undefined) {
+        clearTimeout(initialRefreshRetryTimer);
+        initialRefreshRetryTimer = undefined;
+      }
+      initialRefreshStarted = true;
+      const refreshRevision = intervalsConfigRevision;
+      let ownerSucceeded = false;
+      initialRefreshPromise = runtime!
+        .runWindowAfter(async (signal) => {
+          const initializationSignal = AbortSignal.any([signal, initialRefreshController.signal]);
+          initializationSignal.throwIfAborted();
+          initialRefreshConfigCaptured = true;
+          const initialIntervals = { ...unapprovedConfig.intervals };
+          if (initialIntervals.apiKey.length > 0 && !intervalsOwnerReady) {
+            const ownerClaim = await assertIntervalsOwner(
+              initialIntervals,
+              initialIntervals,
+              initializationSignal,
+            );
+            initializationSignal.throwIfAborted();
+            await ownerClaim?.claim();
+            initializationSignal.throwIfAborted();
+          }
+          await reconfigurable.replace(
+            () => {
+              initializationSignal.throwIfAborted();
+              return buildBundle(approvedRuntimeConfig(unapprovedConfig, true));
+            },
+            (replacement) => {
+              initializationSignal.throwIfAborted();
+              intervalsOwnerReady = true;
+              activeTimezone = replacement.timezone;
+              ownerSucceeded = true;
+              return replacement;
+            },
+          );
+        })
+        .then(() => undefined)
+        .finally(() => {
+          if (ownerSucceeded) ensureSchedulerStarted();
+        })
+        .catch((error) => {
+          if (!closing) {
+            logger.error("initial_store_refresh_failed", undefined, {
+              configRevision: refreshRevision,
+              failure: serializeBoundaryError(error),
+            });
+            initialRefreshPromise = undefined;
+            if (
+              !ownerSucceeded &&
+              (!(error instanceof RuntimeAthleteOwnerRefusal) || error.transient)
+            ) {
+              scheduleInitialRefreshRetry();
             }
           }
           throw error;
-        }
-        activeConfig = candidate;
-        if (intervalsConfigChanged) intervalsConfigRevision += 1;
-        activeTimezone = replacement.timezone;
-        return replacement;
-      });
-      if (request.intervals !== undefined && candidate.intervals.apiKey.length > 0) {
-        void runtime!.runWindowAfter(() => Promise.resolve()).catch(() => {});
-      }
+        });
+      return initialRefreshPromise;
     };
     const liveIntervals = Object.freeze({
       async read() {
-        return Object.freeze({ ...activeConfig.intervals });
+        return Object.freeze({ ...approvedConfig().intervals });
       },
     });
     const options = Object.freeze({ liveIntervals });
@@ -1247,8 +1418,15 @@ export async function createLocalCoachComposition(
             reconfigurable.getArchivedTranscriptPage(request),
           applyRuntimeConfig,
           verifyIntervalsCredential,
+          intervalsVerificationPending,
           readRuntimeConfig: () =>
-            runtimeConfigSnapshot(input.home.configDir, activeConfig, input.env, activeTimezone),
+            runtimeConfigSnapshot(
+              input.home.configDir,
+              unapprovedConfig,
+              input.env,
+              activeTimezone,
+              intervalsVerificationPending(),
+            ),
         },
         dependencies.operationsDependencies,
       ),
@@ -1261,8 +1439,15 @@ export async function createLocalCoachComposition(
       operations,
       spendMeter: reconfigurable.spendMeter,
       confirmations: reconfigurable.confirmations,
+      startInitialRefresh,
       close() {
         closePromise ??= (async () => {
+          closing = true;
+          if (initialRefreshRetryTimer !== undefined) {
+            clearTimeout(initialRefreshRetryTimer);
+            initialRefreshRetryTimer = undefined;
+          }
+          initialRefreshController.abort(new Error("Coach lifecycle closed."));
           let failure: { readonly error: unknown } | undefined;
           const attempt = async (operation: () => void | Promise<void>): Promise<void> => {
             try {
@@ -1274,6 +1459,7 @@ export async function createLocalCoachComposition(
           await attempt(() => dependencies.closeHostAdapters?.());
           await attempt(() => reference!.scheduler.stop());
           await attempt(() => runtime!.close());
+          await initialRefreshPromise?.catch(() => {});
           if (failure !== undefined) throw failure.error;
         })();
         return closePromise;

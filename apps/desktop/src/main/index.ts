@@ -4,7 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connectCoachClient } from "@enduragent/coach-client";
 import { checkIntervalsStoreOwnerAtPath } from "@enduragent/coach/account-identity";
-import { prepareDesktopAthleteHome } from "@enduragent/coach/enduragent";
+import {
+  prepareDesktopAthleteHome,
+  startDesktopDaemonInitialRefresh,
+} from "@enduragent/coach/enduragent";
 import { AthleteHomeIdentitySchema } from "@enduragent/coach-contract";
 import {
   app,
@@ -22,12 +25,26 @@ import {
 } from "electron";
 import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
 import { createClaudeCliStatus, readClaudeCliSettings } from "./claude-cli-status.js";
-import { installDesktopConnectionIpc } from "./connection-ipc.js";
+import {
+  installDesktopConnectionIpc,
+  type DesktopConnectionIpcController,
+} from "./connection-ipc.js";
 import { installDesktopCrashTelemetry, startDesktopCrashReporter } from "./crash-telemetry.js";
+import {
+  createDesktopInitialRefreshCoordinator,
+  shouldReleaseInitialRefreshAfterLoadFailure,
+  shouldReleaseInitialRefreshAfterLoadRejection,
+  shouldReleaseInitialRefreshForWindowEvent,
+} from "./initial-refresh.js";
 import { bindDesktopAppUserModelId, createDesktopActivationRelay } from "./desktop-lifecycle.js";
 import { installDesktopAppearanceIpc } from "./appearance-ipc.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
+import { isDesktopRendererUrl } from "./renderer-navigation.js";
+import {
+  createDesktopRendererNavigationTracker,
+  type DesktopRendererNavigation,
+} from "./renderer-navigation-load.js";
 import {
   createDesktopIntervalsCredentialVerifier,
   installDesktopIntervalsIpc,
@@ -153,6 +170,8 @@ function disableChromiumMediaSessionIntegration(): void {
 let desktopIsClosing = false;
 let desktopStartedInBackground = false;
 const desktopAcceptanceHidden = process.env.ENDURAGENT_ACCEPTANCE_HIDDEN === "1";
+const INITIAL_REFRESH_RELEASE_RETRY_DELAY_MS = 1_000;
+const INITIAL_REFRESH_SETTLE_WATCHDOG_MS = 30_000;
 
 const mainDirectory = dirname(fileURLToPath(import.meta.url));
 const utilityEntry = resolve(mainDirectory, "daemon-utility.js");
@@ -209,6 +228,15 @@ async function runDesktop(): Promise<void> {
   desktopStartedInBackground =
     !securitySmokeMode && (await shouldStartInBackgroundAtLogin(app, backgroundAtLoginPreference));
   const controller = new AbortController();
+  const scheduleInitialRefreshOperation = (delayMs: number, operation: () => void): void => {
+    if (controller.signal.aborted) return;
+    const timer = setTimeout(() => {
+      controller.signal.removeEventListener("abort", cancel);
+      operation();
+    }, delayMs);
+    const cancel = (): void => clearTimeout(timer);
+    controller.signal.addEventListener("abort", cancel, { once: true });
+  };
   const environment = { ...process.env };
   const rendererSource = resolveDesktopRendererSource(
     app.isPackaged,
@@ -238,7 +266,7 @@ async function runDesktop(): Promise<void> {
   );
   let quitRequested = false;
   let protocolInstalled = false;
-  let disposeConnectionIpc: (() => void) | undefined;
+  let connectionIpc: DesktopConnectionIpcController | undefined;
   let disposeTranscriptIpc: (() => void) | undefined;
   let disposeTrainingExportIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
@@ -251,6 +279,17 @@ async function runDesktop(): Promise<void> {
   let telegramPower: DesktopTelegramPowerLifecycle | undefined;
   let closeTelegramCoordinator: (() => Promise<void>) | undefined;
   let daemonLifecycle: DesktopDaemonLifecycle | undefined;
+  const initialRefreshCoordinator = createDesktopInitialRefreshCoordinator({
+    currentConnection: () => daemonLifecycle!.connection(),
+    startInitialRefresh: startDesktopDaemonInitialRefresh,
+    reportFailure: () => {
+      process.stderr.write("desktop-initial-refresh-release-failure\n");
+    },
+    scheduleRetry: (operation) =>
+      scheduleInitialRefreshOperation(INITIAL_REFRESH_RELEASE_RETRY_DELAY_MS, operation),
+    scheduleWatchdog: (operation) =>
+      scheduleInitialRefreshOperation(INITIAL_REFRESH_SETTLE_WATCHDOG_MS, operation),
+  });
   let shutdownPromise: Promise<void> | undefined;
   let securitySmokeControlPipe: import("node:net").Socket | undefined;
   let securitySmokeShutdownAccepted = false;
@@ -291,8 +330,8 @@ async function runDesktop(): Promise<void> {
       await Promise.all([intervalsIpcClose, telegramIpcClose]);
       await reportSecuritySmokeShutdownStage("ipc-closed");
       controller.abort();
-      disposeConnectionIpc?.();
-      disposeConnectionIpc = undefined;
+      connectionIpc?.dispose();
+      connectionIpc = undefined;
       disposeTranscriptIpc?.();
       disposeTranscriptIpc = undefined;
       disposeTrainingExportIpc?.();
@@ -404,8 +443,28 @@ async function runDesktop(): Promise<void> {
     });
     let window: BrowserWindow | null = null;
     let windowCreation: Promise<BrowserWindow> | undefined;
+    const rendererNavigationTracker = createDesktopRendererNavigationTracker<BrowserWindow>();
     const currentWindow = (): BrowserWindow | null =>
-      window !== null && !window.isDestroyed() ? window : null;
+      window !== null && !window.isDestroyed() && !window.webContents.isDestroyed()
+        ? window
+        : null;
+    const startRendererNavigation = (
+      target: BrowserWindow,
+      navigationUrl: string,
+    ): DesktopRendererNavigation<BrowserWindow> => {
+      const navigation = rendererNavigationTracker.start(target, navigationUrl, () =>
+        target.loadURL(navigationUrl),
+      );
+      void navigation.task.catch((error: unknown) => {
+        if (
+          shouldReleaseInitialRefreshAfterLoadRejection(error) &&
+          connectionIpc?.isCurrentDocumentNavigation(target, navigationUrl)
+        ) {
+          void initialRefreshCoordinator.releaseCurrent();
+        }
+      });
+      return navigation;
+    };
     type RuntimeBinding = {
       readonly authority: RuntimeConfigurationAuthority;
       readonly credentials: CredentialRuntimeApplication;
@@ -516,10 +575,40 @@ async function runDesktop(): Promise<void> {
           );
           preparedRuntimeBindings.delete(current.generation);
         }
-        if (new URL(previous.url).port === new URL(current.url).port) return;
         const visibleWindow = currentWindow();
-        if (visibleWindow === null) return;
-        visibleWindow.webContents.reload();
+        if (current.owner !== "app-supervised") {
+          if (visibleWindow !== null) {
+            const portChanged = new URL(previous.url).port !== new URL(current.url).port;
+            const advanced =
+              !portChanged &&
+              (connectionIpc?.advanceCurrentDocumentGeneration(current.generation) ?? false);
+            if (!advanced) {
+              try {
+                const navigationUrl = connectionIpc!.prepareDocumentNavigation(
+                  visibleWindow,
+                  current.generation,
+                );
+                startRendererNavigation(visibleWindow, navigationUrl);
+              } catch {}
+            }
+          }
+          return;
+        }
+        const recovery = initialRefreshCoordinator.prepareRecovery({
+          current,
+          rendererPresent: visibleWindow !== null,
+        });
+        if (recovery === "reload-required") {
+          try {
+            const navigationUrl = connectionIpc!.prepareDocumentNavigation(
+              visibleWindow!,
+              current.generation,
+            );
+            startRendererNavigation(visibleWindow!, navigationUrl);
+          } catch {
+            void initialRefreshCoordinator.releaseCurrent();
+          }
+        }
       },
     });
     const configDir = join(selectedAthleteHome, "config");
@@ -816,7 +905,9 @@ async function runDesktop(): Promise<void> {
           }
           return Promise.resolve(current);
         }
+        let creating: BrowserWindow | undefined;
         windowCreation = (async () => {
+          const navigationGeneration = daemonLifecycle!.connection().generation;
           const windowOptions = desktopWindowOptions(
             preloadEntry,
             nativeTheme.shouldUseDarkColors ? "dark" : "light",
@@ -828,6 +919,7 @@ async function runDesktop(): Promise<void> {
             };
           }
           const created = new BrowserWindow(windowOptions);
+          creating = created;
           window = created;
           residency?.manageMainWindow(created);
           rendererConsoleCapture.attach(created.webContents);
@@ -885,26 +977,81 @@ async function runDesktop(): Promise<void> {
               window = null;
               disposeOnboarding?.();
               disposeOnboarding = undefined;
+              void initialRefreshCoordinator.releaseCurrent();
             }
           });
-          await created.loadURL(DESKTOP_RENDERER_URL);
+          created.webContents.on("render-process-gone", () => {
+            if (
+              shouldReleaseInitialRefreshForWindowEvent(
+                currentWindow(),
+                created,
+                connectionIpc?.isCurrentDocumentNavigation(
+                  created,
+                  created.webContents.getURL(),
+                ) ?? false,
+              )
+            ) {
+              void initialRefreshCoordinator.releaseCurrent();
+            }
+          });
+          created.webContents.on(
+            "did-fail-load",
+            (_event, errorCode, _description, failedUrl, mainFrame) => {
+              if (
+                shouldReleaseInitialRefreshAfterLoadFailure(errorCode, mainFrame) &&
+                connectionIpc?.isCurrentDocumentNavigation(created, failedUrl)
+              ) {
+                void initialRefreshCoordinator.releaseCurrent();
+              }
+            },
+          );
+          const navigationUrl = connectionIpc!.prepareDocumentNavigation(
+            created,
+            navigationGeneration,
+          );
+          const initialNavigation = startRendererNavigation(created, navigationUrl);
+          await rendererNavigationTracker.waitForCurrent(initialNavigation);
           if (!desktopAcceptanceHidden) {
             if (created.isMinimized()) created.restore();
             created.show();
             created.focus();
           }
           return created;
-        })().finally(() => {
-          windowCreation = undefined;
-        });
+        })()
+          .catch((error: unknown) => {
+            const created = creating;
+            if (created !== undefined) {
+              if (window === created) {
+                window = null;
+                disposeOnboarding?.();
+                disposeOnboarding = undefined;
+              }
+              if (!created.isDestroyed()) created.destroy();
+            }
+            const lifecycleState = daemonLifecycle?.snapshot();
+            if (
+              lifecycleState?.status === "terminal" &&
+              !desktopAcceptanceHidden &&
+              !desktopIsClosing
+            ) {
+              const copy = lifecycleErrorCopy(lifecycleState);
+              if (copy !== undefined) dialog.showErrorBox(copy.title, copy.content);
+            }
+            throw error;
+          })
+          .finally(() => {
+            windowCreation = undefined;
+          });
         return windowCreation;
       },
     };
-    disposeConnectionIpc = installDesktopConnectionIpc({
+    connectionIpc = installDesktopConnectionIpc({
       ipcMain,
       currentWindow: () => mainWindow.current() ?? undefined,
       expectedAthleteHome: selectedAthleteHome,
       runtime: daemonLifecycle,
+      initialSetupStatusSettled: (generation) =>
+        initialRefreshCoordinator.initialSetupStatusSettled(generation),
     });
     disposeTranscriptIpc = installDesktopTranscriptIpc({
       ipcMain,
@@ -970,6 +1117,10 @@ async function runDesktop(): Promise<void> {
       power: telegramPower,
       isTrusted: (event) => isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
     });
+    const initialRefreshConnection = daemonLifecycle.connection();
+    if (initialRefreshConnection.owner === "app-supervised") {
+      initialRefreshCoordinator.arm(initialRefreshConnection);
+    }
     residency = createDesktopResidency({
       app,
       mainWindow,
@@ -998,6 +1149,13 @@ async function runDesktop(): Promise<void> {
     });
     if (process.platform === "win32") await activation.bind(residency);
     await residency.start();
+    if (
+      desktopStartedInBackground &&
+      initialRefreshConnection.owner === "app-supervised" &&
+      mainWindow.current() === null
+    ) {
+      void initialRefreshCoordinator.releaseCurrent();
+    }
     const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();
     void updateController.start();
 
@@ -1075,7 +1233,8 @@ async function runDesktop(): Promise<void> {
           ? undefined
           : waitForSecuritySmokeShutdown(securitySmokeControlPipe);
       const result = {
-        url: rendererResult.url,
+        url: DESKTOP_RENDERER_URL,
+        rendererNavigationValid: isDesktopRendererUrl(rendererResult.url),
         rpcUrl: daemonLifecycle.connection().url,
         hasSingleInstanceLock: app.hasSingleInstanceLock(),
         visibleForSecondLaunch: initialWindow.isVisible(),

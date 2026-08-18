@@ -619,6 +619,19 @@ describe("coach request and event projection", () => {
       requests: { store: 2, reference: 1, total: 3 },
     } as const;
     expect(SyncRpcResultSchema.parse(syncResult)).toEqual(syncResult);
+    for (const backfill of [
+      "completed",
+      "skipped-no-credential",
+      "pending-verification",
+    ] as const) {
+      expect(SyncRpcResultSchema.parse({ ...syncResult, backfill })).toEqual({
+        ...syncResult,
+        backfill,
+      });
+    }
+    expect(SyncRpcResultSchema.safeParse({ ...syncResult, backfill: "skipped" }).success).toBe(
+      false,
+    );
     expect(
       SyncRpcResultSchema.safeParse({
         ...syncResult,
@@ -821,12 +834,10 @@ describe("coach request and event projection", () => {
       }).success,
     ).toBe(false);
     expect(JSON.stringify(result)).not.toContain("placeholder");
-    expect(IntervalsCredentialApprovalSchema.parse(INTERVALS_APPROVAL)).toBe(
-      INTERVALS_APPROVAL,
-    );
-    expect(
-      VerifyIntervalsCredentialRpcParamsSchema.parse({ api_key: "placeholder" }),
-    ).toEqual({ api_key: "placeholder" });
+    expect(IntervalsCredentialApprovalSchema.parse(INTERVALS_APPROVAL)).toBe(INTERVALS_APPROVAL);
+    expect(VerifyIntervalsCredentialRpcParamsSchema.parse({ api_key: "placeholder" })).toEqual({
+      api_key: "placeholder",
+    });
     for (const invalid of [
       {},
       { api_key: "" },
@@ -876,6 +887,21 @@ describe("coach request and event projection", () => {
       },
     } as const;
     expect(GetRuntimeConfigRpcResultSchema.parse(snapshot)).toEqual(snapshot);
+    expect(
+      GetRuntimeConfigRpcResultSchema.parse({
+        ...snapshot,
+        intervals: { ...snapshot.intervals, credential_verification_pending: true },
+      }),
+    ).toEqual({
+      ...snapshot,
+      intervals: { ...snapshot.intervals, credential_verification_pending: true },
+    });
+    expect(
+      GetRuntimeConfigRpcResultSchema.safeParse({
+        ...snapshot,
+        intervals: { ...snapshot.intervals, credential_verification_pending: "true" },
+      }).success,
+    ).toBe(false);
     expect(
       GetRuntimeConfigRpcResultSchema.parse({
         ...snapshot,
@@ -1598,7 +1624,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-17 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-18 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1606,8 +1632,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 17,
-      serverProtocolVersion: 17,
+      clientProtocolVersion: 18,
+      serverProtocolVersion: 18,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1662,9 +1688,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 17 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 18 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(17);
+    expect(client.clientProtocolVersion).toBe(18);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -1674,11 +1700,7 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual(
       accepted,
     );
-    const oldClient = createVersionMismatchServerHandshakeFrame(
-      "ephemeral-client-started",
-      14,
-      15,
-    );
+    const oldClient = createVersionMismatchServerHandshakeFrame("ephemeral-client-started", 14, 15);
     const oldServer = createVersionMismatchServerHandshakeFrame("unmanaged-foreground", 16, 15);
     expect(ServerHandshakeFrameSchema.parse(oldClient)).toEqual(oldClient);
     expect(oldClient.direction).toBe("client-older");
@@ -1794,7 +1816,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version seventeen", () => {
-    expect(PROTOCOL_VERSION).toBe(17);
+  it("uses protocol version eighteen", () => {
+    expect(PROTOCOL_VERSION).toBe(18);
   });
 });

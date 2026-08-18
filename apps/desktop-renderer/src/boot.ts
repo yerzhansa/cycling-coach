@@ -55,6 +55,7 @@ import {
 } from "./settings/credential-controller.js";
 import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
 import { createTrainingExportController } from "./training-export/controller.js";
+import { settleInitialSetupStatus } from "./initial-setup-status.js";
 
 export type Disposer = () => void;
 
@@ -422,7 +423,15 @@ export function bootRenderer(): Disposer {
   spendController.start();
   void telegramSettingsController.activate();
   void chatController.start();
-  void onboarding.open().finally(() => store.getState().setOnboardingStartupSettled(true));
+  settleInitialSetupStatus({
+    captureGeneration: () =>
+      window.enduragentAuth.getDaemonConnection().then((connection) => connection.generation),
+    open: () => onboarding.open(),
+    markSettled: () => store.getState().setOnboardingStartupSettled(true),
+    reportSettled: (generation) =>
+      window.enduragentAuth.initialSetupStatusSettled({ generation }),
+    reportFailure: () => console.error("desktop-initial-setup-settled-report-failure"),
+  });
   void clients.getClient().then(
     () => {
       document.documentElement.dataset.rpc = "connected";

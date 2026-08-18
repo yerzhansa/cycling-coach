@@ -5,6 +5,7 @@ interface EnduragentAuth {
     readonly rendererCapability: string;
     readonly generation: number;
   }>;
+  initialSetupStatusSettled(input: { readonly generation: number }): Promise<void>;
   getTranscriptPage(input: {
     readonly cursor: string | null;
     readonly limit: number;

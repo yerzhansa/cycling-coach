@@ -6,8 +6,11 @@ vi.mock("electron", () => ({
   protocol: { registerSchemesAsPrivileged: vi.fn() },
 }));
 
-import { DESKTOP_OPEN_EXTERNAL_CHANNEL, DESKTOP_RENDERER_URL } from "../src/main/constants.js";
+import { DESKTOP_OPEN_EXTERNAL_CHANNEL } from "../src/main/constants.js";
 import { installDesktopExternalLinkIpc } from "../src/main/external-link-ipc.js";
+import { createDesktopRendererUrl } from "../src/main/renderer-navigation.js";
+
+const RENDERER_URL = createDesktopRendererUrl("A".repeat(43));
 
 type Listener = (event: unknown, ...args: unknown[]) => void;
 
@@ -23,7 +26,7 @@ function setup(openExternal = vi.fn(async () => {})) {
       listeners.get(channel)?.delete(listener);
     }),
   };
-  const mainFrame: { url: string } = { url: DESKTOP_RENDERER_URL };
+  const mainFrame: { url: string } = { url: RENDERER_URL };
   const webContents = { isDestroyed: () => false, mainFrame };
   const window = { isDestroyed: () => false, webContents };
   let currentWindow: typeof window | undefined = window;
@@ -102,7 +105,7 @@ describe("desktop external-link IPC", () => {
 
   it("rejects stale, subframe, mismatched-sender, and destroyed-window events", () => {
     const state = setup();
-    const otherFrame = { url: DESKTOP_RENDERER_URL };
+    const otherFrame = { url: RENDERER_URL };
 
     state.emit(
       { sender: state.webContents, senderFrame: otherFrame },
@@ -112,7 +115,7 @@ describe("desktop external-link IPC", () => {
     state.emit({ sender: state.webContents, senderFrame: null }, "https://example.test/guide");
     state.mainFrame.url = "https://example.invalid";
     state.emit(state.trusted, "https://example.test/guide");
-    state.mainFrame.url = DESKTOP_RENDERER_URL;
+    state.mainFrame.url = RENDERER_URL;
     state.setCurrentWindow(undefined);
     state.emit(state.trusted, "https://example.test/guide");
     state.setCurrentWindow({ ...state.window, isDestroyed: () => true });

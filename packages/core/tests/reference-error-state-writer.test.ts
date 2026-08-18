@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import {
   clearErrorState,
   writeErrorState,
 } from "../src/reference/sync/error-state-writer.js";
+import { enqueueCommit } from "../src/io/atomic-write-json.js";
 
 describe("writeErrorState", () => {
   let dir: string;
@@ -100,6 +101,47 @@ describe("clearErrorState", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("deletes the canonical target through the asynchronous unlink primitive", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const unlink = vi.fn((...args: Parameters<typeof actual.unlink>) => actual.unlink(...args));
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({ ...actual, unlink }));
+    try {
+      const {
+        clearErrorState: isolatedClearErrorState,
+        writeErrorState: isolatedWriteErrorState,
+      } = await import("../src/reference/sync/error-state-writer.js");
+      await isolatedWriteErrorState(dir, { step: "gate_rejected", detail: "x" });
+      unlink.mockClear();
+      await isolatedClearErrorState(dir);
+      expect(unlink).toHaveBeenCalledOnce();
+      expect(existsSync(join(dir, "error_state.json"))).toBe(false);
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("skips a queued unlink whose signal aborted while an earlier commit was in flight", async () => {
+    await writeErrorState(dir, { step: "gate_rejected", detail: "x" });
+    const path = join(dir, "error_state.json");
+
+    let releaseQueue!: () => void;
+    const queueGate = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    const blocked = enqueueCommit(path, () => queueGate);
+
+    const controller = new AbortController();
+    const clearing = clearErrorState(dir, { signal: controller.signal });
+    controller.abort();
+    releaseQueue();
+    await blocked;
+    await expect(clearing).resolves.toBeUndefined();
+
+    expect(existsSync(path)).toBe(true);
+  });
+
   it("skips the unlink when the signal is aborted (B3)", async () => {
     await writeErrorState(dir, { step: "gate_rejected", detail: "x" });
     expect(existsSync(join(dir, "error_state.json"))).toBe(true);
@@ -111,6 +153,12 @@ describe("clearErrorState", () => {
 
     await clearErrorState(dir);
     expect(existsSync(join(dir, "error_state.json"))).toBe(false);
+  });
+
+  it("swallows a missing error state and rejects other unlink failures", async () => {
+    await expect(clearErrorState(dir)).resolves.toBeUndefined();
+    mkdirSync(join(dir, "error_state.json"));
+    await expect(clearErrorState(dir)).rejects.toThrow();
   });
 });
 

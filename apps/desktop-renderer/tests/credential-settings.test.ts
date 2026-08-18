@@ -203,6 +203,38 @@ describe("credential settings controller", () => {
     expect(serialized).not.toContain("hash");
   });
 
+  it("lists the training credential as verifying while owner verification is pending", async () => {
+    const pendingIntervals = {
+      athlete_id: "synthetic-athlete",
+      credential_configured: true,
+      credential_verification_pending: true,
+      managedByEnvironment: { athleteId: false },
+    } satisfies RuntimeConfigSnapshot["intervals"];
+    const fromStatus = createSubject({
+      runtime: runtime(undefined, pendingIntervals),
+      statuses: [{ slot: "intervals-icu", state: "configured", runtimeState: "active" }],
+    });
+    await fromStatus.controller.activate();
+    expect(content(fromStatus.controller.state()).entries).toContainEqual({
+      credential: "intervals-icu",
+      provider: "intervals.icu",
+      kind: "Training account key",
+      runtimeState: "verifying",
+    });
+
+    const fromRuntimeFallback = createSubject({
+      runtime: runtime(undefined, pendingIntervals),
+      statuses: [],
+    });
+    await fromRuntimeFallback.controller.activate();
+    expect(content(fromRuntimeFallback.controller.state()).entries).toContainEqual({
+      credential: "intervals-icu",
+      provider: "intervals.icu",
+      kind: "Training account key",
+      runtimeState: "verifying",
+    });
+  });
+
   it("lists a keyless provider as a non-credential status row and never as a credential", async () => {
     const { controller } = createSubject({
       runtime: runtime({

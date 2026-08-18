@@ -34,6 +34,14 @@ import {
   isTrustedConnectionRequest,
   resolveDesktopRendererSource,
 } from "../src/main/security.js";
+import {
+  createDesktopRendererUrl,
+  desktopRendererNavigationToken,
+  isDesktopRendererUrl,
+} from "../src/main/renderer-navigation.js";
+
+const NAVIGATION_TOKEN = "A".repeat(43);
+const RENDERER_URL = createDesktopRendererUrl(NAVIGATION_TOKEN);
 
 describe("desktop security boundary", () => {
   beforeEach(() => {
@@ -144,7 +152,11 @@ describe("desktop security boundary", () => {
     });
 
     const contentType = async (pathname: string) =>
-      (await handler!(new Request(`enduragent://app${pathname}`))).headers.get("Content-Type");
+      (
+        await handler!(
+          new Request(pathname === "/index.html" ? RENDERER_URL : `enduragent://app${pathname}`),
+        )
+      ).headers.get("Content-Type");
 
     expect(await contentType("/index.html")).toBe("text/html; charset=utf-8");
     expect(await contentType("/assets/renderer.js")).toBe("text/javascript; charset=utf-8");
@@ -152,6 +164,49 @@ describe("desktop security boundary", () => {
     expect(await contentType("/assets/coach-prose.woff2")).toBe("font/woff2");
     expect(await contentType("/assets/trayTemplate.png")).toBeNull();
     await rm(rendererRoot, { recursive: true, force: true });
+  });
+
+  it("requires one exact navigation token for the renderer document", async () => {
+    let handler: ((request: Request) => Promise<Response>) | undefined;
+    const protocol = {
+      handle: vi.fn(async (_scheme: string, installed: (request: Request) => Promise<Response>) => {
+        handler = installed;
+      }),
+    };
+    vi.mocked(net.fetch).mockResolvedValue(new Response("synthetic-renderer"));
+    await installDesktopProtocol({
+      session: { protocol } as never,
+      currentDaemonPort: () => 45_001,
+      rendererRoot: "/synthetic/renderer",
+      rendererSource: resolveDesktopRendererSource(false, "http://127.0.0.1:5173/root"),
+    });
+
+    await expect(handler!(new Request(DESKTOP_RENDERER_URL))).resolves.toMatchObject({
+      status: 404,
+    });
+    await expect(handler!(new Request(`${RENDERER_URL}&extra=1`))).resolves.toMatchObject({
+      status: 404,
+    });
+    await expect(handler!(new Request(RENDERER_URL))).resolves.toMatchObject({ status: 200 });
+    expect(net.fetch).toHaveBeenCalledOnce();
+    expect(net.fetch).toHaveBeenCalledWith(
+      `http://127.0.0.1:5173/index.html?navigationToken=${NAVIGATION_TOKEN}`,
+    );
+  });
+
+  it("accepts only the byte-exact canonical renderer navigation URL", () => {
+    expect(desktopRendererNavigationToken(RENDERER_URL)).toBe(NAVIGATION_TOKEN);
+    expect(isDesktopRendererUrl(RENDERER_URL)).toBe(true);
+    for (const value of [
+      DESKTOP_RENDERER_URL,
+      `${RENDERER_URL}&extra=1`,
+      `${RENDERER_URL}#fragment`,
+      `${DESKTOP_RENDERER_URL}?navigationToken=${"a".repeat(42)}`,
+      `${DESKTOP_RENDERER_URL}?navigationToken=${NAVIGATION_TOKEN}&navigationToken=${NAVIGATION_TOKEN}`,
+    ]) {
+      expect(desktopRendererNavigationToken(value)).toBeUndefined();
+      expect(isDesktopRendererUrl(value)).toBe(false);
+    }
   });
 
   it("pins the scheme, IPC, window, and assigned-port-only CSP constants", () => {
@@ -189,9 +244,7 @@ describe("desktop security boundary", () => {
   });
 
   it("relaxes only inline execution and dev-server connections in the development policy", () => {
-    expect(
-      createDesktopDevelopmentContentSecurityPolicy(45_001, "http://localhost:5173/"),
-    ).toBe(
+    expect(createDesktopDevelopmentContentSecurityPolicy(45_001, "http://localhost:5173/")).toBe(
       "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ws://127.0.0.1:45001 ws://127.0.0.1:5173 ws://localhost:5173 http://127.0.0.1:5173 http://localhost:5173; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
     );
     expect(() =>
@@ -354,7 +407,7 @@ describe("desktop security boundary", () => {
   });
 
   it("requires the live window, sender, main frame, and exact URL", () => {
-    const mainFrame: { url: string } = { url: DESKTOP_RENDERER_URL };
+    const mainFrame: { url: string } = { url: RENDERER_URL };
     const webContents = { isDestroyed: () => false, mainFrame };
     const window = { isDestroyed: () => false, webContents };
     expect(
@@ -365,7 +418,7 @@ describe("desktop security boundary", () => {
     ).toBe(true);
     expect(
       isTrustedConnectionRequest(
-        { sender: webContents, senderFrame: { url: DESKTOP_RENDERER_URL } } as never,
+        { sender: webContents, senderFrame: { url: RENDERER_URL } } as never,
         window as never,
       ),
     ).toBe(false);

@@ -19,7 +19,7 @@ export interface CredentialSettingsEntry {
   readonly credential: DesktopCredentialId;
   readonly provider: string;
   readonly kind: CredentialKind;
-  readonly runtimeState: "active" | "stored-inactive" | "failed";
+  readonly runtimeState: "active" | "verifying" | "stored-inactive" | "failed";
 }
 
 export const NON_CREDENTIAL_PROVIDERS = ["claude-cli", "codex-agent"] as const;
@@ -188,6 +188,9 @@ function entriesFrom(
   runtime: RuntimeConfigSnapshot,
 ): readonly CredentialSettingsEntry[] {
   const entries = new Map<DesktopCredentialId, CredentialSettingsEntry>();
+  const intervalsVerifying =
+    runtime.intervals.credential_configured &&
+    runtime.intervals.credential_verification_pending === true;
   for (const status of statuses) {
     if (status.state === "missing") continue;
     const runtimeActive =
@@ -199,7 +202,9 @@ function entriesFrom(
       provider: PROVIDER_NAMES[status.slot],
       kind: kind(status.slot),
       runtimeState: runtimeActive
-        ? "active"
+        ? status.slot === "intervals-icu" && intervalsVerifying
+          ? "verifying"
+          : "active"
         : status.state === "re-prompt" || status.runtimeState === "failed"
           ? "failed"
           : "stored-inactive",
@@ -231,7 +236,7 @@ function entriesFrom(
       credential: "intervals-icu",
       provider: PROVIDER_NAMES["intervals-icu"],
       kind: kind("intervals-icu"),
-      runtimeState: "active",
+      runtimeState: intervalsVerifying ? "verifying" : "active",
     });
   }
   return CREDENTIAL_ORDER.flatMap((credential) => {

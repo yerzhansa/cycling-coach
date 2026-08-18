@@ -839,6 +839,26 @@ describe("conversation settings", () => {
     ).not.toHaveLength(0);
   });
 
+  it("shows the training credential as verifying while owner verification is pending", async () => {
+    await renderSettings({
+      runtime: () =>
+        snapshot({
+          intervals: {
+            athlete_id: "i1",
+            credential_configured: true,
+            credential_verification_pending: true,
+            managedByEnvironment: { athleteId: false },
+          },
+        }),
+    });
+
+    const note = await screen.findByText(/Verifying the connected training account/u);
+    expect(note).toHaveAttribute("id", "athlete-id-verifying");
+    expect(screen.getByLabelText("Athlete ID").getAttribute("aria-describedby")).toContain(
+      "athlete-id-verifying",
+    );
+  });
+
   it("warns the athlete about the session-lifecycle side effects", async () => {
     await renderSettings();
 

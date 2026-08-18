@@ -509,6 +509,7 @@ describe("coach operations", () => {
       }),
     ).resolves.toEqual({
       schemaVersion: 1,
+      backfill: "skipped-no-credential",
       published: true,
       referenceSucceeded: false,
       requests: { store: 2, reference: 1, total: 3 },
@@ -606,6 +607,33 @@ describe("coach operations", () => {
     expect(trace).toEqual(["import-start", "import-end", "sync"]);
   });
 
+  it("reports pending verification instead of a completed keyless sync", async () => {
+    const backfill = vi.fn(async () => ({ pages: 0, artifacts: 0, reports: [] }));
+    const pending = { value: true };
+    const operations = createCoachOperations(
+      {
+        home,
+        context: context(),
+        runtime: operationRuntime(),
+        intervalsCredentials: intervalsCredentials(),
+        intervalsVerificationPending: () => pending.value,
+        historyNewestDate: () => "1998-07-18",
+        applyRuntimeConfig: async () => {},
+      },
+      { backfill },
+    );
+    await expect(operations.sync({})).resolves.toMatchObject({
+      schemaVersion: 1,
+      backfill: "pending-verification",
+    });
+    expect(backfill).not.toHaveBeenCalled();
+    pending.value = false;
+    await expect(operations.sync({})).resolves.toMatchObject({
+      backfill: "skipped-no-credential",
+    });
+    expect(backfill).not.toHaveBeenCalled();
+  });
+
   it("reads live credentials after admission and orders backfill before refresh and completion", async () => {
     const trace: string[] = [];
     const selectedContext = context();
@@ -665,6 +693,7 @@ describe("coach operations", () => {
     });
     expect(result).toEqual({
       schemaVersion: 1,
+      backfill: "completed",
       published: true,
       referenceSucceeded: true,
       requests: { store: 3, reference: 2, total: 5 },

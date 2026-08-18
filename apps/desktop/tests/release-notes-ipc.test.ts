@@ -13,8 +13,11 @@ vi.mock("@enduragent/core", () => ({
   fetchLatestReleaseNotes: coreMocks.fetchLatestReleaseNotes,
 }));
 
-import { DESKTOP_RELEASE_NOTES_CHANNEL, DESKTOP_RENDERER_URL } from "../src/main/constants.js";
+import { DESKTOP_RELEASE_NOTES_CHANNEL } from "../src/main/constants.js";
 import { installDesktopReleaseNotesIpc } from "../src/main/release-notes-ipc.js";
+import { createDesktopRendererUrl } from "../src/main/renderer-navigation.js";
+
+const RENDERER_URL = createDesktopRendererUrl("A".repeat(43));
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 type LoadReleaseNotes = (...args: unknown[]) => Promise<unknown>;
@@ -32,7 +35,7 @@ function setup(loadReleaseNotes: LoadReleaseNotes = vi.fn(async () => availableR
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
     removeHandler: vi.fn((channel: string) => handlers.delete(channel)),
   };
-  const mainFrame: { url: string } = { url: DESKTOP_RENDERER_URL };
+  const mainFrame: { url: string } = { url: RENDERER_URL };
   const webContents = { isDestroyed: () => false, mainFrame };
   const window = { isDestroyed: () => false, webContents };
   let currentWindow: typeof window | undefined = window;
@@ -135,7 +138,7 @@ describe("desktop release notes IPC", () => {
   it("refuses untrusted, stale, subframe, and wrong-origin senders", async () => {
     const state = setup();
     const releaseNotes = state.handlers.get(DESKTOP_RELEASE_NOTES_CHANNEL)!;
-    const subframe = { url: DESKTOP_RENDERER_URL };
+    const subframe = { url: RENDERER_URL };
 
     expect(() => releaseNotes({ sender: state.webContents, senderFrame: subframe })).toThrow(
       "untrusted desktop release notes request",
@@ -145,7 +148,7 @@ describe("desktop release notes IPC", () => {
     );
     state.mainFrame.url = "https://example.invalid";
     expect(() => releaseNotes(state.trusted)).toThrow("untrusted desktop release notes request");
-    state.mainFrame.url = DESKTOP_RENDERER_URL;
+    state.mainFrame.url = RENDERER_URL;
     state.setCurrentWindow(undefined);
     expect(() => releaseNotes(state.trusted)).toThrow("untrusted desktop release notes request");
 

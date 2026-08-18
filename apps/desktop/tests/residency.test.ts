@@ -619,11 +619,19 @@ describe("desktop residency", () => {
   it("presents the initial window only after its renderer URL loads", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
     const creationStart = source.indexOf("windowCreation = (async () => {");
-    const load = source.indexOf("await created.loadURL(DESKTOP_RENDERER_URL);", creationStart);
+    const prepare = source.indexOf("connectionIpc!.prepareDocumentNavigation", creationStart);
+    const load = source.indexOf(
+      "const initialNavigation = startRendererNavigation(created, navigationUrl);",
+      prepare,
+    );
+    const waitForCurrent = source.indexOf(
+      "await rendererNavigationTracker.waitForCurrent(initialNavigation);",
+      load,
+    );
     const restore = source.indexOf("if (created.isMinimized()) created.restore();", load);
     const show = source.indexOf("created.show();", load);
     const focus = source.indexOf("created.focus();", load);
-    const creationEnd = source.indexOf("})().finally(() => {", focus);
+    const creationEnd = source.indexOf("windowCreation = undefined;", focus);
     const residencyStart = source.indexOf("await residency.start();", creationEnd);
     const initialShow = source.indexOf(
       "const initialWindow = desktopStartedInBackground ? undefined : await mainWindow.show();",
@@ -632,12 +640,13 @@ describe("desktop residency", () => {
 
     expect(source).not.toContain('created.once("ready-to-show"');
     expect(creationStart).toBeGreaterThanOrEqual(0);
-    expect(load).toBeGreaterThan(creationStart);
-    expect(restore).toBeGreaterThan(load);
+    expect(prepare).toBeGreaterThan(creationStart);
+    expect(load).toBeGreaterThan(prepare);
+    expect(waitForCurrent).toBeGreaterThan(load);
+    expect(restore).toBeGreaterThan(waitForCurrent);
     expect(show).toBeGreaterThan(restore);
     expect(focus).toBeGreaterThan(show);
     expect(creationEnd).toBeGreaterThan(focus);
-    expect(source.slice(load, creationEnd)).not.toMatch(/\bcatch\b/);
     expect(residencyStart).toBeGreaterThan(creationEnd);
     expect(initialShow).toBeGreaterThan(residencyStart);
   });

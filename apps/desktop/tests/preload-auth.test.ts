@@ -3,6 +3,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LLM_MODEL_CATALOGUE } from "../../../packages/core/src/runtime-config.js";
 
+const NAVIGATION_TOKEN = "n".repeat(43);
+const RENDERER_URL = `enduragent://app/index.html?navigationToken=${NAVIGATION_TOKEN}`;
+
 const mocks = vi.hoisted(() => {
   const exposed: Record<string, unknown> = {};
   class FakeAnchor {
@@ -13,6 +16,9 @@ const mocks = vi.hoisted(() => {
   }
   let clickListener: ((event: Record<string, unknown>) => void) | undefined;
   const fakeWindow = {
+    location: {
+      href: `enduragent://app/index.html?navigationToken=${"n".repeat(43)}`,
+    },
     addEventListener: vi.fn((name: string, listener: typeof clickListener) => {
       if (name === "click") clickListener = listener;
     }),
@@ -31,18 +37,25 @@ const mocks = vi.hoisted(() => {
     invoke: vi.fn(),
     on: vi.fn(),
     send: vi.fn(),
+    sendSync: vi.fn((_channel: string, _request?: unknown) => true),
   };
 });
 
 vi.mock("electron", () => ({
   contextBridge: { exposeInMainWorld: mocks.exposeInMainWorld },
-  ipcRenderer: { invoke: mocks.invoke, on: mocks.on, send: mocks.send },
+  ipcRenderer: {
+    invoke: mocks.invoke,
+    on: mocks.on,
+    send: mocks.send,
+    sendSync: mocks.sendSync,
+  },
   webUtils: { getPathForFile: vi.fn() },
 }));
 
 interface AuthBridge {
   readonly platform: unknown;
   getDaemonConnection(failedGeneration?: number): Promise<unknown>;
+  initialSetupStatusSettled(input: unknown): Promise<unknown>;
   getTranscriptPage(input: unknown): Promise<unknown>;
   listArchivedConversations(): Promise<unknown>;
   getArchivedTranscriptPage(input: unknown): Promise<unknown>;
@@ -184,6 +197,10 @@ function pinnedSmokeBridgeKeys(): string[] {
 
 let bridge: AuthBridge;
 
+function documentNavigationToken(): string {
+  return (mocks.sendSync.mock.calls[0]![1] as { readonly navigationToken: string }).navigationToken;
+}
+
 beforeAll(async () => {
   Object.assign(globalThis, {
     window: mocks.fakeWindow,
@@ -201,17 +218,89 @@ beforeEach(() => {
     window: mocks.fakeWindow,
     HTMLAnchorElement: mocks.FakeAnchor,
   });
+  mocks.fakeWindow.location.href = RENDERER_URL;
 });
 
 describe("desktop preload ChatGPT auth", () => {
+  it("confirms the URL navigation token before exposing the public bridge", () => {
+    expect(mocks.sendSync).toHaveBeenCalledOnce();
+    expect(mocks.sendSync).toHaveBeenCalledWith("desktop:register-document-navigation", {
+      navigationToken: NAVIGATION_TOKEN,
+    });
+    expect(mocks.sendSync.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.exposeInMainWorld.mock.invocationCallOrder[0]!,
+    );
+    expect(Object.values(mocks.exposed)).not.toContain(documentNavigationToken());
+  });
+
+  it("does not expose the public bridge when document registration fails", async () => {
+    const exposureCount = mocks.exposeInMainWorld.mock.calls.length;
+    mocks.sendSync.mockReturnValueOnce(false);
+    vi.resetModules();
+
+    await expect(import("../src/preload/index.js")).rejects.toBeInstanceOf(TypeError);
+    expect(mocks.exposeInMainWorld).toHaveBeenCalledTimes(exposureCount);
+  });
+
+  it.each([
+    "enduragent://app/index.html",
+    "enduragent://app/index.html?navigationToken=short",
+    `${RENDERER_URL}&extra=true`,
+  ])("does not expose or register a non-canonical renderer URL: %s", async (url) => {
+    const exposureCount = mocks.exposeInMainWorld.mock.calls.length;
+    const registrationCount = mocks.sendSync.mock.calls.length;
+    mocks.fakeWindow.location.href = url;
+    vi.resetModules();
+
+    try {
+      await expect(import("../src/preload/index.js")).rejects.toBeInstanceOf(TypeError);
+      expect(mocks.sendSync).toHaveBeenCalledTimes(registrationCount);
+      expect(mocks.exposeInMainWorld).toHaveBeenCalledTimes(exposureCount);
+    } finally {
+      mocks.fakeWindow.location.href = RENDERER_URL;
+    }
+  });
+
   it("reuses the connection channel with a closed recovery request", async () => {
     mocks.invoke.mockResolvedValue(undefined);
     await bridge.getDaemonConnection();
     await bridge.getDaemonConnection(7);
     expect(mocks.invoke.mock.calls).toEqual([
-      ["desktop:get-daemon-connection"],
-      ["desktop:get-daemon-connection", { generation: 7 }],
+      ["desktop:get-daemon-connection", { navigationToken: documentNavigationToken() }],
+      [
+        "desktop:get-daemon-connection",
+        { navigationToken: documentNavigationToken(), generation: 7 },
+      ],
     ]);
+  });
+
+  it("forwards only a strict positive initial setup generation", async () => {
+    mocks.invoke.mockResolvedValue(undefined);
+    await expect(bridge.initialSetupStatusSettled({ generation: 4 })).resolves.toBeUndefined();
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:initial-setup-status-settled", {
+      navigationToken: documentNavigationToken(),
+      generation: 4,
+    });
+    for (const request of [
+      undefined,
+      null,
+      {},
+      { generation: 0 },
+      { generation: 1.5 },
+      {
+        generation: 1,
+        extra: true,
+      },
+    ]) {
+      expect(() => bridge.initialSetupStatusSettled(request)).toThrow(TypeError);
+    }
+    expect(() =>
+      (bridge.initialSetupStatusSettled as (...args: unknown[]) => Promise<unknown>)(
+        { generation: 1 },
+        { generation: 2 },
+      ),
+    ).toThrow(TypeError);
+    expect(mocks.invoke).toHaveBeenCalledOnce();
   });
 
   it("forwards only closed lifecycle states to the renderer", () => {
@@ -250,6 +339,7 @@ describe("desktop preload ChatGPT auth", () => {
         "getUpdateState",
         "getDaemonConnection",
         "getTranscriptPage",
+        "initialSetupStatusSettled",
         "listArchivedConversations",
         "listTelegramAllowedSenders",
         "getArchivedTranscriptPage",

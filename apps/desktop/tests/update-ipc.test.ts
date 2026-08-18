@@ -7,6 +7,9 @@ import {
 } from "../src/main/constants.js";
 import { installDesktopUpdateIpc } from "../src/main/update-ipc.js";
 import type { DesktopUpdateController, DesktopUpdateState } from "../src/main/update-controller.js";
+import { createDesktopRendererUrl } from "../src/main/renderer-navigation.js";
+
+const RENDERER_URL = createDesktopRendererUrl("A".repeat(43));
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -30,7 +33,7 @@ function setup() {
     ),
     close: vi.fn(),
   };
-  const mainFrame = { url: "enduragent://app/index.html" };
+  const mainFrame = { url: RENDERER_URL };
   const webContents = { isDestroyed: () => false, mainFrame, send: vi.fn() };
   const window = { isDestroyed: () => false, webContents };
   const trusted = { sender: webContents, senderFrame: mainFrame };

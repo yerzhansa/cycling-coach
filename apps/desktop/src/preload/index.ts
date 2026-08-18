@@ -2,9 +2,12 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { PlatformAbsolutePathSchema } from "@enduragent/coach-contract";
 import { parseDesktopAppearance } from "../main/appearance.js";
 import { desktopPlatformProjection } from "../main/platform-copy.js";
+import { desktopRendererNavigationToken } from "../main/renderer-navigation.js";
 import {
   DESKTOP_APPEARANCE_CHANNEL,
   DESKTOP_CONNECTION_CHANNEL,
+  DESKTOP_DOCUMENT_REGISTRATION_CHANNEL,
+  DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL,
   DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
@@ -1360,6 +1363,8 @@ async function invokeTelegramSenders(): Promise<unknown> {
 let dropDisposer: (() => void) | undefined;
 const updateListeners = new Set<(state: PreloadUpdateState) => void>();
 const chatGptLoginProgressListeners = new Set<(progress: PreloadChatGptLoginProgress) => void>();
+const desktopDocumentNavigationToken = desktopRendererNavigationToken(window.location.href);
+if (desktopDocumentNavigationToken === undefined) throw new TypeError();
 
 window.addEventListener(
   "click",
@@ -1420,6 +1425,14 @@ ipcRenderer.on(DESKTOP_CHATGPT_LOGIN_PROGRESS_CHANNEL, (_event, value: unknown) 
   }
 });
 
+if (
+  ipcRenderer.sendSync(DESKTOP_DOCUMENT_REGISTRATION_CHANNEL, {
+    navigationToken: desktopDocumentNavigationToken,
+  }) !== true
+) {
+  throw new TypeError();
+}
+
 contextBridge.exposeInMainWorld(
   "enduragentAuth",
   Object.freeze({
@@ -1431,10 +1444,26 @@ contextBridge.exposeInMainWorld(
       ) {
         throw new TypeError();
       }
-      return ipcRenderer.invoke(
-        DESKTOP_CONNECTION_CHANNEL,
-        ...(failedGeneration === undefined ? [] : [{ generation: failedGeneration }]),
-      );
+      return ipcRenderer.invoke(DESKTOP_CONNECTION_CHANNEL, {
+        navigationToken: desktopDocumentNavigationToken,
+        ...(failedGeneration === undefined ? {} : { generation: failedGeneration }),
+      });
+    },
+    initialSetupStatusSettled: (...args: unknown[]) => {
+      if (args.length !== 1) throw new TypeError();
+      const input = args[0];
+      if (
+        !record(input) ||
+        !exactKeys(input, ["generation"]) ||
+        !Number.isSafeInteger(input.generation) ||
+        (input.generation as number) < 1
+      ) {
+        throw new TypeError();
+      }
+      return ipcRenderer.invoke(DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL, {
+        navigationToken: desktopDocumentNavigationToken,
+        generation: input.generation,
+      });
     },
     getTranscriptPage: async (input: unknown) => {
       const request = parseTranscriptPageRequest(input);

@@ -14,9 +14,11 @@ import {
 import {
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
-  DESKTOP_RENDERER_URL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
 } from "../src/main/constants.js";
+import { createDesktopRendererUrl } from "../src/main/renderer-navigation.js";
+
+const RENDERER_URL = createDesktopRendererUrl("A".repeat(43));
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -59,7 +61,7 @@ function setup(
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
     removeHandler: vi.fn((channel: string) => handlers.delete(channel)),
   };
-  const mainFrame = { url: DESKTOP_RENDERER_URL };
+  const mainFrame = { url: RENDERER_URL };
   const webContents = { isDestroyed: () => false, mainFrame };
   const window = { isDestroyed: () => false, webContents };
   const dispose = installDesktopTranscriptIpc({
@@ -97,10 +99,7 @@ describe("desktop transcript IPC", () => {
     const subject = setup();
     const handler = subject.handlers.get(DESKTOP_TRANSCRIPT_PAGE_CHANNEL)!;
     await expect(
-      handler(
-        { sender: {}, senderFrame: { url: DESKTOP_RENDERER_URL } },
-        { cursor: null, limit: 25 },
-      ),
+      handler({ sender: {}, senderFrame: { url: RENDERER_URL } }, { cursor: null, limit: 25 }),
     ).rejects.toThrow("untrusted desktop transcript request");
 
     for (const args of [
@@ -196,7 +195,7 @@ describe("desktop transcript IPC", () => {
     const subject = setup();
     const listHandler = subject.handlers.get(DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL)!;
     const pageHandler = subject.handlers.get(DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL)!;
-    const untrusted = { sender: {}, senderFrame: { url: DESKTOP_RENDERER_URL } };
+    const untrusted = { sender: {}, senderFrame: { url: RENDERER_URL } };
 
     await expect(listHandler(untrusted)).rejects.toThrow("untrusted desktop transcript request");
     await expect(

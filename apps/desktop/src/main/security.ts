@@ -12,7 +12,6 @@ import {
 import { desktopWindowBackgroundColor, type DesktopResolvedTheme } from "./appearance.js";
 import {
   DESKTOP_HOST,
-  DESKTOP_RENDERER_URL,
   DESKTOP_SCHEME,
   DESKTOP_WINDOW_HEIGHT,
   DESKTOP_WINDOW_MIN_HEIGHT,
@@ -21,6 +20,7 @@ import {
   createDesktopContentSecurityPolicy,
   createDesktopDevelopmentContentSecurityPolicy,
 } from "./constants.js";
+import { isDesktopRendererUrl } from "./renderer-navigation.js";
 
 export function registerDesktopScheme(): void {
   protocol.registerSchemesAsPrivileged([
@@ -104,6 +104,9 @@ export async function installDesktopProtocol(input: {
     const requested = new URL(request.url);
     if (requested.host !== DESKTOP_HOST)
       return withCurrentPolicy(new Response(null, { status: 404 }));
+    if (requested.pathname === "/index.html" && !isDesktopRendererUrl(request.url)) {
+      return withCurrentPolicy(new Response(null, { status: 404 }));
+    }
     if (input.rendererSource.kind === "development") {
       const upstream = new URL(input.rendererSource.developmentUrl);
       upstream.pathname = requested.pathname;
@@ -197,7 +200,7 @@ export function isTrustedConnectionRequest(
     !window.webContents.isDestroyed() &&
     event.sender === window.webContents &&
     event.senderFrame === window.webContents.mainFrame &&
-    event.senderFrame.url === DESKTOP_RENDERER_URL
+    isDesktopRendererUrl(event.senderFrame.url)
   );
 }
 

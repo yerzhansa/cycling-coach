@@ -3,6 +3,7 @@ import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isDesktopRendererUrl } from "../src/main/renderer-navigation.js";
 import {
   launchDesktopFixture,
   type DesktopFixtureScript,
@@ -412,6 +413,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "getDaemonConnection",
       "getTranscriptPage",
       "getUpdateState",
+      "initialSetupStatusSettled",
       "listArchivedConversations",
       "listTelegramAllowedSenders",
       "llmConfiguration",
@@ -434,7 +436,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
     ]);
     expect(state.syncChip).toBe(true);
     expect(state.node).toBe("undefined:undefined");
-    expect(state.location).toBe("enduragent://app/index.html");
+    expect(isDesktopRendererUrl(state.location)).toBe(true);
     for (const surface of [
       state.location,
       state.dom,

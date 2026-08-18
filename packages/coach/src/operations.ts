@@ -72,6 +72,7 @@ export interface CreateCoachOperationsInput {
   readonly intervalsCredentials: Readonly<{
     read(): Promise<Readonly<{ apiKey: string; athleteId: string }>>;
   }>;
+  readonly intervalsVerificationPending?: () => boolean;
   readonly historyNewestDate: () => string;
   readonly readTranscriptPage?: (
     request: GetTranscriptPageRpcParams,
@@ -217,10 +218,17 @@ export function createCoachOperations(
     sync(request: SyncRpcParams, onEvent): Promise<SyncRpcResult> {
       SyncRpcParamsSchema.parse(request);
       deliver(onEvent, { phase: "started", completed: 0, total: 1 });
+      let backfillOutcome: SyncRpcResult["backfill"] = "completed";
       return input.runtime
         .runWindowAfter(async (signal) => {
           const credentials = await input.intervalsCredentials.read();
-          if (credentials.apiKey.length === 0) return;
+          if (credentials.apiKey.length === 0) {
+            backfillOutcome =
+              input.intervalsVerificationPending?.() === true
+                ? "pending-verification"
+                : "skipped-no-credential";
+            return;
+          }
           await backfill({
             home: input.home,
             store: input.context.store,
@@ -233,6 +241,7 @@ export function createCoachOperations(
         .then((window) => {
           const result = SyncRpcResultSchema.parse({
             schemaVersion: 1,
+            backfill: backfillOutcome,
             published: window.published,
             referenceSucceeded: window.legacySucceeded,
             requests: {

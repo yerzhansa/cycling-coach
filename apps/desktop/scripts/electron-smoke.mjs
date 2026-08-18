@@ -278,7 +278,10 @@ async function security() {
     const summary = {
       passes: {
         rendererIsolation: ready.noNodeGlobals === true,
-        originAuth: ready.url === "enduragent://app/index.html" && ready.rpcConnected === true,
+        originAuth:
+          ready.url === "enduragent://app/index.html" &&
+          ready.rendererNavigationValid === true &&
+          ready.rpcConnected === true,
         spoofOrigin: spoofed === expectedForbidden,
         wrongToken: wrongCode === 1008,
         observerOrder: JSON.stringify(observerOrder) === JSON.stringify(expectedOrder),
@@ -306,6 +309,7 @@ async function security() {
             "getDaemonConnection",
             "getTranscriptPage",
             "getUpdateState",
+            "initialSetupStatusSettled",
             "listArchivedConversations",
             "listTelegramAllowedSenders",
             "llmConfiguration",

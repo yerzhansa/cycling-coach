@@ -60,6 +60,265 @@ describe("createRunSync", () => {
     expect(mutex.isHeld()).toBe(false);
   });
 
+  it("settles an external abort while fetch ignores cancellation without persisting diagnostics", async () => {
+    const controller = new AbortController();
+    let releaseFetch!: (value: FetchedReference) => void;
+    let fetchSignal!: AbortSignal;
+    const syncHistory = vi.fn();
+    const atomicWrite = vi.fn(async () => {});
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex: new AsyncMutex(),
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: (signal) => {
+        fetchSignal = signal;
+        return new Promise<FetchedReference>((resolve) => {
+          releaseFetch = resolve;
+        });
+      },
+      atomicWrite,
+      syncHistory,
+    });
+
+    const running = runSync({ caller: "scheduled", signal: controller.signal });
+    while (fetchSignal === undefined) await Promise.resolve();
+    controller.abort(new Error("store runtime closed"));
+
+    await expect(running).rejects.toThrow("store runtime closed");
+    expect(fetchSignal.aborted).toBe(true);
+    expect(syncHistory).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(() => readFileSync(join(dir, "error_state.json"), "utf8")).toThrow();
+
+    releaseFetch(emptyFetched);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(syncHistory).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it("does not let an externally aborted predecessor replace a successor cache", async () => {
+    const mutex = new AsyncMutex();
+    const controller = new AbortController();
+    const { atomicWriteJson: realAtomicWrite } = await import(
+      "../src/io/atomic-write-json.js"
+    );
+    let releaseWrites!: () => void;
+    const writesGate = new Promise<void>((resolve) => {
+      releaseWrites = resolve;
+    });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    let marked = false;
+    const pendingWrites: Array<Promise<void>> = [];
+    const predecessor = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      atomicWrite: async (path, value, opts) => {
+        if (!marked) {
+          marked = true;
+          markWriteStarted();
+        }
+        await writesGate;
+        const pending = realAtomicWrite(path, value, opts);
+        pendingWrites.push(pending);
+        await pending;
+      },
+      now: () => new Date("1998-01-01T00:00:00.000Z"),
+    });
+
+    const predecessorRun = predecessor({ caller: "scheduled", signal: controller.signal });
+    await writeStarted;
+    controller.abort(new Error("store runtime closed"));
+    await expect(predecessorRun).rejects.toThrow("store runtime closed");
+    expect(mutex.isHeld()).toBe(false);
+
+    const successor = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      now: () => new Date("1998-01-02T00:00:00.000Z"),
+    });
+    await successor({ caller: "scheduled" });
+    releaseWrites();
+    await vi.waitFor(() => expect(pendingWrites).toHaveLength(5));
+    await Promise.allSettled(pendingWrites);
+
+    const latest = JSON.parse(readFileSync(join(dir, "latest.json"), "utf-8"));
+    expect(latest.metadata.last_updated).toBe("1998-01-02T00:00:00.000Z");
+  });
+
+  it("does not let an externally aborted predecessor clear a successor error state", async () => {
+    const mutex = new AsyncMutex();
+    const controller = new AbortController();
+    const { clearErrorState: realClearError } = await import(
+      "../src/reference/sync/error-state-writer.js"
+    );
+    let releaseClear!: () => void;
+    const clearGate = new Promise<void>((resolve) => {
+      releaseClear = resolve;
+    });
+    let markClearStarted!: () => void;
+    const clearStarted = new Promise<void>((resolve) => {
+      markClearStarted = resolve;
+    });
+    const predecessor = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockResolvedValue(emptyFetched),
+      clearError: async (dataDir, opts) => {
+        markClearStarted();
+        await clearGate;
+        await realClearError(dataDir, opts);
+      },
+      now: () => new Date("1998-01-01T00:00:00.000Z"),
+    });
+
+    const predecessorRun = predecessor({ caller: "scheduled", signal: controller.signal });
+    await clearStarted;
+    controller.abort(new Error("store runtime closed"));
+    await expect(predecessorRun).rejects.toThrow("store runtime closed");
+    expect(mutex.isHeld()).toBe(false);
+
+    const successor = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: vi.fn().mockRejectedValue(new Error("successor fetch failed")),
+      now: () => new Date("1998-01-02T00:00:00.000Z"),
+    });
+    const successorResult = await successor({ caller: "scheduled" });
+    expect(successorResult).toMatchObject({ kind: "failed", reason: "fetch_failed" });
+    releaseClear();
+    await clearGate;
+    await Promise.resolve();
+
+    const errorState = JSON.parse(readFileSync(join(dir, "error_state.json"), "utf-8"));
+    expect(errorState.step).toBe("fetch_failed");
+    expect(errorState.detail).toBe("successor fetch failed");
+  });
+
+  it("settles an external abort while queued for the mutex without starting sync work", async () => {
+    const mutex = new AsyncMutex();
+    let releaseHolder!: () => void;
+    let markHolderEntered!: () => void;
+    const holderEntered = new Promise<void>((resolve) => {
+      markHolderEntered = resolve;
+    });
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    const holder = mutex.runExclusive(
+      async () => {
+        markHolderEntered();
+        await holderGate;
+      },
+      { acquireTimeoutMs: 1_000, hotWarnMs: 500, caller: "holder" },
+    );
+    await holderEntered;
+
+    const controller = new AbortController();
+    const reason = new Error("store runtime closed while queued");
+    const fetchReferenceData = vi.fn().mockResolvedValue(emptyFetched);
+    const atomicWrite = vi.fn(async () => {});
+    const syncHistory = vi.fn();
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData,
+      atomicWrite,
+      syncHistory,
+      timing: { acquireTimeoutMs: 1_000, hotWarnMs: 500 },
+    });
+    const running = runSync({ caller: "scheduled", signal: controller.signal });
+    const observed = running.then(
+      (value) => ({ kind: "value" as const, value }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+
+    controller.abort(reason);
+    const early = await Promise.race([
+      observed,
+      new Promise<{ kind: "pending" }>((resolve) => {
+        setImmediate(() => resolve({ kind: "pending" }));
+      }),
+    ]);
+    releaseHolder();
+    await holder;
+    const outcome = await observed;
+
+    expect(early).toEqual({ kind: "error", error: reason });
+    expect(outcome).toEqual({ kind: "error", error: reason });
+    expect(fetchReferenceData).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(syncHistory).not.toHaveBeenCalled();
+    expect(mutex.isHeld()).toBe(false);
+  });
+
+  it("waits for an active timeout record before settling a later external abort", async () => {
+    const mutex = new AsyncMutex();
+    const controller = new AbortController();
+    const reason = new Error("store runtime closed during timeout write");
+    let releaseWrite!: () => void;
+    let markWriteEntered!: () => void;
+    const writeEntered = new Promise<void>((resolve) => {
+      markWriteEntered = resolve;
+    });
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const atomicWrite = vi.fn(async () => {
+      markWriteEntered();
+      await writeGate;
+    });
+    const syncHistory = vi.fn();
+    const runSync = createRunSync({
+      dataDir: dir,
+      mutex,
+      cooldown: new Cooldown(),
+      cooldownWindowMs: 30_000,
+      fetchReferenceData: async () => await new Promise<FetchedReference>(() => {}),
+      atomicWrite,
+      syncHistory,
+      timing: { outerTimeoutMs: 10 },
+    });
+    const running = runSync({ caller: "scheduled", signal: controller.signal });
+    const observed = running.then(
+      (value) => ({ kind: "value" as const, value }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+
+    await writeEntered;
+    controller.abort(reason);
+    const early = await Promise.race([
+      observed,
+      new Promise<{ kind: "pending" }>((resolve) => {
+        setImmediate(() => resolve({ kind: "pending" }));
+      }),
+    ]);
+    releaseWrite();
+    const outcome = await observed;
+
+    expect(early).toEqual({ kind: "pending" });
+    expect(outcome).toEqual({ kind: "error", error: reason });
+    expect(atomicWrite).toHaveBeenCalledOnce();
+    expect(syncHistory).not.toHaveBeenCalled();
+    expect(mutex.isHeld()).toBe(false);
+  });
+
   it("writes 5 cache files first then .scheduler.json (commit-marker) and returns kind:ran with the refreshed list", async () => {
     const mutex = new AsyncMutex();
     const cooldown = new Cooldown();
@@ -617,12 +876,16 @@ describe("createRunSync", () => {
     });
     const pendingWrites: Array<Promise<unknown>> = [];
     const latchedSchedulerWrite = vi.fn(
-      async (path: string, value: unknown): Promise<void> => {
+      async (
+        path: string,
+        value: unknown,
+        opts?: { signal?: AbortSignal },
+      ): Promise<void> => {
         if (path.endsWith(".scheduler.json")) {
           signalArrived();
           await schedulerGate;
         }
-        const w = realAtomicWrite(path, value);
+        const w = realAtomicWrite(path, value, opts);
         pendingWrites.push(w);
         await w;
       },
@@ -687,6 +950,7 @@ describe("createRunSync", () => {
     await schedulerGate;
     await Promise.resolve();
     await Promise.allSettled(pendingWrites);
+    expect(() => readFileSync(join(dir, ".scheduler.json"), "utf-8")).toThrow();
   });
 
   // ── A1: body must NOT proceed past writing_cache once outer timeout fired ──

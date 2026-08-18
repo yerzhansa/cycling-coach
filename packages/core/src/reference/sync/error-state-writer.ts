@@ -5,7 +5,7 @@ import {
   type ErrorPhase,
   type ErrorMitigation,
 } from "../schemas/error-state.js";
-import { atomicWriteJson } from "../../io/atomic-write-json.js";
+import { atomicWriteJson, enqueueCommit } from "../../io/atomic-write-json.js";
 
 export type { ErrorPhase };
 
@@ -63,9 +63,13 @@ export async function clearErrorState(
   opts?: { signal?: AbortSignal },
 ): Promise<void> {
   if (opts?.signal?.aborted === true) return;
-  try {
-    await unlink(join(dataDir, "error_state.json"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
-  }
+  const path = join(dataDir, "error_state.json");
+  await enqueueCommit(path, async () => {
+    if (opts?.signal?.aborted === true) return;
+    try {
+      await unlink(path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
+    }
+  });
 }

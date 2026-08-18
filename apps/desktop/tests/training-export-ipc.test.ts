@@ -10,7 +10,10 @@ import {
   createConnectionTrainingExporter,
   installDesktopTrainingExportIpc,
 } from "../src/main/training-export-ipc.js";
-import { DESKTOP_RENDERER_URL, DESKTOP_TRAINING_EXPORT_CHANNEL } from "../src/main/constants.js";
+import { DESKTOP_TRAINING_EXPORT_CHANNEL } from "../src/main/constants.js";
+import { createDesktopRendererUrl } from "../src/main/renderer-navigation.js";
+
+const RENDERER_URL = createDesktopRendererUrl("A".repeat(43));
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -27,7 +30,7 @@ function setup(result: unknown = EXPORTED) {
     handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)),
     removeHandler: vi.fn((channel: string) => handlers.delete(channel)),
   };
-  const mainFrame = { url: DESKTOP_RENDERER_URL };
+  const mainFrame = { url: RENDERER_URL };
   const webContents = { isDestroyed: () => false, mainFrame };
   const window = { isDestroyed: () => false, webContents };
   const dialog = {
@@ -151,7 +154,7 @@ describe("desktop training export IPC", () => {
     const handler = subject.handlers.get(DESKTOP_TRAINING_EXPORT_CHANNEL)!;
     await expect(
       handler(
-        { sender: {}, senderFrame: { url: DESKTOP_RENDERER_URL } },
+        { sender: {}, senderFrame: { url: RENDERER_URL } },
         {
           kind: "activity",
           canonicalActivityId: "a".repeat(64),

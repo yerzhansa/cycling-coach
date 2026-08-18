@@ -1172,6 +1172,43 @@ export type DesktopDaemonResolution =
       readonly retryable: boolean;
     };
 
+export interface DesktopDaemonInitialRefreshConnection {
+  readonly url: `ws://127.0.0.1:${number}/rpc`;
+  readonly token: string;
+  readonly owner: DaemonOwner;
+}
+
+export async function startDesktopDaemonInitialRefresh(
+  connection: DesktopDaemonInitialRefreshConnection,
+  openControl: typeof openAuthenticatedDaemonControl = openAuthenticatedDaemonControl,
+): Promise<{ readonly status: "accepted" }> {
+  const url = new URL(connection.url);
+  const port = Number(url.port);
+  if (
+    url.protocol !== "ws:" ||
+    url.hostname !== "127.0.0.1" ||
+    url.pathname !== "/rpc" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    !Number.isSafeInteger(port) ||
+    port < 1 ||
+    port > 65_535
+  ) {
+    throw new TypeError("invalid desktop daemon connection");
+  }
+  const control = await openControl({
+    port,
+    token: connection.token,
+    incumbentProtocolVersion: PROTOCOL_VERSION,
+    expectedOwner: connection.owner,
+  });
+  try {
+    return await control.startInitialRefresh();
+  } finally {
+    await control.close();
+  }
+}
+
 const DESKTOP_DAEMON_PUBLICATION_WAIT_MS = 30_000;
 const DESKTOP_EPHEMERAL_START_ATTEMPTS = 3;
 const DESKTOP_EPHEMERAL_START_DEADLINE_MS = 90_000;
@@ -2162,6 +2199,7 @@ async function runServeInvocation(input: {
       const result = await input.dependencies.withLocalCoach({
         env: input.runInput.env,
         home: input.home,
+        deferInitialRefresh: true,
         operation: async (lifecycle) =>
           successor === undefined
             ? runCoachServe({

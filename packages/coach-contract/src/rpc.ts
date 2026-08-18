@@ -461,9 +461,17 @@ export type ImportFilesRpcResult = z.infer<typeof ImportFilesRpcResultSchema>;
 export const SyncRpcParamsSchema = EmptyRpcParamsSchema;
 export type SyncRpcParams = z.infer<typeof SyncRpcParamsSchema>;
 
+export const SyncBackfillOutcomeSchema = z.enum([
+  "completed",
+  "skipped-no-credential",
+  "pending-verification",
+]);
+export type SyncBackfillOutcome = z.infer<typeof SyncBackfillOutcomeSchema>;
+
 export const SyncRpcResultSchema = z
   .object({
     schemaVersion: z.literal(1),
+    backfill: SyncBackfillOutcomeSchema.optional(),
     published: z.boolean(),
     referenceSucceeded: z.boolean(),
     requests: z
@@ -791,6 +799,7 @@ export const RuntimeConfigSnapshotSchema = z
       .object({
         athlete_id: z.string().max(512),
         credential_configured: z.boolean(),
+        credential_verification_pending: z.boolean().optional(),
         managedByEnvironment: z
           .object({
             athleteId: z.boolean(),

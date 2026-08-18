@@ -13,10 +13,12 @@ import {
 } from "../src/main/appearance.js";
 import {
   DESKTOP_APPEARANCE_CHANNEL,
-  DESKTOP_RENDERER_URL,
   DESKTOP_WINDOW_DARK_BACKGROUND,
   DESKTOP_WINDOW_LIGHT_BACKGROUND,
 } from "../src/main/constants.js";
+import { createDesktopRendererUrl } from "../src/main/renderer-navigation.js";
+
+const RENDERER_URL = createDesktopRendererUrl("a".repeat(43));
 
 type Listener = (event: unknown, ...args: unknown[]) => void;
 
@@ -34,7 +36,7 @@ function setup(
       listeners.get(channel)?.delete(listener);
     }),
   };
-  const mainFrame: { url: string } = { url: DESKTOP_RENDERER_URL };
+  const mainFrame: { url: string } = { url: RENDERER_URL };
   const setBackgroundColor = vi.fn();
   const webContents = { isDestroyed: () => false, mainFrame };
   const window = { isDestroyed: () => false, webContents, setBackgroundColor };
@@ -134,14 +136,14 @@ describe("desktop appearance IPC", () => {
 
   it("rejects stale, subframe, mismatched-sender, and destroyed-window events", () => {
     const state = setup();
-    const otherFrame = { url: DESKTOP_RENDERER_URL };
+    const otherFrame = { url: RENDERER_URL };
 
     state.emit({ sender: state.webContents, senderFrame: otherFrame }, "dark");
     state.emit({ sender: {}, senderFrame: state.mainFrame }, "dark");
     state.emit({ sender: state.webContents, senderFrame: null }, "dark");
     state.mainFrame.url = "https://example.invalid";
     state.emit(state.trusted, "dark");
-    state.mainFrame.url = DESKTOP_RENDERER_URL;
+    state.mainFrame.url = RENDERER_URL;
     state.setCurrentWindow(undefined);
     state.emit(state.trusted, "dark");
     state.setCurrentWindow({ ...state.window, isDestroyed: () => true });

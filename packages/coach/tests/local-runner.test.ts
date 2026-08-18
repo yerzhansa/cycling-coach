@@ -224,7 +224,14 @@ beforeEach(async () => {
   });
   mocks.composition.mockImplementation(async () => {
     trace.push("engine-open");
-    return { engine, operations, spendMeter, confirmations, close: () => closeImplementation() };
+    return {
+      engine,
+      operations,
+      spendMeter,
+      confirmations,
+      async startInitialRefresh() {},
+      close: () => closeImplementation(),
+    };
   });
   mocks.withWriter.mockImplementation(
     async (env: Record<string, string | undefined>, plan: CoachStoreWriterPlan<unknown>) => {
@@ -281,6 +288,34 @@ describe("local coach runner", () => {
     const compositionInput = mocks.composition.mock.calls[0]![0];
     expect(compositionInput.config).toBe(readyConfig);
     expect(compositionInput.engineConfig).toBe(engineConfig);
+  });
+
+  it("publishes deferred initialization without starting it before the operation", async () => {
+    const startInitialRefresh = vi.fn(async () => {});
+    mocks.composition.mockImplementationOnce(async () => ({
+      engine,
+      operations,
+      spendMeter,
+      confirmations,
+      startInitialRefresh,
+      close: () => closeImplementation(),
+    }));
+
+    await expect(
+      withLocalCoach({
+        ...input(async (lifecycle) => {
+          expect(startInitialRefresh).not.toHaveBeenCalled();
+          await lifecycle.startInitialRefresh();
+          return "done";
+        }),
+        deferInitialRefresh: true,
+      }),
+    ).resolves.toEqual({ status: "completed", value: "done" });
+
+    expect(mocks.composition).toHaveBeenCalledWith(
+      expect.objectContaining({ deferInitialRefresh: true }),
+    );
+    expect(startInitialRefresh).toHaveBeenCalledOnce();
   });
 
   it("uses one physical athlete-home identity throughout a root-alias lifecycle", async () => {
