@@ -208,6 +208,43 @@ describe("desktop coach client lifecycle", () => {
     expect(connect).toHaveBeenCalledTimes(3);
   });
 
+  it("drops the failed-generation latch when the recovery bridge call itself rejects", async () => {
+    const first = { close: vi.fn(async () => {}) } as unknown as CoachClient;
+    const second = { close: vi.fn(async () => {}) } as unknown as CoachClient;
+    const bridgeFailure = new Error("desktop document daemon generation mismatch");
+    const auth = {
+      getDaemonConnection: vi
+        .fn()
+        .mockResolvedValueOnce({
+          url: "ws://127.0.0.1:45001/rpc",
+          rendererCapability: capability("s"),
+          generation: 4,
+        })
+        .mockRejectedValueOnce(bridgeFailure)
+        .mockResolvedValueOnce({
+          url: "ws://127.0.0.1:45002/rpc",
+          rendererCapability: capability("t"),
+          generation: 6,
+        }),
+    };
+    const connect = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    vi.stubGlobal("window", { enduragentAuth: auth });
+    const clients = createDesktopCoachClientProvider(connect);
+    await expect(clients.getClient()).resolves.toBe(first);
+    const options = connect.mock.calls[0]![0] as ConnectCoachClientOptions;
+
+    options.onTerminal?.(first, new CoachClientDisconnectedError(1006, ""));
+
+    await expect(clients.getClient()).rejects.toBe(bridgeFailure);
+    await expect(clients.getClient()).resolves.toBe(second);
+    expect(auth.getDaemonConnection.mock.calls.map(([failed]) => failed)).toEqual([
+      undefined,
+      4,
+      undefined,
+    ]);
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects a client terminalized during connection resolution and recovers on the next call", async () => {
     const first = { close: vi.fn(async () => {}) } as unknown as CoachClient;
     const second = { close: vi.fn(async () => {}) } as unknown as CoachClient;

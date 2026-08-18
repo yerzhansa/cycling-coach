@@ -84,7 +84,7 @@ export function createDesktopCoachClientProvider(
       })
       .catch((error: unknown) => {
         if (connection === pending) {
-          if (shutdownCause === undefined && connectionGeneration !== undefined) {
+          if (shutdownCause === undefined) {
             failedGeneration = connectionGeneration;
           }
           connection = undefined;
