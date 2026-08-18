@@ -172,6 +172,24 @@ describe("training sync coordinator", () => {
     },
   );
 
+  it("maps a pending-verification backfill to a retryable operation failure", async () => {
+    const result: SyncRpcResult = { ...published, backfill: "pending-verification" };
+    const client = clientWith((options) => exactCall(options, result));
+    const refreshTrainingContext = vi.fn(async () => {});
+    const coordinator = createTrainingSyncCoordinator({
+      clients: providerWith(client),
+      refreshTrainingContext,
+    });
+    await coordinator.request();
+    expect(coordinator.getState()).toEqual({
+      status: "failed",
+      operation: 1,
+      kind: "operation",
+      retryable: true,
+    });
+    expect(refreshTrainingContext).toHaveBeenCalledTimes(1);
+  });
+
   it("treats an authoritative remote terminal as a fixed operation failure and refreshes once", async () => {
     const client = clientWith(async (options) => {
       options.onNotificationEnvelope?.(envelope("started", 0));

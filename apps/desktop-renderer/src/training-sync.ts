@@ -281,6 +281,13 @@ export function createTrainingSyncCoordinator(input: {
       }
       if (result === undefined) {
         publishProtocol(selectedEpoch, selectedOperation);
+      } else if (result.backfill === "pending-verification") {
+        publish({
+          status: "failed",
+          operation: selectedOperation,
+          kind: "operation",
+          retryable: true,
+        });
       } else if (result.published && result.referenceSucceeded) {
         publish({ status: "succeeded", operation: selectedOperation, kind: "published" });
       } else if (!result.published && result.referenceSucceeded) {
