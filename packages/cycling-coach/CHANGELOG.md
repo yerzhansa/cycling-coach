@@ -1,5 +1,25 @@
 # cycling-coach
 
+## 2026.8.18
+
+### Patch Changes
+
+- df20eb1: User-facing: ChatGPT sign-in now keeps working on machines with a wrong clock, and sign-in problems show up as authentication errors instead of a generic failure.
+
+  Token validity no longer depends on the local wall clock: the ChatGPT-lane token readers return the stored access token as-is and treat a server 401 as the only invalid signal, with one bounded refresh-and-retry per generation (MAX_AUTH_REFRESH_ATTEMPTS = 1). HTTP 401/403 from the provider is classified as error_class "auth" in turn_outcome. Coaching dates and daily resets intentionally stay on the local clock.
+
+- d141441: User-facing: Enduragent now opens normally when Telegram setup is left in an uncertain state after a crash or forced quit; the Telegram section shows a repair prompt instead of the whole app refusing to start.
+
+  Startup no longer throws when the initial Telegram reconciliation returns a non-applied outcome. The channel is latched into its existing failed/repair status until a successful reconcile or a daemon rebind clears it, and unexpected startup failures are now written to log.jsonl as a classified startup_failed record before any dialog.
+
+- 5eecfd8: User-facing: Enduragent now recovers Windows conversations after a crash interrupts reset-intent or transcript-boundary writes.
+- a0571e3: Internal: Add hosted Windows verification for the installed unsigned NSIS package and its cleanup contract.
+- 8b8991a: User-facing: Exporting a ride and importing ride files now work on Windows. Both used to fail with "The export could not be saved to that location" because every Windows path was rejected before anything was read or written.
+
+  Export destinations and import paths now share one platform-absolute path validator that accepts POSIX, drive-letter and UNC paths; the preload and renderer import gates parse extensions across both separators; the export writer joins its temporary path with the platform separator and skips the post-rename directory fsync on Windows, where directory handles cannot be synced; and desktop export IPC now logs a fixed failure-stage classification before reporting a write failure.
+
+- 40c9230: Internal: Stage generated sport-skill modules beside their destination so atomic replacement also works when Windows temp and workspace directories are on different drives.
+
 ## 2026.8.15
 
 ### Patch Changes

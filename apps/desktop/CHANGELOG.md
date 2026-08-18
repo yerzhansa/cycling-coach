@@ -1,5 +1,26 @@
 # @enduragent/desktop
 
+## 0.1.5
+
+### Patch Changes
+
+- fb370fb: User-facing: Saving a timezone now keeps the timezone and its pin together, so Enduragent cannot lose the saved choice between two separate writes.
+- 10678ab: User-facing: Delete buttons in setup and settings now sit at the same weight as the buttons beside them and differ only in colour, the confirm button in a delete prompt is a filled red so it never reads as the same control as Cancel, and buttons, links and dropdowns across setup and settings show the hand cursor on hover.
+
+  Danger is a colour, not a button weight. The renderer now exports exactly two danger constants: `BUTTON_DANGER_QUIET_SM` at the quiet weight (no border, transparent background) for every in-row destructive action, and `BUTTON_DANGER_SOLID_SM` at the solid weight for the confirm button in `InlineConfirmation`, where a fill keeps the destructive action distinguishable from Cancel without relying on colour alone. `surface.module.css` `.dangerous` mirrors the quiet variant so the Reset conversation button matches without migrating that file to Tailwind.
+
+- 85fd087: User-facing: Fixed Desktop startup when an existing Intervals refresh cannot be saved.
+- be36645: Log renderer and child-process crashes from the desktop main process and start Electron's crash reporter with local-only minidumps (`uploadToServer: false`). Fields are collapsed to one stderr line, query strings and fragments are dropped from the crashed URL, and oversized values are truncated.
+- 63637ca: User-facing: The native window title bar now follows the appearance you pick in Preferences, so a dark app no longer sits under light window chrome.
+- 7438087: User-facing: The first launch after installing no longer reports a fully-configured install as unconfigured — setup status now retries while the coach is still starting, shows a neutral "Checking setup…" state until it is known, and the Training page keeps reporting ride imports once setup is complete.
+- d7dc601: User-facing: Enduragent now uses this computer's timezone by default and refreshes it every time it starts, so a machine that moves zones no longer coaches on the old one. Save a timezone yourself in Settings → Conversation & time and Enduragent keeps that one from then on. COACH_TZ still owns the timezone when it is set.
+- 73269ae: User-facing: Settings now shows the coach Provider row's title and its active-route detail on separate lines instead of running them together.
+- 381ea8a: User-facing: Removing an additional Telegram user now asks for confirmation and explains that the user loses access until re-added by sender ID.
+- 479180d: Ship the `en-US` Chromium locale pak in the Windows package. `electronLanguages: [en]` matched nothing under app-builder-lib's inverted prefix filter, so every locale pak was deleted from `win-unpacked/locales/` and Blink null-dereferenced in `Locale::DefaultLocale` the first time a renderer wrote a value into a number input. The Windows package verifier now requires a present, non-empty `locales/en-US.pak` and rejects any other locale entry.
+- a0571e3: Verify the Windows installer envelope and retained application tree with native Node.js tooling, and emit immutable SHA-256 package evidence without relying on a machine-installed archive utility.
+- a0571e3: User-facing: Uninstalling Enduragent on Windows now removes both owned login-start registry values while preserving athlete data and desktop settings.
+- b4c0197: User-facing: The Windows app now enforces the update downgrade floor; previously it was silently inactive on Windows.
+
 ## 0.1.4
 
 ### Patch Changes
