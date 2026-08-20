@@ -1,0 +1,249 @@
+import { randomBytes } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import {
+  CREDENTIAL_ENVELOPE_IV_BYTES,
+  CREDENTIAL_ENVELOPE_MAGIC,
+  CREDENTIAL_ENVELOPE_TAG_BYTES,
+  CredentialEnvelopeError,
+  KEYCHAIN_ENVELOPE_KEY_ID,
+  KEYCHAIN_PARTITION_STORAGE_BACKEND,
+  KeychainEncryptionError,
+  SAFE_STORAGE_ENVELOPE_KEY_ID,
+  createKeychainPartitionEncryption,
+  openCredentialEnvelope,
+  readCredentialEnvelopeKeyId,
+  sealCredentialEnvelope,
+} from "../src/main/keychain-credential-encryption.js";
+import {
+  KEYCHAIN_CREDENTIAL_SERVICE,
+  KEYCHAIN_CREDENTIAL_SERVICE_DEV,
+  KEYCHAIN_KEY_BYTES,
+  KEYCHAIN_TEAM_IDENTIFIER,
+  type KeychainHelperRequest,
+  type KeychainHelperResponse,
+  type KeychainHelperTransport,
+} from "../src/main/keychain-helper.js";
+
+const PROBE_OK: KeychainHelperResponse = {
+  ok: true,
+  op: "probe",
+  teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER,
+};
+
+interface RecordingTransport extends KeychainHelperTransport {
+  readonly requests: KeychainHelperRequest[];
+}
+
+function transportOf(...responses: readonly KeychainHelperResponse[]): RecordingTransport {
+  const remaining = [...responses];
+  const requests: KeychainHelperRequest[] = [];
+  return {
+    requests,
+    send(request) {
+      requests.push(request);
+      const next = remaining.shift();
+      if (next === undefined) throw new Error("unexpected helper request");
+      return Promise.resolve(next);
+    },
+  };
+}
+
+function storedKey(): { readonly key: Buffer; readonly encoded: string } {
+  const key = randomBytes(KEYCHAIN_KEY_BYTES);
+  return { key, encoded: key.toString("base64") };
+}
+
+describe("credential envelope", () => {
+  it("seals a value under the keychain key-id and reads it back", () => {
+    const { key } = storedKey();
+    const envelope = sealCredentialEnvelope(key, "sk-secret-value");
+    expect(envelope.subarray(0, CREDENTIAL_ENVELOPE_MAGIC.length).toString("ascii")).toBe(
+      CREDENTIAL_ENVELOPE_MAGIC,
+    );
+    expect(readCredentialEnvelopeKeyId(envelope)).toBe(KEYCHAIN_ENVELOPE_KEY_ID);
+    expect(readCredentialEnvelopeKeyId(envelope)).not.toBe(SAFE_STORAGE_ENVELOPE_KEY_ID);
+    expect(envelope.includes(Buffer.from("sk-secret-value", "utf8"))).toBe(false);
+    expect(openCredentialEnvelope(key, envelope)).toBe("sk-secret-value");
+  });
+
+  it("lays the envelope out as magic, key-id, iv, ciphertext, tag", () => {
+    const { key } = storedKey();
+    const envelope = sealCredentialEnvelope(key, "abcd");
+    const overhead =
+      CREDENTIAL_ENVELOPE_MAGIC.length +
+      1 +
+      CREDENTIAL_ENVELOPE_IV_BYTES +
+      CREDENTIAL_ENVELOPE_TAG_BYTES;
+    expect(envelope.length).toBe(overhead + Buffer.byteLength("abcd", "utf8"));
+  });
+
+  it("uses a fresh iv for every seal", () => {
+    const { key } = storedKey();
+    const first = sealCredentialEnvelope(key, "same");
+    const second = sealCredentialEnvelope(key, "same");
+    expect(first.equals(second)).toBe(false);
+  });
+
+  it("refuses a tampered ciphertext", () => {
+    const { key } = storedKey();
+    const envelope = sealCredentialEnvelope(key, "sk-secret-value");
+    const target = CREDENTIAL_ENVELOPE_MAGIC.length + 1 + CREDENTIAL_ENVELOPE_IV_BYTES;
+    envelope[target] ^= 0xff;
+    expect(() => openCredentialEnvelope(key, envelope)).toThrow();
+  });
+
+  it("refuses another key", () => {
+    const envelope = sealCredentialEnvelope(storedKey().key, "sk-secret-value");
+    expect(() => openCredentialEnvelope(storedKey().key, envelope)).toThrow();
+  });
+
+  it("refuses a safeStorage-era envelope and foreign bytes", () => {
+    const { key } = storedKey();
+    const envelope = sealCredentialEnvelope(key, "sk-secret-value");
+    const legacy = Buffer.from(envelope);
+    legacy[CREDENTIAL_ENVELOPE_MAGIC.length] = SAFE_STORAGE_ENVELOPE_KEY_ID;
+    expect(() => openCredentialEnvelope(key, legacy)).toThrow(CredentialEnvelopeError);
+    expect(
+      readCredentialEnvelopeKeyId(Buffer.from("v10 opaque safeStorage bytes")),
+    ).toBeUndefined();
+    expect(readCredentialEnvelopeKeyId(Buffer.alloc(4))).toBeUndefined();
+    expect(() => openCredentialEnvelope(key, Buffer.alloc(4))).toThrow(CredentialEnvelopeError);
+  });
+});
+
+describe("keychain partition backend", () => {
+  it("adopts an existing key and reports its backend id", async () => {
+    const { encoded } = storedKey();
+    const transport = transportOf(PROBE_OK, { ok: true, op: "read-key", key: encoded });
+    const result = await createKeychainPartitionEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+    expect(result.createdKey).toBe(false);
+    expect(result.encryption.isEncryptionAvailable()).toBe(true);
+    expect(result.encryption.getSelectedStorageBackend?.()).toBe(
+      KEYCHAIN_PARTITION_STORAGE_BACKEND,
+    );
+    const sealed = result.encryption.encryptString("token-value");
+    expect(result.encryption.decryptString(sealed)).toBe("token-value");
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+    expect(
+      transport.requests.every((request) => request.service === KEYCHAIN_CREDENTIAL_SERVICE),
+    ).toBe(true);
+    expect(JSON.stringify(transport.requests)).not.toContain(encoded);
+  });
+
+  it("creates a key when the item is absent", async () => {
+    const { encoded } = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: false, code: "item-not-found" },
+      { ok: true, op: "create-key", key: encoded },
+    );
+    const result = await createKeychainPartitionEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE_DEV,
+    });
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+    expect(result.createdKey).toBe(true);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "create-key",
+    ]);
+    expect(
+      transport.requests.every((request) => request.service === KEYCHAIN_CREDENTIAL_SERVICE_DEV),
+    ).toBe(true);
+  });
+
+  it("deletes and recreates a poisoned item", async () => {
+    const { encoded } = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: false, code: "unreadable-item" },
+      { ok: true, op: "delete-key", deleted: true },
+      { ok: true, op: "create-key", key: encoded },
+    );
+    const result = await createKeychainPartitionEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("ready");
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "create-key",
+    ]);
+  });
+
+  it("reports encryption as unavailable when the keychain is locked", async () => {
+    const transport = transportOf(PROBE_OK, { ok: false, code: "keychain-locked" });
+    const result = await createKeychainPartitionEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("unavailable");
+    if (result.status !== "unavailable") return;
+    expect(result.code).toBe("keychain-locked");
+    expect(result.encryption.isEncryptionAvailable()).toBe(false);
+    expect(result.encryption.getSelectedStorageBackend?.()).toBe(
+      KEYCHAIN_PARTITION_STORAGE_BACKEND,
+    );
+    expect(() => result.encryption.encryptString("token-value")).toThrow(KeychainEncryptionError);
+  });
+
+  it("keeps encryption available but refuses writes when a create duplicates", async () => {
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: false, code: "item-not-found" },
+      { ok: false, code: "duplicate-item" },
+    );
+    const result = await createKeychainPartitionEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("storage-failed");
+    if (result.status !== "storage-failed") return;
+    expect(result.code).toBe("duplicate-item");
+    expect(result.encryption.isEncryptionAvailable()).toBe(true);
+    expect(() => result.encryption.encryptString("token-value")).toThrow(KeychainEncryptionError);
+    expect(() => result.encryption.decryptString(Buffer.alloc(0))).toThrow(KeychainEncryptionError);
+  });
+
+  it("stops at the probe and touches no keychain op when the build is not team signed", async () => {
+    const transport = transportOf({ ok: false, code: "not-team-signed" });
+    const result = await createKeychainPartitionEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result).toEqual({ status: "unsupported", code: "not-team-signed" });
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe"]);
+  });
+
+  it("refuses a probe answered by a foreign team", async () => {
+    const transport = transportOf({ ok: true, op: "probe", teamIdentifier: "ZZZZZZZZZZ" });
+    const result = await createKeychainPartitionEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("storage-failed");
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  it("refuses a helper key of the wrong size", async () => {
+    const transport = transportOf(PROBE_OK, {
+      ok: true,
+      op: "read-key",
+      key: randomBytes(16).toString("base64"),
+    });
+    const result = await createKeychainPartitionEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("storage-failed");
+  });
+});
