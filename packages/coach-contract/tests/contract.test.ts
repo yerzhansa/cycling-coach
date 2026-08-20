@@ -113,7 +113,7 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 18", () => {
+  it("is 19", () => {
     expect(PROTOCOL_VERSION).toBe(19);
   });
 });
