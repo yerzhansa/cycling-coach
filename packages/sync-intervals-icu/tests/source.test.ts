@@ -206,6 +206,38 @@ describe("intervals.icu full-history source", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("stores every visible activity when Strava stubs dominate the page", async () => {
+    const stub = (index: number) => ({ id: `strava-${String(index).padStart(2, "0")}`, icu_athlete_id: "i12345",
+      start_date_local: "1998-08-20T14:08:41", source: "STRAVA", _note: "STRAVA activities are not available via the API" });
+    const visible = Array.from({ length: 7 }, (_, index) => activity(`visible-${index}`, `1998-03-0${index + 1}`));
+    const page = [...Array.from({ length: 60 }, (_, index) => stub(index)), ...visible];
+
+    const result = await collect(source({ fetch: async () => json(page) }).pull(watermark("activities"), budget()));
+
+    const snapshots = result.filter((entry) => (entry as { kind: string }).kind === "snapshot");
+    expect(snapshots).toHaveLength(7);
+    expect(snapshots.map((entry) => (entry as { externalId: string }).externalId).sort())
+      .toEqual(visible.map((entry) => entry.id).sort());
+    expect(result.at(-1)).toMatchObject({ kind: "checkpoint" });
+  });
+
+  it("stores all 67 rows when the page carries no Strava stubs", async () => {
+    const page = Array.from({ length: 67 }, (_, index) => activity(
+      `full-${String(index).padStart(2, "0")}`,
+      `1998-0${Math.floor(index / 28) + 1}-${String((index % 28) + 1).padStart(2, "0")}`,
+    ));
+
+    const result = await collect(source({ fetch: async () => json(page) }).pull(watermark("activities"), budget()));
+
+    expect(result.filter((entry) => (entry as { kind: string }).kind === "snapshot")).toHaveLength(67);
+  });
+
+  it("still rejects a typed activity row with an invalid elapsed time", async () => {
+    const broken = { ...activity("broken"), elapsed_time: -1 };
+    await expect(collect(source({ fetch: async () => json([broken]) }).pull(watermark("activities"), budget())))
+      .rejects.toThrow("activity elapsed time is invalid");
+  });
+
   it("charges the injected physical-attempt ledger at the actual source request", async () => {
     const attemptLedger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
     await collect(source({ fetch: async () => json([]) }, { attemptLedger })

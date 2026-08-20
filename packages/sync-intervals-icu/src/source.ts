@@ -71,15 +71,17 @@ interface ActivityIndexEntry extends ReturnType<typeof activityIdentity> {
 
 function activityIndex(value: unknown): readonly ActivityIndexEntry[] {
   if (!Array.isArray(value)) throw new TypeError("activities response is invalid");
-  const rows = value.map((entry) => {
+  const rows: ActivityIndexEntry[] = [];
+  for (const entry of value) {
     const row = objectRow(entry, "activity row");
-    nonempty(row.type, "activity type");
+    const type = row.type;
+    if (typeof type !== "string" || type.length === 0) continue;
     for (const [field, label] of [["moving_time", "moving time"], ["elapsed_time", "elapsed time"]] as const) {
       const item = row[field];
       if (typeof item !== "number" || !Number.isSafeInteger(item) || item < 0) throw new TypeError(`activity ${label} is invalid`);
     }
-    return { ...activityIdentity(row), row };
-  });
+    rows.push({ ...activityIdentity(row), row });
+  }
   rows.sort((a, b) => compareBinary(a.key, b.key));
   return rows;
 }
