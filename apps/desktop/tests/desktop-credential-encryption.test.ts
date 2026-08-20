@@ -233,21 +233,45 @@ describe("desktop credential encryption startup", () => {
   });
 
   it("retires the key only when the keychain backend is live and every envelope is gone", async () => {
+    const replacement = randomBytes(KEY.length);
     const transport = transportOf(
       PROBE_OK,
       { ok: true, op: "read-key", key: KEY.toString("base64") },
       { ok: true, op: "delete-key", deleted: true },
+      { ok: true, op: "create-key", key: replacement.toString("base64") },
     );
 
     const prepared = await prepareDesktopCredentialEncryption(
       options({ createTransport: () => transport }),
     );
 
-    await expect(prepared.retireKeychainKey()).resolves.toEqual({ status: "deleted" });
-    expect(transport.requests.at(-1)).toEqual({
-      op: "delete-key",
-      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    await expect(prepared.retireKeychainKey()).resolves.toEqual({ status: "rotated" });
+    expect(transport.requests.slice(-2)).toEqual([
+      { op: "delete-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
+      { op: "create-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
+    ]);
+    const sealed = prepared.encryption.encryptString("post-retirement-secret");
+    expect(prepared.encryption.decryptString(sealed)).toBe("post-retirement-secret");
+  });
+
+  it("refuses to seal under the old key when rotation cannot mint a replacement", async () => {
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY.toString("base64") },
+      { ok: true, op: "delete-key", deleted: true },
+      { ok: false, code: "keychain-locked" },
+    );
+
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({ createTransport: () => transport }),
+    );
+
+    await expect(prepared.retireKeychainKey()).resolves.toEqual({
+      status: "failed",
+      code: "keychain-locked",
     });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    expect(() => prepared.encryption.encryptString("orphan-candidate")).toThrow();
   });
 
   it("keeps the key while any envelope survives in either vault", async () => {

@@ -93,7 +93,12 @@ export async function prepareDesktopCredentialEncryption(
     service,
     async retireKeychainKey(): Promise<KeychainKeyRetirement | undefined> {
       if (selection.status !== "keychain") return undefined;
-      return await retireKeychainKeyWhenLastEnvelopeGone({ ...roots, transport, service });
+      return await retireKeychainKeyWhenLastEnvelopeGone({
+        ...roots,
+        transport,
+        service,
+        rotate: selection.rotateKey,
+      });
     },
   };
 }

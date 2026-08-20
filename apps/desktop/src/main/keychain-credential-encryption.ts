@@ -61,6 +61,7 @@ export type KeychainPartitionEncryptionResult =
       readonly status: "ready";
       readonly encryption: CredentialEncryptionPort;
       readonly createdKey: boolean;
+      readonly rotateKey: () => Promise<KeychainKeyRotation>;
     }
   | {
       readonly status: "unavailable";
@@ -97,11 +98,24 @@ export function createRefusingKeychainEncryption(
   };
 }
 
-function readyPort(key: Buffer): CredentialEncryptionPort {
+export type KeychainKeyRotation =
+  | Readonly<{ status: "rotated" }>
+  | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>;
+
+interface KeyHolder {
+  key: Buffer | null;
+  failure: KeychainHelperErrorCode;
+}
+
+function readyPort(holder: KeyHolder): CredentialEncryptionPort {
+  const currentKey = (): Buffer => {
+    if (holder.key === null) throw new KeychainEncryptionError(holder.failure);
+    return holder.key;
+  };
   return {
-    isEncryptionAvailable: () => true,
-    encryptString: (value: string) => sealCredentialEnvelope(key, value),
-    decryptString: (envelope: Buffer) => openCredentialEnvelope(key, envelope),
+    isEncryptionAvailable: () => holder.key !== null,
+    encryptString: (value: string) => sealCredentialEnvelope(currentKey(), value),
+    decryptString: (envelope: Buffer) => openCredentialEnvelope(currentKey(), envelope),
     getSelectedStorageBackend: () => KEYCHAIN_PARTITION_STORAGE_BACKEND,
   };
 }
@@ -135,13 +149,38 @@ export async function createKeychainPartitionEncryption(
     return refused("unknown");
   }
 
+  const ready = (key: Buffer, createdKey: boolean): KeychainPartitionEncryptionResult => {
+    const holder: KeyHolder = { key, failure: "unknown" };
+    const rotateKey = async (): Promise<KeychainKeyRotation> => {
+      const deleted = await transport.send({ op: "delete-key", service });
+      if (!deleted.ok) return { status: "failed", code: deleted.code };
+      if (deleted.op !== "delete-key") return { status: "failed", code: "unknown" };
+      const created = await transport.send({ op: "create-key", service });
+      const failure = created.ok ? "unknown" : created.code;
+      if (!created.ok || created.op !== "create-key") {
+        holder.key = null;
+        holder.failure = failure;
+        return { status: "failed", code: failure };
+      }
+      const next = Buffer.from(created.key, "base64");
+      if (next.length !== KEYCHAIN_KEY_BYTES) {
+        holder.key = null;
+        holder.failure = "unknown";
+        return { status: "failed", code: "unknown" };
+      }
+      holder.key = next;
+      return { status: "rotated" };
+    };
+    return { status: "ready", encryption: readyPort(holder), createdKey, rotateKey };
+  };
+
   const create = async (): Promise<KeychainPartitionEncryptionResult> => {
     const created = await transport.send({ op: "create-key", service });
     if (!created.ok) return refused(created.code);
     if (created.op !== "create-key") return refused("unknown");
     const key = Buffer.from(created.key, "base64");
     if (key.length !== KEYCHAIN_KEY_BYTES) return refused("unknown");
-    return { status: "ready", encryption: readyPort(key), createdKey: true };
+    return ready(key, true);
   };
 
   const read = await transport.send({ op: "read-key", service });
@@ -149,7 +188,7 @@ export async function createKeychainPartitionEncryption(
     if (read.op !== "read-key") return refused("unknown");
     const key = Buffer.from(read.key, "base64");
     if (key.length !== KEYCHAIN_KEY_BYTES) return refused("unknown");
-    return { status: "ready", encryption: readyPort(key), createdKey: false };
+    return ready(key, false);
   }
   if (read.code === "item-not-found") return create();
   if (read.code !== "unreadable-item") return refused(read.code);

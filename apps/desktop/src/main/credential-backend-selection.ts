@@ -7,6 +7,7 @@ import {
 import {
   createKeychainPartitionEncryption,
   createRefusingKeychainEncryption,
+  type KeychainKeyRotation,
 } from "./keychain-credential-encryption.js";
 import type { KeychainHelperErrorCode, KeychainHelperTransport } from "./keychain-helper.js";
 import {
@@ -23,6 +24,7 @@ export type DesktopCredentialBackendSelection =
       encryption: CredentialEncryptionPort;
       migration: CredentialMigrationOutcome;
       createdKey: boolean;
+      rotateKey: () => Promise<KeychainKeyRotation>;
     }>
   | Readonly<{ status: "safe-storage"; encryption: CredentialEncryptionPort }>
   | Readonly<{
@@ -117,5 +119,6 @@ export async function selectDesktopCredentialBackend(
           }),
     migration,
     createdKey: keychain.createdKey,
+    rotateKey: keychain.rotateKey,
   };
 }
