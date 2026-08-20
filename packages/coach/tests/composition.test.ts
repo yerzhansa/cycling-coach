@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
-import type { AthleteState, CoachEngine } from "@enduragent/coach-contract";
+import {
+  EMPTY_DROPPED_ACTIVITIES,
+  type AthleteState,
+  type CoachEngine,
+} from "@enduragent/coach-contract";
 import {
   RefreshTokenReusedError,
   engineConfigFromConfig,
@@ -197,6 +201,7 @@ function runtime(
       published: boolean;
       counts: ReturnType<ReturnType<typeof createPhysicalRequestLedger>["snapshot"]>;
       legacySucceeded: boolean;
+      droppedActivities?: typeof EMPTY_DROPPED_ACTIVITIES;
     }>;
     close?: () => Promise<void>;
   } = {},
@@ -220,11 +225,12 @@ function runtime(
   };
   return {
     athleteData: athleteData(),
+    currentDroppedActivities: () => EMPTY_DROPPED_ACTIVITIES,
     attemptLedgerForRun: () => ledger,
-    runWindow,
+    runWindow: async () => ({ ...(await runWindow()), droppedActivities: EMPTY_DROPPED_ACTIVITIES }),
     async runWindowAfter(work) {
       await work(new AbortController().signal);
-      return runWindow();
+      return { ...(await runWindow()), droppedActivities: EMPTY_DROPPED_ACTIVITIES };
     },
     runExclusive,
     async runActivityWrite(work) {
@@ -1380,7 +1386,7 @@ describe("local coach composition", () => {
       const current = runtimeOptions?.readConfig?.();
       if (current === undefined) throw new Error("Expected live runtime configuration.");
       windows.push({ ...current.intervals });
-      return { published: true, counts, legacySucceeded: true };
+      return { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
     });
     const lifecycle = await compose(
       home,
@@ -1578,7 +1584,7 @@ describe("local coach composition", () => {
   it("keeps manual sync keyless before deferred owner approval", async () => {
     const home = await freshHome();
     const context = fakeContext(home);
-    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [] }));
+    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
     let runtimeOptions: LocalStoreRuntimeOptions | undefined;
     let readReferenceIntervals:
       | (() => { readonly apiKey: string; readonly athleteId?: string })
@@ -1665,7 +1671,7 @@ describe("local coach composition", () => {
         const current = runtimeOptions?.readConfig?.();
         if (current === undefined) throw new Error("Expected live runtime configuration.");
         windows.push({ ...current.intervals });
-        return { published: true, counts, legacySucceeded: true };
+        return { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
       }),
     );
     let holdTurn = true;
@@ -1735,13 +1741,7 @@ describe("local coach composition", () => {
     const home = await freshHome();
     const shutdownFailure = new Error("synthetic lifecycle close");
     let windowController: AbortController | undefined;
-    let activeWindow:
-      | Promise<{
-          published: boolean;
-          counts: ReturnType<ReturnType<typeof createPhysicalRequestLedger>["snapshot"]>;
-          legacySucceeded: boolean;
-        }>
-      | undefined;
+    let activeWindow: ReturnType<LocalStoreRuntime["runWindow"]> | undefined;
     let markOwnerEntered!: () => void;
     const ownerEntered = new Promise<void>((resolve) => {
       markOwnerEntered = resolve;
@@ -1757,7 +1757,7 @@ describe("local coach composition", () => {
       windowController = new AbortController();
       activeWindow = (async () => {
         await work(windowController!.signal);
-        return { published: true, counts, legacySucceeded: true };
+        return { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
       })();
       return activeWindow;
     });
@@ -2809,7 +2809,7 @@ describe("local coach composition", () => {
               const current = options.readConfig?.();
               if (current === undefined) throw new Error("Expected live runtime configuration.");
               windows.push({ ...current.intervals });
-              return { published: true, counts, legacySucceeded: true };
+              return { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
             },
           });
         },
@@ -3910,7 +3910,7 @@ describe("local coach composition", () => {
       legacyLimit: 15,
       totalLimit: 79,
     }).snapshot();
-    const result = { published: true, counts, legacySucceeded: true };
+    const result = { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
     let active: ReturnType<LocalStoreRuntime["runWindow"]> | undefined;
     let windowCount = 0;
     const launchWindow = (): ReturnType<LocalStoreRuntime["runWindow"]> => {
@@ -4949,7 +4949,7 @@ describe("local coach composition", () => {
     const home = await freshHome();
     const context = fakeContext(home);
     const selectedRuntime = runtime();
-    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [] }));
+    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
     const lifecycle = await compose(
       home,
       {

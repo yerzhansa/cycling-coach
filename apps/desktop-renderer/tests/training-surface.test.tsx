@@ -1042,7 +1042,7 @@ describe("training page sync", () => {
     expect(message).toHaveTextContent("Syncing training data…");
 
     update({
-      sync: toManualSyncViewState({ status: "succeeded", operation: 1, kind: "no-change" }),
+      sync: toManualSyncViewState({ status: "succeeded", operation: 1, kind: "no-change", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } }),
     });
     const settled = screen.getByRole("button", { name: "Sync again" });
     expect(settled).toBeEnabled();

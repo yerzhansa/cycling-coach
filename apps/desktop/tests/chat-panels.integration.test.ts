@@ -452,6 +452,7 @@ ${"nonwrapping".repeat(36)}
             published: partial,
             referenceSucceeded: !partial,
             requests: { store: 1, reference: 1, total: 2 },
+            droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
           }),
         ];
       }

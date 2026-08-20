@@ -91,6 +91,24 @@ describe("intervals.icu full-history source", () => {
     expect(JSON.parse((refreshed.at(-1) as { watermark: { value: string } }).watermark.value).cycle).toBe(4);
   });
 
+  it("reports dropped rows once when resuming the same activity page", async () => {
+    const page = [
+      { id: "strava-stub", icu_athlete_id: "i12345", start_date_local: "1998-01-04T08:00:00", source: "STRAVA" },
+      activity("a"),
+      activity("b", "1998-01-06"),
+    ];
+    const value = source({ fetch: async () => json(page) });
+    const first = await collect(value.pull(watermark("activities"), budget(1)));
+    expect(first.at(-1)).toMatchObject({ kind: "checkpoint",
+      droppedActivityRows: { sourceRestricted: 1, other: 0 } });
+    const cursor = (first.at(-1) as { watermark: { value: string } }).watermark.value;
+
+    const resumed = await collect(value.pull(watermark("activities", cursor), budget(1)));
+
+    expect(resumed.at(-1)).toMatchObject({ kind: "checkpoint",
+      droppedActivityRows: { sourceRestricted: 0, other: 0 } });
+  });
+
   it.each([
     ["the next day", "1998-07-19", "1998-07-19"],
     ["five days later", "1998-07-23", "1998-07-23"],
@@ -230,6 +248,54 @@ describe("intervals.icu full-history source", () => {
     const result = await collect(source({ fetch: async () => json(page) }).pull(watermark("activities"), budget()));
 
     expect(result.filter((entry) => (entry as { kind: string }).kind === "snapshot")).toHaveLength(67);
+  });
+
+  it("counts 60 source-restricted drops and no other drops across a 67-row page", async () => {
+    const stub = (index: number) => ({ id: `strava-${String(index).padStart(2, "0")}`, icu_athlete_id: "i12345",
+      start_date_local: "1998-08-20T14:08:41", source: "STRAVA", _note: "STRAVA activities are not available via the API" });
+    const visible = Array.from({ length: 7 }, (_, index) => activity(`visible-${index}`, `1998-03-0${index + 1}`));
+    const page = [...Array.from({ length: 60 }, (_, index) => stub(index)), ...visible];
+
+    const result = await collect(source({ fetch: async () => json(page) }).pull(watermark("activities"), budget()));
+
+    expect(page).toHaveLength(67);
+    expect(result.at(-1)).toMatchObject({ kind: "checkpoint",
+      droppedActivityRows: { sourceRestricted: 60, other: 0 } });
+  });
+
+  it("counts a type-less row from another provider as an other drop", async () => {
+    const page = [
+      { id: "garmin-01", icu_athlete_id: "i12345", start_date_local: "1998-08-20T14:08:41", source: "GARMIN_CONNECT" },
+      { id: "strava-01", icu_athlete_id: "i12345", start_date_local: "1998-08-20T14:08:41", source: "STRAVA" },
+      activity("visible-0"),
+    ];
+
+    const result = await collect(source({ fetch: async () => json(page) }).pull(watermark("activities"), budget()));
+
+    expect(result.at(-1)).toMatchObject({ kind: "checkpoint",
+      droppedActivityRows: { sourceRestricted: 1, other: 1 } });
+  });
+
+  it("reports zero drops when the page carries no unusable rows", async () => {
+    const page = Array.from({ length: 67 }, (_, index) => activity(
+      `full-${String(index).padStart(2, "0")}`,
+      `1998-0${Math.floor(index / 28) + 1}-${String((index % 28) + 1).padStart(2, "0")}`,
+    ));
+
+    const result = await collect(source({ fetch: async () => json(page) }).pull(watermark("activities"), budget()));
+
+    expect(result.at(-1)).toMatchObject({ kind: "checkpoint",
+      droppedActivityRows: { sourceRestricted: 0, other: 0 } });
+  });
+
+  it("carries the drop split on the bulk-fit checkpoint", async () => {
+    const page = Array.from({ length: 60 }, (_, index) => ({ id: `strava-${String(index).padStart(2, "0")}`,
+      icu_athlete_id: "i12345", start_date_local: "1998-08-20T14:08:41", source: "STRAVA" }));
+
+    const result = await collect(source({ fetch: async () => json(page) }).pull(watermark("bulk-fit"), budget()));
+
+    expect(result.at(-1)).toMatchObject({ kind: "checkpoint",
+      droppedActivityRows: { sourceRestricted: 60, other: 0 } });
   });
 
   it("still rejects a typed activity row with an invalid elapsed time", async () => {

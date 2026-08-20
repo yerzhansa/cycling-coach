@@ -25,6 +25,7 @@ const published: SyncRpcResult = {
   published: true,
   referenceSucceeded: true,
   requests: { store: 1, reference: 1, total: 2 },
+  droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
 };
 
 function deferred<T>(): {
@@ -148,12 +149,13 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 1,
       kind: "published",
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 
   it.each([
-    [true, true, { status: "succeeded", operation: 1, kind: "published" }],
-    [false, true, { status: "succeeded", operation: 1, kind: "no-change" }],
+    [true, true, { status: "succeeded", operation: 1, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } }],
+    [false, true, { status: "succeeded", operation: 1, kind: "no-change", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } }],
     [true, false, { status: "failed", operation: 1, kind: "partial", retryable: true }],
     [false, false, { status: "failed", operation: 1, kind: "operation", retryable: true }],
   ] as const)(
@@ -171,6 +173,40 @@ describe("training sync coordinator", () => {
       expect(refreshTrainingContext).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("carries the dropped-activity split onto the succeeded state", async () => {
+    const result: SyncRpcResult = {
+      ...published,
+      droppedActivities: {
+        overall: {
+          total: 67,
+          visible: 5,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+          other: 2,
+        },
+        recent7Days: {
+          total: 5,
+          visible: 1,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+          other: 0,
+        },
+      },
+    };
+    const client = clientWith((options) => exactCall(options, result));
+    const coordinator = createTrainingSyncCoordinator({
+      clients: providerWith(client),
+      refreshTrainingContext: vi.fn(async () => {}),
+    });
+
+    await coordinator.request();
+
+    expect(coordinator.getState()).toEqual({
+      status: "succeeded",
+      operation: 1,
+      kind: "published",
+      droppedActivities: result.droppedActivities,
+    });
+  });
 
   it("maps a pending-verification backfill to a retryable operation failure", async () => {
     const result: SyncRpcResult = { ...published, backfill: "pending-verification" };
@@ -330,6 +366,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 2,
       kind: "published",
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 
@@ -361,6 +398,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 2,
       kind: "published",
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 
@@ -544,6 +582,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 1,
       kind: "published",
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 
@@ -579,6 +618,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 2,
       kind: "published",
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 

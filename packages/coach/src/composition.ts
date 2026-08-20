@@ -202,6 +202,7 @@ export interface LocalReferenceRuntime {
 
 export interface LocalStoreRuntime {
   readonly athleteData: StoreRuntime["athleteData"];
+  currentDroppedActivities(): ReturnType<StoreRuntime["currentDroppedActivities"]>;
   attemptLedgerForRun(): ReturnType<StoreRuntime["attemptLedgerForRun"]>;
   runWindow(): ReturnType<StoreRuntime["runWindow"]>;
   runWindowAfter(
@@ -942,6 +943,7 @@ export async function createLocalCoachComposition(
       cyclingFtpAnchorResolver,
       powerProgressSource: powerProgress,
       recentRidesSource: createRecentRidesSource(canonicalActivities),
+      droppedActivitiesSource: () => runtime!.currentDroppedActivities(),
     });
     const buildBundle = (config: Config): RuntimeBundle => {
       const timezone = resolveUserTimezone(config.session.timezone);

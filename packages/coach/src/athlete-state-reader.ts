@@ -2,9 +2,11 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   AthleteStateSchema,
+  EMPTY_DROPPED_ACTIVITIES,
   PowerProgressPanelSchema,
   RecentRidesPanelSchema,
   type AthleteState,
+  type DroppedActivities,
   type PowerProgressPanel,
   type RecentRidesPanel,
 } from "@enduragent/coach-contract";
@@ -63,6 +65,7 @@ export interface CreatePersistedAthleteStateSourceOptions {
       readonly asOfEpochSeconds: number;
     }): Promise<RecentRidesPanel>;
   };
+  readonly droppedActivitiesSource?: () => DroppedActivities;
 }
 
 export function createPersistedAthleteStateSource(
@@ -165,6 +168,8 @@ export function createPersistedAthleteStateSource(
         wellness: latest.wellness_data,
         performanceProgress,
         recentRides,
+        droppedActivities:
+          input.droppedActivitiesSource?.() ?? EMPTY_DROPPED_ACTIVITIES,
       });
       const mapped = {
         schemaVersion: latest.metadata.schema_version,

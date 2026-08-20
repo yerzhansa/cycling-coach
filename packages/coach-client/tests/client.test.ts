@@ -830,6 +830,7 @@ describe("RPC receive and observers", () => {
           published: true,
           referenceSucceeded: true,
           requests: { store: 1, reference: 1, total: 2 },
+          droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
         },
         getSetupStatus: {
           schemaVersion: 1,
@@ -1343,6 +1344,7 @@ describe("RPC receive and observers", () => {
           published: false,
           referenceSucceeded: true,
           requests: { store: 0, reference: 0, total: 0 },
+          droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
         },
       }),
     );

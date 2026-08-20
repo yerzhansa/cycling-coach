@@ -14,12 +14,12 @@ import {
   assertProjectionEvidenceEqual,
   parseCanonicalProjectionValue,
 } from "@enduragent/kernel/reference/local-bundle";
-import type { SourceCheckpoint, SourceLane, SourceWatermark, SyncBudget } from "@enduragent/kernel/store";
+import type { SourceLane, SourceWatermark, SyncBudget } from "@enduragent/kernel/store";
 import { activityIdentity, mapActivityLanding, mapSettingsLanding, mapWellnessLanding, normalizeStreamLanding } from "./landing.js";
 import { advanceWindow, compactCursor, compareBinary, parseCivilDate, parseCursor, type CursorRange, type RangeCursor } from "./cursor.js";
 import { createRequester, IntervalsHttpError, MIN_CONFIGURED_INTERVAL_MS, SyncBudgetExceededError, type IntervalsRequester } from "./http.js";
 import { BULK_FIT_BATCH_SIZE, BULK_SAFE_ACTIVITY_ID, IncompleteBulkFitBatchError, MAX_FIT_BYTES, MAX_ZIP_BYTES, extractBulkFitZip } from "./zip.js";
-import { INTERVALS_ICU_CAPABILITIES, INTERVALS_ICU_SOURCE_ID, MAX_JSON_BYTES, type IntervalsIcuArtifact, type IntervalsIcuCaptureSource, type IntervalsIcuSourceOptions, type ReferenceCaptureActivityRecord, type ReferenceCaptureBatch, type ReferenceCaptureEndpoint, type ReferenceCaptureSettingsRecord, type ReferenceCaptureStreamRecord, type ReferenceCaptureWellnessRecord } from "./types.js";
+import { INTERVALS_ICU_CAPABILITIES, INTERVALS_ICU_SOURCE_ID, MAX_JSON_BYTES, ZERO_DROPPED_ACTIVITY_ROWS, type DroppedActivityRowCounts, type IntervalsIcuArtifact, type IntervalsIcuCaptureSource, type IntervalsIcuCheckpoint, type IntervalsIcuSourceOptions, type ReferenceCaptureActivityRecord, type ReferenceCaptureBatch, type ReferenceCaptureEndpoint, type ReferenceCaptureSettingsRecord, type ReferenceCaptureStreamRecord, type ReferenceCaptureWellnessRecord } from "./types.js";
 
 const BASE_URL = "https://intervals.icu";
 const JSON_TYPE = "application/json";
@@ -69,13 +69,38 @@ interface ActivityIndexEntry extends ReturnType<typeof activityIdentity> {
   readonly row: Record<string, unknown>;
 }
 
-function activityIndex(value: unknown): readonly ActivityIndexEntry[] {
+const SOURCE_RESTRICTED_PROVIDER = "STRAVA";
+
+function isSourceRestrictedRow(entry: unknown): boolean {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return false;
+  return (entry as Record<string, unknown>).source === SOURCE_RESTRICTED_PROVIDER;
+}
+
+class DropTally {
+  private restricted = 0;
+  private rest = 0;
+  record(entry: unknown): void {
+    if (isSourceRestrictedRow(entry)) this.restricted += 1;
+    else this.rest += 1;
+  }
+  counts(): DroppedActivityRowCounts {
+    return Object.freeze({ sourceRestricted: this.restricted, other: this.rest });
+  }
+}
+
+interface ActivityScan {
+  readonly rows: readonly ActivityIndexEntry[];
+  readonly dropped: DroppedActivityRowCounts;
+}
+
+function activityIndex(value: unknown): ActivityScan {
   if (!Array.isArray(value)) throw new TypeError("activities response is invalid");
   const rows: ActivityIndexEntry[] = [];
+  const tally = new DropTally();
   for (const entry of value) {
     const row = objectRow(entry, "activity row");
     const type = row.type;
-    if (typeof type !== "string" || type.length === 0) continue;
+    if (typeof type !== "string" || type.length === 0) { tally.record(row); continue; }
     for (const [field, label] of [["moving_time", "moving time"], ["elapsed_time", "elapsed time"]] as const) {
       const item = row[field];
       if (typeof item !== "number" || !Number.isSafeInteger(item) || item < 0) throw new TypeError(`activity ${label} is invalid`);
@@ -83,11 +108,11 @@ function activityIndex(value: unknown): readonly ActivityIndexEntry[] {
     rows.push({ ...activityIdentity(row), row });
   }
   rows.sort((a, b) => compareBinary(a.key, b.key));
-  return rows;
+  return { rows, dropped: tally.counts() };
 }
 
-function checkpoint(lane: SourceLane, cursor: RangeCursor): SourceCheckpoint {
-  return { kind: "checkpoint", watermark: { source: "intervals-icu", lane, value: compactCursor(cursor) } };
+function checkpoint(lane: SourceLane, cursor: RangeCursor, droppedActivityRows: DroppedActivityRowCounts): IntervalsIcuCheckpoint {
+  return { kind: "checkpoint", watermark: { source: "intervals-icu", lane, value: compactCursor(cursor) }, droppedActivityRows };
 }
 
 function nextCursor(cursor: RangeCursor, range: CursorRange, remaining: number, processedKey: string | null): RangeCursor {
@@ -178,9 +203,10 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
       if (yielded >= budget.maxArtifacts) throw new Error("artifact yield exceeds validated budget");
       yielded += 1;
     };
-    const yieldCheckpoint = async function* (value: RangeCursor): AsyncGenerator<IntervalsIcuArtifact> {
+    const yieldCheckpoint = async function* (value: RangeCursor,
+      dropped: DroppedActivityRowCounts = ZERO_DROPPED_ACTIVITY_ROWS): AsyncGenerator<IntervalsIcuArtifact> {
       requester.assertActive();
-      yield checkpoint(lane, value);
+      yield checkpoint(lane, value, dropped);
     };
 
     if (lane === "bulk-fit" && cursor.complete) {
@@ -196,10 +222,13 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
       const transport = await fetchJson(requester, lane, { method: "GET", url: rangeUrl(athleteId, lane, cursor) });
       await options.archive.writeSnapshot(transport, rowInstant(epochForDate(cursor.requestStart ?? cursor.window_start)));
       if (!Array.isArray(transport)) throw new TypeError(`${lane} response is invalid`);
-      const indexed = lane === "activities" ? [...activityIndex(transport)] : transport.map((entry) => {
+      const scan = lane === "activities" ? activityIndex(transport) : null;
+      const indexed = scan !== null ? [...scan.rows] : transport.map((entry) => {
         const row = objectRow(entry, "wellness row"), identity = wellnessIdentity(row);
         return { externalId: identity.id, startUtc: identity.instant.epochSeconds, localDate: identity.id, key: identity.key, row };
       }).sort((a, b) => compareBinary(a.key, b.key));
+      const droppedRows =
+        scan === null || cursor.last_key !== null ? ZERO_DROPPED_ACTIVITY_ROWS : scan.dropped;
       const remaining = indexed.filter((entry) => cursor.last_key === null || compareBinary(entry.key, cursor.last_key) > 0);
       let processedKey = cursor.last_key;
       let processed = 0;
@@ -227,7 +256,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
         processed += 1;
         processedKey = entry.key;
       }
-      yield* yieldCheckpoint(nextCursor(cursor, range, remaining.length - processed, processedKey));
+      yield* yieldCheckpoint(nextCursor(cursor, range, remaining.length - processed, processedKey), droppedRows);
       return;
     }
 
@@ -272,8 +301,10 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
 
     const activityTransport = await fetchJson(requester, "activities", { method: "GET", url: rangeUrl(athleteId, "activities", cursor) });
     await options.archive.writeSnapshot(activityTransport, rowInstant(epochForDate(cursor.requestStart ?? cursor.window_start)));
-    const allActivities = activityIndex(activityTransport);
-    const remaining = allActivities.filter((entry) => cursor.last_key === null || compareBinary(entry.key, cursor.last_key) > 0);
+    const activityScan = activityIndex(activityTransport);
+    const droppedRows =
+      cursor.last_key === null ? activityScan.dropped : ZERO_DROPPED_ACTIVITY_ROWS;
+    const remaining = activityScan.rows.filter((entry) => cursor.last_key === null || compareBinary(entry.key, cursor.last_key) > 0);
     let processedKey = cursor.last_key, processed = 0;
 
     if (lane === "streams") {
@@ -307,7 +338,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
             normalizedPayloadJson } };
         processed += 1; processedKey = activity.key;
       }
-      yield* yieldCheckpoint(nextCursor(cursor, range, remaining.length - processed, processedKey));
+      yield* yieldCheckpoint(nextCursor(cursor, range, remaining.length - processed, processedKey), droppedRows);
       return;
     }
 
@@ -384,8 +415,10 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
       processedKey = group[group.length - 1]!.key;
       offset += group.length;
     }
-    yield* yieldCheckpoint(nextCursor(cursor, range, remaining.length - processed, processedKey));
+    yield* yieldCheckpoint(nextCursor(cursor, range, remaining.length - processed, processedKey), droppedRows);
   }
+
+  let capturedActivityDrops: DroppedActivityRowCounts = ZERO_DROPPED_ACTIVITY_ROWS;
 
   const placeholderArchive: ArchiveWriteResult = Object.freeze({
     address: "0".repeat(64),
@@ -440,6 +473,7 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
 
     const activities: DerivedCaptureMember[] = [];
     const activityPayload = endpointPayloads[1]!.payload as unknown[];
+    const activityDrops = new DropTally();
     for (let index = 0; index < activityPayload.length; index += 1) {
       try {
         const row = objectRow(activityPayload[index], "activity row");
@@ -453,8 +487,9 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
         options.acl.assertClean(normalized);
         await mapActivityLanding({ normalized, archiveInstant: rowInstant(identity.startUtc), archive: placeholderArchive });
         activities.push({ endpoint_ordinal: 1, payload_index: index, external_id: identity.externalId, payload: row });
-      } catch {}
+      } catch { activityDrops.record(activityPayload[index]); }
     }
+    capturedActivityDrops = activityDrops.counts();
 
     const wellness: DerivedCaptureMember[] = [];
     const wellnessPayload = endpointPayloads[2]!.payload as unknown[];
@@ -613,7 +648,8 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
       settings: Object.freeze(settings), activities: Object.freeze(activities),
       wellness: Object.freeze(wellness), streams: Object.freeze(streams),
     }), selected_stream_ids: Object.freeze(selectedIds),
-    captured_stream_ids: Object.freeze(successfulStreams.map((endpoint) => endpoint.request.activity_id!)) });
+    captured_stream_ids: Object.freeze(successfulStreams.map((endpoint) => endpoint.request.activity_id!)),
+    dropped_activity_rows: capturedActivityDrops });
   }
 
   return Object.freeze({ id: INTERVALS_ICU_SOURCE_ID, capabilities: INTERVALS_ICU_CAPABILITIES,

@@ -16,6 +16,11 @@
 // `SYNC_OPERATION_TIMEOUT_MS` budget.
 
 import { snakeCaseKeys, type Activity as ManagedActivity } from "intervals-icu-api";
+import {
+  DroppedActivitiesSchema,
+  type ActivityRestriction,
+  type DroppedActivities,
+} from "@enduragent/coach-contract";
 import { serializeError } from "../../logging/serialize-error.js";
 import {
   REFERENCE_CAPTURE_STREAM_LIMIT,
@@ -106,6 +111,8 @@ export interface FetchEndpointError {
   readonly detail: string;
 }
 
+export const SOURCE_RESTRICTED_PROVIDER = "STRAVA";
+
 export interface LiveFetchResult {
   /** Raw athlete object — cached verbatim as `latest.athlete_profile`. */
   readonly athleteProfile: unknown;
@@ -122,6 +129,7 @@ export interface LiveFetchResult {
   readonly adapterActivities: readonly ManagedActivity[];
   /** Sync wall-clock as an ISO string — the metric date-window anchor. */
   readonly frozenNow: string;
+  readonly droppedActivities: DroppedActivities;
   /** Endpoints that returned an error (athlete-profile, wellness) and were
    *  filled with empty fallbacks to keep the bundle well-typed. The gate turns
    *  a non-empty list into a hard-fail so a swallowed failure can no longer
@@ -292,16 +300,57 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const actSummary: RenameSummary = { skippedNonNumeric: {} };
   const wellSummary: RenameSummary = { skippedNonNumeric: {} };
 
+  const retentionCutoffMs = now.getTime() - LATEST_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const isRecent = (row: { readonly start_date_local?: unknown }): boolean => {
+    if (typeof row.start_date_local !== "string") return false;
+    const milliseconds = Date.parse(row.start_date_local);
+    return Number.isFinite(milliseconds) && milliseconds >= retentionCutoffMs;
+  };
   const activities: Activity[] = [];
+  const droppedRows: Array<Record<string, unknown>> = [];
   for (const row of rawActivities) {
     try {
       activities.push(parseRenamedActivity(renameTpFieldsOnActivity(row, actSummary)));
     } catch (err) {
+      droppedRows.push(row);
       log(
         `Reference: skipped malformed activity row: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
+  const restrictionsFor = (
+    rows: readonly Record<string, unknown>[],
+  ): ActivityRestriction[] => {
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      if (row.source !== SOURCE_RESTRICTED_PROVIDER) continue;
+      counts.set(row.source, (counts.get(row.source) ?? 0) + 1);
+    }
+    return [...counts]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([source, count]) => ({ reason: "source-restricted", source, count }));
+  };
+  const recentRawActivities = rawActivities.filter(isRecent);
+  const recentActivities = activities.filter(isRecent);
+  const recentDroppedRows = droppedRows.filter(isRecent);
+  const restrictions = restrictionsFor(droppedRows);
+  const recentRestrictions = restrictionsFor(recentDroppedRows);
+  const restrictedCount = restrictions.reduce((sum, entry) => sum + entry.count, 0);
+  const recentRestrictedCount = recentRestrictions.reduce((sum, entry) => sum + entry.count, 0);
+  const droppedActivities = DroppedActivitiesSchema.parse({
+    overall: {
+      total: rawActivities.length,
+      visible: activities.length,
+      restrictions,
+      other: droppedRows.length - restrictedCount,
+    },
+    recent7Days: {
+      total: recentRawActivities.length,
+      visible: recentActivities.length,
+      restrictions: recentRestrictions,
+      other: recentDroppedRows.length - recentRestrictedCount,
+    },
+  });
   const wellness: WellnessDay[] = [];
   for (const row of rawWellness) {
     try {
@@ -330,13 +379,6 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     ...(athlete !== undefined ? { athlete } : {}),
   };
 
-  const retentionCutoffMs = now.getTime() - LATEST_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  const recentActivities = activities.filter((a) => {
-    if (typeof a.start_date_local !== "string") return false;
-    const ms = Date.parse(a.start_date_local);
-    return Number.isFinite(ms) && ms >= retentionCutoffMs;
-  });
-
   return {
     athleteProfile,
     recentActivities,
@@ -345,6 +387,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     bundle,
     adapterActivities,
     frozenNow,
+    droppedActivities,
     ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
   };
 }
