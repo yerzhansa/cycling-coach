@@ -1718,7 +1718,7 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 18 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 19 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
     expect(client.clientProtocolVersion).toBe(19);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
