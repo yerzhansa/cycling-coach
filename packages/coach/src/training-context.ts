@@ -26,7 +26,21 @@ export interface ProjectCyclingTrainingContextInput {
   readonly droppedActivities?: DroppedActivities;
 }
 
+export const ADHERENCE_MAX_RESTRICTED_ACTIVITIES = 0;
+export const LOAD_MAX_RESTRICTED_SHARE = 0.5;
+
 const cyclingTypes = new Set<string>(cyclingSport.intervalsActivityTypes);
+
+type DroppedActivitiesWindow = DroppedActivities["overall"];
+
+function restrictedActivityCount(window: DroppedActivitiesWindow | undefined): number {
+  return window?.restrictions.reduce((sum, entry) => sum + entry.count, 0) ?? 0;
+}
+
+function restrictedActivityShare(window: DroppedActivitiesWindow | undefined): number {
+  if (window === undefined || window.total === 0) return 0;
+  return restrictedActivityCount(window) / window.total;
+}
 
 function projectAnchorZones(
   input: ProjectCyclingTrainingContextInput,
@@ -58,6 +72,9 @@ function projectAnchorZones(
 function projectCyclingLoad(
   input: ProjectCyclingTrainingContextInput,
 ): CyclingTrainingContext["cyclingLoad"] {
+  if (restrictedActivityShare(input.droppedActivities?.recent7Days) >= LOAD_MAX_RESTRICTED_SHARE) {
+    return { kind: "unknown", reason: "source-restricted" };
+  }
   const activities = input.recentActivities.flatMap((row) => {
     const parsed = ActivitySchema.safeParse(row);
     return parsed.success && cyclingTypes.has(parsed.data.type) ? [parsed.data] : [];
@@ -112,6 +129,12 @@ function nonnegativeInteger(value: unknown): value is number {
 function projectAdherence(
   input: ProjectCyclingTrainingContextInput,
 ): CyclingTrainingContext["adherence"] {
+  if (
+    restrictedActivityCount(input.droppedActivities?.recent7Days) >
+    ADHERENCE_MAX_RESTRICTED_ACTIVITIES
+  ) {
+    return { kind: "unknown", reason: "source-restricted" };
+  }
   const ratio = input.derivedMetrics.consistency_index;
   const details = input.derivedMetrics.consistency_details;
   if (
@@ -192,12 +215,18 @@ function projectWellness(
 export function projectCyclingTrainingContext(
   input: ProjectCyclingTrainingContextInput,
 ): CyclingTrainingContext {
+  const overallRestricted =
+    restrictedActivityShare(input.droppedActivities?.overall) >= LOAD_MAX_RESTRICTED_SHARE;
   return {
-    performanceProgress: input.performanceProgress ?? {
-      kind: "unavailable",
-      reason: "not-synced",
-    },
-    recentRides: input.recentRides ?? { kind: "unknown", reason: "not-synced" },
+    performanceProgress: overallRestricted
+      ? { kind: "unavailable", reason: "source-restricted" }
+      : (input.performanceProgress ?? {
+          kind: "unavailable",
+          reason: "not-synced",
+        }),
+    recentRides: overallRestricted
+      ? { kind: "unknown", reason: "source-restricted" }
+      : (input.recentRides ?? { kind: "unknown", reason: "not-synced" }),
     anchorZones: projectAnchorZones(input),
     cyclingLoad: projectCyclingLoad(input),
     plan: projectPlan(input),

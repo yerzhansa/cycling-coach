@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type {
+  DroppedActivities,
+  PowerProgressPanel,
+  RecentRidesPanel,
+} from "@enduragent/coach-contract";
 import type { CyclingFtpAnchorResult } from "@enduragent/kernel/anchors";
-import { projectCyclingTrainingContext } from "../src/training-context.js";
+import {
+  ADHERENCE_MAX_RESTRICTED_ACTIVITIES,
+  LOAD_MAX_RESTRICTED_SHARE,
+  projectCyclingTrainingContext,
+} from "../src/training-context.js";
 
 const anchor: CyclingFtpAnchorResult = {
   kind: "ftp",
@@ -11,6 +20,46 @@ const anchor: CyclingFtpAnchorResult = {
   ageDays: 48,
   stalenessBand: "aging",
   stale: true,
+};
+
+const performanceProgress: PowerProgressPanel = {
+  kind: "computed",
+  currentWindow: { start: "1998-06-09", end: "1998-07-06" },
+  previousWindow: { start: "1998-05-12", end: "1998-06-08" },
+  anchors: ([5, 60, 300, 1_200, 3_600] as const).map((durationSeconds) => ({
+    durationSeconds,
+    current: { kind: "computed", watts: 300 },
+    previous: { kind: "computed", watts: 280 },
+    change: { kind: "computed", percent: 7.1 },
+  })),
+  rotation: "balanced",
+  heartRateContext: { kind: "unavailable", reason: "insufficient-data" },
+  sustainabilityContext: {
+    kind: "computed",
+    window: { start: "1998-05-26", end: "1998-07-06" },
+    coverageRatio: 0.8,
+    sourceContext: "mixed",
+  },
+  freshness: "fresh",
+  asOf: "1998-07-06T09:00:00.000Z",
+};
+
+const recentRides: RecentRidesPanel = {
+  kind: "computed",
+  asOf: "1998-07-06T09:00:00.000Z",
+  windowDays: 28,
+  items: [
+    {
+      id: "a".repeat(64),
+      subSport: "road",
+      startEpochSeconds: 899_712_000,
+      timezoneOffsetSeconds: 21_600,
+      localDate: "1998-07-06",
+      elapsedSeconds: 3_700,
+      movingSeconds: 3_600,
+      distanceMeters: 40_000,
+    },
+  ],
 };
 
 function activity(overrides: Record<string, unknown> = {}) {
@@ -37,6 +86,27 @@ function wellness(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+function droppedActivities(
+  overallRestricted: number,
+  overallTotal: number,
+  recentRestricted: number,
+  recentTotal: number,
+): DroppedActivities {
+  const window = (restricted: number, total: number) => ({
+    total,
+    visible: total - restricted,
+    restrictions:
+      restricted === 0
+        ? []
+        : [{ reason: "source-restricted" as const, source: "STRAVA", count: restricted }],
+    other: 0,
+  });
+  return {
+    overall: window(overallRestricted, overallTotal),
+    recent7Days: window(recentRestricted, recentTotal),
+  };
+}
+
 function project(overrides: Partial<Parameters<typeof projectCyclingTrainingContext>[0]> = {}) {
   return projectCyclingTrainingContext({
     asOf: "2026-07-18T00:00:00.000Z",
@@ -56,6 +126,8 @@ function project(overrides: Partial<Parameters<typeof projectCyclingTrainingCont
       },
     ],
     wellness: [wellness("2026-07-17")],
+    performanceProgress,
+    recentRides,
     ...overrides,
   });
 }
@@ -123,6 +195,84 @@ describe("cycling training context projection", () => {
       kind: "unknown",
       reason: "no-platform-load",
     });
+  });
+
+  it("preserves every computed panel when no activities are restricted", () => {
+    const baseline = project();
+    const result = project({ droppedActivities: droppedActivities(0, 100, 0, 7) });
+    expect(result).toEqual(baseline);
+    expect({
+      performanceProgress: result.performanceProgress.kind,
+      recentRides: result.recentRides.kind,
+      cyclingLoad: result.cyclingLoad.kind,
+      adherence: result.adherence.kind,
+    }).toMatchInlineSnapshot(`
+      {
+        "adherence": "computed",
+        "cyclingLoad": "computed",
+        "performanceProgress": "computed",
+        "recentRides": "computed",
+      }
+    `);
+  });
+
+  it("refuses adherence after one restricted activity without hiding the other panels", () => {
+    const result = project({ droppedActivities: droppedActivities(1, 100, 1, 100) });
+    expect(result.adherence).toEqual({ kind: "unknown", reason: "source-restricted" });
+    expect(result.cyclingLoad.kind).toBe("computed");
+    expect(result.performanceProgress.kind).toBe("computed");
+    expect(result.recentRides.kind).toBe("computed");
+  });
+
+  it("keeps broad panels computed below the restricted-share boundary", () => {
+    const result = project({ droppedActivities: droppedActivities(49, 100, 49, 100) });
+    expect(result.cyclingLoad.kind).toBe("computed");
+    expect(result.performanceProgress.kind).toBe("computed");
+    expect(result.recentRides.kind).toBe("computed");
+  });
+
+  it("refuses broad panels at the restricted-share boundary", () => {
+    const result = project({ droppedActivities: droppedActivities(50, 100, 50, 100) });
+    expect(result.cyclingLoad).toEqual({ kind: "unknown", reason: "source-restricted" });
+    expect(result.performanceProgress).toEqual({
+      kind: "unavailable",
+      reason: "source-restricted",
+    });
+    expect(result.recentRides).toEqual({ kind: "unknown", reason: "source-restricted" });
+    expect(result.adherence).toEqual({ kind: "unknown", reason: "source-restricted" });
+  });
+
+  it("combines restricted sources without treating other dropped rows as restrictions", () => {
+    const restrictedWindow = {
+      total: 100,
+      visible: 49,
+      restrictions: [
+        { reason: "source-restricted" as const, source: "GARMIN_CONNECT", count: 25 },
+        { reason: "source-restricted" as const, source: "STRAVA", count: 25 },
+      ],
+      other: 1,
+    };
+    const restricted = project({
+      droppedActivities: { overall: restrictedWindow, recent7Days: restrictedWindow },
+    });
+    expect(restricted.cyclingLoad).toEqual({ kind: "unknown", reason: "source-restricted" });
+
+    const otherOnlyWindow = {
+      total: 100,
+      visible: 49,
+      restrictions: [],
+      other: 51,
+    };
+    const otherOnly = project({
+      droppedActivities: { overall: otherOnlyWindow, recent7Days: otherOnlyWindow },
+    });
+    expect(otherOnly.cyclingLoad.kind).toBe("computed");
+    expect(otherOnly.adherence.kind).toBe("computed");
+  });
+
+  it("exports the refusal boundaries", () => {
+    expect(ADHERENCE_MAX_RESTRICTED_ACTIVITIES).toBe(0);
+    expect(LOAD_MAX_RESTRICTED_SHARE).toBe(0.5);
   });
 
   it("filters, sorts, and caps cycling plan rows", () => {
