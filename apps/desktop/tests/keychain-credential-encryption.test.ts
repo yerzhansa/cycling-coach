@@ -303,4 +303,82 @@ describe("keychain partition backend", () => {
     expect(result.status).toBe("storage-failed");
     expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
   });
+
+  it("keeps an ambiguous deletion unavailable until the surviving key is read again", async () => {
+    const { encoded } = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: encoded },
+      { ok: false, code: "unknown" },
+      { ok: true, op: "read-key", key: encoded },
+    );
+    const serialize = createCredentialEnvelopeMutationLock();
+    const result = await serialize((lockProof) =>
+      createKeychainPartitionEncryption({
+        transport,
+        service: KEYCHAIN_CREDENTIAL_SERVICE,
+        dependentEnvelopes: 0,
+        lockProof,
+      }),
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await expect(serialize((proof) => result.deleteKey(proof))).resolves.toEqual({
+      status: "failed",
+      code: "unknown",
+    });
+    expect(result.encryption.isEncryptionAvailable()).toBe(false);
+    expect(() => result.encryption.encryptString("orphan-candidate")).toThrow(
+      KeychainEncryptionError,
+    );
+
+    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+      status: "ready",
+    });
+    expect(result.encryption.isEncryptionAvailable()).toBe(true);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "read-key",
+    ]);
+  });
+
+  it("re-reads an ambiguously deleted key before replacing a confirmed absence", async () => {
+    const original = storedKey();
+    const replacement = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: original.encoded },
+      { ok: false, code: "unknown" },
+      { ok: false, code: "item-not-found" },
+      { ok: true, op: "create-key", key: replacement.encoded },
+    );
+    const serialize = createCredentialEnvelopeMutationLock();
+    const result = await serialize((lockProof) =>
+      createKeychainPartitionEncryption({
+        transport,
+        service: KEYCHAIN_CREDENTIAL_SERVICE,
+        dependentEnvelopes: 0,
+        lockProof,
+      }),
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await serialize((proof) => result.deleteKey(proof));
+    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+      status: "ready",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "read-key",
+      "create-key",
+    ]);
+    const sealed = result.encryption.encryptString("post-reconciliation-secret");
+    expect(openCredentialEnvelope(replacement.key, sealed)).toBe("post-reconciliation-secret");
+  });
 });

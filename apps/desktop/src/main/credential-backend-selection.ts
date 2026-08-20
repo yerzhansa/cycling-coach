@@ -89,7 +89,7 @@ async function selectMacCredentialBackend(
   const keychain = await createKeychainPartitionEncryption({
     transport: options.transport,
     service: options.service,
-    dependentEnvelopes: inventory.envelopes.length,
+    dependentEnvelopes: inventory.migrated + inventory.unreadable,
     lockProof: proof,
   });
   if (keychain.status === "unsupported") {

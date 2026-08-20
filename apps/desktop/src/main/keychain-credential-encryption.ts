@@ -170,10 +170,38 @@ export async function createKeychainPartitionEncryption(
       : { status: "failed", code: "unknown" };
   };
 
+  const readMaterial = async (): Promise<
+    | Readonly<{ status: "ready"; key: Buffer }>
+    | Readonly<{ status: "missing" }>
+    | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>
+  > => {
+    const read = await transport.send({ op: "read-key", service });
+    if (!read.ok) {
+      return read.code === "item-not-found"
+        ? { status: "missing" }
+        : { status: "failed", code: read.code };
+    }
+    if (read.op !== "read-key") return { status: "failed", code: "unknown" };
+    const key = Buffer.from(read.key, "base64");
+    return key.length === KEYCHAIN_KEY_BYTES
+      ? { status: "ready", key }
+      : { status: "failed", code: "unknown" };
+  };
+
   const ready = (key: Buffer, createdKey: boolean): KeychainPartitionEncryptionResult => {
     const holder: KeyHolder = { key, failure: "item-not-found" };
     const prepareKey = async (): Promise<KeychainKeyPreparation> => {
       if (holder.key !== null) return { status: "ready" };
+      const existing = await readMaterial();
+      if (existing.status === "ready") {
+        holder.key = existing.key;
+        holder.failure = "item-not-found";
+        return { status: "ready" };
+      }
+      if (existing.status === "failed") {
+        holder.failure = existing.code;
+        return existing;
+      }
       const created = await createMaterial();
       if (created.status === "failed") {
         holder.failure = created.code;
@@ -189,7 +217,7 @@ export async function createKeychainPartitionEncryption(
       const deleted = await transport.send({ op: "delete-key", service });
       if (!deleted.ok || deleted.op !== "delete-key") {
         const code = deleted.ok ? "unknown" : deleted.code;
-        holder.key = previous;
+        previous?.fill(0);
         holder.failure = code;
         return { status: "failed", code };
       }
@@ -205,15 +233,10 @@ export async function createKeychainPartitionEncryption(
     return created.status === "ready" ? ready(created.key, true) : refused(created.code);
   };
 
-  const read = await transport.send({ op: "read-key", service });
-  if (read.ok) {
-    if (read.op !== "read-key") return refused("unknown");
-    const key = Buffer.from(read.key, "base64");
-    if (key.length !== KEYCHAIN_KEY_BYTES) return refused("unknown");
-    return ready(key, false);
-  }
-  if (read.code === "item-not-found") {
-    return options.dependentEnvelopes === 0 ? create() : refused(read.code);
+  const read = await readMaterial();
+  if (read.status === "ready") return ready(read.key, false);
+  if (read.status === "missing") {
+    return options.dependentEnvelopes === 0 ? create() : refused("item-not-found");
   }
   if (read.code !== "unreadable-item") return refused(read.code);
   if (options.dependentEnvelopes > 0) return refused(read.code);

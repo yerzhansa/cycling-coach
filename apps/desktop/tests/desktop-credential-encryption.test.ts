@@ -252,6 +252,7 @@ describe("desktop credential encryption startup", () => {
       PROBE_OK,
       { ok: true, op: "read-key", key: KEY.toString("base64") },
       { ok: true, op: "delete-key", deleted: true },
+      { ok: false, code: "item-not-found" },
       { ok: true, op: "create-key", key: replacement.toString("base64") },
     );
 
@@ -269,7 +270,8 @@ describe("desktop credential encryption startup", () => {
     ]);
 
     await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
-    expect(transport.requests.slice(-1)).toEqual([
+    expect(transport.requests.slice(-2)).toEqual([
+      { op: "read-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
       { op: "create-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
     ]);
     const sealed = prepared.encryption.encryptString("post-retirement-secret");
@@ -281,6 +283,7 @@ describe("desktop credential encryption startup", () => {
       PROBE_OK,
       { ok: true, op: "read-key", key: KEY.toString("base64") },
       { ok: true, op: "delete-key", deleted: true },
+      { ok: false, code: "item-not-found" },
       { ok: false, code: "keychain-locked" },
     );
 

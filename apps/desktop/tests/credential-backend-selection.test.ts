@@ -229,10 +229,16 @@ describe("backend selection", () => {
   posixIt("migrates eagerly at the first startup on the keychain backend", async () => {
     const roots = await fixture();
     const legacy = safeStorage();
+    const key = randomBytes(KEYCHAIN_KEY_BYTES);
     await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
     await seedProfile(roots, "synthetic-token", legacy);
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: false, code: "item-not-found" },
+      { ok: true, op: "create-key", key: key.toString("base64") },
+    );
     const options = {
-      ...selection(roots, transportOf(PROBE_OK, readKey(randomBytes(KEYCHAIN_KEY_BYTES)))),
+      ...selection(roots, transport),
       safeStorage: legacy,
     };
 
@@ -255,6 +261,11 @@ describe("backend selection", () => {
     await expect(telegramVault(roots, selected.encryption).profileStatus()).resolves.toMatchObject({
       state: "configured",
     });
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "create-key",
+    ]);
   });
 });
 
