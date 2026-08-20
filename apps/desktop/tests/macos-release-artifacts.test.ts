@@ -27,6 +27,7 @@ import {
   verifyMacosApplication,
   verifyMacosBaselineApplication,
   verifyMacosIdentityContinuity,
+  verifyMacosKeychainHelper,
   verifyMacosReleaseApplicationContents,
   verifyMacosReleaseArtifacts,
   verifyMacosReleaseEnvelope,
@@ -61,6 +62,33 @@ function dmgSigningIdentityResult(
       "Authority=Apple Root CA",
       `TeamIdentifier=${teamIdentifier}`,
     ].join("\n"),
+  };
+}
+
+const keychainHelperDesignatedRequirement = [
+  'identifier "keychain-helper-a1b2c3" and anchor apple generic and certificate',
+  "1[field.1.2.840.113635.100.6.2.6] exists and certificate",
+  "leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = FA494ACVTF",
+].join(" ");
+
+function keychainHelperIdentityResult(teamIdentifier = "FA494ACVTF", flags = "runtime") {
+  return {
+    stdout: "",
+    stderr: [
+      "Identifier=keychain-helper-a1b2c3",
+      `CodeDirectory v=20500 size=402 flags=0x10000(${flags}) hashes=6+2 location=embedded`,
+      `Authority=Developer ID Application: Enduragent Test (${teamIdentifier})`,
+      "Authority=Developer ID Certification Authority",
+      "Authority=Apple Root CA",
+      `TeamIdentifier=${teamIdentifier}`,
+    ].join("\n"),
+  };
+}
+
+function keychainHelperRequirementResult(teamIdentifier = "FA494ACVTF") {
+  return {
+    stdout: `designated => ${keychainHelperDesignatedRequirement.replace("FA494ACVTF", teamIdentifier)}\n`,
+    stderr: "",
   };
 }
 
@@ -2060,6 +2088,72 @@ describe.skipIf(process.platform === "win32")("macOS release artifact envelope",
       ["/usr/bin/xcrun", ["stapler", "validate", "-v", application]],
       ["/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=4", application]],
     ]);
+  });
+
+  it("verifies the packaged keychain helper identity and designated requirement", async () => {
+    const application = "/synthetic/Enduragent.app";
+    const helper = `${application}/Contents/Resources/keychain/keychain-helper`;
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      if (arguments_.includes("--requirements")) return keychainHelperRequirementResult();
+      if (arguments_.includes("--verbose=4")) return keychainHelperIdentityResult();
+      return { stdout: "", stderr: "" };
+    });
+
+    await expect(verifyMacosKeychainHelper(application, { executeFile })).resolves.toEqual({
+      teamIdentifier: "FA494ACVTF",
+      designatedRequirement: keychainHelperDesignatedRequirement,
+    });
+    expect(executeFile.mock.calls).toEqual([
+      ["/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", helper]],
+      ["/usr/bin/codesign", ["--display", "--verbose=4", helper]],
+      ["/usr/bin/codesign", ["--display", "--requirements", "-", helper]],
+    ]);
+  });
+
+  it.each([
+    [
+      "an unverifiable signature",
+      () => ({ verifies: false }),
+      "macOS keychain helper signature verification failed",
+    ],
+    [
+      "a foreign team identifier",
+      () => ({ teamIdentifier: "ZZZZZZZZZZ" }),
+      "macOS keychain helper signing identity is invalid",
+    ],
+    [
+      "a helper without the hardened runtime",
+      () => ({ flags: "adhoc" }),
+      "macOS keychain helper signing identity is invalid",
+    ],
+    [
+      "a designated requirement naming another team",
+      () => ({ requirementTeamIdentifier: "ZZZZZZZZZZ" }),
+      "macOS keychain helper designated requirement is invalid",
+    ],
+  ])("rejects %s", async (_label, overrides, message) => {
+    const options = overrides() as {
+      verifies?: boolean;
+      teamIdentifier?: string;
+      flags?: string;
+      requirementTeamIdentifier?: string;
+    };
+    const executeFile = vi.fn(async (_executable: string, arguments_: readonly string[]) => {
+      if (arguments_.includes("--verify") && options.verifies === false) {
+        throw new Error("synthetic native verification failure");
+      }
+      if (arguments_.includes("--requirements")) {
+        return keychainHelperRequirementResult(options.requirementTeamIdentifier);
+      }
+      if (arguments_.includes("--verbose=4")) {
+        return keychainHelperIdentityResult(options.teamIdentifier, options.flags);
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await expect(
+      verifyMacosKeychainHelper("/synthetic/Enduragent.app", { executeFile }),
+    ).rejects.toThrow(message);
   });
 
   it("fails closed without invoking later application verification commands", async () => {

@@ -755,6 +755,14 @@ export async function runMacosRelease(input, dependencies = {}) {
       feedUrl: plan.feedUrl,
     },
   });
+  const verifyKeychainHelper =
+    dependencies.verifyKeychainHelper ??
+    ((candidate) =>
+      verification.verifyMacosKeychainHelper(candidate, {
+        executeFile: dependencies.executeFile,
+      }));
+  dependencies.reportStage?.("keychain-helper");
+  await verifyKeychainHelper(application);
   const verifyIdentityContinuity =
     dependencies.verifyIdentityContinuity ??
     ((baseline, candidate, options) =>

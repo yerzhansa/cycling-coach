@@ -61,6 +61,10 @@ const verifiedBaselineApplication = Object.freeze({
   baselineVersion: "2026.7.1",
   teamIdentifier: "FA494ACVTF",
 });
+const verifiedKeychainHelper = Object.freeze({
+  teamIdentifier: "FA494ACVTF",
+  designatedRequirement: 'identifier "keychain-helper" and anchor apple generic',
+});
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
@@ -87,6 +91,10 @@ function canonicalDmgSigningIdentityResult() {
 
 function baselineVerifier() {
   return vi.fn(async () => verifiedBaselineApplication);
+}
+
+function keychainHelperVerifier() {
+  return vi.fn(async () => verifiedKeychainHelper);
 }
 
 function verifiedReleaseArtifactsAt(artifactDirectory: string) {
@@ -470,6 +478,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
     ]);
     const sealReleaseMetadata = vi.fn(async () => {});
     const verifyPackageLayout = vi.fn(async () => {});
+    const verifyKeychainHelper = keychainHelperVerifier();
     const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
       if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
         return canonicalDmgSigningIdentityResult();
@@ -516,6 +525,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
         sealReleaseMetadata,
         verifyBaselineApplication,
         verifyPackageLayout,
+        verifyKeychainHelper,
         verifyIdentityContinuity,
         verifyReleaseApplicationContents,
         promoteReleaseEnvelope,
@@ -600,7 +610,12 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
     expect(build.mock.invocationCallOrder[0]).toBeLessThan(
       verifyPackageLayout.mock.invocationCallOrder[0]!,
     );
+    expect(verifyKeychainHelper).toHaveBeenCalledOnce();
+    expect(verifyKeychainHelper).toHaveBeenCalledWith(application);
     expect(verifyPackageLayout.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyKeychainHelper.mock.invocationCallOrder[0]!,
+    );
+    expect(verifyKeychainHelper.mock.invocationCallOrder[0]).toBeLessThan(
       verifyIdentityContinuity.mock.invocationCallOrder[0]!,
     );
     expect(verifyIdentityContinuity.mock.invocationCallOrder[0]).toBeLessThan(
@@ -630,6 +645,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
       "baseline-verification",
       "electron-builder",
       "package-layout",
+      "keychain-helper",
       "identity-continuity",
       "dmg-notarization",
       "dmg-verification",
@@ -660,6 +676,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           build,
           sealReleaseMetadata,
           verifyBaselineApplication: baselineVerifier(),
+          verifyKeychainHelper: keychainHelperVerifier(),
           verifyPackageLayout,
         },
       ),
@@ -702,6 +719,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           notarize,
           sealReleaseMetadata,
           verifyBaselineApplication: baselineVerifier(),
+          verifyKeychainHelper: keychainHelperVerifier(),
           verifyPackageLayout,
           verifyIdentityContinuity,
           promoteReleaseEnvelope,
@@ -911,6 +929,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           build,
           sealReleaseMetadata,
           verifyBaselineApplication: baselineVerifier(),
+          verifyKeychainHelper: keychainHelperVerifier(),
           verifyPackageLayout,
           verifyIdentityContinuity,
           notarize,
@@ -951,6 +970,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           environment: notarizationEnvironment,
           build,
           verifyBaselineApplication: baselineVerifier(),
+          verifyKeychainHelper: keychainHelperVerifier(),
           verifyPackageLayout,
           verifyIdentityContinuity,
           executeFile,
@@ -1026,6 +1046,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
         environment: notarizationEnvironment,
         build: vi.fn(async () => []),
         verifyBaselineApplication: baselineVerifier(),
+        verifyKeychainHelper: keychainHelperVerifier(),
         verifyPackageLayout: vi.fn(async () => {}),
         verifyIdentityContinuity,
         verifyReleaseApplicationContents,
@@ -1088,6 +1109,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           environment: notarizationEnvironment,
           build: vi.fn(async () => []),
           verifyBaselineApplication: baselineVerifier(),
+          verifyKeychainHelper: keychainHelperVerifier(),
           verifyPackageLayout: vi.fn(async () => {}),
           verifyIdentityContinuity: vi.fn(async () => verifiedLooseIdentity),
           notarize: vi.fn(async () => {}),

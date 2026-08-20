@@ -128,6 +128,15 @@ export interface VerifiedMacosReleaseEnvelope {
 
 export function safeMacosReleaseVerificationMessage(error: unknown): string | undefined;
 
+export interface VerifiedMacosKeychainHelper {
+  readonly teamIdentifier: string;
+  readonly designatedRequirement: string;
+}
+
+export function verifyMacosKeychainHelper(
+  application: string,
+  dependencies?: Pick<VerifyMacosReleaseDependencies, "executeFile">,
+): Promise<VerifiedMacosKeychainHelper>;
 export function verifyMacosApplication(
   application: string,
   dependencies?: Pick<VerifyMacosReleaseDependencies, "executeFile">,

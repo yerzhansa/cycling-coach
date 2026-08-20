@@ -10,6 +10,7 @@ import {
   createDevelopmentPackagePlan,
 } from "./development-package-plan.mjs";
 import {
+  KEYCHAIN_HELPER_RESOURCE_PATH,
   PackageLayoutError,
   assertDirectory,
   assertExactResourceNames,
@@ -43,6 +44,7 @@ const reservedResourceNames = new Set([
   "icon.icns",
   "en.lproj",
 ]);
+const signedExternalExecutables = [KEYCHAIN_HELPER_RESOURCE_PATH];
 
 export async function readBuilderAuthority(desktopRoot = canonicalDesktopRoot) {
   const config = await readBuilderConfiguration(desktopRoot);
@@ -167,12 +169,21 @@ export async function verifyPackageLayout(application, options = {}) {
         externalPackaged.set(`${topLevel}/${path}`, entry);
       }
     }
-    compareStagedTree(externalSource, externalPackaged, "Contents/Resources");
+    compareStagedTree(externalSource, externalPackaged, "Contents/Resources", {
+      signedExecutables: signedExternalExecutables,
+    });
     const runner = externalPackaged.get("self-test/self-test-runner.cjs");
     if (runner === undefined || runner.type !== "file") {
       fail(
         "external self-test runner is missing",
         "Contents/Resources/self-test/self-test-runner.cjs",
+      );
+    }
+    const helper = externalPackaged.get(KEYCHAIN_HELPER_RESOURCE_PATH);
+    if (helper === undefined || helper.type !== "file") {
+      fail(
+        "external keychain helper is missing",
+        `Contents/Resources/${KEYCHAIN_HELPER_RESOURCE_PATH}`,
       );
     }
 

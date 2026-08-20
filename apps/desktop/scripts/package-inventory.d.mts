@@ -2,6 +2,8 @@ import type { Stats } from "node:fs";
 
 export { contained } from "./package-plan.mjs";
 
+export const KEYCHAIN_HELPER_RESOURCE_PATH: "keychain/keychain-helper";
+
 export interface BuilderAuthority {
   readonly asarSourceRoot: string;
   readonly externalSourceRoot: string;
@@ -54,6 +56,18 @@ export interface ManifestValidationOptions {
   readonly release?: {
     readonly version: string;
   };
+}
+
+export interface MachoExecutableIdentity {
+  readonly cpuType: number;
+  readonly cpuSubtype: number;
+  readonly fileType: number;
+  readonly uuid: string;
+  readonly contentSha256: string;
+}
+
+export interface StagedTreeComparisonOptions {
+  readonly signedExecutables?: readonly string[];
 }
 
 export class PackageLayoutError extends Error {}
@@ -110,10 +124,13 @@ export function validateUnpackedTree(
   labels: UnpackedTreeLabels,
 ): Promise<void>;
 
+export function machoExecutableIdentity(bytes: Buffer, label: string): MachoExecutableIdentity;
+
 export function compareStagedTree(
   expected: ReadonlyMap<string, PackageTreeEntry>,
   actual: ReadonlyMap<string, PackageTreeEntry>,
   actualRoot: string,
+  options?: StagedTreeComparisonOptions,
 ): void;
 
 export function compareAsarStaging(
