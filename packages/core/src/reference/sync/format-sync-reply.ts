@@ -1,5 +1,11 @@
 import type { SyncResult } from "./run-sync.js";
 
+export const STRAVA_RESTRICTION_TELEGRAM_COPY = Object.freeze({
+  notice(count: number, total: number): string {
+    return `${count} of ${total} activities are hidden by Strava, so they aren’t included. A Strava API restriction prevents intervals.icu from sharing activities that came from Strava. For future rides, connect your recording source directly to intervals.icu and keep Strava connected. For past rides, use Import All Strava Data in intervals.icu settings; it requires an intervals.icu supporter subscription.`;
+  },
+});
+
 /**
  * Render a `SyncResult` as athlete-facing prose for the `/sync` Telegram
  * reply. Spec shape:
@@ -49,7 +55,26 @@ export function formatSyncReply(result: SyncResult, now: Date = new Date()): str
         result.refreshed.length === 0
           ? "Already up to date — nothing changed since the last sync."
           : `Refreshed: ${result.refreshed.join(", ")}`;
-      return `Sync ✅\n${lastLine}\n${detailLine}`;
+      const stravaRestriction = result.droppedActivities.overall.restrictions.find((entry) => {
+        switch (entry.reason) {
+          case "source-restricted":
+            return entry.source === "STRAVA";
+          default: {
+            const _exhaustive: never = entry.reason;
+            throw new Error(
+              `formatSyncReply: unhandled activity restriction ${String(_exhaustive)}`,
+            );
+          }
+        }
+      });
+      const restrictionLine =
+        stravaRestriction === undefined
+          ? null
+          : STRAVA_RESTRICTION_TELEGRAM_COPY.notice(
+              stravaRestriction.count,
+              result.droppedActivities.overall.total,
+            );
+      return ["Sync ✅", lastLine, detailLine, restrictionLine].filter(Boolean).join("\n");
     }
     default: {
       const _exhaustive: never = result;

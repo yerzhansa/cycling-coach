@@ -10,7 +10,10 @@ describe("formatSyncReply", () => {
       kind: "ran",
       lastSyncAt: "2026-05-09T14:23:00Z",
       refreshed: ["latest", "history", "intervals", "routes", "ftp_history"],
-      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text).toContain("Sync");
@@ -20,7 +23,7 @@ describe("formatSyncReply", () => {
     expect(text).toContain("history");
   });
 
-  it("carries the dropped-activity split to the Telegram surface without changing the reply", () => {
+  it("explains Strava-restricted activities with both recovery paths", () => {
     const base = {
       kind: "ran",
       lastSyncAt: "2026-05-09T14:23:00Z",
@@ -28,7 +31,10 @@ describe("formatSyncReply", () => {
     } as const;
     const clean: SyncResult = {
       ...base,
-      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
     };
     const restricted: SyncResult = {
       ...base,
@@ -48,10 +54,15 @@ describe("formatSyncReply", () => {
       },
     };
 
-    expect(restricted.droppedActivities.recent7Days.restrictions).toEqual([
-      { reason: "source-restricted", source: "STRAVA", count: 4 },
-    ]);
-    expect(formatSyncReply(restricted, fixedNow)).toBe(formatSyncReply(clean, fixedNow));
+    const cleanText = formatSyncReply(clean, fixedNow);
+    const restrictedText = formatSyncReply(restricted, fixedNow);
+
+    expect(cleanText).not.toContain("hidden by Strava");
+    expect(restrictedText).toContain("60 of 67 activities are hidden by Strava");
+    expect(restrictedText).toContain("Strava API restriction");
+    expect(restrictedText).toContain("recording source directly to intervals.icu");
+    expect(restrictedText).toContain("Import All Strava Data");
+    expect(restrictedText).toContain("intervals.icu supporter subscription");
   });
 
   it("renders a no-op ran result (empty refreshed) without a dangling 'Refreshed:' line", () => {
@@ -59,7 +70,10 @@ describe("formatSyncReply", () => {
       kind: "ran",
       lastSyncAt: "2026-05-09T14:23:00Z",
       refreshed: [],
-      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text).toContain("Sync");
@@ -73,7 +87,10 @@ describe("formatSyncReply", () => {
       kind: "ran",
       lastSyncAt: new Date(fixedNow.getTime() + 10 * 60 * 1000).toISOString(),
       refreshed: ["latest"],
-      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text).not.toContain("0s ago");
@@ -85,7 +102,10 @@ describe("formatSyncReply", () => {
       kind: "ran",
       lastSyncAt: "2026-05-09T14:23:00Z",
       refreshed: ["latest"],
-      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text).toContain("32s ago");

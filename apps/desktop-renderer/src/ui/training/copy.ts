@@ -19,6 +19,7 @@ export const TRAINING_UNKNOWN_COPY: Readonly<Record<TrainingContextUnknownReason
   "no-plan": "No planned cycling workouts are available",
   "insufficient-data": "Not enough persisted data to show this yet",
   "no-wellness": "No wellness readings are available",
+  "source-restricted": "Not enough activity data is visible to calculate this safely",
 };
 
 export const WELLNESS_LABELS: readonly string[] = ["HRV", "Sleep", "Resting HR"];
@@ -31,6 +32,7 @@ export const POWER_PROGRESS_UNAVAILABLE_COPY: Readonly<
   "invalid-data": "Power progress data could not be verified. Sync again.",
   "refresh-failed": "Power progress has not refreshed yet. Try syncing again.",
   "temporary-failure": "Power progress is temporarily unavailable. Try again.",
+  "source-restricted": "Too much activity data is hidden to compare power safely.",
 };
 
 export const POWER_PROGRESS_REFRESH_FAILURE_COPY: Readonly<
