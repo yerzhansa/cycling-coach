@@ -148,6 +148,7 @@ export interface TelegramCredentialVaultOptions {
   readonly syncDirectory?: (root: string) => Promise<void>;
   readonly syncParentDirectory?: (root: string) => Promise<void>;
   readonly observeSecureStorageFailure?: TelegramSecureStorageObserver;
+  readonly observeEnvelopeRemoved?: () => Promise<void>;
   readonly platform?: NodeJS.Platform;
   readonly openFile?: typeof open;
 }
@@ -892,6 +893,9 @@ export function createTelegramCredentialVault(
         }
         const removed = await removeStoredProfile();
         if (removed === "deleted" || removed === "cleanup-pending") {
+          try {
+            await options.observeEnvelopeRemoved?.();
+          } catch {}
           return { outcome: "applied", cleanupPending: removed === "cleanup-pending" };
         }
         if (removed === "uncertain") profileUncertain = true;

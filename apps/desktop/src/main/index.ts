@@ -69,6 +69,7 @@ import {
   type CredentialSlotStatus,
   type DesktopCredentialSlot,
 } from "./credential-vault.js";
+import { prepareDesktopCredentialEncryption } from "./desktop-credential-encryption.js";
 import {
   DesktopDaemonLifecycle,
   type DesktopDaemonConnection,
@@ -408,12 +409,40 @@ async function runDesktop(): Promise<void> {
     );
     const intervalsStorePath = join(selectedAthleteHome, "store", "store.db");
     requireDesktopDaemonHome(selectedAthleteHome, resolution.athleteHome);
+    const credentialRoot = join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME);
+    const telegramCredentialRoot = join(
+      app.getPath("userData"),
+      TELEGRAM_CREDENTIAL_DIRECTORY_NAME,
+    );
+    const credentialEncryption = await prepareDesktopCredentialEncryption({
+      credentialRoot,
+      telegramRoot: telegramCredentialRoot,
+      location: {
+        platform: process.platform,
+        packaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        applicationPath: app.getAppPath(),
+      },
+      safeStorage,
+    });
+    const retireCredentialEncryptionKey = async (): Promise<void> => {
+      await credentialEncryption.retireKeychainKey();
+    };
+    if (process.platform === "darwin") {
+      const selected = credentialEncryption.selection;
+      process.stderr.write(
+        selected.status === "refused"
+          ? `desktop-credential-backend refused ${selected.reason} ${selected.code}\n`
+          : `desktop-credential-backend ${selected.status}\n`,
+      );
+    }
     const telegramSecureStorageDiagnostics = createTelegramSecureStorageDiagnostics();
     const telegramVault = createTelegramCredentialVault({
-      root: join(app.getPath("userData"), TELEGRAM_CREDENTIAL_DIRECTORY_NAME),
+      root: telegramCredentialRoot,
       athleteHome: selectedAthleteHome,
-      encryption: safeStorage,
+      encryption: credentialEncryption.encryption,
       observeSecureStorageFailure: telegramSecureStorageDiagnostics,
+      observeEnvelopeRemoved: retireCredentialEncryptionKey,
     });
     let activeTelegramBinding: TelegramDaemonBinding | undefined;
     const preparedTelegramBindings = new Map<number, TelegramDaemonBinding>();
@@ -433,7 +462,7 @@ async function runDesktop(): Promise<void> {
     });
     closeTelegramCoordinator = () => telegramCoordinator.close();
     telegramPower = createDesktopTelegramPowerLifecycle({
-      root: join(app.getPath("userData"), TELEGRAM_CREDENTIAL_DIRECTORY_NAME),
+      root: telegramCredentialRoot,
       athleteHome: selectedAthleteHome,
       powerMonitor,
       controller: telegramCoordinator,
@@ -674,10 +703,10 @@ async function runDesktop(): Promise<void> {
       }
       return page;
     };
-    const credentialRoot = join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME);
     const vault = createCredentialVault({
       root: credentialRoot,
-      encryption: safeStorage,
+      encryption: credentialEncryption.encryption,
+      observeEnvelopeRemoved: retireCredentialEncryptionKey,
       runtimeState: credentialRuntimeState,
       onRuntimeStateChange: markCredentialRuntimeChange,
       createRuntimePublicationGuard(slot) {
@@ -754,7 +783,7 @@ async function runDesktop(): Promise<void> {
       const successor = createRuntimeBinding(connection);
       const successorVault = createCredentialVault({
         root: credentialRoot,
-        encryption: safeStorage,
+        encryption: credentialEncryption.encryption,
         async applyCredential(slot, value) {
           await successor.credentials.applyExplicit(runtimeConfigurationForCredential(slot, value));
         },

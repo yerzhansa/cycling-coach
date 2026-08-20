@@ -165,6 +165,7 @@ interface CredentialVaultOptions {
   readonly clearCredential?: (
     slot: DesktopCredentialSlot,
   ) => Promise<"cleared" | "not-active" | "managed-by-environment">;
+  readonly observeEnvelopeRemoved?: () => Promise<void>;
   readonly renameCredentialFile?: typeof rename;
   readonly removeCredentialFile?: typeof rm;
   readonly readCredentialFile?: typeof readFile;
@@ -920,6 +921,9 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
         }
         if (removed === "deleted" || removed === "cleanup-pending") {
           clearRuntimeState(slot);
+          try {
+            await options.observeEnvelopeRemoved?.();
+          } catch {}
           return {
             slot,
             status: "deleted",
