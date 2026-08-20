@@ -15,6 +15,12 @@ import type {
 } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "./coach-client.js";
 
+export interface TrainingSyncDroppedActivities {
+  readonly sourceRestricted: number;
+  readonly other: number;
+  readonly total: number;
+}
+
 export type TrainingSyncState =
   | { readonly status: "idle" }
   | { readonly status: "queued"; readonly operation: number }
@@ -23,6 +29,7 @@ export type TrainingSyncState =
       readonly status: "succeeded";
       readonly operation: number;
       readonly kind: "published" | "no-change";
+      readonly droppedActivities: TrainingSyncDroppedActivities;
     }
   | {
       readonly status: "failed";
@@ -61,7 +68,10 @@ function isSameTrainingSyncState(left: TrainingSyncState, right: TrainingSyncSta
       return (
         right.status === "succeeded" &&
         right.operation === left.operation &&
-        right.kind === left.kind
+        right.kind === left.kind &&
+        right.droppedActivities.sourceRestricted === left.droppedActivities.sourceRestricted &&
+        right.droppedActivities.other === left.droppedActivities.other &&
+        right.droppedActivities.total === left.droppedActivities.total
       );
     case "failed":
       return (
@@ -289,9 +299,19 @@ export function createTrainingSyncCoordinator(input: {
           retryable: true,
         });
       } else if (result.published && result.referenceSucceeded) {
-        publish({ status: "succeeded", operation: selectedOperation, kind: "published" });
+        publish({
+          status: "succeeded",
+          operation: selectedOperation,
+          kind: "published",
+          droppedActivities: result.droppedActivities,
+        });
       } else if (!result.published && result.referenceSucceeded) {
-        publish({ status: "succeeded", operation: selectedOperation, kind: "no-change" });
+        publish({
+          status: "succeeded",
+          operation: selectedOperation,
+          kind: "no-change",
+          droppedActivities: result.droppedActivities,
+        });
       } else if (result.published) {
         publish({
           status: "failed",

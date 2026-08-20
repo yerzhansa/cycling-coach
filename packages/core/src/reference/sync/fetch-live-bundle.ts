@@ -106,6 +106,20 @@ export interface FetchEndpointError {
   readonly detail: string;
 }
 
+export const SOURCE_RESTRICTED_PROVIDER = "STRAVA";
+
+export interface DroppedActivityCounts {
+  readonly sourceRestricted: number;
+  readonly other: number;
+  readonly total: number;
+}
+
+export const NO_DROPPED_ACTIVITIES: DroppedActivityCounts = Object.freeze({
+  sourceRestricted: 0,
+  other: 0,
+  total: 0,
+});
+
 export interface LiveFetchResult {
   /** Raw athlete object — cached verbatim as `latest.athlete_profile`. */
   readonly athleteProfile: unknown;
@@ -122,6 +136,7 @@ export interface LiveFetchResult {
   readonly adapterActivities: readonly ManagedActivity[];
   /** Sync wall-clock as an ISO string — the metric date-window anchor. */
   readonly frozenNow: string;
+  readonly droppedActivities: DroppedActivityCounts;
   /** Endpoints that returned an error (athlete-profile, wellness) and were
    *  filled with empty fallbacks to keep the bundle well-typed. The gate turns
    *  a non-empty list into a hard-fail so a swallowed failure can no longer
@@ -293,15 +308,24 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const wellSummary: RenameSummary = { skippedNonNumeric: {} };
 
   const activities: Activity[] = [];
+  let droppedSourceRestricted = 0;
+  let droppedOther = 0;
   for (const row of rawActivities) {
     try {
       activities.push(parseRenamedActivity(renameTpFieldsOnActivity(row, actSummary)));
     } catch (err) {
+      if (row.source === SOURCE_RESTRICTED_PROVIDER) droppedSourceRestricted += 1;
+      else droppedOther += 1;
       log(
         `Reference: skipped malformed activity row: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
+  const droppedActivities: DroppedActivityCounts = Object.freeze({
+    sourceRestricted: droppedSourceRestricted,
+    other: droppedOther,
+    total: droppedSourceRestricted + droppedOther,
+  });
   const wellness: WellnessDay[] = [];
   for (const row of rawWellness) {
     try {
@@ -345,6 +369,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     bundle,
     adapterActivities,
     frozenNow,
+    droppedActivities,
     ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
   };
 }

@@ -100,6 +100,7 @@ function makeScript(): DesktopFixtureScript {
           published: true,
           referenceSucceeded: true,
           requests: { store: 1, reference: 1, total: 2 },
+          droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
         });
       }
       if (request.method === "getAthleteState") {

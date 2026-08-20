@@ -165,6 +165,7 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
           published: false,
           referenceSucceeded: true,
           requests: { store: 0, reference: 0, total: 0 },
+          droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
         });
       }
       if (request.method === "hasSession") return response({ hasSession: false });

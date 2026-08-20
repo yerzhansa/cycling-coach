@@ -25,6 +25,7 @@ const published: SyncRpcResult = {
   published: true,
   referenceSucceeded: true,
   requests: { store: 1, reference: 1, total: 2 },
+  droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
 };
 
 function deferred<T>(): {
@@ -148,12 +149,13 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 1,
       kind: "published",
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     });
   });
 
   it.each([
-    [true, true, { status: "succeeded", operation: 1, kind: "published" }],
-    [false, true, { status: "succeeded", operation: 1, kind: "no-change" }],
+    [true, true, { status: "succeeded", operation: 1, kind: "published", droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } }],
+    [false, true, { status: "succeeded", operation: 1, kind: "no-change", droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } }],
     [true, false, { status: "failed", operation: 1, kind: "partial", retryable: true }],
     [false, false, { status: "failed", operation: 1, kind: "operation", retryable: true }],
   ] as const)(
@@ -171,6 +173,27 @@ describe("training sync coordinator", () => {
       expect(refreshTrainingContext).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("carries the dropped-activity split onto the succeeded state", async () => {
+    const result: SyncRpcResult = {
+      ...published,
+      droppedActivities: { sourceRestricted: 60, other: 2, total: 62 },
+    };
+    const client = clientWith((options) => exactCall(options, result));
+    const coordinator = createTrainingSyncCoordinator({
+      clients: providerWith(client),
+      refreshTrainingContext: vi.fn(async () => {}),
+    });
+
+    await coordinator.request();
+
+    expect(coordinator.getState()).toEqual({
+      status: "succeeded",
+      operation: 1,
+      kind: "published",
+      droppedActivities: { sourceRestricted: 60, other: 2, total: 62 },
+    });
+  });
 
   it("maps a pending-verification backfill to a retryable operation failure", async () => {
     const result: SyncRpcResult = { ...published, backfill: "pending-verification" };
@@ -330,6 +353,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 2,
       kind: "published",
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     });
   });
 
@@ -361,6 +385,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 2,
       kind: "published",
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     });
   });
 
@@ -544,6 +569,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 1,
       kind: "published",
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     });
   });
 
@@ -579,6 +605,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 2,
       kind: "published",
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     });
   });
 

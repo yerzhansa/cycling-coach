@@ -10,6 +10,7 @@ describe("formatSyncReply", () => {
       kind: "ran",
       lastSyncAt: "2026-05-09T14:23:00Z",
       refreshed: ["latest", "history", "intervals", "routes", "ftp_history"],
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text).toContain("Sync");
@@ -19,11 +20,31 @@ describe("formatSyncReply", () => {
     expect(text).toContain("history");
   });
 
+  it("carries the dropped-activity split to the Telegram surface without changing the reply", () => {
+    const base = {
+      kind: "ran",
+      lastSyncAt: "2026-05-09T14:23:00Z",
+      refreshed: ["latest"],
+    } as const;
+    const clean: SyncResult = {
+      ...base,
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+    };
+    const restricted: SyncResult = {
+      ...base,
+      droppedActivities: { sourceRestricted: 60, other: 2, total: 62 },
+    };
+
+    expect(restricted.droppedActivities).toEqual({ sourceRestricted: 60, other: 2, total: 62 });
+    expect(formatSyncReply(restricted, fixedNow)).toBe(formatSyncReply(clean, fixedNow));
+  });
+
   it("renders a no-op ran result (empty refreshed) without a dangling 'Refreshed:' line", () => {
     const r: SyncResult = {
       kind: "ran",
       lastSyncAt: "2026-05-09T14:23:00Z",
       refreshed: [],
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text).toContain("Sync");
@@ -37,6 +58,7 @@ describe("formatSyncReply", () => {
       kind: "ran",
       lastSyncAt: new Date(fixedNow.getTime() + 10 * 60 * 1000).toISOString(),
       refreshed: ["latest"],
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text).not.toContain("0s ago");
@@ -48,6 +70,7 @@ describe("formatSyncReply", () => {
       kind: "ran",
       lastSyncAt: "2026-05-09T14:23:00Z",
       refreshed: ["latest"],
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     };
     const text = formatSyncReply(r, fixedNow);
     expect(text).toContain("32s ago");

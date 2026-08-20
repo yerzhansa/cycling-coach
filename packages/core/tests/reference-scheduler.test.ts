@@ -9,6 +9,7 @@ const okResult = (lastSyncAt: string): SyncResult => ({
   kind: "ran",
   lastSyncAt,
   refreshed: ["latest", "history", "intervals", "routes", "ftp_history"],
+  droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
 });
 
 describe("Scheduler", () => {

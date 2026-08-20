@@ -513,6 +513,7 @@ describe("coach operations", () => {
       published: true,
       referenceSucceeded: false,
       requests: { store: 2, reference: 1, total: 3 },
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     });
     expect(importFiles).toHaveBeenCalledTimes(1);
     expect(runWindowAfter).toHaveBeenCalledTimes(1);
@@ -608,7 +609,7 @@ describe("coach operations", () => {
   });
 
   it("reports pending verification instead of a completed keyless sync", async () => {
-    const backfill = vi.fn(async () => ({ pages: 0, artifacts: 0, reports: [] }));
+    const backfill = vi.fn(async () => ({ pages: 0, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
     const pending = { value: true };
     const operations = createCoachOperations(
       {
@@ -648,7 +649,7 @@ describe("coach operations", () => {
     };
     const backfill = vi.fn(async () => {
       trace.push("backfill");
-      return { pages: 1, artifacts: 1, reports: [] };
+      return { pages: 1, artifacts: 1, reports: [], droppedActivityRows: { sourceRestricted: 60, other: 2 } };
     });
     const runWindowAfter = vi.fn(async (work: (signal: AbortSignal) => Promise<void>) => {
       trace.push("admitted");
@@ -697,6 +698,7 @@ describe("coach operations", () => {
       published: true,
       referenceSucceeded: true,
       requests: { store: 3, reference: 2, total: 5 },
+      droppedActivities: { sourceRestricted: 60, other: 2, total: 62 },
     });
     const terminal = JSON.stringify(result);
     for (const privateValue of [
@@ -727,7 +729,7 @@ describe("coach operations", () => {
     ] as const;
     for (const options of pairs) {
       const events: unknown[] = [];
-      const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [] }));
+      const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
       const refresh = vi.fn();
       const runtime = {
         credentials: intervalsCredentials(options.apiKey, options.athleteId),
@@ -778,7 +780,7 @@ describe("coach operations", () => {
       const refresh = vi.fn();
       const backfill = vi.fn(async () => {
         if (failurePoint === "backfill") throw new Error("synthetic backfill failure");
-        return { pages: 1, artifacts: 1, reports: [] };
+        return { pages: 1, artifacts: 1, reports: [], droppedActivityRows: { sourceRestricted: 60, other: 2 } };
       });
       const runtime = {
         intervals: intervalsCredentials(
@@ -834,7 +836,7 @@ describe("coach operations", () => {
         ]);
         attempt += 1;
         if (attempt === 1) throw new Error("synthetic interruption");
-        return { pages: 1, artifacts: 0, reports: [] };
+        return { pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } };
       });
       const runtime = {
         intervals: intervalsCredentials(

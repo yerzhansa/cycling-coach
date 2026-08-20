@@ -77,7 +77,7 @@ async function makeRuntime(
     services: {},
     runScheduledOnce: vi.fn(async () => {
       runtime.attemptLedgerForRun().charge("legacy", "legacy:reference");
-      return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [] } as const;
+      return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [], droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } } as const;
     }),
   } as unknown as ReferenceRuntime;
   const capture = vi.fn(
@@ -179,7 +179,7 @@ describe("StoreRuntime", () => {
       await new Promise<void>((resolve) => {
         releaseLegacy = resolve;
       });
-      return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [] };
+      return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [], droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } };
     });
 
     const window = runtime.runWindow();
@@ -283,7 +283,7 @@ describe("StoreRuntime", () => {
     const reference = {
       scheduler: { stop: vi.fn() },
       services: {},
-      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })),
+      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [], droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } })),
     } as unknown as ReferenceRuntime;
     const capture = vi
       .fn<() => Promise<ReferenceCaptureManifest>>()
@@ -358,7 +358,7 @@ describe("StoreRuntime", () => {
     const reference = {
       scheduler: { stop: vi.fn() },
       services: {},
-      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [] })),
+      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [], droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } })),
     } as unknown as ReferenceRuntime;
     const runtime = createStoreRuntime({
       env: {},

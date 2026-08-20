@@ -456,6 +456,7 @@ async function createFixture(): Promise<ReleaseChainFixture> {
       published: false,
       referenceSucceeded: true,
       requests: { store: 0, reference: 0, total: 0 },
+      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
     }),
   } as unknown as CoachOperations;
   const confirmations = {

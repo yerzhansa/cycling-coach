@@ -566,6 +566,43 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     expect(res.fetchErrors).toBeUndefined();
   });
 
+  it("splits dropped activity rows into source-restricted and other", async () => {
+    const stub = (index: number) => ({
+      id: 9000 + index,
+      icuAthleteId: "i12345",
+      startDateLocal: daysAgo(2),
+      source: "STRAVA",
+    });
+    const foreign = { id: 8001, icuAthleteId: "i12345", startDateLocal: daysAgo(2), source: "GARMIN_CONNECT" };
+    const visible = Array.from({ length: 6 }, (_, index) => camelActivity({ id: index + 1 }));
+    const activities = [...Array.from({ length: 60 }, (_, index) => stub(index)), foreign, ...visible];
+    const { client } = fakeClient({ activities });
+
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+      log: () => {},
+    });
+
+    expect(activities).toHaveLength(67);
+    expect(res.droppedActivities).toEqual({ sourceRestricted: 60, other: 1, total: 61 });
+  });
+
+  it("reports no dropped activity rows when every row lands", async () => {
+    const { client } = fakeClient({ activities: [camelActivity({ id: 1 })] });
+
+    const res = await fetchLiveBundle({
+      client,
+      signal: new AbortController().signal,
+      now: NOW,
+      throttleMs: 0,
+    });
+
+    expect(res.droppedActivities).toEqual({ sourceRestricted: 0, other: 0, total: 0 });
+  });
+
   it("treats a non-array activities body as empty (ok:true, malformed) without crashing", async () => {
     const logs: string[] = [];
     const client: BundleFetchClient = {

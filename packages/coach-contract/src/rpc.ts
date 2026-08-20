@@ -481,6 +481,13 @@ export const SyncRpcResultSchema = z
         total: z.number().int().nonnegative(),
       })
       .strict(),
+    droppedActivities: z
+      .object({
+        sourceRestricted: z.number().int().nonnegative(),
+        other: z.number().int().nonnegative(),
+        total: z.number().int().nonnegative(),
+      })
+      .strict(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -489,6 +496,16 @@ export const SyncRpcResultSchema = z
         code: "custom",
         path: ["requests"],
         message: "request counts must balance",
+      });
+    }
+    if (
+      value.droppedActivities.sourceRestricted + value.droppedActivities.other !==
+      value.droppedActivities.total
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["droppedActivities"],
+        message: "dropped activity counts must balance",
       });
     }
   });

@@ -1578,7 +1578,7 @@ describe("local coach composition", () => {
   it("keeps manual sync keyless before deferred owner approval", async () => {
     const home = await freshHome();
     const context = fakeContext(home);
-    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [] }));
+    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
     let runtimeOptions: LocalStoreRuntimeOptions | undefined;
     let readReferenceIntervals:
       | (() => { readonly apiKey: string; readonly athleteId?: string })
@@ -4949,7 +4949,7 @@ describe("local coach composition", () => {
     const home = await freshHome();
     const context = fakeContext(home);
     const selectedRuntime = runtime();
-    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [] }));
+    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
     const lifecycle = await compose(
       home,
       {

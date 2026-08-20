@@ -126,6 +126,39 @@ describe("incremental backfill pages", () => {
     };
   }
 
+  it("sums dropped activity rows across pages and never counts the terminal replay twice", async () => {
+    const value = await fresh();
+    try {
+      const midway = JSON.stringify({
+        v: 1,
+        cycle: 0,
+        window_start: "2010-11-05",
+        window_end: "2010-11-30",
+        last_key: null,
+        complete: false,
+      });
+      const fake = source((_watermark, call) =>
+        (async function* () {
+          yield {
+            kind: "checkpoint",
+            watermark: { source: "intervals-icu", lane: "bulk-fit", value: call === 0 ? midway : complete },
+            droppedActivityRows: { sourceRestricted: call === 0 ? 60 : 3, other: call === 0 ? 0 : 2 },
+          };
+        })(),
+      );
+      const result = await runBackfillPages({
+        store: value.store,
+        node: value.node,
+        source: fake,
+        clock,
+      });
+      expect(result).toMatchObject({ pages: 3 });
+      expect(result.droppedActivityRows).toEqual({ sourceRestricted: 63, other: 2 });
+    } finally {
+      await value.store.close();
+    }
+  });
+
   it("commits each page checkpoint atomically and finishes with one terminal no-op", async () => {
     const value = await fresh();
     try {

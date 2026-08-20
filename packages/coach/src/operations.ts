@@ -219,6 +219,11 @@ export function createCoachOperations(
       SyncRpcParamsSchema.parse(request);
       deliver(onEvent, { phase: "started", completed: 0, total: 1 });
       let backfillOutcome: SyncRpcResult["backfill"] = "completed";
+      let droppedActivities: SyncRpcResult["droppedActivities"] = {
+        sourceRestricted: 0,
+        other: 0,
+        total: 0,
+      };
       return input.runtime
         .runWindowAfter(async (signal) => {
           const credentials = await input.intervalsCredentials.read();
@@ -229,7 +234,7 @@ export function createCoachOperations(
                 : "skipped-no-credential";
             return;
           }
-          await backfill({
+          const run = await backfill({
             home: input.home,
             store: input.context.store,
             apiKey: credentials.apiKey,
@@ -237,6 +242,12 @@ export function createCoachOperations(
             historyNewestDate: input.historyNewestDate(),
             signal,
           });
+          const dropped = run.droppedActivityRows;
+          droppedActivities = {
+            sourceRestricted: dropped.sourceRestricted,
+            other: dropped.other,
+            total: dropped.sourceRestricted + dropped.other,
+          };
         })
         .then((window) => {
           const result = SyncRpcResultSchema.parse({
@@ -249,6 +260,7 @@ export function createCoachOperations(
               reference: window.counts.legacyRequests,
               total: window.counts.totalRequests,
             },
+            droppedActivities,
           });
           deliver(onEvent, { phase: "completed", completed: 1, total: 1 });
           return result;

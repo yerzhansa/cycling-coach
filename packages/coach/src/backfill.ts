@@ -5,6 +5,8 @@ import { createNodeImportRuntime, type NodeImportRuntime } from "@enduragent/ker
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import {
   REQUEST_ATTEMPTS,
+  ZERO_DROPPED_ACTIVITY_ROWS,
+  type DroppedActivityRowCounts,
   type IntervalsIcuArtifact,
   type IntervalsIcuSource,
 } from "@enduragent/sync-intervals-icu";
@@ -91,13 +93,20 @@ export interface RunBackfillPagesOptions {
   readonly onPageCommitted?: (input: { readonly pages: number; readonly artifacts: number; readonly report: ImportReport | null }) => void;
 }
 
-export interface BackfillRunResult { readonly pages: number; readonly artifacts: number; readonly reports: readonly ImportReport[]; }
+export interface BackfillRunResult { readonly pages: number; readonly artifacts: number; readonly reports: readonly ImportReport[];
+  readonly droppedActivityRows: DroppedActivityRowCounts; }
+
+function addDropped(total: DroppedActivityRowCounts, page: DroppedActivityRowCounts | undefined): DroppedActivityRowCounts {
+  if (page === undefined) return total;
+  return { sourceRestricted: total.sourceRestricted + page.sourceRestricted, other: total.other + page.other };
+}
 
 export async function runActivityAuditPages(options: RunBackfillPagesOptions): Promise<BackfillRunResult> {
   const batchSize = configured(options.batchSize, DEFAULT_BACKFILL_BATCH_SIZE, 1, 1_000, "batch size");
   const perRequestTimeoutMs = configured(options.perRequestTimeoutMs, DEFAULT_PER_REQUEST_TIMEOUT_MS, 1_000, 300_000, "request timeout");
   const pageDeadlineMs = configured(options.backfillPageDeadlineMs, DEFAULT_BACKFILL_PAGE_DEADLINE_MS, 60_000, 86_400_000, "page deadline");
   let pages = 0, artifacts = 0;
+  let droppedActivityRows: DroppedActivityRowCounts = ZERO_DROPPED_ACTIVITY_ROWS;
   const reports: ImportReport[] = [];
   for (;;) {
     const before = await createSyncStateRepository(options.store).readWatermark("intervals-icu", "activities");
@@ -129,6 +138,7 @@ export async function runActivityAuditPages(options: RunBackfillPagesOptions): P
     if (checkpoint === null || checkpoint.watermark.source !== "intervals-icu" || checkpoint.watermark.lane !== "activities") {
       throw new Error("invalid source checkpoint");
     }
+    droppedActivityRows = addDropped(droppedActivityRows, checkpoint.droppedActivityRows);
     const checkpointValue = checkpoint.watermark.value;
     const parsed = cursor(checkpointValue);
     let report: ImportReport | null = null;
@@ -153,7 +163,8 @@ export async function runActivityAuditPages(options: RunBackfillPagesOptions): P
     options.onPageCommitted?.({ pages, artifacts, report });
     if (parsed.complete) break;
   }
-  return Object.freeze({ pages, artifacts, reports: Object.freeze(reports) });
+  return Object.freeze({ pages, artifacts, reports: Object.freeze(reports),
+    droppedActivityRows: Object.freeze(droppedActivityRows) });
 }
 
 export async function runBackfillPages(options: RunBackfillPagesOptions): Promise<BackfillRunResult> {
@@ -161,6 +172,7 @@ export async function runBackfillPages(options: RunBackfillPagesOptions): Promis
   const perRequestTimeoutMs = configured(options.perRequestTimeoutMs, DEFAULT_PER_REQUEST_TIMEOUT_MS, 1_000, 300_000, "request timeout");
   const pageDeadlineMs = configured(options.backfillPageDeadlineMs, DEFAULT_BACKFILL_PAGE_DEADLINE_MS, 60_000, 86_400_000, "page deadline");
   let pages = 0, artifacts = 0, terminalCursor: string | null = null;
+  let droppedActivityRows: DroppedActivityRowCounts = ZERO_DROPPED_ACTIVITY_ROWS;
   const reports: ImportReport[] = [];
   for (;;) {
     const before = await createSyncStateRepository(options.store).readWatermark("intervals-icu", "bulk-fit");
@@ -194,6 +206,7 @@ export async function runBackfillPages(options: RunBackfillPagesOptions): Promis
     if (checkpoint === null || checkpoint.watermark.source !== "intervals-icu" || checkpoint.watermark.lane !== "bulk-fit") {
       throw new Error("invalid source checkpoint");
     }
+    if (terminalCursor === null) droppedActivityRows = addDropped(droppedActivityRows, checkpoint.droppedActivityRows);
     const checkpointValue = checkpoint.watermark.value;
     const parsed = cursor(checkpointValue);
     let report: ImportReport | null = null;
@@ -222,7 +235,8 @@ export async function runBackfillPages(options: RunBackfillPagesOptions): Promis
     }
     if (parsed.complete) terminalCursor = checkpointValue;
   }
-  return Object.freeze({ pages, artifacts, reports: Object.freeze(reports) });
+  return Object.freeze({ pages, artifacts, reports: Object.freeze(reports),
+    droppedActivityRows: Object.freeze(droppedActivityRows) });
 }
 
 export interface RunIntervalsBackfillOptions {

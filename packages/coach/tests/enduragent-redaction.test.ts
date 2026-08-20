@@ -157,6 +157,7 @@ describe.skipIf(!hasLoopback)("local CLI redaction boundary", () => {
               published: false,
               referenceSucceeded: true,
               requests: { store: 0, reference: 0, total: 0 },
+              droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
             }),
             saveIntake: async () => ({ schemaVersion: 1, saved: true }),
             getTranscriptPage: async () => ({
