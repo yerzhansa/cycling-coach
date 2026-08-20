@@ -23,6 +23,7 @@
     "verify:package-layout": "node scripts/verify-package-layout.mjs",
     "verify:win-package": "node scripts/verify-windows-package.mjs",
     "verify:mac-release": "node scripts/verify-macos-release.mjs",
+    "verify:mac-backend-selection": "node scripts/verify-macos-backend-selection.mjs",
     "smoke:runtime": "node scripts/electron-smoke.mjs runtime",
     "smoke:security": "node scripts/electron-smoke.mjs security",
     "accept:residency": "node ./scripts/accept-residency.mjs",

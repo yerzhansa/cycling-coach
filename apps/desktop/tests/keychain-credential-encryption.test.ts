@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import {
   CREDENTIAL_ENVELOPE_IV_BYTES,
   CREDENTIAL_ENVELOPE_MAGIC,
@@ -10,6 +11,7 @@ import {
   KeychainEncryptionError,
   SAFE_STORAGE_ENVELOPE_KEY_ID,
   createKeychainPartitionEncryption,
+  type CreateKeychainPartitionEncryptionOptions,
   openCredentialEnvelope,
   readCredentialEnvelopeKeyId,
   sealCredentialEnvelope,
@@ -51,6 +53,22 @@ function transportOf(...responses: readonly KeychainHelperResponse[]): Recording
 function storedKey(): { readonly key: Buffer; readonly encoded: string } {
   const key = randomBytes(KEYCHAIN_KEY_BYTES);
   return { key, encoded: key.toString("base64") };
+}
+
+async function createEncryption(
+  options: Omit<CreateKeychainPartitionEncryptionOptions, "dependentEnvelopes" | "lockProof"> & {
+    readonly dependentEnvelopes?: number;
+  },
+) {
+  const { dependentEnvelopes = 0, ...keychainOptions } = options;
+  const serialize = createCredentialEnvelopeMutationLock();
+  return await serialize((lockProof) =>
+    createKeychainPartitionEncryption({
+      ...keychainOptions,
+      dependentEnvelopes,
+      lockProof,
+    }),
+  );
 }
 
 describe("credential envelope", () => {
@@ -115,7 +133,7 @@ describe("keychain partition backend", () => {
   it("adopts an existing key and reports its backend id", async () => {
     const { encoded } = storedKey();
     const transport = transportOf(PROBE_OK, { ok: true, op: "read-key", key: encoded });
-    const result = await createKeychainPartitionEncryption({
+    const result = await createEncryption({
       transport,
       service: KEYCHAIN_CREDENTIAL_SERVICE,
     });
@@ -142,7 +160,7 @@ describe("keychain partition backend", () => {
       { ok: false, code: "item-not-found" },
       { ok: true, op: "create-key", key: encoded },
     );
-    const result = await createKeychainPartitionEncryption({
+    const result = await createEncryption({
       transport,
       service: KEYCHAIN_CREDENTIAL_SERVICE_DEV,
     });
@@ -159,7 +177,7 @@ describe("keychain partition backend", () => {
     ).toBe(true);
   });
 
-  it("deletes and recreates a poisoned item", async () => {
+  it("deletes and recreates a positively unreadable item with no dependent envelopes", async () => {
     const { encoded } = storedKey();
     const transport = transportOf(
       PROBE_OK,
@@ -167,7 +185,7 @@ describe("keychain partition backend", () => {
       { ok: true, op: "delete-key", deleted: true },
       { ok: true, op: "create-key", key: encoded },
     );
-    const result = await createKeychainPartitionEncryption({
+    const result = await createEncryption({
       transport,
       service: KEYCHAIN_CREDENTIAL_SERVICE,
     });
@@ -182,7 +200,7 @@ describe("keychain partition backend", () => {
 
   it("reports encryption as unavailable when the keychain is locked", async () => {
     const transport = transportOf(PROBE_OK, { ok: false, code: "keychain-locked" });
-    const result = await createKeychainPartitionEncryption({
+    const result = await createEncryption({
       transport,
       service: KEYCHAIN_CREDENTIAL_SERVICE,
     });
@@ -202,7 +220,7 @@ describe("keychain partition backend", () => {
       { ok: false, code: "item-not-found" },
       { ok: false, code: "duplicate-item" },
     );
-    const result = await createKeychainPartitionEncryption({
+    const result = await createEncryption({
       transport,
       service: KEYCHAIN_CREDENTIAL_SERVICE,
     });
@@ -216,7 +234,7 @@ describe("keychain partition backend", () => {
 
   it("stops at the probe and touches no keychain op when the build is not team signed", async () => {
     const transport = transportOf({ ok: false, code: "not-team-signed" });
-    const result = await createKeychainPartitionEncryption({
+    const result = await createEncryption({
       transport,
       service: KEYCHAIN_CREDENTIAL_SERVICE,
     });
@@ -226,7 +244,7 @@ describe("keychain partition backend", () => {
 
   it("refuses a probe answered by a foreign team", async () => {
     const transport = transportOf({ ok: true, op: "probe", teamIdentifier: "ZZZZZZZZZZ" });
-    const result = await createKeychainPartitionEncryption({
+    const result = await createEncryption({
       transport,
       service: KEYCHAIN_CREDENTIAL_SERVICE,
     });
@@ -240,10 +258,127 @@ describe("keychain partition backend", () => {
       op: "read-key",
       key: randomBytes(16).toString("base64"),
     });
-    const result = await createKeychainPartitionEncryption({
+    const result = await createEncryption({
       transport,
       service: KEYCHAIN_CREDENTIAL_SERVICE,
     });
     expect(result.status).toBe("storage-failed");
+  });
+
+  it("preserves an uninspectable item and reports encryption unavailable", async () => {
+    const transport = transportOf(PROBE_OK, { ok: false, code: "uninspectable-item" });
+
+    const result = await createEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+      dependentEnvelopes: 2,
+    });
+
+    expect(result.status).toBe("unavailable");
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+  });
+
+  it("preserves a missing key when dependent envelopes need recovery", async () => {
+    const transport = transportOf(PROBE_OK, { ok: false, code: "item-not-found" });
+
+    const result = await createEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+      dependentEnvelopes: 1,
+    });
+
+    expect(result.status).toBe("unavailable");
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+  });
+
+  it("preserves a positively invalid item while dependent envelopes survive", async () => {
+    const transport = transportOf(PROBE_OK, { ok: false, code: "unreadable-item" });
+
+    const result = await createEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+      dependentEnvelopes: 1,
+    });
+
+    expect(result.status).toBe("storage-failed");
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+  });
+
+  it("keeps an ambiguous deletion unavailable until the surviving key is read again", async () => {
+    const { encoded } = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: encoded },
+      { ok: false, code: "unknown" },
+      { ok: true, op: "read-key", key: encoded },
+    );
+    const serialize = createCredentialEnvelopeMutationLock();
+    const result = await serialize((lockProof) =>
+      createKeychainPartitionEncryption({
+        transport,
+        service: KEYCHAIN_CREDENTIAL_SERVICE,
+        dependentEnvelopes: 0,
+        lockProof,
+      }),
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await expect(serialize((proof) => result.deleteKey(proof))).resolves.toEqual({
+      status: "failed",
+      code: "unknown",
+    });
+    expect(result.encryption.isEncryptionAvailable()).toBe(false);
+    expect(() => result.encryption.encryptString("orphan-candidate")).toThrow(
+      KeychainEncryptionError,
+    );
+
+    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+      status: "ready",
+    });
+    expect(result.encryption.isEncryptionAvailable()).toBe(true);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "read-key",
+    ]);
+  });
+
+  it("re-reads an ambiguously deleted key before replacing a confirmed absence", async () => {
+    const original = storedKey();
+    const replacement = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: original.encoded },
+      { ok: false, code: "unknown" },
+      { ok: false, code: "item-not-found" },
+      { ok: true, op: "create-key", key: replacement.encoded },
+    );
+    const serialize = createCredentialEnvelopeMutationLock();
+    const result = await serialize((lockProof) =>
+      createKeychainPartitionEncryption({
+        transport,
+        service: KEYCHAIN_CREDENTIAL_SERVICE,
+        dependentEnvelopes: 0,
+        lockProof,
+      }),
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await serialize((proof) => result.deleteKey(proof));
+    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+      status: "ready",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "read-key",
+      "create-key",
+    ]);
+    const sealed = result.encryption.encryptString("post-reconciliation-secret");
+    expect(openCredentialEnvelope(replacement.key, sealed)).toBe("post-reconciliation-secret");
   });
 });

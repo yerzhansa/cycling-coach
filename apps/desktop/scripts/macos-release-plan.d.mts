@@ -105,6 +105,7 @@ export type MacosReleaseStage =
   | "electron-builder"
   | "package-layout"
   | "keychain-helper"
+  | "backend-selection"
   | "candidate-verification"
   | "identity-continuity"
   | "dmg-notarization"
@@ -135,6 +136,7 @@ export interface MacosReleaseDependencies {
     options: { readonly candidateVersion: string },
   ) => Promise<VerifiedMacosBaselineApplication>;
   readonly verifyKeychainHelper?: (candidateApplication: string) => Promise<unknown>;
+  readonly verifyBackendSelection?: (candidateApplication: string) => Promise<unknown>;
   readonly verifyIdentityContinuity?: (
     baselineApplication: string,
     candidateApplication: string,

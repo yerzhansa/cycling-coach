@@ -12,6 +12,7 @@ import {
   credentialEnvelopeKeyId,
   scanCredentialEnvelopes,
 } from "../src/main/credential-envelope-inventory.js";
+import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import {
   createLegacyReadFallbackEncryption,
   migrateCredentialEnvelopes,
@@ -92,13 +93,18 @@ function transportOf(...responses: readonly KeychainHelperResponse[]): KeychainH
 async function keychainEncryption(
   key: Buffer = randomBytes(KEYCHAIN_KEY_BYTES),
 ): Promise<CredentialEncryptionPort> {
-  const result = await createKeychainPartitionEncryption({
-    transport: transportOf(
-      { ok: true, op: "probe", teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER },
-      { ok: true, op: "read-key", key: key.toString("base64") },
-    ),
-    service: KEYCHAIN_CREDENTIAL_SERVICE,
-  });
+  const serialize = createCredentialEnvelopeMutationLock();
+  const result = await serialize((lockProof) =>
+    createKeychainPartitionEncryption({
+      transport: transportOf(
+        { ok: true, op: "probe", teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER },
+        { ok: true, op: "read-key", key: key.toString("base64") },
+      ),
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+      dependentEnvelopes: 0,
+      lockProof,
+    }),
+  );
   if (result.status !== "ready") throw new TypeError();
   return result.encryption;
 }
@@ -168,7 +174,16 @@ describe("credential envelope inventory", () => {
     await seedCredential(roots.credentialRoot, "openrouter", "sk-migrated", keychain);
     await seedProfile(roots, "synthetic-token", legacy.port);
 
-    const inventory = await scanCredentialEnvelopes(roots);
+    const inventory = await scanCredentialEnvelopes({
+      ...roots,
+      classifyLegacyEnvelope(envelope) {
+        try {
+          return legacy.port.decryptString(envelope).length > 0;
+        } catch {
+          return false;
+        }
+      },
+    });
 
     expect(inventory.envelopes.map((envelope) => envelope.fileName)).toEqual([
       "anthropic.bin",
@@ -191,13 +206,45 @@ describe("credential envelope inventory", () => {
     await seedCredential(roots.credentialRoot, "anthropic", "sk-legacy", legacy.port);
     await seedProfile(roots, "synthetic-token", legacy.port);
 
-    await expect(scanCredentialEnvelopes(roots)).resolves.toMatchObject({
+    await expect(
+      scanCredentialEnvelopes({
+        ...roots,
+        classifyLegacyEnvelope(envelope) {
+          try {
+            return legacy.port.decryptString(envelope).length > 0;
+          } catch {
+            return false;
+          }
+        },
+      }),
+    ).resolves.toMatchObject({
       keychainRequired: false,
       migrated: 0,
     });
     await expect(scanCredentialEnvelopes(await fixture())).resolves.toMatchObject({
       keychainRequired: false,
       envelopes: [],
+    });
+  });
+
+  posixIt("requires positive legacy decryption before excluding an unknown envelope", async () => {
+    const roots = await fixture();
+    const legacy = safeStorage();
+    await seedCredential(roots.credentialRoot, "anthropic", "sk-legacy", legacy.port);
+
+    await expect(scanCredentialEnvelopes(roots)).resolves.toMatchObject({
+      keychainRequired: true,
+      legacy: [],
+      unreadable: 1,
+    });
+    await expect(
+      scanCredentialEnvelopes({
+        ...roots,
+        classifyLegacyEnvelope: (envelope) => legacy.port.decryptString(envelope).length > 0,
+      }),
+    ).resolves.toMatchObject({
+      keychainRequired: false,
+      unreadable: 0,
     });
   });
 

@@ -19,6 +19,10 @@ import {
   type OnboardingLlmSelectionResult,
 } from "./llm-selection.js";
 import { durablyReplaceReversible } from "./durable-atomic-replace.js";
+import type {
+  CredentialEnvelopeLockProof,
+  SerializeCredentialEnvelopeMutation,
+} from "./credential-envelope-lock.js";
 import {
   assertWindowsPrivateFileAtPath,
   MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
@@ -165,6 +169,9 @@ interface CredentialVaultOptions {
   readonly clearCredential?: (
     slot: DesktopCredentialSlot,
   ) => Promise<"cleared" | "not-active" | "managed-by-environment">;
+  readonly serializeEnvelopeMutation?: SerializeCredentialEnvelopeMutation;
+  readonly prepareEnvelopeWrite?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
+  readonly observeEnvelopeRemoved?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
   readonly renameCredentialFile?: typeof rename;
   readonly removeCredentialFile?: typeof rm;
   readonly readCredentialFile?: typeof readFile;
@@ -329,6 +336,12 @@ async function validTarget(
 }
 
 export function createCredentialVault(options: CredentialVaultOptions): CredentialVault {
+  if (
+    options.serializeEnvelopeMutation === undefined &&
+    (options.prepareEnvelopeWrite !== undefined || options.observeEnvelopeRemoved !== undefined)
+  ) {
+    throw new TypeError();
+  }
   const platform = options.platform ?? process.platform;
   const runtimeState =
     options.runtimeState ?? new Map<DesktopCredentialSlot, CredentialRuntimeState>();
@@ -406,6 +419,12 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
 
   const exclusive = <T>(operation: () => Promise<T>): Promise<T> =>
     serializeCredentialRoot(options.root, operation);
+  const envelopeExclusive = <T>(
+    operation: (proof: CredentialEnvelopeLockProof | undefined) => Promise<T>,
+  ): Promise<T> =>
+    options.serializeEnvelopeMutation === undefined
+      ? exclusive(() => operation(undefined))
+      : options.serializeEnvelopeMutation((proof) => exclusive(() => operation(proof)));
 
   const reconcileDurability = (): Promise<CredentialVaultDurabilityState> => {
     if (durabilityState !== "pending") return Promise.resolve(durabilityState);
@@ -818,13 +837,17 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
 
   return {
     writeCredential(input, behavior): Promise<CredentialWriteResult> {
-      return exclusive(() => writeCredential(input, behavior));
+      return envelopeExclusive(async (proof) => {
+        if (proof !== undefined) await options.prepareEnvelopeWrite?.(proof);
+        return await writeCredential(input, behavior);
+      });
     },
 
     runExclusiveMutation<T>(
       operation: (current: CredentialVaultMutation) => Promise<T>,
     ): Promise<T> {
-      return exclusive(async () => {
+      return envelopeExclusive(async (proof) => {
+        if (proof !== undefined) await options.prepareEnvelopeWrite?.(proof);
         let active = true;
         const mutation = Object.freeze({
           writeCredential(
@@ -882,7 +905,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     },
 
     deleteCredential(slot): Promise<CredentialDeleteResult> {
-      return exclusive(async () => {
+      return envelopeExclusive(async (proof) => {
         if (!isCredentialSlot(slot)) {
           return { slot: "anthropic", status: "refused", reason: "not-found" };
         }
@@ -920,6 +943,11 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
         }
         if (removed === "deleted" || removed === "cleanup-pending") {
           clearRuntimeState(slot);
+          if (proof !== undefined) {
+            try {
+              await options.observeEnvelopeRemoved?.(proof);
+            } catch {}
+          }
           return {
             slot,
             status: "deleted",

@@ -763,6 +763,14 @@ export async function runMacosRelease(input, dependencies = {}) {
       }));
   dependencies.reportStage?.("keychain-helper");
   await verifyKeychainHelper(application);
+  const verifyBackendSelection =
+    dependencies.verifyBackendSelection ??
+    (async (candidate) =>
+      (await import("./verify-macos-backend-selection.mjs")).verifyMacosBackendSelection(candidate, {
+        executeFile: dependencies.executeFile,
+      }));
+  dependencies.reportStage?.("backend-selection");
+  await verifyBackendSelection(application);
   const verifyIdentityContinuity =
     dependencies.verifyIdentityContinuity ??
     ((baseline, candidate, options) =>

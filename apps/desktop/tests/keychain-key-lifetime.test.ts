@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import {
   type CredentialEncryptionPort,
   type DesktopCredentialSlot,
 } from "../src/main/credential-vault.js";
+import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import { createKeychainPartitionEncryption } from "../src/main/keychain-credential-encryption.js";
 import {
   KEYCHAIN_CREDENTIAL_SERVICE,
@@ -66,16 +67,45 @@ function transportOf(...responses: readonly KeychainHelperResponse[]): Recording
 }
 
 async function keychainEncryption(): Promise<CredentialEncryptionPort> {
-  const result = await createKeychainPartitionEncryption({
-    transport: transportOf(PROBE_OK, {
-      ok: true,
-      op: "read-key",
-      key: randomBytes(KEYCHAIN_KEY_BYTES).toString("base64"),
+  const serialize = createCredentialEnvelopeMutationLock();
+  const result = await serialize((lockProof) =>
+    createKeychainPartitionEncryption({
+      transport: transportOf(PROBE_OK, {
+        ok: true,
+        op: "read-key",
+        key: randomBytes(KEYCHAIN_KEY_BYTES).toString("base64"),
+      }),
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+      dependentEnvelopes: 0,
+      lockProof,
     }),
-    service: KEYCHAIN_CREDENTIAL_SERVICE,
-  });
+  );
   if (result.status !== "ready") throw new TypeError();
   return result.encryption;
+}
+
+async function retireKey(
+  roots: Fixture,
+  transport: RecordingTransport,
+  readEnvelopeFile?: typeof readFile,
+) {
+  const serialize = createCredentialEnvelopeMutationLock();
+  return await serialize((lockProof) =>
+    retireKeychainKeyWhenLastEnvelopeGone({
+      ...roots,
+      readEnvelopeFile,
+      lockProof,
+      deleteKey: async () => {
+        const deleted = await transport.send({
+          op: "delete-key",
+          service: KEYCHAIN_CREDENTIAL_SERVICE,
+        });
+        if (!deleted.ok) return { status: "failed", code: deleted.code };
+        if (deleted.op !== "delete-key") return { status: "failed", code: "unknown" };
+        return { status: deleted.deleted ? "deleted" : "already-absent" };
+      },
+    }),
+  );
 }
 
 function credentialVault(roots: Fixture, encryption: CredentialEncryptionPort) {
@@ -134,13 +164,10 @@ describe("keychain key retirement", () => {
       credentialVault(roots, encryption).deleteCredential("anthropic"),
     ).resolves.toMatchObject({ slot: "anthropic", status: "deleted" });
 
-    await expect(
-      retireKeychainKeyWhenLastEnvelopeGone({
-        ...roots,
-        transport,
-        service: KEYCHAIN_CREDENTIAL_SERVICE,
-      }),
-    ).resolves.toEqual({ status: "retained", envelopes: 1 });
+    await expect(retireKey(roots, transport)).resolves.toEqual({
+      status: "retained",
+      envelopes: 1,
+    });
     expect(transport.requests).toHaveLength(0);
   });
 
@@ -157,25 +184,13 @@ describe("keychain key retirement", () => {
         credentialVault(roots, encryption).deleteCredential(slot),
       ).resolves.toMatchObject({ status: "deleted" });
     }
-    await expect(
-      retireKeychainKeyWhenLastEnvelopeGone({
-        ...roots,
-        transport,
-        service: KEYCHAIN_CREDENTIAL_SERVICE,
-      }),
-    ).resolves.toMatchObject({ status: "retained" });
+    await expect(retireKey(roots, transport)).resolves.toMatchObject({ status: "retained" });
 
     await expect(telegramVault(roots, encryption).deleteProfile()).resolves.toMatchObject({
       outcome: "applied",
     });
 
-    await expect(
-      retireKeychainKeyWhenLastEnvelopeGone({
-        ...roots,
-        transport,
-        service: KEYCHAIN_CREDENTIAL_SERVICE,
-      }),
-    ).resolves.toEqual({ status: "deleted" });
+    await expect(retireKey(roots, transport)).resolves.toEqual({ status: "deleted" });
     expect(transport.requests).toEqual([
       { op: "delete-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
     ]);
@@ -186,14 +201,9 @@ describe("keychain key retirement", () => {
     const transport = transportOf();
 
     await expect(
-      retireKeychainKeyWhenLastEnvelopeGone({
-        ...roots,
-        transport,
-        service: KEYCHAIN_CREDENTIAL_SERVICE,
-        readEnvelopeFile: (async () => {
-          throw Object.assign(new Error("synthetic read failure"), { code: "EACCES" });
-        }) as never,
-      }),
+      retireKey(roots, transport, (async () => {
+        throw Object.assign(new Error("synthetic read failure"), { code: "EACCES" });
+      }) as never),
     ).resolves.toMatchObject({ status: "retained" });
     expect(transport.requests).toHaveLength(0);
   });
@@ -202,19 +212,11 @@ describe("keychain key retirement", () => {
     const roots = await fixture();
 
     await expect(
-      retireKeychainKeyWhenLastEnvelopeGone({
-        ...roots,
-        transport: transportOf({ ok: true, op: "delete-key", deleted: false }),
-        service: KEYCHAIN_CREDENTIAL_SERVICE,
-      }),
+      retireKey(roots, transportOf({ ok: true, op: "delete-key", deleted: false })),
     ).resolves.toEqual({ status: "already-absent" });
 
     await expect(
-      retireKeychainKeyWhenLastEnvelopeGone({
-        ...roots,
-        transport: transportOf({ ok: false, code: "keychain-locked" }),
-        service: KEYCHAIN_CREDENTIAL_SERVICE,
-      }),
+      retireKey(roots, transportOf({ ok: false, code: "keychain-locked" })),
     ).resolves.toEqual({ status: "failed", code: "keychain-locked" });
   });
 });

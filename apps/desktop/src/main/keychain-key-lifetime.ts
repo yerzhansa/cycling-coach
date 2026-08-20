@@ -2,7 +2,9 @@ import {
   scanCredentialEnvelopes,
   type CredentialEnvelopeRoots,
 } from "./credential-envelope-inventory.js";
-import type { KeychainHelperErrorCode, KeychainHelperTransport } from "./keychain-helper.js";
+import type { CredentialEnvelopeLockProof } from "./credential-envelope-lock.js";
+import type { KeychainKeyDeletion } from "./keychain-credential-encryption.js";
+import type { KeychainHelperErrorCode } from "./keychain-helper.js";
 
 export type KeychainKeyRetirement =
   | Readonly<{ status: "retained"; envelopes: number }>
@@ -11,8 +13,8 @@ export type KeychainKeyRetirement =
   | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>;
 
 export interface RetireKeychainKeyOptions extends CredentialEnvelopeRoots {
-  readonly transport: KeychainHelperTransport;
-  readonly service: string;
+  readonly lockProof: CredentialEnvelopeLockProof;
+  readonly deleteKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyDeletion>;
 }
 
 export async function retireKeychainKeyWhenLastEnvelopeGone(
@@ -22,8 +24,5 @@ export async function retireKeychainKeyWhenLastEnvelopeGone(
   if (inventory.envelopes.length > 0) {
     return { status: "retained", envelopes: inventory.envelopes.length };
   }
-  const deleted = await options.transport.send({ op: "delete-key", service: options.service });
-  if (!deleted.ok) return { status: "failed", code: deleted.code };
-  if (deleted.op !== "delete-key") return { status: "failed", code: "unknown" };
-  return deleted.deleted ? { status: "deleted" } : { status: "already-absent" };
+  return await options.deleteKey(options.lockProof);
 }

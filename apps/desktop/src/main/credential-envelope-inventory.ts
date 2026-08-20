@@ -35,6 +35,10 @@ export interface CredentialEnvelopeRoots {
   readonly credentialRoot: string;
   readonly telegramRoot: string;
   readonly readEnvelopeFile?: typeof readFile;
+  readonly classifyLegacyEnvelope?: (
+    envelope: Buffer,
+    target: CredentialEnvelopeTarget,
+  ) => boolean | Promise<boolean>;
 }
 
 export function credentialEnvelopeTargets(
@@ -75,7 +79,16 @@ export async function scanCredentialEnvelopes(
       continue;
     }
     try {
-      envelopes.push({ ...target, keyId: credentialEnvelopeKeyId(contents) });
+      let keyId = readCredentialEnvelopeKeyId(contents);
+      if (keyId === undefined || keyId === SAFE_STORAGE_ENVELOPE_KEY_ID) {
+        keyId = undefined;
+        try {
+          if (await roots.classifyLegacyEnvelope?.(contents, target)) {
+            keyId = SAFE_STORAGE_ENVELOPE_KEY_ID;
+          }
+        } catch {}
+      }
+      envelopes.push({ ...target, keyId });
     } finally {
       contents.fill(0);
     }

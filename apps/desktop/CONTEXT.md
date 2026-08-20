@@ -28,9 +28,13 @@ _Avoid_: Daemon, service, agent (the daemon is the long-lived coaching process; 
 The single number inside an envelope naming the key that protects it. `0` names the platform-secure-storage era. Any other value names a later key. Without a key-id an envelope from one era is indistinguishable from another, and a half-migrated vault cannot be repaired.
 _Avoid_: Version, key version, generation
 
-**Poisoned item**:
-A stored key that exists but cannot be read by the app entitled to it. It is a recoverable state, not a fatal one: the app destroys it and creates a fresh key, accepting that every envelope under the old key must be re-entered. Distinct from a missing key, which is simply the first-run case.
-_Avoid_: Corrupt key, broken keychain, orphaned item
+**Uninspectable item**:
+An existing keychain item whose contents or access rules cannot be positively verified. This state does not prove corruption and never authorises destroying the encryption key.
+_Avoid_: Poisoned item, corrupt key, broken keychain
+
+**Missing encryption key**:
+An absent encryption key. It is a first-run state only when no envelope depends on it; otherwise it is a recovery state and the envelopes remain preserved.
+_Avoid_: Unconfigured credential, empty vault
 
 ## Relationships
 
@@ -38,7 +42,7 @@ _Avoid_: Corrupt key, broken keychain, orphaned item
 - A **Vault** delegates every encryption and decryption to one **Backend** and never inspects an **Envelope** itself.
 - A **Backend** may need a **Helper** to obtain its key; a backend that needs no helper has none.
 - Every **Envelope** carries the **Key-id** of the key that sealed it.
-- A **Poisoned item** is a **Backend** concern; a **Vault** only ever sees the refusal that follows.
+- An **Uninspectable item** is a **Backend** concern; a **Vault** only ever sees the refusal that follows.
 
 ## Example dialogue
 

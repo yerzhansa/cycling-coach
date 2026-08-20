@@ -1,4 +1,8 @@
 import type { rename, rm } from "node:fs/promises";
+import type {
+  CredentialEnvelopeLockProof,
+  SerializeCredentialEnvelopeMutation,
+} from "./credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
 import {
   scanCredentialEnvelopes,
@@ -7,6 +11,8 @@ import {
 import {
   createKeychainPartitionEncryption,
   createRefusingKeychainEncryption,
+  type KeychainKeyDeletion,
+  type KeychainKeyPreparation,
 } from "./keychain-credential-encryption.js";
 import type { KeychainHelperErrorCode, KeychainHelperTransport } from "./keychain-helper.js";
 import {
@@ -23,6 +29,8 @@ export type DesktopCredentialBackendSelection =
       encryption: CredentialEncryptionPort;
       migration: CredentialMigrationOutcome;
       createdKey: boolean;
+      prepareKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyPreparation>;
+      deleteKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyDeletion>;
     }>
   | Readonly<{ status: "safe-storage"; encryption: CredentialEncryptionPort }>
   | Readonly<{
@@ -41,16 +49,20 @@ export interface SelectDesktopCredentialBackendOptions extends CredentialEnvelop
   readonly renameFile?: typeof rename;
   readonly removeFile?: typeof rm;
   readonly syncDirectory?: (root: string) => Promise<void>;
+  readonly serializeEnvelopeMutation: SerializeCredentialEnvelopeMutation;
 }
 
 export function keychainFailureRefusal(
   code: KeychainHelperErrorCode,
   keychainRequired: boolean,
 ): DesktopCredentialBackendRefusal {
-  if (code === "keychain-locked" || code === "not-team-signed") {
+  if (code === "keychain-locked" || code === "uninspectable-item" || code === "not-team-signed") {
     return "encryption-unavailable";
   }
-  if (keychainRequired && code === "unknown") {
+  if (
+    keychainRequired &&
+    (code === "unknown" || code === "item-not-found" || code === "unreadable-item")
+  ) {
     return "encryption-unavailable";
   }
   return "storage-failed";
@@ -63,10 +75,31 @@ export async function selectDesktopCredentialBackend(
   if (platform !== "darwin") {
     return { status: "safe-storage", encryption: options.safeStorage };
   }
-  const inventory = await scanCredentialEnvelopes(options);
+  return await options.serializeEnvelopeMutation((proof) =>
+    selectMacCredentialBackend(options, platform, proof),
+  );
+}
+
+async function selectMacCredentialBackend(
+  options: SelectDesktopCredentialBackendOptions,
+  platform: NodeJS.Platform,
+  proof: CredentialEnvelopeLockProof,
+): Promise<DesktopCredentialBackendSelection> {
+  const inventory = await scanCredentialEnvelopes({
+    ...options,
+    classifyLegacyEnvelope(envelope) {
+      try {
+        return options.safeStorage.decryptString(envelope).length > 0;
+      } catch {
+        return false;
+      }
+    },
+  });
   const keychain = await createKeychainPartitionEncryption({
     transport: options.transport,
     service: options.service,
+    dependentEnvelopes: inventory.migrated + inventory.unreadable,
+    lockProof: proof,
   });
   if (keychain.status === "unsupported") {
     if (!inventory.keychainRequired) {
@@ -117,5 +150,7 @@ export async function selectDesktopCredentialBackend(
           }),
     migration,
     createdKey: keychain.createdKey,
+    prepareKey: keychain.prepareKey,
+    deleteKey: keychain.deleteKey,
   };
 }
