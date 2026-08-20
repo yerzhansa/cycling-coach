@@ -9,6 +9,11 @@ const rendererRoot = import.meta.dirname;
 
 export default defineConfig({
   plugins: [react(), ...(process.env.VITEST ? [] : [tailwindcss()])],
+  resolve: {
+    alias: {
+      "@": resolve(rendererRoot, "src"),
+    },
+  },
   define: appVersionDefine(),
   build: {
     outDir: "dist",

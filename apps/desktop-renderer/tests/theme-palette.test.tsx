@@ -97,7 +97,10 @@ function expectedProperties(paletteId: string, theme: ResolvedTheme): Map<string
     ["--ink-2", ramp.ink2],
     ["--ink-3", `color-mix(in srgb, ${ramp.ink2} 62%, ${ramp.bg})`],
     ["--line", ramp.line],
-    ["--line-2", `color-mix(in srgb, ${ramp.line} ${theme === "dark" ? "93%" : "85%"}, ${ramp.ink2})`],
+    [
+      "--line-2",
+      `color-mix(in srgb, ${ramp.line} ${theme === "dark" ? "93%" : "85%"}, ${ramp.ink2})`,
+    ],
     ["--brand", ramp.br],
     ["--brand-ink", ramp.bri],
     ["--brand-soft", ramp.soft],
@@ -233,13 +236,19 @@ describe("palette engine", () => {
 
   it("covers the whole colour vocabulary declared in the token sheet", async () => {
     const tokens = await readTokenSheet();
-    const declared = [...tokens.slice(0, tokens.indexOf("}")).matchAll(/(--[\w-]+)\s*:/gu)]
-      .map((match) => match[1])
-      .filter((property) => !property.startsWith("--f-") && !NON_PALETTE_TOKENS.has(property));
+    const declarations = blockDeclarations(tokens, ":root");
+    const declared = [...declarations.keys()].filter(
+      (property) => !property.startsWith("--f-") && !NON_PALETTE_TOKENS.has(property),
+    );
     const stamped = new Set(paletteCustomProperties(PALETTES[0], "light").keys());
+    const unresolved = declared.filter((property) => {
+      if (stamped.has(property)) return false;
+      const reference = declarations.get(property)?.match(/^var\((--[\w-]+)\)$/u)?.[1];
+      return !reference || (!stamped.has(reference) && !NON_PALETTE_TOKENS.has(reference));
+    });
 
     expect(declared.length).toBeGreaterThan(0);
-    expect(declared.filter((property) => !stamped.has(property))).toEqual([]);
+    expect(unresolved).toEqual([]);
   });
 
   it("keeps the chart pair fixed across every palette", () => {

@@ -19,6 +19,27 @@
   --warn: #b4761e;
   --danger: #b03d38;
 
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-ink);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--sunk);
+  --muted-foreground: var(--ink-2);
+  --accent: var(--brand-soft);
+  --accent-foreground: var(--brand);
+  --destructive: var(--danger);
+  --border: var(--line);
+  --input: var(--line-2);
+  --ring: var(--brand);
+  --sidebar: var(--rail);
+  --radius: var(--r);
+
   --edge: inset 0 -1px 0 rgb(0 0 0 / 4%);
   --sheen: inset 0 1px 0 rgb(255 255 255 / 16%);
   --press: inset 0 1px 0 rgb(0 0 0 / 8%);
@@ -156,6 +177,10 @@
   textarea,
   select {
     font: inherit;
+  }
+
+  button {
+    background-color: transparent;
   }
 
   pre,

@@ -153,7 +153,12 @@ export const RULES: readonly PackageDepRule[] = [
       "react-dom",
       "zustand",
       "@base-ui/react",
+      "class-variance-authority",
+      "clsx",
       "lucide-react",
+      "shadcn",
+      "tailwind-merge",
+      "tw-animate-css",
       "@fontsource-variable/dm-sans",
     ],
     forbidNode: true,
@@ -501,7 +506,8 @@ export function runRulesAgainst(root: string, rules: readonly PackageDepRule[]):
         if (
           rule.allowedExternal === undefined ||
           rule.allowedExternal.some((entry) => matchesEntry(name, entry))
-        ) continue;
+        )
+          continue;
         violations.push({
           file: manifestFile,
           line: 1,
@@ -539,11 +545,18 @@ export function checkPrivatePackages(root: string): PrivateViolation[] {
       const manifestPath = join(root, group, entry, "package.json");
       let pkg: { name?: string; private?: boolean };
       try {
-        pkg = JSON.parse(readFileSync(manifestPath, "utf-8")) as { name?: string; private?: boolean };
+        pkg = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+          name?: string;
+          private?: boolean;
+        };
       } catch {
         continue;
       }
-      if (typeof pkg.name === "string" && pkg.name.startsWith(WORKSPACE_SCOPE) && pkg.private !== true) {
+      if (
+        typeof pkg.name === "string" &&
+        pkg.name.startsWith(WORKSPACE_SCOPE) &&
+        pkg.private !== true
+      ) {
         out.push({ file: join(group, entry, "package.json"), name: pkg.name });
       }
     }
@@ -587,11 +600,15 @@ export function main(argv: readonly string[]): number {
     `check-package-deps: ${result.violations.length + privateViolations.length} forbidden package edge(s) found:`,
   );
   for (const v of result.violations) {
-    console.error(`  ${v.file}:${v.line}:${v.column}  ${v.ruleId}: forbidden import "${v.specifier}" from ${v.pkg}`);
+    console.error(
+      `  ${v.file}:${v.line}:${v.column}  ${v.ruleId}: forbidden import "${v.specifier}" from ${v.pkg}`,
+    );
     console.error(remediation(v));
   }
   for (const pv of privateViolations) {
-    console.error(`  ${pv.file}:1:1  R7: ${pv.name} is @enduragent/*-named but not "private": true`);
+    console.error(
+      `  ${pv.file}:1:1  R7: ${pv.name} is @enduragent/*-named but not "private": true`,
+    );
   }
   return 1;
 }

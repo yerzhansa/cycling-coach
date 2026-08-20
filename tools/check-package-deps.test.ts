@@ -310,6 +310,25 @@ describe("R6 desktop renderer", () => {
     write("apps/desktop-renderer/src/external.ts", `import value from "zod";\nexport { value };\n`);
     expect(violationsFor(rRenderer)).toBe(2);
   });
+
+  it("R6 passes the shadcn foundation dependencies", () => {
+    write(
+      "apps/desktop-renderer/src/lib/utils.ts",
+      `import { clsx } from "clsx";\nimport { twMerge } from "tailwind-merge";\nexport const value = twMerge(clsx("base"));\n`,
+    );
+    writeJson("apps/desktop-renderer/package.json", {
+      name: "@enduragent/desktop-renderer",
+      private: true,
+      dependencies: {
+        "class-variance-authority": "^0.7.1",
+        clsx: "^2.1.1",
+        shadcn: "4.18.0",
+        "tailwind-merge": "^3.6.0",
+        "tw-animate-css": "^1.4.0",
+      },
+    });
+    expect(violationsFor(rRenderer)).toBe(0);
+  });
 });
 
 describe("R8 desktop app", () => {
