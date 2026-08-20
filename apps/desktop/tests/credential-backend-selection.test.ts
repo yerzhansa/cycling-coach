@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ import {
 } from "../src/main/credential-vault.js";
 import { credentialEnvelopeKeyId } from "../src/main/credential-envelope-inventory.js";
 import {
+  CREDENTIAL_ENVELOPE_MAGIC,
   KEYCHAIN_ENVELOPE_KEY_ID,
   KEYCHAIN_PARTITION_STORAGE_BACKEND,
   SAFE_STORAGE_ENVELOPE_KEY_ID,
@@ -537,6 +538,54 @@ describe("keychain failure mapping", () => {
     });
     expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
   });
+
+  posixIt(
+    "preserves an unrecognized envelope when legacy decryption cannot prove ownership",
+    async () => {
+      const roots = await fixture();
+      const retired = await keychainEncryption(randomBytes(KEYCHAIN_KEY_BYTES));
+      await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", retired);
+      const path = join(roots.credentialRoot, "anthropic.bin");
+      const damaged = await readFile(path);
+      damaged[0] ^= 0xff;
+      await writeFile(path, damaged);
+      damaged.fill(0);
+      const transport = transportOf(PROBE_OK, { ok: false, code: "unreadable-item" });
+
+      const selected = await selectDesktopCredentialBackend(selection(roots, transport));
+
+      expect(selected).toMatchObject({
+        status: "refused",
+        reason: "encryption-unavailable",
+        code: "unreadable-item",
+      });
+      expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+    },
+  );
+
+  posixIt(
+    "preserves a key-id zero envelope when legacy decryption cannot prove ownership",
+    async () => {
+      const roots = await fixture();
+      const retired = await keychainEncryption(randomBytes(KEYCHAIN_KEY_BYTES));
+      await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", retired);
+      const path = join(roots.credentialRoot, "anthropic.bin");
+      const damaged = await readFile(path);
+      damaged[CREDENTIAL_ENVELOPE_MAGIC.length] = SAFE_STORAGE_ENVELOPE_KEY_ID;
+      await writeFile(path, damaged);
+      damaged.fill(0);
+      const transport = transportOf(PROBE_OK, { ok: false, code: "unreadable-item" });
+
+      const selected = await selectDesktopCredentialBackend(selection(roots, transport));
+
+      expect(selected).toMatchObject({
+        status: "refused",
+        reason: "encryption-unavailable",
+        code: "unreadable-item",
+      });
+      expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+    },
+  );
 
   posixIt("keeps a partly migrated vault readable and writes only keychain envelopes", async () => {
     const roots = await fixture();

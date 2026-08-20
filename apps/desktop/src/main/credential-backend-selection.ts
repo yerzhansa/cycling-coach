@@ -85,7 +85,16 @@ async function selectMacCredentialBackend(
   platform: NodeJS.Platform,
   proof: CredentialEnvelopeLockProof,
 ): Promise<DesktopCredentialBackendSelection> {
-  const inventory = await scanCredentialEnvelopes(options);
+  const inventory = await scanCredentialEnvelopes({
+    ...options,
+    classifyLegacyEnvelope(envelope) {
+      try {
+        return options.safeStorage.decryptString(envelope).length > 0;
+      } catch {
+        return false;
+      }
+    },
+  });
   const keychain = await createKeychainPartitionEncryption({
     transport: options.transport,
     service: options.service,
