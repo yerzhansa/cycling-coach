@@ -721,15 +721,23 @@ describe("chat surface", () => {
       expect(row?.className).toBe(streamingClassName);
     });
 
-    it("declares the system prose stack for the transcript row", async () => {
+    it("declares the Inter and Geist font foundation", async () => {
       const sourceRoot = resolve(import.meta.dirname, "..", "src");
-      const [stylesheet, tokens] = await Promise.all([
+      const [stylesheet, tokens, fonts] = await Promise.all([
         readFile(resolve(sourceRoot, "ui/chat/Transcript.module.css"), "utf8"),
         readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"),
+        readFile(resolve(sourceRoot, "theme/fonts.css"), "utf8"),
       ]);
       expect(stylesheet).toMatch(/\.prose\s*\{[^}]*font:\s*16px\/1\.6\s+var\(--f-prose\);/u);
       expect(tokens).toMatch(/--f-prose:\s*var\(--f-ui\);/u);
-      expect(tokens).toMatch(/--f-ui:\s*\n?\s*"DM Sans Variable", "DM Sans",/u);
+      expect(tokens).toMatch(/--f-ui:\s*\n?\s*"Inter Variable", "Inter",/u);
+      expect(tokens).toMatch(/--f-mono:\s*\n?\s*"Geist Mono Variable", "Geist Mono",/u);
+      expect(tokens).toMatch(
+        /body\s*\{[^}]*font-optical-sizing:\s*auto;[^}]*font-feature-settings:\s*"cv01",\s*"ss02";/su,
+      );
+      expect(fonts).toContain('@import "@fontsource-variable/inter/opsz.css";');
+      expect(fonts).toContain('@import "@fontsource-variable/geist-mono/index.css";');
+      expect(fonts).not.toContain("dm-sans");
     });
   });
 });
