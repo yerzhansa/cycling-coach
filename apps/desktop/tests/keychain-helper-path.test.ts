@@ -1,4 +1,7 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { KEYCHAIN_HELPER_BUILD_DIRECTORY } from "../scripts/build-keychain-helper.mjs";
+import { KEYCHAIN_HELPER_RESOURCE_PATH } from "../scripts/package-inventory.mjs";
 import {
   KEYCHAIN_HELPER_DEVELOPMENT_DIRECTORY,
   KEYCHAIN_HELPER_EXECUTABLE_NAME,
@@ -21,6 +24,16 @@ const development = {
 };
 
 describe("keychain helper path", () => {
+  it("agrees with the packaging constants on the packaged resource path", () => {
+    expect(join(KEYCHAIN_HELPER_RESOURCE_DIRECTORY, KEYCHAIN_HELPER_EXECUTABLE_NAME)).toBe(
+      KEYCHAIN_HELPER_RESOURCE_PATH,
+    );
+  });
+
+  it("agrees with the build script on the development directory", () => {
+    expect(KEYCHAIN_HELPER_DEVELOPMENT_DIRECTORY).toBe(KEYCHAIN_HELPER_BUILD_DIRECTORY);
+  });
+
   it("resolves the packaged helper under the external resource directory", () => {
     expect(resolveKeychainHelperPath(packaged)).toBe(
       `/Applications/Enduragent.app/Contents/Resources/${KEYCHAIN_HELPER_RESOURCE_DIRECTORY}/${KEYCHAIN_HELPER_EXECUTABLE_NAME}`,
