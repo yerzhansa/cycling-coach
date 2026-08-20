@@ -10,15 +10,22 @@ import {
   type CoachClientTerminalEnvelope,
 } from "@enduragent/coach-client";
 import type {
+  ActivityRestriction,
   CoachOperationProgressNotificationEnvelope,
   SyncRpcResult,
 } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "./coach-client.js";
 
-export interface TrainingSyncDroppedActivities {
-  readonly sourceRestricted: number;
-  readonly other: number;
+interface TrainingSyncRestrictionWindow {
   readonly total: number;
+  readonly visible: number;
+  readonly restrictions: readonly ActivityRestriction[];
+  readonly other: number;
+}
+
+export interface TrainingSyncDroppedActivities {
+  readonly overall: TrainingSyncRestrictionWindow;
+  readonly recent7Days: TrainingSyncRestrictionWindow;
 }
 
 export type TrainingSyncState =
@@ -57,6 +64,27 @@ function isIndeterminateFailure(error: unknown): boolean {
   );
 }
 
+function isSameRestrictionWindow(
+  left: TrainingSyncRestrictionWindow,
+  right: TrainingSyncRestrictionWindow,
+): boolean {
+  return (
+    left.total === right.total &&
+    left.visible === right.visible &&
+    left.other === right.other &&
+    left.restrictions.length === right.restrictions.length &&
+    left.restrictions.every((entry, index) => {
+      const other = right.restrictions[index];
+      return (
+        other !== undefined &&
+        entry.reason === other.reason &&
+        entry.source === other.source &&
+        entry.count === other.count
+      );
+    })
+  );
+}
+
 function isSameTrainingSyncState(left: TrainingSyncState, right: TrainingSyncState): boolean {
   switch (left.status) {
     case "idle":
@@ -69,9 +97,14 @@ function isSameTrainingSyncState(left: TrainingSyncState, right: TrainingSyncSta
         right.status === "succeeded" &&
         right.operation === left.operation &&
         right.kind === left.kind &&
-        right.droppedActivities.sourceRestricted === left.droppedActivities.sourceRestricted &&
-        right.droppedActivities.other === left.droppedActivities.other &&
-        right.droppedActivities.total === left.droppedActivities.total
+        isSameRestrictionWindow(
+          right.droppedActivities.overall,
+          left.droppedActivities.overall,
+        ) &&
+        isSameRestrictionWindow(
+          right.droppedActivities.recent7Days,
+          left.droppedActivities.recent7Days,
+        )
       );
     case "failed":
       return (

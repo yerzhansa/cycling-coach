@@ -570,11 +570,13 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     const stub = (index: number) => ({
       id: 9000 + index,
       icuAthleteId: "i12345",
-      startDateLocal: daysAgo(2),
+      startDateLocal: daysAgo(index < 4 ? 2 : 20),
       source: "STRAVA",
     });
-    const foreign = { id: 8001, icuAthleteId: "i12345", startDateLocal: daysAgo(2), source: "GARMIN_CONNECT" };
-    const visible = Array.from({ length: 6 }, (_, index) => camelActivity({ id: index + 1 }));
+    const foreign = { id: 8001, icuAthleteId: "i12345", startDateLocal: daysAgo(20), source: "GARMIN_CONNECT" };
+    const visible = Array.from({ length: 6 }, (_, index) =>
+      camelActivity({ id: index + 1, startDateLocal: daysAgo(index === 0 ? 2 : 20) }),
+    );
     const activities = [...Array.from({ length: 60 }, (_, index) => stub(index)), foreign, ...visible];
     const { client } = fakeClient({ activities });
 
@@ -587,7 +589,20 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
     });
 
     expect(activities).toHaveLength(67);
-    expect(res.droppedActivities).toEqual({ sourceRestricted: 60, other: 1, total: 61 });
+    expect(res.droppedActivities).toEqual({
+      overall: {
+        total: 67,
+        visible: 6,
+        restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+        other: 1,
+      },
+      recent7Days: {
+        total: 5,
+        visible: 1,
+        restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+        other: 0,
+      },
+    });
   });
 
   it("reports no dropped activity rows when every row lands", async () => {
@@ -600,7 +615,10 @@ describe("fetchLiveBundle — real lib stream shapes + edge cases", () => {
       throttleMs: 0,
     });
 
-    expect(res.droppedActivities).toEqual({ sourceRestricted: 0, other: 0, total: 0 });
+    expect(res.droppedActivities).toEqual({
+      overall: { total: 1, visible: 1, restrictions: [], other: 0 },
+      recent7Days: { total: 1, visible: 1, restrictions: [], other: 0 },
+    });
   });
 
   it("treats a non-array activities body as empty (ok:true, malformed) without crashing", async () => {

@@ -16,6 +16,11 @@
 // `SYNC_OPERATION_TIMEOUT_MS` budget.
 
 import { snakeCaseKeys, type Activity as ManagedActivity } from "intervals-icu-api";
+import {
+  DroppedActivitiesSchema,
+  type ActivityRestriction,
+  type DroppedActivities,
+} from "@enduragent/coach-contract";
 import { serializeError } from "../../logging/serialize-error.js";
 import {
   REFERENCE_CAPTURE_STREAM_LIMIT,
@@ -108,18 +113,6 @@ export interface FetchEndpointError {
 
 export const SOURCE_RESTRICTED_PROVIDER = "STRAVA";
 
-export interface DroppedActivityCounts {
-  readonly sourceRestricted: number;
-  readonly other: number;
-  readonly total: number;
-}
-
-export const NO_DROPPED_ACTIVITIES: DroppedActivityCounts = Object.freeze({
-  sourceRestricted: 0,
-  other: 0,
-  total: 0,
-});
-
 export interface LiveFetchResult {
   /** Raw athlete object — cached verbatim as `latest.athlete_profile`. */
   readonly athleteProfile: unknown;
@@ -136,7 +129,7 @@ export interface LiveFetchResult {
   readonly adapterActivities: readonly ManagedActivity[];
   /** Sync wall-clock as an ISO string — the metric date-window anchor. */
   readonly frozenNow: string;
-  readonly droppedActivities: DroppedActivityCounts;
+  readonly droppedActivities: DroppedActivities;
   /** Endpoints that returned an error (athlete-profile, wellness) and were
    *  filled with empty fallbacks to keep the bundle well-typed. The gate turns
    *  a non-empty list into a hard-fail so a swallowed failure can no longer
@@ -307,24 +300,56 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const actSummary: RenameSummary = { skippedNonNumeric: {} };
   const wellSummary: RenameSummary = { skippedNonNumeric: {} };
 
+  const retentionCutoffMs = now.getTime() - LATEST_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const isRecent = (row: { readonly start_date_local?: unknown }): boolean => {
+    if (typeof row.start_date_local !== "string") return false;
+    const milliseconds = Date.parse(row.start_date_local);
+    return Number.isFinite(milliseconds) && milliseconds >= retentionCutoffMs;
+  };
   const activities: Activity[] = [];
-  let droppedSourceRestricted = 0;
-  let droppedOther = 0;
+  const droppedRows: Array<Record<string, unknown>> = [];
   for (const row of rawActivities) {
     try {
       activities.push(parseRenamedActivity(renameTpFieldsOnActivity(row, actSummary)));
     } catch (err) {
-      if (row.source === SOURCE_RESTRICTED_PROVIDER) droppedSourceRestricted += 1;
-      else droppedOther += 1;
+      droppedRows.push(row);
       log(
         `Reference: skipped malformed activity row: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
-  const droppedActivities: DroppedActivityCounts = Object.freeze({
-    sourceRestricted: droppedSourceRestricted,
-    other: droppedOther,
-    total: droppedSourceRestricted + droppedOther,
+  const restrictionsFor = (
+    rows: readonly Record<string, unknown>[],
+  ): ActivityRestriction[] => {
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      if (row.source !== SOURCE_RESTRICTED_PROVIDER) continue;
+      counts.set(row.source, (counts.get(row.source) ?? 0) + 1);
+    }
+    return [...counts]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([source, count]) => ({ reason: "source-restricted", source, count }));
+  };
+  const recentRawActivities = rawActivities.filter(isRecent);
+  const recentActivities = activities.filter(isRecent);
+  const recentDroppedRows = droppedRows.filter(isRecent);
+  const restrictions = restrictionsFor(droppedRows);
+  const recentRestrictions = restrictionsFor(recentDroppedRows);
+  const restrictedCount = restrictions.reduce((sum, entry) => sum + entry.count, 0);
+  const recentRestrictedCount = recentRestrictions.reduce((sum, entry) => sum + entry.count, 0);
+  const droppedActivities = DroppedActivitiesSchema.parse({
+    overall: {
+      total: rawActivities.length,
+      visible: activities.length,
+      restrictions,
+      other: droppedRows.length - restrictedCount,
+    },
+    recent7Days: {
+      total: recentRawActivities.length,
+      visible: recentActivities.length,
+      restrictions: recentRestrictions,
+      other: recentDroppedRows.length - recentRestrictedCount,
+    },
   });
   const wellness: WellnessDay[] = [];
   for (const row of rawWellness) {
@@ -353,13 +378,6 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
     ...(Object.keys(streams).length > 0 ? { streams } : {}),
     ...(athlete !== undefined ? { athlete } : {}),
   };
-
-  const retentionCutoffMs = now.getTime() - LATEST_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  const recentActivities = activities.filter((a) => {
-    if (typeof a.start_date_local !== "string") return false;
-    const ms = Date.parse(a.start_date_local);
-    return Number.isFinite(ms) && ms >= retentionCutoffMs;
-  });
 
   return {
     athleteProfile,

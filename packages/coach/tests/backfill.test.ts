@@ -12,6 +12,7 @@ import { createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import type { IntervalsIcuSource } from "@enduragent/sync-intervals-icu";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { EMPTY_DROPPED_ACTIVITIES } from "@enduragent/coach-contract";
 import {
   createIntervalsBackfillSource,
   runBackfillPages,
@@ -361,6 +362,7 @@ describe("incremental backfill pages", () => {
                   "legacy:reference": 0,
                 },
               },
+              droppedActivities: EMPTY_DROPPED_ACTIVITIES,
             };
           },
         },

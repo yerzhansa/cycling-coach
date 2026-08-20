@@ -25,7 +25,7 @@ const published: SyncRpcResult = {
   published: true,
   referenceSucceeded: true,
   requests: { store: 1, reference: 1, total: 2 },
-  droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+  droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
 };
 
 function deferred<T>(): {
@@ -149,13 +149,13 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 1,
       kind: "published",
-      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 
   it.each([
-    [true, true, { status: "succeeded", operation: 1, kind: "published", droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } }],
-    [false, true, { status: "succeeded", operation: 1, kind: "no-change", droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } }],
+    [true, true, { status: "succeeded", operation: 1, kind: "published", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } }],
+    [false, true, { status: "succeeded", operation: 1, kind: "no-change", droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } }],
     [true, false, { status: "failed", operation: 1, kind: "partial", retryable: true }],
     [false, false, { status: "failed", operation: 1, kind: "operation", retryable: true }],
   ] as const)(
@@ -177,7 +177,20 @@ describe("training sync coordinator", () => {
   it("carries the dropped-activity split onto the succeeded state", async () => {
     const result: SyncRpcResult = {
       ...published,
-      droppedActivities: { sourceRestricted: 60, other: 2, total: 62 },
+      droppedActivities: {
+        overall: {
+          total: 67,
+          visible: 5,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+          other: 2,
+        },
+        recent7Days: {
+          total: 5,
+          visible: 1,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+          other: 0,
+        },
+      },
     };
     const client = clientWith((options) => exactCall(options, result));
     const coordinator = createTrainingSyncCoordinator({
@@ -191,7 +204,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 1,
       kind: "published",
-      droppedActivities: { sourceRestricted: 60, other: 2, total: 62 },
+      droppedActivities: result.droppedActivities,
     });
   });
 
@@ -353,7 +366,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 2,
       kind: "published",
-      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 
@@ -385,7 +398,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 2,
       kind: "published",
-      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 
@@ -569,7 +582,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 1,
       kind: "published",
-      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 
@@ -605,7 +618,7 @@ describe("training sync coordinator", () => {
       status: "succeeded",
       operation: 2,
       kind: "published",
-      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
   });
 

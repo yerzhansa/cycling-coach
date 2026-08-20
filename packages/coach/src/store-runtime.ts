@@ -19,6 +19,10 @@ import type { ReferenceCaptureManifest } from "@enduragent/kernel/reference/capt
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { openReadonlySqliteStorage } from "@enduragent/kernel-node/sqlite";
+import {
+  EMPTY_DROPPED_ACTIVITIES,
+  type DroppedActivities,
+} from "@enduragent/coach-contract";
 import { join } from "node:path";
 import { runAnalyticsCurveRefresh } from "./analytics-curves.js";
 import { runReferenceCapture } from "./capture.js";
@@ -45,6 +49,7 @@ export interface StoreWindowResult {
   readonly published: boolean;
   readonly counts: PhysicalRequestCounts;
   readonly legacySucceeded: boolean;
+  readonly droppedActivities: DroppedActivities;
 }
 
 export interface StoreWriteResult<T> {
@@ -98,6 +103,7 @@ export class StoreRuntime {
   private activeController: AbortController | undefined;
   private activeBeforeWindowController: AbortController | undefined;
   private activeWindow: Promise<StoreWindowResult> | undefined;
+  private droppedActivitiesValue = EMPTY_DROPPED_ACTIVITIES;
   private admissionActive = false;
   private readonly admissionQueue: Array<() => void> = [];
   private readonly admissionDrainWaiters = new Set<() => void>();
@@ -198,6 +204,10 @@ export class StoreRuntime {
     });
     this.installActiveWindow(task);
     return task;
+  }
+
+  currentDroppedActivities(): DroppedActivities {
+    return this.droppedActivitiesValue;
   }
 
   runExclusive<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -442,11 +452,19 @@ LIMIT 1`,
       }
       const counts = ledger.snapshot();
       if (captureResult.status === "rejected") throw captureResult.reason;
+      const droppedActivities =
+        legacyResult.status === "fulfilled" && legacyResult.value.kind === "ran"
+          ? legacyResult.value.droppedActivities
+          : this.droppedActivitiesValue;
+      if (legacyResult.status === "fulfilled" && legacyResult.value.kind === "ran") {
+        this.droppedActivitiesValue = droppedActivities;
+      }
       return Object.freeze({
         published,
         counts,
         legacySucceeded:
           legacyResult.status === "fulfilled" && legacyResult.value.kind !== "failed",
+        droppedActivities,
       });
     } finally {
       admissionSignal.removeEventListener("abort", abortWindow);

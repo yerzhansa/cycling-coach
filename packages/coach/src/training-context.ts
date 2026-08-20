@@ -1,6 +1,7 @@
 import type {
   CyclingTrainingContext,
   CyclingZoneRow,
+  DroppedActivities,
   PowerProgressPanel,
   RecentRidesPanel,
   WellnessSeries,
@@ -22,6 +23,7 @@ export interface ProjectCyclingTrainingContextInput {
   readonly wellness: unknown;
   readonly performanceProgress?: PowerProgressPanel;
   readonly recentRides?: RecentRidesPanel;
+  readonly droppedActivities?: DroppedActivities;
 }
 
 const cyclingTypes = new Set<string>(cyclingSport.intervalsActivityTypes);

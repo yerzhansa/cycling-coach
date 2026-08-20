@@ -227,7 +227,8 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
         const row = objectRow(entry, "wellness row"), identity = wellnessIdentity(row);
         return { externalId: identity.id, startUtc: identity.instant.epochSeconds, localDate: identity.id, key: identity.key, row };
       }).sort((a, b) => compareBinary(a.key, b.key));
-      const droppedRows = scan === null ? ZERO_DROPPED_ACTIVITY_ROWS : scan.dropped;
+      const droppedRows =
+        scan === null || cursor.last_key !== null ? ZERO_DROPPED_ACTIVITY_ROWS : scan.dropped;
       const remaining = indexed.filter((entry) => cursor.last_key === null || compareBinary(entry.key, cursor.last_key) > 0);
       let processedKey = cursor.last_key;
       let processed = 0;
@@ -301,7 +302,8 @@ export function createIntervalsIcuSource(options: IntervalsIcuSourceOptions): In
     const activityTransport = await fetchJson(requester, "activities", { method: "GET", url: rangeUrl(athleteId, "activities", cursor) });
     await options.archive.writeSnapshot(activityTransport, rowInstant(epochForDate(cursor.requestStart ?? cursor.window_start)));
     const activityScan = activityIndex(activityTransport);
-    const droppedRows = activityScan.dropped;
+    const droppedRows =
+      cursor.last_key === null ? activityScan.dropped : ZERO_DROPPED_ACTIVITY_ROWS;
     const remaining = activityScan.rows.filter((entry) => cursor.last_key === null || compareBinary(entry.key, cursor.last_key) > 0);
     let processedKey = cursor.last_key, processed = 0;
 

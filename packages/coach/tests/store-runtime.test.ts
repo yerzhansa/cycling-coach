@@ -77,7 +77,7 @@ async function makeRuntime(
     services: {},
     runScheduledOnce: vi.fn(async () => {
       runtime.attemptLedgerForRun().charge("legacy", "legacy:reference");
-      return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [], droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } } as const;
+      return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [], droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } } as const;
     }),
   } as unknown as ReferenceRuntime;
   const capture = vi.fn(
@@ -166,6 +166,48 @@ describe("StoreRuntime", () => {
     await runtime.close();
   });
 
+  it("surfaces the current Reference restriction summary without persisting it", async () => {
+    const { runtime, reference } = await makeRuntime();
+    const droppedActivities = {
+      overall: {
+        total: 67,
+        visible: 5,
+        restrictions: [{ reason: "source-restricted" as const, source: "STRAVA", count: 60 }],
+        other: 2,
+      },
+      recent7Days: {
+        total: 5,
+        visible: 1,
+        restrictions: [{ reason: "source-restricted" as const, source: "STRAVA", count: 4 }],
+        other: 0,
+      },
+    };
+    vi.mocked(reference.runScheduledOnce).mockImplementationOnce(async () => {
+      runtime.attemptLedgerForRun().charge("legacy", "legacy:reference");
+      return {
+        kind: "ran",
+        lastSyncAt: "1998-07-18T12:00:00.000Z",
+        refreshed: [],
+        droppedActivities,
+      };
+    });
+
+    const result = await runtime.runWindow();
+
+    expect(result.droppedActivities).toEqual(droppedActivities);
+    expect(runtime.currentDroppedActivities()).toEqual(droppedActivities);
+    vi.mocked(reference.runScheduledOnce).mockImplementationOnce(async () => {
+      runtime.attemptLedgerForRun().charge("legacy", "legacy:reference");
+      return { kind: "failed", reason: "fetch_failed", failures: [] };
+    });
+
+    const failedRefresh = await runtime.runWindow();
+
+    expect(failedRefresh).toMatchObject({ legacySucceeded: false, droppedActivities });
+    expect(runtime.currentDroppedActivities()).toEqual(droppedActivities);
+    await runtime.close();
+  });
+
   it("waits for both base lanes before reserving optional curve capacity", async () => {
     const { runtime, refreshCurves, reference } = await makeRuntime();
     let releaseLegacy!: () => void;
@@ -179,7 +221,7 @@ describe("StoreRuntime", () => {
       await new Promise<void>((resolve) => {
         releaseLegacy = resolve;
       });
-      return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [], droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } };
+      return { kind: "ran", lastSyncAt: "1998-07-18T12:00:00.000Z", refreshed: [], droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } };
     });
 
     const window = runtime.runWindow();
@@ -283,7 +325,7 @@ describe("StoreRuntime", () => {
     const reference = {
       scheduler: { stop: vi.fn() },
       services: {},
-      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [], droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } })),
+      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [], droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } })),
     } as unknown as ReferenceRuntime;
     const capture = vi
       .fn<() => Promise<ReferenceCaptureManifest>>()
@@ -358,7 +400,7 @@ describe("StoreRuntime", () => {
     const reference = {
       scheduler: { stop: vi.fn() },
       services: {},
-      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [], droppedActivities: { sourceRestricted: 0, other: 0, total: 0 } })),
+      runScheduledOnce: vi.fn(async () => ({ kind: "ran", lastSyncAt: "", refreshed: [], droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } } })),
     } as unknown as ReferenceRuntime;
     const runtime = createStoreRuntime({
       env: {},

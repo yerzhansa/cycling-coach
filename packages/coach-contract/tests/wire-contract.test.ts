@@ -618,7 +618,7 @@ describe("coach request and event projection", () => {
       published: true,
       referenceSucceeded: true,
       requests: { store: 2, reference: 1, total: 3 },
-      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     } as const;
     expect(SyncRpcResultSchema.parse(syncResult)).toEqual(syncResult);
     for (const backfill of [
@@ -640,6 +640,77 @@ describe("coach request and event projection", () => {
         requests: { ...syncResult.requests, total: 4 },
       }).success,
     ).toBe(false);
+    const restricted = {
+      overall: {
+        total: 67,
+        visible: 5,
+        restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+        other: 2,
+      },
+      recent7Days: {
+        total: 5,
+        visible: 1,
+        restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+        other: 0,
+      },
+    } as const;
+    expect(
+      SyncRpcResultSchema.parse({ ...syncResult, droppedActivities: restricted })
+        .droppedActivities,
+    ).toEqual(restricted);
+    expect(
+      SyncRpcResultSchema.safeParse({
+        ...syncResult,
+        droppedActivities: {
+          overall: {
+            total: 67,
+            visible: 5,
+            restrictions: [
+              { reason: "source-restricted", source: "GARMIN_CONNECT", count: 10 },
+              { reason: "source-restricted", source: "STRAVA", count: 50 },
+            ],
+            other: 2,
+          },
+          recent7Days: {
+            total: 5,
+            visible: 1,
+            restrictions: [
+              { reason: "source-restricted", source: "GARMIN_CONNECT", count: 1 },
+              { reason: "source-restricted", source: "STRAVA", count: 3 },
+            ],
+            other: 0,
+          },
+        },
+      }).success,
+    ).toBe(true);
+    for (const droppedActivities of [
+      { ...restricted, overall: { ...restricted.overall, total: 68 } },
+      {
+        ...restricted,
+        recent7Days: {
+          total: 62,
+          visible: 1,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 61 }],
+          other: 0,
+        },
+      },
+      {
+        ...restricted,
+        overall: {
+          total: 67,
+          visible: 5,
+          restrictions: [
+            { reason: "source-restricted", source: "STRAVA", count: 30 },
+            { reason: "source-restricted", source: "STRAVA", count: 30 },
+          ],
+          other: 2,
+        },
+      },
+    ]) {
+      expect(
+        SyncRpcResultSchema.safeParse({ ...syncResult, droppedActivities }).success,
+      ).toBe(false);
+    }
     expect(
       OperationProgressEventSchema.parse({ phase: "started", completed: 0, total: 1 }),
     ).toEqual({ phase: "started", completed: 0, total: 1 });
@@ -1065,7 +1136,7 @@ describe("coach request and event projection", () => {
         published: false,
         referenceSucceeded: true,
         requests: { store: 0, reference: 0, total: 0 },
-        droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+        droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
       }),
       getSetupStatus: async () => ({
         schemaVersion: 1,
@@ -1846,7 +1917,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version eighteen", () => {
+  it("uses protocol version nineteen", () => {
     expect(PROTOCOL_VERSION).toBe(19);
   });
 });

@@ -7,6 +7,7 @@ import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import { runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { LocalStoreRuntime } from "../src/composition.js";
+import { EMPTY_DROPPED_ACTIVITIES, type DroppedActivities } from "@enduragent/coach-contract";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 import { createCoachOperations } from "../src/operations.js";
 
@@ -56,7 +57,13 @@ function promiseGate(): { readonly promise: Promise<void>; release(): void } {
 }
 
 function operationRuntime(
-  runWindowAfter: LocalStoreRuntime["runWindowAfter"] = async (work) => {
+  runWindowAfter: (
+    work: (signal: AbortSignal) => Promise<void>,
+  ) => Promise<
+    Omit<Awaited<ReturnType<LocalStoreRuntime["runWindowAfter"]>>, "droppedActivities"> & {
+      readonly droppedActivities?: DroppedActivities;
+    }
+  > = async (work) => {
     await work(new AbortController().signal);
     return {
       published: false,
@@ -81,7 +88,14 @@ function operationRuntime(
       value: await runExclusive(work),
       activityReadAvailable: true,
     }),
-    runWindowAfter: (work) => runExclusive(() => runWindowAfter(work)),
+    runWindowAfter: (work) =>
+      runExclusive(async () => {
+        const result = await runWindowAfter(work);
+        return {
+          ...result,
+          droppedActivities: result.droppedActivities ?? EMPTY_DROPPED_ACTIVITIES,
+        };
+      }),
   };
 }
 
@@ -513,7 +527,7 @@ describe("coach operations", () => {
       published: true,
       referenceSucceeded: false,
       requests: { store: 2, reference: 1, total: 3 },
-      droppedActivities: { sourceRestricted: 0, other: 0, total: 0 },
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
     expect(importFiles).toHaveBeenCalledTimes(1);
     expect(runWindowAfter).toHaveBeenCalledTimes(1);
@@ -659,6 +673,20 @@ describe("coach operations", () => {
         published: true,
         legacySucceeded: true,
         counts: requestCounts(3, 2),
+        droppedActivities: {
+          overall: {
+            total: 67,
+            visible: 5,
+            restrictions: [{ reason: "source-restricted" as const, source: "STRAVA", count: 60 }],
+            other: 2,
+          },
+          recent7Days: {
+            total: 5,
+            visible: 1,
+            restrictions: [{ reason: "source-restricted" as const, source: "STRAVA", count: 4 }],
+            other: 0,
+          },
+        },
       };
     });
     const operations = createCoachOperations(
@@ -698,7 +726,20 @@ describe("coach operations", () => {
       published: true,
       referenceSucceeded: true,
       requests: { store: 3, reference: 2, total: 5 },
-      droppedActivities: { sourceRestricted: 60, other: 2, total: 62 },
+      droppedActivities: {
+        overall: {
+          total: 67,
+          visible: 5,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+          other: 2,
+        },
+        recent7Days: {
+          total: 5,
+          visible: 1,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+          other: 0,
+        },
+      },
     });
     const terminal = JSON.stringify(result);
     for (const privateValue of [
