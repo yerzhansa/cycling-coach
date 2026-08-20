@@ -13,6 +13,7 @@ export const KEYCHAIN_HELPER_ERROR_CODES = [
   "keychain-locked",
   "duplicate-item",
   "unreadable-item",
+  "uninspectable-item",
   "unknown",
 ] as const;
 

@@ -4,6 +4,10 @@ import {
   selectDesktopCredentialBackend,
   type DesktopCredentialBackendSelection,
 } from "./credential-backend-selection.js";
+import type {
+  CredentialEnvelopeLockProof,
+  SerializeCredentialEnvelopeMutation,
+} from "./credential-envelope-lock.js";
 import type { CredentialEnvelopeRoots } from "./credential-envelope-inventory.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
 import { createRefusingKeychainEncryption } from "./keychain-credential-encryption.js";
@@ -33,7 +37,8 @@ export interface DesktopCredentialEncryption {
   readonly encryption: CredentialEncryptionPort;
   readonly selection: DesktopCredentialBackendSelection;
   readonly service: string;
-  retireKeychainKey(): Promise<KeychainKeyRetirement | undefined>;
+  prepareEnvelopeWrite(proof: CredentialEnvelopeLockProof): Promise<void>;
+  retireKeychainKey(proof: CredentialEnvelopeLockProof): Promise<KeychainKeyRetirement | undefined>;
 }
 
 export interface PrepareDesktopCredentialEncryptionOptions extends CredentialEnvelopeRoots {
@@ -41,6 +46,7 @@ export interface PrepareDesktopCredentialEncryptionOptions extends CredentialEnv
   readonly safeStorage: CredentialEncryptionPort;
   readonly createTransport?: (helperPath: string) => KeychainHelperTransport;
   readonly helperIsExecutable?: (helperPath: string) => Promise<boolean>;
+  readonly serializeEnvelopeMutation: SerializeCredentialEnvelopeMutation;
 }
 
 async function helperIsExecutableFile(helperPath: string): Promise<boolean> {
@@ -69,8 +75,10 @@ export async function prepareDesktopCredentialEncryption(
       helperPath !== undefined &&
       (await (options.helperIsExecutable ?? helperIsExecutableFile)(helperPath));
     if (usableHelper && helperPath !== undefined) {
-      transport = (options.createTransport ??
-        ((path: string) => createKeychainHelperTransport({ helperPath: path })))(helperPath);
+      transport = (
+        options.createTransport ??
+        ((path: string) => createKeychainHelperTransport({ helperPath: path }))
+      )(helperPath);
     }
     selection = await selectDesktopCredentialBackend({
       ...roots,
@@ -78,6 +86,7 @@ export async function prepareDesktopCredentialEncryption(
       service,
       safeStorage: options.safeStorage,
       platform: options.location.platform,
+      serializeEnvelopeMutation: options.serializeEnvelopeMutation,
     });
   } catch {
     selection = {
@@ -91,13 +100,18 @@ export async function prepareDesktopCredentialEncryption(
     encryption: selection.encryption,
     selection,
     service,
-    async retireKeychainKey(): Promise<KeychainKeyRetirement | undefined> {
+    async prepareEnvelopeWrite(proof: CredentialEnvelopeLockProof): Promise<void> {
+      if (selection.status !== "keychain") return;
+      await selection.prepareKey(proof);
+    },
+    async retireKeychainKey(
+      proof: CredentialEnvelopeLockProof,
+    ): Promise<KeychainKeyRetirement | undefined> {
       if (selection.status !== "keychain") return undefined;
       return await retireKeychainKeyWhenLastEnvelopeGone({
         ...roots,
-        transport,
-        service,
-        rotate: selection.rotateKey,
+        lockProof: proof,
+        deleteKey: selection.deleteKey,
       });
     },
   };

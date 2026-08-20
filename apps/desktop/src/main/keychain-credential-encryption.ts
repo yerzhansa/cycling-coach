@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import type { CredentialEnvelopeLockProof } from "./credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
 import {
   KEYCHAIN_KEY_BYTES,
@@ -61,7 +62,8 @@ export type KeychainPartitionEncryptionResult =
       readonly status: "ready";
       readonly encryption: CredentialEncryptionPort;
       readonly createdKey: boolean;
-      readonly rotateKey: () => Promise<KeychainKeyRotation>;
+      readonly prepareKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyPreparation>;
+      readonly deleteKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyDeletion>;
     }
   | {
       readonly status: "unavailable";
@@ -81,6 +83,8 @@ export type KeychainPartitionEncryptionResult =
 export interface CreateKeychainPartitionEncryptionOptions {
   readonly transport: KeychainHelperTransport;
   readonly service: string;
+  readonly dependentEnvelopes: number;
+  readonly lockProof: CredentialEnvelopeLockProof;
 }
 
 export function createRefusingKeychainEncryption(
@@ -98,8 +102,12 @@ export function createRefusingKeychainEncryption(
   };
 }
 
-export type KeychainKeyRotation =
-  | Readonly<{ status: "rotated" }>
+export type KeychainKeyPreparation =
+  | Readonly<{ status: "ready" }>
+  | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>;
+
+export type KeychainKeyDeletion =
+  | Readonly<{ status: "deleted" | "already-absent" }>
   | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>;
 
 interface KeyHolder {
@@ -121,7 +129,7 @@ function readyPort(holder: KeyHolder): CredentialEncryptionPort {
 }
 
 function refused(code: KeychainHelperErrorCode): KeychainPartitionEncryptionResult {
-  if (code === "keychain-locked") {
+  if (code === "keychain-locked" || code === "uninspectable-item" || code === "item-not-found") {
     return {
       status: "unavailable",
       code,
@@ -149,38 +157,52 @@ export async function createKeychainPartitionEncryption(
     return refused("unknown");
   }
 
+  const createMaterial = async (): Promise<
+    | Readonly<{ status: "ready"; key: Buffer }>
+    | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>
+  > => {
+    const created = await transport.send({ op: "create-key", service });
+    if (!created.ok) return { status: "failed", code: created.code };
+    if (created.op !== "create-key") return { status: "failed", code: "unknown" };
+    const key = Buffer.from(created.key, "base64");
+    return key.length === KEYCHAIN_KEY_BYTES
+      ? { status: "ready", key }
+      : { status: "failed", code: "unknown" };
+  };
+
   const ready = (key: Buffer, createdKey: boolean): KeychainPartitionEncryptionResult => {
-    const holder: KeyHolder = { key, failure: "unknown" };
-    const rotateKey = async (): Promise<KeychainKeyRotation> => {
-      const deleted = await transport.send({ op: "delete-key", service });
-      if (!deleted.ok) return { status: "failed", code: deleted.code };
-      if (deleted.op !== "delete-key") return { status: "failed", code: "unknown" };
-      const created = await transport.send({ op: "create-key", service });
-      const failure = created.ok ? "unknown" : created.code;
-      if (!created.ok || created.op !== "create-key") {
-        holder.key = null;
-        holder.failure = failure;
-        return { status: "failed", code: failure };
+    const holder: KeyHolder = { key, failure: "item-not-found" };
+    const prepareKey = async (): Promise<KeychainKeyPreparation> => {
+      if (holder.key !== null) return { status: "ready" };
+      const created = await createMaterial();
+      if (created.status === "failed") {
+        holder.failure = created.code;
+        return created;
       }
-      const next = Buffer.from(created.key, "base64");
-      if (next.length !== KEYCHAIN_KEY_BYTES) {
-        holder.key = null;
-        holder.failure = "unknown";
-        return { status: "failed", code: "unknown" };
-      }
-      holder.key = next;
-      return { status: "rotated" };
+      holder.key = created.key;
+      holder.failure = "item-not-found";
+      return { status: "ready" };
     };
-    return { status: "ready", encryption: readyPort(holder), createdKey, rotateKey };
+    const deleteKey = async (): Promise<KeychainKeyDeletion> => {
+      const previous = holder.key;
+      holder.key = null;
+      const deleted = await transport.send({ op: "delete-key", service });
+      if (!deleted.ok || deleted.op !== "delete-key") {
+        const code = deleted.ok ? "unknown" : deleted.code;
+        holder.key = previous;
+        holder.failure = code;
+        return { status: "failed", code };
+      }
+      previous?.fill(0);
+      holder.failure = "item-not-found";
+      return { status: deleted.deleted ? "deleted" : "already-absent" };
+    };
+    return { status: "ready", encryption: readyPort(holder), createdKey, prepareKey, deleteKey };
   };
 
   const create = async (): Promise<KeychainPartitionEncryptionResult> => {
-    const created = await transport.send({ op: "create-key", service });
-    if (!created.ok) return refused(created.code);
-    if (created.op !== "create-key") return refused("unknown");
-    const key = Buffer.from(created.key, "base64");
-    if (key.length !== KEYCHAIN_KEY_BYTES) return refused("unknown");
-    return ready(key, true);
+    const created = await createMaterial();
+    return created.status === "ready" ? ready(created.key, true) : refused(created.code);
   };
 
   const read = await transport.send({ op: "read-key", service });
@@ -190,8 +212,11 @@ export async function createKeychainPartitionEncryption(
     if (key.length !== KEYCHAIN_KEY_BYTES) return refused("unknown");
     return ready(key, false);
   }
-  if (read.code === "item-not-found") return create();
+  if (read.code === "item-not-found") {
+    return options.dependentEnvelopes === 0 ? create() : refused(read.code);
+  }
   if (read.code !== "unreadable-item") return refused(read.code);
+  if (options.dependentEnvelopes > 0) return refused(read.code);
 
   const deleted = await transport.send({ op: "delete-key", service });
   if (!deleted.ok) return refused(deleted.code);

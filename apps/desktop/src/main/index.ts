@@ -69,6 +69,10 @@ import {
   type CredentialSlotStatus,
   type DesktopCredentialSlot,
 } from "./credential-vault.js";
+import {
+  createCredentialEnvelopeMutationLock,
+  type CredentialEnvelopeLockProof,
+} from "./credential-envelope-lock.js";
 import { prepareDesktopCredentialEncryption } from "./desktop-credential-encryption.js";
 import {
   DesktopDaemonLifecycle,
@@ -414,6 +418,7 @@ async function runDesktop(): Promise<void> {
       app.getPath("userData"),
       TELEGRAM_CREDENTIAL_DIRECTORY_NAME,
     );
+    const serializeCredentialEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const credentialEncryption = await prepareDesktopCredentialEncryption({
       credentialRoot,
       telegramRoot: telegramCredentialRoot,
@@ -424,9 +429,17 @@ async function runDesktop(): Promise<void> {
         applicationPath: app.getAppPath(),
       },
       safeStorage,
+      serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
     });
-    const retireCredentialEncryptionKey = async (): Promise<void> => {
-      await credentialEncryption.retireKeychainKey();
+    const prepareCredentialEnvelopeWrite = async (
+      proof: CredentialEnvelopeLockProof,
+    ): Promise<void> => {
+      await credentialEncryption.prepareEnvelopeWrite(proof);
+    };
+    const retireCredentialEncryptionKey = async (
+      proof: CredentialEnvelopeLockProof,
+    ): Promise<void> => {
+      await credentialEncryption.retireKeychainKey(proof);
     };
     if (process.platform === "darwin") {
       const selected = credentialEncryption.selection;
@@ -442,6 +455,8 @@ async function runDesktop(): Promise<void> {
       athleteHome: selectedAthleteHome,
       encryption: credentialEncryption.encryption,
       observeSecureStorageFailure: telegramSecureStorageDiagnostics,
+      serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
+      prepareEnvelopeWrite: prepareCredentialEnvelopeWrite,
       observeEnvelopeRemoved: retireCredentialEncryptionKey,
     });
     let activeTelegramBinding: TelegramDaemonBinding | undefined;
@@ -474,9 +489,7 @@ async function runDesktop(): Promise<void> {
     let windowCreation: Promise<BrowserWindow> | undefined;
     const rendererNavigationTracker = createDesktopRendererNavigationTracker<BrowserWindow>();
     const currentWindow = (): BrowserWindow | null =>
-      window !== null && !window.isDestroyed() && !window.webContents.isDestroyed()
-        ? window
-        : null;
+      window !== null && !window.isDestroyed() && !window.webContents.isDestroyed() ? window : null;
     const startRendererNavigation = (
       target: BrowserWindow,
       navigationUrl: string,
@@ -706,6 +719,8 @@ async function runDesktop(): Promise<void> {
     const vault = createCredentialVault({
       root: credentialRoot,
       encryption: credentialEncryption.encryption,
+      serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
+      prepareEnvelopeWrite: prepareCredentialEnvelopeWrite,
       observeEnvelopeRemoved: retireCredentialEncryptionKey,
       runtimeState: credentialRuntimeState,
       onRuntimeStateChange: markCredentialRuntimeChange,
@@ -1014,10 +1029,8 @@ async function runDesktop(): Promise<void> {
               shouldReleaseInitialRefreshForWindowEvent(
                 currentWindow(),
                 created,
-                connectionIpc?.isCurrentDocumentNavigation(
-                  created,
-                  created.webContents.getURL(),
-                ) ?? false,
+                connectionIpc?.isCurrentDocumentNavigation(created, created.webContents.getURL()) ??
+                  false,
               )
             ) {
               void initialRefreshCoordinator.releaseCurrent();

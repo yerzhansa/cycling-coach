@@ -12,6 +12,7 @@ import {
   credentialEnvelopeKeyId,
   scanCredentialEnvelopes,
 } from "../src/main/credential-envelope-inventory.js";
+import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import {
   createLegacyReadFallbackEncryption,
   migrateCredentialEnvelopes,
@@ -92,13 +93,18 @@ function transportOf(...responses: readonly KeychainHelperResponse[]): KeychainH
 async function keychainEncryption(
   key: Buffer = randomBytes(KEYCHAIN_KEY_BYTES),
 ): Promise<CredentialEncryptionPort> {
-  const result = await createKeychainPartitionEncryption({
-    transport: transportOf(
-      { ok: true, op: "probe", teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER },
-      { ok: true, op: "read-key", key: key.toString("base64") },
-    ),
-    service: KEYCHAIN_CREDENTIAL_SERVICE,
-  });
+  const serialize = createCredentialEnvelopeMutationLock();
+  const result = await serialize((lockProof) =>
+    createKeychainPartitionEncryption({
+      transport: transportOf(
+        { ok: true, op: "probe", teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER },
+        { ok: true, op: "read-key", key: key.toString("base64") },
+      ),
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+      dependentEnvelopes: 0,
+      lockProof,
+    }),
+  );
   if (result.status !== "ready") throw new TypeError();
   return result.encryption;
 }

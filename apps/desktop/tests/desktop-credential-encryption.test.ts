@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "../src/main/credential-vault.js";
 import {
   desktopKeychainCredentialService,
@@ -81,6 +82,7 @@ function options(
       applicationPath: "/Applications/Enduragent.app/Contents/Resources/app.asar",
     },
     helperIsExecutable: async () => true,
+    serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
     ...overrides,
   };
 }
@@ -93,7 +95,11 @@ describe("desktop credential encryption startup", () => {
   });
 
   it("asks the packaged lane for the signed-release service exactly once per key acquisition", async () => {
-    const transport = transportOf(PROBE_OK, { ok: true, op: "read-key", key: KEY.toString("base64") });
+    const transport = transportOf(PROBE_OK, {
+      ok: true,
+      op: "read-key",
+      key: KEY.toString("base64"),
+    });
 
     const prepared = await prepareDesktopCredentialEncryption(
       options({ createTransport: () => transport }),
@@ -111,7 +117,11 @@ describe("desktop credential encryption startup", () => {
   });
 
   it("never lets an unpackaged run touch the signed-release service", async () => {
-    const transport = transportOf(PROBE_OK, { ok: true, op: "read-key", key: KEY.toString("base64") });
+    const transport = transportOf(PROBE_OK, {
+      ok: true,
+      op: "read-key",
+      key: KEY.toString("base64"),
+    });
 
     const prepared = await prepareDesktopCredentialEncryption(
       options({
@@ -160,11 +170,13 @@ describe("desktop credential encryption startup", () => {
     const createTransport = vi.fn(() => transportOf());
     const helperIsExecutable = vi.fn(async () => true);
 
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const prepared = await prepareDesktopCredentialEncryption(
       options({
         safeStorage,
         createTransport,
         helperIsExecutable,
+        serializeEnvelopeMutation,
         location: {
           platform: "win32",
           packaged: true,
@@ -178,7 +190,9 @@ describe("desktop credential encryption startup", () => {
     expect(prepared.selection.status).toBe("safe-storage");
     expect(createTransport).not.toHaveBeenCalled();
     expect(helperIsExecutable).not.toHaveBeenCalled();
-    await expect(prepared.retireKeychainKey()).resolves.toBeUndefined();
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
+    ).resolves.toBeUndefined();
   });
 
   it("falls back to safeStorage when the bundled helper cannot run and nothing is migrated", async () => {
@@ -232,7 +246,7 @@ describe("desktop credential encryption startup", () => {
     );
   });
 
-  it("retires the key only when the keychain backend is live and every envelope is gone", async () => {
+  it("deletes after a zero-envelope census and recreates before a later write", async () => {
     const replacement = randomBytes(KEY.length);
     const transport = transportOf(
       PROBE_OK,
@@ -241,20 +255,28 @@ describe("desktop credential encryption startup", () => {
       { ok: true, op: "create-key", key: replacement.toString("base64") },
     );
 
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const prepared = await prepareDesktopCredentialEncryption(
-      options({ createTransport: () => transport }),
+      options({ createTransport: () => transport, serializeEnvelopeMutation }),
     );
 
-    await expect(prepared.retireKeychainKey()).resolves.toEqual({ status: "rotated" });
-    expect(transport.requests.slice(-2)).toEqual([
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
+    ).resolves.toEqual({ status: "deleted" });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.slice(-1)).toEqual([
       { op: "delete-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
+    ]);
+
+    await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
+    expect(transport.requests.slice(-1)).toEqual([
       { op: "create-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
     ]);
     const sealed = prepared.encryption.encryptString("post-retirement-secret");
     expect(prepared.encryption.decryptString(sealed)).toBe("post-retirement-secret");
   });
 
-  it("refuses to seal under the old key when rotation cannot mint a replacement", async () => {
+  it("refuses to seal when a later write cannot recreate the retired key", async () => {
     const transport = transportOf(
       PROBE_OK,
       { ok: true, op: "read-key", key: KEY.toString("base64") },
@@ -262,47 +284,57 @@ describe("desktop credential encryption startup", () => {
       { ok: false, code: "keychain-locked" },
     );
 
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const prepared = await prepareDesktopCredentialEncryption(
-      options({ createTransport: () => transport }),
+      options({ createTransport: () => transport, serializeEnvelopeMutation }),
     );
 
-    await expect(prepared.retireKeychainKey()).resolves.toEqual({
-      status: "failed",
-      code: "keychain-locked",
-    });
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
+    ).resolves.toEqual({ status: "deleted" });
+    await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
     expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
     expect(() => prepared.encryption.encryptString("orphan-candidate")).toThrow();
   });
 
   it("keeps the key while any envelope survives in either vault", async () => {
-    const transport = transportOf(PROBE_OK, { ok: true, op: "read-key", key: KEY.toString("base64") });
+    const transport = transportOf(PROBE_OK, {
+      ok: true,
+      op: "read-key",
+      key: KEY.toString("base64"),
+    });
 
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const prepared = await prepareDesktopCredentialEncryption(
       options({
         createTransport: () => transport,
         readEnvelopeFile: migratedTelegramEnvelope(),
+        serializeEnvelopeMutation,
       }),
     );
 
-    await expect(prepared.retireKeychainKey()).resolves.toEqual({
-      status: "retained",
-      envelopes: 1,
-    });
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
+    ).resolves.toEqual({ status: "retained", envelopes: 1 });
     expect(transport.requests.some((request) => request.op === "delete-key")).toBe(false);
   });
 
   it("never deletes a keychain item from a refusing or safeStorage lane", async () => {
     const transport = transportOf({ ok: false, code: "keychain-locked" });
 
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const prepared = await prepareDesktopCredentialEncryption(
       options({
         createTransport: () => transport,
         readEnvelopeFile: migratedTelegramEnvelope(),
+        serializeEnvelopeMutation,
       }),
     );
 
     expect(prepared.selection.status).toBe("refused");
-    await expect(prepared.retireKeychainKey()).resolves.toBeUndefined();
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
+    ).resolves.toBeUndefined();
     expect(transport.requests.some((request) => request.op === "delete-key")).toBe(false);
   });
 });
@@ -337,12 +369,11 @@ describe("desktop startup wiring", () => {
     expect(source.slice(report - 400, report)).toMatch(/process\.platform === "darwin"/u);
   });
 
-  it("retires the keychain key from both envelope-deletion paths", async () => {
+  it("uses one shared lock for both envelope-deletion paths", async () => {
     const source = await readFile(resolve(import.meta.dirname, "../src/main/index.ts"), "utf8");
 
-    expect(source).toMatch(/credentialEncryption\.retireKeychainKey\(\)/u);
-    expect(
-      source.split("observeEnvelopeRemoved: retireCredentialEncryptionKey"),
-    ).toHaveLength(3);
+    expect(source).toMatch(/credentialEncryption\.retireKeychainKey\(proof\)/u);
+    expect(source.split("createCredentialEnvelopeMutationLock()")).toHaveLength(2);
+    expect(source.split("observeEnvelopeRemoved: retireCredentialEncryptionKey")).toHaveLength(3);
   });
 });

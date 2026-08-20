@@ -8,6 +8,10 @@ import {
   type CredentialEncryptionPort,
 } from "../src/main/credential-vault.js";
 import {
+  createCredentialEnvelopeMutationLock,
+  type CredentialEnvelopeLockProof,
+} from "../src/main/credential-envelope-lock.js";
+import {
   openCredentialEnvelope,
   sealCredentialEnvelope,
 } from "../src/main/keychain-credential-encryption.js";
@@ -69,21 +73,39 @@ function transportOf(...responses: readonly KeychainHelperResponse[]) {
   };
 }
 
+async function retireKey(
+  roots: Fixture,
+  transport: ReturnType<typeof transportOf>,
+  lockProof: CredentialEnvelopeLockProof,
+) {
+  return await retireKeychainKeyWhenLastEnvelopeGone({
+    ...roots,
+    lockProof,
+    deleteKey: async () => {
+      const deleted = await transport.send({
+        op: "delete-key",
+        service: KEYCHAIN_CREDENTIAL_SERVICE,
+      });
+      if (!deleted.ok) return { status: "failed", code: deleted.code };
+      if (deleted.op !== "delete-key") return { status: "failed", code: "unknown" };
+      return { status: deleted.deleted ? "deleted" : "already-absent" };
+    },
+  });
+}
+
 describe("keychain key retirement call sites", () => {
   posixIt("retires the key when deleting the last credential envelope", async () => {
     const roots = await fixture();
     const encryption = keychainPort(randomBytes(KEYCHAIN_KEY_BYTES));
     const transport = transportOf({ ok: true, op: "delete-key", deleted: true });
-    const observeEnvelopeRemoved = vi.fn(async () => {
-      await retireKeychainKeyWhenLastEnvelopeGone({
-        ...roots,
-        transport,
-        service: KEYCHAIN_CREDENTIAL_SERVICE,
-      });
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const observeEnvelopeRemoved = vi.fn(async (proof: CredentialEnvelopeLockProof) => {
+      await retireKey(roots, transport, proof);
     });
     const vault = createCredentialVault({
       root: roots.credentialRoot,
       encryption,
+      serializeEnvelopeMutation,
       observeEnvelopeRemoved,
       applyCredential: vi.fn(async () => undefined),
       clearCredential: vi.fn(async () => "cleared" as const),
@@ -106,15 +128,13 @@ describe("keychain key retirement call sites", () => {
     const roots = await fixture();
     const encryption = keychainPort(randomBytes(KEYCHAIN_KEY_BYTES));
     const transport = transportOf();
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const vault = createCredentialVault({
       root: roots.credentialRoot,
       encryption,
-      observeEnvelopeRemoved: async () => {
-        await retireKeychainKeyWhenLastEnvelopeGone({
-          ...roots,
-          transport,
-          service: KEYCHAIN_CREDENTIAL_SERVICE,
-        });
+      serializeEnvelopeMutation,
+      observeEnvelopeRemoved: async (proof) => {
+        await retireKey(roots, transport, proof);
       },
       applyCredential: vi.fn(async () => undefined),
       clearCredential: vi.fn(async () => "cleared" as const),
@@ -136,17 +156,15 @@ describe("keychain key retirement call sites", () => {
     const roots = await fixture();
     const encryption = keychainPort(randomBytes(KEYCHAIN_KEY_BYTES));
     const transport = transportOf({ ok: true, op: "delete-key", deleted: true });
-    const observeEnvelopeRemoved = vi.fn(async () => {
-      await retireKeychainKeyWhenLastEnvelopeGone({
-        ...roots,
-        transport,
-        service: KEYCHAIN_CREDENTIAL_SERVICE,
-      });
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const observeEnvelopeRemoved = vi.fn(async (proof: CredentialEnvelopeLockProof) => {
+      await retireKey(roots, transport, proof);
     });
     const vault = createTelegramCredentialVault({
       root: roots.telegramRoot,
       athleteHome: roots.athleteHome,
       encryption,
+      serializeEnvelopeMutation,
       observeEnvelopeRemoved,
     });
     await expect(
@@ -169,24 +187,26 @@ describe("keychain key retirement call sites", () => {
     const roots = await fixture();
     const encryption = keychainPort(randomBytes(KEYCHAIN_KEY_BYTES));
     const transport = transportOf();
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const credentials = createCredentialVault({
       root: roots.credentialRoot,
       encryption,
+      serializeEnvelopeMutation,
       applyCredential: vi.fn(async () => undefined),
     });
     await expect(
-      credentials.writeCredential({ slot: "anthropic", value: "sk-anthropic" }, { activate: false }),
+      credentials.writeCredential(
+        { slot: "anthropic", value: "sk-anthropic" },
+        { activate: false },
+      ),
     ).resolves.toMatchObject({ status: "configured" });
     const vault = createTelegramCredentialVault({
       root: roots.telegramRoot,
       athleteHome: roots.athleteHome,
       encryption,
-      observeEnvelopeRemoved: async () => {
-        await retireKeychainKeyWhenLastEnvelopeGone({
-          ...roots,
-          transport,
-          service: KEYCHAIN_CREDENTIAL_SERVICE,
-        });
+      serializeEnvelopeMutation,
+      observeEnvelopeRemoved: async (proof) => {
+        await retireKey(roots, transport, proof);
       },
     });
     await expect(
@@ -205,9 +225,11 @@ describe("keychain key retirement call sites", () => {
   posixIt("never fails a deletion because retirement threw", async () => {
     const roots = await fixture();
     const encryption = keychainPort(randomBytes(KEYCHAIN_KEY_BYTES));
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const vault = createCredentialVault({
       root: roots.credentialRoot,
       encryption,
+      serializeEnvelopeMutation,
       observeEnvelopeRemoved: async () => {
         throw new Error("synthetic retirement failure");
       },
@@ -221,5 +243,68 @@ describe("keychain key retirement call sites", () => {
     await expect(vault.deleteCredential("anthropic")).resolves.toMatchObject({
       status: "deleted",
     });
+  });
+
+  posixIt("blocks a write in the other vault through the zero-envelope census", async () => {
+    const roots = await fixture();
+    const key = randomBytes(KEYCHAIN_KEY_BYTES);
+    const baseEncryption = keychainPort(key);
+    let seals = 0;
+    const encryption: CredentialEncryptionPort = {
+      ...baseEncryption,
+      encryptString(value) {
+        seals += 1;
+        return baseEncryption.encryptString(value);
+      },
+    };
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const transport = transportOf({ ok: true, op: "delete-key", deleted: true });
+    let releaseRetirement: (() => void) | undefined;
+    let markRetirementStarted: (() => void) | undefined;
+    const retirementBlocked = new Promise<void>((resolve) => {
+      releaseRetirement = resolve;
+    });
+    const retirementStarted = new Promise<void>((resolve) => {
+      markRetirementStarted = resolve;
+    });
+    const credentials = createCredentialVault({
+      root: roots.credentialRoot,
+      encryption,
+      serializeEnvelopeMutation,
+      observeEnvelopeRemoved: async (proof) => {
+        markRetirementStarted?.();
+        await retirementBlocked;
+        await retireKey(roots, transport, proof);
+      },
+      applyCredential: vi.fn(async () => undefined),
+      clearCredential: vi.fn(async () => "cleared" as const),
+    });
+    const telegram = createTelegramCredentialVault({
+      root: roots.telegramRoot,
+      athleteHome: roots.athleteHome,
+      encryption,
+      serializeEnvelopeMutation,
+    });
+    await credentials.writeCredential(
+      { slot: "anthropic", value: "sk-anthropic" },
+      { activate: false },
+    );
+    seals = 0;
+
+    const deletion = credentials.deleteCredential("anthropic");
+    await retirementStarted;
+    const write = telegram.replaceProfile({
+      token: "123:synthetic",
+      bot: BOT,
+      authenticatedAthleteHome: roots.athleteHome,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(seals).toBe(0);
+    releaseRetirement?.();
+    await expect(deletion).resolves.toMatchObject({ status: "deleted" });
+    await expect(write).resolves.toMatchObject({ outcome: "applied" });
+    expect(seals).toBe(1);
   });
 });

@@ -44,7 +44,7 @@ func mapStatus(_ status: OSStatus) -> String {
   case errSecInteractionNotAllowed, errSecInteractionRequired, errSecNotAvailable:
     return "keychain-locked"
   case errSecAuthFailed:
-    return "unreadable-item"
+    return "uninspectable-item"
   default:
     return "unknown"
   }
@@ -111,23 +111,35 @@ func makeAccess() -> SecAccess? {
   return access
 }
 
-func carriesPartitionEntry(_ item: SecKeychainItem) -> Bool {
+enum PartitionInspection {
+  case present
+  case absent
+  case uninspectable
+}
+
+func inspectPartitionEntry(_ item: SecKeychainItem) -> PartitionInspection {
   var access: SecAccess?
-  guard SecKeychainItemCopyAccess(item, &access) == errSecSuccess, let access else { return false }
+  guard SecKeychainItemCopyAccess(item, &access) == errSecSuccess, let access else {
+    return .uninspectable
+  }
   var aclList: CFArray?
-  guard SecAccessCopyACLList(access, &aclList) == errSecSuccess else { return false }
-  for acl in (aclList as? [SecACL]) ?? [] {
-    let authorizations = SecACLCopyAuthorizations(acl) as? [String] ?? []
+  guard SecAccessCopyACLList(access, &aclList) == errSecSuccess,
+        let acls = aclList as? [SecACL]
+  else { return .uninspectable }
+  for acl in acls {
+    guard let authorizations = SecACLCopyAuthorizations(acl) as? [String] else {
+      return .uninspectable
+    }
     guard authorizations.contains(kSecACLAuthorizationPartitionID as String) else { continue }
     var applications: CFArray?
     var description: CFString?
     var prompt = SecKeychainPromptSelector()
     guard SecACLCopyContents(acl, &applications, &description, &prompt) == errSecSuccess else {
-      continue
+      return .uninspectable
     }
-    if let text = description as String?, text.contains(partitionMarker) { return true }
+    if let text = description as String?, text.contains(partitionMarker) { return .present }
   }
-  return false
+  return .absent
 }
 
 func readKey(_ service: String) -> Never {
@@ -144,9 +156,18 @@ func readKey(_ service: String) -> Never {
         let reference = attributes[kSecValueRef as String]
   else { fail("unreadable-item") }
   let candidate = reference as CFTypeRef
-  guard CFGetTypeID(candidate) == SecKeychainItemGetTypeID() else { fail("unreadable-item") }
+  guard CFGetTypeID(candidate) == SecKeychainItemGetTypeID() else {
+    fail("uninspectable-item")
+  }
   let item = unsafeBitCast(candidate, to: SecKeychainItem.self)
-  guard carriesPartitionEntry(item) else { fail("unreadable-item") }
+  switch inspectPartitionEntry(item) {
+  case .present:
+    break
+  case .absent:
+    fail("unreadable-item")
+  case .uninspectable:
+    fail("uninspectable-item")
+  }
   succeed(["ok": true, "op": "read-key", "key": data.base64EncodedString()])
 }
 
