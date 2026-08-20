@@ -37,7 +37,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "ai": "^6.0.158",
     "grammy": "^1.42.0",
-    "intervals-icu-api": "^0.3.1",
+    "intervals-icu-api": "^0.4.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },

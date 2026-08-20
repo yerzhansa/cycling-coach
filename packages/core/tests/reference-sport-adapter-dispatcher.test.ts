@@ -80,6 +80,13 @@ describe("findAdapterForActivity", () => {
     expect(findAdapterForActivity([cyclingAdapter, runningAdapter], activity("Skydive"))).toBeNull();
   });
 
+  it("returns null without warning for a Strava stub whose type is null", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stub = { id: "12345", startDateLocal: "1998-08-20T14:08:41", type: null } as unknown as Activity;
+    expect(findAdapterForActivity([cyclingAdapter], stub)).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("returns null without warning for a malformed row whose type is missing", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const malformed = { id: "12345", startDateLocal: "1998-06-04T12:00:00" } as unknown as Activity;
@@ -143,6 +150,14 @@ describe("runAdaptersForActivities", () => {
   it("silently skips an out-of-sport type without warning", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const runs = runAdaptersForActivities([cyclingAdapter], cyclingTypes, [activity("Swim")]);
+    expect(runs).toHaveLength(0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("silently skips a Strava stub whose type is null", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stub = { id: "12345", startDateLocal: "1998-08-20T14:08:41", type: null } as unknown as Activity;
+    const runs = runAdaptersForActivities([cyclingAdapter], cyclingTypes, [stub]);
     expect(runs).toHaveLength(0);
     expect(warn).not.toHaveBeenCalled();
   });

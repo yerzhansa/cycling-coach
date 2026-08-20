@@ -22,7 +22,7 @@
   "dependencies": {
     "@enduragent/engine": "workspace:*",
     "@enduragent/kernel": "workspace:*",
-    "intervals-icu-api": "^0.3.1",
+    "intervals-icu-api": "^0.4.0",
     "ai": "^6.0.158",
     "zod": "^4.3.6"
   },
