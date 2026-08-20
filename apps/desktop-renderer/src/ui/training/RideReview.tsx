@@ -32,6 +32,7 @@ const EMPTY_COPY: Readonly<
   "not-synced": "Sync or import a cycling ride to review it here.",
   "no-recent-rides": "No cycling rides are available from the last 28 days.",
   "temporary-failure": "Recent rides could not be refreshed. Try syncing again.",
+  "source-restricted": "Too many activities are hidden to show a trustworthy ride list.",
 };
 
 function rideKind(ride: RecentRide): string {

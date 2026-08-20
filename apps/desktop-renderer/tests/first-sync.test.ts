@@ -367,6 +367,53 @@ describe("first sync controller", () => {
     expect(manualStates.at(-1)?.message).toBe("Training-data check completed.");
   });
 
+  it("keeps the last successful restriction summary through a failed refresh", async () => {
+    const coordinator = new FakeCoordinator();
+    const states: ManualSyncViewState[] = [];
+    const manual = createManualSyncController({
+      coordinator,
+      view: { render: (state) => states.push(state), restoreKeyboardFocus: vi.fn() },
+    });
+
+    const first = manual.activate("pointer");
+    coordinator.finish({
+      status: "succeeded",
+      operation: 1,
+      kind: "published",
+      droppedActivities: {
+        overall: {
+          total: 67,
+          visible: 5,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+          other: 2,
+        },
+        recent7Days: {
+          total: 5,
+          visible: 1,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+          other: 0,
+        },
+      },
+    });
+    await first;
+    await Promise.resolve();
+
+    const second = manual.activate("pointer");
+    expect(states.at(-1)?.tone).toBe("active");
+    expect(states.at(-1)?.droppedActivities?.overall.restrictions[0]?.count).toBe(60);
+    coordinator.finish({
+      status: "failed",
+      operation: 2,
+      kind: "operation",
+      retryable: true,
+    });
+    await second;
+
+    expect(states.at(-1)?.tone).toBe("failure");
+    expect(states.at(-1)?.droppedActivities?.overall.restrictions[0]?.count).toBe(60);
+    manual.dispose();
+  });
+
   it("restores focus only for the accepted keyboard activation", async () => {
     const coordinator = new FakeCoordinator();
     const restoreKeyboardFocus = vi.fn();

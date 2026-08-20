@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
@@ -260,6 +260,78 @@ describe("sidebar sync chip", () => {
     });
     expect(chip()).toHaveAttribute("data-status", "attention");
     expect(chip()).toHaveTextContent("Try again");
+  });
+
+  it("shows a successful Strava restriction without nesting buttons", async () => {
+    const user = userEvent.setup();
+    useEnduragentStore.setState({ syncActions: { request: vi.fn() } });
+    render(<Sidebar />);
+
+    update({
+      training: {
+        ...EMPTY_TRAINING_SURFACE,
+        status: "ready",
+        metadata: {
+          lastUpdated: "1998-07-19T08:00:00.000Z",
+          lastSynced: "1998-07-19T07:55:00.000Z",
+          freshness: "fresh",
+          degraded: false,
+        },
+      },
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: {
+          overall: {
+            total: 67,
+            visible: 5,
+            restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+            other: 2,
+          },
+          recent7Days: {
+            total: 5,
+            visible: 1,
+            restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+            other: 0,
+          },
+        },
+      }),
+    });
+
+    expect(chip()).toHaveAttribute("data-status", "synced");
+    expect(chip()).toHaveTextContent("60 hidden by Strava");
+    expect(chip()).not.toHaveTextContent("1998-07-19 07:55:00 UTC");
+    expect(chip()).toHaveAttribute("title", "1998-07-19 07:55:00 UTC");
+    expect(chip().querySelector("button")).toBeNull();
+
+    const trigger = chip().querySelector<HTMLElement>("[data-info-tip]");
+    expect(trigger?.tagName).toBe("SPAN");
+    await user.hover(trigger as HTMLElement);
+    await waitFor(() => {
+      expect(document.querySelector("[data-info-tip-popup]")).not.toBeNull();
+    });
+    expect(screen.getByText("60 activities hidden by Strava")).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "How to fix this" });
+    expect(link).toHaveAttribute("href", "#strava-restricted-activities");
+
+    fireEvent.click(link);
+    expect(useEnduragentStore.getState().activeView).toBe("training");
+
+    update({
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 2,
+        kind: "no-change",
+        droppedActivities: {
+          overall: { total: 5, visible: 5, restrictions: [], other: 0 },
+          recent7Days: { total: 5, visible: 5, restrictions: [], other: 0 },
+        },
+      }),
+    });
+    expect(chip()).toHaveTextContent("1998-07-19 07:55:00 UTC");
+    expect(chip()).not.toHaveAttribute("title");
+    expect(chip().querySelector("[data-info-tip]")).toBeNull();
   });
 
   it("reports never-synced and unavailable training data honestly", () => {
