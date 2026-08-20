@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEVELOPMENT_PACKAGE_NAME } from "../scripts/development-package-plan.mjs";
+import { KEYCHAIN_HELPER_RESOURCE_PATH } from "../scripts/package-inventory.mjs";
 import { readBuilderAuthority, verifyPackageLayout } from "../scripts/verify-package-layout.mjs";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -138,6 +139,35 @@ function checksum(bytes: Buffer): Buffer {
   return Buffer.from(`${createHash("sha256").update(bytes).digest("hex")}  matrix.json\n`);
 }
 
+const stagedHelperUuid = "00112233445566778899aabbccddeeff";
+
+function machoExecutable(uuid: string, signatureBytes = 512, payload = "synthetic helper"): Buffer {
+  const signatureOffset = 8_192;
+  const bytes = Buffer.alloc(signatureOffset + signatureBytes);
+  bytes.writeUInt32LE(0xfeed_facf, 0);
+  bytes.writeUInt32LE(0x0100_000c, 4);
+  bytes.writeUInt32LE(0, 8);
+  bytes.writeUInt32LE(2, 12);
+  bytes.writeUInt32LE(3, 16);
+  bytes.writeUInt32LE(112, 20);
+  bytes.writeUInt32LE(0x1b, 32);
+  bytes.writeUInt32LE(24, 36);
+  Buffer.from(uuid, "hex").copy(bytes, 40);
+  bytes.writeUInt32LE(0x19, 56);
+  bytes.writeUInt32LE(72, 60);
+  bytes.write("__LINKEDIT", 64, "latin1");
+  bytes.writeBigUInt64LE(BigInt(4_096 + signatureBytes), 88);
+  bytes.writeBigUInt64LE(BigInt(4_096), 96);
+  bytes.writeBigUInt64LE(BigInt(4_096 + signatureBytes), 104);
+  bytes.writeUInt32LE(0x1d, 128);
+  bytes.writeUInt32LE(16, 132);
+  bytes.writeUInt32LE(signatureOffset, 136);
+  bytes.writeUInt32LE(signatureBytes, 140);
+  bytes.write(payload, 1_024, "latin1");
+  bytes.fill(0x5a, signatureOffset);
+  return bytes;
+}
+
 function builderYaml(
   asarSource = "dist/self-test-asar",
   externalSource = "dist/extra-resources",
@@ -176,6 +206,8 @@ type SyntheticPackage = {
   desktop: string;
   externalPackaged: string;
   externalSource: string;
+  helperPackaged: string;
+  helperSource: string;
   resources: string;
   rebuild: () => Promise<void>;
   writeArchive: (path: string, bytes?: string | Buffer) => Promise<void>;
@@ -191,6 +223,8 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
   const asarSource = join(desktop, "dist/self-test-asar");
   const externalSource = join(desktop, "dist/extra-resources");
   const externalPackaged = join(resources, "self-test");
+  const helperSource = join(externalSource, KEYCHAIN_HELPER_RESOURCE_PATH);
+  const helperPackaged = join(resources, KEYCHAIN_HELPER_RESOURCE_PATH);
   const matrix = Buffer.from('{"schemaVersion":1}\n');
   const matrixChecksum = checksum(matrix);
 
@@ -200,9 +234,13 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
     mkdir(archiveSource, { recursive: true }),
     mkdir(join(asarSource, "resources/self-test"), { recursive: true }),
     mkdir(join(externalSource, "self-test"), { recursive: true }),
+    mkdir(dirname(helperSource), { recursive: true }),
+    mkdir(dirname(helperPackaged), { recursive: true }),
     mkdir(desktop, { recursive: true }),
   ]);
   await Promise.all([
+    writeFile(helperSource, machoExecutable(stagedHelperUuid)),
+    writeFile(helperPackaged, machoExecutable(stagedHelperUuid)),
     writeFile(join(desktop, "electron-builder.yml"), builderYaml()),
     writeFile(join(desktop, "package.json"), sourceManifestBytes),
     writeFile(join(resources, "icon.icns"), "synthetic icon"),
@@ -263,6 +301,8 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
     desktop,
     externalPackaged,
     externalSource,
+    helperPackaged,
+    helperSource,
     resources,
     rebuild,
     writeArchive,
@@ -954,6 +994,44 @@ describe("desktop package layout", () => {
     await expect(
       verifyPackageLayout(unpacked.app, { desktopRoot: unpacked.desktop }),
     ).rejects.toThrow("symbolic links are forbidden");
+  });
+
+  it("accepts a packaged keychain helper re-signed after staging", async () => {
+    const fixture = await syntheticPackage();
+    await writeFile(fixture.helperPackaged, machoExecutable(stagedHelperUuid, 4_096));
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["built from a different image", machoExecutable("ffeeddccbbaa99887766554433221100")],
+    ["patched outside its code signature", machoExecutable(stagedHelperUuid, 4_096, "patched")],
+  ])("rejects a packaged keychain helper %s", async (_label, replacement) => {
+    const fixture = await syntheticPackage();
+    await writeFile(fixture.helperPackaged, replacement);
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("packaged external executable differs from staging");
+  });
+
+  it("rejects a packaged keychain helper that is not a Mach-O executable", async () => {
+    const fixture = await syntheticPackage();
+    await writeFile(fixture.helperPackaged, Buffer.alloc(8_192, 0x61));
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("expected a 64-bit little-endian Mach-O executable");
+  });
+
+  it("rejects a package that stages no keychain helper at all", async () => {
+    const fixture = await syntheticPackage();
+    await Promise.all([
+      rm(dirname(fixture.helperSource), { recursive: true }),
+      rm(dirname(fixture.helperPackaged), { recursive: true }),
+    ]);
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("external keychain helper is missing");
   });
 
   it("keeps the external runner out of app.asar", async () => {

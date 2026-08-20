@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, readFile, rename, rm } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { keychainHelperBuildPath } from "./build-keychain-helper.mjs";
+import { KEYCHAIN_HELPER_RESOURCE_PATH, machoExecutableIdentity } from "./package-inventory.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDirectory, "..");
@@ -48,6 +50,18 @@ if (
   canonicalChecksum.toString("utf8") !== `${digest(canonicalMatrix)}  matrix.json\n`
 ) {
   throw new Error("staged resource mismatch");
+}
+if (process.platform === "darwin") {
+  const source = keychainHelperBuildPath(desktopRoot);
+  const sourceStat = await lstat(source);
+  if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) throw new Error("invalid staged source");
+  const target = join(temporaryRoot, KEYCHAIN_HELPER_RESOURCE_PATH);
+  await mkdir(dirname(target), { recursive: true });
+  await copyFile(source, target);
+  await chmod(target, 0o755);
+  const staged = await lstat(target);
+  if (!staged.isFile() || staged.isSymbolicLink()) throw new Error("invalid staged resource");
+  machoExecutableIdentity(await readFile(target), KEYCHAIN_HELPER_RESOURCE_PATH);
 }
 await rm(targetRoot, { recursive: true, force: true });
 await rename(temporaryRoot, targetRoot);
