@@ -329,6 +329,19 @@ describe("R6 desktop renderer", () => {
     });
     expect(violationsFor(rRenderer)).toBe(0);
   });
+
+  it("R6 passes the renderer font dependencies", () => {
+    write("apps/desktop-renderer/src/ok.ts", `export const value = 1;\n`);
+    writeJson("apps/desktop-renderer/package.json", {
+      name: "@enduragent/desktop-renderer",
+      private: true,
+      dependencies: {
+        "@fontsource-variable/geist-mono": "^5.3.0",
+        "@fontsource-variable/inter": "^5.3.0",
+      },
+    });
+    expect(violationsFor(rRenderer)).toBe(0);
+  });
 });
 
 describe("R8 desktop app", () => {
