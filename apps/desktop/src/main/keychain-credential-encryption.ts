@@ -82,7 +82,10 @@ export interface CreateKeychainPartitionEncryptionOptions {
   readonly service: string;
 }
 
-function refusingPort(code: KeychainHelperErrorCode, available: boolean): CredentialEncryptionPort {
+export function createRefusingKeychainEncryption(
+  code: KeychainHelperErrorCode,
+  available: boolean,
+): CredentialEncryptionPort {
   const refuse = (): never => {
     throw new KeychainEncryptionError(code);
   };
@@ -105,9 +108,17 @@ function readyPort(key: Buffer): CredentialEncryptionPort {
 
 function refused(code: KeychainHelperErrorCode): KeychainPartitionEncryptionResult {
   if (code === "keychain-locked") {
-    return { status: "unavailable", code, encryption: refusingPort(code, false) };
+    return {
+      status: "unavailable",
+      code,
+      encryption: createRefusingKeychainEncryption(code, false),
+    };
   }
-  return { status: "storage-failed", code, encryption: refusingPort(code, true) };
+  return {
+    status: "storage-failed",
+    code,
+    encryption: createRefusingKeychainEncryption(code, true),
+  };
 }
 
 export async function createKeychainPartitionEncryption(
