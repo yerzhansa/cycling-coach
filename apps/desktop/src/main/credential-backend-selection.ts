@@ -45,10 +45,15 @@ export interface SelectDesktopCredentialBackendOptions extends CredentialEnvelop
 
 export function keychainFailureRefusal(
   code: KeychainHelperErrorCode,
+  keychainRequired: boolean,
 ): DesktopCredentialBackendRefusal {
-  return code === "keychain-locked" || code === "not-team-signed"
-    ? "encryption-unavailable"
-    : "storage-failed";
+  if (code === "keychain-locked" || code === "not-team-signed") {
+    return "encryption-unavailable";
+  }
+  if (keychainRequired && code === "unknown") {
+    return "encryption-unavailable";
+  }
+  return "storage-failed";
 }
 
 export async function selectDesktopCredentialBackend(
@@ -70,15 +75,19 @@ export async function selectDesktopCredentialBackend(
     return {
       status: "refused",
       encryption: createRefusingKeychainEncryption(keychain.code, false),
-      reason: keychainFailureRefusal(keychain.code),
+      reason: keychainFailureRefusal(keychain.code, inventory.keychainRequired),
       code: keychain.code,
     };
   }
   if (keychain.status !== "ready") {
+    const reason = keychainFailureRefusal(keychain.code, inventory.keychainRequired);
     return {
       status: "refused",
-      encryption: keychain.encryption,
-      reason: keychainFailureRefusal(keychain.code),
+      encryption: createRefusingKeychainEncryption(
+        keychain.code,
+        reason !== "encryption-unavailable",
+      ),
+      reason,
       code: keychain.code,
     };
   }

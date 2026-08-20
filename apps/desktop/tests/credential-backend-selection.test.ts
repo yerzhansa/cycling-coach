@@ -313,6 +313,44 @@ describe("mandatory keychain rule", () => {
     await expect(readFile(join(roots.credentialRoot, "anthropic.bin"))).resolves.toEqual(migrated);
   });
 
+  posixIt("reports a broken helper as encryption-unavailable once an envelope is migrated", async () => {
+    const roots = await fixture();
+    const legacy = safeStorage();
+    const key = randomBytes(KEYCHAIN_KEY_BYTES);
+    await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
+    await selectDesktopCredentialBackend({
+      ...selection(roots, transportOf(PROBE_OK, readKey(key))),
+      safeStorage: legacy,
+    });
+
+    const selected = await selectDesktopCredentialBackend({
+      ...selection(roots, transportOf({ ok: false, code: "unknown" })),
+      safeStorage: legacy,
+    });
+
+    expect(selected.status).toBe("refused");
+    if (selected.status !== "refused") return;
+    expect(selected.reason).toBe("encryption-unavailable");
+    expect(selected.code).toBe("unknown");
+    expect(selected.encryption.isEncryptionAvailable()).toBe(false);
+  });
+
+  posixIt("keeps a broken helper as storage-failed before any envelope is migrated", async () => {
+    const roots = await fixture();
+    const legacy = safeStorage();
+    await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
+
+    const selected = await selectDesktopCredentialBackend({
+      ...selection(roots, transportOf({ ok: false, code: "unknown" })),
+      safeStorage: legacy,
+    });
+
+    expect(selected.status).toBe("refused");
+    if (selected.status !== "refused") return;
+    expect(selected.reason).toBe("storage-failed");
+    expect(selected.encryption.isEncryptionAvailable()).toBe(true);
+  });
+
   posixIt("refuses when an existing envelope cannot be read", async () => {
     const roots = await fixture();
     const legacy = safeStorage();
@@ -367,12 +405,18 @@ describe("mandatory keychain rule", () => {
 
 describe("keychain failure mapping", () => {
   it("maps every helper error code onto the existing taxonomy", () => {
-    expect(keychainFailureRefusal("keychain-locked")).toBe("encryption-unavailable");
-    expect(keychainFailureRefusal("not-team-signed")).toBe("encryption-unavailable");
-    expect(keychainFailureRefusal("duplicate-item")).toBe("storage-failed");
-    expect(keychainFailureRefusal("unreadable-item")).toBe("storage-failed");
-    expect(keychainFailureRefusal("item-not-found")).toBe("storage-failed");
-    expect(keychainFailureRefusal("unknown")).toBe("storage-failed");
+    expect(keychainFailureRefusal("keychain-locked", false)).toBe("encryption-unavailable");
+    expect(keychainFailureRefusal("not-team-signed", false)).toBe("encryption-unavailable");
+    expect(keychainFailureRefusal("duplicate-item", false)).toBe("storage-failed");
+    expect(keychainFailureRefusal("unreadable-item", false)).toBe("storage-failed");
+    expect(keychainFailureRefusal("item-not-found", false)).toBe("storage-failed");
+    expect(keychainFailureRefusal("unknown", false)).toBe("storage-failed");
+    expect(keychainFailureRefusal("keychain-locked", true)).toBe("encryption-unavailable");
+    expect(keychainFailureRefusal("not-team-signed", true)).toBe("encryption-unavailable");
+    expect(keychainFailureRefusal("unknown", true)).toBe("encryption-unavailable");
+    expect(keychainFailureRefusal("duplicate-item", true)).toBe("storage-failed");
+    expect(keychainFailureRefusal("unreadable-item", true)).toBe("storage-failed");
+    expect(keychainFailureRefusal("item-not-found", true)).toBe("storage-failed");
   });
 
   posixIt("maps a locked keychain onto encryption-unavailable in both vaults", async () => {
