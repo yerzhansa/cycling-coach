@@ -61,11 +61,23 @@ function partitionAclStatus(
   applications: "null" | "empty" | "populated",
   prompt: "zero" | "nonzero",
 ) {
+  return harnessStatus("acl", authorization, applications, prompt, canonicalPartitionDescription);
+}
+
+function accessAclStatus(
+  ownerAuthorization: "exact" | "extra",
+  ownerApplications: "null" | "empty" | "populated",
+  ownerCount: "missing" | "single" | "duplicate",
+  partitionCount: "missing" | "single" | "duplicate",
+  unrelated: "none" | "default" | "any" | "change-owner",
+) {
   return harnessStatus(
-    "acl",
-    authorization,
-    applications,
-    prompt,
+    "access",
+    ownerAuthorization,
+    ownerApplications,
+    ownerCount,
+    partitionCount,
+    unrelated,
     canonicalPartitionDescription,
   );
 }
@@ -132,8 +144,22 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
         source.indexOf("napi_value CreateKey"),
         source.indexOf("napi_value DeleteKey"),
       );
+      const accessConstructionStart = source.indexOf("SecAccessRef MakeAccess");
+      const accessConstruction = source.slice(
+        accessConstructionStart,
+        source.indexOf("PartitionInspection InspectAccess", accessConstructionStart),
+      );
       expect(readiness.indexOf("InteractionDisabled()")).toBeLessThan(
         readiness.indexOf("TrustedHost()"),
+      );
+      expect(accessConstruction).toContain(
+        "acceptable = IsExpectedOwnerAcl(authorizations, applications)",
+      );
+      expect(accessConstruction.indexOf("IsExpectedOwnerAcl")).toBeLessThan(
+        accessConstruction.indexOf("SecACLSetContents"),
+      );
+      expect(accessConstruction).toContain(
+        "InspectAccess(access) != PartitionInspection::kPresent",
       );
       expect(creation.indexOf("InspectPartition(")).toBeLessThan(
         creation.indexOf("SecKeychainItemCopyContent"),
@@ -144,9 +170,7 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       expect(creation.indexOf("SecKeychainItemFreeContent")).toBeLessThan(
         creation.indexOf("napi_create_buffer_copy"),
       );
-      expect(creation).toContain(
-        "persistedLength == static_cast<UInt32>(material.size())",
-      );
+      expect(creation).toContain("persistedLength == static_cast<UInt32>(material.size())");
       expect(creation).toContain("timingsafe_bcmp");
       expect(creation).not.toContain("SecItemDelete");
       expect(source).toContain("#define __STDC_WANT_LIB_EXT1__ 1");
@@ -169,6 +193,26 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       expect(partitionAclStatus("exact", "null", "nonzero")).toBe(1);
     });
 
+    it("accepts one protected owner with one exact partition ACL", () => {
+      expect(accessAclStatus("exact", "empty", "single", "single", "none")).toBe(0);
+      expect(accessAclStatus("exact", "empty", "single", "single", "default")).toBe(0);
+    });
+
+    it("rejects an unsafe or ambiguous owner ACL", () => {
+      expect(accessAclStatus("exact", "empty", "missing", "single", "none")).toBe(1);
+      expect(accessAclStatus("exact", "empty", "duplicate", "single", "none")).toBe(1);
+      expect(accessAclStatus("exact", "null", "single", "single", "none")).toBe(1);
+      expect(accessAclStatus("exact", "populated", "single", "single", "none")).toBe(1);
+      expect(accessAclStatus("extra", "empty", "single", "single", "none")).toBe(1);
+    });
+
+    it("rejects ambiguous partitions and unrestricted mutation authority", () => {
+      expect(accessAclStatus("exact", "empty", "single", "missing", "none")).toBe(1);
+      expect(accessAclStatus("exact", "empty", "single", "duplicate", "none")).toBe(1);
+      expect(accessAclStatus("exact", "empty", "single", "single", "any")).toBe(1);
+      expect(accessAclStatus("exact", "empty", "single", "single", "change-owner")).toBe(1);
+    });
+
     it("rejects malformed and structurally invalid property lists", () => {
       const rejected = [
         "teamid:FA494ACVTF",
@@ -177,9 +221,7 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
         plistDictionary(""),
         plistDictionary("<key>Partitions</key><string>teamid:FA494ACVTF</string>"),
         plistDictionary("<key>Partitions</key><array></array>"),
-        plistDictionary(
-          "<key>Partitions</key><array><integer>1</integer></array>",
-        ),
+        plistDictionary("<key>Partitions</key><array><integer>1</integer></array>"),
       ];
       for (const description of rejected) {
         expect(partitionDescriptionStatus(description)).toBe(1);
@@ -192,9 +234,7 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
           "<key>Partitions</key><array><string>teamid:FA494ACVTF</string></array>" +
             "<key>Extra</key><string>teamid:FA494ACVTF</string>",
         ),
-        plistDictionary(
-          "<key>Partitions</key><array><string>teamid:OTHER</string></array>",
-        ),
+        plistDictionary("<key>Partitions</key><array><string>teamid:OTHER</string></array>"),
         plistDictionary(
           "<key>Partitions</key><array><string>teamid:FA494ACVTF</string>" +
             "<string>teamid:OTHER</string></array>",
@@ -206,25 +246,16 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
     });
 
     it("rejects duplicate partition dictionary keys", () => {
-      const expected =
-        "<key>Partitions</key><array><string>teamid:FA494ACVTF</string></array>";
-      const wrong =
-        "<key>Partitions</key><array><string>teamid:OTHER</string></array>";
-      expect(
-        partitionDescriptionStatus(plistDictionary(expected + expected)),
-      ).toBe(1);
-      expect(partitionDescriptionStatus(plistDictionary(expected + wrong))).toBe(
-        1,
-      );
+      const expected = "<key>Partitions</key><array><string>teamid:FA494ACVTF</string></array>";
+      const wrong = "<key>Partitions</key><array><string>teamid:OTHER</string></array>";
+      expect(partitionDescriptionStatus(plistDictionary(expected + expected))).toBe(1);
+      expect(partitionDescriptionStatus(plistDictionary(expected + wrong))).toBe(1);
     });
 
     it("rejects zero or multiple partition-authorized ACL descriptions", () => {
       expect(partitionDescriptionStatus()).toBe(1);
       expect(
-        partitionDescriptionStatus(
-          canonicalPartitionDescription,
-          alternatePartitionDescription,
-        ),
+        partitionDescriptionStatus(canonicalPartitionDescription, alternatePartitionDescription),
       ).toBe(1);
     });
   },

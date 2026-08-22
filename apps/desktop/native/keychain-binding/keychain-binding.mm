@@ -145,6 +145,10 @@ CFMutableDictionaryRef Query(const std::string &service) {
   return query;
 }
 
+enum class PartitionInspection { kPresent, kAbsent, kUninspectable };
+
+PartitionInspection InspectAccess(SecAccessRef access);
+
 SecAccessRef MakeAccess() {
   SecAccessRef access = nullptr;
   CFStringRef label = String("Enduragent credential encryption key");
@@ -161,31 +165,64 @@ SecAccessRef MakeAccess() {
     return nullptr;
   }
   const CFIndex count = CFArrayGetCount(aclList);
+  CFIndex ownerCount = 0;
   for (CFIndex index = 0; index < count; index += 1) {
     SecACLRef acl = static_cast<SecACLRef>(
         const_cast<void *>(CFArrayGetValueAtIndex(aclList, index)));
+    CFArrayRef authorizations = SecACLCopyAuthorizations(acl);
+    if (authorizations == nullptr) {
+      CFRelease(aclList);
+      CFRelease(access);
+      return nullptr;
+    }
+    const KeychainAclRole role = ClassifyKeychainAcl(authorizations);
+    if (role == KeychainAclRole::kPartition ||
+        role == KeychainAclRole::kUnsafe) {
+      CFRelease(authorizations);
+      CFRelease(aclList);
+      CFRelease(access);
+      return nullptr;
+    }
     CFArrayRef applications = nullptr;
     CFStringRef description = nullptr;
     SecKeychainPromptSelector prompt{};
     if (SecACLCopyContents(acl, &applications, &description, &prompt) !=
-            errSecSuccess ||
-        SecACLSetContents(acl, nullptr,
-                          description == nullptr ? CFSTR("") : description,
-                          prompt) != errSecSuccess) {
+        errSecSuccess) {
       if (applications != nullptr)
         CFRelease(applications);
       if (description != nullptr)
         CFRelease(description);
+      CFRelease(authorizations);
       CFRelease(aclList);
       CFRelease(access);
       return nullptr;
+    }
+    bool acceptable = true;
+    if (role == KeychainAclRole::kOwner) {
+      ownerCount += 1;
+      acceptable = IsExpectedOwnerAcl(authorizations, applications);
+    } else {
+      acceptable = SecACLSetContents(
+                       acl, nullptr,
+                       description == nullptr ? CFSTR("") : description,
+                       prompt) == errSecSuccess;
     }
     if (applications != nullptr)
       CFRelease(applications);
     if (description != nullptr)
       CFRelease(description);
+    CFRelease(authorizations);
+    if (!acceptable) {
+      CFRelease(aclList);
+      CFRelease(access);
+      return nullptr;
+    }
   }
   CFRelease(aclList);
+  if (ownerCount != 1) {
+    CFRelease(access);
+    return nullptr;
+  }
   CFStringRef partition =
       String("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
              "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
@@ -211,32 +248,21 @@ SecAccessRef MakeAccess() {
     CFRelease(access);
     return nullptr;
   }
+  if (InspectAccess(access) != PartitionInspection::kPresent) {
+    CFRelease(access);
+    return nullptr;
+  }
   return access;
 }
 
-enum class PartitionInspection { kPresent, kAbsent, kUninspectable };
-
-PartitionInspection InspectPartition(SecKeychainItemRef item) {
-  SecAccessRef access = nullptr;
-  if (SecKeychainItemCopyAccess(item, &access) != errSecSuccess ||
-      access == nullptr) {
-    return PartitionInspection::kUninspectable;
-  }
+PartitionInspection InspectAccess(SecAccessRef access) {
   CFArrayRef aclList = nullptr;
   if (SecAccessCopyACLList(access, &aclList) != errSecSuccess ||
       aclList == nullptr) {
-    CFRelease(access);
-    return PartitionInspection::kUninspectable;
-  }
-  CFMutableArrayRef partitionDescriptions = CFArrayCreateMutable(
-      kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
-  if (partitionDescriptions == nullptr) {
-    CFRelease(aclList);
-    CFRelease(access);
     return PartitionInspection::kUninspectable;
   }
   PartitionInspection result = PartitionInspection::kAbsent;
-  bool exactPartitionSemantics = true;
+  KeychainAccessAclInspection inspection{0, 0, true};
   const CFIndex count = CFArrayGetCount(aclList);
   for (CFIndex index = 0; index < count; index += 1) {
     SecACLRef acl = static_cast<SecACLRef>(
@@ -246,10 +272,14 @@ PartitionInspection InspectPartition(SecKeychainItemRef item) {
       result = PartitionInspection::kUninspectable;
       break;
     }
-    const bool partition = CFArrayContainsValue(
-        authorizations, CFRangeMake(0, CFArrayGetCount(authorizations)),
-        kSecACLAuthorizationPartitionID);
-    if (!partition) {
+    const KeychainAclRole role = ClassifyKeychainAcl(authorizations);
+    if (role == KeychainAclRole::kUnrelated) {
+      CFRelease(authorizations);
+      continue;
+    }
+    if (role == KeychainAclRole::kUnsafe) {
+      IncludeKeychainAcl(inspection, role, authorizations, nullptr, nullptr,
+                         SecKeychainPromptSelector{});
       CFRelease(authorizations);
       continue;
     }
@@ -257,8 +287,7 @@ PartitionInspection InspectPartition(SecKeychainItemRef item) {
     CFStringRef description = nullptr;
     SecKeychainPromptSelector prompt{};
     if (SecACLCopyContents(acl, &applications, &description, &prompt) !=
-            errSecSuccess ||
-        description == nullptr) {
+        errSecSuccess) {
       if (applications != nullptr)
         CFRelease(applications);
       if (description != nullptr)
@@ -267,22 +296,28 @@ PartitionInspection InspectPartition(SecKeychainItemRef item) {
       result = PartitionInspection::kUninspectable;
       break;
     }
-    exactPartitionSemantics =
-        exactPartitionSemantics &&
-        IsExpectedPartitionAcl(authorizations, applications, description,
-                               prompt);
-    CFArrayAppendValue(partitionDescriptions, description);
+    IncludeKeychainAcl(inspection, role, authorizations, applications,
+                       description, prompt);
     CFRelease(authorizations);
     if (applications != nullptr)
       CFRelease(applications);
-    CFRelease(description);
+    if (description != nullptr)
+      CFRelease(description);
   }
   if (result != PartitionInspection::kUninspectable &&
-      exactPartitionSemantics &&
-      AreExpectedPartitionDescriptions(partitionDescriptions))
+      IsExpectedKeychainAccess(inspection))
     result = PartitionInspection::kPresent;
-  CFRelease(partitionDescriptions);
   CFRelease(aclList);
+  return result;
+}
+
+PartitionInspection InspectPartition(SecKeychainItemRef item) {
+  SecAccessRef access = nullptr;
+  if (SecKeychainItemCopyAccess(item, &access) != errSecSuccess ||
+      access == nullptr) {
+    return PartitionInspection::kUninspectable;
+  }
+  const PartitionInspection result = InspectAccess(access);
   CFRelease(access);
   return result;
 }

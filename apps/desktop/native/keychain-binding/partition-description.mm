@@ -23,6 +23,11 @@ bool HasUnambiguousPartitionKey(CFStringRef description) {
          OccurrenceCount(description, CFSTR("<!ENTITY")) == 0;
 }
 
+bool IsAuthorization(CFTypeRef value, CFStringRef expected) {
+  return value != nullptr && CFGetTypeID(value) == CFStringGetTypeID() &&
+         CFEqual(value, expected);
+}
+
 }
 
 bool IsExpectedPartitionDescription(CFStringRef description) {
@@ -98,4 +103,81 @@ bool IsExpectedPartitionAcl(CFArrayRef authorizations, CFArrayRef applications,
          CFEqual(authorization, kSecACLAuthorizationPartitionID) &&
          applications == nullptr && prompt == 0 &&
          IsExpectedPartitionDescription(description);
+}
+
+KeychainAclRole ClassifyKeychainAcl(CFArrayRef authorizations) {
+  if (authorizations == nullptr ||
+      CFGetTypeID(authorizations) != CFArrayGetTypeID() ||
+      CFArrayGetCount(authorizations) == 0) {
+    return KeychainAclRole::kUnsafe;
+  }
+  bool owner = false;
+  bool partition = false;
+  const CFIndex count = CFArrayGetCount(authorizations);
+  for (CFIndex index = 0; index < count; index += 1) {
+    CFTypeRef authorization = CFArrayGetValueAtIndex(authorizations, index);
+    if (authorization == nullptr ||
+        CFGetTypeID(authorization) != CFStringGetTypeID()) {
+      return KeychainAclRole::kUnsafe;
+    }
+    owner = owner ||
+            IsAuthorization(authorization, kSecACLAuthorizationChangeACL);
+    partition =
+        partition ||
+        IsAuthorization(authorization, kSecACLAuthorizationPartitionID);
+    if (IsAuthorization(authorization, kSecACLAuthorizationAny) ||
+        IsAuthorization(authorization, kSecACLAuthorizationChangeOwner)) {
+      return KeychainAclRole::kUnsafe;
+    }
+  }
+  if (owner && partition)
+    return KeychainAclRole::kUnsafe;
+  if (owner)
+    return KeychainAclRole::kOwner;
+  if (partition)
+    return KeychainAclRole::kPartition;
+  return KeychainAclRole::kUnrelated;
+}
+
+bool IsExpectedOwnerAcl(CFArrayRef authorizations, CFArrayRef applications) {
+  if (authorizations == nullptr ||
+      CFGetTypeID(authorizations) != CFArrayGetTypeID() ||
+      CFArrayGetCount(authorizations) != 1 || applications == nullptr ||
+      CFGetTypeID(applications) != CFArrayGetTypeID() ||
+      CFArrayGetCount(applications) != 0) {
+    return false;
+  }
+  return IsAuthorization(CFArrayGetValueAtIndex(authorizations, 0),
+                         kSecACLAuthorizationChangeACL);
+}
+
+void IncludeKeychainAcl(KeychainAccessAclInspection &inspection,
+                        KeychainAclRole role, CFArrayRef authorizations,
+                        CFArrayRef applications, CFStringRef description,
+                        SecKeychainPromptSelector prompt) {
+  switch (role) {
+  case KeychainAclRole::kOwner:
+    inspection.ownerCount += 1;
+    inspection.exact = inspection.exact &&
+                       IsExpectedOwnerAcl(authorizations, applications);
+    return;
+  case KeychainAclRole::kPartition:
+    inspection.partitionCount += 1;
+    inspection.exact =
+        inspection.exact &&
+        IsExpectedPartitionAcl(authorizations, applications, description,
+                               prompt);
+    return;
+  case KeychainAclRole::kUnrelated:
+    return;
+  case KeychainAclRole::kUnsafe:
+    inspection.exact = false;
+    return;
+  }
+}
+
+bool IsExpectedKeychainAccess(
+    const KeychainAccessAclInspection &inspection) {
+  return inspection.exact && inspection.ownerCount == 1 &&
+         inspection.partitionCount == 1;
 }
