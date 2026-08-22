@@ -32,7 +32,7 @@ export interface CredentialEnvelopeInventory {
 export interface CredentialEnvelopeRoots {
   readonly credentialRoot: string;
   readonly telegramRoot: string;
-  readonly readEnvelopeFile?: typeof readFile;
+  readonly readEnvelopeFile?: (path: string) => Promise<Buffer>;
   readonly readEnvelopeDirectory?: (path: string) => Promise<string[]>;
 }
 
@@ -104,7 +104,7 @@ function transientCredentialEnvelopeTarget(
 
 async function inspectEnvelopeTarget(
   target: CredentialEnvelopeTarget,
-  read: typeof readFile,
+  read: (path: string) => Promise<Buffer>,
 ): Promise<CredentialEnvelopeRef | undefined> {
   let contents: Buffer | undefined;
   try {
@@ -123,7 +123,7 @@ async function inspectEnvelopeTarget(
 export async function scanCredentialEnvelopes(
   roots: CredentialEnvelopeRoots,
 ): Promise<CredentialEnvelopeInventory> {
-  const read = roots.readEnvelopeFile ?? readFile;
+  const read = roots.readEnvelopeFile ?? ((path: string) => readFile(path));
   const readDirectory = roots.readEnvelopeDirectory ?? readdir;
   const deletionBlockers: CredentialEnvelopeRef[] = [];
   const canonicalEnvelopes: CredentialEnvelopeRef[] = [];
