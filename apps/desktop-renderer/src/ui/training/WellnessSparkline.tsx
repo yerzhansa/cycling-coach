@@ -1,6 +1,6 @@
 import type { WellnessSeries } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
-import styles from "./TrainingView.module.css";
+import { overviewStyles as styles } from "./overviewStyles.js";
 
 export function WellnessSparkline(props: {
   readonly series: WellnessSeries;

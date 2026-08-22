@@ -1,0 +1,57 @@
+export const overviewStyles = {
+  status: "mb-3.5 text-sm text-ink-2",
+  panel:
+    "mb-3.5 rounded-card border border-line bg-surface px-[18px] py-4 shadow-elev-1 last:mb-0",
+  panelTitle: "m-0 text-xs font-semibold text-ink-3",
+  panelBody: "mt-3 min-w-0",
+  subheading: "mt-[18px] text-xs font-semibold text-ink-2",
+  value: "mb-1.5 text-2xl leading-8 font-semibold tracking-normal tabular-nums",
+  meta: "m-0 [overflow-wrap:anywhere] text-xs leading-[1.45] text-ink-2",
+  support: "mt-2 [overflow-wrap:anywhere] text-sm leading-[1.45] text-ink-2",
+  empty: "m-0 text-sm leading-[1.45] text-ink-2",
+  srOnly: "sr-only",
+  progressNotice:
+    "mb-3.5 border-l-[3px] border-warn bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] px-[11px] py-[9px] text-xs leading-6 text-ink-2",
+  progressHeader:
+    "flex min-w-0 items-start justify-between gap-3 [&>div]:min-w-0 [&_.training-badge]:m-0 [&_.training-badge]:shrink-0",
+  progressLead: "mb-[5px] text-sm leading-5 font-semibold text-ink",
+  progressTableWrap: "training-progress-table-wrap mt-3.5 min-w-0 overflow-x-auto",
+  progressTable:
+    "w-full min-w-[390px] border-separate border-spacing-0 tabular-nums [&_th]:border-b [&_th]:border-line [&_th]:px-2 [&_th]:py-[9px] [&_th]:text-right [&_td]:border-b [&_td]:border-line [&_td]:px-2 [&_td]:py-[9px] [&_td]:text-right [&_thead_th]:pt-0 [&_thead_th]:text-xs [&_thead_th]:font-medium [&_thead_th]:tracking-normal [&_thead_th]:text-ink-3 [&_th:first-child]:pl-0 [&_th:first-child]:text-left [&_td:first-child]:pl-0 [&_td:first-child]:text-left [&_th:last-child]:pr-0 [&_td:last-child]:pr-0 [&_tbody_th]:relative [&_tbody_th]:text-xs [&_tbody_th]:leading-4 [&_tbody_th]:font-semibold [&_tbody_th]:text-ink [&_tbody_th::before]:mr-[9px] [&_tbody_th::before]:inline-block [&_tbody_th::before]:h-[18px] [&_tbody_th::before]:w-[3px] [&_tbody_th::before]:rounded-sm [&_tbody_th::before]:bg-ink [&_tbody_th::before]:align-middle [&_tbody_th::before]:opacity-25 [&_tbody_th::before]:content-[''] [&_tbody_tr:nth-child(1)_th::before]:opacity-100 [&_tbody_tr:nth-child(2)_th::before]:opacity-80 [&_tbody_tr:nth-child(3)_th::before]:opacity-60 [&_tbody_tr:nth-child(4)_th::before]:opacity-40 [&_tbody_td]:text-xs [&_tbody_td]:leading-4 [&_tbody_td]:text-ink-2 [&_tbody_td:nth-child(2)]:font-semibold [&_tbody_td:nth-child(2)]:text-ink",
+  progressChange:
+    "data-[tone=positive]:text-ok data-[tone=negative]:text-warn",
+  progressDetails:
+    "mt-3.5 text-xs text-ink-2 [&_summary]:w-fit [&_summary]:cursor-pointer [&_summary]:font-semibold [&_summary]:focus-visible:outline-2 [&_summary]:focus-visible:outline-offset-[3px] [&_summary]:focus-visible:outline-ink [&_.training-progress-table-wrap]:mt-2.5",
+  heartRateTable: "[&_tbody_th::before]:opacity-45",
+  progressFoot: "mt-3.5 text-xs leading-6 text-ink-3",
+  badge:
+    "training-badge mt-1 mb-2 inline-flex h-5 shrink-0 items-center justify-center gap-1 rounded-chip bg-surface-2 px-1.5 text-xs font-medium text-ink-2 capitalize data-[band=aging]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[band=aging]:text-warn data-[band=stale]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[band=stale]:text-warn data-[band=very-stale]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[band=very-stale]:text-warn data-[freshness=flag]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[freshness=flag]:text-warn data-[freshness=stale]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[freshness=stale]:text-warn data-[freshness=critical]:bg-[color-mix(in_srgb,var(--warn)_var(--tint),transparent)] data-[freshness=critical]:text-warn",
+  metadata:
+    "flex flex-wrap items-center gap-x-3 gap-y-2 empty:hidden [&_.training-badge]:m-0",
+  syncRow:
+    "mt-3.5 flex min-w-0 flex-wrap items-center gap-x-3.5 gap-y-2.5 data-[tone=success]:[&_.training-sync-message]:text-ok data-[tone=partial]:[&_.training-sync-message]:text-warn data-[tone=failure]:[&_.training-sync-message]:text-warn",
+  syncMessage:
+    "training-sync-message m-0 min-w-0 flex-[1_1_220px] [overflow-wrap:anywhere] text-xs leading-[1.45] text-ink-2",
+  zones: "mt-2.5 grid gap-x-4 gap-y-2 text-xs",
+  zone: "flex min-w-0 items-baseline justify-between gap-4",
+  zoneName:
+    "m-0 min-w-0 [overflow-wrap:anywhere] data-[overlaps=true]:after:text-ink-3 data-[overlaps=true]:after:content-['_·_overlaps']",
+  zoneRange: "m-0 shrink-0 tabular-nums",
+  plan: "m-0 grid list-none gap-2.5 p-0",
+  planItem:
+    "grid min-w-0 gap-[3px] rounded-ctl bg-sunk px-3 py-2.5 [&_strong]:[overflow-wrap:anywhere] [&_strong]:text-sm [&_strong]:font-semibold [&_span]:text-xs [&_span]:leading-5 [&_span]:text-ink-2",
+  planExport: "mt-3.5 border-t border-line pt-3.5",
+  exportControls: "mt-3 flex flex-wrap items-center gap-[9px] [&_label]:text-xs [&_label]:font-semibold [&_label]:text-ink-2",
+  exportStatus: "mt-2.5 text-xs leading-[1.45] text-ink-2",
+  wellness: "mt-3 grid gap-2.5",
+  wellnessRow:
+    "grid min-w-0 grid-cols-[76px_78px_minmax(60px,1fr)] items-center gap-2 text-xs",
+  wellnessValue: "min-w-0 [overflow-wrap:anywhere] text-xs text-ink-2",
+  wellnessEmpty: "min-w-0 [overflow-wrap:anywhere] text-xs text-ink-2",
+  sparkline:
+    "h-[30px] w-full overflow-visible [&_polyline]:fill-none [&_polyline]:stroke-ink [&_polyline]:stroke-2 [&_polyline]:[stroke-linecap:round] [&_polyline]:[stroke-linejoin:round]",
+  analysisPanel:
+    "mt-3.5 rounded-card border border-line bg-surface p-5 shadow-elev-1",
+  analysisTitle: "m-0 text-xl leading-6 font-semibold tracking-normal",
+  analysisIntro: "mt-[9px] max-w-[650px] text-xs leading-6 text-ink-2",
+} as const;
