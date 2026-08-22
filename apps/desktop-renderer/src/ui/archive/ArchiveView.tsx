@@ -92,7 +92,8 @@ function ArchiveList(): ReactElement {
             key={entry.boundaryRef}
             type="button"
             variant="outline"
-            className="archive-entry grid h-auto w-full justify-items-start gap-1 rounded-card border-line bg-surface px-3.5 py-3 text-left shadow-elev-1 transition-colors hover:border-line-2 hover:bg-surface-2 active:shadow-none"
+            className="archive-entry grid h-auto w-full grid-cols-1 items-start justify-start justify-items-start gap-1 whitespace-normal rounded-card border-line bg-surface px-3.5 py-3 text-left font-normal shadow-elev-1 transition-colors hover:border-line-2 hover:bg-surface-2 active:shadow-none"
+            aria-label={`${archiveTimestampCopy(entry.boundaryAt)} · ${archiveTurnCountCopy(entry.turnCount)} · ${archiveReasonCopy(entry.reason)}`}
             disabled={actions === null}
             onClick={() => {
               actions?.open(entry.boundaryRef);
@@ -188,11 +189,7 @@ function ArchiveReader(props: { readonly reading: ArchiveReadingState }): ReactE
       >
         {ARCHIVE_EMPTY_CONVERSATION_COPY}
       </p>
-      <section
-        className="archive-thread grid gap-6"
-        aria-label="Past conversation"
-        aria-live="off"
-      >
+      <section className="archive-thread grid gap-6" aria-label="Past conversation" aria-live="off">
         {reading.turns.map((turn) => (
           <TurnRows key={turn.turnId} turn={turn} />
         ))}

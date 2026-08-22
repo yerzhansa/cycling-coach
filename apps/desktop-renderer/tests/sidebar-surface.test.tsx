@@ -265,7 +265,9 @@ describe("sidebar sync chip", () => {
     render(<Sidebar />);
 
     expect(chip()).toHaveAttribute("data-status", "loading");
+    expect(chipSurface()).toHaveClass("min-w-0");
     expect(chipSurface()).toHaveTextContent("Loading training data");
+    expect(screen.getByText("Sync now")).toHaveClass("max-[860px]:hidden");
 
     update({
       training: {

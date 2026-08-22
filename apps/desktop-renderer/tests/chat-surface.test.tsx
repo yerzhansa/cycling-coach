@@ -161,6 +161,7 @@ describe("chat surface", () => {
 
       expect(form?.nextElementSibling).toBe(disclaimer);
       expect(disclaimer.parentElement).toHaveClass("composer-wrap");
+      expect(disclaimer.parentElement).toHaveClass("bg-bg");
     });
 
     it("focuses the enabled composer when Chat mounts after required setup", () => {
