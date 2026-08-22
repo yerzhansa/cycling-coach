@@ -930,6 +930,12 @@ describe("settings lifecycle", () => {
 });
 
 describe("credential deletion", () => {
+  it("does not offer full reset for verified credentials without repair", async () => {
+    await renderSettings();
+
+    expect(screen.queryByRole("button", { name: "Remove all credentials" })).toBeNull();
+  });
+
   it("offers inline removal when saved credentials are unverified", async () => {
     const user = userEvent.setup();
     const subject = await renderSettings({
@@ -944,9 +950,43 @@ describe("credential deletion", () => {
     );
     expect(subject.resetAllCredentials).not.toHaveBeenCalled();
 
+    await user.click(within(confirmation).getByRole("button", { name: "Remove all credentials" }));
+    await waitFor(() => expect(subject.resetAllCredentials).toHaveBeenCalledOnce());
+  });
+
+  it("offers explicit full reset after an uncertain per-slot deletion", async () => {
+    const user = userEvent.setup();
+    const subject = await renderSettings({
+      deleteCredential: async () => ({
+        slot: "openrouter",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
     await user.click(
-      within(confirmation).getByRole("button", { name: "Remove all credentials" }),
+      screen.getByRole("button", { name: "Confirm deletion of the OpenRouter credential" }),
     );
+    await screen.findByText(
+      "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
+    );
+
+    expect(screen.getByRole("button", { name: "Delete the Anthropic credential" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
+    const reset = screen.getByRole("button", { name: "Remove all credentials" });
+    expect(reset).toBeEnabled();
+
+    await user.click(reset);
+    const confirmation = screen.getByRole("group", { name: "Remove all credentials?" });
+    await waitFor(() =>
+      expect(within(confirmation).getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    await user.click(within(confirmation).getByRole("button", { name: "Remove all credentials" }));
+
     await waitFor(() => expect(subject.resetAllCredentials).toHaveBeenCalledOnce());
   });
 
