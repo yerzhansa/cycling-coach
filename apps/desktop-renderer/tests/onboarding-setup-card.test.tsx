@@ -373,7 +373,7 @@ describe("setup card", () => {
       expect(rowState("training")).toBe("ready");
     });
 
-    expect(trigger("ai").className).toContain("border-ink-2");
+    expect(trigger("ai").className).toContain("border-input");
     expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
     const remove = screen.getByRole("button", { name: "Delete the Intervals.icu connection" });
     expect(remove).toHaveTextContent("Delete");
@@ -571,9 +571,9 @@ describe("setup card", () => {
     expect(
       Array.from(chatgpt?.querySelectorAll("button") ?? [], (entry) => entry.textContent),
     ).toEqual(["Cancel", "Sign in with ChatGPT"]);
-    expect(
-      screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement,
-    ).toHaveClass("justify-end");
+    expect(screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement).toHaveClass(
+      "justify-end",
+    );
     expect(
       screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement
         ?.previousElementSibling,
@@ -766,7 +766,7 @@ describe("setup card", () => {
       expect(rowState("ai")).toBe("ready");
     });
 
-    expect(primaryButton().className).toContain("bg-ink text-bg");
+    expect(primaryButton().className).toContain("bg-primary text-primary-foreground");
     const tick = setupRow("ai").querySelector<HTMLElement>('[data-setup-disc="ready"]');
     expect(tick?.className).toContain("text-ok");
     const pending = setupRow("injury-status").querySelector('[data-setup-disc="pending"]');
@@ -1514,7 +1514,7 @@ describe("setup card accessibility", () => {
     wizard.controller.dispose();
   });
 
-  it("uses stronger tokens for compact Setup copy and essential control edges", async () => {
+  it("uses stronger compact copy and semantic control edges", async () => {
     const user = userEvent.setup();
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
@@ -1528,14 +1528,12 @@ describe("setup card accessibility", () => {
       expect(element?.className).toContain("text-ink-2");
       expect(element?.className).not.toContain("text-ink-3");
     }
-    for (const element of [
-      trigger("ai"),
-      trigger("training"),
-      control("onboarding-injury-status"),
-    ]) {
-      expect(element.className).toContain("border-ink-2");
+    for (const element of [trigger("ai"), trigger("training")]) {
+      expect(element.className).toContain("border-input");
       expect(element.className).not.toContain("border-line-2");
     }
+    expect(control("onboarding-injury-status").className).toContain("border-ink-2");
+    expect(control("onboarding-injury-status").className).not.toContain("border-line-2");
 
     await openLaneMenu(user);
     expect(within(laneMenu() as HTMLElement).getByText(SETUP_MENU_LABEL).className).toContain(

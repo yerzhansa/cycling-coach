@@ -19,7 +19,7 @@ export function Shell(props: { readonly onReady: () => void }): ReactElement {
 
   return (
     <div
-      className={`fixed inset-0 grid bg-bg bg-repeat text-[14px] leading-[1.5] font-sans text-ink [background-image:var(--grain)] [background-size:256px_256px] ${
+      className={`fixed inset-0 grid bg-bg font-sans text-sm text-ink ${
         disposition === "satisfied"
           ? "grid-cols-[260px_minmax(0,1fr)] max-[1100px]:grid-cols-[208px_minmax(0,1fr)] max-[860px]:grid-cols-[184px_minmax(0,1fr)]"
           : "grid-cols-[minmax(0,1fr)]"

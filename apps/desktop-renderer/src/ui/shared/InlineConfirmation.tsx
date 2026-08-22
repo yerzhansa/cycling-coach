@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, type ReactElement } from "react";
-import { BUTTON_COMPACT_QUIET_SM, BUTTON_DANGER_SOLID_SM } from "./buttons.js";
+import { Button } from "../../components/ui/button.js";
 
 export type InlineConfirmationFocus = "cancel" | "confirm" | null;
 
@@ -78,19 +78,21 @@ export function InlineConfirmation(props: {
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <button
+          <Button
             type="button"
             ref={cancel}
-            className={BUTTON_COMPACT_QUIET_SM}
+            variant="ghost"
+            size="sm"
             disabled={props.cancelDisabled}
             onClick={props.onCancel}
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             ref={confirm}
-            className={BUTTON_DANGER_SOLID_SM}
+            variant="destructive-solid"
+            size="sm"
             disabled={props.confirmBusy ? false : props.confirmDisabled}
             aria-disabled={props.confirmBusy ? "true" : undefined}
             aria-label={props.confirmAriaLabel}
@@ -99,7 +101,7 @@ export function InlineConfirmation(props: {
             }}
           >
             {props.confirmLabel}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
