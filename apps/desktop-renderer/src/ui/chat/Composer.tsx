@@ -8,9 +8,9 @@ import {
   type RefObject,
 } from "react";
 import { filterSlashCommands } from "../../chat/commands.js";
+import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { setupReady } from "../../state/onboarding-slice.js";
-import styles from "./Composer.module.css";
 import { SlashPopup } from "./SlashPopup.js";
 
 export interface ComposerHandle {
@@ -21,6 +21,7 @@ export interface ComposerHandle {
 export function Composer(props: {
   readonly handle: RefObject<ComposerHandle | null>;
 }): ReactElement {
+  const form = useRef<HTMLFormElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState("");
   const [selected, setSelected] = useState(0);
@@ -107,7 +108,8 @@ export function Composer(props: {
 
   return (
     <form
-      className={`composer ${styles.form}`}
+      ref={form}
+      className="composer relative"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
@@ -115,18 +117,26 @@ export function Composer(props: {
     >
       <SlashPopup
         open={open}
+        anchor={form}
         matches={matches}
         selected={active}
         onHighlight={setSelected}
         onAccept={accept}
+        onDismiss={() => {
+          setDismissed(true);
+        }}
       />
-      <label className={`${styles.label} chat-composer__label`} htmlFor="message">
+      <label
+        className="chat-composer__label mb-[7px] ml-[calc(var(--inset)*2)] block text-xs leading-[1.4] font-medium text-ink-2"
+        htmlFor="message"
+      >
         Message your coach
       </label>
-      <div className={`${styles.controls} chat-composer__controls`}>
+      <div className="chat-composer__controls grid grid-cols-[minmax(0,1fr)_var(--ctl-h-lg)] items-center gap-2 rounded-card border border-line-2 bg-surface py-inset pr-inset pl-[calc(var(--inset)*2)] transition-[border-color,box-shadow] duration-120 motion-reduce:transition-none focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
         <textarea
           id="message"
           ref={textarea}
+          className="min-h-10 max-h-[140px] resize-none border-0 bg-transparent py-2 text-ink outline-0 placeholder:text-[color-mix(in_srgb,var(--ink-2)_72%,transparent)] focus-visible:outline-0"
           rows={2}
           disabled={inputDisabled || !canChat}
           onChange={(event) => {
@@ -139,14 +149,15 @@ export function Composer(props: {
             setDismissed(true);
           }}
         />
-        <button
+        <Button
           type="submit"
-          className={styles.send}
+          variant="default"
+          size="icon-lg"
           aria-label="Send message"
           disabled={sendDisabled || !canChat}
         >
           ↑
-        </button>
+        </Button>
       </div>
     </form>
   );

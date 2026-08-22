@@ -1,11 +1,11 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
-import styles from "./Transcript.module.css";
 
 export function Notice(): ReactElement {
   const notice = useEnduragentStore((state) => state.chat.notice);
   return (
-    <p className={`${styles.notice} chat-notice`} hidden={notice === null}>
+    <p className="chat-notice m-0 text-sm text-ink-2" hidden={notice === null}>
       {notice ?? ""}
     </p>
   );
@@ -17,9 +17,11 @@ export function RetryBar(): ReactElement {
   const actions = useEnduragentStore((state) => state.chatActions);
 
   return (
-    <button
+    <Button
       type="button"
-      className={`${styles.pill} chat-retry`}
+      className="chat-retry justify-self-start"
+      variant="outline"
+      size="sm"
       hidden={!interrupted}
       disabled={workBlocked}
       onClick={() => {
@@ -28,6 +30,6 @@ export function RetryBar(): ReactElement {
       }}
     >
       Retry message
-    </button>
+    </Button>
   );
 }
