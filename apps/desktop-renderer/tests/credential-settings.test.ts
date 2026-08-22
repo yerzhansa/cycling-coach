@@ -632,6 +632,43 @@ describe("credential settings controller", () => {
     expect(content(controller.state()).repairCredential).toBeNull();
   });
 
+  it("allows confirmed removal of all credentials while a per-slot deletion needs repair", async () => {
+    const { controller, subject, resetAllCredentials } = createSubject({
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      },
+    });
+    await controller.activate();
+
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() =>
+      expect(controller.state()).toMatchObject({
+        status: "error",
+        repairCredential: "anthropic",
+      }),
+    );
+
+    subject.requestReset();
+    expect(controller.state()).toMatchObject({
+      status: "confirming",
+      confirmation: "all",
+      repairCredential: "anthropic",
+    });
+    subject.confirmDelete();
+
+    await vi.waitFor(() => expect(controller.state().status).toBe("deleted"));
+    expect(resetAllCredentials).toHaveBeenCalledOnce();
+    expect(controller.state()).toMatchObject({
+      status: "deleted",
+      entries: [],
+      confirmation: null,
+      repairCredential: null,
+    });
+  });
+
   it("treats a rejected delete request as an unknown outcome that requires repair", async () => {
     const { controller, subject, deleteCredential } = createSubject({
       deleteCredential: async () => {
