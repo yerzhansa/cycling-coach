@@ -1,9 +1,8 @@
-import { useEffect, useRef, type ReactElement } from "react";
+import type { ReactElement } from "react";
 import { APP_VERSION } from "../../app-version.js";
 import type { DesktopUpdateState } from "../../update/controller.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
-import { RELEASE_NOTES_UNAVAILABLE_COPY } from "./copy.js";
 import styles from "./SettingsView.module.css";
 
 interface UpdateCopy {
@@ -79,39 +78,15 @@ function updateCopy(state: DesktopUpdateState): UpdateCopy {
 
 export function ApplicationSection(): ReactElement {
   const update = useEnduragentStore((store) => store.settings.update);
-  const releaseNotes = useEnduragentStore((store) => store.settings.releaseNotes);
-  const releaseNotesOpen = useEnduragentStore((store) => store.settings.releaseNotesOpen);
   const mutating = useEnduragentStore((store) => settingsMutationActive(store.settings));
   const ports = useEnduragentStore((store) => store.settingsPorts);
   const chatActions = useEnduragentStore((store) => store.chatActions);
   const setActiveView = useEnduragentStore((store) => store.setActiveView);
-  const dialog = useRef<HTMLDialogElement>(null);
-  const closeDialog = useRef<HTMLButtonElement>(null);
-  const opener = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const element = dialog.current;
-    if (element === null) return;
-    if (releaseNotesOpen && !element.open) {
-      element.showModal();
-      closeDialog.current?.focus();
-      return;
-    }
-    if (!releaseNotesOpen && element.open) {
-      element.close();
-      opener.current?.focus();
-    }
-  }, [releaseNotesOpen]);
-
   const copy = updateCopy(update.state);
   const updateBusy =
     mutating ||
     update.actionDisabled ||
     ["disabled", "checking", "downloading", "installing"].includes(update.state.status);
-  const releaseUrl =
-    releaseNotes.status === "available" || releaseNotes.status === "unavailable"
-      ? releaseNotes.releaseUrl
-      : null;
 
   return (
     <>
@@ -140,24 +115,6 @@ export function ApplicationSection(): ReactElement {
             </button>
           )}
         </div>
-        <div className={styles.row}>
-          <div className={styles.label}>
-            <div className={styles.rowTitle}>What’s new</div>
-            <div className={styles.rowDetail}>Athlete-facing changes in the latest release</div>
-          </div>
-          <button
-            type="button"
-            ref={opener}
-            className={styles.button}
-            aria-haspopup="dialog"
-            aria-expanded={releaseNotesOpen}
-            onClick={() => {
-              ports?.releaseNotes.open();
-            }}
-          >
-            What’s new
-          </button>
-        </div>
       </section>
       <h2 className={styles.heading}>Danger</h2>
       <section className={styles.group} aria-label="Danger">
@@ -181,70 +138,6 @@ export function ApplicationSection(): ReactElement {
           </button>
         </div>
       </section>
-      <dialog
-        ref={dialog}
-        className={styles.dialog}
-        aria-labelledby="release-notes-title"
-        aria-modal="true"
-        aria-busy={releaseNotes.status === "loading" ? "true" : undefined}
-        onCancel={(event) => {
-          event.preventDefault();
-          ports?.releaseNotes.close();
-        }}
-      >
-        <header className={styles.dialogHeader}>
-          <h2 id="release-notes-title">
-            {releaseNotes.status === "available"
-              ? `What’s new in ${releaseNotes.version}`
-              : "What’s new"}
-          </h2>
-          <button
-            type="button"
-            ref={closeDialog}
-            className={styles.button}
-            aria-label="Close release notes"
-            onClick={() => {
-              ports?.releaseNotes.close();
-            }}
-          >
-            Close
-          </button>
-        </header>
-        <div className={styles.dialogContent} role="status" aria-live="polite" aria-atomic="true">
-          {releaseNotes.status === "loading" ? <p>Loading release notes…</p> : null}
-          {releaseNotes.status === "idle" ? <p>Loading release notes…</p> : null}
-          {releaseNotes.status === "unavailable" ? <p>{RELEASE_NOTES_UNAVAILABLE_COPY}</p> : null}
-          {releaseNotes.status === "available" ? (
-            releaseNotes.notes.length === 0 ? (
-              <p>No athlete-facing changes were listed for this release.</p>
-            ) : (
-              <ol>
-                {releaseNotes.notes.map((note) => (
-                  <li key={note}>{note}</li>
-                ))}
-              </ol>
-            )
-          ) : null}
-        </div>
-        <footer className={styles.dialogActions}>
-          {releaseNotes.status === "unavailable" ? (
-            <button
-              type="button"
-              className={styles.button}
-              onClick={() => {
-                ports?.releaseNotes.retry();
-              }}
-            >
-              Retry
-            </button>
-          ) : null}
-          {releaseUrl === null ? null : (
-            <a href={releaseUrl} target="_blank" rel="noopener noreferrer">
-              View full release
-            </a>
-          )}
-        </footer>
-      </dialog>
     </>
   );
 }

@@ -15,7 +15,6 @@ import {
   DESKTOP_CONNECTION_CHANNEL,
   DESKTOP_HOST,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
-  DESKTOP_RELEASE_NOTES_CHANNEL,
   DESKTOP_RENDERER_ORIGIN,
   DESKTOP_RENDERER_URL,
   DESKTOP_SCHEME,
@@ -217,7 +216,6 @@ describe("desktop security boundary", () => {
       DESKTOP_RENDERER_URL,
       DESKTOP_CONNECTION_CHANNEL,
       DESKTOP_OPEN_EXTERNAL_CHANNEL,
-      DESKTOP_RELEASE_NOTES_CHANNEL,
     }).toEqual({
       DESKTOP_SCHEME: "enduragent",
       DESKTOP_HOST: "app",
@@ -225,7 +223,6 @@ describe("desktop security boundary", () => {
       DESKTOP_RENDERER_URL: "enduragent://app/index.html",
       DESKTOP_CONNECTION_CHANNEL: "desktop:get-daemon-connection",
       DESKTOP_OPEN_EXTERNAL_CHANNEL: "desktop:open-external",
-      DESKTOP_RELEASE_NOTES_CHANNEL: "desktop:get-release-notes",
     });
     expect({
       DESKTOP_WINDOW_WIDTH,
