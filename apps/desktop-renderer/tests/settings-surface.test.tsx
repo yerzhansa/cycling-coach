@@ -21,7 +21,6 @@ import {
   onboardingCredentialMutationActive,
   type OnboardingController,
 } from "../src/onboarding/controller.js";
-import { createReleaseNotesController } from "../src/release-notes/controller.js";
 import { createAthleteSettingsController } from "../src/settings/athlete-controller.js";
 import { createCredentialSettingsController } from "../src/settings/credential-controller.js";
 import { createProviderModelSettingsController } from "../src/settings/provider-model-controller.js";
@@ -32,7 +31,6 @@ import {
 } from "../src/settings/telegram-controller.js";
 import { createSpendMeterController } from "../src/spend-meter/controller.js";
 import { createOnboardingViewAdapter } from "../src/state/adapters/onboarding.js";
-import { createReleaseNotesSettingsAdapter } from "../src/state/adapters/release-notes.js";
 import {
   createAthleteSettingsAdapter,
   createCoachSettingsAdapter,
@@ -176,7 +174,6 @@ interface HarnessOptions {
   readonly deleteCredential?: () => Promise<CredentialDeleteResult>;
   readonly onDeleted?: () => Promise<void> | void;
   readonly onReconciled?: () => Promise<void> | void;
-  readonly releaseNotes?: () => Promise<ReleaseNotesResult>;
   readonly updateState?: DesktopUpdateState;
   readonly spend?: () => Promise<SpendSummary>;
   readonly telegram?: TelegramControlStatus;
@@ -260,9 +257,6 @@ function createHarness(options: HarnessOptions = {}) {
   });
   const updateAdapter = createUpdateSettingsAdapter({
     publish: (next) => store.getState().patchSettings({ update: next }),
-  });
-  const releaseNotesAdapter = createReleaseNotesSettingsAdapter({
-    publish: (patch) => store.getState().patchSettings(patch),
   });
 
   const conversationController = createSessionSettingsController({
@@ -366,18 +360,6 @@ function createHarness(options: HarnessOptions = {}) {
     },
     view: updateAdapter.view,
   });
-  const releaseNotesController = createReleaseNotesController({
-    request:
-      options.releaseNotes ??
-      (async () => ({
-        status: "available",
-        version: "1998.7.6",
-        notes: ["Added a synthetic quick action."],
-        releaseUrl: "https://example.invalid/release",
-      })),
-    view: releaseNotesAdapter.view,
-  });
-
   store.getState().bindSettingsPorts({
     panes: {
       activate() {
@@ -400,7 +382,6 @@ function createHarness(options: HarnessOptions = {}) {
     telegram: telegramAdapter.port,
     spend: spendAdapter.port,
     update: updateAdapter.port,
-    releaseNotes: releaseNotesAdapter.port,
     units: { set: vi.fn() },
     openSetup,
   });
@@ -430,7 +411,6 @@ function createHarness(options: HarnessOptions = {}) {
       telegramController.dispose();
       spendController.dispose();
       updateController.dispose();
-      releaseNotesController.dispose();
       store.getState().bindSettingsPorts(null);
     },
   };
@@ -757,7 +737,6 @@ describe("settings mutation lock", () => {
       expect(useEnduragentStore.getState().settings.savingOwners).toEqual(["session"]);
     });
     expect(updateAction).toBeDisabled();
-    expect(screen.getByRole("button", { name: "What’s new" })).toBeEnabled();
     await user.click(updateAction);
     expect(subject.restartToUpdate).not.toHaveBeenCalled();
 
@@ -1659,6 +1638,14 @@ describe("coach route", () => {
 });
 
 describe("application section", () => {
+  it("does not offer desktop release notes", async () => {
+    await renderSettings();
+
+    const application = within(screen.getByRole("region", { name: "Application" }));
+    expect(application.queryByText("What’s new")).toBeNull();
+    expect(application.queryByRole("button", { name: "What’s new" })).toBeNull();
+  });
+
   it("runs the update action the state calls for", async () => {
     const user = userEvent.setup();
     const subject = await renderSettings({
@@ -1699,41 +1686,6 @@ describe("application section", () => {
       expect(subject.restartToUpdate).not.toHaveBeenCalled();
     },
   );
-
-  it("opens release notes and offers a retry when they are unavailable", async () => {
-    const user = userEvent.setup();
-    let attempts = 0;
-    await renderSettings({
-      releaseNotes: async () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error("synthetic release notes failure");
-        return {
-          status: "available",
-          version: "1998.7.6",
-          notes: ["Added a synthetic quick action."],
-          releaseUrl: "https://example.invalid/release",
-        };
-      },
-    });
-
-    await user.click(screen.getByRole("button", { name: "What’s new" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveClass("m-auto");
-    expect(
-      await within(dialog).findByText(
-        "Release notes aren’t available right now. Check your connection and try again.",
-      ),
-    ).toBeInTheDocument();
-
-    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
-    expect(await within(dialog).findByText("Added a synthetic quick action.")).toBeInTheDocument();
-    expect(within(dialog).getByRole("heading", { name: "What’s new in 1998.7.6" })).toBeVisible();
-
-    await user.click(within(dialog).getByRole("button", { name: "Close release notes" }));
-    await waitFor(() => {
-      expect(useEnduragentStore.getState().settings.releaseNotesOpen).toBe(false);
-    });
-  });
 });
 
 describe("spending", () => {

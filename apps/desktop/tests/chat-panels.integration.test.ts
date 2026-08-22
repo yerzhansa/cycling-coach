@@ -1059,7 +1059,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "pasteTelegramTokenFromClipboard",
         "platform",
         "reconcileTelegram",
-        "releaseNotes",
         "removeTelegram",
         "removeTelegramAllowedSender",
         "removeTelegramWebhook",
@@ -1870,27 +1869,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       retentionWarningVisible: true,
       paletteSwatchesFillButtons: true,
     });
-    const releaseDialogCentered = await fixture.evaluate<boolean>(`
-      const settingsPage = document.querySelector('section[aria-label="Settings"]');
-      const releaseNotesButton = Array.from(settingsPage.querySelectorAll("button")).find(
-        (entry) => entry.textContent.trim() === "What’s new",
-      );
-      releaseNotesButton.click();
-      const deadline = Date.now() + 2000;
-      let dialog = document.querySelector("dialog.new-settings-dialog[open]");
-      while (dialog === null && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        dialog = document.querySelector("dialog.new-settings-dialog[open]");
-      }
-      if (dialog === null) throw new Error("release notes dialog did not open");
-      const rect = dialog.getBoundingClientRect();
-      const centered =
-        Math.abs(rect.left + rect.width / 2 - window.innerWidth / 2) <= 1 &&
-        Math.abs(rect.top + rect.height / 2 - window.innerHeight / 2) <= 1;
-      dialog.querySelector('button[aria-label="Close release notes"]').click();
-      return centered;
-    `);
-    expect(releaseDialogCentered).toBe(true);
     const runtimeReads = calls.filter((call) => call.method === "getRuntimeConfig");
     expect(runtimeReads.length).toBeGreaterThan(runtimeReadsBeforeSettings);
     expect(runtimeReads).toEqual(

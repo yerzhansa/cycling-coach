@@ -285,13 +285,6 @@
       "test": "apps/desktop-renderer/tests/settings-surface.test.tsx > runs the update action the state calls for"
     },
     {
-      "id": "settings.application.release-notes",
-      "surface": "settings",
-      "expected": "Release notes open from Settings, render the available version notes, and expose retry when notes are unavailable.",
-      "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/settings-surface.test.tsx > opens release notes and offers a retry when they are unavailable"
-    },
-    {
       "id": "settings.application.reset-conversation",
       "surface": "settings",
       "expected": "Reset conversation uses the same confirmation flow as Chat and clears conversation history without removing training data or saved coach memory.",

@@ -62,7 +62,7 @@ describe("Windows installed acceptance", () => {
 
     expect(plan.manifests).toEqual(collection.manifests);
     expect(plan.totals).toEqual(derivedTotals);
-    expect(plan.totals.total).toBe(140);
+    expect(plan.totals.total).toBe(139);
     expect(plan.automatedEvidence).toHaveLength(derivedTotals.deterministic);
     expect(plan.manualChecklist).toHaveLength(derivedTotals.vmOnly);
     expect(

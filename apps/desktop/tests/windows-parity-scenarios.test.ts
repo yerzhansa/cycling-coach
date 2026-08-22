@@ -73,7 +73,7 @@ describe("Windows parity scenario manifests", () => {
         (scenario) => scenario.automation === "deterministic",
       ).length,
       vmOnly: collection.scenarios.filter((scenario) => scenario.automation === "vm-only").length,
-    }).toEqual({ total: 140, deterministic: 112, vmOnly: 28 });
+    }).toEqual({ total: 139, deterministic: 111, vmOnly: 28 });
     expect(new Set(collection.scenarios.map((scenario) => scenario.id)).size).toBe(
       collection.scenarios.length,
     );
