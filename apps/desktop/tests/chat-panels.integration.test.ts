@@ -977,7 +977,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       controlObserver.disconnect();
       const coach = document.querySelector(".chat-message--coach");
       const link = coach?.querySelector("a");
-      const syncChip = document.querySelector(".sync-chip");
+      const syncChip = document.querySelector("[data-sync-chip]");
       return {
         location: location.href,
         bridgeKeys,

@@ -8,7 +8,14 @@ import type {
   WellnessTrendPanel,
 } from "@enduragent/coach-contract";
 import { TriangleAlert } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, type ReactElement, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { rideImportStatusCopy } from "../../ride-import.js";
 import { rideImportStatusSuppressed } from "../../state/onboarding-slice.js";
 import {
@@ -41,6 +48,10 @@ import { PowerProgressContent } from "./PowerProgressPanel.js";
 import { RecentRidesStatePanel, RideDetailView } from "./RideReview.js";
 import { WellnessSparkline } from "./WellnessSparkline.js";
 import { WorkoutArchiveExportControl } from "./TrainingExportControls.js";
+import {
+  STRAVA_RESTRICTION_CARD_ID,
+  takeTrainingRestrictionFocusRequest,
+} from "./restriction-focus.js";
 
 function Panel(props: {
   readonly name: string;
@@ -67,7 +78,9 @@ function PowerProgressStatePanel(props: { readonly panel: PowerProgressPanel }):
   );
 }
 
-function SyncPanel(): ReactElement {
+function SyncPanel(props: {
+  readonly restrictionCard: RefObject<HTMLDivElement | null>;
+}): ReactElement {
   const metadata = useEnduragentStore((store) => store.training.metadata);
   const sync = useEnduragentStore((store) => store.sync);
   const actions = useEnduragentStore((store) => store.syncActions);
@@ -139,7 +152,8 @@ function SyncPanel(): ReactElement {
       </div>
       {restriction === null ? null : (
         <div
-          id="strava-restricted-activities"
+          ref={props.restrictionCard}
+          id={STRAVA_RESTRICTION_CARD_ID}
           tabIndex={-1}
           className="mt-4 rounded-xl border border-line bg-surface p-4 shadow-[var(--edge),var(--elev-1)]"
         >
@@ -377,24 +391,28 @@ export function TrainingView(): ReactElement {
   const rideAnalysisActions = useEnduragentStore((store) => store.rideAnalysisActions);
   const rideButtons = useRef(new Map<string, HTMLButtonElement>());
   const previousRideId = useRef<string | null>(null);
+  const restrictionCard = useRef<HTMLDivElement>(null);
   const title = useRef<HTMLHeadingElement>(null);
   const status = trainingStatusCopy(training.status);
 
   useLayoutEffect(() => {
-    const element = title.current;
-    if (element === null) return;
-    const owner = element.ownerDocument;
-    const active = owner.activeElement;
-    if (active !== null && active !== owner.body && active !== owner.documentElement) return;
-    element.focus();
-  }, []);
-
-  useLayoutEffect(() => {
     const currentRideId = selectedRide?.id ?? null;
-    if (currentRideId !== null && previousRideId.current !== currentRideId) {
+    const restrictionFocusRequested = takeTrainingRestrictionFocusRequest();
+    if (restrictionFocusRequested) {
+      (restrictionCard.current ?? title.current)?.focus();
+    } else if (currentRideId !== null && previousRideId.current !== currentRideId) {
       title.current?.focus();
     } else if (currentRideId === null && previousRideId.current !== null) {
       (rideButtons.current.get(previousRideId.current) ?? title.current)?.focus();
+    } else {
+      const element = title.current;
+      if (element !== null) {
+        const owner = element.ownerDocument;
+        const active = owner.activeElement;
+        if (active === null || active === owner.body || active === owner.documentElement) {
+          element.focus();
+        }
+      }
     }
     previousRideId.current = currentRideId;
   }, [selectedRide?.id]);
@@ -419,7 +437,7 @@ export function TrainingView(): ReactElement {
       <p className={`${styles.status} training-status`} hidden={training.status === "ready"}>
         {status}
       </p>
-      <SyncPanel />
+      <SyncPanel restrictionCard={restrictionCard} />
       <PowerProgressStatePanel panel={training.trainingContext.performanceProgress} />
       <RecentRidesStatePanel
         panel={training.trainingContext.recentRides}
