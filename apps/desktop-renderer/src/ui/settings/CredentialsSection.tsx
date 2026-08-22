@@ -268,7 +268,8 @@ export function CredentialSettingsFeedback(): ReactElement | null {
   const resetConfirmation = current?.confirmation === "all";
   const canRetryRecovery = recovery?.state === "locked" || recovery?.state === "unavailable";
   const canReset =
-    recovery !== undefined && (recovery.state !== "ready" || recovery.unverifiedEnvelopes > 0);
+    recovery !== undefined &&
+    (repairRequired !== null || recovery.state !== "ready" || recovery.unverifiedEnvelopes > 0);
   const announcement =
     "announcement" in state && state.announcement.length > 0
       ? state.announcement
