@@ -110,7 +110,7 @@ export function ChatView(): ReactElement {
         </div>
       </main>
       <div
-        className="composer-wrap sticky bottom-0 z-2 col-start-1 row-start-2 self-end bg-[linear-gradient(transparent,var(--bg)_28%)] px-[max(24px,calc((100%-48px-840px)/2))] pt-3 pb-[18px] max-[760px]:px-4"
+        className="composer-wrap sticky bottom-0 z-2 col-start-1 row-start-2 self-end bg-bg bg-[linear-gradient(transparent,var(--bg)_28%)] px-[max(24px,calc((100%-48px-840px)/2))] pt-3 pb-[18px] max-[760px]:px-4"
         ref={composerWrap}
       >
         <div className="chat-notice-host empty:hidden">

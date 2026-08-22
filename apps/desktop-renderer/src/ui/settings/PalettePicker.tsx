@@ -19,7 +19,7 @@ export function PalettePicker(): ReactElement {
           key={palette.id}
           type="button"
           variant="ghost"
-          className="flex h-auto cursor-pointer flex-col gap-1.5 rounded-ctl border-0 bg-transparent p-0 font-inherit"
+          className="flex h-auto cursor-pointer flex-col items-stretch gap-1.5 rounded-ctl border-0 bg-transparent p-0 font-inherit"
           aria-pressed={palette.id === paletteId}
           aria-label={`Use the ${palette.name} palette`}
           onClick={() => {

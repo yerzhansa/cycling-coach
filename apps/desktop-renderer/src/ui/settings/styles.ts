@@ -33,7 +33,7 @@ export const settingsStyles = {
   capLabel: "min-w-0 flex-1 text-sm font-semibold",
   srOnly: "sr-only",
   dialog:
-    "new-settings-dialog w-[min(520px,calc(100vw-48px))] max-w-none max-h-[min(70vh,620px)] rounded-card border border-line-2 bg-surface p-5 text-ink shadow-elev-4 backdrop:bg-[var(--scrim)]",
+    "new-settings-dialog m-auto w-[min(520px,calc(100vw-48px))] max-w-none max-h-[min(70vh,620px)] rounded-card border border-line-2 bg-surface p-5 text-ink shadow-elev-4 backdrop:bg-[var(--scrim)]",
   dialogHeader: "flex items-baseline justify-between gap-3 [&_h2]:m-0 [&_h2]:text-[15px]",
   dialogContent: "mt-3 text-[13.5px] text-ink-2 [&_ol]:m-0 [&_ol]:pl-5 [&_li]:mb-1.5",
   dialogActions:

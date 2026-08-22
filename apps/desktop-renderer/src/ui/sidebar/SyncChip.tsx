@@ -59,7 +59,7 @@ export function SyncChip(): ReactElement {
 
   return (
     <div
-      className="relative flex min-h-ctl w-full items-center gap-2 px-row py-1.5 text-left text-xs font-normal text-ink-2"
+      className="relative flex min-h-ctl min-w-0 w-full items-center gap-2 px-row py-1.5 text-left text-xs font-normal text-ink-2"
       data-sync-chip=""
       data-status={status}
     >
@@ -136,7 +136,10 @@ export function SyncChip(): ReactElement {
           />
         )}
       </span>
-      <span className="pointer-events-none relative z-[1] flex-none text-xs text-ink-3" aria-hidden="true">
+      <span
+        className="pointer-events-none relative z-[1] flex-none text-xs text-ink-3 max-[860px]:hidden"
+        aria-hidden="true"
+      >
         {sync.label}
       </span>
     </div>

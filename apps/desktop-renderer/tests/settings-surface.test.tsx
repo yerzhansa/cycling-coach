@@ -1652,7 +1652,9 @@ describe("coach route", () => {
     expect(label).not.toBeNull();
     expect(label).toHaveClass("settings-label", "flex", "min-w-0", "flex-1", "flex-col");
     expect(label?.querySelector(".settings-row-title")?.textContent).toBe("Provider");
-    expect(label?.querySelector(".settings-row-detail")?.textContent).toMatch(/^Currently active: /u);
+    expect(label?.querySelector(".settings-row-detail")?.textContent).toMatch(
+      /^Currently active: /u,
+    );
   });
 });
 
@@ -1716,6 +1718,7 @@ describe("application section", () => {
 
     await user.click(screen.getByRole("button", { name: "What’s new" }));
     const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveClass("m-auto");
     expect(
       await within(dialog).findByText(
         "Release notes aren’t available right now. Check your connection and try again.",
