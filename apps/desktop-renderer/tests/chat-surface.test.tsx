@@ -759,6 +759,7 @@ describe("chat surface", () => {
       expect(source).not.toContain("font-mono");
       expect(source).toContain("PopoverContent");
       expect(source).toContain("components/ui/button.js");
+      expect(source).toContain("chat-markdown\\\\_\\\\_table-scroll");
     });
   });
 });
