@@ -768,7 +768,7 @@ describe("chat surface", () => {
       expect(source).toContain("chat-markdown\\\\_\\\\_table-scroll");
     });
 
-    it("keeps chat support cards and dialogs on shadcn primitives", async () => {
+    it("keeps chat support cards and dialogs on local UI primitives", async () => {
       const sourceRoot = resolve(import.meta.dirname, "..", "src", "ui", "chat");
       const sources = await Promise.all(
         [

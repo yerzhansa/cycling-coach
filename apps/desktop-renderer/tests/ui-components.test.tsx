@@ -97,7 +97,7 @@ function ComponentGallery() {
   );
 }
 
-describe("shadcn component skin", () => {
+describe("local UI component skin", () => {
   for (const paletteId of PALETTE_IDS) {
     for (const theme of THEMES) {
       it(`renders every initial component with ${paletteId} ${theme} tokens`, () => {
