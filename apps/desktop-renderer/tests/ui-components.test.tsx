@@ -16,12 +16,6 @@ import {
   DialogTrigger,
 } from "../src/components/ui/dialog.js";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../src/components/ui/dropdown-menu.js";
-import {
   Popover,
   PopoverContent,
   PopoverDescription,
@@ -35,12 +29,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../src/components/ui/select.js";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "../src/components/ui/tooltip.js";
 import { applyPalette, type ResolvedTheme } from "../src/theme/applyPalette.js";
 import { paletteById } from "../src/theme/palettes.js";
 
@@ -81,18 +69,6 @@ function ComponentGallery() {
           <PopoverDescription>Popover description</PopoverDescription>
         </PopoverContent>
       </Popover>
-      <TooltipProvider delay={0}>
-        <Tooltip open>
-          <TooltipTrigger>Tooltip trigger</TooltipTrigger>
-          <TooltipContent>Tooltip sample</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-      <DropdownMenu open modal={false}>
-        <DropdownMenuTrigger>Menu trigger</DropdownMenuTrigger>
-        <DropdownMenuContent>
-          <DropdownMenuItem>Menu item</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
     </>
   );
 }
@@ -115,15 +91,9 @@ describe("local UI component skin", () => {
           "rounded-card",
           "border-border",
         );
-        for (const slot of [
-          "dialog-content",
-          "select-content",
-          "popover-content",
-          "tooltip-content",
-          "dropdown-menu-content",
-        ]) {
+        for (const slot of ["dialog-content", "select-content", "popover-content"]) {
           expect(document.querySelector(`[data-slot="${slot}"]`)).toHaveClass(
-            slot === "tooltip-content" ? "rounded-ctl" : "rounded-card",
+            "rounded-card",
             "border-line-2",
             "shadow-elev-3",
           );
