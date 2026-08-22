@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { DEVELOPMENT_PACKAGE_NAME } from "../scripts/development-package-plan.mjs";
 import {
   KEYCHAIN_BINDING_ASAR_PATH,
+  KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN,
   KEYCHAIN_BINDING_FUSE_CONFIGURATION,
 } from "../scripts/package-inventory.mjs";
 import { readBuilderAuthority, verifyPackageLayout } from "../scripts/verify-package-layout.mjs";
@@ -180,7 +181,7 @@ function builderYaml(
     "productName: Enduragent",
     "asar: true",
     "asarUnpack:",
-    `  - ${KEYCHAIN_BINDING_ASAR_PATH}`,
+    `  - ${KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN}`,
     "electronFuses:",
     ...Object.entries(KEYCHAIN_BINDING_FUSE_CONFIGURATION).map(
       ([name, value]) => `  ${name}: ${String(value)}`,
@@ -642,6 +643,18 @@ describe("desktop package layout", () => {
       asarSourceRoot: join(desktopRoot, "dist/self-test-asar"),
       externalSourceRoot: join(desktopRoot, "dist/extra-resources"),
     });
+  });
+
+  it("requires the exact keychain binding unpack source", async () => {
+    const fixture = await syntheticPackage();
+    const yaml = builderYaml().replace(
+      KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN,
+      KEYCHAIN_BINDING_ASAR_PATH,
+    );
+    await writeFile(join(fixture.desktop, "electron-builder.yml"), yaml);
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("invalid builder packaging authority");
   });
 
   it("pins the sole audited Electron locale", async () => {

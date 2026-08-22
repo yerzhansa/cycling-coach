@@ -2,7 +2,7 @@ appId: icu.enduragent.desktop
 productName: Enduragent
 asar: true
 asarUnpack:
-  - native/keychain-binding.node
+  - dist/self-test-asar/native/keychain-binding.node
 electronFuses:
   runAsNode: false
   enableNodeOptionsEnvironmentVariable: false

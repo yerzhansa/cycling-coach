@@ -9,6 +9,8 @@ import { contained } from "./package-plan.mjs";
 export { contained } from "./package-plan.mjs";
 
 export const KEYCHAIN_BINDING_ASAR_PATH = "native/keychain-binding.node";
+export const KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN =
+  `dist/self-test-asar/${KEYCHAIN_BINDING_ASAR_PATH}`;
 export const KEYCHAIN_BINDING_FUSE_CONFIGURATION = Object.freeze({
   runAsNode: false,
   enableNodeOptionsEnvironmentVariable: false,
@@ -369,7 +371,7 @@ export function validateBuilderInventoryAuthority(config, desktopRoot, options =
     !Array.isArray(config.extraResources) ||
     !Array.isArray(config.asarUnpack) ||
     config.asarUnpack.length !== 1 ||
-    config.asarUnpack[0] !== KEYCHAIN_BINDING_ASAR_PATH ||
+    config.asarUnpack[0] !== KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN ||
     !isDeepStrictEqual(config.electronFuses, KEYCHAIN_BINDING_FUSE_CONFIGURATION) ||
     validateEnvelopeAuthority(config) !== true
   ) {

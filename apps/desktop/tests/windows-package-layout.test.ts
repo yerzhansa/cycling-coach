@@ -6,6 +6,7 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { createPackage } from "@electron/asar";
 import { afterEach, describe, expect, it } from "vitest";
+import { KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN } from "../scripts/package-inventory.mjs";
 import {
   WINDOWS_PACKAGE_GUID,
   windowsPackageArtifactName,
@@ -171,7 +172,7 @@ function builderYaml(): string {
     "productName: Enduragent",
     "asar: true",
     "asarUnpack:",
-    "  - native/keychain-binding.node",
+    `  - ${KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN}`,
     "electronFuses:",
     "  runAsNode: false",
     "  enableNodeOptionsEnvironmentVariable: false",
