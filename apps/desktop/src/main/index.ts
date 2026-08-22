@@ -96,7 +96,6 @@ import {
   type OnboardingLlmSelection,
 } from "./llm-selection.js";
 import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
-import { installDesktopReleaseNotesIpc } from "./release-notes-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import { adoptDeviceTimezoneAtStart } from "./session-timezone.js";
 import {
@@ -271,7 +270,6 @@ async function runDesktop(): Promise<void> {
   let disposeTrainingExportIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeAppearanceIpc: (() => void) | undefined;
-  let disposeReleaseNotesIpc: (() => void) | undefined;
   let disposeUpdateIpc: (() => void) | undefined;
   let disposeIntervalsIpc: (() => Promise<void>) | undefined;
   let disposeTelegramIpc: (() => Promise<void>) | undefined;
@@ -340,8 +338,6 @@ async function runDesktop(): Promise<void> {
       disposeExternalLinkIpc = undefined;
       disposeAppearanceIpc?.();
       disposeAppearanceIpc = undefined;
-      disposeReleaseNotesIpc?.();
-      disposeReleaseNotesIpc = undefined;
       disposeUpdateIpc?.();
       disposeUpdateIpc = undefined;
       await telegramPower?.close();
@@ -1086,10 +1082,6 @@ async function runDesktop(): Promise<void> {
         nativeTheme.themeSource = appearance;
         return nativeTheme.shouldUseDarkColors ? "dark" : "light";
       },
-    });
-    disposeReleaseNotesIpc = installDesktopReleaseNotesIpc({
-      ipcMain,
-      currentWindow: () => mainWindow.current() ?? undefined,
     });
     disposeUpdateIpc = installDesktopUpdateIpc({
       ipcMain,

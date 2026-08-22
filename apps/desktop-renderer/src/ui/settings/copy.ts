@@ -118,6 +118,3 @@ export function credentialRuntimeLabel(state: CredentialSettingsEntry["runtimeSt
   if (state === "stored-inactive") return "Saved, not active";
   return "Needs attention";
 }
-
-export const RELEASE_NOTES_UNAVAILABLE_COPY =
-  "Release notes aren’t available right now. Check your connection and try again.";
