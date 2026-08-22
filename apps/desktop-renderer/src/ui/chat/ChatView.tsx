@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
 import { CHAT_AUTO_LOAD_EARLIER_THRESHOLD, chatScrollAnchor } from "../../state/chat-stream.js";
 import { useEnduragentStore } from "../../state/store.js";
-import styles from "./ChatView.module.css";
 import { Composer, type ComposerHandle } from "./Composer.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
 import { NewConversationDialog } from "./NewConversationDialog.js";
@@ -100,20 +99,23 @@ export function ChatView(): ReactElement {
   return (
     <>
       <main
-        className={`${styles.conversation} conversation`}
+        className="conversation col-start-1 overflow-auto pt-[34px] pb-[var(--chat-composer-clearance,150px)] [overflow-anchor:none]"
         aria-label="Coaching conversation"
         data-chat-status={status}
         ref={conversation}
       >
-        <div className={`${styles.thread} thread`}>
+        <div className="thread mx-auto w-[min(840px,calc(100%-48px))] max-[760px]:w-[calc(100%-32px)]">
           <Transcript />
           <FirstSyncCard />
         </div>
       </main>
-      <div className={`${styles.composerWrap} composer-wrap`} ref={composerWrap}>
-        <div className={`${styles.noticeHost} chat-notice-host`}>
+      <div
+        className="composer-wrap sticky bottom-0 z-2 col-start-1 row-start-2 self-end bg-[linear-gradient(transparent,var(--bg)_28%)] px-[max(24px,calc((100%-48px-840px)/2))] pt-3 pb-[18px] max-[760px]:px-4"
+        ref={composerWrap}
+      >
+        <div className="chat-notice-host empty:hidden">
           <p
-            className={`${styles.announcement} new-conversation-status`}
+            className="new-conversation-status m-0 text-sm leading-[1.4] text-ink-2 not-empty:px-3.5 not-empty:pb-inset"
             role="status"
             aria-live="polite"
           >
@@ -124,7 +126,7 @@ export function ChatView(): ReactElement {
         <QuickActions />
         <QueuedMessages />
         <Composer handle={composer} />
-        <p className={styles.announcement}>{CHAT_DISCLAIMER}</p>
+        <p className="m-0 text-sm leading-[1.4] text-ink-2">{CHAT_DISCLAIMER}</p>
       </div>
       <NewConversationDialog
         onComposerReset={() => {
