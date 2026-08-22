@@ -1,10 +1,9 @@
 import type { ReactElement } from "react";
 import { isSlashCommandText } from "../../chat/commands.js";
-import styles from "./Message.module.css";
+import { cn } from "../../lib/utils.js";
+import { MESSAGE_COMMAND_CLASS, MESSAGE_TEXT_CLASS } from "./Message.js";
 
 export function AthleteMessage(props: { readonly text: string }): ReactElement {
-  const className = isSlashCommandText(props.text)
-    ? `${styles.text} ${styles.command} chat-message__text`
-    : `${styles.text} chat-message__text`;
+  const className = cn(MESSAGE_TEXT_CLASS, isSlashCommandText(props.text) && MESSAGE_COMMAND_CLASS);
   return <div className={className}>{props.text}</div>;
 }

@@ -107,6 +107,9 @@ const effort = "easy";
     expect(findAll(root, "ol")[0]?.children).toHaveLength(2);
     expect(findAll(root, "pre")[0]?.textContent).toBe('const effort = "easy";');
     expect(findAll(root, "table")).toHaveLength(1);
+    expect(findAll(root, "div")[1]?.className).toBe(
+      "chat-markdown__table-scroll my-[0.65em] max-w-full overflow-x-auto",
+    );
     expect(findAll(root, "th").map((node) => node.textContent)).toEqual(["Session", "Goal"]);
     const anchor = findAll(root, "a")[0]!;
     expect(anchor.textContent).toBe("Training guide");

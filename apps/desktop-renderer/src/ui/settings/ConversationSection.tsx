@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import type {
   SessionSettingsFormState,
   SessionSettingsState,
@@ -10,7 +11,7 @@ import {
   MANAGED_BY_ENVIRONMENT_COPY,
   conversationSaveErrorCopy,
 } from "./copy.js";
-import styles from "./SettingsView.module.css";
+import { settingsStyles as styles } from "./styles.js";
 
 function formState(state: SessionSettingsState): SessionSettingsFormState | null {
   if (
@@ -123,27 +124,29 @@ export function ConversationSection(): ReactElement {
         )}
         <div className={styles.actions}>
           {retryVisible ? (
-            <button
+            <Button
               type="button"
-              className={styles.button}
+              variant="outline"
+              size="sm"
               disabled={busy}
               onClick={() => {
                 port?.retry();
               }}
             >
               Reconnect &amp; reload
-            </button>
+            </Button>
           ) : null}
-          <button
+          <Button
             type="button"
-            className={styles.primary}
+            variant="default"
+            size="sm"
             disabled={busy || !canSave}
             onClick={() => {
               port?.save();
             }}
           >
             {saving ? "Saving…" : "Save conversation settings"}
-          </button>
+          </Button>
         </div>
       </section>
     </>

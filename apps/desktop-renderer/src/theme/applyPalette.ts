@@ -22,7 +22,6 @@ export function paletteCustomProperties(
 ): ReadonlyMap<string, string> {
   const ramp = theme === "dark" ? palette.d : palette.l;
   const fixed = theme === "dark" ? FIXED.d : FIXED.l;
-  const controlEdge = theme === "dark" ? "93%" : "85%";
   return new Map([
     ["--bg", ramp.bg],
     ["--rail", ramp.rail],
@@ -31,9 +30,9 @@ export function paletteCustomProperties(
     ["--sunk", `color-mix(in srgb, ${ramp.rail} 55%, ${ramp.bg})`],
     ["--ink", ramp.ink],
     ["--ink-2", ramp.ink2],
-    ["--ink-3", `color-mix(in srgb, ${ramp.ink2} 62%, ${ramp.bg})`],
+    ["--ink-3", `color-mix(in srgb, ${ramp.ink2} 78%, ${ramp.sf})`],
     ["--line", ramp.line],
-    ["--line-2", `color-mix(in srgb, ${ramp.line} ${controlEdge}, ${ramp.ink2})`],
+    ["--line-2", `color-mix(in srgb, ${ramp.line} 25%, ${ramp.ink2})`],
     ["--brand", ramp.br],
     ["--brand-ink", ramp.bri],
     ["--brand-soft", ramp.soft],

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, type ReactElement, type RefObject } from "react";
+import { Button } from "../../components/ui/button.js";
 import type { DesktopCredentialId } from "../../onboarding/bridge.js";
 import { DESKTOP_CREDENTIAL_SLOTS } from "../../onboarding/constants.js";
 import { onboardingCredentialMutationActive } from "../../onboarding/controller.js";
@@ -15,10 +16,8 @@ import {
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { SetupRow } from "../onboarding/SetupRow.js";
-import { BUTTON_DANGER_QUIET_SM, BUTTON_QUIET_SM } from "../onboarding/SetupCard.js";
 import { InlineConfirmation } from "../shared/InlineConfirmation.js";
 import { credentialRuntimeLabel } from "./copy.js";
-import styles from "./SettingsView.module.css";
 
 export const SETUP_CREDENTIAL_EDIT_EVENT = "enduragent:edit-credential";
 
@@ -103,11 +102,12 @@ export function CredentialDeleteButton(props: {
   if (entry === null && !intervalsFallback) return null;
   const provider = entry?.provider ?? "Intervals.icu";
   return (
-    <button
+    <Button
       type="button"
       ref={button}
       data-setup-delete={props.credential}
-      className={BUTTON_DANGER_QUIET_SM}
+      variant="destructive"
+      size="sm"
       disabled={
         port === null ||
         state.status === "loading" ||
@@ -125,7 +125,7 @@ export function CredentialDeleteButton(props: {
       onClick={() => port?.requestDelete(props.credential)}
     >
       Delete
-    </button>
+    </Button>
   );
 }
 
@@ -209,15 +209,16 @@ export function AdditionalCredentialRows(props: {
             subtitle={`${entry.kind} · ${credentialRuntimeLabel(entry.runtimeState)}`}
             trailing={
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <button
+                <Button
                   type="button"
-                  className={BUTTON_QUIET_SM}
+                  variant="ghost"
+                  size="sm"
                   disabled={setupLoading || onboardingMutating || changesBlocked}
                   aria-label={`Change the ${entry.provider} credential`}
                   onClick={() => openCredentialEditor(entry.credential)}
                 >
                   Change
-                </button>
+                </Button>
                 <CredentialDeleteButton credential={entry.credential} />
               </div>
             }
@@ -300,14 +301,16 @@ export function CredentialSettingsFeedback(): ReactElement | null {
         </p>
       )}
       {loadError || repairRequired !== null ? (
-        <button
+        <Button
           type="button"
-          className={`${styles.button} mt-2`}
+          variant="outline"
+          size="sm"
+          className="mt-2"
           disabled={mutating || loading}
           onClick={() => port?.retry()}
         >
           {repairRequired === null ? "Reconnect & reload" : "Reload credential status"}
-        </button>
+        </Button>
       ) : null}
     </div>
   );

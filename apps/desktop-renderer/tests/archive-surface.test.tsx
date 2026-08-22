@@ -122,6 +122,18 @@ describe("past chats list", () => {
     const region = screen.getByRole("region", { name: "Past chats" });
     const entries = region.querySelectorAll("button.archive-entry");
     expect(entries).toHaveLength(2);
+    expect(entries[0]).toHaveClass(
+      "h-auto",
+      "grid-cols-1",
+      "items-start",
+      "justify-start",
+      "whitespace-normal",
+      "font-normal",
+    );
+    expect(entries[0]).not.toHaveClass("h-ctl", "justify-center", "whitespace-nowrap");
+    expect(entries[0]).toHaveAccessibleName(
+      "1998-07-19 08:15 UTC · 3 messages · You started a new conversation",
+    );
     expect(entries[0]).toHaveTextContent("1998-07-19 08:15 UTC");
     expect(entries[0]).toHaveTextContent("3 messages");
     expect(entries[1]).toHaveTextContent("1 message");

@@ -452,7 +452,10 @@ ${"nonwrapping".repeat(36)}
             published: partial,
             referenceSucceeded: !partial,
             requests: { store: 1, reference: 1, total: 2 },
-            droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+            droppedActivities: {
+              overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+              recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+            },
           }),
         ];
       }
@@ -1121,6 +1124,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly draft: string;
       readonly documentOverflow: boolean;
       readonly composerHeight: number;
+      readonly composerOpaque: boolean;
       readonly composerClearanceTracksHeight: boolean;
       readonly finalTranscriptClearsComposer: boolean;
     }>(`
@@ -1180,6 +1184,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         draft: textarea.value,
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         composerHeight: composerRect.height,
+        composerOpaque: getComputedStyle(composer).backgroundColor !== "rgba(0, 0, 0, 0)",
         composerClearanceTracksHeight: Math.abs(reservedBottom - composerRect.height) < 1,
         finalTranscriptClearsComposer:
           finalTranscriptItem.getBoundingClientRect().bottom <= composerRect.top + 1,
@@ -1196,6 +1201,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       draft: "  keep draft\n",
       documentOverflow: false,
       composerHeight: expect.any(Number),
+      composerOpaque: true,
       composerClearanceTracksHeight: true,
       finalTranscriptClearsComposer: true,
     });
@@ -1206,6 +1212,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly tableScrollsLocally: boolean;
       readonly codeScrollsLocally: boolean;
       readonly shortcutsWrapped: boolean;
+      readonly composerOpaque: boolean;
       readonly composerHeight: number;
       readonly composerClearanceTracksHeight: boolean;
       readonly finalTranscriptClearsComposer: boolean;
@@ -1228,6 +1235,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
           tableScrollsLocally: tableScroll.scrollWidth > tableScroll.clientWidth && getComputedStyle(tableScroll).overflowX === "auto",
           codeScrollsLocally: codeBlock.scrollWidth > codeBlock.clientWidth && getComputedStyle(codeBlock).overflowX === "auto",
           shortcutsWrapped: shortcutGroup.getBoundingClientRect().height > firstShortcut.getBoundingClientRect().height,
+          composerOpaque: getComputedStyle(composer).backgroundColor !== "rgba(0, 0, 0, 0)",
           composerHeight: composerRect.height,
           composerClearanceTracksHeight: Math.abs(reservedBottom - composerRect.height) < 1,
           finalTranscriptClearsComposer:
@@ -1239,6 +1247,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       tableScrollsLocally: true,
       codeScrollsLocally: true,
       shortcutsWrapped: true,
+      composerOpaque: true,
       composerHeight: expect.any(Number),
       composerClearanceTracksHeight: true,
       finalTranscriptClearsComposer: true,
@@ -1263,13 +1272,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const enabledBefore = !opener.disabled && opener.getAttribute("aria-disabled") !== "true" && !textarea.disabled;
       if (enabledBefore) opener.click();
       const dialog = document.querySelector(".new-conversation-dialog");
-      const dialogOpen = dialog.open;
+      const dialogOpen = dialog !== null;
       const clearRecords = [];
       const clearObserver = new MutationObserver((records) => clearRecords.push(...records));
       clearObserver.observe(document.querySelector(".chat-messages"), { childList: true });
       if (dialogOpen) dialog.querySelector(".new-conversation-dialog__confirm").click();
       const resetDeadline = Date.now() + 5000;
-      while (dialog.open && Date.now() < resetDeadline) {
+      while (document.querySelector(".new-conversation-dialog") !== null && Date.now() < resetDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1671,6 +1680,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly settingsReachable: boolean;
       readonly settingsAccessibleLabel: string;
       readonly chipReachable: boolean;
+      readonly syncFitsRail: boolean;
+      readonly syncHasNoOverflow: boolean;
+      readonly syncActionHidden: boolean;
       readonly trainingOpen: boolean;
       readonly buttonResident: boolean;
       readonly buttonReachable: boolean;
@@ -1694,11 +1706,16 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const compactButton = page.querySelector(".training-sync-action");
       const compactStatus = page.querySelector(".training-sync-message");
       const chip = document.querySelector(".sync-chip");
+      const syncSurface = document.querySelector("[data-sync-chip]");
+      const sidebar = syncSurface.closest("aside");
+      const syncAction = syncSurface.lastElementChild;
       const pageRect = page.getBoundingClientRect();
       const buttonRect = compactButton.getBoundingClientRect();
       const railRect = rail.getBoundingClientRect();
       const settingsRect = settings.getBoundingClientRect();
       const chipRect = chip.getBoundingClientRect();
+      const syncRect = syncSurface.getBoundingClientRect();
+      const sidebarRect = sidebar.getBoundingClientRect();
       compactButton.scrollIntoView({ block: "nearest" });
       return {
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -1713,6 +1730,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
           chipRect.left >= 0 &&
           chipRect.right <= window.innerWidth &&
           chipRect.bottom <= window.innerHeight,
+        syncFitsRail:
+          syncRect.left >= sidebarRect.left && syncRect.right <= sidebarRect.right,
+        syncHasNoOverflow: syncSurface.scrollWidth <= syncSurface.clientWidth,
+        syncActionHidden: getComputedStyle(syncAction).display === "none",
         trainingOpen: page.getAttribute("aria-hidden") === null,
         buttonResident: page.querySelectorAll(".training-sync-action").length === 1,
         buttonReachable:
@@ -1733,6 +1754,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       settingsReachable: true,
       settingsAccessibleLabel: "Settings",
       chipReachable: true,
+      syncFitsRail: true,
+      syncHasNoOverflow: true,
+      syncActionHidden: true,
       trainingOpen: true,
       buttonResident: true,
       buttonReachable: true,
@@ -1753,6 +1777,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly scrolled: boolean;
       readonly resetWarningVisible: boolean;
       readonly retentionWarningVisible: boolean;
+      readonly paletteSwatchesFillButtons: boolean;
     }>(`
       const settings = Array.from(
         document.querySelectorAll('nav[aria-label="Main navigation"] button'),
@@ -1788,6 +1813,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const scrollRect = scroll.getBoundingClientRect();
       const subpixelTolerance = 1;
       const copy = page.textContent;
+      const paletteButtons = Array.from(
+        page.querySelectorAll('button[aria-label^="Use the "][aria-label$=" palette"]'),
+      );
       return {
         open: page.getAttribute("aria-hidden") === null,
         onePage: document.querySelectorAll('section[aria-label="Settings"]').length === 1,
@@ -1818,6 +1846,15 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
           "may make your next message start a fresh conversation",
         ),
         retentionWarningVisible: copy.includes("changes apply only to future pruning"),
+        paletteSwatchesFillButtons:
+          paletteButtons.length > 0 &&
+          paletteButtons.every((button) => {
+            const swatch = button.firstElementChild;
+            return (
+              swatch !== null &&
+              Math.abs(swatch.getBoundingClientRect().width - button.getBoundingClientRect().width) < 1
+            );
+          }),
       };
     `);
     expect(compactSettingsGeometry).toEqual({
@@ -1830,6 +1867,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       scrolled: true,
       resetWarningVisible: true,
       retentionWarningVisible: true,
+      paletteSwatchesFillButtons: true,
     });
     const runtimeReads = calls.filter((call) => call.method === "getRuntimeConfig");
     expect(runtimeReads.length).toBeGreaterThan(runtimeReadsBeforeSettings);

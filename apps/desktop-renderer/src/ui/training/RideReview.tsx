@@ -8,11 +8,12 @@ import type {
 } from "@enduragent/coach-contract";
 import type { ReactElement, ReactNode, Ref } from "react";
 import type { RideAnalysisViewState } from "../../activity-analysis/controller.js";
+import { Button } from "../../components/ui/button.js";
 import { formatDateLabel } from "../../training-context/format.js";
 import { Page } from "../shared/Page.js";
 import { analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy.js";
 import { RideResponseReview } from "./RideResponseReview.js";
-import styles from "./TrainingView.module.css";
+import { rideStyles as styles } from "./rideStyles.js";
 import { ActivityExportControl } from "./TrainingExportControls.js";
 
 const RIDE_KIND: Readonly<Record<string, string>> = {
@@ -249,9 +250,9 @@ function AerobicDriftPanel(props: {
       <div className={styles.analysisUnavailable}>
         <p>{analysisUnavailableCopy(section.reason)}</p>
         {props.onRefresh !== null && shouldOfferRetry(section.reason) ? (
-          <button type="button" className={styles.action} onClick={props.onRefresh}>
+          <Button type="button" variant="outline" onClick={props.onRefresh}>
             Try again
-          </button>
+          </Button>
         ) : null}
       </div>
     );
@@ -260,9 +261,9 @@ function AerobicDriftPanel(props: {
       <div className={styles.analysisUnavailable}>
         <p>The ride could not be analyzed right now.</p>
         {props.onRefresh === null ? null : (
-          <button type="button" className={styles.action} onClick={props.onRefresh}>
+          <Button type="button" variant="outline" onClick={props.onRefresh}>
             Try again
-          </button>
+          </Button>
         )}
       </div>
     );
@@ -445,9 +446,9 @@ function AnalysisRetry(props: {
           : analysisUnavailableCopy(props.reason)}
       </p>
       {props.onRefresh !== null && retry ? (
-        <button type="button" className={styles.action} onClick={props.onRefresh}>
+        <Button type="button" variant="outline" onClick={props.onRefresh}>
           Try again
-        </button>
+        </Button>
       ) : null}
     </div>
   );
@@ -725,11 +726,12 @@ export function RecentRidesStatePanel(props: {
               const distance = rideDistance(ride, props.units);
               return (
                 <li key={ride.id} className={styles.rideListItem}>
-                  <button
+                  <Button
                     ref={(node) => {
                       props.registerButton(ride.id, node);
                     }}
                     type="button"
+                    variant="ghost"
                     className={styles.rideButton}
                     aria-label={`Review ${rideKind(ride).toLowerCase()} from ${dateTime}, ${duration}, ${distance}`}
                     onClick={() => {
@@ -748,7 +750,7 @@ export function RecentRidesStatePanel(props: {
                     <span className={styles.rideArrow} aria-hidden="true">
                       →
                     </span>
-                  </button>
+                  </Button>
                 </li>
               );
             })}
@@ -773,9 +775,9 @@ export function RideDetailView(props: {
       subtitle={formatDateLabel(props.ride.localDate)}
       titleRef={props.titleRef}
       action={
-        <button type="button" className={styles.detailBack} onClick={props.onBack}>
+        <Button type="button" variant="outline" onClick={props.onBack}>
           Back to training
-        </button>
+        </Button>
       }
     >
       <section className={styles.rideOverview} aria-labelledby="ride-overview-title">

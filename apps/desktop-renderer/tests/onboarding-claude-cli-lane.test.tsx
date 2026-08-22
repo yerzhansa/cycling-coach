@@ -300,8 +300,8 @@ describe("claude-cli onboarding lane", () => {
     const wizard = await openLane(bridge);
     await openApiKeyPanel(user);
 
-    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("anthropic");
-    expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("claude-sonnet-4-6");
+    expect(control("onboarding-llm-provider")).toHaveTextContent("Anthropic");
+    expect(control("onboarding-llm-model")).toHaveTextContent("Claude Sonnet 4.6");
     expect(bridge.claudeCliStatus).not.toHaveBeenCalled();
     expect(bridge.claudeCliRecheck).not.toHaveBeenCalled();
     wizard.controller.dispose();

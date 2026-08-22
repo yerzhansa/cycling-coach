@@ -216,15 +216,26 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
         setter?.call(input, value);
         input.dispatchEvent(new Event("input", { bubbles: true }));
       };
-      const pick = (id, value) => {
-        const select = document.querySelector("#" + id);
-        if (!select) return;
-        const setter = Object.getOwnPropertyDescriptor(
-          HTMLSelectElement.prototype,
-          "value",
-        )?.set;
-        setter?.call(select, value);
-        select.dispatchEvent(new Event("change", { bubbles: true }));
+      const pick = async (id, label) => {
+        const trigger = document.querySelector("#" + id);
+        if (!(trigger instanceof HTMLButtonElement)) {
+          throw new Error("missing select trigger " + id);
+        }
+        trigger.click();
+        const optionsDeadline = Date.now() + 10000;
+        let option;
+        while (option === undefined && Date.now() < optionsDeadline) {
+          option = Array.from(document.querySelectorAll('[role="option"]')).find(
+            (entry) => entry.textContent?.trim() === label,
+          );
+          if (option === undefined) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+        }
+        if (!(option instanceof HTMLElement)) {
+          throw new Error("missing select option " + label);
+        }
+        option.click();
       };
       document.querySelector('[data-setup-trigger="ai"]')?.click();
       await waitFor('[data-lane="api-key"]');
@@ -242,7 +253,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
         throw new Error("unexpected Intervals.icu credential input");
       }
       await waitFor('[data-setup-readiness="2"]');
-      pick("onboarding-injury-status", "none");
+      await pick("onboarding-injury-status", "No current injury");
       await new Promise((resolve) => setTimeout(resolve, 60));
       button("Start coaching")?.click();
       const chatDeadline = Date.now() + 10000;

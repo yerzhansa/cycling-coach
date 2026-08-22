@@ -21,6 +21,11 @@ describe("settings preferences", () => {
 
     const swatches = screen.getAllByRole("button", { name: /^Use the .+ palette$/u });
     expect(swatches).toHaveLength(PALETTES.length);
+    for (const swatch of swatches) {
+      expect(swatch).toHaveClass("h-auto", "items-stretch");
+      expect(swatch).not.toHaveClass("h-ctl");
+      expect(swatch.firstElementChild).toHaveClass("h-10");
+    }
     expect(screen.getByRole("button", { name: "Use the Patrol palette" })).toHaveAttribute(
       "aria-pressed",
       "true",

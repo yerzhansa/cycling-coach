@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
 import type { Appearance } from "../../theme/applyPalette.js";
-import styles from "./AppearanceControl.module.css";
 
 const OPTIONS: readonly { readonly value: Appearance; readonly label: string }[] = Object.freeze([
   { value: "system", label: "System" },
@@ -14,19 +14,25 @@ export function AppearanceControl(): ReactElement {
   const setAppearance = useEnduragentStore((state) => state.setAppearance);
 
   return (
-    <div className={styles.seg} role="group" aria-label="Appearance">
+    <div
+      className="flex shrink-0 rounded-ctl border border-line bg-sunk p-0.5"
+      role="group"
+      aria-label="Appearance"
+    >
       {OPTIONS.map((option) => (
-        <button
+        <Button
           key={option.value}
           type="button"
-          className={option.value === appearance ? `${styles.option} ${styles.on}` : styles.option}
+          variant="ghost"
+          size="sm"
+          className="text-ink-2 hover:text-ink aria-pressed:bg-surface aria-pressed:text-ink aria-pressed:shadow-elev-1"
           aria-pressed={option.value === appearance}
           onClick={() => {
             setAppearance(option.value);
           }}
         >
           {option.label}
-        </button>
+        </Button>
       ))}
     </div>
   );

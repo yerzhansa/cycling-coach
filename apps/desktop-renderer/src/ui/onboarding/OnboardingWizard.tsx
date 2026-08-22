@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { rideImportStatusCopy } from "../../ride-import.js";
 import { useEnduragentStore } from "../../state/store.js";
 import {
@@ -29,11 +30,11 @@ import {
   nonTelegramSettingsMutationActive,
   settingsMutationActive,
 } from "../../state/settings-slice.js";
-import { BUTTON_PRIMARY, SetupCard } from "./SetupCard.js";
+import { SetupCard } from "./SetupCard.js";
 import { SetupError } from "./SetupRow.js";
 import { TelegramRow } from "./TelegramRow.js";
 import { TrainingRow } from "./TrainingRow.js";
-import settingsStyles from "../settings/SettingsView.module.css";
+import { settingsStyles } from "../settings/styles.js";
 
 export type SetupPlacement = "gate" | "settings";
 
@@ -101,7 +102,7 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
             <h1
               id="setup-panel-title"
               tabIndex={-1}
-              className="text-[27px] leading-[1.16] font-[590] tracking-[-0.035em] outline-none"
+              className="text-2xl leading-8 font-semibold tracking-[-0.02em] outline-none"
             >
               {gateUnavailable || statusKnown ? SETUP_HEADING : SETUP_CHECKING_HEADING}
             </h1>
@@ -138,17 +139,18 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
           role="status"
           aria-live="polite"
         >
-          <span className="text-[13px] text-ink-2">{SETUP_STATUS_UNAVAILABLE_COPY}</span>
-          <button
+          <span className="text-sm text-ink-2">{SETUP_STATUS_UNAVAILABLE_COPY}</span>
+          <Button
             type="button"
-            className={BUTTON_PRIMARY}
+            variant="default"
+            size="lg"
             disabled={surface.loading}
             onClick={() => {
               void actions?.refresh();
             }}
           >
             {RETRY_SETUP_STATUS_LABEL}
-          </button>
+          </Button>
         </div>
       ) : null}
       {gateUnavailable ? null : (
@@ -168,16 +170,17 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
       )}
       {props.placement === "gate" && !surface.loadUnavailable ? (
         <footer className="mt-[18px] flex flex-wrap items-center gap-3">
-          <button
+          <Button
             type="button"
-            className={BUTTON_PRIMARY}
+            variant="default"
+            size="lg"
             disabled={blocked}
             onClick={() => {
               actions?.finish();
             }}
           >
             {PRIMARY_LABEL}
-          </button>
+          </Button>
           <SetupError surface={surface} section="footer" />
           <span className="ml-auto text-xs text-ink-2">{FOOTER_NOTE}</span>
         </footer>

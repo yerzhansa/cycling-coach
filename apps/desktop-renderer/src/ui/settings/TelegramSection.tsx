@@ -6,6 +6,7 @@ import {
   type FormEvent,
   type ReactElement,
 } from "react";
+import { Button } from "../../components/ui/button.js";
 import {
   hasActiveTelegramPairingCode,
   type TelegramControlStatus,
@@ -14,17 +15,11 @@ import {
 import { PLATFORM_COPY } from "../../platform-copy.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
-import {
-  BUTTON_DANGER_QUIET_SM,
-  BUTTON_OUTLINE_SM,
-  BUTTON_QUIET_SM,
-  BUTTON_SOLID_SM,
-} from "../shared/buttons.js";
 import { InlineConfirmation } from "../shared/InlineConfirmation.js";
 
 const HEADING_CLASS =
   "mx-1 mt-[26px] mb-2 text-[11px] font-normal tracking-[0.07em] text-ink-3 uppercase first:mt-0";
-const GROUP_CLASS = "rounded-xl border border-line bg-surface shadow-[var(--edge),var(--elev-1)]";
+const GROUP_CLASS = "rounded-xl border border-line bg-surface shadow-elev-1";
 const ROW_CLASS = "flex items-center gap-4 border-b border-line px-4 py-[13px] last:border-b-0";
 const ROW_TITLE_CLASS = "text-sm font-[560]";
 const ROW_DETAIL_CLASS = "mt-px text-[12.5px] text-ink-2";
@@ -34,7 +29,7 @@ const INLINE_ACTIONS_CLASS = "flex flex-none flex-wrap items-center gap-2";
 const ATTENTION_CLASS =
   "flex items-center justify-between gap-[14px] border-b border-line bg-sunk px-4 py-[13px] shadow-[inset_3px_0_0_var(--danger)] max-[620px]:flex-col max-[620px]:items-stretch [&_p]:m-0 [&_p]:text-[12.5px] [&_p]:text-ink-2";
 const FIELD_CLASS =
-  "h-[30px] min-w-0 flex-1 rounded-ctl border border-line-2 bg-surface px-[11px] text-sm text-ink shadow-[var(--edge),var(--elev-1)] transition-[border-color,box-shadow] focus-visible:border-ink focus-visible:outline-0 focus-visible:shadow-[var(--edge),0_0_0_3px_color-mix(in_srgb,var(--ink)_12%,transparent)] disabled:opacity-64";
+  "h-[30px] min-w-0 flex-1 rounded-ctl border border-line-2 bg-surface px-[11px] text-sm text-ink shadow-elev-1 transition-[border-color,box-shadow] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/20 focus-visible:outline-0 disabled:opacity-64";
 
 function content(state: TelegramSettingsState) {
   if (state.status === "ready" || state.status === "working" || state.status === "error") {
@@ -297,16 +292,17 @@ export function TelegramSection(): ReactElement {
                 reached Enduragent. Check the Telegram chat before clearing this warning.
               </p>
             </div>
-            <button
+            <Button
               type="button"
-              className={BUTTON_OUTLINE_SM}
+              variant="outline"
+              size="sm"
               disabled={busy}
               onClick={() => {
                 port?.acknowledgeGapWarning();
               }}
             >
               Acknowledge
-            </button>
+            </Button>
           </div>
         ) : null}
 
@@ -315,16 +311,17 @@ export function TelegramSection(): ReactElement {
             <p>{attention}</p>
             <div className={INLINE_ACTIONS_CLASS}>
               {needsCheck ? (
-                <button
+                <Button
                   type="button"
-                  className={BUTTON_OUTLINE_SM}
+                  variant="outline"
+                  size="sm"
                   disabled={busy}
                   onClick={() => {
                     port?.reconcile();
                   }}
                 >
                   Check again
-                </button>
+                </Button>
               ) : null}
             </div>
           </div>
@@ -338,16 +335,17 @@ export function TelegramSection(): ReactElement {
                 Reload the saved connection status before trying another action.
               </div>
             </div>
-            <button
+            <Button
               type="button"
-              className={BUTTON_OUTLINE_SM}
+              variant="outline"
+              size="sm"
               disabled={busy}
               onClick={() => {
                 port?.retry();
               }}
             >
               Retry
-            </button>
+            </Button>
           </div>
         ) : null}
 
@@ -364,40 +362,43 @@ export function TelegramSection(): ReactElement {
             <div className={INLINE_ACTIONS_CLASS}>
               {paired ? (
                 telegram.channel.desiredState === "enabled" ? (
-                  <button
+                  <Button
                     type="button"
-                    className={BUTTON_OUTLINE_SM}
+                    variant="outline"
+                    size="sm"
                     disabled={busy}
                     onClick={() => {
                       port?.disable();
                     }}
                   >
                     Turn off
-                  </button>
+                  </Button>
                 ) : (
-                  <button
+                  <Button
                     type="button"
-                    className={BUTTON_SOLID_SM}
+                    variant="default"
+                    size="sm"
                     disabled={busy}
                     onClick={() => {
                       port?.enable();
                     }}
                   >
                     Turn on
-                  </button>
+                  </Button>
                 )
               ) : null}
-              <button
+              <Button
                 type="button"
                 ref={deleteTrigger}
-                className={BUTTON_DANGER_QUIET_SM}
+                variant="destructive"
+                size="sm"
                 disabled={busy || confirmRemove}
                 onClick={() => {
                   setConfirmRemove(true);
                 }}
               >
                 Delete
-              </button>
+              </Button>
             </div>
           </div>
         ) : !credentialIdentityMissing ? null : firstTimeOpen ? (
@@ -428,9 +429,10 @@ export function TelegramSection(): ReactElement {
               </div>
             </div>
             <div className={INLINE_ACTIONS_CLASS}>
-              <button
+              <Button
                 type="button"
-                className={BUTTON_QUIET_SM}
+                variant="ghost"
+                size="sm"
                 disabled={busy}
                 aria-label="Cancel Telegram bot setup"
                 onClick={() => {
@@ -439,29 +441,31 @@ export function TelegramSection(): ReactElement {
                 }}
               >
                 Cancel
-              </button>
+              </Button>
               {state.status === "error" && state.kind === "load" ? (
-                <button
+                <Button
                   type="button"
-                  className={BUTTON_OUTLINE_SM}
+                  variant="outline"
+                  size="sm"
                   disabled={busy}
                   onClick={() => {
                     port?.retry();
                   }}
                 >
                   Retry
-                </button>
+                </Button>
               ) : null}
-              <button
+              <Button
                 type="button"
-                className={BUTTON_SOLID_SM}
+                variant="default"
+                size="sm"
                 disabled={busy}
                 onClick={() => {
                   port?.pasteToken();
                 }}
               >
                 Paste token from clipboard
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
@@ -470,10 +474,11 @@ export function TelegramSection(): ReactElement {
               <div className={ROW_TITLE_CLASS}>Create a bot with BotFather</div>
               <div className={ROW_DETAIL_CLASS}>Connect a Telegram bot with a copied token.</div>
             </div>
-            <button
+            <Button
               type="button"
               ref={firstTimeTrigger}
-              className={BUTTON_OUTLINE_SM}
+              variant="outline"
+              size="sm"
               disabled={busy}
               aria-expanded={false}
               aria-controls="telegram-first-time-panel"
@@ -483,7 +488,7 @@ export function TelegramSection(): ReactElement {
               }}
             >
               Connect
-            </button>
+            </Button>
           </div>
         )}
 
@@ -516,16 +521,17 @@ export function TelegramSection(): ReactElement {
                 This explicit action keeps pending updates and lets Desktop begin polling.
               </p>
             </div>
-            <button
+            <Button
               type="button"
-              className={BUTTON_OUTLINE_SM}
+              variant="outline"
+              size="sm"
               disabled={busy}
               onClick={() => {
                 port?.removeWebhook();
               }}
             >
               Remove webhook
-            </button>
+            </Button>
           </div>
         ) : null}
 
@@ -549,16 +555,18 @@ export function TelegramSection(): ReactElement {
                 minute: "2-digit",
               })}
             </p>
-            <button
+            <Button
               type="button"
-              className={`${BUTTON_OUTLINE_SM} col-start-2 row-start-3 max-[620px]:col-start-1 max-[620px]:row-auto`}
+              variant="outline"
+              size="sm"
+              className="col-start-2 row-start-3 max-[620px]:col-start-1 max-[620px]:row-auto"
               disabled={busy}
               onClick={() => {
                 port?.cancelPairing();
               }}
             >
               Cancel pairing
-            </button>
+            </Button>
           </div>
         ) : null}
 
@@ -573,9 +581,10 @@ export function TelegramSection(): ReactElement {
                   `A one-minute code ensures only the person with access to ${PLATFORM_COPY.computer} can claim the bot.`}
               </div>
             </div>
-            <button
+            <Button
               type="button"
-              className={BUTTON_SOLID_SM}
+              variant="default"
+              size="sm"
               disabled={busy}
               onClick={() => {
                 port?.beginPairing();
@@ -584,7 +593,7 @@ export function TelegramSection(): ReactElement {
               {telegram.pairing.state === "expired"
                 ? "Create new code and turn on"
                 : "Start pairing and turn on"}
-            </button>
+            </Button>
           </div>
         ) : null}
 
@@ -616,9 +625,10 @@ export function TelegramSection(): ReactElement {
                     </div>
                     {sender.role === "additional" ? (
                       <>
-                        <button
+                        <Button
                           type="button"
-                          className={BUTTON_DANGER_QUIET_SM}
+                          variant="destructive"
+                          size="sm"
                           disabled={busy || confirmRemoveSenderId !== null}
                           aria-label={"Remove Telegram user " + sender.senderId}
                           onClick={(event) => {
@@ -627,7 +637,7 @@ export function TelegramSection(): ReactElement {
                           }}
                         >
                           Remove
-                        </button>
+                        </Button>
                         {confirmRemoveSenderId === sender.senderId ? (
                           <InlineConfirmation
                             name="remove-telegram-user"
@@ -674,9 +684,9 @@ export function TelegramSection(): ReactElement {
                     setSenderError(null);
                   }}
                 />
-                <button type="submit" className={BUTTON_OUTLINE_SM} disabled={busy}>
+                <Button type="submit" variant="outline" size="sm" disabled={busy}>
                   Add user
-                </button>
+                </Button>
               </div>
               <p className="mt-1 mb-0 text-[12.5px] text-ink-2" id="telegram-sender-help">
                 Add only people you trust to use your coach and shared athlete data.

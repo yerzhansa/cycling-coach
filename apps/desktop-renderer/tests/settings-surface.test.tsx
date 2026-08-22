@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import type { CoachClient } from "@enduragent/coach-client";
 import type { RuntimeConfigSnapshot, SpendSummary } from "@enduragent/coach-contract";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
@@ -50,7 +48,6 @@ import type { DesktopUpdateState } from "../src/update/controller.js";
 import { createDesktopUpdateController } from "../src/update/controller.js";
 import { CONVERSATION_FIELDS } from "../src/ui/settings/copy.js";
 import { SettingsView } from "../src/ui/settings/SettingsView.js";
-import settingsStyles from "../src/ui/settings/SettingsView.module.css";
 import { testBridge } from "./onboarding-harness.js";
 
 interface Deferred<T> {
@@ -602,12 +599,12 @@ describe("settings setup inventory", () => {
       within(trainingRow as HTMLElement).getByRole("button", {
         name: "Delete the Intervals.icu connection",
       }).className,
-    ).toContain("text-danger");
+    ).toContain("text-destructive");
     expect(
       within(aiRow as HTMLElement).getByRole("button", {
         name: "Delete the Anthropic credential",
       }).className,
-    ).toMatch(/danger/u);
+    ).toMatch(/destructive/u);
     expect(
       within(trainingRow as HTMLElement).queryByRole("button", {
         name: "Change Intervals.icu",
@@ -645,7 +642,7 @@ describe("settings setup inventory", () => {
       expect(document.querySelector('[data-setup-panel="api-key"]')).not.toBeNull(),
     );
     expect(document.querySelector('[data-setup-menu="ai"]')).toBeNull();
-    expect(screen.getByLabelText("Provider")).toHaveValue("openrouter");
+    expect(screen.getByLabelText("Provider")).toHaveTextContent("OpenRouter");
     expect(useEnduragentStore.getState().onboarding.configuration?.active).toEqual({
       provider: "anthropic",
       model: "synthetic-model",
@@ -1529,7 +1526,8 @@ describe("coach route", () => {
     const user = userEvent.setup();
     const subject = await renderSettings();
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /^Model$/u }), "__custom__");
+    await user.click(screen.getByRole("combobox", { name: /^Model$/u }));
+    await user.click(await screen.findByRole("option", { name: "Other model…" }));
     const custom = await screen.findByLabelText("Custom model name");
     await waitFor(() => {
       expect(custom).toHaveFocus();
@@ -1553,7 +1551,8 @@ describe("coach route", () => {
       applyLlmSelection: async () => ({ status: "refused", reason: "credential-required" }),
     });
 
-    await user.selectOptions(screen.getByRole("combobox", { name: /Provider/u }), "openrouter");
+    await user.click(screen.getByRole("combobox", { name: /Provider/u }));
+    await user.click(await screen.findByRole("option", { name: "OpenRouter" }));
     await user.click(screen.getByRole("button", { name: "Save coach route" }));
 
     const openSetup = await within(screen.getByRole("region", { name: "Coach" })).findByRole(
@@ -1598,7 +1597,8 @@ describe("coach route", () => {
       "credentials, athlete data, conversations, and other settings stay unchanged",
     );
 
-    await user.selectOptions(coach.getByRole("combobox", { name: /Provider/u }), "anthropic");
+    await user.click(coach.getByRole("combobox", { name: /Provider/u }));
+    await user.click(await screen.findByRole("option", { name: "Anthropic" }));
     await user.click(coach.getByRole("button", { name: "Save coach route" }));
     await screen.findByText("Coach settings saved.");
 
@@ -1626,24 +1626,14 @@ describe("coach route", () => {
   it("stacks the provider label title above its active-route detail", async () => {
     await renderSettings();
 
-    const provider = screen.getByRole("combobox", { name: /Provider/u });
-    const label = document.querySelector<HTMLLabelElement>(`label[for="${provider.id}"]`);
+    expect(screen.getByRole("combobox", { name: /Provider/u })).toHaveTextContent("Anthropic");
+    const label = document.querySelector<HTMLElement>("#coach-provider-label");
     expect(label).not.toBeNull();
-    expect(label?.querySelector(`.${settingsStyles.rowTitle}`)?.textContent).toBe("Provider");
-    expect(label?.querySelector(`.${settingsStyles.rowDetail}`)?.textContent).toMatch(
+    expect(label).toHaveClass("settings-label", "flex", "min-w-0", "flex-1", "flex-col");
+    expect(label?.querySelector(".settings-row-title")?.textContent).toBe("Provider");
+    expect(label?.querySelector(".settings-row-detail")?.textContent).toMatch(
       /^Currently active: /u,
     );
-
-    const stylesheet = await readFile(
-      resolve(import.meta.dirname, "..", "src", "ui", "settings", "SettingsView.module.css"),
-      "utf8",
-    );
-    const rule = /^\.label\s*\{([^}]*)\}/mu.exec(stylesheet)?.[1] ?? "";
-    expect(rule).toMatch(/display:\s*flex;/u);
-    expect(rule).toMatch(/flex-direction:\s*column;/u);
-    expect(rule).toMatch(/align-items:\s*stretch;/u);
-    expect(rule).toMatch(/flex:\s*1;/u);
-    expect(rule).toMatch(/min-width:\s*0;/u);
   });
 });
 

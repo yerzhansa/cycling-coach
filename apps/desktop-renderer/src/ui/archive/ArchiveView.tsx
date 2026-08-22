@@ -1,11 +1,11 @@
 import { useEffect, type ReactElement } from "react";
 import type { ArchiveReadingState } from "../../archive/controller.js";
 import type { TranscriptTurn } from "../../chat/hydration.js";
+import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AthleteMessage } from "../chat/AthleteMessage.js";
 import { CoachMessage } from "../chat/CoachMessage.js";
 import { Page } from "../shared/Page.js";
-import styles from "./ArchiveView.module.css";
 import {
   ARCHIVE_BACK_COPY,
   ARCHIVE_EMPTY_CONVERSATION_COPY,
@@ -24,21 +24,24 @@ import {
   archiveTurnCountCopy,
 } from "./copy.js";
 
+const NOTE_CLASS = "mb-3.5 text-sm text-ink-2";
+const ACTION_CLASS = "justify-self-start [&[hidden]]:hidden";
+
 function TurnRows(props: { readonly turn: TranscriptTurn }): ReactElement {
   return (
     <>
       <article
-        className={`${styles.row} ${styles.athlete} archive-message archive-message--athlete`}
+        className="archive-message archive-message--athlete grid min-w-0 max-w-[78%] justify-self-end gap-[7px] rounded-card rounded-br-ctl border border-line bg-surface px-4 py-3 shadow-elev-1"
         data-turn-id={props.turn.turnId}
       >
-        <p className={styles.role}>You</p>
+        <p className="m-0 text-xs font-medium text-ink-3">You</p>
         <AthleteMessage text={props.turn.athleteText} />
       </article>
       <article
-        className={`${styles.row} ${styles.coach} archive-message archive-message--coach`}
+        className="archive-message archive-message--coach grid min-w-0 max-w-[78%] justify-self-start gap-[7px] font-[var(--f-prose)] text-base leading-[1.6] tracking-[0.002em]"
         data-turn-id={props.turn.turnId}
       >
-        <p className={styles.role}>Coach</p>
+        <p className="m-0 text-xs font-medium text-ink-3">Coach</p>
         <CoachMessage text={props.turn.coachText} />
       </article>
     </>
@@ -54,18 +57,20 @@ function ArchiveList(): ReactElement {
 
   return (
     <>
-      <p className={`${styles.note} archive-note`}>{ARCHIVE_READ_ONLY_NOTE}</p>
+      <p className={`${NOTE_CLASS} archive-note`}>{ARCHIVE_READ_ONLY_NOTE}</p>
       <p
-        className={`${styles.status} archive-status`}
+        className={`${NOTE_CLASS} archive-status`}
         role="status"
         aria-live="polite"
         hidden={listStatus === "ready"}
       >
         {failed ? ARCHIVE_LIST_FAILURE_COPY : ARCHIVE_LOADING_COPY}
       </p>
-      <button
+      <Button
         type="button"
-        className={`${styles.pill} archive-retry`}
+        variant="outline"
+        size="sm"
+        className={`${ACTION_CLASS} archive-retry`}
         hidden={!failed}
         disabled={actions === null}
         onClick={() => {
@@ -74,32 +79,36 @@ function ArchiveList(): ReactElement {
         }}
       >
         {ARCHIVE_RETRY_COPY}
-      </button>
+      </Button>
       <p
-        className={`${styles.status} archive-empty`}
+        className={`${NOTE_CLASS} archive-empty`}
         hidden={listStatus !== "ready" || conversations.length > 0}
       >
         {ARCHIVE_EMPTY_COPY}
       </p>
-      <div className={`${styles.list} archive-list`}>
+      <div className="archive-list grid gap-inset">
         {conversations.map((entry) => (
-          <button
+          <Button
             key={entry.boundaryRef}
             type="button"
-            className={`${styles.entry} archive-entry`}
+            variant="outline"
+            className="archive-entry grid h-auto w-full grid-cols-1 items-start justify-start justify-items-start gap-1 whitespace-normal rounded-card border-line bg-surface px-3.5 py-3 text-left font-normal shadow-elev-1 transition-colors hover:border-line-2 hover:bg-surface-2 active:shadow-none"
+            aria-label={`${archiveTimestampCopy(entry.boundaryAt)} · ${archiveTurnCountCopy(entry.turnCount)} · ${archiveReasonCopy(entry.reason)}`}
             disabled={actions === null}
             onClick={() => {
               actions?.open(entry.boundaryRef);
             }}
           >
-            <span className={styles.entryWhen}>{archiveTimestampCopy(entry.boundaryAt)}</span>
-            <span className={styles.entryMeta}>
+            <span className="text-xs leading-4 font-medium tracking-normal">
+              {archiveTimestampCopy(entry.boundaryAt)}
+            </span>
+            <span className="text-xs text-ink-2">
               {archiveTurnCountCopy(entry.turnCount)} · {archiveReasonCopy(entry.reason)}
             </span>
-          </button>
+          </Button>
         ))}
       </div>
-      <p className={`${styles.note} archive-truncated`} hidden={!truncated}>
+      <p className={`${NOTE_CLASS} archive-truncated`} hidden={!truncated}>
         {ARCHIVE_TRUNCATED_COPY}
       </p>
     </>
@@ -114,24 +123,26 @@ function ArchiveReader(props: { readonly reading: ArchiveReadingState }): ReactE
 
   return (
     <>
-      <div className={styles.bar}>
-        <button
+      <div className="mb-4 hidden items-center gap-inset has-[>*:not([hidden])]:flex">
+        <Button
           type="button"
-          className={`${styles.pill} archive-back`}
+          variant="outline"
+          size="sm"
+          className={`${ACTION_CLASS} archive-back`}
           disabled={actions === null}
           onClick={() => {
             actions?.close();
           }}
         >
           {ARCHIVE_BACK_COPY}
-        </button>
-        <p className={`${styles.note} archive-reading-when`}>
+        </Button>
+        <p className={`${NOTE_CLASS} archive-reading-when mb-0`}>
           {reading.boundaryAt === null ? "" : archiveTimestampCopy(reading.boundaryAt)}
         </p>
       </div>
-      <p className={`${styles.note} archive-note`}>{ARCHIVE_READ_ONLY_NOTE}</p>
+      <p className={`${NOTE_CLASS} archive-note`}>{ARCHIVE_READ_ONLY_NOTE}</p>
       <p
-        className={`${styles.status} archive-reading-status`}
+        className={`${NOTE_CLASS} archive-reading-status`}
         role="status"
         aria-live="polite"
         hidden={reading.status === "ready"}
@@ -142,10 +153,12 @@ function ArchiveReader(props: { readonly reading: ArchiveReadingState }): ReactE
             ? ARCHIVE_UNAVAILABLE_COPY
             : ARCHIVE_LOADING_COPY}
       </p>
-      <div className={styles.bar}>
-        <button
+      <div className="mb-4 hidden items-center gap-inset has-[>*:not([hidden])]:flex">
+        <Button
           type="button"
-          className={`${styles.pill} archive-load-earlier`}
+          variant="outline"
+          size="sm"
+          className={`${ACTION_CLASS} archive-load-earlier`}
           hidden={!reading.hasEarlier || failed}
           disabled={actions === null || reading.status === "loading"}
           onClick={() => {
@@ -154,10 +167,12 @@ function ArchiveReader(props: { readonly reading: ArchiveReadingState }): ReactE
           }}
         >
           {ARCHIVE_LOAD_EARLIER_COPY}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          className={`${styles.pill} archive-retry`}
+          variant="outline"
+          size="sm"
+          className={`${ACTION_CLASS} archive-retry`}
           hidden={!failed}
           disabled={actions === null}
           onClick={() => {
@@ -166,19 +181,15 @@ function ArchiveReader(props: { readonly reading: ArchiveReadingState }): ReactE
           }}
         >
           {ARCHIVE_RETRY_COPY}
-        </button>
+        </Button>
       </div>
       <p
-        className={`${styles.status} archive-empty`}
+        className={`${NOTE_CLASS} archive-empty`}
         hidden={reading.status !== "ready" || reading.turns.length > 0}
       >
         {ARCHIVE_EMPTY_CONVERSATION_COPY}
       </p>
-      <section
-        className={`${styles.thread} archive-thread`}
-        aria-label="Past conversation"
-        aria-live="off"
-      >
+      <section className="archive-thread grid gap-6" aria-label="Past conversation" aria-live="off">
         {reading.turns.map((turn) => (
           <TurnRows key={turn.turnId} turn={turn} />
         ))}

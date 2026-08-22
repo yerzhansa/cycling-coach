@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -245,12 +247,27 @@ describe("sidebar information hierarchy", () => {
   });
 });
 
+describe("sidebar styling", () => {
+  it("uses shadcn buttons and Tailwind without the legacy module or mono copy", async () => {
+    const sources = await Promise.all(
+      ["Sidebar.tsx", "SyncChip.tsx", "UpdateAvailableButton.tsx"].map((name) =>
+        readFile(resolve(import.meta.dirname, "..", "src", "ui", "sidebar", name), "utf8"),
+      ),
+    );
+    expect(sources.every((source) => source.includes("components/ui/button.js"))).toBe(true);
+    expect(sources.join("\n")).not.toContain("Sidebar.module.css");
+    expect(sources.join("\n")).not.toContain("font-mono");
+  });
+});
+
 describe("sidebar sync chip", () => {
   it("walks the loading, synced, syncing and attention states", () => {
     render(<Sidebar />);
 
     expect(chip()).toHaveAttribute("data-status", "loading");
+    expect(chipSurface()).toHaveClass("min-w-0");
     expect(chipSurface()).toHaveTextContent("Loading training data");
+    expect(screen.getByText("Sync now")).toHaveClass("max-[860px]:hidden");
 
     update({
       training: {

@@ -5,8 +5,9 @@ import type {
 } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
 import type { RideAnalysisViewState } from "../../activity-analysis/controller.js";
+import { Button } from "../../components/ui/button.js";
 import { analysisRefreshFailureCopy, analysisUnavailableCopy } from "./copy.js";
-import styles from "./TrainingView.module.css";
+import { responseStyles as styles } from "./responseStyles.js";
 
 const CHART_WIDTH = 640;
 const CHART_HEIGHT = 190;
@@ -39,9 +40,9 @@ function AnalysisRetry(props: {
     <div className={styles.analysisUnavailable}>
       <p>{props.reason === null ? props.fallback : analysisUnavailableCopy(props.reason)}</p>
       {props.onRefresh !== null && (props.reason === null || offerRetry(props.reason)) ? (
-        <button type="button" className={styles.action} onClick={props.onRefresh}>
+        <Button type="button" variant="outline" onClick={props.onRefresh}>
           Try again
-        </button>
+        </Button>
       ) : null}
     </div>
   );

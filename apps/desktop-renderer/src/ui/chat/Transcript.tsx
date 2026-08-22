@@ -1,21 +1,23 @@
 import type { ReactElement } from "react";
 import type { ChatMessageView } from "../../state/chat-slice.js";
+import { cn } from "../../lib/utils.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AthleteMessage } from "./AthleteMessage.js";
 import { CoachMessage } from "./CoachMessage.js";
 import { Notice, RetryBar } from "./Notice.js";
 import { HistoryControls } from "./HistoryControls.js";
 import { StreamingMessage } from "./StreamingMessage.js";
-import styles from "./Transcript.module.css";
 
 function MessageRow(props: { readonly message: ChatMessageView }): ReactElement {
   const message = props.message;
   const streaming = message.role === "coach" && message.delivery === "streaming";
   const silent = message.historical || message.role === "athlete";
-  const rowClassName =
+  const rowClassName = cn(
+    "chat-message grid min-w-0 max-w-[78%] gap-[7px] data-[delivery=interrupted]:text-ink-2",
     message.role === "coach"
-      ? `${styles.row} ${styles.coach} chat-message chat-message--coach ${styles.prose}`
-      : `${styles.row} ${styles.athlete} chat-message chat-message--athlete`;
+      ? "chat-message--coach justify-self-start text-base leading-[1.6] tracking-[0.002em]"
+      : "chat-message--athlete justify-self-end rounded-card rounded-br-ctl border border-line bg-surface px-4 py-3",
+  );
 
   return (
     <article
@@ -26,7 +28,7 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
       aria-atomic={message.role === "coach" ? "true" : "false"}
       aria-busy={streaming ? "true" : undefined}
     >
-      <p className={`${styles.role} chat-message__role`}>
+      <p className="chat-message__role m-0 text-xs leading-[1.2] tracking-[0.04em] text-ink-3 uppercase">
         {message.role === "athlete" ? "You" : "Coach"}
       </p>
       {message.role === "athlete" ? (
@@ -45,7 +47,7 @@ export function Transcript(): ReactElement {
 
   return (
     <section
-      className={`${styles.transcript} chat-transcript`}
+      className="chat-transcript grid gap-[18px]"
       role="log"
       aria-live="polite"
       aria-relevant="additions text"
@@ -53,9 +55,9 @@ export function Transcript(): ReactElement {
       aria-label="Coach conversation"
     >
       <HistoryControls />
-      <div className={`${styles.messages} chat-messages`}>
+      <div className="chat-messages grid gap-7">
         {messages.length === 0 ? null : (
-          <div className={styles.page}>
+          <div className="contents">
             {messages.map((message) => (
               <MessageRow key={message.id} message={message} />
             ))}

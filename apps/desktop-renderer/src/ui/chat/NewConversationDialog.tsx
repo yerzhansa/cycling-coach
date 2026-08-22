@@ -1,8 +1,17 @@
 import { useLayoutEffect, useRef, type ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
 import { PLATFORM_COPY } from "../../platform-copy.js";
 import { focusNewConversationOpener } from "../../state/new-conversation-opener.js";
 import { useEnduragentStore } from "../../state/store.js";
-import styles from "./NewConversationDialog.module.css";
 
 const BASE_COPY =
   "Your visible conversation will be cleared. Your training data and saved coach memory will remain.";
@@ -15,71 +24,72 @@ export function NewConversationDialog(props: {
   const resetCount = useEnduragentStore((state) => state.chat.resetCount);
   const hasHydratedHistory = useEnduragentStore((state) => state.chat.hasHydratedHistory);
   const actions = useEnduragentStore((state) => state.chatActions);
-  const dialog = useRef<HTMLDialogElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   const renderedResetCount = useRef(resetCount);
   const onComposerReset = props.onComposerReset;
 
   const pending = resetPhase === "resetting";
   const requested = resetPhase === "confirming" || pending;
+  const renderedRequested = useRef(requested);
 
   useLayoutEffect(() => {
-    const element = dialog.current;
     const completed = resetCount !== renderedResetCount.current;
+    const wasRequested = renderedRequested.current;
     renderedResetCount.current = resetCount;
-    if (element === null) return;
-    if (requested && !element.open) {
-      element.showModal();
-      cancel.current?.focus();
-      return;
-    }
-    if (!requested && element.open) {
-      element.close();
-      if (completed) onComposerReset();
-      else focusNewConversationOpener();
-      return;
-    }
+    renderedRequested.current = requested;
+    if (requested) return;
     if (completed) onComposerReset();
-  });
+    else if (wasRequested) focusNewConversationOpener();
+  }, [onComposerReset, requested, resetCount]);
 
   return (
-    <dialog
-      ref={dialog}
-      className={`${styles.dialog} new-conversation-dialog`}
-      aria-labelledby="new-conversation-title"
-      aria-describedby="new-conversation-description"
-      aria-modal="true"
-      aria-busy={pending ? "true" : undefined}
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!pending) actions?.cancelNewConversation();
+    <Dialog
+      open={requested}
+      onOpenChange={(open) => {
+        if (!open && !pending) actions?.cancelNewConversation();
       }}
     >
-      <h2 id="new-conversation-title">Start a new conversation?</h2>
-      <p id="new-conversation-description">{hasHydratedHistory ? HYDRATED_COPY : BASE_COPY}</p>
-      <div className={`${styles.actions} new-conversation-dialog__actions`}>
-        <button
-          type="button"
-          ref={cancel}
-          className={`${styles.cancel} new-conversation-dialog__cancel`}
-          disabled={pending}
-          onClick={() => {
-            actions?.cancelNewConversation();
-          }}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          className={`${styles.confirm} new-conversation-dialog__confirm`}
-          disabled={pending}
-          onClick={() => {
-            actions?.confirmNewConversation();
-          }}
-        >
-          Start new conversation
-        </button>
-      </div>
-    </dialog>
+      <DialogContent
+        className="new-conversation-dialog w-[min(460px,calc(100vw-32px))] max-w-none gap-0 p-6 shadow-elev-4 sm:max-w-none"
+        showCloseButton={false}
+        initialFocus={cancel}
+        finalFocus={false}
+        aria-busy={pending ? "true" : undefined}
+      >
+        <DialogHeader className="gap-2.5">
+          <DialogTitle id="new-conversation-title" className="m-0 text-xl">
+            Start a new conversation?
+          </DialogTitle>
+          <DialogDescription id="new-conversation-description" className="m-0 leading-[1.5]">
+            {hasHydratedHistory ? HYDRATED_COPY : BASE_COPY}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="new-conversation-dialog__actions mx-0 mt-[22px] mb-0 flex-row justify-end border-0 bg-transparent p-0">
+          <DialogClose
+            render={
+              <Button
+                ref={cancel}
+                className="new-conversation-dialog__cancel"
+                variant="outline"
+                size="lg"
+                disabled={pending}
+              />
+            }
+          >
+            Cancel
+          </DialogClose>
+          <Button
+            className="new-conversation-dialog__confirm"
+            size="lg"
+            disabled={pending}
+            onClick={() => {
+              actions?.confirmNewConversation();
+            }}
+          >
+            Start new conversation
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
