@@ -420,7 +420,7 @@ export function TelegramRow(): ReactElement {
   const feedbackNode =
     panelFeedback === null ? null : (
       <p
-        className={`mt-2 mb-0 text-[12.5px] ${panelFeedback.tone === "error" || panelFeedback.tone === "warning" ? "text-danger" : "text-ink-2"}`}
+        className={`mt-2 mb-0 text-xs ${panelFeedback.tone === "error" || panelFeedback.tone === "warning" ? "text-danger" : "text-ink-2"}`}
         role={panelFeedback.tone === "error" ? "alert" : "status"}
         aria-live={panelFeedback.tone === "error" ? undefined : "polite"}
         data-telegram-feedback={panelFeedback.tone}
@@ -447,7 +447,7 @@ export function TelegramRow(): ReactElement {
         }
         info={
           <span
-            className="rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] px-[7px] py-0.5 text-[10px] font-semibold uppercase tracking-[0.055em] text-brand"
+            className="rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] px-[7px] py-0.5 text-xs font-semibold text-brand"
             data-telegram-optional=""
           >
             {TELEGRAM_OPTIONAL_LABEL}
@@ -508,11 +508,11 @@ export function TelegramRow(): ReactElement {
                 ref={heading}
                 id="onboarding-telegram-create-title"
                 tabIndex={-1}
-                className="m-0 text-[13.5px] font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
+                className="m-0 text-sm font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
               >
                 {TELEGRAM_CREATE_TITLE}
               </h3>
-              <p className="mt-1 mb-0 max-w-[525px] text-[12.5px] text-ink-2">
+              <p className="mt-1 mb-0 max-w-[525px] text-xs text-ink-2">
                 Ask{" "}
                 <a
                   className="font-medium underline underline-offset-[3px] hover:text-ink"

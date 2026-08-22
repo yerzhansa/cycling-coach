@@ -172,7 +172,7 @@ export function TrainingRow(props: {
               <h3
                 ref={headingRef}
                 tabIndex={-1}
-                className="m-0 text-[13.5px] font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
+                className="m-0 text-sm font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
               >
                 {TRAINING_CONNECT_TITLE}
               </h3>

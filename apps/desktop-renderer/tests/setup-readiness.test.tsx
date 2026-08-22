@@ -1,4 +1,5 @@
 import { act, fireEvent, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onboardingStatusRetryDelayMs,
@@ -14,6 +15,7 @@ import {
   mountWizard,
   readyTelegramSettings,
   resetOnboardingStore,
+  selectSetupOption,
   setTelegramSettings,
   testBridge,
 } from "./onboarding-harness.js";
@@ -60,7 +62,7 @@ describe("authoritative setup readiness", () => {
     await wizard.open();
 
     expect(wizard.controller.state().intake).toEqual({ injuryStatus: "managing" });
-    expect(control<HTMLSelectElement>("onboarding-injury-status")).toHaveValue("managing");
+    expect(control("onboarding-injury-status")).toHaveTextContent("Managing an injury");
     expect(document.querySelector("#onboarding-clinician-cleared")).toBeNull();
     expect(useEnduragentStore.getState().onboarding.readiness).toEqual({
       provider: true,
@@ -251,7 +253,7 @@ describe("authoritative setup readiness", () => {
     expect(screen.getByRole("button", { name: "Start coaching" })).toBeEnabled();
     expect(document.querySelector('[data-setup-trigger="ai"]')).toBeEnabled();
     expect(document.querySelector('[data-setup-trigger="training"]')).toBeEnabled();
-    expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeEnabled();
+    expect(control<HTMLButtonElement>("onboarding-injury-status")).toBeEnabled();
     expect(document.querySelector("#onboarding-clinician-cleared")).toBeNull();
     expect(document.querySelector("[data-setup-readiness]")).toHaveTextContent(
       "3 of 3 required ready",
@@ -331,7 +333,7 @@ describe("authoritative setup readiness", () => {
     expect(setupReady(useEnduragentStore.getState())).toBe(true);
     expect(readinessBadge()).toHaveTextContent("3 of 3 required ready");
     expect(readinessBadge()).toHaveAttribute("data-state", "ready");
-    const injury = control<HTMLSelectElement>("onboarding-injury-status");
+    const injury = control<HTMLButtonElement>("onboarding-injury-status");
     expect(injury).toBeDisabled();
     expect(control<HTMLButtonElement>("setup-panel-title").closest("section")).toHaveAttribute(
       "aria-busy",
@@ -407,7 +409,7 @@ describe("authoritative setup readiness", () => {
       expect(document.querySelector("[data-setup-card]")).not.toBeNull();
       expect(document.querySelector('[data-setup-trigger="ai"]')).toBeNull();
       expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
-      expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeDisabled();
+      expect(control<HTMLButtonElement>("onboarding-injury-status")).toBeDisabled();
       expect(screen.queryByRole("button", { name: "Start coaching" })).toBeNull();
 
       setupReadFails = false;
@@ -424,7 +426,7 @@ describe("authoritative setup readiness", () => {
       expect(
         document.querySelector<HTMLButtonElement>('[data-setup-trigger="training"]'),
       ).toBeEnabled();
-      expect(control<HTMLSelectElement>("onboarding-injury-status")).toBeEnabled();
+      expect(control<HTMLButtonElement>("onboarding-injury-status")).toBeEnabled();
       wizard.controller.dispose();
     } finally {
       vi.useRealTimers();
@@ -580,6 +582,7 @@ describe("authoritative setup readiness", () => {
   );
 
   it("counts an answered injury status before it is persisted, so the badge agrees with the primary action", async () => {
+    const user = userEvent.setup();
     const bridge = testBridge(async () => ({ status: "refused", reason: "cancelled" }));
     bridge.chatGptStatus.mockResolvedValue({ state: "configured", runtimeReady: true });
     bridge.getSetupStatus = vi.fn(async () => ({
@@ -593,9 +596,7 @@ describe("authoritative setup readiness", () => {
     expect(readinessBadge()).toHaveTextContent("2 of 3 required ready");
     expect(screen.getByRole("button", { name: "Start coaching" })).toBeDisabled();
 
-    fireEvent.change(control<HTMLSelectElement>("onboarding-injury-status"), {
-      target: { value: "none" },
-    });
+    await selectSetupOption(user, "onboarding-injury-status", "none");
 
     expect(useEnduragentStore.getState().onboarding.readiness.intake).toBe(false);
     expect(readinessBadge()).toHaveTextContent("3 of 3 required ready");

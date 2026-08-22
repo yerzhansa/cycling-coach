@@ -147,6 +147,34 @@ export function control<T extends HTMLElement>(id: string): T {
   return element;
 }
 
+const SETUP_OPTION_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "onboarding-injury-status": {
+    none: "No current injury",
+    returning: "Returning after an injury",
+  },
+  "onboarding-llm-provider": {
+    anthropic: "Anthropic",
+    openrouter: "OpenRouter",
+  },
+  "onboarding-llm-model": {
+    __custom__: "Other model…",
+    "deepseek/deepseek-v4-flash": "DeepSeek V4 Flash",
+  },
+  "onboarding-endpoint-mode": {
+    custom: "Use a custom endpoint",
+  },
+};
+
+export async function selectSetupOption(
+  user: UserEvent,
+  id: string,
+  value: string,
+): Promise<void> {
+  const label = SETUP_OPTION_LABELS[id]?.[value] ?? value;
+  await user.click(control(id));
+  await user.click(await screen.findByRole("option", { name: label }));
+}
+
 export function errorText(): string {
   return document.querySelector("#onboarding-error")?.textContent ?? "";
 }

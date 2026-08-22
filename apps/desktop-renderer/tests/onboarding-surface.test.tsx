@@ -26,6 +26,7 @@ import {
   rowState,
   saveModelKey,
   seedSecret,
+  selectSetupOption,
   testBridge,
   TEST_LLM_CONFIGURATION,
   type UserEvent,
@@ -47,7 +48,7 @@ function button(name: string): HTMLButtonElement {
 }
 
 async function chooseOption(user: UserEvent, id: string, value: string) {
-  await user.selectOptions(control<HTMLSelectElement>(id), value);
+  await selectSetupOption(user, id, value);
 }
 
 async function typeInto(user: UserEvent, id: string, value: string) {
@@ -667,7 +668,7 @@ describe("mounted onboarding", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openApiKeyPanel(user);
-    const provider = control<HTMLSelectElement>("onboarding-llm-provider");
+    const provider = control<HTMLButtonElement>("onboarding-llm-provider");
 
     expect(fireEvent.keyDown(provider, { key: "Enter" })).toBe(true);
 
@@ -763,9 +764,9 @@ describe("mounted onboarding", () => {
     await chooseOption(user, "onboarding-llm-provider", "anthropic");
     await chooseOption(user, "onboarding-llm-provider", "openrouter");
 
-    expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("__custom__");
+    expect(control("onboarding-llm-model")).toHaveTextContent("Other model…");
     expect(control<HTMLInputElement>("onboarding-custom-model").value).toBe(selection.model);
-    expect(control<HTMLSelectElement>("onboarding-endpoint-mode").value).toBe("custom");
+    expect(control("onboarding-endpoint-mode")).toHaveTextContent("Use a custom endpoint");
     expect(control<HTMLInputElement>("onboarding-custom-endpoint").value).toBe(
       selection.endpoint.value,
     );
