@@ -469,7 +469,7 @@ describe("first sync controller", () => {
       readFile(new URL("../src/boot.ts", import.meta.url), "utf8"),
       readFile(new URL("../src/ui/chat/FirstSyncCard.tsx", import.meta.url), "utf8"),
       readFile(new URL("../src/first-sync.ts", import.meta.url), "utf8"),
-      readFile(new URL("../src/ui/chat/FirstSyncCard.module.css", import.meta.url), "utf8"),
+      readFile(new URL("../src/theme/tailwind.css", import.meta.url), "utf8"),
     ]);
     for (const copy of [
       "Getting your coach ready",
@@ -492,7 +492,8 @@ describe("first sync controller", () => {
     expect(host).toContain("coordinator: trainingSyncCoordinator");
     expect(host).not.toContain("syncNeedsReconnect");
     expect(controller).not.toMatch(/onNotificationEnvelope|requestId|chat|transcript/u);
-    expect(styles).toContain("width: min(680px, calc(100% - 48px))");
-    expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(card).toContain("w-[min(680px,calc(100%-48px))]");
+    expect(card).toContain("motion-reduce:before:animate-none");
+    expect(styles).toContain("@keyframes first-sync-sweep");
   });
 });

@@ -108,3 +108,9 @@
     border-width: 0;
   }
 }
+
+@keyframes first-sync-sweep {
+  to {
+    transform: translateX(250%);
+  }
+}

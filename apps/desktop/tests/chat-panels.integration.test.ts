@@ -1263,13 +1263,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const enabledBefore = !opener.disabled && opener.getAttribute("aria-disabled") !== "true" && !textarea.disabled;
       if (enabledBefore) opener.click();
       const dialog = document.querySelector(".new-conversation-dialog");
-      const dialogOpen = dialog.open;
+      const dialogOpen = dialog !== null;
       const clearRecords = [];
       const clearObserver = new MutationObserver((records) => clearRecords.push(...records));
       clearObserver.observe(document.querySelector(".chat-messages"), { childList: true });
       if (dialogOpen) dialog.querySelector(".new-conversation-dialog__confirm").click();
       const resetDeadline = Date.now() + 5000;
-      while (dialog.open && Date.now() < resetDeadline) {
+      while (document.querySelector(".new-conversation-dialog") !== null && Date.now() < resetDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       await new Promise((resolve) => setTimeout(resolve, 0));

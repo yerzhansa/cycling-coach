@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { setupReady } from "../../state/onboarding-slice.js";
-import styles from "./QuickActions.module.css";
 
 const COACHING_SHORTCUTS = Object.freeze([
   Object.freeze({ command: "/plan", label: "Build a plan" }),
@@ -69,15 +69,15 @@ export function QuickActions(): ReactElement {
 
   return (
     <div
-      className={`${styles.group} coaching-shortcuts`}
+      className="coaching-shortcuts mb-2.5 flex min-w-0 flex-wrap gap-2"
       role="group"
       aria-label="Coaching shortcuts"
     >
       {COACHING_SHORTCUTS.map((shortcut) => (
-        <button
+        <Button
           key={shortcut.command}
-          type="button"
-          className={`${styles.shortcut} coaching-shortcut`}
+          className="coaching-shortcut min-w-0 max-w-full"
+          variant="outline"
           aria-label={`${shortcut.label}, ${shortcut.command} command`}
           disabled={disabled || !canChat}
           onClick={(event) => {
@@ -90,9 +90,13 @@ export function QuickActions(): ReactElement {
             actions.submit(shortcut.command);
           }}
         >
-          <span className={`${styles.label} coaching-shortcut__label`}>{shortcut.label}</span>
-          <span className={`${styles.command} coaching-shortcut__command`}>{shortcut.command}</span>
-        </button>
+          <span className="coaching-shortcut__label min-w-0 overflow-hidden text-ellipsis">
+            {shortcut.label}
+          </span>
+          <span className="coaching-shortcut__command shrink-0 text-xs text-ink-2">
+            {shortcut.command}
+          </span>
+        </Button>
       ))}
     </div>
   );

@@ -16,7 +16,6 @@ import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-sli
 import { useEnduragentStore } from "../src/state/store.js";
 import { SLASH_COMMANDS } from "../src/chat/commands.js";
 import { ChatView } from "../src/ui/chat/ChatView.js";
-import queueStyles from "../src/ui/chat/QueuedMessages.module.css";
 
 function stubActions(): ChatActions {
   return {
@@ -334,7 +333,7 @@ describe("chat surface", () => {
       expect(actions.removeQueued).toHaveBeenNthCalledWith(2, "queued-1");
     });
 
-    it("gives a queued command the monospace face", () => {
+    it("marks queued commands without restoring the legacy monospace face", () => {
       render(<Harness />);
       setChat({
         queued: [
@@ -345,9 +344,10 @@ describe("chat surface", () => {
 
       expect(
         [...document.querySelectorAll(".chat-queue__text")].map((node) =>
-          node.classList.contains(queueStyles.command),
+          node.classList.contains("chat-queue__command"),
         ),
       ).toEqual([false, true]);
+      expect(document.querySelector(".chat-queue__command")).not.toHaveClass("font-mono");
     });
 
     it("locks removal while work is blocked", async () => {
@@ -587,13 +587,13 @@ describe("chat surface", () => {
     it("walks the confirm flow and hands focus back to the composer", async () => {
       const user = userEvent.setup();
       render(<Shell onReady={() => {}} />);
-      const dialog = document.querySelector(".new-conversation-dialog");
-      if (!(dialog instanceof HTMLDialogElement)) throw new TypeError("dialog missing");
-      expect(dialog.open).toBe(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
 
       setChat({ resetPhase: "confirming" });
-      expect(dialog.open).toBe(true);
-      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+      const dialog = screen.getByRole("dialog");
+      await waitFor(() => {
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+      });
 
       await user.click(screen.getByRole("button", { name: "Start new conversation" }));
       expect(actions.confirmNewConversation).toHaveBeenCalledTimes(1);
@@ -605,9 +605,12 @@ describe("chat surface", () => {
 
       composer().value = "leftover draft";
       setChat({ resetPhase: "idle", resetCount: 1 });
-      expect(dialog.open).toBe(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
       expect(composer()).toHaveValue("");
       expect(document.activeElement).toBe(composer());
+      await waitFor(() => {
+        expect(dialog).not.toBeInTheDocument();
+      });
     });
 
     it("returns focus to the opener when the athlete cancels", async () => {
@@ -622,7 +625,9 @@ describe("chat surface", () => {
       expect(actions.cancelNewConversation).toHaveBeenCalledTimes(1);
 
       setChat({ resetPhase: "idle" });
-      expect(document.activeElement).toBe(screen.getByRole("button", { name: "New chat" }));
+      await waitFor(() => {
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "New chat" }));
+      });
     });
 
     it("names the restored history in the confirmation copy", () => {
@@ -760,6 +765,25 @@ describe("chat surface", () => {
       expect(source).toContain("PopoverContent");
       expect(source).toContain("components/ui/button.js");
       expect(source).toContain("chat-markdown\\\\_\\\\_table-scroll");
+    });
+
+    it("keeps chat support cards and dialogs on shadcn primitives", async () => {
+      const sourceRoot = resolve(import.meta.dirname, "..", "src", "ui", "chat");
+      const sources = await Promise.all(
+        [
+          "FirstSyncCard.tsx",
+          "NewConversationDialog.tsx",
+          "QueuedMessages.tsx",
+          "QuickActions.tsx",
+          "SpendNotice.tsx",
+        ].map((name) => readFile(resolve(sourceRoot, name), "utf8")),
+      );
+      const source = sources.join("\n");
+      expect(source).not.toContain(".module.css");
+      expect(source).not.toContain("font-mono");
+      expect(source).toContain("components/ui/button.js");
+      expect(source).toContain("components/ui/card.js");
+      expect(source).toContain("components/ui/dialog.js");
     });
   });
 });
