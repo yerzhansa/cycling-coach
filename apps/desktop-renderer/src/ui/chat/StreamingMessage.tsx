@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactElement } from "react";
 import { chatStreamBuffer } from "../../state/chat-stream.js";
-import styles from "./Message.module.css";
+import { MESSAGE_TEXT_CLASS } from "./Message.js";
 
 export function StreamingMessage(props: { readonly messageId: string }): ReactElement {
   const host = useRef<HTMLDivElement>(null);
@@ -13,5 +13,5 @@ export function StreamingMessage(props: { readonly messageId: string }): ReactEl
     };
   }, [messageId]);
 
-  return <div className={`${styles.text} chat-message__text`} ref={host} />;
+  return <div className={MESSAGE_TEXT_CLASS} ref={host} />;
 }

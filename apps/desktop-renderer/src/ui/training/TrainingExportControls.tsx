@@ -1,11 +1,31 @@
 import type { ActivityExportFormat, WorkoutArchiveFormat } from "@enduragent/coach-contract";
 import { useId, useState, type ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select.js";
 import { useEnduragentStore } from "../../state/store.js";
 import {
   trainingExportStatusCopy,
   type TrainingExportTarget,
 } from "../../training-export/controller.js";
-import styles from "./TrainingView.module.css";
+import { overviewStyles as styles } from "./overviewStyles.js";
+
+const ACTIVITY_FORMATS = [
+  { value: "fit", label: "FIT" },
+  { value: "gpx", label: "GPX" },
+] as const;
+
+const WORKOUT_FORMATS = [
+  { value: "zwo", label: "ZWO" },
+  { value: "mrc", label: "MRC" },
+  { value: "erg", label: "ERG" },
+  { value: "fit", label: "FIT" },
+] as const;
 
 function Status(props: { readonly target: TrainingExportTarget }): ReactElement {
   const state = useEnduragentStore((store) => store.trainingExport);
@@ -43,19 +63,28 @@ export function ActivityExportControl(props: {
       </p>
       <div className={styles.exportControls}>
         <label htmlFor={`${id}-format`}>File format</label>
-        <select
-          id={`${id}-format`}
-          className={styles.exportSelect}
+        <Select
+          items={ACTIVITY_FORMATS}
           value={format}
           disabled={busy}
-          onChange={(event) => setFormat(event.currentTarget.value as ActivityExportFormat)}
+          onValueChange={(value) => {
+            if (value !== null) setFormat(value as ActivityExportFormat);
+          }}
         >
-          <option value="fit">FIT</option>
-          <option value="gpx">GPX</option>
-        </select>
-        <button
+          <SelectTrigger id={`${id}-format`} className="min-w-[86px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent align="start">
+            {ACTIVITY_FORMATS.map((entry) => (
+              <SelectItem key={entry.value} value={entry.value}>
+                {entry.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
           type="button"
-          className={styles.action}
+          variant="outline"
           disabled={actions === null || busy}
           aria-busy={busy ? "true" : undefined}
           onClick={() => {
@@ -63,7 +92,7 @@ export function ActivityExportControl(props: {
           }}
         >
           Export ride
-        </button>
+        </Button>
       </div>
       <Status target="activity" />
     </section>
@@ -86,21 +115,28 @@ export function WorkoutArchiveExportControl(props: {
       </p>
       <div className={styles.exportControls}>
         <label htmlFor={`${id}-format`}>Workout format</label>
-        <select
-          id={`${id}-format`}
-          className={styles.exportSelect}
+        <Select
+          items={WORKOUT_FORMATS}
           value={format}
           disabled={busy}
-          onChange={(event) => setFormat(event.currentTarget.value as WorkoutArchiveFormat)}
+          onValueChange={(value) => {
+            if (value !== null) setFormat(value as WorkoutArchiveFormat);
+          }}
         >
-          <option value="zwo">ZWO</option>
-          <option value="mrc">MRC</option>
-          <option value="erg">ERG</option>
-          <option value="fit">FIT</option>
-        </select>
-        <button
+          <SelectTrigger id={`${id}-format`} className="min-w-[86px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent align="start">
+            {WORKOUT_FORMATS.map((entry) => (
+              <SelectItem key={entry.value} value={entry.value}>
+                {entry.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
           type="button"
-          className={styles.action}
+          variant="outline"
           disabled={actions === null || busy}
           aria-busy={busy ? "true" : undefined}
           onClick={() => {
@@ -108,7 +144,7 @@ export function WorkoutArchiveExportControl(props: {
           }}
         >
           Export workouts
-        </button>
+        </Button>
       </div>
       <Status target="workout-archive" />
     </div>

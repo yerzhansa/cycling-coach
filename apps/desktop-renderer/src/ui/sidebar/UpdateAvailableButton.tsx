@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
-import styles from "./Sidebar.module.css";
 
 interface UpdateAvailableButtonProps {
   readonly locked: boolean;
@@ -22,9 +22,11 @@ export function UpdateAvailableButton({ locked }: UpdateAvailableButtonProps): R
   return (
     <>
       {visible ? (
-        <button
+        <Button
           type="button"
-          className={styles.updateButton}
+          variant="outline"
+          size="default"
+          className="update-button w-full justify-center bg-surface font-medium text-ink hover:bg-surface-2"
           aria-label={
             restarting
               ? `Restarting to install update version ${version}`
@@ -37,10 +39,10 @@ export function UpdateAvailableButton({ locked }: UpdateAvailableButtonProps): R
           }}
         >
           {restarting ? "Restarting…" : "Update available"}
-        </button>
+        </Button>
       ) : null}
       <span
-        className={`${styles.srOnly} update-announcement`}
+        className="update-announcement sr-only"
         role="status"
         aria-live="polite"
         aria-atomic="true"

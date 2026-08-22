@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import {
   setupStatusKnown,
   type OnboardingActions,
@@ -33,12 +34,7 @@ import {
   CredentialDeleteButton,
   CredentialDeleteConfirmation,
 } from "../settings/CredentialsSection.js";
-import {
-  BUTTON_OUTLINE_SM,
-  BUTTON_QUIET_SM,
-  BUTTON_SOLID_SM,
-  SETUP_LINK_BUTTON,
-} from "./SetupCard.js";
+import { SETUP_LINK_BUTTON } from "./SetupCard.js";
 import { SetupError, SetupRow, SetupSubPanel } from "./SetupRow.js";
 import type { SetupPlacement } from "./OnboardingWizard.js";
 
@@ -141,11 +137,12 @@ export function TrainingRow(props: {
           !statusKnown ? null : connected ? (
             <CredentialDeleteButton credential="intervals-icu" buttonRef={deleteRef} />
           ) : (
-            <button
+            <Button
               ref={triggerRef}
               type="button"
               data-setup-trigger="training"
-              className={BUTTON_OUTLINE_SM}
+              variant="outline"
+              size="sm"
               disabled={controlsDisabled}
               aria-expanded={open}
               aria-label={TRAINING_TRIGGER_LABELS.disconnected}
@@ -160,7 +157,7 @@ export function TrainingRow(props: {
               }}
             >
               Connect
-            </button>
+            </Button>
           )
         }
       />
@@ -172,16 +169,17 @@ export function TrainingRow(props: {
               <h3
                 ref={headingRef}
                 tabIndex={-1}
-                className="m-0 text-[13.5px] font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
+                className="m-0 text-sm font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
               >
                 {TRAINING_CONNECT_TITLE}
               </h3>
               <p className="mt-1 mb-0 text-xs text-ink-2">{INTERVALS_PANEL_HINT}</p>
             </div>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-              <button
+              <Button
                 type="button"
-                className={BUTTON_QUIET_SM}
+                variant="ghost"
+                size="sm"
                 disabled={controlsDisabled}
                 aria-label={TRAINING_CANCEL_LABEL}
                 onClick={() => {
@@ -190,19 +188,22 @@ export function TrainingRow(props: {
                 }}
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className={BUTTON_SOLID_SM}
+                variant="default"
+                size="sm"
                 disabled={controlsDisabled || importing}
                 onClick={connect}
               >
                 {connectPhase === "idle" ? TRAINING_USE_COPIED_KEY_LABEL : "Connecting…"}
-              </button>
+              </Button>
             </div>
           </div>
-          <button
+          <Button
             type="button"
+            variant="link"
+            size="sm"
             className={SETUP_LINK_BUTTON}
             disabled={controlsDisabled || importing}
             onClick={() => {
@@ -210,15 +211,17 @@ export function TrainingRow(props: {
             }}
           >
             {IMPORT_FILES_LABEL}
-          </button>
+          </Button>
           <SetupError surface={surface} section="training" />
         </SetupSubPanel>
       ) : null}
       {connected && (retryable || ownsError) ? (
         <SetupSubPanel name="training-recovery">
           {retryable ? (
-            <button
+            <Button
               type="button"
+              variant="link"
+              size="sm"
               className={SETUP_LINK_BUTTON}
               disabled={controlsDisabled || importing}
               onClick={() => {
@@ -228,7 +231,7 @@ export function TrainingRow(props: {
               }}
             >
               {RETRY_SAVED_KEYS_LABEL}
-            </button>
+            </Button>
           ) : null}
           <SetupError surface={surface} section="training" />
         </SetupSubPanel>

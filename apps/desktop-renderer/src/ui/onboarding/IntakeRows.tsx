@@ -1,4 +1,12 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select.js";
 import type { OnboardingActions, OnboardingSurfaceState } from "../../onboarding/controller.js";
 import { errorSection } from "../../onboarding/lanes.js";
 import { RETRY_INTAKE_SAVE_LABEL } from "./copy.js";
@@ -24,22 +32,29 @@ function IntakeSelect(props: {
   readonly onSelect: (value: string) => void;
 }): ReactElement {
   return (
-    <select
-      id={props.id}
-      className={`${SETUP_SELECT_CLASS} w-[180px]`}
+    <Select
       disabled={props.disabled}
+      items={props.options.map(([value, label]) => ({ value, label }))}
       value={props.value}
-      aria-describedby={props.describedBy}
-      onChange={(event) => {
-        props.onSelect(event.target.value);
+      onValueChange={(value) => {
+        if (value !== null) props.onSelect(value);
       }}
     >
-      {props.options.map(([value, label]) => (
-        <option key={value} value={value}>
-          {label}
-        </option>
-      ))}
-    </select>
+      <SelectTrigger
+        id={props.id}
+        className={`${SETUP_SELECT_CLASS} w-[180px]`}
+        aria-describedby={props.describedBy}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="end">
+        {props.options.map(([value, label]) => (
+          <SelectItem key={value} value={value}>
+            {label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -84,8 +99,10 @@ export function IntakeRows(props: {
         <SetupSubPanel name="intake-error">
           <SetupError surface={surface} section="intake" />
           {props.placement === "settings" && wizard.fixedError === "intake-save-failed" ? (
-            <button
+            <Button
               type="button"
+              variant="link"
+              size="sm"
               className={SETUP_LINK_BUTTON}
               disabled={controlsDisabled}
               onClick={() => {
@@ -93,7 +110,7 @@ export function IntakeRows(props: {
               }}
             >
               {RETRY_INTAKE_SAVE_LABEL}
-            </button>
+            </Button>
           ) : null}
         </SetupSubPanel>
       ) : null}

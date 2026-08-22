@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { TRANSCRIPT_HYDRATION_FAILURE_COPY } from "../../chat/hydration.js";
 import { useEnduragentStore } from "../../state/store.js";
-import styles from "./Transcript.module.css";
 
 export function HistoryControls(): ReactElement {
   const status = useEnduragentStore((state) => state.chat.hydrationStatus);
@@ -15,13 +15,15 @@ export function HistoryControls(): ReactElement {
 
   return (
     <div
-      className={`${styles.controls} chat-history-controls`}
+      className="chat-history-controls flex items-center justify-start gap-inset"
       aria-live="off"
       hidden={!hasEarlier && !failed}
     >
-      <button
+      <Button
         type="button"
-        className={`${styles.pill} chat-history-load`}
+        className="chat-history-load"
+        variant="outline"
+        size="sm"
         hidden={loadHidden}
         disabled={loadDisabled}
         onClick={() => {
@@ -30,13 +32,15 @@ export function HistoryControls(): ReactElement {
         }}
       >
         Load earlier messages
-      </button>
-      <p className={`${styles.failure} chat-history-failure`} hidden={!failed}>
+      </Button>
+      <p className="chat-history-failure m-0 text-sm text-ink-2" hidden={!failed}>
         {TRANSCRIPT_HYDRATION_FAILURE_COPY}
       </p>
-      <button
+      <Button
         type="button"
-        className={`${styles.pill} chat-history-retry`}
+        className="chat-history-retry"
+        variant="outline"
+        size="sm"
         hidden={!failed}
         disabled={workBlocked}
         onClick={() => {
@@ -45,7 +49,7 @@ export function HistoryControls(): ReactElement {
         }}
       >
         Retry history
-      </button>
+      </Button>
     </div>
   );
 }

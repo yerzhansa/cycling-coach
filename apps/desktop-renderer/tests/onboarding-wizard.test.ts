@@ -21,7 +21,6 @@ const SETUP_SOURCES = [
   "InfoTip.tsx",
   "../../app/SetupGate.tsx",
   "CredentialField.tsx",
-  "../shared/buttons.ts",
 ] as const;
 
 const BANNED_TRAINING_TERMS = [
@@ -264,7 +263,7 @@ describe("desktop onboarding wizard", () => {
       readFile(new URL("../src/ui/onboarding/SetupCard.tsx", import.meta.url), "utf8"),
     ]);
     expect(wizard).toContain("export function SetupPanel");
-    expect(wizard).toContain('data-setup-host={props.placement}');
+    expect(wizard).toContain("data-setup-host={props.placement}");
     expect(wizard).not.toContain('title="Setup"');
     expect(wizard).not.toContain("onboarding-dismiss");
     expect(wizard).not.toContain("Dismiss");
@@ -289,14 +288,17 @@ describe("desktop onboarding wizard", () => {
   });
 
   it("keeps setup control heights on the shared height tokens", async () => {
-    const buttons = await readFile(
-      new URL("../src/ui/shared/buttons.ts", import.meta.url),
-      "utf8",
-    );
-    expect(buttons).toContain("h-ctl-sm");
-    expect(buttons).toContain("h-ctl-lg");
-    expect(buttons).not.toContain("h-[28px]");
-    expect(buttons).not.toContain("h-[36px]");
+    const [button, wizard, telegram] = await Promise.all([
+      readFile(new URL("../src/components/ui/button.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../src/ui/onboarding/OnboardingWizard.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../src/ui/onboarding/TelegramRow.tsx", import.meta.url), "utf8"),
+    ]);
+    expect(button).toContain("h-ctl-sm");
+    expect(button).toContain("h-ctl-lg");
+    expect(telegram).toContain('size="sm"');
+    expect(wizard).toContain('size="lg"');
+    expect(`${button}\n${wizard}\n${telegram}`).not.toContain("h-[28px]");
+    expect(`${button}\n${wizard}\n${telegram}`).not.toContain("h-[36px]");
   });
 
   it("keeps one field class shared by every setup input", async () => {
@@ -352,7 +354,7 @@ describe("desktop onboarding wizard", () => {
     }
   });
 
-  it("keeps the setup surface monochrome", async () => {
+  it("keeps the setup surface on shared semantic colors", async () => {
     const sources = await Promise.all(
       SETUP_SOURCES.map((name) =>
         readFile(new URL(`../src/ui/onboarding/${name}`, import.meta.url), "utf8"),
@@ -364,8 +366,11 @@ describe("desktop onboarding wizard", () => {
         brand: false,
       });
     }
-    const buttons = sources[SETUP_SOURCES.indexOf("../shared/buttons.ts")] ?? "";
-    expect(buttons).toContain("bg-ink text-bg");
+    const button = await readFile(
+      new URL("../src/components/ui/button.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(button).toContain("bg-primary text-primary-foreground");
     const row = sources[SETUP_SOURCES.indexOf("SetupRow.tsx")] ?? "";
     expect(row).toContain("text-ok");
   });

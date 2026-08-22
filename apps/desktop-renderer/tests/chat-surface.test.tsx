@@ -16,9 +16,6 @@ import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-sli
 import { useEnduragentStore } from "../src/state/store.js";
 import { SLASH_COMMANDS } from "../src/chat/commands.js";
 import { ChatView } from "../src/ui/chat/ChatView.js";
-import messageStyles from "../src/ui/chat/Message.module.css";
-import queueStyles from "../src/ui/chat/QueuedMessages.module.css";
-import transcriptStyles from "../src/ui/chat/Transcript.module.css";
 
 function stubActions(): ChatActions {
   return {
@@ -164,6 +161,7 @@ describe("chat surface", () => {
 
       expect(form?.nextElementSibling).toBe(disclaimer);
       expect(disclaimer.parentElement).toHaveClass("composer-wrap");
+      expect(disclaimer.parentElement).toHaveClass("bg-bg");
     });
 
     it("focuses the enabled composer when Chat mounts after required setup", () => {
@@ -336,7 +334,7 @@ describe("chat surface", () => {
       expect(actions.removeQueued).toHaveBeenNthCalledWith(2, "queued-1");
     });
 
-    it("gives a queued command the monospace face", () => {
+    it("marks queued commands without restoring the legacy monospace face", () => {
       render(<Harness />);
       setChat({
         queued: [
@@ -347,9 +345,10 @@ describe("chat surface", () => {
 
       expect(
         [...document.querySelectorAll(".chat-queue__text")].map((node) =>
-          node.classList.contains(queueStyles.command),
+          node.classList.contains("chat-queue__command"),
         ),
       ).toEqual([false, true]);
+      expect(document.querySelector(".chat-queue__command")).not.toHaveClass("font-mono");
     });
 
     it("locks removal while work is blocked", async () => {
@@ -457,7 +456,7 @@ describe("chat surface", () => {
 
     function chipped(): readonly (string | null)[] {
       return [...document.querySelectorAll(".chat-message--athlete .chat-message__text")].map(
-        (node) => (node.classList.contains(messageStyles.command) ? "command" : null),
+        (node) => (node.classList.contains("chat-message__command") ? "command" : null),
       );
     }
 
@@ -492,7 +491,7 @@ describe("chat surface", () => {
       });
 
       const coach = document.querySelector(".chat-message--coach .chat-message__text");
-      expect(coach?.classList.contains(messageStyles.command)).toBe(false);
+      expect(coach?.classList.contains("chat-message__command")).toBe(false);
     });
   });
 
@@ -589,13 +588,13 @@ describe("chat surface", () => {
     it("walks the confirm flow and hands focus back to the composer", async () => {
       const user = userEvent.setup();
       render(<Shell onReady={() => {}} />);
-      const dialog = document.querySelector(".new-conversation-dialog");
-      if (!(dialog instanceof HTMLDialogElement)) throw new TypeError("dialog missing");
-      expect(dialog.open).toBe(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
 
       setChat({ resetPhase: "confirming" });
-      expect(dialog.open).toBe(true);
-      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+      const dialog = screen.getByRole("dialog");
+      await waitFor(() => {
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+      });
 
       await user.click(screen.getByRole("button", { name: "Start new conversation" }));
       expect(actions.confirmNewConversation).toHaveBeenCalledTimes(1);
@@ -607,9 +606,12 @@ describe("chat surface", () => {
 
       composer().value = "leftover draft";
       setChat({ resetPhase: "idle", resetCount: 1 });
-      expect(dialog.open).toBe(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
       expect(composer()).toHaveValue("");
       expect(document.activeElement).toBe(composer());
+      await waitFor(() => {
+        expect(dialog).not.toBeInTheDocument();
+      });
     });
 
     it("returns focus to the opener when the athlete cancels", async () => {
@@ -624,7 +626,9 @@ describe("chat surface", () => {
       expect(actions.cancelNewConversation).toHaveBeenCalledTimes(1);
 
       setChat({ resetPhase: "idle" });
-      expect(document.activeElement).toBe(screen.getByRole("button", { name: "New chat" }));
+      await waitFor(() => {
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "New chat" }));
+      });
     });
 
     it("names the restored history in the confirmation copy", () => {
@@ -703,10 +707,10 @@ describe("chat surface", () => {
 
       for (const id of ["c1", "c2", "c3"]) {
         const row = document.querySelector(`[data-message-id="${id}"]`);
-        expect(row?.classList.contains(transcriptStyles.prose)).toBe(true);
+        expect(row).toHaveClass("text-base", "leading-[1.6]");
       }
       const athlete = document.querySelector('[data-message-id="a1"]');
-      expect(athlete?.classList.contains(transcriptStyles.prose)).toBe(false);
+      expect(athlete).not.toHaveClass("text-base");
       expect(athlete?.classList.contains("chat-message--athlete")).toBe(true);
     });
 
@@ -721,15 +725,66 @@ describe("chat surface", () => {
       expect(row?.className).toBe(streamingClassName);
     });
 
-    it("declares the system prose stack for the transcript row", async () => {
+    it("declares the Inter and Geist font foundation", async () => {
       const sourceRoot = resolve(import.meta.dirname, "..", "src");
-      const [stylesheet, tokens] = await Promise.all([
-        readFile(resolve(sourceRoot, "ui/chat/Transcript.module.css"), "utf8"),
+      const [transcript, tokens, fonts] = await Promise.all([
+        readFile(resolve(sourceRoot, "ui/chat/Transcript.tsx"), "utf8"),
         readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"),
+        readFile(resolve(sourceRoot, "theme/fonts.css"), "utf8"),
       ]);
-      expect(stylesheet).toMatch(/\.prose\s*\{[^}]*font:\s*16px\/1\.6\s+var\(--f-prose\);/u);
+      expect(transcript).toContain("text-base leading-[1.6]");
       expect(tokens).toMatch(/--f-prose:\s*var\(--f-ui\);/u);
-      expect(tokens).toMatch(/--f-ui:\s*\n?\s*"DM Sans Variable", "DM Sans",/u);
+      expect(tokens).toMatch(/--f-ui:\s*\n?\s*"Inter Variable", "Inter",/u);
+      expect(tokens).toMatch(/--f-mono:\s*\n?\s*"Geist Mono Variable", "Geist Mono",/u);
+      expect(tokens).toMatch(
+        /body\s*\{[^}]*font-optical-sizing:\s*auto;[^}]*font-feature-settings:\s*"cv01",\s*"ss02";/su,
+      );
+      expect(fonts).toContain('@import "@fontsource-variable/inter/opsz.css";');
+      expect(fonts).toContain('@import "@fontsource-variable/geist-mono/index.css";');
+      expect(fonts).not.toContain("dm-sans");
+    });
+
+    it("keeps chat core on Tailwind and the Base UI-backed command menu", async () => {
+      const sourceRoot = resolve(import.meta.dirname, "..", "src", "ui", "chat");
+      const sources = await Promise.all(
+        [
+          "AthleteMessage.tsx",
+          "ChatView.tsx",
+          "CoachMessage.tsx",
+          "Composer.tsx",
+          "HistoryControls.tsx",
+          "Message.ts",
+          "Notice.tsx",
+          "SlashPopup.tsx",
+          "StreamingMessage.tsx",
+          "Transcript.tsx",
+        ].map((name) => readFile(resolve(sourceRoot, name), "utf8")),
+      );
+      const source = sources.join("\n");
+      expect(source).not.toContain(".module.css");
+      expect(source).not.toContain("font-mono");
+      expect(source).toContain("PopoverContent");
+      expect(source).toContain("components/ui/button.js");
+      expect(source).toContain("chat-markdown\\\\_\\\\_table-scroll");
+    });
+
+    it("keeps chat support cards and dialogs on shadcn primitives", async () => {
+      const sourceRoot = resolve(import.meta.dirname, "..", "src", "ui", "chat");
+      const sources = await Promise.all(
+        [
+          "FirstSyncCard.tsx",
+          "NewConversationDialog.tsx",
+          "QueuedMessages.tsx",
+          "QuickActions.tsx",
+          "SpendNotice.tsx",
+        ].map((name) => readFile(resolve(sourceRoot, name), "utf8")),
+      );
+      const source = sources.join("\n");
+      expect(source).not.toContain(".module.css");
+      expect(source).not.toContain("font-mono");
+      expect(source).toContain("components/ui/button.js");
+      expect(source).toContain("components/ui/card.js");
+      expect(source).toContain("components/ui/dialog.js");
     });
   });
 });

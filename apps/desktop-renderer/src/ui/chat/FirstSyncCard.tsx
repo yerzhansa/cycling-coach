@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
+import { Card } from "../../components/ui/card.js";
 import { useEnduragentStore } from "../../state/store.js";
-import styles from "./FirstSyncCard.module.css";
 
 export function FirstSyncCard(): ReactElement | null {
   const state = useEnduragentStore((store) => store.firstSync);
@@ -18,22 +19,28 @@ export function FirstSyncCard(): ReactElement | null {
   const unreachable = state.status === "failed" && state.kind === "protocol";
 
   return (
-    <section
-      className={`${styles.card} first-sync`}
+    <Card
+      className="first-sync mx-auto my-6 grid w-[min(680px,calc(100%-48px))] grid-cols-[10px_minmax(0,1fr)] gap-3.5 px-5 py-5 shadow-elev-1 max-[760px]:mx-4 max-[760px]:w-[calc(100%-32px)]"
       data-state={status}
+      role="region"
       aria-labelledby="first-sync-title"
     >
-      <div className={`${styles.mark} first-sync__mark`} aria-hidden="true" />
-      <div className={`${styles.body} first-sync__body`}>
-        <p className={`${styles.eyebrow} first-sync__eyebrow`}>Getting your coach ready</p>
-        <h2 id="first-sync-title">
+      <div
+        className="first-sync__mark mt-[5px] size-2.5 rounded-full bg-ink-2"
+        aria-hidden="true"
+      />
+      <div className="first-sync__body min-w-0">
+        <p className="first-sync__eyebrow m-0 text-xs font-semibold tracking-[0.08em] text-ink-2 uppercase">
+          Getting your coach ready
+        </p>
+        <h2 id="first-sync-title" className="mt-[7px] mb-1.5 text-lg leading-[1.3]">
           {syncing
             ? "Syncing your training history…"
             : unreachable
               ? "Enduragent needs to reconnect safely"
               : "We couldn’t finish syncing"}
         </h2>
-        <p className={`${styles.detail} first-sync__detail`}>
+        <p className="first-sync__detail m-0 text-sm leading-[1.5] text-ink-2">
           {syncing
             ? "You can keep Enduragent open while rides, wellness, and calendar data are added."
             : unreachable
@@ -42,15 +49,15 @@ export function FirstSyncCard(): ReactElement | null {
         </p>
         {syncing ? (
           <div
-            className={`${styles.track} first-sync__track`}
+            className="first-sync__track relative mt-4 h-1 overflow-hidden rounded-full bg-sunk before:absolute before:h-full before:w-2/5 before:-translate-x-full before:rounded-[inherit] before:bg-ink-2 before:content-[''] before:animate-[first-sync-sweep_1.2s_ease-in-out_infinite] motion-reduce:before:translate-x-0 motion-reduce:before:animate-none"
             role="progressbar"
             aria-label="Syncing training history"
           />
         ) : null}
         {!syncing && !unreachable ? (
-          <button
-            type="button"
-            className={`${styles.retry} first-sync__retry`}
+          <Button
+            className="first-sync__retry mt-3.5"
+            variant="outline"
             disabled={retrying}
             onClick={() => {
               setRetrying(true);
@@ -58,9 +65,9 @@ export function FirstSyncCard(): ReactElement | null {
             }}
           >
             Retry sync
-          </button>
+          </Button>
         ) : null}
       </div>
-    </section>
+    </Card>
   );
 }

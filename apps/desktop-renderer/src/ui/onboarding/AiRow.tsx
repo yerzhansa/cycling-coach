@@ -2,6 +2,8 @@ import { Menu } from "@base-ui/react/menu";
 import { isKeylessProvider } from "@enduragent/coach-contract";
 import { Check } from "lucide-react";
 import { useEffect, useRef, useState, type ReactElement } from "react";
+import { Button, buttonVariants } from "../../components/ui/button.js";
+import { cn } from "../../lib/utils.js";
 import {
   CUSTOM_MODEL_SELECTION,
   DESKTOP_CREDENTIAL_SLOTS,
@@ -23,6 +25,13 @@ import {
   type SetupLane,
 } from "../../onboarding/lanes.js";
 import { llmSelectionFromDraft, type LlmSelectionDraft } from "../../onboarding/selection.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select.js";
 import {
   credentialChangesBlocked,
   repairRequiredCredential,
@@ -65,9 +74,6 @@ import {
   type SetupCredentialEditDetail,
 } from "../settings/CredentialsSection.js";
 import {
-  BUTTON_OUTLINE_SM,
-  BUTTON_QUIET_SM,
-  BUTTON_SOLID_SM,
   SETUP_FIELD_CLASS,
   SETUP_HINT_CLASS,
   SETUP_LABEL_CLASS,
@@ -349,11 +355,13 @@ export function AiRow(props: {
                   aria-label={
                     hasDisplayedProvider ? AI_TRIGGER_LABELS.set : AI_TRIGGER_LABELS.unset
                   }
-                  className={
-                    props.placement === "gate" || !hasDisplayedProvider
-                      ? BUTTON_OUTLINE_SM
-                      : BUTTON_QUIET_SM
-                  }
+                  className={cn(
+                    buttonVariants({
+                      variant:
+                        props.placement === "gate" || !hasDisplayedProvider ? "outline" : "ghost",
+                      size: "sm",
+                    }),
+                  )}
                 >
                   {hasDisplayedProvider ? "Change" : "Choose"}
                 </Menu.Trigger>
@@ -364,7 +372,7 @@ export function AiRow(props: {
                       className="w-[262px] rounded-md border border-line-2 bg-surface p-[5px] shadow-elev-3"
                     >
                       <Menu.RadioGroup value={lane}>
-                        <Menu.GroupLabel className="px-[9px] pt-1.5 pb-1 text-[11px] font-semibold tracking-wider text-ink-2 uppercase">
+                        <Menu.GroupLabel className="px-[9px] pt-1.5 pb-1 text-xs font-medium text-ink-2">
                           {SETUP_MENU_LABEL}
                         </Menu.GroupLabel>
                         {lanes.map((entry) => (
@@ -385,7 +393,7 @@ export function AiRow(props: {
                               </Menu.RadioItemIndicator>
                             </span>
                             <span className="min-w-0 flex-1">
-                              <b className="block text-[13.5px] font-medium">
+                              <b className="block text-sm font-medium">
                                 {SETUP_LANE_LABELS[entry]}
                               </b>
                               <i className="mt-px block text-xs text-ink-2 not-italic">
@@ -399,7 +407,7 @@ export function AiRow(props: {
                         <div className="mt-1 border-t border-line px-[9px] pt-2 pb-1">
                           <p
                             data-setup-note="claude-cli"
-                            className="text-[11.5px] leading-normal text-ink-2"
+                            className="text-xs leading-normal text-ink-2"
                           >
                             {note}
                           </p>
@@ -431,14 +439,15 @@ export function AiRow(props: {
       {panel === "chatgpt" ? (
         <SetupSubPanel name="chatgpt">
           <div className="flex min-w-0 flex-wrap items-center gap-x-7 gap-y-3">
-            <span className="min-w-52 flex-1 text-[11.5px] leading-normal text-ink-2">
+            <span className="min-w-52 flex-1 text-xs leading-normal text-ink-2">
               {CHATGPT_PANEL_HINT}
             </span>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               {autoChatGptPanel && !chatGptLoginPending ? null : (
-                <button
+                <Button
                   type="button"
-                  className={BUTTON_QUIET_SM}
+                  variant="ghost"
+                  size="sm"
                   disabled={
                     chatGptLoginPending ? surface.loading : controlsDisabled || chatGptActivating
                   }
@@ -451,11 +460,12 @@ export function AiRow(props: {
                   }}
                 >
                   {chatGptLoginPending ? CHATGPT_CANCEL_SIGN_IN_LABEL : "Cancel"}
-                </button>
+                </Button>
               )}
-              <button
+              <Button
                 type="button"
-                className={BUTTON_SOLID_SM}
+                variant="default"
+                size="sm"
                 disabled={controlsDisabled || chatGptLoginPending || chatGptActivating}
                 onClick={() => {
                   if (chatGptStored) actions?.retryChatGptActivation();
@@ -463,12 +473,12 @@ export function AiRow(props: {
                 }}
               >
                 {chatGptPrimaryLabel}
-              </button>
+              </Button>
             </div>
           </div>
           {chatGptStatusCopy === null ? null : (
             <p
-              className={`mt-[7px] text-[11.5px] ${chatGptPhase === "activation-failed" ? "text-danger" : "text-ink-2"}`}
+              className={`mt-[7px] text-xs ${chatGptPhase === "activation-failed" ? "text-danger" : "text-ink-2"}`}
               role="status"
               aria-live="polite"
               aria-atomic="true"
@@ -478,7 +488,7 @@ export function AiRow(props: {
             </p>
           )}
           {wizard.chatGptRefusal !== null ? (
-            <p className="mt-[7px] text-[11.5px] text-danger" aria-live="polite">
+            <p className="mt-[7px] text-xs text-danger" aria-live="polite">
               {CHATGPT_REFUSAL_COPY[wizard.chatGptRefusal]}
             </p>
           ) : null}
@@ -488,27 +498,34 @@ export function AiRow(props: {
       {panel === "api-key" ? (
         <SetupSubPanel name="api-key">
           {configuration === null || draft === null ? (
-            <p className="text-[13px] text-ink-2">{ERROR_COPY["configuration-unavailable"]}</p>
+            <p className="text-sm text-ink-2">{ERROR_COPY["configuration-unavailable"]}</p>
           ) : (
             <>
               <label className={SETUP_LABEL_CLASS} htmlFor="onboarding-llm-provider">
                 Provider
               </label>
-              <select
-                id="onboarding-llm-provider"
-                className={SETUP_SELECT_CLASS}
+              <Select
                 disabled={controlsDisabled}
+                items={keyProviders.map((entry) => ({
+                  value: entry.provider,
+                  label: ONBOARDING_LLM_PROVIDER_LABELS[entry.provider],
+                }))}
                 value={draft.provider.provider}
-                onChange={(event) => {
-                  actions?.selectProvider(event.target.value);
+                onValueChange={(value) => {
+                  if (value !== null) actions?.selectProvider(value);
                 }}
               >
-                {keyProviders.map((entry) => (
-                  <option key={entry.provider} value={entry.provider}>
-                    {ONBOARDING_LLM_PROVIDER_LABELS[entry.provider]}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="onboarding-llm-provider" className={SETUP_SELECT_CLASS}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="start">
+                  {keyProviders.map((entry) => (
+                    <SelectItem key={entry.provider} value={entry.provider}>
+                      {ONBOARDING_LLM_PROVIDER_LABELS[entry.provider]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               {keySlot === undefined ? null : (
                 <div className="mt-[11px]">
                   <CredentialField
@@ -521,24 +538,26 @@ export function AiRow(props: {
                 </div>
               )}
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button
+                <Button
                   type="button"
-                  className={BUTTON_QUIET_SM}
+                  variant="ghost"
+                  size="sm"
                   disabled={controlsDisabled}
                   aria-label={AI_CANCEL_LABEL}
                   onClick={() => revert()}
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className={BUTTON_SOLID_SM}
+                  variant="default"
+                  size="sm"
                   disabled={controlsDisabled}
                   aria-label={AI_SAVE_LABEL}
                   onClick={save}
                 >
                   Save
-                </button>
+                </Button>
               </div>
               <span className={SETUP_HINT_CLASS}>{API_KEY_PANEL_HINT}</span>
               <details className="mt-2">
@@ -548,24 +567,36 @@ export function AiRow(props: {
                     <label className={SETUP_LABEL_CLASS} htmlFor="onboarding-llm-model">
                       Model
                     </label>
-                    <select
-                      id="onboarding-llm-model"
-                      className={SETUP_SELECT_CLASS}
+                    <Select
                       disabled={controlsDisabled}
+                      items={draft.provider.models
+                        .map((model) => ({
+                          value: model.value,
+                          label:
+                            model.hint === undefined
+                              ? model.label
+                              : `${model.label} · ${model.hint}`,
+                        }))
+                        .concat({ value: CUSTOM_MODEL_SELECTION, label: "Other model…" })}
                       value={draft.modelChoice}
-                      onChange={(event) => {
-                        actions?.selectModel(event.target.value);
+                      onValueChange={(value) => {
+                        if (value !== null) actions?.selectModel(value);
                       }}
                     >
-                      {draft.provider.models.map((model) => (
-                        <option key={model.value} value={model.value}>
-                          {model.hint === undefined
-                            ? model.label
-                            : `${model.label} · ${model.hint}`}
-                        </option>
-                      ))}
-                      <option value={CUSTOM_MODEL_SELECTION}>Other model…</option>
-                    </select>
+                      <SelectTrigger id="onboarding-llm-model" className={SETUP_SELECT_CLASS}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent align="start">
+                        {draft.provider.models.map((model) => (
+                          <SelectItem key={model.value} value={model.value}>
+                            {model.hint === undefined
+                              ? model.label
+                              : `${model.label} · ${model.hint}`}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value={CUSTOM_MODEL_SELECTION}>Other model…</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   {draft.modelChoice === CUSTOM_MODEL_SELECTION ? (
                     <div>
@@ -593,21 +624,28 @@ export function AiRow(props: {
                         <label className={SETUP_LABEL_CLASS} htmlFor="onboarding-endpoint-mode">
                           Endpoint
                         </label>
-                        <select
-                          id="onboarding-endpoint-mode"
-                          className={SETUP_SELECT_CLASS}
+                        <Select
                           disabled={controlsDisabled}
+                          items={ENDPOINT_MODE_COPY.map(([value, label]) => ({ value, label }))}
                           value={draft.endpointMode}
-                          onChange={(event) => {
-                            actions?.setEndpointMode(event.target.value);
+                          onValueChange={(value) => {
+                            if (value !== null) actions?.setEndpointMode(value);
                           }}
                         >
-                          {ENDPOINT_MODE_COPY.map(([value, entry]) => (
-                            <option key={value} value={value}>
-                              {entry}
-                            </option>
-                          ))}
-                        </select>
+                          <SelectTrigger
+                            id="onboarding-endpoint-mode"
+                            className={SETUP_SELECT_CLASS}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent align="start">
+                            {ENDPOINT_MODE_COPY.map(([value, entry]) => (
+                              <SelectItem key={value} value={value}>
+                                {entry}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
                       {draft.endpointMode === "custom" ? (
                         <div>

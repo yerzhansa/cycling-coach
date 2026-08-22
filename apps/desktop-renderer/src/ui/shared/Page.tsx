@@ -1,5 +1,5 @@
 import type { KeyboardEventHandler, ReactElement, ReactNode, Ref } from "react";
-import styles from "./Page.module.css";
+import { cn } from "../../lib/utils.js";
 
 export function Page(props: {
   readonly title: string;
@@ -15,26 +15,28 @@ export function Page(props: {
   return (
     <section
       ref={props.ref}
-      className={props.className === undefined ? styles.page : `${styles.page} ${props.className}`}
+      className={cn("flex min-h-0 min-w-0 flex-1 flex-col", props.className)}
       aria-label={props.title}
       aria-busy={props.busy === true ? "true" : undefined}
       onKeyDown={props.onKeyDown}
     >
-      <div className={styles.bar}>
+      <div className="flex h-[52px] flex-none items-center gap-row border-b border-line px-5">
         <h1
           ref={props.titleRef}
-          className={styles.title}
+          className="m-0 text-sm font-semibold tracking-normal"
           tabIndex={props.titleRef === undefined ? undefined : -1}
         >
           {props.title}
         </h1>
         {props.subtitle === undefined ? null : (
-          <span className={styles.subtitle}>{props.subtitle}</span>
+          <span className="text-xs text-ink-3">{props.subtitle}</span>
         )}
-        {props.action === undefined ? null : <div className={styles.action}>{props.action}</div>}
+        {props.action === undefined ? null : (
+          <div className="ml-auto flex items-center gap-inset">{props.action}</div>
+        )}
       </div>
-      <div className={styles.scroll} data-page-scroll>
-        <div className={styles.column}>{props.children}</div>
+      <div className="flex-1 overflow-auto pt-7 pb-10 overscroll-contain" data-page-scroll>
+        <div className="mx-auto w-[min(680px,calc(100%-64px))]">{props.children}</div>
       </div>
     </section>
   );

@@ -1,9 +1,10 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { APP_VERSION } from "../../app-version.js";
 import type { DesktopUpdateState } from "../../update/controller.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
-import styles from "./SettingsView.module.css";
+import { settingsStyles as styles } from "./styles.js";
 
 interface UpdateCopy {
   readonly action: string | null;
@@ -101,9 +102,10 @@ export function ApplicationSection(): ReactElement {
             </span>
           </div>
           {update.state.status === "disabled" || copy.action === null ? null : (
-            <button
+            <Button
               type="button"
-              className={styles.button}
+              variant="outline"
+              size="sm"
               title={copy.label}
               aria-label={copy.label}
               disabled={updateBusy}
@@ -112,7 +114,7 @@ export function ApplicationSection(): ReactElement {
               }}
             >
               {copy.action}
-            </button>
+            </Button>
           )}
         </div>
       </section>
@@ -125,9 +127,10 @@ export function ApplicationSection(): ReactElement {
               Clears the visible conversation. Training data and saved coach memory remain.
             </div>
           </div>
-          <button
+          <Button
             type="button"
-            className={styles.danger}
+            variant="destructive"
+            size="sm"
             disabled={chatActions === null || mutating}
             onClick={() => {
               setActiveView("chat");
@@ -135,7 +138,7 @@ export function ApplicationSection(): ReactElement {
             }}
           >
             Reset conversation
-          </button>
+          </Button>
         </div>
       </section>
     </>

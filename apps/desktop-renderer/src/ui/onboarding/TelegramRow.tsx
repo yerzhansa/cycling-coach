@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import type {
   TelegramControlStatus,
   TelegramSettingsFeedback,
@@ -17,12 +18,6 @@ import {
   TELEGRAM_ROW_TITLE,
   TELEGRAM_VERIFIED_PREFIX,
 } from "./copy.js";
-import {
-  BUTTON_DANGER_QUIET_SM,
-  BUTTON_OUTLINE_SM,
-  BUTTON_QUIET_SM,
-  BUTTON_SOLID_SM,
-} from "../shared/buttons.js";
 import { InlineConfirmation, type InlineConfirmationFocus } from "../shared/InlineConfirmation.js";
 import { SetupRow, SetupSubPanel } from "./SetupRow.js";
 
@@ -420,7 +415,7 @@ export function TelegramRow(): ReactElement {
   const feedbackNode =
     panelFeedback === null ? null : (
       <p
-        className={`mt-2 mb-0 text-[12.5px] ${panelFeedback.tone === "error" || panelFeedback.tone === "warning" ? "text-danger" : "text-ink-2"}`}
+        className={`mt-2 mb-0 text-xs ${panelFeedback.tone === "error" || panelFeedback.tone === "warning" ? "text-danger" : "text-ink-2"}`}
         role={panelFeedback.tone === "error" ? "alert" : "status"}
         aria-live={panelFeedback.tone === "error" ? undefined : "polite"}
         data-telegram-feedback={panelFeedback.tone}
@@ -447,7 +442,7 @@ export function TelegramRow(): ReactElement {
         }
         info={
           <span
-            className="rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] px-[7px] py-0.5 text-[10px] font-semibold uppercase tracking-[0.055em] text-brand"
+            className="rounded-full bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] px-[7px] py-0.5 text-xs font-semibold text-brand"
             data-telegram-optional=""
           >
             {TELEGRAM_OPTIONAL_LABEL}
@@ -456,21 +451,23 @@ export function TelegramRow(): ReactElement {
         announce={panel === "token" ? "Telegram bot setup opened below this row." : ""}
         trailing={
           identityUnknown && !configured && panel === "closed" ? (
-            <button
+            <Button
               ref={trigger}
               type="button"
-              className={BUTTON_QUIET_SM}
+              variant="ghost"
+              size="sm"
               data-setup-trigger="telegram"
               disabled={busy}
               onClick={checkAgain}
             >
               Check again
-            </button>
+            </Button>
           ) : configured ? (
-            <button
+            <Button
               ref={trigger}
               type="button"
-              className={BUTTON_DANGER_QUIET_SM}
+              variant="destructive"
+              size="sm"
               data-setup-delete="telegram"
               disabled={busy || (authoritativeCheckRequired && attempt?.action === "paste-token")}
               aria-expanded={panel === "delete"}
@@ -478,12 +475,13 @@ export function TelegramRow(): ReactElement {
               onClick={openDeletePanel}
             >
               Delete
-            </button>
+            </Button>
           ) : (
-            <button
+            <Button
               ref={trigger}
               type="button"
-              className={BUTTON_OUTLINE_SM}
+              variant="outline"
+              size="sm"
               data-setup-trigger="telegram"
               disabled={busy}
               aria-expanded={panel === "token"}
@@ -492,7 +490,7 @@ export function TelegramRow(): ReactElement {
               onClick={openTokenPanel}
             >
               Create
-            </button>
+            </Button>
           )
         }
       />
@@ -508,11 +506,11 @@ export function TelegramRow(): ReactElement {
                 ref={heading}
                 id="onboarding-telegram-create-title"
                 tabIndex={-1}
-                className="m-0 text-[13.5px] font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
+                className="m-0 text-sm font-medium text-ink focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-ink"
               >
                 {TELEGRAM_CREATE_TITLE}
               </h3>
-              <p className="mt-1 mb-0 max-w-[525px] text-[12.5px] text-ink-2">
+              <p className="mt-1 mb-0 max-w-[525px] text-xs text-ink-2">
                 Ask{" "}
                 <a
                   className="font-medium underline underline-offset-[3px] hover:text-ink"
@@ -527,36 +525,39 @@ export function TelegramRow(): ReactElement {
               {feedbackNode}
             </div>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-              <button
+              <Button
                 type="button"
-                className={BUTTON_QUIET_SM}
+                variant="ghost"
+                size="sm"
                 disabled={busy}
                 aria-label="Cancel Telegram bot setup"
                 onClick={closeTokenPanel}
               >
                 Cancel
-              </button>
+              </Button>
               {mutationUnsafe ? (
-                <button
+                <Button
                   ref={retryAction}
                   type="button"
-                  className={BUTTON_QUIET_SM}
+                  variant="ghost"
+                  size="sm"
                   disabled={busy}
                   onClick={checkAgain}
                 >
                   Check again
-                </button>
+                </Button>
               ) : null}
-              <button
+              <Button
                 ref={tokenAction}
                 type="button"
-                className={BUTTON_SOLID_SM}
+                variant="default"
+                size="sm"
                 data-telegram-action="use-token"
                 disabled={busy || mutationUnsafe}
                 onClick={() => begin("paste-token")}
               >
                 {connecting ? "Connecting…" : "Use copied token"}
-              </button>
+              </Button>
             </div>
           </div>
           <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
@@ -571,15 +572,17 @@ export function TelegramRow(): ReactElement {
         <SetupSubPanel name="telegram-connect-recovery">
           {feedbackNode}
           {mutationUnsafe ? (
-            <button
+            <Button
               ref={retryAction}
               type="button"
-              className={`${BUTTON_QUIET_SM} mt-2`}
+              variant="ghost"
+              size="sm"
+              className="mt-2"
               disabled={busy}
               onClick={checkAgain}
             >
               Check again
-            </button>
+            </Button>
           ) : null}
         </SetupSubPanel>
       ) : null}
@@ -602,15 +605,17 @@ export function TelegramRow(): ReactElement {
             <SetupSubPanel name="telegram-delete-recovery">
               {feedbackNode}
               {mutationUnsafe ? (
-                <button
+                <Button
                   ref={retryAction}
                   type="button"
-                  className={`${BUTTON_QUIET_SM} mt-2`}
+                  variant="ghost"
+                  size="sm"
+                  className="mt-2"
                   disabled={busy}
                   onClick={checkAgain}
                 >
                   Check again
-                </button>
+                </Button>
               ) : null}
             </SetupSubPanel>
           )}

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buttonVariants } from "../src/components/ui/button.js";
+import { cn } from "../src/lib/utils.js";
 import type { OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
 import type { CredentialSettingsPort } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
@@ -11,7 +13,6 @@ import {
   RETRY_INTAKE_SAVE_LABEL,
   SETUP_MENU_LABEL,
 } from "../src/ui/onboarding/copy.js";
-import { BUTTON_DANGER_QUIET_SM } from "../src/ui/shared/buttons.js";
 import {
   chooseLane,
   claudeCliNoteText,
@@ -31,6 +32,7 @@ import {
   rowState,
   rowSubtitle,
   seedSecret,
+  selectSetupOption,
   setTelegramSettings,
   setupCard,
   setupRow,
@@ -98,7 +100,10 @@ function trigger(id: string): HTMLElement {
 }
 
 function buttonNames(host: HTMLElement | null): readonly string[] {
-  return Array.from(host?.querySelectorAll("button") ?? [], (entry) => entry.textContent ?? "");
+  return Array.from(
+    host?.querySelectorAll('button:not([role="combobox"])') ?? [],
+    (entry) => entry.textContent ?? "",
+  );
 }
 
 function bindCredentialPort(): CredentialSettingsPort {
@@ -117,7 +122,7 @@ function bindCredentialPort(): CredentialSettingsPort {
 }
 
 async function completeIntake(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
+  await selectSetupOption(user, "onboarding-injury-status", "none");
 }
 
 describe("setup card", () => {
@@ -279,12 +284,9 @@ describe("setup card", () => {
       expect(panel("api-key")).not.toBeNull();
     });
     expect(rowState("ai")).toBe("pending");
-    expect(
-      Array.from(
-        control<HTMLSelectElement>("onboarding-llm-provider").options,
-        (option) => option.value,
-      ),
-    ).not.toContain("codex-agent");
+    await user.click(control("onboarding-llm-provider"));
+    expect(screen.queryByRole("option", { name: "Codex agent (experimental)" })).toBeNull();
+    await user.keyboard("{Escape}");
     wizard.controller.dispose();
   });
 
@@ -344,7 +346,7 @@ describe("setup card", () => {
     await wizard.open();
 
     expect(screen.queryByRole("button", { name: RETRY_INTAKE_SAVE_LABEL })).toBeNull();
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
+    await selectSetupOption(user, "onboarding-injury-status", "none");
 
     const retry = await screen.findByRole("button", { name: RETRY_INTAKE_SAVE_LABEL });
     expect(retry.className).toContain("underline");
@@ -373,11 +375,11 @@ describe("setup card", () => {
       expect(rowState("training")).toBe("ready");
     });
 
-    expect(trigger("ai").className).toContain("border-ink-2");
+    expect(trigger("ai").className).toContain("border-input");
     expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
     const remove = screen.getByRole("button", { name: "Delete the Intervals.icu connection" });
     expect(remove).toHaveTextContent("Delete");
-    expect(remove.className).toBe(BUTTON_DANGER_QUIET_SM);
+    expect(remove.className).toBe(cn(buttonVariants({ variant: "destructive", size: "sm" })));
     expect(setupRow("training").querySelectorAll("button")).toHaveLength(2);
     wizard.controller.dispose();
   });
@@ -571,9 +573,9 @@ describe("setup card", () => {
     expect(
       Array.from(chatgpt?.querySelectorAll("button") ?? [], (entry) => entry.textContent),
     ).toEqual(["Cancel", "Sign in with ChatGPT"]);
-    expect(
-      screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement,
-    ).toHaveClass("justify-end");
+    expect(screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement).toHaveClass(
+      "justify-end",
+    );
     expect(
       screen.getByRole("button", { name: "Cancel ChatGPT setup" }).parentElement
         ?.previousElementSibling,
@@ -602,11 +604,11 @@ describe("setup card", () => {
     const advanced = control("onboarding-llm-model").closest("details");
     expect(advanced).not.toBeNull();
     expect(advanced?.hasAttribute("open")).toBe(false);
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "openrouter");
+    await selectSetupOption(user, "onboarding-llm-provider", "openrouter");
     expect(control("onboarding-endpoint-mode").closest("details")).toBe(
       control("onboarding-llm-model").closest("details"),
     );
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "anthropic");
+    await selectSetupOption(user, "onboarding-llm-provider", "anthropic");
 
     seedSecret("anthropic", randomUUID());
     await user.click(screen.getByRole("button", { name: "Save API key" }));
@@ -669,12 +671,12 @@ describe("setup card", () => {
     await wizard.open();
     await openApiKeyPanel(user);
     await openTrainingPanel(user);
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-model"), "__custom__");
+    await selectSetupOption(user, "onboarding-injury-status", "returning");
+    await selectSetupOption(user, "onboarding-llm-model", "__custom__");
 
     const controls = Array.from(
       document.querySelectorAll<HTMLElement>(
-        ".setup-panel input, .setup-panel select, .setup-panel textarea",
+        '.setup-panel input:not([aria-hidden="true"]), .setup-panel select, .setup-panel textarea, .setup-panel [role="combobox"]',
       ),
     );
     expect(controls.length).toBeGreaterThan(4);
@@ -719,7 +721,7 @@ describe("setup card", () => {
       "2 of 3 required ready",
     );
 
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
+    await selectSetupOption(user, "onboarding-injury-status", "none");
 
     await waitFor(() => {
       expect(rowState("injury-status")).toBe("ready");
@@ -766,7 +768,7 @@ describe("setup card", () => {
       expect(rowState("ai")).toBe("ready");
     });
 
-    expect(primaryButton().className).toContain("bg-ink text-bg");
+    expect(primaryButton().className).toContain("bg-primary text-primary-foreground");
     const tick = setupRow("ai").querySelector<HTMLElement>('[data-setup-disc="ready"]');
     expect(tick?.className).toContain("text-ok");
     const pending = setupRow("injury-status").querySelector('[data-setup-disc="pending"]');
@@ -781,13 +783,13 @@ describe("setup card", () => {
 
     expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
 
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
+    await selectSetupOption(user, "onboarding-injury-status", "returning");
 
     expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
     expect(setupRow("injury-status").parentElement).toBe(setupCard());
     expect(document.querySelector('[data-setup-row="clinician-cleared"]')).toBeNull();
 
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "none");
+    await selectSetupOption(user, "onboarding-injury-status", "none");
 
     expect(rowIds()).toEqual(["ai", "training", "telegram", "injury-status"]);
     wizard.controller.dispose();
@@ -966,21 +968,20 @@ describe("setup card", () => {
     });
     await openApiKeyPanel(user);
 
-    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("openrouter");
-    expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("__custom__");
+    expect(control("onboarding-llm-provider")).toHaveTextContent("OpenRouter");
+    expect(control("onboarding-llm-model")).toHaveTextContent("Other model…");
     expect(control<HTMLInputElement>("onboarding-custom-model").value).toBe("saved/custom-model");
-    expect(control<HTMLSelectElement>("onboarding-endpoint-mode").value).toBe("automatic");
-
-    await user.selectOptions(
-      control<HTMLSelectElement>("onboarding-llm-model"),
-      "deepseek/deepseek-v4-flash",
+    expect(control("onboarding-endpoint-mode")).toHaveTextContent(
+      "Keep current, or use provider default",
     );
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-endpoint-mode"), "custom");
+
+    await selectSetupOption(user, "onboarding-llm-model", "deepseek/deepseek-v4-flash");
+    await selectSetupOption(user, "onboarding-endpoint-mode", "custom");
     await user.type(
       control<HTMLInputElement>("onboarding-custom-endpoint"),
       "https://changed.example.test/v1",
     );
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "anthropic");
+    await selectSetupOption(user, "onboarding-llm-provider", "anthropic");
 
     await user.click(
       within(panel("api-key") as HTMLElement).getByRole("button", { name: "Cancel API key setup" }),
@@ -990,10 +991,12 @@ describe("setup card", () => {
     });
     await openApiKeyPanel(user);
 
-    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("openrouter");
-    expect(control<HTMLSelectElement>("onboarding-llm-model").value).toBe("__custom__");
+    expect(control("onboarding-llm-provider")).toHaveTextContent("OpenRouter");
+    expect(control("onboarding-llm-model")).toHaveTextContent("Other model…");
     expect(control<HTMLInputElement>("onboarding-custom-model").value).toBe("saved/custom-model");
-    expect(control<HTMLSelectElement>("onboarding-endpoint-mode").value).toBe("automatic");
+    expect(control("onboarding-endpoint-mode")).toHaveTextContent(
+      "Keep current, or use provider default",
+    );
     expect(document.querySelector("#onboarding-custom-endpoint")).toBeNull();
     wizard.controller.dispose();
   });
@@ -1028,7 +1031,7 @@ describe("setup card", () => {
     });
     await openApiKeyPanel(user);
 
-    expect(control<HTMLSelectElement>("onboarding-llm-provider").value).toBe("anthropic");
+    expect(control("onboarding-llm-provider")).toHaveTextContent("Anthropic");
     wizard.controller.dispose();
   });
 
@@ -1205,7 +1208,7 @@ describe("setup card", () => {
     expect(screen.getByText(FOOTER_NOTE).className).toContain("ml-auto");
     expect(document.querySelector("[data-setup-outstanding]")).toBeNull();
 
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-injury-status"), "returning");
+    await selectSetupOption(user, "onboarding-injury-status", "returning");
 
     await waitFor(() => {
       expect(primaryButton()).toBeEnabled();
@@ -1274,9 +1277,9 @@ describe("setup card", () => {
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
     await openApiKeyPanel(user);
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "openrouter");
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-model"), "__custom__");
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-endpoint-mode"), "custom");
+    await selectSetupOption(user, "onboarding-llm-provider", "openrouter");
+    await selectSetupOption(user, "onboarding-llm-model", "__custom__");
+    await selectSetupOption(user, "onboarding-endpoint-mode", "custom");
 
     expect(screen.getByLabelText("Custom model name")).toBe(control("onboarding-custom-model"));
     expect(screen.getByLabelText("Endpoint")).toBe(control("onboarding-endpoint-mode"));
@@ -1514,7 +1517,7 @@ describe("setup card accessibility", () => {
     wizard.controller.dispose();
   });
 
-  it("uses stronger tokens for compact Setup copy and essential control edges", async () => {
+  it("uses stronger compact copy and semantic control edges", async () => {
     const user = userEvent.setup();
     const wizard = mountWizard({ bridge: coldBridge() });
     await wizard.open();
@@ -1528,14 +1531,12 @@ describe("setup card accessibility", () => {
       expect(element?.className).toContain("text-ink-2");
       expect(element?.className).not.toContain("text-ink-3");
     }
-    for (const element of [
-      trigger("ai"),
-      trigger("training"),
-      control("onboarding-injury-status"),
-    ]) {
-      expect(element.className).toContain("border-ink-2");
+    for (const element of [trigger("ai"), trigger("training")]) {
+      expect(element.className).toContain("border-input");
       expect(element.className).not.toContain("border-line-2");
     }
+    expect(control("onboarding-injury-status").className).toContain("border-input");
+    expect(control("onboarding-injury-status").className).not.toContain("border-line-2");
 
     await openLaneMenu(user);
     expect(within(laneMenu() as HTMLElement).getByText(SETUP_MENU_LABEL).className).toContain(
@@ -1549,7 +1550,7 @@ describe("setup card accessibility", () => {
       expect(panel("api-key")).not.toBeNull();
     });
     expect(screen.getByText(API_KEY_PANEL_HINT).className).toContain("text-ink-2");
-    expect(control("onboarding-llm-provider").className).toContain("border-ink-2");
+    expect(control("onboarding-llm-provider").className).toContain("border-input");
     wizard.controller.dispose();
   });
 });

@@ -1,6 +1,8 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
+import { buttonVariants } from "../src/components/ui/button.js";
+import { cn } from "../src/lib/utils.js";
 import type {
   TelegramControlStatus,
   TelegramSettingsAction,
@@ -13,7 +15,6 @@ import {
   TELEGRAM_CREATE_TITLE,
   TELEGRAM_DELETE_COPY,
 } from "../src/ui/onboarding/copy.js";
-import { BUTTON_DANGER_QUIET_SM, BUTTON_DANGER_SOLID_SM } from "../src/ui/shared/buttons.js";
 import {
   mountWizard,
   panel,
@@ -265,7 +266,7 @@ describe("setup gate Telegram row", () => {
     const deleteButton = within(setupRow("telegram")).getByRole("button", {
       name: "Delete the Telegram connection",
     });
-    expect(deleteButton.className).toBe(BUTTON_DANGER_QUIET_SM);
+    expect(deleteButton.className).toBe(cn(buttonVariants({ variant: "destructive", size: "sm" })));
     expect(deleteButton).toHaveFocus();
     expect(screen.queryByRole("button", { name: "Change Telegram bot" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Use copied token" })).toBeNull();
@@ -384,7 +385,7 @@ describe("setup gate Telegram row", () => {
     const deleteButton = within(setupRow("telegram")).getByRole("button", {
       name: "Delete the Telegram connection",
     });
-    expect(deleteButton.className).toBe(BUTTON_DANGER_QUIET_SM);
+    expect(deleteButton.className).toBe(cn(buttonVariants({ variant: "destructive", size: "sm" })));
     expect(screen.queryByRole("button", { name: "Change Telegram bot" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Use copied token" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
@@ -398,7 +399,9 @@ describe("setup gate Telegram row", () => {
       "Delete connection",
     ]);
     expect(confirmationButtons[0]).toHaveFocus();
-    expect(confirmationButtons[1]?.className).toBe(BUTTON_DANGER_SOLID_SM);
+    expect(confirmationButtons[1]?.className).toBe(
+      cn(buttonVariants({ variant: "destructive-solid", size: "sm" })),
+    );
     expect(port.remove).not.toHaveBeenCalled();
 
     await user.click(confirmationButtons[0] as HTMLButtonElement);

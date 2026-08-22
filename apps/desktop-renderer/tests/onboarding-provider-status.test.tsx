@@ -5,13 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingBridge } from "../src/onboarding/bridge.js";
 import {
   chooseLane,
-  control,
   mountWizard,
   openApiKeyPanel,
   panel,
   resetOnboardingStore,
   rowState,
   rowSubtitle,
+  selectSetupOption,
   seedSecret,
   setupCard,
   testBridge,
@@ -123,7 +123,7 @@ describe("onboarding provider status", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openApiKeyPanel(user);
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "anthropic");
+    await selectSetupOption(user, "onboarding-llm-provider", "anthropic");
     seedSecret("anthropic", randomUUID());
 
     const host = panel("api-key");
@@ -162,7 +162,7 @@ describe("onboarding provider status", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openApiKeyPanel(user);
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "anthropic");
+    await selectSetupOption(user, "onboarding-llm-provider", "anthropic");
 
     const host = panel("api-key");
     await user.click(within(host as HTMLElement).getByRole("button", { name: "Save API key" }));
@@ -200,7 +200,7 @@ describe("onboarding provider status", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openApiKeyPanel(user);
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "anthropic");
+    await selectSetupOption(user, "onboarding-llm-provider", "anthropic");
 
     const host = panel("api-key");
     await user.click(within(host as HTMLElement).getByRole("button", { name: "Save API key" }));
