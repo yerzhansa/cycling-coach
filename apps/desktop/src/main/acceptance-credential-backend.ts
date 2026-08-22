@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,14 +10,23 @@ import {
 } from "./keychain-binding.js";
 
 const PACKAGE_JSON_LIMIT = 64 * 1024;
-const TELEGRAM_ACCEPTANCE_MARKER = "enduragentDesktopTelegramAcceptance";
-const TELEGRAM_ACCEPTANCE_PACKAGE_NAME = "enduragent-desktop-telegram-acceptance";
-const TELEGRAM_ACCEPTANCE_PRODUCT_NAME = "Enduragent Telegram Acceptance";
+const TELEGRAM_ACCEPTANCE_MARKER_DIGEST =
+  "6403ac18359b3a76b67b73aaca35224bb208910cf1deb5b55df79ca6a770a272";
+const TELEGRAM_ACCEPTANCE_PACKAGE_NAME_DIGEST =
+  "8c7664f44392258f873dd70296c5978e00045627a70b33eebb799b38ac75c326";
+const TELEGRAM_ACCEPTANCE_PRODUCT_NAME_DIGEST =
+  "1cda3287fbe8127102a851088456509106bf8369111bd8860f56d80d3493461a";
 const ACCEPTANCE_KEY_FILE = ".enduragent-acceptance-key";
 
 export type AcceptanceCredentialBackend =
   | Readonly<{ kind: "memory"; key: Buffer }>
   | Readonly<{ kind: "file"; keyPath: string }>;
+
+function matchesIdentity(value: unknown, digest: string): boolean {
+  return (
+    typeof value === "string" && createHash("sha256").update(value, "utf8").digest("hex") === digest
+  );
+}
 
 function packagedAcceptanceManifest(input: {
   readonly appPath: string;
@@ -32,10 +41,12 @@ function packagedAcceptanceManifest(input: {
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
     const metadata = parsed as Record<string, unknown>;
     return (
-      metadata.name === TELEGRAM_ACCEPTANCE_PACKAGE_NAME &&
-      metadata.productName === TELEGRAM_ACCEPTANCE_PRODUCT_NAME &&
-      Object.hasOwn(metadata, TELEGRAM_ACCEPTANCE_MARKER) &&
-      metadata[TELEGRAM_ACCEPTANCE_MARKER] === true
+      matchesIdentity(metadata.name, TELEGRAM_ACCEPTANCE_PACKAGE_NAME_DIGEST) &&
+      matchesIdentity(metadata.productName, TELEGRAM_ACCEPTANCE_PRODUCT_NAME_DIGEST) &&
+      Object.entries(metadata).some(
+        ([name, value]) =>
+          value === true && matchesIdentity(name, TELEGRAM_ACCEPTANCE_MARKER_DIGEST),
+      )
     );
   } catch {
     return false;
@@ -61,7 +72,7 @@ export function resolveAcceptanceCredentialBackend(input: {
   if (
     input.backend !== "file" ||
     !input.disposableContext ||
-    input.appName !== TELEGRAM_ACCEPTANCE_PRODUCT_NAME ||
+    !matchesIdentity(input.appName, TELEGRAM_ACCEPTANCE_PRODUCT_NAME_DIGEST) ||
     !packagedAcceptanceManifest(input)
   ) {
     return undefined;
