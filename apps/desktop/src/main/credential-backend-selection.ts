@@ -3,10 +3,8 @@ import type {
   SerializeCredentialEnvelopeMutation,
 } from "./credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
-import {
-  scanCredentialEnvelopes,
-  type CredentialEnvelopeRoots,
-} from "./credential-envelope-inventory.js";
+import type { CredentialEnvelopeRoots } from "./credential-envelope-inventory.js";
+import { scanBoundCredentialEnvelopes } from "./credential-envelope-root-binding.js";
 import {
   createKeychainPartitionEncryption,
   createRefusingKeychainEncryption,
@@ -89,7 +87,10 @@ async function selectMacCredentialBackend(
     service: options.service,
     keyCleanupPending: options.keyCleanupPending,
     envelopeCensus: async () => {
-      const inventory = await scanCredentialEnvelopes(options);
+      const { inventory } = await scanBoundCredentialEnvelopes(
+        options,
+        options.platform ?? process.platform,
+      );
       deletionBlockers = inventory.deletionBlockers.length;
       unverifiedEnvelopes = inventory.unverified;
       return {

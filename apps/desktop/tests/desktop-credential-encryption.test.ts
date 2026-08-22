@@ -1,9 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
-import type { CredentialEncryptionPort } from "../src/main/credential-vault.js";
+import {
+  CREDENTIAL_DIRECTORY_MODE,
+  type CredentialEncryptionPort,
+} from "../src/main/credential-vault.js";
 import {
   desktopKeychainCredentialService,
   prepareDesktopCredentialEncryption,
@@ -21,9 +25,12 @@ import {
   type KeychainBindingRequest,
   type KeychainBindingResponse,
 } from "../src/main/keychain-binding.js";
+import { TELEGRAM_CREDENTIAL_DIRECTORY_MODE } from "../src/main/telegram-credential-vault.js";
 
-const CREDENTIAL_ROOT = "/synthetic/userData/credentials-v1";
-const TELEGRAM_ROOT = "/synthetic/userData/telegram-channel-v1";
+let fixtureRoot = "";
+let credentialRoot = "";
+let telegramRoot = "";
+const posixIt = it.skipIf(process.platform === "win32");
 const KEY = randomBytes(KEYCHAIN_KEY_BYTES);
 const PROBE_OK: KeychainBindingResponse = {
   ok: true,
@@ -62,7 +69,7 @@ function noEnvelopes() {
 function migratedTelegramEnvelope() {
   const sealed = sealCredentialEnvelope(KEY, "bot-token");
   return (async (path: string) => {
-    if (path.startsWith(TELEGRAM_ROOT)) return Buffer.from(sealed);
+    if (path.startsWith(telegramRoot)) return Buffer.from(sealed);
     throw Object.assign(new Error("missing"), { code: "ENOENT" });
   }) as never;
 }
@@ -72,7 +79,7 @@ function removableTelegramEnvelope() {
   let present = true;
   return {
     read: (async (path: string) => {
-      if (present && path.startsWith(TELEGRAM_ROOT)) return Buffer.from(sealed);
+      if (present && path.startsWith(telegramRoot)) return Buffer.from(sealed);
       throw Object.assign(new Error("missing"), { code: "ENOENT" });
     }) as never,
     remove() {
@@ -85,8 +92,8 @@ function options(
   overrides: Partial<PrepareDesktopCredentialEncryptionOptions> = {},
 ): PrepareDesktopCredentialEncryptionOptions {
   return {
-    credentialRoot: CREDENTIAL_ROOT,
-    telegramRoot: TELEGRAM_ROOT,
+    credentialRoot,
+    telegramRoot,
     safeStorage: safeStoragePort(),
     readEnvelopeFile: noEnvelopes(),
     location: {
@@ -99,6 +106,18 @@ function options(
     ...overrides,
   };
 }
+
+beforeAll(async () => {
+  fixtureRoot = await mkdtemp(join(await realpath(tmpdir()), "desktop-credential-encryption-"));
+  credentialRoot = join(fixtureRoot, "credentials-v1");
+  telegramRoot = join(fixtureRoot, "telegram-channel-v1");
+  await mkdir(credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+  await mkdir(telegramRoot, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+});
+
+afterAll(async () => {
+  await rm(fixtureRoot, { recursive: true, force: true });
+});
 
 describe("desktop credential encryption startup", () => {
   it("separates the signed-release service from the development service", () => {
@@ -287,6 +306,48 @@ describe("desktop credential encryption startup", () => {
     expect(stablePort.decryptString(stablePort.encryptString("synthetic-secret"))).toBe(
       "synthetic-secret",
     );
+  });
+
+  posixIt("refuses Retry when a previously safe credential root redirects", async () => {
+    const retryRoot = await mkdtemp(join(fixtureRoot, "retry-redirect-"));
+    const retryCredentialRoot = join(retryRoot, "credentials-v1");
+    const retryTelegramRoot = join(retryRoot, "telegram-channel-v1");
+    const redirectedRoot = join(retryRoot, "redirected-credentials");
+    await mkdir(retryCredentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(retryTelegramRoot, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(redirectedRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: false, code: "keychain-locked" },
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY },
+      { ok: true, op: "delete-key", deleted: true },
+    );
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({
+        credentialRoot: retryCredentialRoot,
+        telegramRoot: retryTelegramRoot,
+        createTransport: () => transport,
+      }),
+    );
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      code: "keychain-locked",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+    await rm(retryCredentialRoot, { recursive: true });
+    await symlink(redirectedRoot, retryCredentialRoot, "dir");
+
+    await expect(prepared.retryKeychain()).resolves.toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unknown",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "probe",
+    ]);
   });
 
   it("leaves the custom key absent after reset and recreates it only before a later write", async () => {
