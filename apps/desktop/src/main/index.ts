@@ -1,5 +1,8 @@
 import { bindWindowsUserData } from "./windows-user-data.js";
-import { randomBytes } from "node:crypto";
+import {
+  createAcceptanceKeychainTransport,
+  resolveAcceptanceCredentialBackend,
+} from "./acceptance-credential-backend.js";
 import { realpath, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,11 +86,6 @@ import {
 } from "./credential-envelope-lock.js";
 import { prepareDesktopCredentialEncryption } from "./desktop-credential-encryption.js";
 import { resetEncryptedCredentialStorage } from "./credential-reset.js";
-import {
-  KEYCHAIN_KEY_BYTES,
-  KEYCHAIN_TEAM_IDENTIFIER,
-  type KeychainBindingTransport,
-} from "./keychain-binding.js";
 import { probePackagedKeychainBackendSelection } from "./keychain-backend-selection-probe.js";
 import {
   DesktopDaemonLifecycle,
@@ -196,29 +194,6 @@ let desktopIsClosing = false;
 let desktopStartedInBackground = false;
 const desktopAcceptanceHidden = process.env.ENDURAGENT_ACCEPTANCE_HIDDEN === "1";
 
-function createAcceptanceKeychainTransport(): KeychainBindingTransport {
-  let key: Buffer | undefined = randomBytes(KEYCHAIN_KEY_BYTES);
-  return {
-    async send(request) {
-      if (request.op === "probe") {
-        return { ok: true, op: "probe", teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER };
-      }
-      if (request.op === "read-key") {
-        return key === undefined
-          ? { ok: false, code: "item-not-found" }
-          : { ok: true, op: "read-key", key: Buffer.from(key) };
-      }
-      if (request.op === "create-key") {
-        key ??= randomBytes(KEYCHAIN_KEY_BYTES);
-        return { ok: true, op: "create-key", key: Buffer.from(key) };
-      }
-      const deleted = key !== undefined;
-      key?.fill(0);
-      key = undefined;
-      return { ok: true, op: "delete-key", deleted };
-    },
-  };
-}
 const INITIAL_REFRESH_RELEASE_RETRY_DELAY_MS = 1_000;
 const INITIAL_REFRESH_SETTLE_WATCHDOG_MS = 30_000;
 
@@ -487,10 +462,16 @@ async function runDesktop(): Promise<void> {
     );
     const serializeCredentialMutation = createCredentialMutationLock();
     const serializeCredentialEnvelopeMutation = createCredentialEnvelopeMutationLock();
-    const acceptanceCredentialBackend =
-      !app.isPackaged &&
-      desktopAcceptanceHidden &&
-      environment.ENDURAGENT_ACCEPTANCE_CREDENTIAL_BACKEND === "memory";
+    const acceptanceCredentialBackend = resolveAcceptanceCredentialBackend({
+      isPackaged: app.isPackaged,
+      hidden: desktopAcceptanceHidden,
+      backend: environment.ENDURAGENT_ACCEPTANCE_CREDENTIAL_BACKEND,
+      appName: app.getName(),
+      appPath: app.getAppPath(),
+      userDataPath: app.getPath("userData"),
+      disposableContext:
+        environment.CI === "true" || environment.ENDURAGENT_DISPOSABLE_SAFE_STORAGE_CONTEXT === "1",
+    });
     const credentialEncryption = await prepareDesktopCredentialEncryption({
       credentialRoot,
       telegramRoot: telegramCredentialRoot,
@@ -502,9 +483,9 @@ async function runDesktop(): Promise<void> {
       },
       safeStorage,
       serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
-      ...(acceptanceCredentialBackend
+      ...(acceptanceCredentialBackend !== undefined
         ? {
-            createTransport: () => createAcceptanceKeychainTransport(),
+            createTransport: () => createAcceptanceKeychainTransport(acceptanceCredentialBackend),
           }
         : {}),
     });
