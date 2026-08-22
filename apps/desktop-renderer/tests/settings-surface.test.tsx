@@ -662,7 +662,7 @@ describe("settings setup inventory", () => {
       expect(document.querySelector('[data-setup-panel="api-key"]')).not.toBeNull(),
     );
     expect(document.querySelector('[data-setup-menu="ai"]')).toBeNull();
-    expect(screen.getByLabelText("Provider")).toHaveValue("openrouter");
+    expect(screen.getByLabelText("Provider")).toHaveTextContent("OpenRouter");
     expect(useEnduragentStore.getState().onboarding.configuration?.active).toEqual({
       provider: "anthropic",
       model: "synthetic-model",

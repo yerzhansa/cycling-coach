@@ -6,7 +6,7 @@ import { ERROR_COPY } from "./copy.js";
 
 export type SetupRowStatus = "ready" | "pending" | "none";
 
-const TITLE_CLASS = "flex items-center gap-1.5 text-[13.5px] font-medium";
+const TITLE_CLASS = "flex items-center gap-1.5 text-sm font-medium";
 
 function StatusDisc(props: { readonly status: SetupRowStatus }): ReactElement | null {
   if (props.status === "none") return null;
@@ -98,7 +98,7 @@ export function SetupError(props: {
   const wizard = props.surface.wizard;
   if (errorSection(wizard.fixedError, props.surface.lastCommit) !== props.section) return null;
   return (
-    <p id="onboarding-error" className="mt-2 text-[13px] text-danger">
+    <p id="onboarding-error" className="mt-2 text-sm text-danger">
       {wizard.fixedError === null ? "" : ERROR_COPY[wizard.fixedError]}
     </p>
   );

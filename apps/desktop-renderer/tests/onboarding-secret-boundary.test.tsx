@@ -9,7 +9,6 @@ import type {
 } from "../src/onboarding/bridge.js";
 import { handoffCredential } from "../src/onboarding/credentials.js";
 import {
-  control,
   mountWizard,
   openApiKeyPanel,
   openTrainingPanel,
@@ -19,6 +18,7 @@ import {
   resetOnboardingStore,
   rowState,
   saveModelKey,
+  selectSetupOption,
   seedSecret,
   testBridge,
 } from "./onboarding-harness.js";
@@ -248,7 +248,7 @@ describe("mounted onboarding secret boundary", () => {
     const wizard = mountWizard({ bridge });
     await wizard.open();
     await openApiKeyPanel(user);
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "openrouter");
+    await selectSetupOption(user, "onboarding-llm-provider", "openrouter");
 
     await user.type(passwordInput("openrouter"), sentinel);
     await saveModelKey(user);
@@ -271,7 +271,7 @@ describe("mounted onboarding secret boundary", () => {
     await openApiKeyPanel(user);
 
     await user.type(passwordInput("anthropic"), sentinel);
-    await user.selectOptions(control<HTMLSelectElement>("onboarding-llm-provider"), "openrouter");
+    await selectSetupOption(user, "onboarding-llm-provider", "openrouter");
 
     expect(document.querySelector('input[data-slot="anthropic"]')).toBeNull();
     expect(passwordInput("openrouter").getAttribute("value")).toBeNull();

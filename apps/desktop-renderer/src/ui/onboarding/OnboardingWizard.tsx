@@ -101,7 +101,7 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
             <h1
               id="setup-panel-title"
               tabIndex={-1}
-              className="text-[27px] leading-[1.16] font-[590] tracking-[-0.035em] outline-none"
+              className="text-2xl leading-8 font-semibold tracking-[-0.02em] outline-none"
             >
               {gateUnavailable || statusKnown ? SETUP_HEADING : SETUP_CHECKING_HEADING}
             </h1>
@@ -138,7 +138,7 @@ export function SetupPanel(props: { readonly placement: SetupPlacement }): React
           role="status"
           aria-live="polite"
         >
-          <span className="text-[13px] text-ink-2">{SETUP_STATUS_UNAVAILABLE_COPY}</span>
+          <span className="text-sm text-ink-2">{SETUP_STATUS_UNAVAILABLE_COPY}</span>
           <button
             type="button"
             className={BUTTON_PRIMARY}
