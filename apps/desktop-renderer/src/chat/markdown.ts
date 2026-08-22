@@ -441,7 +441,7 @@ function appendTable(
   budget: MarkdownBudget,
 ): void {
   const scroll = element(budget, "div");
-  scroll.className = "chat-markdown__table-scroll";
+  scroll.className = "chat-markdown__table-scroll my-[0.65em] max-w-full overflow-x-auto";
   const table = element(budget, "table");
   const head = element(budget, "thead");
   const headRow = element(budget, "tr");
