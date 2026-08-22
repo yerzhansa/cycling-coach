@@ -19,9 +19,9 @@ function budget(maxArtifacts = 20): SyncBudget {
     perRequestTimeoutMs: 1_000, maxRequests: 20, maxArtifacts };
 }
 
-function fixture(stream: unknown = { time: [0, 1], watts: [200, 210] }) {
+function fixture(stream: unknown = { time: [0, 1], watts: [200, 210] }, activities: readonly unknown[] = [ACTIVITY]) {
   const requests: string[] = [], writes: { payload: unknown; epoch: number }[] = [];
-  const queue = [response(PROFILE), response([ACTIVITY]), response([WELLNESS]), response(stream)];
+  const queue = [response(PROFILE), response(activities), response([WELLNESS]), response(stream)];
   const source = createIntervalsIcuSource({ athleteId: "synthetic-athlete", historyNewestDate: "1998-07-18",
     minRequestIntervalMs: 250, wallClock: { now: () => NOW.getTime() }, sleep: async () => {},
     httpFactory: () => ({ fetch: async (request) => { requests.push(request.url); return queue.shift()!; } }),
@@ -55,6 +55,22 @@ describe("captureReference", () => {
     expect(batch.records.streams[0]?.externalId).toBe("streams:42");
     expect(batch.records.streams[0]?.archive).toBe(batch.endpoints[3]?.archive);
     expect(value.writes).toHaveLength(7);
+  });
+
+  it("splits the activity rows the capture drops into source-restricted and other", async () => {
+    const stub = { id: "9001", icu_athlete_id: "i12345", start_date_local: "1998-07-17T14:08:41", source: "STRAVA" };
+    const foreign = { id: "9002", icu_athlete_id: "i12345", start_date_local: "1998-07-17T14:09:41", source: "GARMIN_CONNECT" };
+    const value = fixture({ time: [0, 1], watts: [200, 210] }, [ACTIVITY, stub, foreign]);
+
+    const batch = await value.source.captureReference(NOW, budget());
+
+    expect(batch.records.activities).toHaveLength(1);
+    expect(batch.dropped_activity_rows).toEqual({ sourceRestricted: 1, other: 1 });
+  });
+
+  it("reports no dropped activity rows for a clean capture", async () => {
+    const batch = await fixture().source.captureReference(NOW, budget());
+    expect(batch.dropped_activity_rows).toEqual({ sourceRestricted: 0, other: 0 });
   });
 
   it("omits malformed stream responses without omitting required lanes", async () => {

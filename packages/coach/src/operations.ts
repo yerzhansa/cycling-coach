@@ -249,6 +249,7 @@ export function createCoachOperations(
               reference: window.counts.legacyRequests,
               total: window.counts.totalRequests,
             },
+            droppedActivities: window.droppedActivities,
           });
           deliver(onEvent, { phase: "completed", completed: 1, total: 1 });
           return result;

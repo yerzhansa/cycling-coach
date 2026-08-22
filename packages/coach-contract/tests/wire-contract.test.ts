@@ -80,6 +80,7 @@ import {
   compareProtocolVersions,
   createAcceptedServerHandshakeFrame,
   createClientHandshakeFrame,
+  EXIT_VERSION_MISMATCH,
   createVersionMismatchServerHandshakeFrame,
   parseCoachRpcEnvelope,
   serializeCoachRpcEnvelope,
@@ -617,6 +618,7 @@ describe("coach request and event projection", () => {
       published: true,
       referenceSucceeded: true,
       requests: { store: 2, reference: 1, total: 3 },
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     } as const;
     expect(SyncRpcResultSchema.parse(syncResult)).toEqual(syncResult);
     for (const backfill of [
@@ -638,6 +640,77 @@ describe("coach request and event projection", () => {
         requests: { ...syncResult.requests, total: 4 },
       }).success,
     ).toBe(false);
+    const restricted = {
+      overall: {
+        total: 67,
+        visible: 5,
+        restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+        other: 2,
+      },
+      recent7Days: {
+        total: 5,
+        visible: 1,
+        restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+        other: 0,
+      },
+    } as const;
+    expect(
+      SyncRpcResultSchema.parse({ ...syncResult, droppedActivities: restricted })
+        .droppedActivities,
+    ).toEqual(restricted);
+    expect(
+      SyncRpcResultSchema.safeParse({
+        ...syncResult,
+        droppedActivities: {
+          overall: {
+            total: 67,
+            visible: 5,
+            restrictions: [
+              { reason: "source-restricted", source: "GARMIN_CONNECT", count: 10 },
+              { reason: "source-restricted", source: "STRAVA", count: 50 },
+            ],
+            other: 2,
+          },
+          recent7Days: {
+            total: 5,
+            visible: 1,
+            restrictions: [
+              { reason: "source-restricted", source: "GARMIN_CONNECT", count: 1 },
+              { reason: "source-restricted", source: "STRAVA", count: 3 },
+            ],
+            other: 0,
+          },
+        },
+      }).success,
+    ).toBe(true);
+    for (const droppedActivities of [
+      { ...restricted, overall: { ...restricted.overall, total: 68 } },
+      {
+        ...restricted,
+        recent7Days: {
+          total: 62,
+          visible: 1,
+          restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 61 }],
+          other: 0,
+        },
+      },
+      {
+        ...restricted,
+        overall: {
+          total: 67,
+          visible: 5,
+          restrictions: [
+            { reason: "source-restricted", source: "STRAVA", count: 30 },
+            { reason: "source-restricted", source: "STRAVA", count: 30 },
+          ],
+          other: 2,
+        },
+      },
+    ]) {
+      expect(
+        SyncRpcResultSchema.safeParse({ ...syncResult, droppedActivities }).success,
+      ).toBe(false);
+    }
     expect(
       OperationProgressEventSchema.parse({ phase: "started", completed: 0, total: 1 }),
     ).toEqual({ phase: "started", completed: 0, total: 1 });
@@ -1063,6 +1136,7 @@ describe("coach request and event projection", () => {
         published: false,
         referenceSucceeded: true,
         requests: { store: 0, reference: 0, total: 0 },
+        droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
       }),
       getSetupStatus: async () => ({
         schemaVersion: 1,
@@ -1624,7 +1698,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-18 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-19 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1632,12 +1706,39 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 18,
-      serverProtocolVersion: 18,
+      clientProtocolVersion: 19,
+      serverProtocolVersion: 19,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
     });
+  });
+
+  it("refuses a previous-protocol client with a version-mismatch frame instead of a parse error", () => {
+    const previous = PROTOCOL_VERSION - 1;
+    expect(previous).toBe(18);
+    expect(() =>
+      createAcceptedServerHandshakeFrame("service-managed", previous, {
+        ...acceptedHandshakeBinding,
+      }),
+    ).toThrow();
+    expect(createVersionMismatchServerHandshakeFrame("service-managed", previous)).toEqual({
+      type: "handshake",
+      status: "version-mismatch",
+      clientProtocolVersion: previous,
+      serverProtocolVersion: PROTOCOL_VERSION,
+      direction: "client-older",
+      owner: "service-managed",
+    });
+    expect(EXIT_VERSION_MISMATCH).toBe(5);
+    expect(
+      SyncRpcResultSchema.safeParse({
+        schemaVersion: 1,
+        published: true,
+        referenceSucceeded: true,
+        requests: { store: 1, reference: 1, total: 2 },
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps protocol-11 acceptance available only through the upgrade-control schema", () => {
@@ -1688,9 +1789,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 18 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 19 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(18);
+    expect(client.clientProtocolVersion).toBe(19);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -1816,7 +1917,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version eighteen", () => {
-    expect(PROTOCOL_VERSION).toBe(18);
+  it("uses protocol version nineteen", () => {
+    expect(PROTOCOL_VERSION).toBe(19);
   });
 });

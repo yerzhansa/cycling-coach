@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_CHAT_SURFACE, type ChatActions } from "../src/state/chat-slice.js";
@@ -15,6 +15,7 @@ import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
 import { toManualSyncViewState } from "../src/training-context/manual-sync.js";
 import { Sidebar } from "../src/ui/sidebar/Sidebar.js";
+import { clearTrainingRestrictionFocusRequest } from "../src/ui/training/restriction-focus.js";
 
 function stubActions(): ChatActions {
   return {
@@ -42,6 +43,29 @@ function chip(): HTMLElement {
   return element;
 }
 
+function chipSurface(): HTMLElement {
+  const element = document.querySelector<HTMLElement>("[data-sync-chip]");
+  if (element === null) throw new TypeError("sync chip surface missing");
+  return element;
+}
+
+function stravaDroppedActivities() {
+  return {
+    overall: {
+      total: 67,
+      visible: 5,
+      restrictions: [{ reason: "source-restricted" as const, source: "STRAVA", count: 60 }],
+      other: 2,
+    },
+    recent7Days: {
+      total: 5,
+      visible: 1,
+      restrictions: [{ reason: "source-restricted" as const, source: "STRAVA", count: 4 }],
+      other: 0,
+    },
+  };
+}
+
 function setupReadiness(): HTMLElement {
   const element = document.querySelector<HTMLElement>("[data-sidebar-setup-readiness]");
   if (element === null) throw new TypeError("sidebar setup readiness missing");
@@ -65,6 +89,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setManualSyncFocusTarget(null);
+  clearTrainingRestrictionFocusRequest();
   useEnduragentStore.setState({
     chat: EMPTY_CHAT_SURFACE,
     chatActions: null,
@@ -240,7 +265,7 @@ describe("sidebar sync chip", () => {
     render(<Sidebar />);
 
     expect(chip()).toHaveAttribute("data-status", "loading");
-    expect(chip()).toHaveTextContent("Loading training data");
+    expect(chipSurface()).toHaveTextContent("Loading training data");
 
     update({
       training: {
@@ -255,8 +280,8 @@ describe("sidebar sync chip", () => {
       },
     });
     expect(chip()).toHaveAttribute("data-status", "synced");
-    expect(chip()).toHaveTextContent("Training data synced");
-    expect(chip()).toHaveTextContent("1998-07-19 07:55:00 UTC");
+    expect(chipSurface()).toHaveTextContent("Training data synced");
+    expect(chipSurface()).toHaveTextContent("1998-07-19 07:55:00 UTC");
     expect(chip()).toHaveAccessibleName(
       "Sync now · Training data synced · 1998-07-19 07:55:00 UTC",
     );
@@ -274,7 +299,109 @@ describe("sidebar sync chip", () => {
       }),
     });
     expect(chip()).toHaveAttribute("data-status", "attention");
-    expect(chip()).toHaveTextContent("Try again");
+    expect(chipSurface()).toHaveTextContent("Try again");
+  });
+
+  it("keeps Strava remedy navigation independent from syncing", async () => {
+    const user = userEvent.setup();
+    const request = vi.fn();
+    useEnduragentStore.setState({ syncActions: { request } });
+    render(<Sidebar />);
+
+    update({
+      training: {
+        ...EMPTY_TRAINING_SURFACE,
+        status: "ready",
+        metadata: {
+          lastUpdated: "1998-07-19T08:00:00.000Z",
+          lastSynced: "1998-07-19T07:55:00.000Z",
+          freshness: "fresh",
+          degraded: false,
+        },
+      },
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: stravaDroppedActivities(),
+      }),
+    });
+
+    expect(chip()).toHaveAttribute("data-status", "synced");
+    expect(chipSurface()).toHaveTextContent("60 hidden by Strava");
+    expect(chipSurface()).toHaveTextContent("How to fix this");
+    expect(chipSurface()).not.toHaveTextContent("1998-07-19 07:55:00 UTC");
+    expect(chip()).toHaveAttribute("title", "1998-07-19 07:55:00 UTC");
+    expect(chip()).toHaveAccessibleName(
+      "Sync again · Training data synced · 1998-07-19 07:55:00 UTC",
+    );
+    expect(
+      chip().querySelector("a, button, input, select, textarea, [role='button'], [tabindex]"),
+    ).toBeNull();
+
+    const link = screen.getByRole("link", {
+      name: "60 hidden by Strava. How to fix this",
+    });
+    expect(link).toHaveAttribute("href", "#strava-restricted-activities");
+    expect(link).toHaveAttribute("data-info-tip");
+    await user.hover(link);
+    await waitFor(() => {
+      expect(document.querySelector("[data-info-tip-popup]")).not.toBeNull();
+    });
+    expect(screen.getByText("60 activities hidden by Strava")).toBeInTheDocument();
+    const popup = document.querySelector<HTMLElement>("[data-info-tip-popup]");
+    expect(
+      popup?.querySelector("a, button, input, select, textarea, [role='button'], [tabindex]"),
+    ).toBeNull();
+
+    await user.click(link);
+    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(request).not.toHaveBeenCalled();
+
+    clearTrainingRestrictionFocusRequest();
+    update({ activeView: "chat" });
+    chip().focus();
+    await user.tab();
+    expect(link).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(request).not.toHaveBeenCalled();
+
+    clearTrainingRestrictionFocusRequest();
+    update({ activeView: "chat" });
+    fireEvent.pointerDown(link, { pointerType: "touch" });
+    fireEvent.click(link, { detail: 1 });
+    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(request).not.toHaveBeenCalled();
+
+    clearTrainingRestrictionFocusRequest();
+    update({
+      activeView: "chat",
+      sync: {
+        ...toManualSyncViewState({ status: "running", operation: 2 }),
+        droppedActivities: stravaDroppedActivities(),
+      },
+    });
+    expect(chip()).toBeDisabled();
+    expect(link).toBeEnabled();
+    await user.click(link);
+    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(request).not.toHaveBeenCalled();
+
+    update({
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 2,
+        kind: "no-change",
+        droppedActivities: {
+          overall: { total: 5, visible: 5, restrictions: [], other: 0 },
+          recent7Days: { total: 5, visible: 5, restrictions: [], other: 0 },
+        },
+      }),
+    });
+    expect(chipSurface()).toHaveTextContent("1998-07-19 07:55:00 UTC");
+    expect(chip()).not.toHaveAttribute("title");
+    expect(chipSurface().querySelector("[data-info-tip]")).toBeNull();
   });
 
   it("reports never-synced and unavailable training data honestly", () => {
@@ -282,11 +409,11 @@ describe("sidebar sync chip", () => {
 
     update({ training: { ...EMPTY_TRAINING_SURFACE, status: "ready" } });
     expect(chip()).toHaveAttribute("data-status", "never");
-    expect(chip()).toHaveTextContent("Not synced yet");
+    expect(chipSurface()).toHaveTextContent("Not synced yet");
 
     update({ training: { ...EMPTY_TRAINING_SURFACE, status: "unavailable" } });
     expect(chip()).toHaveAttribute("data-status", "unavailable");
-    expect(chip()).toHaveTextContent("Training data unavailable");
+    expect(chipSurface()).toHaveTextContent("Training data unavailable");
   });
 
   it("requests a manual sync and restores keyboard focus to the activator", async () => {

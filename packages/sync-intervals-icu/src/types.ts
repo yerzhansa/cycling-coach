@@ -33,6 +33,16 @@ export const INTERVALS_ICU_CAPABILITIES = Object.freeze({
 
 export const MAX_JSON_BYTES = 67_108_864;
 
+export interface DroppedActivityRowCounts {
+  readonly sourceRestricted: number;
+  readonly other: number;
+}
+
+export const ZERO_DROPPED_ACTIVITY_ROWS: DroppedActivityRowCounts = Object.freeze({
+  sourceRestricted: 0,
+  other: 0,
+});
+
 export type IntervalsHttpFactory = (args: {
   readonly outer: AbortSignal;
   readonly perRequestTimeoutMs: number;
@@ -78,7 +88,11 @@ export type IntervalsIcuArtifact =
         readonly archive: { readonly address: string; readonly relPath: string; readonly deduped: boolean };
       } | null;
     })
-  | SourceCheckpoint;
+  | IntervalsIcuCheckpoint;
+
+export type IntervalsIcuCheckpoint = SourceCheckpoint & {
+  readonly droppedActivityRows?: DroppedActivityRowCounts;
+};
 
 export interface IntervalsIcuSource extends SyncSource {
   readonly id: "intervals-icu";
@@ -135,4 +149,5 @@ export interface ReferenceCaptureBatch {
   };
   readonly selected_stream_ids: readonly string[];
   readonly captured_stream_ids: readonly string[];
+  readonly dropped_activity_rows: DroppedActivityRowCounts;
 }
