@@ -362,18 +362,12 @@ describe("training page", () => {
     );
 
     const panel = screen.getByRole("region", { name: "Export ride" });
-    expect(
-      within(panel)
-        .getAllByRole("option")
-        .map((option) => ({
-          label: option.textContent,
-          value: (option as HTMLOptionElement).value,
-        })),
-    ).toEqual([
-      { label: "FIT", value: "fit" },
-      { label: "GPX", value: "gpx" },
+    await user.click(within(panel).getByRole("combobox", { name: "File format" }));
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "FIT",
+      "GPX",
     ]);
-    await user.selectOptions(within(panel).getByRole("combobox", { name: "File format" }), "gpx");
+    await user.click(screen.getByRole("option", { name: "GPX" }));
     await user.click(within(panel).getByRole("button", { name: "Export ride" }));
     expect(exportActivity).toHaveBeenCalledWith({
       canonicalActivityId: "a".repeat(64),
@@ -899,20 +893,14 @@ describe("training page", () => {
     render(<TrainingView />);
 
     const plan = screen.getByRole("region", { name: "Plan" });
-    expect(
-      within(plan)
-        .getAllByRole("option")
-        .map((option) => ({
-          label: option.textContent,
-          value: (option as HTMLOptionElement).value,
-        })),
-    ).toEqual([
-      { label: "ZWO", value: "zwo" },
-      { label: "MRC", value: "mrc" },
-      { label: "ERG", value: "erg" },
-      { label: "FIT", value: "fit" },
+    await user.click(within(plan).getByRole("combobox", { name: "Workout format" }));
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "ZWO",
+      "MRC",
+      "ERG",
+      "FIT",
     ]);
-    await user.selectOptions(within(plan).getByRole("combobox", { name: "Workout format" }), "fit");
+    await user.click(screen.getByRole("option", { name: "FIT" }));
     await user.click(within(plan).getByRole("button", { name: "Export workouts" }));
     expect(exportWorkoutArchive).toHaveBeenCalledWith({
       oldest: "1998-07-11",

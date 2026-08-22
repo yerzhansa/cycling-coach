@@ -8,6 +8,7 @@ import type {
   WellnessTrendPanel,
 } from "@enduragent/coach-contract";
 import { useEffect, useLayoutEffect, useRef, type ReactElement, type ReactNode } from "react";
+import { Button } from "../../components/ui/button.js";
 import { rideImportStatusCopy } from "../../ride-import.js";
 import { rideImportStatusSuppressed } from "../../state/onboarding-slice.js";
 import {
@@ -31,7 +32,7 @@ import {
   stalenessCopy,
   trainingStatusCopy,
 } from "./copy.js";
-import styles from "./TrainingView.module.css";
+import { overviewStyles as styles } from "./overviewStyles.js";
 import { PowerProgressContent } from "./PowerProgressPanel.js";
 import { RecentRidesStatePanel, RideDetailView } from "./RideReview.js";
 import { WellnessSparkline } from "./WellnessSparkline.js";
@@ -106,10 +107,11 @@ function SyncPanel(): ReactElement {
         )}
       </div>
       <div className={styles.syncRow} data-tone={sync.tone}>
-        <button
+        <Button
           type="button"
           ref={action}
-          className={`${styles.action} training-sync-action`}
+          variant="outline"
+          className="training-sync-action"
           disabled={sync.disabled || actions === null}
           aria-busy={sync.busy ? "true" : undefined}
           onClick={(event) => {
@@ -119,7 +121,7 @@ function SyncPanel(): ReactElement {
           }}
         >
           {sync.label}
-        </button>
+        </Button>
         <p
           ref={message}
           tabIndex={-1}
@@ -287,9 +289,10 @@ function RideImportPanel(): ReactElement {
   return (
     <Panel name="ride-import" title="Import ride files">
       <p className={styles.support}>{RIDE_IMPORT_DESCRIPTION}</p>
-      <button
+      <Button
         type="button"
-        className={`${styles.action} ride-import-action`}
+        variant="outline"
+        className="ride-import-action mt-3"
         disabled={actions === null || state.status === "running"}
         aria-describedby="ride-import-status"
         onClick={() => {
@@ -297,7 +300,7 @@ function RideImportPanel(): ReactElement {
         }}
       >
         Import ride files
-      </button>
+      </Button>
       {progress === null ? null : (
         <p className={styles.meta}>
           {progress.params.event.completed} of {progress.params.event.total} files processed

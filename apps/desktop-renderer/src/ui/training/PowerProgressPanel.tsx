@@ -11,7 +11,7 @@ import {
   POWER_PROGRESS_ROTATION_COPY,
   POWER_PROGRESS_UNAVAILABLE_COPY,
 } from "./copy.js";
-import styles from "./TrainingView.module.css";
+import { overviewStyles as styles } from "./overviewStyles.js";
 
 const POWER_DURATION_LABELS = new Map<number, string>([
   [5, "5 sec"],
