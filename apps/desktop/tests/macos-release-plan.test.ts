@@ -61,15 +61,12 @@ const verifiedBaselineApplication = Object.freeze({
   baselineVersion: "2026.7.1",
   teamIdentifier: "FA494ACVTF",
 });
-const verifiedKeychainHelper = Object.freeze({
-  teamIdentifier: "FA494ACVTF",
-  designatedRequirement: 'identifier "keychain-helper" and anchor apple generic',
-});
 const verifiedBackendSelection = Object.freeze({
-  helper: "/synthetic/Enduragent.app/Contents/Resources/keychain/keychain-helper",
+  binding:
+    "/synthetic/Enduragent.app/Contents/Resources/app.asar.unpacked/native/keychain-binding.node",
   service: "icu.enduragent.desktop",
   teamIdentifier: "FA494ACVTF",
-  designatedRequirement: 'identifier "keychain-helper" and anchor apple generic',
+  designatedRequirement: 'identifier "keychain-binding.node" and anchor apple generic',
 });
 const temporaryRoots: string[] = [];
 
@@ -99,8 +96,19 @@ function baselineVerifier() {
   return vi.fn(async () => verifiedBaselineApplication);
 }
 
-function keychainHelperVerifier() {
-  return vi.fn(async () => verifiedKeychainHelper);
+function keychainBindingPreparer() {
+  return vi.fn(async (_desktopRoot: string) => ({
+    built: "/synthetic/keychain-binding.node",
+    staged: "/synthetic/ASAR-staging/native/keychain-binding.node",
+  }));
+}
+
+function keychainBindingVerifier() {
+  return vi.fn(async () => {});
+}
+
+function electronFusesVerifier() {
+  return vi.fn(async () => {});
 }
 
 function backendSelectionVerifier() {
@@ -446,6 +454,38 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
     expect(build).not.toHaveBeenCalled();
   });
 
+  it("stops before electron-builder when fresh keychain binding preparation fails", async () => {
+    const build = vi.fn(async (_options: MacosReleaseBuilderOptions) => []);
+    const failure = new Error("synthetic keychain binding preparation failure");
+    const prepareKeychainBinding = vi.fn(async () => {
+      throw failure;
+    });
+
+    await expect(
+      runMacosRelease(
+        {
+          repositoryRoot: "/synthetic/repository",
+          desktopRoot: "/synthetic/repository/apps/desktop",
+          feedUrl,
+          identity,
+          baselineApplication,
+        },
+        {
+          readFile: versionReader(),
+          environment: notarizationEnvironment,
+          build,
+          prepareKeychainBinding,
+          verifyBaselineApplication: baselineVerifier(),
+        },
+      ),
+    ).rejects.toBe(failure);
+    expect(prepareKeychainBinding).toHaveBeenCalledOnce();
+    expect(prepareKeychainBinding).toHaveBeenCalledWith(
+      "/synthetic/repository/apps/desktop",
+    );
+    expect(build).not.toHaveBeenCalled();
+  });
+
   it("matches the pinned builder identity qualifier contract without reading a keychain", async () => {
     const localRequire = createRequire(import.meta.url);
     const builderRequire = createRequire(localRequire.resolve("electron-builder"));
@@ -486,9 +526,11 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
     const build = vi.fn(async (_options: MacosReleaseBuilderOptions) => [
       "/synthetic/Enduragent-2026.7.2-arm64.dmg",
     ]);
+    const prepareKeychainBinding = keychainBindingPreparer();
     const sealReleaseMetadata = vi.fn(async () => {});
     const verifyPackageLayout = vi.fn(async () => {});
-    const verifyKeychainHelper = keychainHelperVerifier();
+    const verifyKeychainBinding = keychainBindingVerifier();
+    const verifyElectronFuses = electronFusesVerifier();
     const verifyBackendSelection = backendSelectionVerifier();
     const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
       if (executable === "/usr/bin/codesign" && arguments_.includes("--display")) {
@@ -531,12 +573,14 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
         readFile: versionReader(),
         environment: notarizationEnvironment,
         build,
+        prepareKeychainBinding,
         executeFile,
         notarize,
         sealReleaseMetadata,
         verifyBaselineApplication,
         verifyPackageLayout,
-        verifyKeychainHelper,
+        verifyKeychainBinding,
+        verifyElectronFuses,
         verifyBackendSelection,
         verifyIdentityContinuity,
         verifyReleaseApplicationContents,
@@ -617,25 +661,39 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
     );
     expect(result.envelopePath).toBe(envelopePath);
     expect(verifyBaselineApplication.mock.invocationCallOrder[0]).toBeLessThan(
+      prepareKeychainBinding.mock.invocationCallOrder[0]!,
+    );
+    expect(prepareKeychainBinding).toHaveBeenCalledOnce();
+    expect(prepareKeychainBinding).toHaveBeenCalledWith(
+      "/synthetic/repository/apps/desktop",
+    );
+    expect(prepareKeychainBinding.mock.invocationCallOrder[0]).toBeLessThan(
       build.mock.invocationCallOrder[0]!,
     );
     expect(build.mock.invocationCallOrder[0]).toBeLessThan(
       verifyPackageLayout.mock.invocationCallOrder[0]!,
     );
-    expect(verifyKeychainHelper).toHaveBeenCalledOnce();
-    expect(verifyKeychainHelper).toHaveBeenCalledWith(application);
+    expect(verifyKeychainBinding).toHaveBeenCalledOnce();
+    expect(verifyKeychainBinding).toHaveBeenCalledWith(application);
     expect(verifyPackageLayout.mock.invocationCallOrder[0]).toBeLessThan(
-      verifyKeychainHelper.mock.invocationCallOrder[0]!,
+      verifyKeychainBinding.mock.invocationCallOrder[0]!,
+    );
+    expect(verifyElectronFuses).toHaveBeenCalledOnce();
+    expect(verifyElectronFuses).toHaveBeenCalledWith(
+      join(application, "Contents/MacOS/Enduragent"),
+    );
+    expect(verifyKeychainBinding.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyElectronFuses.mock.invocationCallOrder[0]!,
     );
     expect(verifyBackendSelection).toHaveBeenCalledOnce();
     expect(verifyBackendSelection).toHaveBeenCalledWith(application);
-    expect(verifyKeychainHelper.mock.invocationCallOrder[0]).toBeLessThan(
-      verifyBackendSelection.mock.invocationCallOrder[0]!,
-    );
-    expect(verifyBackendSelection.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(verifyElectronFuses.mock.invocationCallOrder[0]).toBeLessThan(
       verifyIdentityContinuity.mock.invocationCallOrder[0]!,
     );
     expect(verifyIdentityContinuity.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyBackendSelection.mock.invocationCallOrder[0]!,
+    );
+    expect(verifyBackendSelection.mock.invocationCallOrder[0]).toBeLessThan(
       notarize.mock.invocationCallOrder[0]!,
     );
     expect(notarize.mock.invocationCallOrder[0]).toBeLessThan(
@@ -660,11 +718,13 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
       "release-plan",
       "notarization-credentials",
       "baseline-verification",
+      "keychain-binding-preparation",
       "electron-builder",
       "package-layout",
-      "keychain-helper",
-      "backend-selection",
+      "keychain-binding",
+      "electron-fuses",
       "identity-continuity",
+      "backend-selection",
       "dmg-notarization",
       "dmg-verification",
       "metadata-sealing",
@@ -692,9 +752,11 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           readFile: versionReader(),
           environment: notarizationEnvironment,
           build,
+          prepareKeychainBinding: keychainBindingPreparer(),
           sealReleaseMetadata,
           verifyBaselineApplication: baselineVerifier(),
-          verifyKeychainHelper: keychainHelperVerifier(),
+          verifyKeychainBinding: keychainBindingVerifier(),
+          verifyElectronFuses: electronFusesVerifier(),
           verifyBackendSelection: backendSelectionVerifier(),
           verifyPackageLayout,
         },
@@ -710,7 +772,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
     const sealReleaseMetadata = vi.fn(async () => {});
     const notarize = vi.fn(async () => {});
     const verifyIdentityContinuity = vi.fn(async () => verifiedLooseIdentity);
-    const failure = new Error("bundled keychain helper refused the capability probe");
+    const failure = new Error("bundled keychain binding refused the capability probe");
     const verifyBackendSelection = vi.fn(async () => {
       throw failure;
     });
@@ -727,18 +789,23 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           readFile: versionReader(),
           environment: notarizationEnvironment,
           build,
+          prepareKeychainBinding: keychainBindingPreparer(),
           sealReleaseMetadata,
           notarize,
           verifyBaselineApplication: baselineVerifier(),
           verifyPackageLayout: vi.fn(async () => {}),
-          verifyKeychainHelper: keychainHelperVerifier(),
+          verifyKeychainBinding: keychainBindingVerifier(),
+          verifyElectronFuses: electronFusesVerifier(),
           verifyBackendSelection,
           verifyIdentityContinuity,
         },
       ),
     ).rejects.toBe(failure);
     expect(verifyBackendSelection).toHaveBeenCalledOnce();
-    expect(verifyIdentityContinuity).not.toHaveBeenCalled();
+    expect(verifyIdentityContinuity).toHaveBeenCalledOnce();
+    expect(verifyIdentityContinuity.mock.invocationCallOrder[0]).toBeLessThan(
+      verifyBackendSelection.mock.invocationCallOrder[0]!,
+    );
     expect(notarize).not.toHaveBeenCalled();
     expect(sealReleaseMetadata).not.toHaveBeenCalled();
   });
@@ -772,11 +839,13 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           readFile: versionReader(),
           environment: notarizationEnvironment,
           build,
+          prepareKeychainBinding: keychainBindingPreparer(),
           executeFile,
           notarize,
           sealReleaseMetadata,
           verifyBaselineApplication: baselineVerifier(),
-          verifyKeychainHelper: keychainHelperVerifier(),
+          verifyKeychainBinding: keychainBindingVerifier(),
+          verifyElectronFuses: electronFusesVerifier(),
           verifyBackendSelection: backendSelectionVerifier(),
           verifyPackageLayout,
           verifyIdentityContinuity,
@@ -971,6 +1040,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
     const verifyReleaseArtifacts = vi.fn(async (artifactDirectory: string) =>
       verifiedReleaseArtifactsAt(artifactDirectory),
     );
+    const verifyBackendSelection = backendSelectionVerifier();
 
     await expect(
       runMacosRelease(
@@ -985,10 +1055,12 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           readFile: versionReader(),
           environment: notarizationEnvironment,
           build,
+          prepareKeychainBinding: keychainBindingPreparer(),
           sealReleaseMetadata,
           verifyBaselineApplication: baselineVerifier(),
-          verifyKeychainHelper: keychainHelperVerifier(),
-          verifyBackendSelection: backendSelectionVerifier(),
+          verifyKeychainBinding: keychainBindingVerifier(),
+          verifyElectronFuses: electronFusesVerifier(),
+          verifyBackendSelection,
           verifyPackageLayout,
           verifyIdentityContinuity,
           notarize,
@@ -998,6 +1070,7 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
       ),
     ).rejects.toBe(failure);
     expect(verifyIdentityContinuity).toHaveBeenCalledOnce();
+    expect(verifyBackendSelection).not.toHaveBeenCalled();
     expect(notarize).not.toHaveBeenCalled();
     expect(promoteReleaseEnvelope).not.toHaveBeenCalled();
     expect(verifyReleaseArtifacts).not.toHaveBeenCalled();
@@ -1028,8 +1101,10 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           readFile: versionReader(),
           environment: notarizationEnvironment,
           build,
+          prepareKeychainBinding: keychainBindingPreparer(),
           verifyBaselineApplication: baselineVerifier(),
-          verifyKeychainHelper: keychainHelperVerifier(),
+          verifyKeychainBinding: keychainBindingVerifier(),
+          verifyElectronFuses: electronFusesVerifier(),
           verifyBackendSelection: backendSelectionVerifier(),
           verifyPackageLayout,
           verifyIdentityContinuity,
@@ -1105,8 +1180,10 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
         readFile: versionReader(),
         environment: notarizationEnvironment,
         build: vi.fn(async () => []),
+        prepareKeychainBinding: keychainBindingPreparer(),
         verifyBaselineApplication: baselineVerifier(),
-        verifyKeychainHelper: keychainHelperVerifier(),
+        verifyKeychainBinding: keychainBindingVerifier(),
+        verifyElectronFuses: electronFusesVerifier(),
         verifyBackendSelection: backendSelectionVerifier(),
         verifyPackageLayout: vi.fn(async () => {}),
         verifyIdentityContinuity,
@@ -1169,8 +1246,10 @@ describe.skipIf(process.platform === "win32")("macOS release plan", () => {
           readFile: versionReader(),
           environment: notarizationEnvironment,
           build: vi.fn(async () => []),
+          prepareKeychainBinding: keychainBindingPreparer(),
           verifyBaselineApplication: baselineVerifier(),
-          verifyKeychainHelper: keychainHelperVerifier(),
+          verifyKeychainBinding: keychainBindingVerifier(),
+          verifyElectronFuses: electronFusesVerifier(),
           verifyBackendSelection: backendSelectionVerifier(),
           verifyPackageLayout: vi.fn(async () => {}),
           verifyIdentityContinuity: vi.fn(async () => verifiedLooseIdentity),

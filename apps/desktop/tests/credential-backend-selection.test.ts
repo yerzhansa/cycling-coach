@@ -27,10 +27,10 @@ import {
   KEYCHAIN_CREDENTIAL_SERVICE,
   KEYCHAIN_KEY_BYTES,
   KEYCHAIN_TEAM_IDENTIFIER,
-  type KeychainHelperRequest,
-  type KeychainHelperResponse,
-  type KeychainHelperTransport,
-} from "../src/main/keychain-helper.js";
+  type KeychainBindingRequest,
+  type KeychainBindingResponse,
+  type KeychainBindingTransport,
+} from "../src/main/keychain-binding.js";
 import {
   TELEGRAM_PROFILE_FILE_NAME,
   createTelegramCredentialVault,
@@ -39,7 +39,7 @@ import {
 const fixtureRoots: string[] = [];
 const posixIt = it.skipIf(process.platform === "win32");
 const BOT = { id: 123456, username: "synthetic_bot" } as const;
-const PROBE_OK: KeychainHelperResponse = {
+const PROBE_OK: KeychainBindingResponse = {
   ok: true,
   op: "probe",
   teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER,
@@ -75,13 +75,13 @@ function safeStorage(): CredentialEncryptionPort {
   };
 }
 
-interface RecordingTransport extends KeychainHelperTransport {
-  readonly requests: KeychainHelperRequest[];
+interface RecordingTransport extends KeychainBindingTransport {
+  readonly requests: KeychainBindingRequest[];
 }
 
-function transportOf(...responses: readonly KeychainHelperResponse[]): RecordingTransport {
+function transportOf(...responses: readonly KeychainBindingResponse[]): RecordingTransport {
   const remaining = [...responses];
-  const requests: KeychainHelperRequest[] = [];
+  const requests: KeychainBindingRequest[] = [];
   return {
     requests,
     send(request) {
@@ -93,8 +93,8 @@ function transportOf(...responses: readonly KeychainHelperResponse[]): Recording
   };
 }
 
-function readKey(key: Buffer): KeychainHelperResponse {
-  return { ok: true, op: "read-key", key: key.toString("base64") };
+function readKey(key: Buffer): KeychainBindingResponse {
+  return { ok: true, op: "read-key", key };
 }
 
 async function keychainEncryption(key: Buffer): Promise<CredentialEncryptionPort> {
@@ -113,7 +113,7 @@ async function keychainEncryption(key: Buffer): Promise<CredentialEncryptionPort
 
 function selection(
   roots: Fixture,
-  transport: KeychainHelperTransport,
+  transport: KeychainBindingTransport,
 ): SelectDesktopCredentialBackendOptions {
   return {
     credentialRoot: roots.credentialRoot,
@@ -293,7 +293,7 @@ describe("backend selection", () => {
         PROBE_OK,
         { ok: false, code: "item-not-found" },
         { ok: false, code: "item-not-found" },
-        { ok: true, op: "create-key", key: replacement.toString("base64") },
+        { ok: true, op: "create-key", key: replacement },
       );
       const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
       const options = {

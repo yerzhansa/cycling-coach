@@ -4,10 +4,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { createPackage, createPackageWithOptions } from "@electron/asar";
+import { createPackageWithOptions } from "@electron/asar";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEVELOPMENT_PACKAGE_NAME } from "../scripts/development-package-plan.mjs";
-import { KEYCHAIN_HELPER_RESOURCE_PATH } from "../scripts/package-inventory.mjs";
+import {
+  KEYCHAIN_BINDING_ASAR_PATH,
+  KEYCHAIN_BINDING_FUSE_CONFIGURATION,
+} from "../scripts/package-inventory.mjs";
 import { readBuilderAuthority, verifyPackageLayout } from "../scripts/verify-package-layout.mjs";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -139,15 +142,15 @@ function checksum(bytes: Buffer): Buffer {
   return Buffer.from(`${createHash("sha256").update(bytes).digest("hex")}  matrix.json\n`);
 }
 
-const stagedHelperUuid = "00112233445566778899aabbccddeeff";
+const stagedBindingUuid = "00112233445566778899aabbccddeeff";
 
-function machoExecutable(uuid: string, signatureBytes = 512, payload = "synthetic helper"): Buffer {
+function machoBundle(uuid: string, signatureBytes = 512, payload = "synthetic binding"): Buffer {
   const signatureOffset = 8_192;
   const bytes = Buffer.alloc(signatureOffset + signatureBytes);
   bytes.writeUInt32LE(0xfeed_facf, 0);
   bytes.writeUInt32LE(0x0100_000c, 4);
   bytes.writeUInt32LE(0, 8);
-  bytes.writeUInt32LE(2, 12);
+  bytes.writeUInt32LE(8, 12);
   bytes.writeUInt32LE(3, 16);
   bytes.writeUInt32LE(112, 20);
   bytes.writeUInt32LE(0x1b, 32);
@@ -176,6 +179,12 @@ function builderYaml(
     "appId: icu.enduragent.desktop",
     "productName: Enduragent",
     "asar: true",
+    "asarUnpack:",
+    `  - ${KEYCHAIN_BINDING_ASAR_PATH}`,
+    "electronFuses:",
+    ...Object.entries(KEYCHAIN_BINDING_FUSE_CONFIGURATION).map(
+      ([name, value]) => `  ${name}: ${String(value)}`,
+    ),
     "electronLanguages:",
     "  - en-US",
     "directories:",
@@ -203,11 +212,11 @@ function builderYaml(
 type SyntheticPackage = {
   app: string;
   archiveSource: string;
+  bindingPackaged: string;
+  bindingSource: string;
   desktop: string;
   externalPackaged: string;
   externalSource: string;
-  helperPackaged: string;
-  helperSource: string;
   resources: string;
   rebuild: () => Promise<void>;
   writeArchive: (path: string, bytes?: string | Buffer) => Promise<void>;
@@ -223,8 +232,12 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
   const asarSource = join(desktop, "dist/self-test-asar");
   const externalSource = join(desktop, "dist/extra-resources");
   const externalPackaged = join(resources, "self-test");
-  const helperSource = join(externalSource, KEYCHAIN_HELPER_RESOURCE_PATH);
-  const helperPackaged = join(resources, KEYCHAIN_HELPER_RESOURCE_PATH);
+  const bindingSource = join(asarSource, KEYCHAIN_BINDING_ASAR_PATH);
+  const bindingPackaged = join(
+    resources,
+    "app.asar.unpacked",
+    KEYCHAIN_BINDING_ASAR_PATH,
+  );
   const matrix = Buffer.from('{"schemaVersion":1}\n');
   const matrixChecksum = checksum(matrix);
 
@@ -234,13 +247,11 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
     mkdir(archiveSource, { recursive: true }),
     mkdir(join(asarSource, "resources/self-test"), { recursive: true }),
     mkdir(join(externalSource, "self-test"), { recursive: true }),
-    mkdir(dirname(helperSource), { recursive: true }),
-    mkdir(dirname(helperPackaged), { recursive: true }),
+    mkdir(dirname(bindingSource), { recursive: true }),
     mkdir(desktop, { recursive: true }),
   ]);
   await Promise.all([
-    writeFile(helperSource, machoExecutable(stagedHelperUuid)),
-    writeFile(helperPackaged, machoExecutable(stagedHelperUuid)),
+    writeFile(bindingSource, machoBundle(stagedBindingUuid)),
     writeFile(join(desktop, "electron-builder.yml"), builderYaml()),
     writeFile(join(desktop, "package.json"), sourceManifestBytes),
     writeFile(join(resources, "icon.icns"), "synthetic icon"),
@@ -270,6 +281,7 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
     writeArchive("out/renderer/index.html", "<!doctype html>\n"),
     writeArchive("out/renderer/tray.html", "<!doctype html>\n"),
     writeArchive("package.json", sourceManifestBytes),
+    writeArchive(KEYCHAIN_BINDING_ASAR_PATH, machoBundle(stagedBindingUuid)),
     writeArchive("resources/self-test/matrix.json", matrix),
     writeArchive("resources/self-test/matrix.sha256", matrixChecksum),
     ...telegramRuntimePackages.flatMap((runtimePackage) => [
@@ -290,7 +302,10 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
 
   const rebuild = async (): Promise<void> => {
     await rm(join(resources, "app.asar"), { force: true });
-    const archive = await createPackage(archiveSource, join(resources, "app.asar"));
+    await rm(join(resources, "app.asar.unpacked"), { force: true, recursive: true });
+    const archive = await createPackageWithOptions(archiveSource, join(resources, "app.asar"), {
+      unpack: join(archiveSource, KEYCHAIN_BINDING_ASAR_PATH),
+    });
     await finished(archive);
   };
   await rebuild();
@@ -298,11 +313,11 @@ async function syntheticPackage(): Promise<SyntheticPackage> {
   return {
     app,
     archiveSource,
+    bindingPackaged,
+    bindingSource,
     desktop,
     externalPackaged,
     externalSource,
-    helperPackaged,
-    helperSource,
     resources,
     rebuild,
     writeArchive,
@@ -985,7 +1000,7 @@ describe("desktop package layout", () => {
 
     const unpacked = await syntheticPackage();
     const unpackedRoot = join(unpacked.resources, "app.asar.unpacked");
-    await mkdir(unpackedRoot);
+    await mkdir(unpackedRoot, { recursive: true });
     const unpackedSymlinkCapabilityReason = await createSymlinkOrReturnWindowsCapabilityReason(
       unpackedRoot,
       join(unpackedRoot, "loop"),
@@ -996,42 +1011,75 @@ describe("desktop package layout", () => {
     ).rejects.toThrow("symbolic links are forbidden");
   });
 
-  it("accepts a packaged keychain helper re-signed after staging", async () => {
+  it("accepts a packaged keychain binding re-signed after ASAR staging", async () => {
     const fixture = await syntheticPackage();
-    await writeFile(fixture.helperPackaged, machoExecutable(stagedHelperUuid, 4_096));
+    await writeFile(fixture.bindingPackaged, machoBundle(stagedBindingUuid, 4_096));
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
     ).resolves.toBeUndefined();
   });
 
   it.each([
-    ["built from a different image", machoExecutable("ffeeddccbbaa99887766554433221100")],
-    ["patched outside its code signature", machoExecutable(stagedHelperUuid, 4_096, "patched")],
-  ])("rejects a packaged keychain helper %s", async (_label, replacement) => {
+    ["built from a different image", machoBundle("ffeeddccbbaa99887766554433221100")],
+    ["patched outside its code signature", machoBundle(stagedBindingUuid, 4_096, "patched")],
+  ])("rejects a packaged keychain binding %s", async (_label, replacement) => {
     const fixture = await syntheticPackage();
-    await writeFile(fixture.helperPackaged, replacement);
+    await writeFile(fixture.bindingPackaged, replacement);
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
-    ).rejects.toThrow("packaged external executable differs from staging");
+    ).rejects.toThrow("packaged keychain binding differs from staging");
   });
 
-  it("rejects a packaged keychain helper that is not a Mach-O executable", async () => {
+  it("rejects a packaged keychain binding that is not a Mach-O bundle", async () => {
     const fixture = await syntheticPackage();
-    await writeFile(fixture.helperPackaged, Buffer.alloc(8_192, 0x61));
+    await writeFile(fixture.bindingPackaged, Buffer.alloc(8_192, 0x61));
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
-    ).rejects.toThrow("expected a 64-bit little-endian Mach-O executable");
+    ).rejects.toThrow("expected a 64-bit little-endian Mach-O bundle");
   });
 
-  it("rejects a package that stages no keychain helper at all", async () => {
+  it("rejects a keychain binding built as MH_EXECUTE instead of MH_BUNDLE", async () => {
     const fixture = await syntheticPackage();
+    const executable = machoBundle(stagedBindingUuid);
+    executable.writeUInt32LE(2, 12);
+    await writeFile(fixture.bindingPackaged, executable);
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("unsupported Mach-O bundle architecture");
+  });
+
+  it("rejects a package that stages no keychain binding source", async () => {
+    const fixture = await syntheticPackage();
+    await rm(fixture.bindingSource);
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("keychain binding staging source is missing");
+  });
+
+  it("rejects a package whose ASAR declares no unpacked keychain binding", async () => {
+    const fixture = await syntheticPackage();
+    await rm(join(fixture.archiveSource, KEYCHAIN_BINDING_ASAR_PATH));
+    await fixture.rebuild();
+    await expect(
+      verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow("declared keychain binding is missing or packed");
+  });
+
+  it("rejects the retired external keychain helper", async () => {
+    const fixture = await syntheticPackage();
+    const retiredSource = join(fixture.externalSource, "keychain/keychain-helper");
+    const retiredPackaged = join(fixture.resources, "keychain/keychain-helper");
     await Promise.all([
-      rm(dirname(fixture.helperSource), { recursive: true }),
-      rm(dirname(fixture.helperPackaged), { recursive: true }),
+      mkdir(dirname(retiredSource), { recursive: true }),
+      mkdir(dirname(retiredPackaged), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(retiredSource, "retired helper\n"),
+      writeFile(retiredPackaged, "retired helper\n"),
     ]);
     await expect(
       verifyPackageLayout(fixture.app, { desktopRoot: fixture.desktop }),
-    ).rejects.toThrow("external keychain helper is missing");
+    ).rejects.toThrow("forbidden retired keychain helper");
   });
 
   it("keeps the external runner out of app.asar", async () => {

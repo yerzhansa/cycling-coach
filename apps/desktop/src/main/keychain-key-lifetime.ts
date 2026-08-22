@@ -4,13 +4,13 @@ import {
 } from "./credential-envelope-inventory.js";
 import type { CredentialEnvelopeLockProof } from "./credential-envelope-lock.js";
 import type { KeychainKeyDeletion } from "./keychain-credential-encryption.js";
-import type { KeychainHelperErrorCode } from "./keychain-helper.js";
+import type { KeychainBindingErrorCode } from "./keychain-binding.js";
 
 export type KeychainKeyRetirement =
   | Readonly<{ status: "retained"; envelopes: number }>
   | Readonly<{ status: "deleted" }>
   | Readonly<{ status: "already-absent" }>
-  | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>;
+  | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>;
 
 export interface RetireKeychainKeyOptions extends CredentialEnvelopeRoots {
   readonly lockProof: CredentialEnvelopeLockProof;

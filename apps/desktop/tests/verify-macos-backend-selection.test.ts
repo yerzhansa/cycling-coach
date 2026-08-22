@@ -1,164 +1,163 @@
-import { describe, expect, it, vi, type Mock } from "vitest";
-import { KEYCHAIN_HELPER_RESOURCE_PATH } from "../scripts/package-inventory.mjs";
+import { describe, expect, it, vi } from "vitest";
+import { KEYCHAIN_BINDING_ASAR_PATH } from "../scripts/package-inventory.mjs";
 import {
+  BACKEND_SELECTION_BACKEND,
+  BACKEND_SELECTION_OUTPUT_PREFIX,
   BACKEND_SELECTION_SERVICE,
   BACKEND_SELECTION_TEAM_IDENTIFIER,
-  backendSelectionProbeRequest,
-  safeMacosBackendSelectionMessage,
   verifyMacosBackendSelection,
 } from "../scripts/verify-macos-backend-selection.mjs";
 
-const application = "/synthetic/dist/mac-arm64/Enduragent.app";
-const helper = `${application}/Contents/Resources/${KEYCHAIN_HELPER_RESOURCE_PATH}`;
-const signedHelper = Object.freeze({
-  teamIdentifier: "FA494ACVTF",
-  designatedRequirement: 'identifier "keychain-helper" and anchor apple generic',
+const application = "/synthetic/Enduragent.app";
+const binding = `${application}/Contents/Resources/app.asar.unpacked/${KEYCHAIN_BINDING_ASAR_PATH}`;
+const signature: Readonly<{
+  teamIdentifier: string;
+  designatedRequirement: string;
+}> = Object.freeze({
+  teamIdentifier: BACKEND_SELECTION_TEAM_IDENTIFIER,
+  designatedRequirement: 'identifier "keychain-binding" and anchor apple generic',
 });
 
-function probeAnswer(payload: unknown) {
-  return vi.fn(async () => `${JSON.stringify(payload)}\n`);
-}
-
-interface HelperOverrides {
-  readonly requireHelper: Mock;
-  readonly verifyKeychainHelper: Mock;
-  readonly runHelper: Mock;
-}
-
-function overrides(extra: Partial<HelperOverrides> = {}): HelperOverrides {
+function dependencies() {
   return {
-    requireHelper: vi.fn(async () => {}),
-    verifyKeychainHelper: vi.fn(async () => signedHelper),
-    runHelper: probeAnswer({
-      ok: true,
-      op: "probe",
-      teamIdentifier: BACKEND_SELECTION_TEAM_IDENTIFIER,
-    }),
-    ...extra,
+    requireBinding: vi.fn(async () => {}),
+    verifyKeychainBinding: vi.fn(async () => signature),
+    runApplication: vi.fn(async () => ({
+      code: 0,
+      signal: null,
+      stdout: `${BACKEND_SELECTION_OUTPUT_PREFIX}${JSON.stringify({
+        backend: BACKEND_SELECTION_BACKEND,
+        teamIdentifier: BACKEND_SELECTION_TEAM_IDENTIFIER,
+      })}\n`,
+      stderr: "",
+    })),
+    mkdtemp: vi.fn(async () => "/synthetic/probe-data"),
+    rm: vi.fn(async () => {}),
   };
 }
 
 describe("macOS backend selection verification", () => {
-  it("probes the bundled helper only after its signature is verified", async () => {
-    const dependencies = overrides();
-
-    const verified = await verifyMacosBackendSelection(application, dependencies);
-
-    expect(verified).toEqual({
-      helper,
+  it("verifies the nested binding before probing through the signed application", async () => {
+    const injected = dependencies();
+    await expect(verifyMacosBackendSelection(application, injected)).resolves.toEqual({
+      binding,
       service: BACKEND_SELECTION_SERVICE,
+      backend: BACKEND_SELECTION_BACKEND,
       teamIdentifier: BACKEND_SELECTION_TEAM_IDENTIFIER,
-      designatedRequirement: signedHelper.designatedRequirement,
+      designatedRequirement: signature.designatedRequirement,
     });
-    expect(Object.isFrozen(verified)).toBe(true);
-    expect(dependencies.requireHelper).toHaveBeenCalledWith(helper);
-    expect(dependencies.verifyKeychainHelper).toHaveBeenCalledWith(application);
-    expect(dependencies.runHelper).toHaveBeenCalledWith(helper, backendSelectionProbeRequest());
-    expect(dependencies.requireHelper.mock.invocationCallOrder[0]).toBeLessThan(
-      dependencies.verifyKeychainHelper.mock.invocationCallOrder[0]!,
+    expect(injected.requireBinding).toHaveBeenCalledWith(binding);
+    expect(injected.verifyKeychainBinding).toHaveBeenCalledWith(application);
+    expect(injected.runApplication).toHaveBeenCalledWith(
+      `${application}/Contents/MacOS/Enduragent`,
+      "/synthetic/probe-data",
     );
-    expect(dependencies.verifyKeychainHelper.mock.invocationCallOrder[0]).toBeLessThan(
-      dependencies.runHelper.mock.invocationCallOrder[0]!,
+    expect(injected.verifyKeychainBinding.mock.invocationCallOrder[0]).toBeLessThan(
+      injected.runApplication.mock.invocationCallOrder[0]!,
     );
+    expect(injected.rm).toHaveBeenCalledWith("/synthetic/probe-data", {
+      recursive: true,
+      force: true,
+    });
   });
 
-  it("asks the helper for a read-only probe of the signed-release service", () => {
-    expect(JSON.parse(backendSelectionProbeRequest())).toEqual({
-      op: "probe",
-      service: "icu.enduragent.desktop",
-    });
-    expect(backendSelectionProbeRequest().endsWith("\n")).toBe(true);
-  });
-
-  it("refuses a relative application path before touching the bundle", async () => {
-    const dependencies = overrides();
-
-    await expect(
-      verifyMacosBackendSelection("dist/mac-arm64/Enduragent.app", dependencies),
-    ).rejects.toThrow("application path must be absolute");
-    expect(dependencies.requireHelper).not.toHaveBeenCalled();
-  });
-
-  it("stops when the bundled helper is absent", async () => {
-    const dependencies = overrides({
-      requireHelper: vi.fn(async () => {
-        throw new Error("bundled keychain helper is missing");
-      }),
-    });
-
-    await expect(verifyMacosBackendSelection(application, dependencies)).rejects.toThrow(
-      "bundled keychain helper is missing",
+  it("never launches an unverified or foreign-team binding", async () => {
+    const missingBinding = dependencies();
+    missingBinding.requireBinding.mockRejectedValueOnce(new Error("missing binding"));
+    await expect(verifyMacosBackendSelection(application, missingBinding)).rejects.toThrow(
+      "missing binding",
     );
-    expect(dependencies.verifyKeychainHelper).not.toHaveBeenCalled();
-    expect(dependencies.runHelper).not.toHaveBeenCalled();
-  });
+    expect(missingBinding.verifyKeychainBinding).not.toHaveBeenCalled();
+    expect(missingBinding.runApplication).not.toHaveBeenCalled();
 
-  it("never probes a helper whose signature verification fails", async () => {
-    const dependencies = overrides({
-      verifyKeychainHelper: vi.fn(async () => {
-        throw new Error("macOS keychain helper signing identity is invalid");
-      }),
-    });
-
-    await expect(verifyMacosBackendSelection(application, dependencies)).rejects.toThrow(
-      "macOS keychain helper signing identity is invalid",
+    const invalidSignature = dependencies();
+    invalidSignature.verifyKeychainBinding.mockRejectedValueOnce(new Error("invalid signature"));
+    await expect(verifyMacosBackendSelection(application, invalidSignature)).rejects.toThrow(
+      "invalid signature",
     );
-    expect(dependencies.runHelper).not.toHaveBeenCalled();
-  });
+    expect(invalidSignature.runApplication).not.toHaveBeenCalled();
 
-  it("rejects a helper signed by another team", async () => {
-    const dependencies = overrides({
-      verifyKeychainHelper: vi.fn(async () => ({ ...signedHelper, teamIdentifier: "ZZZZZZZZZZ" })),
+    const foreign = dependencies();
+    foreign.verifyKeychainBinding.mockResolvedValueOnce({
+      ...signature,
+      teamIdentifier: "ZZZZZZZZZZ",
     });
-
-    await expect(verifyMacosBackendSelection(application, dependencies)).rejects.toThrow(
-      "bundled keychain helper signing identity is invalid",
+    await expect(verifyMacosBackendSelection(application, foreign)).rejects.toThrow(
+      "bundled keychain binding signing identity is invalid",
     );
-    expect(dependencies.runHelper).not.toHaveBeenCalled();
-  });
-
-  it("rejects a refused capability probe", async () => {
-    const dependencies = overrides({
-      runHelper: probeAnswer({ ok: false, code: "not-team-signed" }),
-    });
-
-    await expect(verifyMacosBackendSelection(application, dependencies)).rejects.toThrow(
-      "bundled keychain helper refused the capability probe",
-    );
-  });
-
-  it("rejects a probe answering another team identifier", async () => {
-    const dependencies = overrides({
-      runHelper: probeAnswer({ ok: true, op: "probe", teamIdentifier: "ZZZZZZZZZZ" }),
-    });
-
-    await expect(verifyMacosBackendSelection(application, dependencies)).rejects.toThrow(
-      "bundled keychain helper reported an unexpected team identifier",
-    );
+    expect(foreign.runApplication).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["", "bundled keychain helper answered nothing"],
-    ["not json", "bundled keychain helper answered malformed JSON"],
-    ["[]", "bundled keychain helper answered malformed JSON"],
-    ['{"ok":true,"op":"read-key","key":"AA=="}', "bundled keychain helper refused the capability"],
-  ])("rejects the probe answer %j", async (line, message) => {
-    const dependencies = overrides({ runHelper: vi.fn(async () => line) });
-
-    await expect(verifyMacosBackendSelection(application, dependencies)).rejects.toThrow(message);
+    { code: 1, signal: null, stdout: "", stderr: "refused" },
+    { code: 0, signal: null, stdout: "malformed\n", stderr: "" },
+    {
+      code: 0,
+      signal: null,
+      stdout: `${BACKEND_SELECTION_OUTPUT_PREFIX}${JSON.stringify({
+        backend: BACKEND_SELECTION_BACKEND,
+        teamIdentifier: "OTHER",
+      })}\n`,
+      stderr: "",
+    },
+    {
+      code: 0,
+      signal: null,
+      stdout: `${BACKEND_SELECTION_OUTPUT_PREFIX}${JSON.stringify({
+        backend: "safe_storage",
+        teamIdentifier: BACKEND_SELECTION_TEAM_IDENTIFIER,
+      })}\n`,
+      stderr: "",
+    },
+    {
+      code: 0,
+      signal: null,
+      stdout: `${BACKEND_SELECTION_OUTPUT_PREFIX}${JSON.stringify({
+        backend: BACKEND_SELECTION_BACKEND,
+        teamIdentifier: BACKEND_SELECTION_TEAM_IDENTIFIER,
+        extra: true,
+      })}\n`,
+      stderr: "",
+    },
+    {
+      code: 0,
+      signal: null,
+      stdout: `${BACKEND_SELECTION_OUTPUT_PREFIX}${JSON.stringify({
+        teamIdentifier: BACKEND_SELECTION_TEAM_IDENTIFIER,
+      })}\n`,
+      stderr: "",
+    },
+    {
+      code: 0,
+      signal: null,
+      stdout: `${BACKEND_SELECTION_OUTPUT_PREFIX}${JSON.stringify({
+        backend: BACKEND_SELECTION_BACKEND,
+      })}\n`,
+      stderr: "",
+    },
+    {
+      code: 0,
+      signal: null,
+      stdout: `${BACKEND_SELECTION_OUTPUT_PREFIX}${JSON.stringify({
+        teamIdentifier: BACKEND_SELECTION_TEAM_IDENTIFIER,
+        backend: BACKEND_SELECTION_BACKEND,
+      })}\n`,
+      stderr: "",
+    },
+  ])("rejects a failed or malformed signed-app probe", async (answer) => {
+    const injected = dependencies();
+    injected.runApplication.mockResolvedValueOnce(answer);
+    await expect(verifyMacosBackendSelection(application, injected)).rejects.toThrow(
+      /signed application keychain binding probe/u,
+    );
+    expect(injected.rm).toHaveBeenCalledOnce();
   });
 
-  it("names its own failures and stays silent about foreign errors", async () => {
-    const dependencies = overrides({
-      runHelper: probeAnswer({ ok: false, code: "keychain-locked" }),
-    });
-    const failure = await verifyMacosBackendSelection(application, dependencies).catch(
-      (error: unknown) => error,
+  it("rejects a relative app before inspecting files", async () => {
+    const injected = dependencies();
+    await expect(verifyMacosBackendSelection("relative.app", injected)).rejects.toThrow(
+      "application path must be absolute",
     );
-
-    expect(safeMacosBackendSelectionMessage(failure)).toBe(
-      "bundled keychain helper refused the capability probe",
-    );
-    expect(safeMacosBackendSelectionMessage(new Error("something else"))).toBeUndefined();
+    expect(injected.requireBinding).not.toHaveBeenCalled();
   });
 });

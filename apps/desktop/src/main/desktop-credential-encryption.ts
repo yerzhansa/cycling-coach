@@ -1,5 +1,3 @@
-import { constants } from "node:fs";
-import { access } from "node:fs/promises";
 import {
   selectDesktopCredentialBackend,
   selectDesktopCredentialBackendLocked,
@@ -21,18 +19,18 @@ import {
 import {
   KEYCHAIN_CREDENTIAL_SERVICE,
   KEYCHAIN_CREDENTIAL_SERVICE_DEV,
-  createKeychainHelperTransport,
-  type KeychainHelperErrorCode,
-  type KeychainHelperResponse,
-  type KeychainHelperTransport,
-} from "./keychain-helper.js";
-import { resolveKeychainHelperPath, type KeychainHelperLocation } from "./keychain-helper-path.js";
+  createKeychainBindingTransport,
+  type KeychainBindingErrorCode,
+  type KeychainBindingResponse,
+  type KeychainBindingTransport,
+} from "./keychain-binding.js";
+import { resolveKeychainBindingPath, type KeychainBindingLocation } from "./keychain-binding-path.js";
 import {
   retireKeychainKeyWhenLastEnvelopeGone,
   type KeychainKeyRetirement,
 } from "./keychain-key-lifetime.js";
 
-const UNAVAILABLE_HELPER_RESPONSE: KeychainHelperResponse = Object.freeze({
+const UNAVAILABLE_BINDING_RESPONSE: KeychainBindingResponse = Object.freeze({
   ok: false,
   code: "not-team-signed",
 });
@@ -56,44 +54,31 @@ export interface DesktopCredentialEncryption {
 }
 
 export interface PrepareDesktopCredentialEncryptionOptions extends CredentialEnvelopeRoots {
-  readonly location: KeychainHelperLocation;
+  readonly location: KeychainBindingLocation;
   readonly safeStorage: CredentialEncryptionPort;
-  readonly createTransport?: (helperPath: string) => KeychainHelperTransport;
-  readonly helperIsExecutable?: (helperPath: string) => Promise<boolean>;
+  readonly createTransport?: (bindingPath: string) => KeychainBindingTransport;
   readonly serializeEnvelopeMutation: SerializeCredentialEnvelopeMutation;
-}
-
-async function helperIsExecutableFile(helperPath: string): Promise<boolean> {
-  try {
-    await access(helperPath, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function prepareDesktopCredentialEncryption(
   options: PrepareDesktopCredentialEncryptionOptions,
 ): Promise<DesktopCredentialEncryption> {
   const service = desktopKeychainCredentialService(options.location.packaged);
-  const helperPath = resolveKeychainHelperPath(options.location);
+  const bindingPath = resolveKeychainBindingPath(options.location);
   const roots = {
     credentialRoot: options.credentialRoot,
     telegramRoot: options.telegramRoot,
     readEnvelopeFile: options.readEnvelopeFile,
     readEnvelopeDirectory: options.readEnvelopeDirectory,
   };
-  let transport: KeychainHelperTransport = { send: async () => UNAVAILABLE_HELPER_RESPONSE };
+  let transport: KeychainBindingTransport = { send: async () => UNAVAILABLE_BINDING_RESPONSE };
   let selection: DesktopCredentialBackendSelection;
   try {
-    const usableHelper =
-      helperPath !== undefined &&
-      (await (options.helperIsExecutable ?? helperIsExecutableFile)(helperPath));
-    if (usableHelper && helperPath !== undefined) {
+    if (bindingPath !== undefined) {
       transport = (
         options.createTransport ??
-        ((path: string) => createKeychainHelperTransport({ helperPath: path }))
-      )(helperPath);
+        ((path: string) => createKeychainBindingTransport({ bindingPath: path }))
+      )(bindingPath);
     }
     selection = await selectDesktopCredentialBackend({
       ...roots,
@@ -123,7 +108,7 @@ export async function prepareDesktopCredentialEncryption(
     getSelectedStorageBackend: () => currentEncryption.getSelectedStorageBackend?.() ?? "",
   };
   const transitionToUnavailable = (
-    code: KeychainHelperErrorCode,
+    code: KeychainBindingErrorCode,
     cleanupPending: boolean,
   ): void => {
     selection = {
@@ -231,17 +216,13 @@ export async function prepareDesktopCredentialEncryption(
                 status: response.deleted ? ("deleted" as const) : ("already-absent" as const),
               };
             });
-      refreshBeforeWrite = true;
-      keyCleanupPending = deleted.status === "failed";
-      const code = deleted.status === "failed" ? deleted.code : "item-not-found";
-      selection = {
-        status: "refused",
-        encryption: createRefusingKeychainEncryption(code, false),
-        reason: "encryption-unavailable",
-        code,
-        keyCleanupPending,
-      };
-      currentEncryption = selection.encryption;
+      if (deleted.status === "failed") {
+        transitionToUnavailable(deleted.code, true);
+        return deleted;
+      }
+      keyCleanupPending = false;
+      refreshBeforeWrite = false;
+      await refreshSelection(proof);
       return deleted;
     },
   };

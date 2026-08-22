@@ -18,10 +18,10 @@ import {
   KEYCHAIN_CREDENTIAL_SERVICE,
   KEYCHAIN_KEY_BYTES,
   KEYCHAIN_TEAM_IDENTIFIER,
-  type KeychainHelperRequest,
-  type KeychainHelperResponse,
-  type KeychainHelperTransport,
-} from "../src/main/keychain-helper.js";
+  type KeychainBindingRequest,
+  type KeychainBindingResponse,
+  type KeychainBindingTransport,
+} from "../src/main/keychain-binding.js";
 import { retireKeychainKeyWhenLastEnvelopeGone } from "../src/main/keychain-key-lifetime.js";
 import {
   TELEGRAM_PROFILE_FILE_NAME,
@@ -31,7 +31,7 @@ import {
 const fixtureRoots: string[] = [];
 const posixIt = it.skipIf(process.platform === "win32");
 const BOT = { id: 123456, username: "synthetic_bot" } as const;
-const PROBE_OK: KeychainHelperResponse = {
+const PROBE_OK: KeychainBindingResponse = {
   ok: true,
   op: "probe",
   teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER,
@@ -55,13 +55,13 @@ async function fixture(): Promise<Fixture> {
   };
 }
 
-interface RecordingTransport extends KeychainHelperTransport {
-  readonly requests: KeychainHelperRequest[];
+interface RecordingTransport extends KeychainBindingTransport {
+  readonly requests: KeychainBindingRequest[];
 }
 
-function transportOf(...responses: readonly KeychainHelperResponse[]): RecordingTransport {
+function transportOf(...responses: readonly KeychainBindingResponse[]): RecordingTransport {
   const remaining = [...responses];
-  const requests: KeychainHelperRequest[] = [];
+  const requests: KeychainBindingRequest[] = [];
   return {
     requests,
     send(request) {
@@ -80,7 +80,7 @@ async function keychainEncryption(): Promise<CredentialEncryptionPort> {
       transport: transportOf(PROBE_OK, {
         ok: true,
         op: "read-key",
-        key: randomBytes(KEYCHAIN_KEY_BYTES).toString("base64"),
+        key: randomBytes(KEYCHAIN_KEY_BYTES),
       }),
       service: KEYCHAIN_CREDENTIAL_SERVICE,
       envelopeCensus: { deletionBlockers: 1, keychainDependents: 1 },

@@ -2,7 +2,14 @@ import type { Stats } from "node:fs";
 
 export { contained } from "./package-plan.mjs";
 
-export const KEYCHAIN_HELPER_RESOURCE_PATH: "keychain/keychain-helper";
+export const KEYCHAIN_BINDING_ASAR_PATH: "native/keychain-binding.node";
+export const KEYCHAIN_BINDING_FUSE_CONFIGURATION: Readonly<{
+  readonly runAsNode: false;
+  readonly enableNodeOptionsEnvironmentVariable: false;
+  readonly enableNodeCliInspectArguments: false;
+  readonly enableEmbeddedAsarIntegrityValidation: true;
+  readonly onlyLoadAppFromAsar: true;
+}>;
 
 export interface BuilderAuthority {
   readonly asarSourceRoot: string;
@@ -51,6 +58,7 @@ export interface UnpackedTreeLabels {
 }
 
 export interface ManifestValidationOptions {
+  readonly macos?: boolean;
   readonly development?: boolean;
   readonly developmentPackageName?: string;
   readonly release?: {
@@ -125,6 +133,7 @@ export function validateUnpackedTree(
 ): Promise<void>;
 
 export function machoExecutableIdentity(bytes: Buffer, label: string): MachoExecutableIdentity;
+export function machoBundleIdentity(bytes: Buffer, label: string): MachoExecutableIdentity;
 
 export function compareStagedTree(
   expected: ReadonlyMap<string, PackageTreeEntry>,

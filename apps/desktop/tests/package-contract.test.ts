@@ -5,6 +5,7 @@ import { finished } from "node:stream/promises";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  KEYCHAIN_BINDING_ASAR_PATH,
   assertExactResourceNames,
   assertNoReservedResourceNames,
   collectAsar,
@@ -15,6 +16,7 @@ import {
   forbiddenPathReason,
   inspectContents,
   inspectPath,
+  machoBundleIdentity,
   machoExecutableIdentity,
   outputChild,
   parseManifest,
@@ -70,6 +72,7 @@ const syntheticUuid = "0123456789abcdeffedcba9876543210";
 
 function machoExecutable(
   options: {
+    readonly fileType?: number;
     readonly uuid?: string;
     readonly signatureBytes?: number;
     readonly payload?: string;
@@ -81,7 +84,7 @@ function machoExecutable(
   bytes.writeUInt32LE(0xfeed_facf, 0);
   bytes.writeUInt32LE(0x0100_000c, 4);
   bytes.writeUInt32LE(0, 8);
-  bytes.writeUInt32LE(2, 12);
+  bytes.writeUInt32LE(options.fileType ?? 2, 12);
   bytes.writeUInt32LE(3, 16);
   bytes.writeUInt32LE(112, 20);
   bytes.writeUInt32LE(0x1b, 32);
@@ -100,6 +103,16 @@ function machoExecutable(
   bytes.write(options.payload ?? "synthetic image", 1_024, "latin1");
   bytes.fill(0x5a, signatureOffset);
   return bytes;
+}
+
+function machoBundle(
+  options: {
+    readonly uuid?: string;
+    readonly signatureBytes?: number;
+    readonly payload?: string;
+  } = {},
+): Buffer {
+  return machoExecutable({ ...options, fileType: 8 });
 }
 
 function asarFile(bytes: string, unpacked = false): AsarTreeEntry {
@@ -221,6 +234,7 @@ describe("shared package path and content policy", () => {
   );
 
   it.each([
+    ["keychain/keychain-helper", "retired keychain helper"],
     ["node_modules/@anthropic-ai/claude-agent-sdk-runtime/launcher", "vendored agent CLI"],
     ["out/runtime.js.map", "source map"],
     ["out/.ENV.production", "environment file"],
@@ -342,36 +356,39 @@ describe("shared package trees", () => {
 
   it("compares a declared signed executable by image identifier instead of bytes", () => {
     const staged = new Map<string, PackageTreeEntry>([
-      ["keychain", { type: "directory" }],
-      ["keychain/keychain-helper", { type: "file", bytes: machoExecutable() }],
+      ["signed", { type: "directory" }],
+      ["signed/signed-tool", { type: "file", bytes: machoExecutable() }],
     ]);
-    const options = { signedExecutables: ["keychain/keychain-helper"] };
+    const options = { signedExecutables: ["signed/signed-tool"] };
     const resigned = new Map<string, PackageTreeEntry>([
-      ["keychain", { type: "directory" }],
-      ["keychain/keychain-helper", { type: "file", bytes: machoExecutable({ signatureBytes: 4_096 }) }],
+      ["signed", { type: "directory" }],
+      [
+        "signed/signed-tool",
+        { type: "file", bytes: machoExecutable({ signatureBytes: 4_096 }) },
+      ],
     ]);
     expect(() => compareStagedTree(staged, resigned, "packaged-tree", options)).not.toThrow();
     expect(() => compareStagedTree(staged, resigned, "packaged-tree")).toThrow(
-      "packaged external resource bytes differ from staging: packaged-tree/keychain/keychain-helper",
+      "packaged external resource bytes differ from staging: packaged-tree/signed/signed-tool",
     );
 
     const rebuilt = new Map<string, PackageTreeEntry>([
-      ["keychain", { type: "directory" }],
+      ["signed", { type: "directory" }],
       [
-        "keychain/keychain-helper",
+        "signed/signed-tool",
         { type: "file", bytes: machoExecutable({ uuid: "ffffffffffffffffffffffffffffffff" }) },
       ],
     ]);
     expect(() => compareStagedTree(staged, rebuilt, "packaged-tree", options)).toThrow(
-      "packaged external executable differs from staging: packaged-tree/keychain/keychain-helper",
+      "packaged external executable differs from staging: packaged-tree/signed/signed-tool",
     );
 
     const foreign = new Map<string, PackageTreeEntry>([
-      ["keychain", { type: "directory" }],
-      ["keychain/keychain-helper", { type: "file", bytes: Buffer.alloc(8_192, 0x61) }],
+      ["signed", { type: "directory" }],
+      ["signed/signed-tool", { type: "file", bytes: Buffer.alloc(8_192, 0x61) }],
     ]);
     expect(() => compareStagedTree(staged, foreign, "packaged-tree", options)).toThrow(
-      "expected a 64-bit little-endian Mach-O executable: packaged-tree/keychain/keychain-helper",
+      "expected a 64-bit little-endian Mach-O executable: packaged-tree/signed/signed-tool",
     );
   });
 });
@@ -467,6 +484,21 @@ describe("shared Mach-O executable identity", () => {
   });
 });
 
+describe("shared Mach-O bundle identity", () => {
+  it("requires the keychain binding to use the MH_BUNDLE file type", () => {
+    expect(machoBundleIdentity(machoBundle(), KEYCHAIN_BINDING_ASAR_PATH)).toEqual({
+      cpuType: 0x0100_000c,
+      cpuSubtype: 0,
+      fileType: 8,
+      uuid: syntheticUuid,
+      contentSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+    });
+    expect(() => machoBundleIdentity(machoExecutable(), KEYCHAIN_BINDING_ASAR_PATH)).toThrow(
+      `unsupported Mach-O bundle architecture: ${KEYCHAIN_BINDING_ASAR_PATH}`,
+    );
+  });
+});
+
 describe("shared ASAR inventory", () => {
   it("collects packed entries and invalidates the ASAR cache between reads", async () => {
     const fixture = await makeAsar({ "nested/runtime.bin": "first" });
@@ -548,10 +580,14 @@ describe("shared ASAR inventory", () => {
 
   it("compares staged entries while allowing unrelated archive inventory", () => {
     const expected = new Map<string, PackageTreeEntry>([
+      ["native", { type: "directory" }],
+      [KEYCHAIN_BINDING_ASAR_PATH, packageFile("binding")],
       ["runtime", { type: "directory" }],
       ["runtime/data.bin", packageFile("expected")],
     ]);
     const exact = new Map<string, AsarTreeEntry>([
+      ["native", { type: "directory", unpacked: true }],
+      [KEYCHAIN_BINDING_ASAR_PATH, asarFile("binding", true)],
       ["runtime", { type: "directory", unpacked: false }],
       ["runtime/data.bin", asarFile("expected")],
       ["unrelated.bin", asarFile("extra")],
@@ -568,6 +604,12 @@ describe("shared ASAR inventory", () => {
     unpacked.set("runtime/data.bin", asarFile("expected", true));
     expect(() => compareAsarStaging(expected, unpacked)).toThrow(
       "ASAR staging entry is missing or unpacked: app.asar/runtime/data.bin",
+    );
+
+    const packedBinding = new Map(exact);
+    packedBinding.set(KEYCHAIN_BINDING_ASAR_PATH, asarFile("binding"));
+    expect(() => compareAsarStaging(expected, packedBinding)).toThrow(
+      `ASAR staging entry is missing or unpacked: app.asar/${KEYCHAIN_BINDING_ASAR_PATH}`,
     );
 
     const stale = new Map(exact);

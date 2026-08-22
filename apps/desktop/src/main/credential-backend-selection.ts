@@ -13,7 +13,7 @@ import {
   type KeychainKeyDeletion,
   type KeychainKeyPreparation,
 } from "./keychain-credential-encryption.js";
-import type { KeychainHelperErrorCode, KeychainHelperTransport } from "./keychain-helper.js";
+import type { KeychainBindingErrorCode, KeychainBindingTransport } from "./keychain-binding.js";
 
 export type DesktopCredentialBackendRefusal = "encryption-unavailable" | "storage-failed";
 
@@ -31,12 +31,12 @@ export type DesktopCredentialBackendSelection =
       status: "refused";
       encryption: CredentialEncryptionPort;
       reason: DesktopCredentialBackendRefusal;
-      code: KeychainHelperErrorCode;
+      code: KeychainBindingErrorCode;
       keyCleanupPending: boolean;
     }>;
 
 export interface SelectDesktopCredentialBackendOptions extends CredentialEnvelopeRoots {
-  readonly transport: KeychainHelperTransport;
+  readonly transport: KeychainBindingTransport;
   readonly service: string;
   readonly safeStorage: CredentialEncryptionPort;
   readonly platform?: NodeJS.Platform;
@@ -45,7 +45,7 @@ export interface SelectDesktopCredentialBackendOptions extends CredentialEnvelop
 }
 
 export function keychainFailureRefusal(
-  code: KeychainHelperErrorCode,
+  code: KeychainBindingErrorCode,
   hasDeletionBlockers: boolean,
 ): DesktopCredentialBackendRefusal {
   if (code === "keychain-locked" || code === "uninspectable-item" || code === "not-team-signed") {

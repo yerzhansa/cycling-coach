@@ -28,9 +28,9 @@ _Avoid_: Keychain envelope, dependent envelope
 The named implementation that turns a credential into an envelope and back. Each backend reports its own name, so a vault can recognise an unsafe one and refuse to write rather than store a credential the athlete believes is protected. `basic_text` is the name that means unprotected.
 _Avoid_: Cipher, provider, encryptor
 
-**Helper**:
-A separate signed executable the desktop app runs to reach a platform facility Electron cannot reach itself. It answers one request and exits. A helper never receives or returns a credential value — only the key material a backend needs.
-_Avoid_: Daemon, service, agent (the daemon is the long-lived coaching process; a helper is short-lived and answers one question)
+**Native binding**:
+The macOS credential boundary loaded only by Desktop main. It authenticates the exact Enduragent host and has no separate caller-facing process. The stored Keychain item separately trusts same-user code signed by Team `FA494ACVTF`.
+_Avoid_: Helper, sidecar, daemon, service
 
 **Key-id**:
 The single number inside an envelope naming the key that protects it. `0` claims the platform-secure-storage era. Any other value names a later key. A claim of `0` is not proof because damaged bytes can carry the same value.
@@ -72,7 +72,7 @@ _Avoid_: Recovery snapshot, startup status
 
 - A **Vault** holds **Slot**s; each configured slot has exactly one **Envelope**.
 - A **Vault** delegates every encryption and decryption to one **Backend** and never inspects an **Envelope** itself.
-- A **Backend** may need a **Helper** to obtain its key; a backend that needs no helper has none.
+- A **Backend** may use the **Native binding** to obtain its platform key. Renderer and unsigned external callers never belong to that boundary.
 - Every **Envelope** carries the **Key-id** of the key that sealed it.
 - Every canonical envelope and recognised transient credential artifact is a **Deletion blocker**.
 - A **Key-dependent envelope** is a **Deletion blocker**. An **Unverified envelope** is a **Deletion blocker** but is not proven key-dependent.

@@ -7,7 +7,7 @@ import {
   DEVELOPMENT_PRODUCT_NAME,
   createDevelopmentPackagePlan,
 } from "./development-package-plan.mjs";
-import { KEYCHAIN_HELPER_RESOURCE_PATH } from "./package-inventory.mjs";
+import { KEYCHAIN_BINDING_ASAR_PATH } from "./package-inventory.mjs";
 
 const APP_READY_TIMEOUT_MS = 30_000;
 const SELF_TEST_TIMEOUT_MS = 120_000;
@@ -314,7 +314,11 @@ async function main() {
       "--force",
       "--sign",
       "-",
-      join(copiedApplication, "Contents/Resources", KEYCHAIN_HELPER_RESOURCE_PATH),
+      join(
+        copiedApplication,
+        "Contents/Resources/app.asar.unpacked",
+        KEYCHAIN_BINDING_ASAR_PATH,
+      ),
     ]);
     const frameworksDirectory = join(copiedApplication, "Contents/Frameworks");
     for (const entry of (await readdir(frameworksDirectory)).sort()) {

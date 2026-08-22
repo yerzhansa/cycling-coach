@@ -86,8 +86,9 @@ import { resetEncryptedCredentialStorage } from "./credential-reset.js";
 import {
   KEYCHAIN_KEY_BYTES,
   KEYCHAIN_TEAM_IDENTIFIER,
-  type KeychainHelperTransport,
-} from "./keychain-helper.js";
+  type KeychainBindingTransport,
+} from "./keychain-binding.js";
+import { probePackagedKeychainBackendSelection } from "./keychain-backend-selection-probe.js";
 import {
   DesktopDaemonLifecycle,
   type DesktopDaemonConnection,
@@ -195,7 +196,7 @@ let desktopIsClosing = false;
 let desktopStartedInBackground = false;
 const desktopAcceptanceHidden = process.env.ENDURAGENT_ACCEPTANCE_HIDDEN === "1";
 
-function createAcceptanceKeychainTransport(): KeychainHelperTransport {
+function createAcceptanceKeychainTransport(): KeychainBindingTransport {
   let key: Buffer | undefined = randomBytes(KEYCHAIN_KEY_BYTES);
   return {
     async send(request) {
@@ -205,11 +206,11 @@ function createAcceptanceKeychainTransport(): KeychainHelperTransport {
       if (request.op === "read-key") {
         return key === undefined
           ? { ok: false, code: "item-not-found" }
-          : { ok: true, op: "read-key", key: key.toString("base64") };
+          : { ok: true, op: "read-key", key: Buffer.from(key) };
       }
       if (request.op === "create-key") {
         key ??= randomBytes(KEYCHAIN_KEY_BYTES);
-        return { ok: true, op: "create-key", key: key.toString("base64") };
+        return { ok: true, op: "create-key", key: Buffer.from(key) };
       }
       const deleted = key !== undefined;
       key?.fill(0);
@@ -241,6 +242,29 @@ async function runRuntimeSmoke(): Promise<void> {
     child.once("exit", (code) => resolveExit(Number.isInteger(code) ? code : 1));
   });
   app.exit(exitCode);
+}
+
+async function runKeychainBindingProbe(): Promise<void> {
+  await app.whenReady();
+  if (!app.isPackaged) {
+    process.stderr.write("ENDURAGENT_KEYCHAIN_BINDING_PROBE refused\n");
+    app.exit(1);
+    return;
+  }
+  const userData = app.getPath("userData");
+  const result = await probePackagedKeychainBackendSelection({
+    credentialRoot: join(userData, CREDENTIAL_DIRECTORY_NAME),
+    telegramRoot: join(userData, TELEGRAM_CREDENTIAL_DIRECTORY_NAME),
+    location: {
+      platform: process.platform,
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      applicationPath: app.getAppPath(),
+    },
+    safeStorage,
+  });
+  process.stdout.write(`ENDURAGENT_KEYCHAIN_BINDING_PROBE ${JSON.stringify(result)}\n`);
+  app.exit(0);
 }
 
 async function runDesktop(): Promise<void> {
@@ -480,7 +504,6 @@ async function runDesktop(): Promise<void> {
       serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
       ...(acceptanceCredentialBackend
         ? {
-            helperIsExecutable: async () => true,
             createTransport: () => createAcceptanceKeychainTransport(),
           }
         : {}),
@@ -1475,21 +1498,24 @@ async function exitSecondaryDesktop(): Promise<void> {
   }
 }
 
-const primaryInstance = app.requestSingleInstanceLock();
-
-if (!primaryInstance) {
-  void exitSecondaryDesktop();
+if (process.argv.includes("--desktop-keychain-binding-probe")) {
+  void runKeychainBindingProbe().catch(() => app.exit(1));
 } else {
-  disableChromiumMediaSessionIntegration();
-  const runPrimaryDesktop = process.argv.includes("--desktop-runtime-smoke")
-    ? runRuntimeSmoke
-    : runDesktop;
-  void runPrimaryDesktop().catch((error: unknown) => {
-    logDesktopStartupFailure(error);
-    console.error("desktop startup failed", error);
-    if (!desktopIsClosing && !desktopStartedInBackground && !desktopAcceptanceHidden) {
-      dialog.showErrorBox(unexpectedStartupCopy.title, unexpectedStartupCopy.content);
-    }
-    app.exit(1);
-  });
+  const primaryInstance = app.requestSingleInstanceLock();
+  if (!primaryInstance) {
+    void exitSecondaryDesktop();
+  } else {
+    disableChromiumMediaSessionIntegration();
+    const runPrimaryDesktop = process.argv.includes("--desktop-runtime-smoke")
+      ? runRuntimeSmoke
+      : runDesktop;
+    void runPrimaryDesktop().catch((error: unknown) => {
+      logDesktopStartupFailure(error);
+      console.error("desktop startup failed", error);
+      if (!desktopIsClosing && !desktopStartedInBackground && !desktopAcceptanceHidden) {
+        dialog.showErrorBox(unexpectedStartupCopy.title, unexpectedStartupCopy.content);
+      }
+      app.exit(1);
+    });
+  }
 }

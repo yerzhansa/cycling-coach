@@ -4,9 +4,9 @@ import type { CredentialEncryptionPort } from "./credential-vault.js";
 import {
   KEYCHAIN_KEY_BYTES,
   KEYCHAIN_TEAM_IDENTIFIER,
-  type KeychainHelperErrorCode,
-  type KeychainHelperTransport,
-} from "./keychain-helper.js";
+  type KeychainBindingErrorCode,
+  type KeychainBindingTransport,
+} from "./keychain-binding.js";
 
 export const KEYCHAIN_PARTITION_STORAGE_BACKEND = "keychain_partition_v1" as const;
 export const CREDENTIAL_ENVELOPE_MAGIC = "ENDURAGENT1" as const;
@@ -21,7 +21,7 @@ const MINIMUM_ENVELOPE_BYTES =
   HEADER_BYTES + CREDENTIAL_ENVELOPE_IV_BYTES + CREDENTIAL_ENVELOPE_TAG_BYTES;
 
 export class KeychainEncryptionError extends Error {
-  constructor(readonly code: KeychainHelperErrorCode) {
+  constructor(readonly code: KeychainBindingErrorCode) {
     super();
   }
 }
@@ -67,13 +67,13 @@ export type KeychainPartitionEncryptionResult =
     }
   | {
       readonly status: "unavailable";
-      readonly code: KeychainHelperErrorCode;
+      readonly code: KeychainBindingErrorCode;
       readonly keyCleanupPending: boolean;
       readonly encryption: CredentialEncryptionPort;
     }
   | {
       readonly status: "storage-failed";
-      readonly code: KeychainHelperErrorCode;
+      readonly code: KeychainBindingErrorCode;
       readonly keyCleanupPending: boolean;
       readonly encryption: CredentialEncryptionPort;
     }
@@ -83,7 +83,7 @@ export type KeychainPartitionEncryptionResult =
     };
 
 export interface CreateKeychainPartitionEncryptionOptions {
-  readonly transport: KeychainHelperTransport;
+  readonly transport: KeychainBindingTransport;
   readonly service: string;
   readonly envelopeCensus:
     | KeychainEnvelopeCensus
@@ -98,7 +98,7 @@ export interface KeychainEnvelopeCensus {
 }
 
 export function createRefusingKeychainEncryption(
-  code: KeychainHelperErrorCode,
+  code: KeychainBindingErrorCode,
   available: boolean,
 ): CredentialEncryptionPort {
   const refuse = (): never => {
@@ -114,15 +114,15 @@ export function createRefusingKeychainEncryption(
 
 export type KeychainKeyPreparation =
   | Readonly<{ status: "ready" }>
-  | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>;
+  | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>;
 
 export type KeychainKeyDeletion =
   | Readonly<{ status: "deleted" | "already-absent" }>
-  | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>;
+  | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>;
 
 interface KeyHolder {
   key: Buffer | null;
-  failure: KeychainHelperErrorCode;
+  failure: KeychainBindingErrorCode;
   cleanupPending: boolean;
 }
 
@@ -140,7 +140,7 @@ function readyPort(holder: KeyHolder): CredentialEncryptionPort {
 }
 
 function refused(
-  code: KeychainHelperErrorCode,
+  code: KeychainBindingErrorCode,
   keyCleanupPending = false,
 ): KeychainPartitionEncryptionResult {
   if (code === "keychain-locked" || code === "uninspectable-item" || code === "item-not-found") {
@@ -180,12 +180,12 @@ export async function createKeychainPartitionEncryption(
 
   const createMaterial = async (): Promise<
     | Readonly<{ status: "ready"; key: Buffer }>
-    | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>
+    | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>
   > => {
     const created = await transport.send({ op: "create-key", service });
     if (!created.ok) return { status: "failed", code: created.code };
     if (created.op !== "create-key") return { status: "failed", code: "unknown" };
-    const key = Buffer.from(created.key, "base64");
+    const key = Buffer.from(created.key);
     return key.length === KEYCHAIN_KEY_BYTES
       ? { status: "ready", key }
       : { status: "failed", code: "unknown" };
@@ -194,7 +194,7 @@ export async function createKeychainPartitionEncryption(
   const readMaterial = async (): Promise<
     | Readonly<{ status: "ready"; key: Buffer }>
     | Readonly<{ status: "missing" }>
-    | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>
+    | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>
   > => {
     const read = await transport.send({ op: "read-key", service });
     if (!read.ok) {
@@ -203,7 +203,7 @@ export async function createKeychainPartitionEncryption(
         : { status: "failed", code: read.code };
     }
     if (read.op !== "read-key") return { status: "failed", code: "unknown" };
-    const key = Buffer.from(read.key, "base64");
+    const key = Buffer.from(read.key);
     return key.length === KEYCHAIN_KEY_BYTES
       ? { status: "ready", key }
       : { status: "failed", code: "unknown" };

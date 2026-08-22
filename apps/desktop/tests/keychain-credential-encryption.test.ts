@@ -21,24 +21,24 @@ import {
   KEYCHAIN_CREDENTIAL_SERVICE_DEV,
   KEYCHAIN_KEY_BYTES,
   KEYCHAIN_TEAM_IDENTIFIER,
-  type KeychainHelperRequest,
-  type KeychainHelperResponse,
-  type KeychainHelperTransport,
-} from "../src/main/keychain-helper.js";
+  type KeychainBindingRequest,
+  type KeychainBindingResponse,
+  type KeychainBindingTransport,
+} from "../src/main/keychain-binding.js";
 
-const PROBE_OK: KeychainHelperResponse = {
+const PROBE_OK: KeychainBindingResponse = {
   ok: true,
   op: "probe",
   teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER,
 };
 
-interface RecordingTransport extends KeychainHelperTransport {
-  readonly requests: KeychainHelperRequest[];
+interface RecordingTransport extends KeychainBindingTransport {
+  readonly requests: KeychainBindingRequest[];
 }
 
-function transportOf(...responses: readonly KeychainHelperResponse[]): RecordingTransport {
+function transportOf(...responses: readonly KeychainBindingResponse[]): RecordingTransport {
   const remaining = [...responses];
-  const requests: KeychainHelperRequest[] = [];
+  const requests: KeychainBindingRequest[] = [];
   return {
     requests,
     send(request) {
@@ -50,9 +50,9 @@ function transportOf(...responses: readonly KeychainHelperResponse[]): Recording
   };
 }
 
-function storedKey(): { readonly key: Buffer; readonly encoded: string } {
+function storedKey(): { readonly key: Buffer; readonly encoded: Buffer } {
   const key = randomBytes(KEYCHAIN_KEY_BYTES);
-  return { key, encoded: key.toString("base64") };
+  return { key, encoded: Buffer.from(key) };
 }
 
 async function createEncryption(
@@ -294,7 +294,7 @@ describe("keychain partition backend", () => {
     const transport = transportOf(PROBE_OK, {
       ok: true,
       op: "read-key",
-      key: randomBytes(16).toString("base64"),
+      key: randomBytes(16),
     });
     const result = await createEncryption({
       transport,
