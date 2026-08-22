@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -217,6 +219,19 @@ describe("sidebar information hierarchy", () => {
     expect(screen.queryByRole("button", { name: /Current conversation/u })).not.toBeInTheDocument();
     expect(screen.queryByText("Connected")).not.toBeInTheDocument();
     expect(document.querySelector(".connection-status")).not.toBeInTheDocument();
+  });
+});
+
+describe("sidebar styling", () => {
+  it("uses shadcn buttons and Tailwind without the legacy module or mono copy", async () => {
+    const sources = await Promise.all(
+      ["Sidebar.tsx", "SyncChip.tsx", "UpdateAvailableButton.tsx"].map((name) =>
+        readFile(resolve(import.meta.dirname, "..", "src", "ui", "sidebar", name), "utf8"),
+      ),
+    );
+    expect(sources.every((source) => source.includes("components/ui/button.js"))).toBe(true);
+    expect(sources.join("\n")).not.toContain("Sidebar.module.css");
+    expect(sources.join("\n")).not.toContain("font-mono");
   });
 });
 
