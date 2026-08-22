@@ -1,8 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CREDENTIAL_FILE_MODE, DESKTOP_CREDENTIAL_SLOTS } from "./credential-vault.js";
 import {
-  SAFE_STORAGE_ENVELOPE_KEY_ID,
+  KEYCHAIN_ENVELOPE_KEY_ID,
   readCredentialEnvelopeKeyId,
 } from "./keychain-credential-encryption.js";
 import {
@@ -24,21 +24,16 @@ export interface CredentialEnvelopeRef extends CredentialEnvelopeTarget {
 }
 
 export interface CredentialEnvelopeInventory {
-  readonly envelopes: readonly CredentialEnvelopeRef[];
-  readonly legacy: readonly CredentialEnvelopeRef[];
-  readonly migrated: number;
-  readonly unreadable: number;
-  readonly keychainRequired: boolean;
+  readonly deletionBlockers: readonly CredentialEnvelopeRef[];
+  readonly keychainDependents: number;
+  readonly unverified: number;
 }
 
 export interface CredentialEnvelopeRoots {
   readonly credentialRoot: string;
   readonly telegramRoot: string;
   readonly readEnvelopeFile?: typeof readFile;
-  readonly classifyLegacyEnvelope?: (
-    envelope: Buffer,
-    target: CredentialEnvelopeTarget,
-  ) => boolean | Promise<boolean>;
+  readonly readEnvelopeDirectory?: (path: string) => Promise<string[]>;
 }
 
 export function credentialEnvelopeTargets(
@@ -60,47 +55,108 @@ export function credentialEnvelopeTargets(
   ];
 }
 
-export function credentialEnvelopeKeyId(envelope: Buffer): number {
-  return readCredentialEnvelopeKeyId(envelope) ?? SAFE_STORAGE_ENVELOPE_KEY_ID;
+export function credentialEnvelopeKeyId(envelope: Buffer): number | undefined {
+  return readCredentialEnvelopeKeyId(envelope);
+}
+
+function transientCredentialEnvelopeTarget(
+  roots: CredentialEnvelopeRoots,
+  root: string,
+  entry: string,
+): CredentialEnvelopeTarget | undefined {
+  if (root === roots.credentialRoot) {
+    for (const slot of DESKTOP_CREDENTIAL_SLOTS) {
+      for (const prefix of [`.${slot}.`, `.${slot}.bin.`]) {
+        if (!entry.startsWith(prefix)) continue;
+        for (const suffix of [".tmp", ".deleted"]) {
+          if (!entry.endsWith(suffix)) continue;
+          const id = entry.slice(prefix.length, -suffix.length);
+          if (/^[A-Za-z0-9-]{1,128}$/.test(id)) {
+            return {
+              vault: "credentials",
+              root,
+              fileName: entry,
+              mode: CREDENTIAL_FILE_MODE,
+            };
+          }
+        }
+      }
+    }
+    return undefined;
+  }
+  if (root !== roots.telegramRoot) return undefined;
+  const prefix = `.${TELEGRAM_PROFILE_FILE_NAME}.`;
+  if (!entry.startsWith(prefix)) return undefined;
+  for (const suffix of [".tmp", ".deleted"]) {
+    if (!entry.endsWith(suffix)) continue;
+    const id = entry.slice(prefix.length, -suffix.length);
+    if (/^[A-Za-z0-9-]{1,128}$/.test(id)) {
+      return {
+        vault: "telegram",
+        root,
+        fileName: entry,
+        mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+      };
+    }
+  }
+  return undefined;
+}
+
+async function inspectEnvelopeTarget(
+  target: CredentialEnvelopeTarget,
+  read: typeof readFile,
+): Promise<CredentialEnvelopeRef | undefined> {
+  let contents: Buffer | undefined;
+  try {
+    contents = await read(join(target.root, target.fileName));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    return { ...target, keyId: undefined };
+  }
+  try {
+    return { ...target, keyId: readCredentialEnvelopeKeyId(contents) };
+  } finally {
+    contents.fill(0);
+  }
 }
 
 export async function scanCredentialEnvelopes(
   roots: CredentialEnvelopeRoots,
 ): Promise<CredentialEnvelopeInventory> {
   const read = roots.readEnvelopeFile ?? readFile;
-  const envelopes: CredentialEnvelopeRef[] = [];
+  const readDirectory = roots.readEnvelopeDirectory ?? readdir;
+  const deletionBlockers: CredentialEnvelopeRef[] = [];
+  const canonicalEnvelopes: CredentialEnvelopeRef[] = [];
   for (const target of credentialEnvelopeTargets(roots)) {
-    let contents: Buffer | undefined;
-    try {
-      contents = await read(join(target.root, target.fileName));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      envelopes.push({ ...target, keyId: undefined });
-      continue;
-    }
-    try {
-      let keyId = readCredentialEnvelopeKeyId(contents);
-      if (keyId === undefined || keyId === SAFE_STORAGE_ENVELOPE_KEY_ID) {
-        keyId = undefined;
-        try {
-          if (await roots.classifyLegacyEnvelope?.(contents, target)) {
-            keyId = SAFE_STORAGE_ENVELOPE_KEY_ID;
-          }
-        } catch {}
-      }
-      envelopes.push({ ...target, keyId });
-    } finally {
-      contents.fill(0);
+    const inspected = await inspectEnvelopeTarget(target, read);
+    if (inspected !== undefined) {
+      deletionBlockers.push(inspected);
+      canonicalEnvelopes.push(inspected);
     }
   }
-  const legacy = envelopes.filter((envelope) => envelope.keyId === SAFE_STORAGE_ENVELOPE_KEY_ID);
-  const unreadable = envelopes.filter((envelope) => envelope.keyId === undefined).length;
-  const migrated = envelopes.length - legacy.length - unreadable;
+  for (const root of new Set([roots.credentialRoot, roots.telegramRoot])) {
+    let entries: string[];
+    try {
+      entries = await readDirectory(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const target = transientCredentialEnvelopeTarget(roots, root, entry);
+      if (target === undefined) continue;
+      const inspected = await inspectEnvelopeTarget(target, read);
+      if (inspected !== undefined) deletionBlockers.push(inspected);
+    }
+  }
+  const keychainDependents = deletionBlockers.filter(
+    (blocker) => blocker.keyId === KEYCHAIN_ENVELOPE_KEY_ID,
+  ).length;
   return {
-    envelopes,
-    legacy,
-    migrated,
-    unreadable,
-    keychainRequired: migrated > 0 || unreadable > 0,
+    deletionBlockers,
+    keychainDependents,
+    unverified: canonicalEnvelopes.filter(
+      (envelope) => envelope.keyId !== KEYCHAIN_ENVELOPE_KEY_ID,
+    ).length,
   };
 }

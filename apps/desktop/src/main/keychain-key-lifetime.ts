@@ -21,8 +21,8 @@ export async function retireKeychainKeyWhenLastEnvelopeGone(
   options: RetireKeychainKeyOptions,
 ): Promise<KeychainKeyRetirement> {
   const inventory = await scanCredentialEnvelopes(options);
-  if (inventory.envelopes.length > 0) {
-    return { status: "retained", envelopes: inventory.envelopes.length };
+  if (inventory.deletionBlockers.length > 0) {
+    return { status: "retained", envelopes: inventory.deletionBlockers.length };
   }
   return await options.deleteKey(options.lockProof);
 }

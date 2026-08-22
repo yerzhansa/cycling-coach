@@ -62,9 +62,23 @@ function noEnvelopes() {
 function migratedTelegramEnvelope() {
   const sealed = sealCredentialEnvelope(KEY, "bot-token");
   return (async (path: string) => {
-    if (path.startsWith(TELEGRAM_ROOT)) return sealed;
+    if (path.startsWith(TELEGRAM_ROOT)) return Buffer.from(sealed);
     throw Object.assign(new Error("missing"), { code: "ENOENT" });
   }) as never;
+}
+
+function removableTelegramEnvelope() {
+  const sealed = sealCredentialEnvelope(KEY, "bot-token");
+  let present = true;
+  return {
+    read: (async (path: string) => {
+      if (present && path.startsWith(TELEGRAM_ROOT)) return Buffer.from(sealed);
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }) as never,
+    remove() {
+      present = false;
+    },
+  };
 }
 
 function options(
@@ -102,7 +116,7 @@ describe("desktop credential encryption startup", () => {
     });
 
     const prepared = await prepareDesktopCredentialEncryption(
-      options({ createTransport: () => transport }),
+      options({ createTransport: () => transport, readEnvelopeFile: migratedTelegramEnvelope() }),
     );
 
     expect(prepared.service).toBe(KEYCHAIN_CREDENTIAL_SERVICE);
@@ -126,6 +140,7 @@ describe("desktop credential encryption startup", () => {
     const prepared = await prepareDesktopCredentialEncryption(
       options({
         createTransport: () => transport,
+        readEnvelopeFile: migratedTelegramEnvelope(),
         location: {
           platform: "darwin",
           packaged: false,
@@ -151,6 +166,7 @@ describe("desktop credential encryption startup", () => {
     await prepareDesktopCredentialEncryption(
       options({
         createTransport,
+        readEnvelopeFile: migratedTelegramEnvelope(),
         location: {
           platform: "darwin",
           packaged: false,
@@ -193,9 +209,15 @@ describe("desktop credential encryption startup", () => {
     await expect(
       serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
     ).resolves.toBeUndefined();
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.deleteKeyForCredentialReset(proof)),
+    ).resolves.toEqual({ status: "already-absent" });
+    expect(prepared.selection.status).toBe("safe-storage");
+    expect(prepared.encryption).toBe(safeStorage);
+    expect(createTransport).not.toHaveBeenCalled();
   });
 
-  it("falls back to safeStorage when the bundled helper cannot run and nothing is migrated", async () => {
+  it("refuses persistence when the bundled macOS helper cannot run", async () => {
     const safeStorage = safeStoragePort();
     const createTransport = vi.fn(() => transportOf());
 
@@ -203,8 +225,12 @@ describe("desktop credential encryption startup", () => {
       options({ safeStorage, createTransport, helperIsExecutable: async () => false }),
     );
 
-    expect(prepared.encryption).toBe(safeStorage);
-    expect(prepared.selection.status).toBe("safe-storage");
+    expect(prepared.encryption).not.toBe(safeStorage);
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "not-team-signed",
+    });
     expect(createTransport).not.toHaveBeenCalled();
   });
 
@@ -239,14 +265,162 @@ describe("desktop credential encryption startup", () => {
 
     expect(prepared.selection.status).toBe("refused");
     if (prepared.selection.status !== "refused") return;
-    expect(prepared.selection.reason).toBe("storage-failed");
+    expect(prepared.selection.reason).toBe("encryption-unavailable");
     expect(prepared.encryption).not.toBe(safeStorage);
     expect(prepared.encryption.getSelectedStorageBackend?.()).toBe(
       KEYCHAIN_PARTITION_STORAGE_BACKEND,
     );
   });
 
-  it("deletes after a zero-envelope census and recreates before a later write", async () => {
+  it("retries a locked helper without replacing the vault encryption port", async () => {
+    const transport = transportOf(PROBE_OK, { ok: false, code: "keychain-locked" }, PROBE_OK, {
+      ok: true,
+      op: "read-key",
+      key: KEY.toString("base64"),
+    });
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({ createTransport: () => transport, readEnvelopeFile: migratedTelegramEnvelope() }),
+    );
+    const stablePort = prepared.encryption;
+
+    expect(prepared.selection).toMatchObject({ status: "refused", code: "keychain-locked" });
+    expect(stablePort.isEncryptionAvailable()).toBe(false);
+    await expect(prepared.retryKeychain()).resolves.toMatchObject({ status: "keychain" });
+    expect(prepared.encryption).toBe(stablePort);
+    expect(stablePort.isEncryptionAvailable()).toBe(true);
+    expect(stablePort.decryptString(stablePort.encryptString("synthetic-secret"))).toBe(
+      "synthetic-secret",
+    );
+  });
+
+  it("leaves the custom key absent after reset and recreates it only before a later write", async () => {
+    const replacement = randomBytes(KEY.length);
+    const envelope = removableTelegramEnvelope();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY.toString("base64") },
+      { ok: true, op: "delete-key", deleted: true },
+      PROBE_OK,
+      { ok: false, code: "item-not-found" },
+      { ok: false, code: "item-not-found" },
+      { ok: true, op: "create-key", key: replacement.toString("base64") },
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({
+        createTransport: () => transport,
+        readEnvelopeFile: envelope.read,
+        serializeEnvelopeMutation,
+      }),
+    );
+
+    envelope.remove();
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.deleteKeyForCredentialReset(proof)),
+    ).resolves.toEqual({ status: "deleted" });
+    expect(prepared.selection.status).toBe("refused");
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+    ]);
+
+    await expect(prepared.retryKeychain()).resolves.toMatchObject({ status: "keychain" });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "probe",
+      "read-key",
+    ]);
+
+    await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
+    expect(prepared.selection.status).toBe("keychain");
+    expect(prepared.encryption.decryptString(prepared.encryption.encryptString("new-secret"))).toBe(
+      "new-secret",
+    );
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "probe",
+      "read-key",
+      "read-key",
+      "create-key",
+    ]);
+  });
+
+  it("keeps the key absent across restart until a credential write", async () => {
+    const replacement = randomBytes(KEY.length);
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: false, code: "item-not-found" },
+      { ok: false, code: "item-not-found" },
+      { ok: true, op: "create-key", key: replacement.toString("base64") },
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+
+    const restarted = await prepareDesktopCredentialEncryption(
+      options({ createTransport: () => transport, serializeEnvelopeMutation }),
+    );
+
+    expect(restarted.selection.status).toBe("keychain");
+    expect(restarted.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+
+    await serializeEnvelopeMutation((proof) => restarted.prepareEnvelopeWrite(proof));
+    expect(restarted.encryption.isEncryptionAvailable()).toBe(true);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+      "create-key",
+    ]);
+  });
+
+  it("publishes a failed key preparation and recovers on Retry", async () => {
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: false, code: "item-not-found" },
+      { ok: false, code: "keychain-locked" },
+      PROBE_OK,
+      { ok: false, code: "item-not-found" },
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({ createTransport: () => transport, serializeEnvelopeMutation }),
+    );
+
+    await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
+
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      code: "keychain-locked",
+      keyCleanupPending: false,
+    });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    await expect(prepared.credentialRecoverySnapshot()).resolves.toMatchObject({
+      selection: { status: "refused", code: "keychain-locked" },
+      unverifiedEnvelopes: 0,
+    });
+
+    await expect(prepared.retryKeychain()).resolves.toMatchObject({ status: "keychain" });
+    await expect(prepared.credentialRecoverySnapshot()).resolves.toMatchObject({
+      selection: { status: "keychain" },
+      unverifiedEnvelopes: 0,
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+      "probe",
+      "read-key",
+    ]);
+  });
+
+  it("deletes a readable zero-envelope key during startup without replacing it", async () => {
     const replacement = randomBytes(KEY.length);
     const transport = transportOf(
       PROBE_OK,
@@ -261,12 +435,11 @@ describe("desktop credential encryption startup", () => {
       options({ createTransport: () => transport, serializeEnvelopeMutation }),
     );
 
-    await expect(
-      serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
-    ).resolves.toEqual({ status: "deleted" });
     expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
-    expect(transport.requests.slice(-1)).toEqual([
-      { op: "delete-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
     ]);
 
     await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
@@ -278,7 +451,7 @@ describe("desktop credential encryption startup", () => {
     expect(prepared.encryption.decryptString(sealed)).toBe("post-retirement-secret");
   });
 
-  it("refuses to seal when a later write cannot recreate the retired key", async () => {
+  it("refuses to seal when a later write cannot recreate a retired orphan key", async () => {
     const transport = transportOf(
       PROBE_OK,
       { ok: true, op: "read-key", key: KEY.toString("base64") },
@@ -292,12 +465,163 @@ describe("desktop credential encryption startup", () => {
       options({ createTransport: () => transport, serializeEnvelopeMutation }),
     );
 
-    await expect(
-      serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
-    ).resolves.toEqual({ status: "deleted" });
     await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
     expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
     expect(() => prepared.encryption.encryptString("orphan-candidate")).toThrow();
+  });
+
+  it("retries failed reset cleanup before an immediate credential write", async () => {
+    const replacement = randomBytes(KEY.length);
+    const envelope = removableTelegramEnvelope();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY.toString("base64") },
+      { ok: false, code: "keychain-locked" },
+      PROBE_OK,
+      { ok: true, op: "delete-key", deleted: true },
+      { ok: false, code: "item-not-found" },
+      { ok: true, op: "create-key", key: replacement.toString("base64") },
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({
+        createTransport: () => transport,
+        readEnvelopeFile: envelope.read,
+        serializeEnvelopeMutation,
+      }),
+    );
+
+    envelope.remove();
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.deleteKeyForCredentialReset(proof)),
+    ).resolves.toEqual({ status: "failed", code: "keychain-locked" });
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      code: "keychain-locked",
+      keyCleanupPending: true,
+    });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+
+    await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
+
+    expect(prepared.selection.status).toBe("keychain");
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(true);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "probe",
+      "delete-key",
+      "read-key",
+      "create-key",
+    ]);
+  });
+
+  it("retries failed orphan cleanup on Retry without creating a key", async () => {
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY.toString("base64") },
+      { ok: false, code: "keychain-locked" },
+      PROBE_OK,
+      { ok: true, op: "delete-key", deleted: true },
+    );
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({ createTransport: () => transport }),
+    );
+
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      keyCleanupPending: true,
+    });
+    await expect(prepared.retryKeychain()).resolves.toMatchObject({ status: "keychain" });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "probe",
+      "delete-key",
+    ]);
+  });
+
+  it("publishes failed last-envelope retirement and recovers cleanup on Retry", async () => {
+    const envelope = removableTelegramEnvelope();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY.toString("base64") },
+      { ok: false, code: "keychain-locked" },
+      PROBE_OK,
+      { ok: true, op: "delete-key", deleted: true },
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({
+        createTransport: () => transport,
+        readEnvelopeFile: envelope.read,
+        serializeEnvelopeMutation,
+      }),
+    );
+
+    envelope.remove();
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
+    ).resolves.toEqual({ status: "failed", code: "keychain-locked" });
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      code: "keychain-locked",
+      keyCleanupPending: true,
+    });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    await expect(prepared.credentialRecoverySnapshot()).resolves.toMatchObject({
+      selection: {
+        status: "refused",
+        code: "keychain-locked",
+        keyCleanupPending: true,
+      },
+    });
+
+    await expect(prepared.retryKeychain()).resolves.toMatchObject({ status: "keychain" });
+    await expect(prepared.credentialRecoverySnapshot()).resolves.toMatchObject({
+      selection: { status: "keychain" },
+      unverifiedEnvelopes: 0,
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "probe",
+      "delete-key",
+    ]);
+  });
+
+  it("retries failed orphan cleanup after restart without creating a key", async () => {
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY.toString("base64") },
+      { ok: false, code: "keychain-locked" },
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY.toString("base64") },
+      { ok: true, op: "delete-key", deleted: true },
+    );
+
+    const first = await prepareDesktopCredentialEncryption(
+      options({ createTransport: () => transport }),
+    );
+    const restarted = await prepareDesktopCredentialEncryption(
+      options({ createTransport: () => transport }),
+    );
+
+    expect(first.selection).toMatchObject({ status: "refused", keyCleanupPending: true });
+    expect(restarted.selection.status).toBe("keychain");
+    expect(restarted.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+      "probe",
+      "read-key",
+      "delete-key",
+    ]);
   });
 
   it("keeps the key while any envelope survives in either vault", async () => {

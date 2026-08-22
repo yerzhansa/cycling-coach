@@ -1,4 +1,5 @@
 import { bindWindowsUserData } from "./windows-user-data.js";
+import { randomBytes } from "node:crypto";
 import { realpath, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +24,12 @@ import {
   shell,
   utilityProcess,
 } from "electron";
-import { createChatGptAuth, hasChatGptProfile } from "./chatgpt-auth.js";
+import {
+  CHATGPT_PROFILE_NAME,
+  createChatGptAuth,
+  deleteChatGptProfile,
+  hasChatGptProfile,
+} from "./chatgpt-auth.js";
 import { createClaudeCliStatus, readClaudeCliSettings } from "./claude-cli-status.js";
 import {
   installDesktopConnectionIpc,
@@ -56,6 +62,7 @@ import {
   createCredentialRuntimeApplication,
   intervalsAthleteIdForOwnership,
   readSelectedLlmProvider,
+  type DesktopManagedCredential,
   type CredentialRuntimeApplication,
   type RuntimeConfigurationAuthority,
 } from "./credential-runtime.js";
@@ -71,9 +78,16 @@ import {
 } from "./credential-vault.js";
 import {
   createCredentialEnvelopeMutationLock,
+  createCredentialMutationLock,
   type CredentialEnvelopeLockProof,
 } from "./credential-envelope-lock.js";
 import { prepareDesktopCredentialEncryption } from "./desktop-credential-encryption.js";
+import { resetEncryptedCredentialStorage } from "./credential-reset.js";
+import {
+  KEYCHAIN_KEY_BYTES,
+  KEYCHAIN_TEAM_IDENTIFIER,
+  type KeychainHelperTransport,
+} from "./keychain-helper.js";
 import {
   DesktopDaemonLifecycle,
   type DesktopDaemonConnection,
@@ -100,7 +114,12 @@ import {
   runtimeConfigurationForExistingSelection,
   type OnboardingLlmSelection,
 } from "./llm-selection.js";
-import { registerOnboardingIpc, runtimeConfigurationForCredential } from "./onboarding-ipc.js";
+import {
+  registerOnboardingIpc,
+  runtimeConfigurationForCredential,
+  type DesktopCredentialRecoveryStatus,
+  type DesktopCredentialResetResult,
+} from "./onboarding-ipc.js";
 import { installDesktopReleaseNotesIpc } from "./release-notes-ipc.js";
 import { createDesktopResidency, type DesktopResidency } from "./residency.js";
 import { adoptDeviceTimezoneAtStart } from "./session-timezone.js";
@@ -175,6 +194,30 @@ function disableChromiumMediaSessionIntegration(): void {
 let desktopIsClosing = false;
 let desktopStartedInBackground = false;
 const desktopAcceptanceHidden = process.env.ENDURAGENT_ACCEPTANCE_HIDDEN === "1";
+
+function createAcceptanceKeychainTransport(): KeychainHelperTransport {
+  let key: Buffer | undefined = randomBytes(KEYCHAIN_KEY_BYTES);
+  return {
+    async send(request) {
+      if (request.op === "probe") {
+        return { ok: true, op: "probe", teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER };
+      }
+      if (request.op === "read-key") {
+        return key === undefined
+          ? { ok: false, code: "item-not-found" }
+          : { ok: true, op: "read-key", key: key.toString("base64") };
+      }
+      if (request.op === "create-key") {
+        key ??= randomBytes(KEYCHAIN_KEY_BYTES);
+        return { ok: true, op: "create-key", key: key.toString("base64") };
+      }
+      const deleted = key !== undefined;
+      key?.fill(0);
+      key = undefined;
+      return { ok: true, op: "delete-key", deleted };
+    },
+  };
+}
 const INITIAL_REFRESH_RELEASE_RETRY_DELAY_MS = 1_000;
 const INITIAL_REFRESH_SETTLE_WATCHDOG_MS = 30_000;
 
@@ -418,7 +461,12 @@ async function runDesktop(): Promise<void> {
       app.getPath("userData"),
       TELEGRAM_CREDENTIAL_DIRECTORY_NAME,
     );
+    const serializeCredentialMutation = createCredentialMutationLock();
     const serializeCredentialEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const acceptanceCredentialBackend =
+      !app.isPackaged &&
+      desktopAcceptanceHidden &&
+      environment.ENDURAGENT_ACCEPTANCE_CREDENTIAL_BACKEND === "memory";
     const credentialEncryption = await prepareDesktopCredentialEncryption({
       credentialRoot,
       telegramRoot: telegramCredentialRoot,
@@ -430,6 +478,12 @@ async function runDesktop(): Promise<void> {
       },
       safeStorage,
       serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
+      ...(acceptanceCredentialBackend
+        ? {
+            helperIsExecutable: async () => true,
+            createTransport: () => createAcceptanceKeychainTransport(),
+          }
+        : {}),
     });
     const prepareCredentialEnvelopeWrite = async (
       proof: CredentialEnvelopeLockProof,
@@ -440,6 +494,28 @@ async function runDesktop(): Promise<void> {
       proof: CredentialEnvelopeLockProof,
     ): Promise<void> => {
       await credentialEncryption.retireKeychainKey(proof);
+    };
+    const credentialRecoveryStatus = async (): Promise<DesktopCredentialRecoveryStatus> => {
+      const snapshot = await credentialEncryption.credentialRecoverySnapshot();
+      const selected = snapshot.selection;
+      if (selected.status === "keychain") {
+        return {
+          state: "ready",
+          unverifiedEnvelopes: snapshot.unverifiedEnvelopes,
+        };
+      }
+      if (selected.status === "safe-storage") {
+        return { state: "ready", unverifiedEnvelopes: 0 };
+      }
+      if (selected.code === "item-not-found") return { state: "missing" };
+      if (
+        selected.code === "keychain-locked" ||
+        selected.code === "uninspectable-item" ||
+        selected.code === "unreadable-item"
+      ) {
+        return { state: "locked" };
+      }
+      return { state: "unavailable" };
     };
     if (process.platform === "darwin") {
       const selected = credentialEncryption.selection;
@@ -474,6 +550,7 @@ async function runDesktop(): Promise<void> {
         },
       },
       observeSecureStorageFailure: telegramSecureStorageDiagnostics,
+      serializeCredentialMutation,
     });
     closeTelegramCoordinator = () => telegramCoordinator.close();
     telegramPower = createDesktopTelegramPowerLifecycle({
@@ -723,6 +800,7 @@ async function runDesktop(): Promise<void> {
       prepareEnvelopeWrite: prepareCredentialEnvelopeWrite,
       observeEnvelopeRemoved: retireCredentialEncryptionKey,
       runtimeState: credentialRuntimeState,
+      serializeCredentialMutation,
       onRuntimeStateChange: markCredentialRuntimeChange,
       createRuntimePublicationGuard(slot) {
         const binding = activeRuntimeBinding;
@@ -799,6 +877,7 @@ async function runDesktop(): Promise<void> {
       const successorVault = createCredentialVault({
         root: credentialRoot,
         encryption: credentialEncryption.encryption,
+        serializeCredentialMutation,
         async applyCredential(slot, value) {
           await successor.credentials.applyExplicit(runtimeConfigurationForCredential(slot, value));
         },
@@ -813,6 +892,7 @@ async function runDesktop(): Promise<void> {
           vault: telegramVault,
           daemon: { current: () => successorTelegram },
           observeSecureStorageFailure: telegramSecureStorageDiagnostics,
+          serializeCredentialMutation,
         });
         const reconciliation = await successorTelegramCoordinator.reconcile();
         const desiredState = await telegramVault.desiredState();
@@ -891,7 +971,63 @@ async function runDesktop(): Promise<void> {
       getRuntimeConfig: readActiveRuntimeConfig,
       openExternal: (url) => shell.openExternal(url),
       signal: controller.signal,
+      serializeCredentialMutation,
     });
+    const managedModelCredentials = new Set<string>([
+      ...DESKTOP_CREDENTIAL_SLOTS.filter((slot) => slot !== "intervals-icu"),
+      CHATGPT_PROFILE_NAME,
+    ]);
+    const resetAllCredentials = (): Promise<DesktopCredentialResetResult> =>
+      serializeCredentialMutation(async () => {
+        const binding = activeRuntimeBinding;
+        const lifecycleState = daemonLifecycle?.snapshot();
+        if (binding === undefined || lifecycleState?.status !== "ready") {
+          return { status: "refused", reason: "runtime-unavailable" };
+        }
+        try {
+          const snapshot = await binding.authority.getRuntimeConfig();
+          const activeCredentials: DesktopManagedCredential[] = [];
+          if (
+            snapshot.llm.credential_configured &&
+            managedModelCredentials.has(snapshot.llm.provider)
+          ) {
+            activeCredentials.push(snapshot.llm.provider as DesktopManagedCredential);
+          }
+          if (snapshot.intervals.credential_configured) activeCredentials.push("intervals-icu");
+          for (const credential of activeCredentials) {
+            await binding.credentials.clearCredential(credential);
+          }
+          if (!(await telegramCoordinator.resetRuntimeForCredentialReset())) {
+            return { status: "refused", reason: "runtime-unavailable" };
+          }
+          const currentLifecycleState = daemonLifecycle?.snapshot();
+          if (
+            activeRuntimeBinding !== binding ||
+            currentLifecycleState?.status !== "ready" ||
+            currentLifecycleState.generation !== lifecycleState.generation
+          ) {
+            return { status: "refused", reason: "runtime-unavailable" };
+          }
+        } catch {
+          return { status: "refused", reason: "runtime-unavailable" };
+        }
+        try {
+          deleteChatGptProfile(configDir);
+          const reset = await resetEncryptedCredentialStorage({
+            credentialRoot,
+            telegramRoot: telegramCredentialRoot,
+            serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
+            deleteKey: (proof) => credentialEncryption.deleteKeyForCredentialReset(proof),
+          });
+          if (reset.status !== "reset") {
+            return { status: "refused", reason: "storage-failed" };
+          }
+          credentialRuntimeState.clear();
+          return reset;
+        } catch {
+          return { status: "refused", reason: "storage-failed" };
+        }
+      });
     const claudeCli = createClaudeCliStatus({
       settings: () => readClaudeCliSettings({ configPath: join(configDir, "config.yaml") }),
       environment: () => environment,
@@ -1013,6 +1149,12 @@ async function runDesktop(): Promise<void> {
                 signal: controller.signal,
               });
             },
+            credentialRecoveryStatus,
+            retryCredentialRecovery: async () => {
+              await credentialEncryption.retryKeychain();
+              return await credentialRecoveryStatus();
+            },
+            resetAllCredentials,
             isTrusted: (event) =>
               isTrustedConnectionRequest(event, mainWindow.current() ?? undefined),
           });

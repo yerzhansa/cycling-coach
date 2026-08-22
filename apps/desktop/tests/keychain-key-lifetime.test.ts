@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,11 @@ import {
   type DesktopCredentialSlot,
 } from "../src/main/credential-vault.js";
 import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
-import { createKeychainPartitionEncryption } from "../src/main/keychain-credential-encryption.js";
+import { scanCredentialEnvelopes } from "../src/main/credential-envelope-inventory.js";
+import {
+  createKeychainPartitionEncryption,
+  sealCredentialEnvelope,
+} from "../src/main/keychain-credential-encryption.js";
 import {
   KEYCHAIN_CREDENTIAL_SERVICE,
   KEYCHAIN_KEY_BYTES,
@@ -19,7 +23,10 @@ import {
   type KeychainHelperTransport,
 } from "../src/main/keychain-helper.js";
 import { retireKeychainKeyWhenLastEnvelopeGone } from "../src/main/keychain-key-lifetime.js";
-import { createTelegramCredentialVault } from "../src/main/telegram-credential-vault.js";
+import {
+  TELEGRAM_PROFILE_FILE_NAME,
+  createTelegramCredentialVault,
+} from "../src/main/telegram-credential-vault.js";
 
 const fixtureRoots: string[] = [];
 const posixIt = it.skipIf(process.platform === "win32");
@@ -76,7 +83,7 @@ async function keychainEncryption(): Promise<CredentialEncryptionPort> {
         key: randomBytes(KEYCHAIN_KEY_BYTES).toString("base64"),
       }),
       service: KEYCHAIN_CREDENTIAL_SERVICE,
-      dependentEnvelopes: 0,
+      envelopeCensus: { deletionBlockers: 1, keychainDependents: 1 },
       lockProof,
     }),
   );
@@ -206,6 +213,86 @@ describe("keychain key retirement", () => {
       }) as never),
     ).resolves.toMatchObject({ status: "retained" });
     expect(transport.requests).toHaveLength(0);
+  });
+
+  posixIt("keeps the key while recognised transient envelope artifacts survive", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { recursive: true });
+    await mkdir(roots.telegramRoot, { recursive: true });
+    await writeFile(join(roots.credentialRoot, ".anthropic.bin.write-1.tmp"), "credential");
+    await writeFile(
+      join(roots.telegramRoot, `.${TELEGRAM_PROFILE_FILE_NAME}.delete-1.deleted`),
+      "telegram",
+    );
+    await writeFile(join(roots.credentialRoot, ".anthropic.bin.bad_id.tmp"), "unrelated");
+    const transport = transportOf();
+
+    await expect(retireKey(roots, transport)).resolves.toEqual({
+      status: "retained",
+      envelopes: 2,
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  posixIt("counts only canonical legacy envelopes as user-facing recovery", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { recursive: true });
+    await writeFile(join(roots.credentialRoot, "anthropic.bin"), "legacy-canonical");
+    await writeFile(join(roots.credentialRoot, ".openrouter.bin.write-1.tmp"), "legacy-transient");
+
+    const inventory = await scanCredentialEnvelopes(roots);
+
+    expect(inventory.deletionBlockers).toHaveLength(2);
+    expect(inventory.keychainDependents).toBe(0);
+    expect(inventory.unverified).toBe(1);
+  });
+
+  posixIt("keeps transient-only recovery out of the user-facing count", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { recursive: true });
+    await writeFile(join(roots.credentialRoot, ".anthropic.bin.write-1.tmp"), "transient");
+    const transport = transportOf();
+
+    const inventory = await scanCredentialEnvelopes(roots);
+
+    expect(inventory.deletionBlockers).toHaveLength(1);
+    expect(inventory.unverified).toBe(0);
+    await expect(retireKey(roots, transport)).resolves.toEqual({
+      status: "retained",
+      envelopes: 1,
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  posixIt("counts a transient key-id one envelope as a keychain dependent", async () => {
+    const roots = await fixture();
+    await mkdir(roots.telegramRoot, { recursive: true });
+    const envelope = sealCredentialEnvelope(randomBytes(KEYCHAIN_KEY_BYTES), "transient-token");
+    await writeFile(
+      join(roots.telegramRoot, `.${TELEGRAM_PROFILE_FILE_NAME}.write-1.tmp`),
+      envelope,
+    );
+    envelope.fill(0);
+
+    const inventory = await scanCredentialEnvelopes(roots);
+
+    expect(inventory.deletionBlockers).toHaveLength(1);
+    expect(inventory.keychainDependents).toBe(1);
+    expect(inventory.unverified).toBe(0);
+  });
+
+  posixIt("ignores files outside the credential transient namespaces", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { recursive: true });
+    await mkdir(roots.telegramRoot, { recursive: true });
+    await writeFile(join(roots.credentialRoot, ".unknown.bin.cleanup.tmp"), "unrelated");
+    await writeFile(
+      join(roots.telegramRoot, ".telegram-desired-state.json.cleanup.deleted"),
+      "unrelated",
+    );
+    const transport = transportOf({ ok: true, op: "delete-key", deleted: true });
+
+    await expect(retireKey(roots, transport)).resolves.toEqual({ status: "deleted" });
   });
 
   posixIt("reports an absent item and a refused delete apart", async () => {
