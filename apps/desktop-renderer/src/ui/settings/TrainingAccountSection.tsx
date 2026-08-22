@@ -10,7 +10,7 @@ import {
   ATHLETE_VALIDATION_COPY,
   MANAGED_BY_ENVIRONMENT_COPY,
 } from "./copy.js";
-import styles from "./SettingsView.module.css";
+import { settingsStyles as styles } from "./styles.js";
 
 function formState(state: AthleteSettingsState): AthleteSettingsFormState | null {
   if (

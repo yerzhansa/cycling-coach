@@ -3,7 +3,7 @@ import { PLATFORM_COPY } from "../../platform-copy.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AppearanceControl } from "./AppearanceControl.js";
 import { PalettePicker } from "./PalettePicker.js";
-import styles from "./SettingsView.module.css";
+import { settingsStyles as styles } from "./styles.js";
 import { UnitsControl } from "./UnitsControl.js";
 
 export function PreferencesSection(): ReactElement {

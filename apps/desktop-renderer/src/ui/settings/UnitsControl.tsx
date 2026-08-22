@@ -1,7 +1,7 @@
 import type { UnitsPreference } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
-import AppearanceStyles from "./AppearanceControl.module.css";
 
 const OPTIONS: readonly { readonly value: UnitsPreference; readonly label: string }[] =
   Object.freeze([
@@ -15,16 +15,18 @@ export function UnitsControl(): ReactElement {
   const disabled = port === null || units.status === "loading" || units.status === "saving";
 
   return (
-    <div className={AppearanceStyles.seg} role="group" aria-label="Display units">
+    <div
+      className="flex shrink-0 rounded-ctl border border-line bg-sunk p-0.5"
+      role="group"
+      aria-label="Display units"
+    >
       {OPTIONS.map((option) => (
-        <button
+        <Button
           key={option.value}
           type="button"
-          className={
-            option.value === units.value
-              ? `${AppearanceStyles.option} ${AppearanceStyles.on}`
-              : AppearanceStyles.option
-          }
+          variant="ghost"
+          size="sm"
+          className="text-ink-2 hover:text-ink aria-pressed:bg-surface aria-pressed:text-ink aria-pressed:shadow-[var(--edge),var(--elev-1)]"
           aria-pressed={option.value === units.value}
           disabled={disabled}
           onClick={() => {
@@ -32,7 +34,7 @@ export function UnitsControl(): ReactElement {
           }}
         >
           {option.label}
-        </button>
+        </Button>
       ))}
     </div>
   );

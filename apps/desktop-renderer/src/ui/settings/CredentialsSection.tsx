@@ -18,7 +18,7 @@ import { SetupRow } from "../onboarding/SetupRow.js";
 import { BUTTON_DANGER_QUIET_SM, BUTTON_QUIET_SM } from "../onboarding/SetupCard.js";
 import { InlineConfirmation } from "../shared/InlineConfirmation.js";
 import { credentialRuntimeLabel } from "./copy.js";
-import styles from "./SettingsView.module.css";
+import { settingsStyles as styles } from "./styles.js";
 
 export const SETUP_CREDENTIAL_EDIT_EVENT = "enduragent:edit-credential";
 
