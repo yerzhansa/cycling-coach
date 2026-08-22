@@ -1,9 +1,3 @@
-import {
-  BUTTON_DANGER_QUIET_SM,
-  BUTTON_OUTLINE_SM,
-  BUTTON_SOLID_SM,
-} from "../shared/buttons.js";
-
 export const settingsStyles = {
   heading:
     "settings-heading mx-1 mt-[26px] mb-2 text-[11px] font-normal tracking-[0.07em] text-ink-3 uppercase first:mt-0",
@@ -15,9 +9,6 @@ export const settingsStyles = {
   rowTitle: "settings-row-title text-sm font-semibold",
   rowDetail: "settings-row-detail mt-px text-[12.5px] text-ink-2",
   dangerTitle: "text-danger!",
-  button: BUTTON_OUTLINE_SM,
-  primary: BUTTON_SOLID_SM,
-  danger: BUTTON_DANGER_QUIET_SM,
   actions: "flex flex-wrap justify-end gap-2 border-t border-line px-4 py-[13px]",
   control:
     "h-ctl w-full min-w-0 max-w-[260px] shrink-0 rounded-ctl border border-input bg-background px-ctl-px text-sm text-foreground shadow-elev-1 outline-none placeholder:text-ink-2 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/20 disabled:opacity-64 aria-invalid:border-danger aria-invalid:ring-3 aria-invalid:ring-danger/20",
@@ -44,8 +35,7 @@ export const settingsStyles = {
   dialog:
     "new-settings-dialog w-[min(520px,calc(100vw-48px))] max-w-none max-h-[min(70vh,620px)] rounded-card border border-line-2 bg-surface p-5 text-ink shadow-elev-4 backdrop:bg-[var(--scrim)]",
   dialogHeader: "flex items-baseline justify-between gap-3 [&_h2]:m-0 [&_h2]:text-[15px]",
-  dialogContent:
-    "mt-3 text-[13.5px] text-ink-2 [&_ol]:m-0 [&_ol]:pl-5 [&_li]:mb-1.5",
+  dialogContent: "mt-3 text-[13.5px] text-ink-2 [&_ol]:m-0 [&_ol]:pl-5 [&_li]:mb-1.5",
   dialogActions:
     "mt-4 flex items-center justify-end gap-2.5 [&_a]:text-[13px] [&_a]:text-ink [&_a]:underline [&_a]:underline-offset-4",
 } as const;

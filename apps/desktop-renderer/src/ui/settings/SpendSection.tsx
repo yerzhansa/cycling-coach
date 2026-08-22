@@ -1,5 +1,6 @@
 import type { SpendRouteSummary, SpendSummary } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { currency, notionalSpendCopy, routeSpendCopy } from "../../state/adapters/spend.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { settingsStyles as styles } from "./styles.js";
@@ -119,16 +120,17 @@ export function SpendSection(): ReactElement {
               port?.changeCap(event.target.value);
             }}
           />
-          <button
+          <Button
             type="button"
-            className={styles.primary}
+            variant="default"
+            size="sm"
             disabled={spend.saving}
             onClick={() => {
               port?.save();
             }}
           >
             Save cap
-          </button>
+          </Button>
           {spend.capError === null ? null : (
             <p className={`${styles.error} ${styles.capError}`} role="status">
               {spend.capError}

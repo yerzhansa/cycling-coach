@@ -1,6 +1,8 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buttonVariants } from "../src/components/ui/button.js";
+import { cn } from "../src/lib/utils.js";
 import type {
   TelegramAllowedSenders,
   TelegramControlStatus,
@@ -9,10 +11,6 @@ import type {
 import { EMPTY_SETTINGS_SURFACE, type TelegramSettingsPort } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { TelegramSection } from "../src/ui/settings/TelegramSection.js";
-import {
-  BUTTON_DANGER_QUIET_SM,
-  BUTTON_DANGER_SOLID_SM,
-} from "../src/ui/shared/buttons.js";
 
 function status(overrides: Partial<TelegramControlStatus> = {}): TelegramControlStatus {
   return {
@@ -247,9 +245,7 @@ describe("Telegram settings surface", () => {
         { senderId: 202, role: "additional" },
       ],
     };
-    const port = setup(
-      readyState(connected, allowedSenders),
-    );
+    const port = setup(readyState(connected, allowedSenders));
 
     expect(screen.getByText("@desktop_coach_bot")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Acknowledge" }));
@@ -263,7 +259,7 @@ describe("Telegram settings surface", () => {
     const removeSender = within(users).getByRole("button", {
       name: "Remove Telegram user 202",
     });
-    expect(removeSender.className).toBe(BUTTON_DANGER_QUIET_SM);
+    expect(removeSender.className).toBe(cn(buttonVariants({ variant: "destructive", size: "sm" })));
 
     await user.click(removeSender);
     let confirmation = within(users).getByRole("group", {
@@ -322,9 +318,7 @@ describe("Telegram settings surface", () => {
       }));
     });
     await waitFor(() =>
-      expect(
-        within(users).queryByRole("group", { name: "Remove Telegram user 202?" }),
-      ).toBeNull(),
+      expect(within(users).queryByRole("group", { name: "Remove Telegram user 202?" })).toBeNull(),
     );
 
     const senderId = screen.getByLabelText("Add a Telegram user ID");
@@ -558,7 +552,9 @@ describe("Telegram settings surface", () => {
     ).toBeVisible();
 
     const deleteTrigger = screen.getByRole("button", { name: "Delete" });
-    expect(deleteTrigger.className).toBe(BUTTON_DANGER_QUIET_SM);
+    expect(deleteTrigger.className).toBe(
+      cn(buttonVariants({ variant: "destructive", size: "sm" })),
+    );
     expect(screen.queryByRole("button", { name: "Replace token from clipboard" })).toBeNull();
 
     await user.click(deleteTrigger);
@@ -574,7 +570,9 @@ describe("Telegram settings surface", () => {
       "Delete connection",
     ]);
     expect(confirmationButtons[0]).toHaveFocus();
-    expect(confirmationButtons[1]?.className).toBe(BUTTON_DANGER_SOLID_SM);
+    expect(confirmationButtons[1]?.className).toBe(
+      cn(buttonVariants({ variant: "destructive-solid", size: "sm" })),
+    );
     expect(port.remove).not.toHaveBeenCalled();
 
     await user.click(confirmationButtons[0]);

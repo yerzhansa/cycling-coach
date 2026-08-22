@@ -51,16 +51,12 @@ const NON_PALETTE_TOKENS = new Set([
   "--scrollbar-w",
   "--scrollbar-thumb",
   "--scrollbar-thumb-hover",
-  "--edge",
-  "--sheen",
-  "--press",
   "--elev-1",
   "--elev-2",
   "--elev-3",
   "--elev-4",
   "--scrim",
   "--tint",
-  "--grain",
   "--chevron",
 ]);
 
@@ -279,11 +275,7 @@ describe("palette engine", () => {
           "--ctl-h-sm",
           "--ctl-h",
           "--ctl-h-lg",
-          "--edge",
-          "--sheen",
-          "--press",
           "--elev-1",
-          "--grain",
         ].map((property) => [property, declared.get(property)]),
       ),
     ).toEqual({
@@ -308,11 +300,7 @@ describe("palette engine", () => {
       "--ctl-h-sm": "28px",
       "--ctl-h": "32px",
       "--ctl-h-lg": "40px",
-      "--edge": "0 0 #0000",
-      "--sheen": "0 0 #0000",
-      "--press": "0 0 #0000",
       "--elev-1": "0 0 #0000",
-      "--grain": "0 0 #0000",
     });
   });
 

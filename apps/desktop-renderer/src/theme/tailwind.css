@@ -1,6 +1,7 @@
 @layer theme, base, surface, components, utilities;
 
 @import "tailwindcss/theme.css" layer(theme) theme(reference);
+@import "tailwindcss/preflight.css" layer(base);
 @import "tailwindcss/utilities.css" layer(utilities);
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -97,16 +98,6 @@
   --shadow-elev-2: var(--elev-2);
   --shadow-elev-3: var(--elev-3);
   --shadow-elev-4: var(--elev-4);
-}
-
-@layer base {
-  *,
-  ::before,
-  ::after,
-  ::backdrop {
-    border-style: solid;
-    border-width: 0;
-  }
 }
 
 @keyframes first-sync-sweep {

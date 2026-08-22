@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buttonVariants } from "../src/components/ui/button.js";
+import { cn } from "../src/lib/utils.js";
 import type { OnboardingLlmConfiguration } from "../src/onboarding/bridge.js";
 import type { CredentialSettingsPort } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
@@ -11,7 +13,6 @@ import {
   RETRY_INTAKE_SAVE_LABEL,
   SETUP_MENU_LABEL,
 } from "../src/ui/onboarding/copy.js";
-import { BUTTON_DANGER_QUIET_SM } from "../src/ui/shared/buttons.js";
 import {
   chooseLane,
   claudeCliNoteText,
@@ -378,7 +379,7 @@ describe("setup card", () => {
     expect(document.querySelector('[data-setup-trigger="training"]')).toBeNull();
     const remove = screen.getByRole("button", { name: "Delete the Intervals.icu connection" });
     expect(remove).toHaveTextContent("Delete");
-    expect(remove.className).toBe(BUTTON_DANGER_QUIET_SM);
+    expect(remove.className).toBe(cn(buttonVariants({ variant: "destructive", size: "sm" })));
     expect(setupRow("training").querySelectorAll("button")).toHaveLength(2);
     wizard.controller.dispose();
   });

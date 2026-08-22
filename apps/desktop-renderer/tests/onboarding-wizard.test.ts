@@ -21,7 +21,6 @@ const SETUP_SOURCES = [
   "InfoTip.tsx",
   "../../app/SetupGate.tsx",
   "CredentialField.tsx",
-  "../shared/buttons.ts",
 ] as const;
 
 const BANNED_TRAINING_TERMS = [
@@ -289,16 +288,17 @@ describe("desktop onboarding wizard", () => {
   });
 
   it("keeps setup control heights on the shared height tokens", async () => {
-    const [button, bridge] = await Promise.all([
+    const [button, wizard, telegram] = await Promise.all([
       readFile(new URL("../src/components/ui/button.tsx", import.meta.url), "utf8"),
-      readFile(new URL("../src/ui/shared/buttons.ts", import.meta.url), "utf8"),
+      readFile(new URL("../src/ui/onboarding/OnboardingWizard.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../src/ui/onboarding/TelegramRow.tsx", import.meta.url), "utf8"),
     ]);
     expect(button).toContain("h-ctl-sm");
     expect(button).toContain("h-ctl-lg");
-    expect(bridge).toContain('size: "sm"');
-    expect(bridge).toContain('size: "lg"');
-    expect(`${button}\n${bridge}`).not.toContain("h-[28px]");
-    expect(`${button}\n${bridge}`).not.toContain("h-[36px]");
+    expect(telegram).toContain('size="sm"');
+    expect(wizard).toContain('size="lg"');
+    expect(`${button}\n${wizard}\n${telegram}`).not.toContain("h-[28px]");
+    expect(`${button}\n${wizard}\n${telegram}`).not.toContain("h-[36px]");
   });
 
   it("keeps one field class shared by every setup input", async () => {
@@ -366,11 +366,10 @@ describe("desktop onboarding wizard", () => {
         brand: false,
       });
     }
-    const [buttons, button] = await Promise.all([
-      Promise.resolve(sources[SETUP_SOURCES.indexOf("../shared/buttons.ts")] ?? ""),
-      readFile(new URL("../src/components/ui/button.tsx", import.meta.url), "utf8"),
-    ]);
-    expect(buttons).toContain('variant: "default"');
+    const button = await readFile(
+      new URL("../src/components/ui/button.tsx", import.meta.url),
+      "utf8",
+    );
     expect(button).toContain("bg-primary text-primary-foreground");
     const row = sources[SETUP_SOURCES.indexOf("SetupRow.tsx")] ?? "";
     expect(row).toContain("text-ok");

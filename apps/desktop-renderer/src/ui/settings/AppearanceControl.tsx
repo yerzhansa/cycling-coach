@@ -25,7 +25,7 @@ export function AppearanceControl(): ReactElement {
           type="button"
           variant="ghost"
           size="sm"
-          className="text-ink-2 hover:text-ink aria-pressed:bg-surface aria-pressed:text-ink aria-pressed:shadow-[var(--edge),var(--elev-1)]"
+          className="text-ink-2 hover:text-ink aria-pressed:bg-surface aria-pressed:text-ink aria-pressed:shadow-elev-1"
           aria-pressed={option.value === appearance}
           onClick={() => {
             setAppearance(option.value);

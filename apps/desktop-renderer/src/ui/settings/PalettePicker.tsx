@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { cn } from "../../lib/utils.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { PALETTES } from "../../theme/palettes.js";
@@ -14,10 +15,11 @@ export function PalettePicker(): ReactElement {
       aria-label="App palette"
     >
       {PALETTES.map((palette) => (
-        <button
+        <Button
           key={palette.id}
           type="button"
-          className="flex cursor-pointer flex-col gap-1.5 rounded-ctl border-0 bg-transparent p-0 font-inherit"
+          variant="ghost"
+          className="flex h-auto cursor-pointer flex-col gap-1.5 rounded-ctl border-0 bg-transparent p-0 font-inherit"
           aria-pressed={palette.id === paletteId}
           aria-label={`Use the ${palette.name} palette`}
           onClick={() => {
@@ -26,7 +28,7 @@ export function PalettePicker(): ReactElement {
         >
           <span
             className={cn(
-              "flex h-10 overflow-hidden rounded-ctl border border-line-2 shadow-[var(--edge),var(--elev-1)]",
+              "flex h-10 overflow-hidden rounded-ctl border border-line-2 shadow-elev-1",
               palette.id === paletteId && "outline-2 outline-offset-2 outline-ink",
             )}
             aria-hidden="true"
@@ -46,7 +48,7 @@ export function PalettePicker(): ReactElement {
           >
             {palette.name}
           </span>
-        </button>
+        </Button>
       ))}
     </div>
   );

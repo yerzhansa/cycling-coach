@@ -2,8 +2,6 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buttonVariants } from "../src/components/ui/button.js";
-import { cn } from "../src/lib/utils.js";
-import * as buttons from "../src/ui/shared/buttons.js";
 
 const themeRoot = resolve(import.meta.dirname, "..", "src", "theme");
 
@@ -38,20 +36,6 @@ function hexValues(source: string, token: string): ReadonlyArray<string> {
 }
 
 describe("button primitives", () => {
-  it("keeps the legacy bridge on the shadcn variant map", () => {
-    expect(buttons.BUTTON_SOLID_SM).toBe(cn(buttonVariants({ variant: "default", size: "sm" })));
-    expect(buttons.BUTTON_OUTLINE_SM).toBe(cn(buttonVariants({ variant: "outline", size: "sm" })));
-    expect(buttons.BUTTON_QUIET_SM).toBe(cn(buttonVariants({ variant: "ghost", size: "sm" })));
-    expect(buttons.BUTTON_COMPACT_QUIET_SM).toBe(buttons.BUTTON_QUIET_SM);
-    expect(buttons.BUTTON_DANGER_QUIET_SM).toBe(
-      cn(buttonVariants({ variant: "destructive", size: "sm" })),
-    );
-    expect(buttons.BUTTON_DANGER_SOLID_SM).toBe(
-      cn(buttonVariants({ variant: "destructive-solid", size: "sm" })),
-    );
-    expect(buttons.BUTTON_PRIMARY).toBe(cn(buttonVariants({ variant: "default", size: "lg" })));
-  });
-
   it("uses the Primer control sizes and radii for every button size", () => {
     expect(classes(buttonVariants({ size: "sm" }))).toEqual(
       expect.arrayContaining(["h-ctl-sm", "rounded-ctl", "text-sm"]),
@@ -79,8 +63,8 @@ describe("button primitives", () => {
   });
 
   it("keeps quiet and solid danger actions visually distinct", () => {
-    const quiet = classes(buttons.BUTTON_DANGER_QUIET_SM);
-    const solid = classes(buttons.BUTTON_DANGER_SOLID_SM);
+    const quiet = classes(buttonVariants({ variant: "destructive", size: "sm" }));
+    const solid = classes(buttonVariants({ variant: "destructive-solid", size: "sm" }));
     expect(quiet).toEqual(expect.arrayContaining(["bg-destructive/10", "text-destructive"]));
     expect(solid).toEqual(
       expect.arrayContaining(["border-destructive", "bg-destructive", "text-background"]),
@@ -100,11 +84,20 @@ describe("button primitives", () => {
     for (const [fill, text] of pairs) expect(contrast(fill, text)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("keeps resting button shadows and Tailwind preflight out", async () => {
-    for (const value of Object.values(buttons)) {
+  it("keeps resting button shadows out and Tailwind preflight in", async () => {
+    for (const variant of [
+      "default",
+      "outline",
+      "secondary",
+      "ghost",
+      "destructive",
+      "destructive-solid",
+      "link",
+    ] as const) {
+      const value = buttonVariants({ variant });
       expect(classes(value).filter((entry) => entry.startsWith("shadow-"))).toEqual([]);
     }
     const entry = await readFile(resolve(themeRoot, "tailwind.css"), "utf8");
-    expect(entry).not.toContain("preflight");
+    expect(entry).toContain('tailwindcss/preflight.css" layer(base)');
   });
 });

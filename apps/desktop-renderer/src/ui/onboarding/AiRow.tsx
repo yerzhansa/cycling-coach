@@ -2,6 +2,8 @@ import { Menu } from "@base-ui/react/menu";
 import { isKeylessProvider } from "@enduragent/coach-contract";
 import { Check } from "lucide-react";
 import { useEffect, useRef, useState, type ReactElement } from "react";
+import { Button, buttonVariants } from "../../components/ui/button.js";
+import { cn } from "../../lib/utils.js";
 import {
   CUSTOM_MODEL_SELECTION,
   DESKTOP_CREDENTIAL_SLOTS,
@@ -72,9 +74,6 @@ import {
   type SetupCredentialEditDetail,
 } from "../settings/CredentialsSection.js";
 import {
-  BUTTON_OUTLINE_SM,
-  BUTTON_QUIET_SM,
-  BUTTON_SOLID_SM,
   SETUP_FIELD_CLASS,
   SETUP_HINT_CLASS,
   SETUP_LABEL_CLASS,
@@ -356,11 +355,13 @@ export function AiRow(props: {
                   aria-label={
                     hasDisplayedProvider ? AI_TRIGGER_LABELS.set : AI_TRIGGER_LABELS.unset
                   }
-                  className={
-                    props.placement === "gate" || !hasDisplayedProvider
-                      ? BUTTON_OUTLINE_SM
-                      : BUTTON_QUIET_SM
-                  }
+                  className={cn(
+                    buttonVariants({
+                      variant:
+                        props.placement === "gate" || !hasDisplayedProvider ? "outline" : "ghost",
+                      size: "sm",
+                    }),
+                  )}
                 >
                   {hasDisplayedProvider ? "Change" : "Choose"}
                 </Menu.Trigger>
@@ -443,9 +444,10 @@ export function AiRow(props: {
             </span>
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               {autoChatGptPanel && !chatGptLoginPending ? null : (
-                <button
+                <Button
                   type="button"
-                  className={BUTTON_QUIET_SM}
+                  variant="ghost"
+                  size="sm"
                   disabled={
                     chatGptLoginPending ? surface.loading : controlsDisabled || chatGptActivating
                   }
@@ -458,11 +460,12 @@ export function AiRow(props: {
                   }}
                 >
                   {chatGptLoginPending ? CHATGPT_CANCEL_SIGN_IN_LABEL : "Cancel"}
-                </button>
+                </Button>
               )}
-              <button
+              <Button
                 type="button"
-                className={BUTTON_SOLID_SM}
+                variant="default"
+                size="sm"
                 disabled={controlsDisabled || chatGptLoginPending || chatGptActivating}
                 onClick={() => {
                   if (chatGptStored) actions?.retryChatGptActivation();
@@ -470,7 +473,7 @@ export function AiRow(props: {
                 }}
               >
                 {chatGptPrimaryLabel}
-              </button>
+              </Button>
             </div>
           </div>
           {chatGptStatusCopy === null ? null : (
@@ -535,24 +538,26 @@ export function AiRow(props: {
                 </div>
               )}
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button
+                <Button
                   type="button"
-                  className={BUTTON_QUIET_SM}
+                  variant="ghost"
+                  size="sm"
                   disabled={controlsDisabled}
                   aria-label={AI_CANCEL_LABEL}
                   onClick={() => revert()}
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
-                  className={BUTTON_SOLID_SM}
+                  variant="default"
+                  size="sm"
                   disabled={controlsDisabled}
                   aria-label={AI_SAVE_LABEL}
                   onClick={save}
                 >
                   Save
-                </button>
+                </Button>
               </div>
               <span className={SETUP_HINT_CLASS}>{API_KEY_PANEL_HINT}</span>
               <details className="mt-2">
