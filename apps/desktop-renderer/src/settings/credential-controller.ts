@@ -637,10 +637,11 @@ export function createCredentialSettingsController(input: {
       return operation ?? Promise.resolve();
     }
     const content = contentState();
-    if (content === null || content.repairCredential !== null || content.confirmation === null) {
+    if (content === null || content.confirmation === null) {
       return Promise.resolve();
     }
     if (content.confirmation === "all") return confirmReset();
+    if (content.repairCredential !== null) return Promise.resolve();
     const target = content.entries.find((entry) => entry.credential === content.confirmation);
     if (target === undefined) return Promise.resolve();
     const releaseMutation = input.beginMutation();
