@@ -1,5 +1,15 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,8 +19,10 @@ import {
   type SelectDesktopCredentialBackendOptions,
 } from "../src/main/credential-backend-selection.js";
 import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
+import { assertPosixCredentialRoot } from "../src/main/credential-envelope-root-binding.js";
 import {
   createCredentialVault,
+  CREDENTIAL_DIRECTORY_MODE,
   type CredentialEncryptionPort,
   type DesktopCredentialSlot,
 } from "../src/main/credential-vault.js";
@@ -32,6 +44,7 @@ import {
   type KeychainBindingTransport,
 } from "../src/main/keychain-binding.js";
 import {
+  TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
   TELEGRAM_PROFILE_FILE_NAME,
   createTelegramCredentialVault,
 } from "../src/main/telegram-credential-vault.js";
@@ -180,6 +193,139 @@ afterEach(async () => {
 });
 
 describe("backend selection", () => {
+  posixIt("rejects a private credential root owned by another uid", () => {
+    if (typeof process.getuid !== "function") throw new TypeError("uid unavailable");
+    const currentUid = process.getuid();
+    const metadata = {
+      isDirectory: () => true,
+      isSymbolicLink: () => false,
+      mode: CREDENTIAL_DIRECTORY_MODE,
+      uid: currentUid + 1,
+    } as Parameters<typeof assertPosixCredentialRoot>[0];
+
+    expect(() => assertPosixCredentialRoot(metadata, CREDENTIAL_DIRECTORY_MODE)).toThrow(TypeError);
+  });
+
+  posixIt("refuses startup key retirement when a credential root redirects", async () => {
+    const roots = await fixture();
+    const hiddenRoot = `${roots.credentialRoot}-hidden`;
+    const redirectedRoot = `${roots.credentialRoot}-redirected`;
+    const hiddenEnvelope = join(hiddenRoot, "anthropic.bin");
+    await mkdir(hiddenRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(redirectedRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await writeFile(hiddenEnvelope, "hidden-envelope");
+    await symlink(redirectedRoot, roots.credentialRoot, "dir");
+    const transport = transportOf(
+      PROBE_OK,
+      readKey(randomBytes(KEYCHAIN_KEY_BYTES)),
+      { ok: true, op: "delete-key", deleted: true },
+    );
+
+    const selected = await selectDesktopCredentialBackend(selection(roots, transport));
+
+    expect(selected).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unknown",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe"]);
+    await expect(readFile(hiddenEnvelope, "utf8")).resolves.toBe("hidden-envelope");
+  });
+
+  posixIt("refuses startup key retirement when a credential root is a dangling link", async () => {
+    const roots = await fixture();
+    await symlink(`${roots.credentialRoot}-missing`, roots.credentialRoot, "dir");
+    const transport = transportOf(
+      PROBE_OK,
+      readKey(randomBytes(KEYCHAIN_KEY_BYTES)),
+      { ok: true, op: "delete-key", deleted: true },
+    );
+
+    const selected = await selectDesktopCredentialBackend(selection(roots, transport));
+
+    expect(selected).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unknown",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe"]);
+  });
+
+  posixIt("refuses startup key retirement when a credential root has unsafe mode", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await chmod(roots.credentialRoot, 0o755);
+    const transport = transportOf(
+      PROBE_OK,
+      readKey(randomBytes(KEYCHAIN_KEY_BYTES)),
+      { ok: true, op: "delete-key", deleted: true },
+    );
+
+    const selected = await selectDesktopCredentialBackend(selection(roots, transport));
+
+    expect(selected).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unknown",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe"]);
+  });
+
+  posixIt(
+    "refuses startup key retirement when a credential root changes during census",
+    async () => {
+      const roots = await fixture();
+      await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+      const readEnvelopeDirectory = vi.fn(async (root: string) => {
+        if (root === roots.credentialRoot) {
+          await rename(root, `${root}-displaced`);
+          await mkdir(root, { mode: CREDENTIAL_DIRECTORY_MODE });
+        }
+        return [];
+      });
+      const transport = transportOf(
+        PROBE_OK,
+        readKey(randomBytes(KEYCHAIN_KEY_BYTES)),
+        { ok: true, op: "delete-key", deleted: true },
+      );
+
+      const selected = await selectDesktopCredentialBackend({
+        ...selection(roots, transport),
+        readEnvelopeDirectory,
+      });
+
+      expect(selected).toMatchObject({
+        status: "refused",
+        reason: "encryption-unavailable",
+        code: "unknown",
+      });
+      expect(readEnvelopeDirectory).toHaveBeenCalledOnce();
+      expect(transport.requests.map((request) => request.op)).toEqual(["probe"]);
+    },
+  );
+
+  posixIt("retires an orphan key when both bound roots are stably empty", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(roots.telegramRoot, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    const transport = transportOf(
+      PROBE_OK,
+      readKey(randomBytes(KEYCHAIN_KEY_BYTES)),
+      { ok: true, op: "delete-key", deleted: true },
+    );
+
+    const selected = await selectDesktopCredentialBackend(selection(roots, transport));
+
+    expect(selected).toMatchObject({ status: "keychain", createdKey: false });
+    if (selected.status !== "keychain") return;
+    expect(selected.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "delete-key",
+    ]);
+  });
+
   posixIt("selects the keychain backend on a team-signed darwin build", async () => {
     const roots = await fixture();
     const key = randomBytes(KEYCHAIN_KEY_BYTES);
@@ -582,7 +728,7 @@ describe("keychain failure mapping", () => {
 
   posixIt("lets a recognised transient key-id one envelope block key creation", async () => {
     const roots = await fixture();
-    await mkdir(roots.credentialRoot, { recursive: true });
+    await mkdir(roots.credentialRoot, { recursive: true, mode: CREDENTIAL_DIRECTORY_MODE });
     const transient = sealCredentialEnvelope(
       randomBytes(KEYCHAIN_KEY_BYTES),
       "transient-secret",

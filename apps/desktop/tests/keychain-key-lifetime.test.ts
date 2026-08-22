@@ -1,10 +1,19 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCredentialVault,
+  CREDENTIAL_DIRECTORY_MODE,
   type CredentialEncryptionPort,
   type DesktopCredentialSlot,
 } from "../src/main/credential-vault.js";
@@ -24,6 +33,7 @@ import {
 } from "../src/main/keychain-binding.js";
 import { retireKeychainKeyWhenLastEnvelopeGone } from "../src/main/keychain-key-lifetime.js";
 import {
+  TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
   TELEGRAM_PROFILE_FILE_NAME,
   createTelegramCredentialVault,
 } from "../src/main/telegram-credential-vault.js";
@@ -94,13 +104,15 @@ async function keychainEncryption(): Promise<CredentialEncryptionPort> {
 async function retireKey(
   roots: Fixture,
   transport: RecordingTransport,
-  readEnvelopeFile?: typeof readFile,
+  readEnvelopeFile?: (path: string) => Promise<Buffer>,
+  readEnvelopeDirectory?: (path: string) => Promise<string[]>,
 ) {
   const serialize = createCredentialEnvelopeMutationLock();
   return await serialize((lockProof) =>
     retireKeychainKeyWhenLastEnvelopeGone({
       ...roots,
       readEnvelopeFile,
+      readEnvelopeDirectory,
       lockProof,
       deleteKey: async () => {
         const deleted = await transport.send({
@@ -160,6 +172,38 @@ afterEach(async () => {
 });
 
 describe("keychain key retirement", () => {
+  posixIt("refuses key retirement when a credential root redirects", async () => {
+    const roots = await fixture();
+    const hiddenRoot = `${roots.credentialRoot}-hidden`;
+    const redirectedRoot = `${roots.credentialRoot}-redirected`;
+    const hiddenEnvelope = join(hiddenRoot, "anthropic.bin");
+    await mkdir(hiddenRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(redirectedRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await writeFile(hiddenEnvelope, "hidden-envelope");
+    await symlink(redirectedRoot, roots.credentialRoot, "dir");
+    const transport = transportOf({ ok: true, op: "delete-key", deleted: true });
+
+    await expect(retireKey(roots, transport)).resolves.toEqual({
+      status: "failed",
+      code: "unknown",
+    });
+    expect(transport.requests).toHaveLength(0);
+    await expect(readFile(hiddenEnvelope, "utf8")).resolves.toBe("hidden-envelope");
+  });
+
+  posixIt("retires the key when both credential roots remain missing", async () => {
+    const roots = await fixture();
+    const readEnvelopeFile = vi.fn(async () => Buffer.from("must-not-be-read"));
+    const readEnvelopeDirectory = vi.fn(async () => ["must-not-be-read.bin"]);
+    const transport = transportOf({ ok: true, op: "delete-key", deleted: true });
+
+    await expect(
+      retireKey(roots, transport, readEnvelopeFile as never, readEnvelopeDirectory),
+    ).resolves.toEqual({ status: "deleted" });
+    expect(readEnvelopeFile).not.toHaveBeenCalled();
+    expect(readEnvelopeDirectory).not.toHaveBeenCalled();
+  });
+
   posixIt("keeps the key while any envelope survives in either vault", async () => {
     const roots = await fixture();
     const encryption = await keychainEncryption();
@@ -205,6 +249,7 @@ describe("keychain key retirement", () => {
 
   posixIt("keeps the key while an envelope exists but cannot be read", async () => {
     const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
     const transport = transportOf();
 
     await expect(
@@ -217,8 +262,11 @@ describe("keychain key retirement", () => {
 
   posixIt("keeps the key while recognised transient envelope artifacts survive", async () => {
     const roots = await fixture();
-    await mkdir(roots.credentialRoot, { recursive: true });
-    await mkdir(roots.telegramRoot, { recursive: true });
+    await mkdir(roots.credentialRoot, { recursive: true, mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(roots.telegramRoot, {
+      recursive: true,
+      mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
+    });
     await writeFile(join(roots.credentialRoot, ".anthropic.bin.write-1.tmp"), "credential");
     await writeFile(
       join(roots.telegramRoot, `.${TELEGRAM_PROFILE_FILE_NAME}.delete-1.deleted`),
@@ -236,7 +284,7 @@ describe("keychain key retirement", () => {
 
   posixIt("counts only canonical legacy envelopes as user-facing recovery", async () => {
     const roots = await fixture();
-    await mkdir(roots.credentialRoot, { recursive: true });
+    await mkdir(roots.credentialRoot, { recursive: true, mode: CREDENTIAL_DIRECTORY_MODE });
     await writeFile(join(roots.credentialRoot, "anthropic.bin"), "legacy-canonical");
     await writeFile(join(roots.credentialRoot, ".openrouter.bin.write-1.tmp"), "legacy-transient");
 
@@ -249,7 +297,7 @@ describe("keychain key retirement", () => {
 
   posixIt("keeps transient-only recovery out of the user-facing count", async () => {
     const roots = await fixture();
-    await mkdir(roots.credentialRoot, { recursive: true });
+    await mkdir(roots.credentialRoot, { recursive: true, mode: CREDENTIAL_DIRECTORY_MODE });
     await writeFile(join(roots.credentialRoot, ".anthropic.bin.write-1.tmp"), "transient");
     const transport = transportOf();
 
@@ -266,7 +314,10 @@ describe("keychain key retirement", () => {
 
   posixIt("counts a transient key-id one envelope as a keychain dependent", async () => {
     const roots = await fixture();
-    await mkdir(roots.telegramRoot, { recursive: true });
+    await mkdir(roots.telegramRoot, {
+      recursive: true,
+      mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
+    });
     const envelope = sealCredentialEnvelope(randomBytes(KEYCHAIN_KEY_BYTES), "transient-token");
     await writeFile(
       join(roots.telegramRoot, `.${TELEGRAM_PROFILE_FILE_NAME}.write-1.tmp`),
@@ -283,8 +334,8 @@ describe("keychain key retirement", () => {
 
   posixIt("ignores files outside the credential transient namespaces", async () => {
     const roots = await fixture();
-    await mkdir(roots.credentialRoot, { recursive: true });
-    await mkdir(roots.telegramRoot, { recursive: true });
+    await mkdir(roots.credentialRoot, { recursive: true, mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(roots.telegramRoot, { recursive: true, mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
     await writeFile(join(roots.credentialRoot, ".unknown.bin.cleanup.tmp"), "unrelated");
     await writeFile(
       join(roots.telegramRoot, ".telegram-desired-state.json.cleanup.deleted"),

@@ -172,11 +172,17 @@ export async function createKeychainPartitionEncryption(
   if (probe.op !== "probe" || probe.teamIdentifier !== KEYCHAIN_TEAM_IDENTIFIER) {
     return refused("unknown");
   }
-  const envelopeCensus = async (): Promise<KeychainEnvelopeCensus> =>
-    typeof options.envelopeCensus === "function"
-      ? await options.envelopeCensus()
-      : options.envelopeCensus;
+  const envelopeCensus = async (): Promise<KeychainEnvelopeCensus | undefined> => {
+    try {
+      return typeof options.envelopeCensus === "function"
+        ? await options.envelopeCensus()
+        : options.envelopeCensus;
+    } catch {
+      return undefined;
+    }
+  };
   const initialCensus = await envelopeCensus();
+  if (initialCensus === undefined) return refused("unknown", options.keyCleanupPending ?? false);
 
   const createMaterial = async (): Promise<
     | Readonly<{ status: "ready"; key: Buffer }>
@@ -223,7 +229,7 @@ export async function createKeychainPartitionEncryption(
       if (holder.key !== null) return { status: "ready" };
       if (holder.cleanupPending) {
         const census = await envelopeCensus();
-        if (census.deletionBlockers > 0) {
+        if (census === undefined || census.deletionBlockers > 0) {
           holder.failure = "unknown";
           return { status: "failed", code: holder.failure };
         }
@@ -245,6 +251,10 @@ export async function createKeychainPartitionEncryption(
         return existing;
       }
       const census = await envelopeCensus();
+      if (census === undefined) {
+        holder.failure = "unknown";
+        return { status: "failed", code: holder.failure };
+      }
       if (census.keychainDependents > 0) {
         holder.failure = "item-not-found";
         return { status: "failed", code: holder.failure };
@@ -260,7 +270,7 @@ export async function createKeychainPartitionEncryption(
     };
     const deleteKey = async (): Promise<KeychainKeyDeletion> => {
       const census = await envelopeCensus();
-      if (census.deletionBlockers > 0) {
+      if (census === undefined || census.deletionBlockers > 0) {
         holder.failure = "unknown";
         return { status: "failed", code: holder.failure };
       }
