@@ -11,7 +11,6 @@ import {
   DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
-  DESKTOP_RELEASE_NOTES_CHANNEL,
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
   DESKTOP_TRANSCRIPT_PAGE_CHANNEL,
@@ -195,8 +194,6 @@ const INTERVALS_CREDENTIAL_REFUSAL_REASONS = new Set([
   "storage-failed",
   "runtime-unavailable",
 ]);
-const RELEASES_URL = "https://github.com/yerzhansa/enduragent/releases";
-const RELEASE_NOTES_MAX_TOTAL_BYTES = 64 * 1024;
 const TRANSCRIPT_PAGE_MAX_TURNS = 50;
 const TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES = 266_240;
 const TRANSCRIPT_CURSOR_LENGTH = 152;
@@ -206,8 +203,6 @@ const ARCHIVED_TRANSCRIPT_CURSOR_VERSION = 2;
 const ARCHIVED_CONVERSATIONS_MAX_ENTRIES = 200;
 const BOUNDARY_REF_PATTERN = /^[a-f0-9]{64}$/;
 const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const RELEASE_VERSION_RE =
-  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const STABLE_VERSION_RE = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const textEncoder = new TextEncoder();
 
@@ -652,60 +647,6 @@ function parseCredentialDeleteInput(value: unknown): { readonly credential: stri
     throw new TypeError();
   }
   return { credential: value.credential };
-}
-
-function releaseVersion(value: unknown): value is string {
-  return safeString(value, 64) && RELEASE_VERSION_RE.test(value);
-}
-
-function releaseTagUrl(version: string): string {
-  return `${RELEASES_URL}/tag/cycling-coach@${encodeURIComponent(version)}`;
-}
-
-function parseReleaseNotes(value: unknown): unknown {
-  if (!record(value) || (value.status !== "available" && value.status !== "unavailable")) {
-    throw new TypeError();
-  }
-  if (value.status === "unavailable") {
-    if (
-      !exactKeys(value, ["status", "version", "releaseUrl"]) ||
-      (value.version !== null && !releaseVersion(value.version)) ||
-      typeof value.releaseUrl !== "string" ||
-      value.releaseUrl.length > 2_048 ||
-      value.releaseUrl !== (value.version === null ? RELEASES_URL : releaseTagUrl(value.version))
-    ) {
-      throw new TypeError();
-    }
-    return {
-      status: "unavailable",
-      version: value.version,
-      releaseUrl: value.releaseUrl,
-    };
-  }
-  if (
-    !exactKeys(value, ["status", "version", "notes", "releaseUrl"]) ||
-    !releaseVersion(value.version) ||
-    !Array.isArray(value.notes) ||
-    value.notes.length > 100 ||
-    typeof value.releaseUrl !== "string" ||
-    value.releaseUrl.length > 2_048 ||
-    value.releaseUrl !== releaseTagUrl(value.version)
-  ) {
-    throw new TypeError();
-  }
-  let totalBytes = 0;
-  const notes = value.notes.map((note) => {
-    if (!safeString(note, 2_000)) throw new TypeError();
-    totalBytes += textEncoder.encode(note).byteLength;
-    if (totalBytes > RELEASE_NOTES_MAX_TOTAL_BYTES) throw new TypeError();
-    return note;
-  });
-  return {
-    status: "available",
-    version: value.version,
-    notes,
-    releaseUrl: value.releaseUrl,
-  };
 }
 
 type PreloadUpdateState =
@@ -1666,8 +1607,6 @@ contextBridge.exposeInMainWorld(
         await ipcRenderer.invoke(DESKTOP_TRAINING_EXPORT_CHANNEL, request),
       );
     },
-    releaseNotes: async () =>
-      parseReleaseNotes(await ipcRenderer.invoke(DESKTOP_RELEASE_NOTES_CHANNEL)),
     getUpdateState: async () =>
       parseUpdateState(await ipcRenderer.invoke(DESKTOP_UPDATE_GET_CHANNEL)),
     checkForUpdates: async () =>

@@ -321,7 +321,6 @@ async function security() {
             "pasteTelegramTokenFromClipboard",
             "platform",
             "reconcileTelegram",
-            "releaseNotes",
             "removeTelegram",
             "removeTelegramAllowedSender",
             "removeTelegramWebhook",

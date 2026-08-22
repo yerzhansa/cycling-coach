@@ -344,6 +344,7 @@ describe("createRunSync", () => {
       kind: "ran",
       lastSyncAt: now.toISOString(),
       refreshed: ["latest", "history", "intervals", "routes", "ftp_history"],
+      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
     });
 
     const latest = JSON.parse(readFileSync(join(dir, "latest.json"), "utf-8"));

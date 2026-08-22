@@ -468,6 +468,80 @@ export const SyncBackfillOutcomeSchema = z.enum([
 ]);
 export type SyncBackfillOutcome = z.infer<typeof SyncBackfillOutcomeSchema>;
 
+export const ActivityRestrictionSchema = z
+  .object({
+    reason: z.literal("source-restricted"),
+    source: z.string().min(1),
+    count: z.number().int().positive(),
+  })
+  .strict();
+export type ActivityRestriction = z.infer<typeof ActivityRestrictionSchema>;
+
+export const ActivityRestrictionWindowSchema = z
+  .object({
+    total: z.number().int().nonnegative(),
+    visible: z.number().int().nonnegative(),
+    restrictions: z.array(ActivityRestrictionSchema),
+    other: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const restricted = value.restrictions.reduce((sum, entry) => sum + entry.count, 0);
+    if (value.visible + restricted + value.other !== value.total) {
+      context.addIssue({
+        code: "custom",
+        path: [],
+        message: "activity counts must balance",
+      });
+    }
+    for (let index = 1; index < value.restrictions.length; index += 1) {
+      if (value.restrictions[index - 1]!.source >= value.restrictions[index]!.source) {
+        context.addIssue({
+          code: "custom",
+          path: ["restrictions", index, "source"],
+          message: "activity restriction sources must be unique and sorted",
+        });
+      }
+    }
+  });
+export type ActivityRestrictionWindow = z.infer<typeof ActivityRestrictionWindowSchema>;
+
+export const DroppedActivitiesSchema = z
+  .object({
+    overall: ActivityRestrictionWindowSchema,
+    recent7Days: ActivityRestrictionWindowSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    for (const field of ["total", "visible", "other"] as const) {
+      if (value.recent7Days[field] > value.overall[field]) {
+        context.addIssue({
+          code: "custom",
+          path: ["recent7Days", field],
+          message: "recent activity count cannot exceed overall activity count",
+        });
+      }
+    }
+    const overallBySource = new Map(
+      value.overall.restrictions.map((entry) => [entry.source, entry.count]),
+    );
+    for (const entry of value.recent7Days.restrictions) {
+      if (entry.count > (overallBySource.get(entry.source) ?? 0)) {
+        context.addIssue({
+          code: "custom",
+          path: ["recent7Days", "restrictions"],
+          message: "recent source restriction count cannot exceed its overall count",
+        });
+      }
+    }
+  });
+export type DroppedActivities = z.infer<typeof DroppedActivitiesSchema>;
+
+export const EMPTY_DROPPED_ACTIVITIES: DroppedActivities = Object.freeze({
+  overall: Object.freeze({ total: 0, visible: 0, restrictions: [], other: 0 }),
+  recent7Days: Object.freeze({ total: 0, visible: 0, restrictions: [], other: 0 }),
+});
+
 export const SyncRpcResultSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -481,6 +555,7 @@ export const SyncRpcResultSchema = z
         total: z.number().int().nonnegative(),
       })
       .strict(),
+    droppedActivities: DroppedActivitiesSchema,
   })
   .strict()
   .superRefine((value, context) => {

@@ -14,7 +14,6 @@ import { createArchiveViewAdapter } from "./state/adapters/archive.js";
 import { createChatViewAdapter } from "./state/adapters/chat.js";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync.js";
 import { createOnboardingViewAdapter } from "./state/adapters/onboarding.js";
-import { createReleaseNotesSettingsAdapter } from "./state/adapters/release-notes.js";
 import { createRideImportAdapter } from "./state/adapters/ride-import.js";
 import {
   createAthleteSettingsAdapter,
@@ -43,7 +42,6 @@ import { createTrainingContextController } from "./training-context/controller.j
 import { createManualSyncController } from "./training-context/manual-sync.js";
 import { createTrainingSyncCoordinator } from "./training-sync.js";
 import { createSpendMeterController } from "./spend-meter/controller.js";
-import { createReleaseNotesController } from "./release-notes/controller.js";
 import { createDesktopUpdateController } from "./update/controller.js";
 import { createProviderModelSettingsController } from "./settings/provider-model-controller.js";
 import { createAthleteSettingsController } from "./settings/athlete-controller.js";
@@ -82,13 +80,6 @@ export function bootRenderer(): Disposer {
   };
   window.addEventListener("enduragent-lifecycle", onLifecycle);
 
-  const releaseNotesAdapter = createReleaseNotesSettingsAdapter({
-    publish: (patch) => store.getState().patchSettings(patch),
-  });
-  const releaseNotesController = createReleaseNotesController({
-    request: () => window.enduragentAuth.releaseNotes(),
-    view: releaseNotesAdapter.view,
-  });
   const updateAdapter = createUpdateSettingsAdapter({
     publish: (next) => store.getState().patchSettings({ update: next }),
   });
@@ -408,7 +399,6 @@ export function bootRenderer(): Disposer {
     telegram: telegramAdapter.port,
     spend: spendAdapter.port,
     update: updateAdapter.port,
-    releaseNotes: releaseNotesAdapter.port,
     units: {
       set: (value) => void trainingContextController.setUnitsPreference(value),
     },
@@ -459,7 +449,6 @@ export function bootRenderer(): Disposer {
     disposeSetupReadiness();
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);
-    releaseNotesController.dispose();
     desktopUpdateController.dispose();
     providerModelSettingsController.dispose();
     credentialSettingsController.dispose();

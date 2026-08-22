@@ -27,6 +27,10 @@ import type { AsyncMutex } from "../../concurrency/mutex.js";
 import type { Cooldown } from "../../concurrency/cooldown.js";
 import type { Clock } from "../../concurrency/clock.js";
 import type { LatestSourceProvenance } from "../source-provenance.js";
+import {
+  EMPTY_DROPPED_ACTIVITIES,
+  type DroppedActivities,
+} from "@enduragent/coach-contract";
 
 /**
  * Re-exported from `error-state.ts` so the runtime opt and the on-disk
@@ -68,6 +72,7 @@ export type SyncResult =
       readonly kind: "ran";
       readonly lastSyncAt: string;
       readonly refreshed: readonly CacheFile[];
+      readonly droppedActivities: DroppedActivities;
     }
   | {
       readonly kind: "skipped";
@@ -111,6 +116,7 @@ export interface FetchedReference {
    *  behind a fresh stamp. Omitted when every endpoint was reachable, so a
    *  fully-successful fetch is shape-identical to a genuinely-empty account. */
   readonly fetch_errors?: readonly { readonly endpoint: string; readonly detail: string }[];
+  readonly dropped_activities?: DroppedActivities;
 }
 
 export interface RunSyncDeps {
@@ -487,6 +493,7 @@ export function createRunSync(
             kind: "ran",
             lastSyncAt: lastUpdated,
             refreshed,
+            droppedActivities: fetched.dropped_activities ?? EMPTY_DROPPED_ACTIVITIES,
           };
         };
 

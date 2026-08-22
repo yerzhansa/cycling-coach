@@ -74,12 +74,6 @@ export interface UpdateSettingsPort {
   activate(): void;
 }
 
-export interface ReleaseNotesSettingsPort {
-  open(): void;
-  retry(): void;
-  close(): void;
-}
-
 interface UnitsSettingsPort {
   set(value: UnitsPreference): void;
 }
@@ -93,7 +87,6 @@ interface SettingsPorts {
   readonly telegram: TelegramSettingsPort;
   readonly spend: SpendSettingsPort;
   readonly update: UpdateSettingsPort;
-  readonly releaseNotes: ReleaseNotesSettingsPort;
   readonly units: UnitsSettingsPort;
   openSetup(): void;
 }
@@ -114,20 +107,6 @@ export interface UpdateSurfaceState {
   readonly actionDisabled: boolean;
 }
 
-export type ReleaseNotesSurfaceState =
-  | { readonly status: "idle" | "loading" }
-  | {
-      readonly status: "available";
-      readonly version: string;
-      readonly notes: readonly string[];
-      readonly releaseUrl: string;
-    }
-  | {
-      readonly status: "unavailable";
-      readonly version: string | null;
-      readonly releaseUrl: string | null;
-    };
-
 interface SettingsSurfaceState {
   readonly savingOwners: readonly string[];
   readonly coach: ProviderModelSettingsState;
@@ -137,8 +116,6 @@ interface SettingsSurfaceState {
   readonly telegram: TelegramSettingsState;
   readonly spend: SpendSurfaceState;
   readonly update: UpdateSurfaceState;
-  readonly releaseNotes: ReleaseNotesSurfaceState;
-  readonly releaseNotesOpen: boolean;
   readonly units: UnitsPreferenceViewState;
 }
 
@@ -169,8 +146,6 @@ export const EMPTY_SETTINGS_SURFACE: SettingsSurfaceState = Object.freeze({
   telegram: CLOSED_PANE,
   spend: EMPTY_SPEND_SURFACE,
   update: EMPTY_UPDATE_SURFACE,
-  releaseNotes: Object.freeze({ status: "idle" as const }),
-  releaseNotesOpen: false,
   units: Object.freeze({
     status: "loading" as const,
     value: "metric" as const,

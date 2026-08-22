@@ -452,6 +452,7 @@ ${"nonwrapping".repeat(36)}
             published: partial,
             referenceSucceeded: !partial,
             requests: { store: 1, reference: 1, total: 2 },
+            droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
           }),
         ];
       }
@@ -976,7 +977,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       controlObserver.disconnect();
       const coach = document.querySelector(".chat-message--coach");
       const link = coach?.querySelector("a");
-      const syncChip = document.querySelector(".sync-chip");
+      const syncChip = document.querySelector("[data-sync-chip]");
       return {
         location: location.href,
         bridgeKeys,
@@ -1056,7 +1057,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "pasteTelegramTokenFromClipboard",
         "platform",
         "reconcileTelegram",
-        "releaseNotes",
         "removeTelegram",
         "removeTelegramAllowedSender",
         "removeTelegramWebhook",

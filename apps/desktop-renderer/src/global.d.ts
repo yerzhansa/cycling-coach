@@ -59,7 +59,6 @@ interface EnduragentAuth {
   chooseImportFiles(): Promise<readonly string[]>;
   exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
-  releaseNotes(): Promise<ReleaseNotesResult>;
   getUpdateState(): Promise<DesktopUpdateState>;
   checkForUpdates(): Promise<DesktopUpdateState>;
   restartToUpdate(): Promise<DesktopUpdateState>;
@@ -280,19 +279,6 @@ type DesktopTelegramAllowedSendersMutationResult =
   | {
       readonly outcome: "uncertain";
       readonly reason: "storage-uncertain" | "control-uncertain";
-    };
-
-type ReleaseNotesResult =
-  | {
-      readonly status: "available";
-      readonly version: string;
-      readonly notes: readonly string[];
-      readonly releaseUrl: string;
-    }
-  | {
-      readonly status: "unavailable";
-      readonly version: string | null;
-      readonly releaseUrl: string;
     };
 
 type DesktopCredentialSlot =

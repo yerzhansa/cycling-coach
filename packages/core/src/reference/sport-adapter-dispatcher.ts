@@ -39,10 +39,10 @@ export function findAdapterForActivity(
   activity: Activity,
 ): ReferenceSportAdapter | null {
   const type = activity.type;
-  // `Activity.type` is typed as a required string, but a malformed upstream row
-  // can still arrive without it at runtime — so this guard is load-bearing, not
-  // dead code; don't strip it. A gap here is silent (never a warn).
-  if (type === undefined) return null;
+  // `Activity.type` is typed as nullish, and an upstream row can arrive without
+  // it at runtime — so this guard is load-bearing, not dead code; don't strip
+  // it. A gap here is silent (never a warn).
+  if (type == null) return null;
   return adapters.find((a) => adapterCoversType(a, type)) ?? null;
 }
 
@@ -73,7 +73,7 @@ export function runAdaptersForActivities(
   const sportFamilies = new Set(sportTypes.map((t) => familyOf(t, t)));
   for (const activity of activities) {
     const type = activity.type;
-    if (type === undefined) continue;
+    if (type == null) continue;
     const family = familyOf(type, type);
     const adapter = findAdapterForActivity(adapters, activity);
     if (adapter) {

@@ -182,6 +182,7 @@ export const PowerProgressUnavailableReasonSchema = z.enum([
   "invalid-data",
   "refresh-failed",
   "temporary-failure",
+  "source-restricted",
 ]);
 
 export const PowerProgressComputedSchema = z
@@ -256,6 +257,7 @@ export const TrainingContextUnknownReasonSchema = z.enum([
   "no-plan",
   "insufficient-data",
   "no-wellness",
+  "source-restricted",
 ]);
 
 export const CyclingAnchorSchema = z
@@ -310,7 +312,7 @@ export const CyclingLoadPanelSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("unknown"),
-      reason: z.enum(["not-synced", "no-platform-load"]),
+      reason: z.enum(["not-synced", "no-platform-load", "source-restricted"]),
     })
     .strict(),
 ]);
@@ -350,7 +352,7 @@ export const AdherencePanelSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("unknown"),
-      reason: z.enum(["not-synced", "no-plan", "insufficient-data"]),
+      reason: z.enum(["not-synced", "no-plan", "insufficient-data", "source-restricted"]),
     })
     .strict(),
 ]);
@@ -409,7 +411,7 @@ export const RecentRidesPanelSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("unknown"),
-      reason: z.enum(["not-synced", "no-recent-rides", "temporary-failure"]),
+      reason: z.enum(["not-synced", "no-recent-rides", "temporary-failure", "source-restricted"]),
     })
     .strict(),
 ]);

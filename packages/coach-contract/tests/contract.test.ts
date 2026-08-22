@@ -11,6 +11,8 @@ import {
   PROTOCOL_VERSION,
   TurnEventSchema,
   AthleteStateSchema,
+  AdherencePanelSchema,
+  CyclingLoadPanelSchema,
   CyclingTrainingContextSchema,
   PowerProgressPanelSchema,
   RecentRidesPanelSchema,
@@ -111,8 +113,8 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 18", () => {
-    expect(PROTOCOL_VERSION).toBe(18);
+  it("is 19", () => {
+    expect(PROTOCOL_VERSION).toBe(19);
   });
 });
 
@@ -396,6 +398,9 @@ describe("AthleteState", () => {
       reason: "not-synced",
     });
     expect(
+      PowerProgressPanelSchema.parse({ kind: "unavailable", reason: "source-restricted" }),
+    ).toEqual({ kind: "unavailable", reason: "source-restricted" });
+    expect(
       PowerProgressPanelSchema.safeParse({
         ...computedPowerProgress,
         anchors: [...computedPowerProgress.anchors].reverse(),
@@ -421,6 +426,17 @@ describe("AthleteState", () => {
     ).toBe(false);
   });
 
+  it("accepts source-restricted as a refusal reason for load and adherence", () => {
+    expect(CyclingLoadPanelSchema.parse({ kind: "unknown", reason: "source-restricted" })).toEqual({
+      kind: "unknown",
+      reason: "source-restricted",
+    });
+    expect(AdherencePanelSchema.parse({ kind: "unknown", reason: "source-restricted" })).toEqual({
+      kind: "unknown",
+      reason: "source-restricted",
+    });
+  });
+
   it("bounds recent rides and rejects provider-only or malformed fields", () => {
     const ride = {
       id: "a".repeat(64),
@@ -442,6 +458,10 @@ describe("AthleteState", () => {
       })),
     } as const;
     expect(RecentRidesPanelSchema.parse(panel)).toEqual(panel);
+    expect(RecentRidesPanelSchema.parse({ kind: "unknown", reason: "source-restricted" })).toEqual({
+      kind: "unknown",
+      reason: "source-restricted",
+    });
     expect(
       RecentRidesPanelSchema.safeParse({ ...panel, items: [...panel.items, ride] }).success,
     ).toBe(false);
