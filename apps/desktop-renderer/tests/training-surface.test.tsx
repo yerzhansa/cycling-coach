@@ -1042,7 +1042,15 @@ describe("training page sync", () => {
     expect(message).toHaveTextContent("Syncing training data…");
 
     update({
-      sync: toManualSyncViewState({ status: "succeeded", operation: 1, kind: "no-change" }),
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "no-change",
+        droppedActivities: {
+          overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+          recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+        },
+      }),
     });
     const settled = screen.getByRole("button", { name: "Sync again" });
     expect(settled).toBeEnabled();
@@ -1085,6 +1093,57 @@ describe("training page sync", () => {
     });
     expect(screen.getByRole("button", { name: "Sync unavailable" })).toBeDisabled();
     expect(message).toHaveTextContent("Enduragent couldn’t verify the sync result.");
+  });
+
+  it("shows the Strava action card only when restricted activities exist", () => {
+    useEnduragentStore.setState({ syncActions: { request: vi.fn() } });
+    render(<TrainingView />);
+
+    update({
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: {
+          overall: {
+            total: 67,
+            visible: 5,
+            restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 60 }],
+            other: 2,
+          },
+          recent7Days: {
+            total: 5,
+            visible: 1,
+            restrictions: [{ reason: "source-restricted", source: "STRAVA", count: 4 }],
+            other: 0,
+          },
+        },
+      }),
+    });
+
+    const notice = document.querySelector("#strava-restricted-activities");
+    expect(notice).not.toBeNull();
+    expect(notice).toHaveTextContent("60 of 67 activities are hidden by Strava");
+    expect(notice).toHaveTextContent("recording source directly to intervals.icu");
+    expect(notice).toHaveTextContent("Import All Strava Data");
+    expect(notice).toHaveTextContent("intervals.icu supporter subscription");
+    expect(document.querySelector(".training-sync-message")).toHaveTextContent(
+      "A Strava API restriction prevents intervals.icu from sharing 60 activities",
+    );
+
+    update({
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 2,
+        kind: "no-change",
+        droppedActivities: {
+          overall: { total: 5, visible: 5, restrictions: [], other: 0 },
+          recent7Days: { total: 5, visible: 5, restrictions: [], other: 0 },
+        },
+      }),
+    });
+
+    expect(document.querySelector("#strava-restricted-activities")).toBeNull();
   });
 
   it("disables the sync action until the controller is bound", () => {

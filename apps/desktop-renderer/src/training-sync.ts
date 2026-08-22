@@ -10,10 +10,23 @@ import {
   type CoachClientTerminalEnvelope,
 } from "@enduragent/coach-client";
 import type {
+  ActivityRestriction,
   CoachOperationProgressNotificationEnvelope,
   SyncRpcResult,
 } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "./coach-client.js";
+
+interface TrainingSyncRestrictionWindow {
+  readonly total: number;
+  readonly visible: number;
+  readonly restrictions: readonly ActivityRestriction[];
+  readonly other: number;
+}
+
+export interface TrainingSyncDroppedActivities {
+  readonly overall: TrainingSyncRestrictionWindow;
+  readonly recent7Days: TrainingSyncRestrictionWindow;
+}
 
 export type TrainingSyncState =
   | { readonly status: "idle" }
@@ -23,6 +36,7 @@ export type TrainingSyncState =
       readonly status: "succeeded";
       readonly operation: number;
       readonly kind: "published" | "no-change";
+      readonly droppedActivities: TrainingSyncDroppedActivities;
     }
   | {
       readonly status: "failed";
@@ -50,6 +64,27 @@ function isIndeterminateFailure(error: unknown): boolean {
   );
 }
 
+function isSameRestrictionWindow(
+  left: TrainingSyncRestrictionWindow,
+  right: TrainingSyncRestrictionWindow,
+): boolean {
+  return (
+    left.total === right.total &&
+    left.visible === right.visible &&
+    left.other === right.other &&
+    left.restrictions.length === right.restrictions.length &&
+    left.restrictions.every((entry, index) => {
+      const other = right.restrictions[index];
+      return (
+        other !== undefined &&
+        entry.reason === other.reason &&
+        entry.source === other.source &&
+        entry.count === other.count
+      );
+    })
+  );
+}
+
 function isSameTrainingSyncState(left: TrainingSyncState, right: TrainingSyncState): boolean {
   switch (left.status) {
     case "idle":
@@ -61,7 +96,15 @@ function isSameTrainingSyncState(left: TrainingSyncState, right: TrainingSyncSta
       return (
         right.status === "succeeded" &&
         right.operation === left.operation &&
-        right.kind === left.kind
+        right.kind === left.kind &&
+        isSameRestrictionWindow(
+          right.droppedActivities.overall,
+          left.droppedActivities.overall,
+        ) &&
+        isSameRestrictionWindow(
+          right.droppedActivities.recent7Days,
+          left.droppedActivities.recent7Days,
+        )
       );
     case "failed":
       return (
@@ -289,9 +332,19 @@ export function createTrainingSyncCoordinator(input: {
           retryable: true,
         });
       } else if (result.published && result.referenceSucceeded) {
-        publish({ status: "succeeded", operation: selectedOperation, kind: "published" });
+        publish({
+          status: "succeeded",
+          operation: selectedOperation,
+          kind: "published",
+          droppedActivities: result.droppedActivities,
+        });
       } else if (!result.published && result.referenceSucceeded) {
-        publish({ status: "succeeded", operation: selectedOperation, kind: "no-change" });
+        publish({
+          status: "succeeded",
+          operation: selectedOperation,
+          kind: "no-change",
+          droppedActivities: result.droppedActivities,
+        });
       } else if (result.published) {
         publish({
           status: "failed",

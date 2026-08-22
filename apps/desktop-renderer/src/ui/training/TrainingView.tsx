@@ -7,7 +7,15 @@ import type {
   RecentRide,
   WellnessTrendPanel,
 } from "@enduragent/coach-contract";
-import { useEffect, useLayoutEffect, useRef, type ReactElement, type ReactNode } from "react";
+import { TriangleAlert } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { rideImportStatusCopy } from "../../ride-import.js";
 import { rideImportStatusSuppressed } from "../../state/onboarding-slice.js";
 import {
@@ -15,6 +23,10 @@ import {
   setManualSyncFocusTarget,
 } from "../../state/manual-sync-focus.js";
 import { useEnduragentStore } from "../../state/store.js";
+import {
+  sourceRestrictionSummary,
+  STRAVA_RESTRICTION_DESKTOP_COPY,
+} from "../../training-context/manual-sync.js";
 import {
   formatDateLabel,
   formatPercentage,
@@ -36,6 +48,10 @@ import { PowerProgressContent } from "./PowerProgressPanel.js";
 import { RecentRidesStatePanel, RideDetailView } from "./RideReview.js";
 import { WellnessSparkline } from "./WellnessSparkline.js";
 import { WorkoutArchiveExportControl } from "./TrainingExportControls.js";
+import {
+  STRAVA_RESTRICTION_CARD_ID,
+  takeTrainingRestrictionFocusRequest,
+} from "./restriction-focus.js";
 
 function Panel(props: {
   readonly name: string;
@@ -62,7 +78,9 @@ function PowerProgressStatePanel(props: { readonly panel: PowerProgressPanel }):
   );
 }
 
-function SyncPanel(): ReactElement {
+function SyncPanel(props: {
+  readonly restrictionCard: RefObject<HTMLDivElement | null>;
+}): ReactElement {
   const metadata = useEnduragentStore((store) => store.training.metadata);
   const sync = useEnduragentStore((store) => store.sync);
   const actions = useEnduragentStore((store) => store.syncActions);
@@ -72,6 +90,7 @@ function SyncPanel(): ReactElement {
   const syncedCopy = synced === null ? null : formatUtcTimestamp(synced);
   const syncedInstant =
     synced === null || syncedCopy === "Unknown sync time" ? null : new Date(synced).toISOString();
+  const restriction = sourceRestrictionSummary(sync.droppedActivities, "STRAVA");
 
   useEffect(() => {
     setManualSyncFocusFallback(message.current);
@@ -131,6 +150,51 @@ function SyncPanel(): ReactElement {
           {sync.message}
         </p>
       </div>
+      {restriction === null ? null : (
+        <div
+          ref={props.restrictionCard}
+          id={STRAVA_RESTRICTION_CARD_ID}
+          tabIndex={-1}
+          className="mt-4 rounded-xl border border-line bg-surface p-4 shadow-[var(--edge),var(--elev-1)]"
+        >
+          <div className="flex items-start gap-2.5">
+            <TriangleAlert
+              size={17}
+              strokeWidth={1.8}
+              className="mt-px flex-none text-warn"
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <p className="m-0 text-sm font-semibold text-ink">
+                {STRAVA_RESTRICTION_DESKTOP_COPY.cardTitle(restriction.count, restriction.total)}
+              </p>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">
+                {STRAVA_RESTRICTION_DESKTOP_COPY.cause}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2.5 border-t border-line pt-3">
+            <div className="flex items-start gap-2.5">
+              <span className="flex size-[18px] flex-none items-center justify-center rounded-full bg-brand/15 text-[10px] font-semibold text-brand">
+                1
+              </span>
+              <p className="m-0 text-[12.5px] leading-relaxed text-ink-2">
+                <strong className="font-semibold text-ink">For future rides — </strong>
+                {STRAVA_RESTRICTION_DESKTOP_COPY.future}
+              </p>
+            </div>
+            <div className="flex items-start gap-2.5">
+              <span className="flex size-[18px] flex-none items-center justify-center rounded-full bg-brand/15 text-[10px] font-semibold text-brand">
+                2
+              </span>
+              <p className="m-0 text-[12.5px] leading-relaxed text-ink-2">
+                <strong className="font-semibold text-ink">For past rides — </strong>
+                {STRAVA_RESTRICTION_DESKTOP_COPY.past}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </Panel>
   );
 }
@@ -327,24 +391,28 @@ export function TrainingView(): ReactElement {
   const rideAnalysisActions = useEnduragentStore((store) => store.rideAnalysisActions);
   const rideButtons = useRef(new Map<string, HTMLButtonElement>());
   const previousRideId = useRef<string | null>(null);
+  const restrictionCard = useRef<HTMLDivElement>(null);
   const title = useRef<HTMLHeadingElement>(null);
   const status = trainingStatusCopy(training.status);
 
   useLayoutEffect(() => {
-    const element = title.current;
-    if (element === null) return;
-    const owner = element.ownerDocument;
-    const active = owner.activeElement;
-    if (active !== null && active !== owner.body && active !== owner.documentElement) return;
-    element.focus();
-  }, []);
-
-  useLayoutEffect(() => {
     const currentRideId = selectedRide?.id ?? null;
-    if (currentRideId !== null && previousRideId.current !== currentRideId) {
+    const restrictionFocusRequested = takeTrainingRestrictionFocusRequest();
+    if (restrictionFocusRequested) {
+      (restrictionCard.current ?? title.current)?.focus();
+    } else if (currentRideId !== null && previousRideId.current !== currentRideId) {
       title.current?.focus();
     } else if (currentRideId === null && previousRideId.current !== null) {
       (rideButtons.current.get(previousRideId.current) ?? title.current)?.focus();
+    } else {
+      const element = title.current;
+      if (element !== null) {
+        const owner = element.ownerDocument;
+        const active = owner.activeElement;
+        if (active === null || active === owner.body || active === owner.documentElement) {
+          element.focus();
+        }
+      }
     }
     previousRideId.current = currentRideId;
   }, [selectedRide?.id]);
@@ -369,7 +437,7 @@ export function TrainingView(): ReactElement {
       <p className={`${styles.status} training-status`} hidden={training.status === "ready"}>
         {status}
       </p>
-      <SyncPanel />
+      <SyncPanel restrictionCard={restrictionCard} />
       <PowerProgressStatePanel panel={training.trainingContext.performanceProgress} />
       <RecentRidesStatePanel
         panel={training.trainingContext.recentRides}

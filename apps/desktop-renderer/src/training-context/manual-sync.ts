@@ -1,4 +1,8 @@
-import type { TrainingSyncCoordinator, TrainingSyncState } from "../training-sync.js";
+import type {
+  TrainingSyncCoordinator,
+  TrainingSyncDroppedActivities,
+  TrainingSyncState,
+} from "../training-sync.js";
 
 export const SYNC_QUEUED_COPY = "Sync queued.";
 export const SYNC_RUNNING_COPY = "Syncing training data…";
@@ -13,12 +17,41 @@ export const SYNC_INDETERMINATE_COPY =
 export const SYNC_PROTOCOL_COPY =
   "Enduragent couldn’t verify the sync result. Quit and reopen Enduragent.";
 
+export const STRAVA_RESTRICTION_DESKTOP_COPY = Object.freeze({
+  syncMessage(count: number): string {
+    return count === 1
+      ? "A Strava API restriction prevents intervals.icu from sharing one activity, so it isn’t included."
+      : `A Strava API restriction prevents intervals.icu from sharing ${count} activities, so they aren’t included.`;
+  },
+  tooltipLead(count: number): string {
+    return count === 1 ? "1 activity hidden by Strava" : `${count} activities hidden by Strava`;
+  },
+  tooltipBody:
+    "A Strava API restriction prevents intervals.icu from sharing these activities with Enduragent.",
+  cardTitle(count: number, total: number): string {
+    return count === 1 && total === 1
+      ? "1 of 1 activity is hidden by Strava"
+      : `${count} of ${total} activities are hidden by Strava`;
+  },
+  cause:
+    "A Strava API restriction prevents intervals.icu from sharing activities that came from Strava with Enduragent. Your API key is fine.",
+  future:
+    "Connect your recording source directly to intervals.icu and keep Strava connected. This is free and covers future rides.",
+  past: "Use Import All Strava Data in intervals.icu settings. This covers past rides and requires an intervals.icu supporter subscription.",
+});
+
+export interface SourceRestrictionSummary {
+  readonly count: number;
+  readonly total: number;
+}
+
 export interface ManualSyncViewState {
   readonly label: "Sync now" | "Sync again" | "Try again" | "Sync unavailable";
   readonly message: string;
   readonly disabled: boolean;
   readonly busy: boolean;
   readonly tone: "idle" | "active" | "success" | "partial" | "failure";
+  readonly droppedActivities?: TrainingSyncDroppedActivities;
 }
 
 export interface ManualSyncView {
@@ -29,6 +62,19 @@ export interface ManualSyncView {
 export interface ManualSyncController {
   activate(kind: "keyboard" | "pointer"): Promise<void>;
   dispose(): void;
+}
+
+export function sourceRestrictionSummary(
+  droppedActivities: TrainingSyncDroppedActivities | undefined,
+  source: string,
+): SourceRestrictionSummary | null {
+  if (droppedActivities === undefined) return null;
+  const restriction = droppedActivities.overall.restrictions.find(
+    (entry) => entry.reason === "source-restricted" && entry.source === source,
+  );
+  return restriction === undefined
+    ? null
+    : { count: restriction.count, total: droppedActivities.overall.total };
 }
 
 export function toManualSyncViewState(state: TrainingSyncState): ManualSyncViewState {
@@ -51,14 +97,21 @@ export function toManualSyncViewState(state: TrainingSyncState): ManualSyncViewS
         busy: true,
         tone: "active",
       };
-    case "succeeded":
+    case "succeeded": {
+      const message = state.kind === "published" ? SYNC_PUBLISHED_COPY : SYNC_NO_CHANGE_COPY;
+      const restriction = sourceRestrictionSummary(state.droppedActivities, "STRAVA");
       return {
         label: "Sync again",
-        message: state.kind === "published" ? SYNC_PUBLISHED_COPY : SYNC_NO_CHANGE_COPY,
+        message:
+          restriction === null
+            ? message
+            : `${message} ${STRAVA_RESTRICTION_DESKTOP_COPY.syncMessage(restriction.count)}`,
         disabled: false,
         busy: false,
         tone: "success",
+        droppedActivities: state.droppedActivities,
       };
+    }
     case "failed":
       if (state.kind === "protocol") {
         return {
@@ -91,8 +144,16 @@ export function createManualSyncController(input: {
   let disposed = false;
   let activation = 0;
   let activationTask: Promise<void> | undefined;
+  let droppedActivities: TrainingSyncDroppedActivities | undefined;
   const unsubscribe = input.coordinator.subscribe((state) => {
-    if (!disposed) input.view.render(toManualSyncViewState(state));
+    if (disposed) return;
+    const next = toManualSyncViewState(state);
+    if (next.droppedActivities !== undefined) droppedActivities = next.droppedActivities;
+    input.view.render(
+      droppedActivities === undefined || next.droppedActivities !== undefined
+        ? next
+        : { ...next, droppedActivities },
+    );
   });
 
   return {

@@ -68,6 +68,7 @@ const operations: CoachOperations = {
     published: true,
     referenceSucceeded: true,
     requests: { store: 0, reference: 0, total: 0 },
+    droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
   }),
   saveIntake: async () => ({ schemaVersion: 1, saved: true }),
   getTranscriptPage: async () => ({

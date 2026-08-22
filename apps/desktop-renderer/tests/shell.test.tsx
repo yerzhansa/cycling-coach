@@ -14,6 +14,13 @@ import {
   setupSurfaceOnScreen,
 } from "../src/state/onboarding-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
+import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
+import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
+import { toManualSyncViewState } from "../src/training-context/manual-sync.js";
+import {
+  clearTrainingRestrictionFocusRequest,
+  takeTrainingRestrictionFocusRequest,
+} from "../src/ui/training/restriction-focus.js";
 
 const REPAIR_REQUIRED_CREDENTIALS: CredentialSettingsState = {
   status: "ready",
@@ -34,6 +41,17 @@ const REQUIRED_ONBOARDING = Object.freeze({
   completionRequired: true,
 });
 
+const SELECTED_RIDE = Object.freeze({
+  id: "a".repeat(64),
+  subSport: "road",
+  startEpochSeconds: 900_000_000,
+  timezoneOffsetSeconds: 0,
+  localDate: "1998-07-09",
+  elapsedSeconds: 3_600,
+  movingSeconds: 3_500,
+  distanceMeters: 32_000,
+});
+
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(),
@@ -45,6 +63,23 @@ function stubActions(): ChatActions {
     cancelNewConversation: vi.fn(),
     confirmNewConversation: vi.fn(),
     retryFirstSync: vi.fn(),
+  };
+}
+
+function stravaDroppedActivities() {
+  return {
+    overall: {
+      total: 67,
+      visible: 5,
+      restrictions: [{ reason: "source-restricted" as const, source: "STRAVA", count: 60 }],
+      other: 2,
+    },
+    recent7Days: {
+      total: 5,
+      visible: 1,
+      restrictions: [{ reason: "source-restricted" as const, source: "STRAVA", count: 4 }],
+      other: 0,
+    },
   };
 }
 
@@ -65,9 +100,17 @@ describe("shell", () => {
       runtimeReady: true,
       chat: { ...EMPTY_CHAT_SURFACE, newConversationUnavailable: false },
       chatActions: stubActions(),
+      training: EMPTY_TRAINING_SURFACE,
+      selectedRide: null,
+      sync: IDLE_MANUAL_SYNC,
+      syncActions: null,
       onboarding: READY_ONBOARDING,
       onboardingActions: null,
       onboardingStartupSettled: true,
+      settings: {
+        ...useEnduragentStore.getState().settings,
+        savingOwners: [],
+      },
     });
   });
 
@@ -75,14 +118,20 @@ describe("shell", () => {
     useEnduragentStore.setState({
       chat: EMPTY_CHAT_SURFACE,
       chatActions: null,
+      training: EMPTY_TRAINING_SURFACE,
+      selectedRide: null,
+      sync: IDLE_MANUAL_SYNC,
+      syncActions: null,
       onboarding: CLOSED_ONBOARDING,
       onboardingActions: null,
       onboardingStartupSettled: false,
       settings: {
         ...useEnduragentStore.getState().settings,
         credentials: { status: "closed" },
+        savingOwners: [],
       },
     });
+    clearTrainingRestrictionFocusRequest();
     resetChatStream();
   });
 
@@ -154,6 +203,80 @@ describe("shell", () => {
     await screen.findByRole("region", { name: "Training" });
 
     expect(trainingButton).toHaveFocus();
+  });
+
+  it("moves focus from a mounted ride review to the Training action card", async () => {
+    const user = userEvent.setup();
+    const request = vi.fn();
+    useEnduragentStore.setState({
+      activeView: "training",
+      training: {
+        ...EMPTY_TRAINING_SURFACE,
+        status: "ready",
+        metadata: {
+          lastUpdated: "1998-07-19T08:00:00.000Z",
+          lastSynced: "1998-07-19T07:55:00.000Z",
+          freshness: "fresh",
+          degraded: false,
+        },
+      },
+      selectedRide: SELECTED_RIDE,
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: stravaDroppedActivities(),
+      }),
+      syncActions: { request },
+    });
+    render(<Shell onReady={() => {}} />);
+    expect(screen.getByRole("region", { name: "Ride review" })).toBeInTheDocument();
+
+    const remedy = screen.getByRole("link", {
+      name: "60 hidden by Strava. How to fix this",
+    });
+    remedy.focus();
+    await user.keyboard("{Enter}");
+
+    const card = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>("#strava-restricted-activities");
+      expect(element).not.toBeNull();
+      return element as HTMLElement;
+    });
+    await waitFor(() => {
+      expect(card).toHaveFocus();
+    });
+    expect(useEnduragentStore.getState().activeView).toBe("training");
+    expect(useEnduragentStore.getState().selectedRide).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("preserves a selected ride and does not arm focus when navigation is blocked", async () => {
+    const user = userEvent.setup();
+    const request = vi.fn();
+    useEnduragentStore.setState({
+      activeView: "settings",
+      selectedRide: SELECTED_RIDE,
+      settings: {
+        ...useEnduragentStore.getState().settings,
+        savingOwners: ["session"],
+      },
+      sync: toManualSyncViewState({
+        status: "succeeded",
+        operation: 1,
+        kind: "published",
+        droppedActivities: stravaDroppedActivities(),
+      }),
+      syncActions: { request },
+    });
+    render(<Shell onReady={() => {}} />);
+
+    await user.click(screen.getByRole("link", { name: "60 hidden by Strava. How to fix this" }));
+
+    expect(useEnduragentStore.getState().activeView).toBe("settings");
+    expect(useEnduragentStore.getState().selectedRide).toEqual(SELECTED_RIDE);
+    expect(takeTrainingRestrictionFocusRequest()).toBe(false);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("keeps the chat surface mounted while another view is shown", async () => {
