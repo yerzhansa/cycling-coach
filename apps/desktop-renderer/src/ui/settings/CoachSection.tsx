@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import {
   CUSTOM_MODEL_SELECTION,
   ONBOARDING_LLM_PROVIDER_LABELS,
@@ -253,39 +254,42 @@ export function CoachSection(): ReactElement {
         )}
         <div className={styles.actions}>
           {loadError ? (
-            <button
+            <Button
               type="button"
-              className={styles.button}
+              variant="outline"
+              size="sm"
               disabled={mutating}
               onClick={() => {
                 port?.retry();
               }}
             >
               Retry
-            </button>
+            </Button>
           ) : null}
           {credentialRequired ? (
-            <button
+            <Button
               type="button"
-              className={styles.button}
+              variant="outline"
+              size="sm"
               disabled={mutating}
               onClick={() => {
                 port?.openSetup();
               }}
             >
               Review setup
-            </button>
+            </Button>
           ) : null}
-          <button
+          <Button
             type="button"
-            className={styles.primary}
+            variant="default"
+            size="sm"
             disabled={mutating || !canSave}
             onClick={() => {
               port?.save();
             }}
           >
             {saving ? "Saving…" : "Save coach route"}
-          </button>
+          </Button>
         </div>
       </section>
     </>

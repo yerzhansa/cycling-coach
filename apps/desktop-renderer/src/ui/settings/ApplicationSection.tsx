@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import { APP_VERSION } from "../../app-version.js";
 import type { DesktopUpdateState } from "../../update/controller.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
@@ -126,9 +127,10 @@ export function ApplicationSection(): ReactElement {
             </span>
           </div>
           {update.state.status === "disabled" || copy.action === null ? null : (
-            <button
+            <Button
               type="button"
-              className={styles.button}
+              variant="outline"
+              size="sm"
               title={copy.label}
               aria-label={copy.label}
               disabled={updateBusy}
@@ -137,7 +139,7 @@ export function ApplicationSection(): ReactElement {
               }}
             >
               {copy.action}
-            </button>
+            </Button>
           )}
         </div>
         <div className={styles.row}>
@@ -145,10 +147,11 @@ export function ApplicationSection(): ReactElement {
             <div className={styles.rowTitle}>What’s new</div>
             <div className={styles.rowDetail}>Athlete-facing changes in the latest release</div>
           </div>
-          <button
+          <Button
             type="button"
             ref={opener}
-            className={styles.button}
+            variant="outline"
+            size="sm"
             aria-haspopup="dialog"
             aria-expanded={releaseNotesOpen}
             onClick={() => {
@@ -156,7 +159,7 @@ export function ApplicationSection(): ReactElement {
             }}
           >
             What’s new
-          </button>
+          </Button>
         </div>
       </section>
       <h2 className={styles.heading}>Danger</h2>
@@ -168,9 +171,10 @@ export function ApplicationSection(): ReactElement {
               Clears the visible conversation. Training data and saved coach memory remain.
             </div>
           </div>
-          <button
+          <Button
             type="button"
-            className={styles.danger}
+            variant="destructive"
+            size="sm"
             disabled={chatActions === null || mutating}
             onClick={() => {
               setActiveView("chat");
@@ -178,7 +182,7 @@ export function ApplicationSection(): ReactElement {
             }}
           >
             Reset conversation
-          </button>
+          </Button>
         </div>
       </section>
       <dialog
@@ -198,17 +202,18 @@ export function ApplicationSection(): ReactElement {
               ? `What’s new in ${releaseNotes.version}`
               : "What’s new"}
           </h2>
-          <button
+          <Button
             type="button"
             ref={closeDialog}
-            className={styles.button}
+            variant="outline"
+            size="sm"
             aria-label="Close release notes"
             onClick={() => {
               ports?.releaseNotes.close();
             }}
           >
             Close
-          </button>
+          </Button>
         </header>
         <div className={styles.dialogContent} role="status" aria-live="polite" aria-atomic="true">
           {releaseNotes.status === "loading" ? <p>Loading release notes…</p> : null}
@@ -228,15 +233,16 @@ export function ApplicationSection(): ReactElement {
         </div>
         <footer className={styles.dialogActions}>
           {releaseNotes.status === "unavailable" ? (
-            <button
+            <Button
               type="button"
-              className={styles.button}
+              variant="outline"
+              size="sm"
               onClick={() => {
                 ports?.releaseNotes.retry();
               }}
             >
               Retry
-            </button>
+            </Button>
           ) : null}
           {releaseUrl === null ? null : (
             <a href={releaseUrl} target="_blank" rel="noopener noreferrer">

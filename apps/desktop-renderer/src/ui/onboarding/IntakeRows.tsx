@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/button.js";
 import {
   Select,
   SelectContent,
@@ -98,8 +99,10 @@ export function IntakeRows(props: {
         <SetupSubPanel name="intake-error">
           <SetupError surface={surface} section="intake" />
           {props.placement === "settings" && wizard.fixedError === "intake-save-failed" ? (
-            <button
+            <Button
               type="button"
+              variant="link"
+              size="sm"
               className={SETUP_LINK_BUTTON}
               disabled={controlsDisabled}
               onClick={() => {
@@ -107,7 +110,7 @@ export function IntakeRows(props: {
               }}
             >
               {RETRY_INTAKE_SAVE_LABEL}
-            </button>
+            </Button>
           ) : null}
         </SetupSubPanel>
       ) : null}
