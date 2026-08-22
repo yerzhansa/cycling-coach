@@ -4,9 +4,9 @@ import type { CredentialEncryptionPort } from "./credential-vault.js";
 import {
   KEYCHAIN_KEY_BYTES,
   KEYCHAIN_TEAM_IDENTIFIER,
-  type KeychainHelperErrorCode,
-  type KeychainHelperTransport,
-} from "./keychain-helper.js";
+  type KeychainBindingErrorCode,
+  type KeychainBindingTransport,
+} from "./keychain-binding.js";
 
 export const KEYCHAIN_PARTITION_STORAGE_BACKEND = "keychain_partition_v1" as const;
 export const CREDENTIAL_ENVELOPE_MAGIC = "ENDURAGENT1" as const;
@@ -21,7 +21,7 @@ const MINIMUM_ENVELOPE_BYTES =
   HEADER_BYTES + CREDENTIAL_ENVELOPE_IV_BYTES + CREDENTIAL_ENVELOPE_TAG_BYTES;
 
 export class KeychainEncryptionError extends Error {
-  constructor(readonly code: KeychainHelperErrorCode) {
+  constructor(readonly code: KeychainBindingErrorCode) {
     super();
   }
 }
@@ -67,12 +67,14 @@ export type KeychainPartitionEncryptionResult =
     }
   | {
       readonly status: "unavailable";
-      readonly code: KeychainHelperErrorCode;
+      readonly code: KeychainBindingErrorCode;
+      readonly keyCleanupPending: boolean;
       readonly encryption: CredentialEncryptionPort;
     }
   | {
       readonly status: "storage-failed";
-      readonly code: KeychainHelperErrorCode;
+      readonly code: KeychainBindingErrorCode;
+      readonly keyCleanupPending: boolean;
       readonly encryption: CredentialEncryptionPort;
     }
   | {
@@ -81,14 +83,22 @@ export type KeychainPartitionEncryptionResult =
     };
 
 export interface CreateKeychainPartitionEncryptionOptions {
-  readonly transport: KeychainHelperTransport;
+  readonly transport: KeychainBindingTransport;
   readonly service: string;
-  readonly dependentEnvelopes: number;
+  readonly envelopeCensus:
+    | KeychainEnvelopeCensus
+    | (() => Promise<KeychainEnvelopeCensus>);
+  readonly keyCleanupPending?: boolean;
   readonly lockProof: CredentialEnvelopeLockProof;
 }
 
+export interface KeychainEnvelopeCensus {
+  readonly deletionBlockers: number;
+  readonly keychainDependents: number;
+}
+
 export function createRefusingKeychainEncryption(
-  code: KeychainHelperErrorCode,
+  code: KeychainBindingErrorCode,
   available: boolean,
 ): CredentialEncryptionPort {
   const refuse = (): never => {
@@ -104,15 +114,16 @@ export function createRefusingKeychainEncryption(
 
 export type KeychainKeyPreparation =
   | Readonly<{ status: "ready" }>
-  | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>;
+  | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>;
 
 export type KeychainKeyDeletion =
   | Readonly<{ status: "deleted" | "already-absent" }>
-  | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>;
+  | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>;
 
 interface KeyHolder {
   key: Buffer | null;
-  failure: KeychainHelperErrorCode;
+  failure: KeychainBindingErrorCode;
+  cleanupPending: boolean;
 }
 
 function readyPort(holder: KeyHolder): CredentialEncryptionPort {
@@ -128,17 +139,22 @@ function readyPort(holder: KeyHolder): CredentialEncryptionPort {
   };
 }
 
-function refused(code: KeychainHelperErrorCode): KeychainPartitionEncryptionResult {
+function refused(
+  code: KeychainBindingErrorCode,
+  keyCleanupPending = false,
+): KeychainPartitionEncryptionResult {
   if (code === "keychain-locked" || code === "uninspectable-item" || code === "item-not-found") {
     return {
       status: "unavailable",
       code,
+      keyCleanupPending,
       encryption: createRefusingKeychainEncryption(code, false),
     };
   }
   return {
     status: "storage-failed",
     code,
+    keyCleanupPending,
     encryption: createRefusingKeychainEncryption(code, true),
   };
 }
@@ -156,15 +172,20 @@ export async function createKeychainPartitionEncryption(
   if (probe.op !== "probe" || probe.teamIdentifier !== KEYCHAIN_TEAM_IDENTIFIER) {
     return refused("unknown");
   }
+  const envelopeCensus = async (): Promise<KeychainEnvelopeCensus> =>
+    typeof options.envelopeCensus === "function"
+      ? await options.envelopeCensus()
+      : options.envelopeCensus;
+  const initialCensus = await envelopeCensus();
 
   const createMaterial = async (): Promise<
     | Readonly<{ status: "ready"; key: Buffer }>
-    | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>
+    | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>
   > => {
     const created = await transport.send({ op: "create-key", service });
     if (!created.ok) return { status: "failed", code: created.code };
     if (created.op !== "create-key") return { status: "failed", code: "unknown" };
-    const key = Buffer.from(created.key, "base64");
+    const key = Buffer.from(created.key);
     return key.length === KEYCHAIN_KEY_BYTES
       ? { status: "ready", key }
       : { status: "failed", code: "unknown" };
@@ -173,7 +194,7 @@ export async function createKeychainPartitionEncryption(
   const readMaterial = async (): Promise<
     | Readonly<{ status: "ready"; key: Buffer }>
     | Readonly<{ status: "missing" }>
-    | Readonly<{ status: "failed"; code: KeychainHelperErrorCode }>
+    | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>
   > => {
     const read = await transport.send({ op: "read-key", service });
     if (!read.ok) {
@@ -182,16 +203,37 @@ export async function createKeychainPartitionEncryption(
         : { status: "failed", code: read.code };
     }
     if (read.op !== "read-key") return { status: "failed", code: "unknown" };
-    const key = Buffer.from(read.key, "base64");
+    const key = Buffer.from(read.key);
     return key.length === KEYCHAIN_KEY_BYTES
       ? { status: "ready", key }
       : { status: "failed", code: "unknown" };
   };
 
-  const ready = (key: Buffer, createdKey: boolean): KeychainPartitionEncryptionResult => {
-    const holder: KeyHolder = { key, failure: "item-not-found" };
+  const deleteMaterial = async (): Promise<KeychainKeyDeletion> => {
+    const deleted = await transport.send({ op: "delete-key", service });
+    if (!deleted.ok || deleted.op !== "delete-key") {
+      return { status: "failed", code: deleted.ok ? "unknown" : deleted.code };
+    }
+    return { status: deleted.deleted ? "deleted" : "already-absent" };
+  };
+
+  const ready = (key: Buffer | null, createdKey: boolean): KeychainPartitionEncryptionResult => {
+    const holder: KeyHolder = { key, failure: "item-not-found", cleanupPending: false };
     const prepareKey = async (): Promise<KeychainKeyPreparation> => {
       if (holder.key !== null) return { status: "ready" };
+      if (holder.cleanupPending) {
+        const census = await envelopeCensus();
+        if (census.deletionBlockers > 0) {
+          holder.failure = "unknown";
+          return { status: "failed", code: holder.failure };
+        }
+        const deleted = await deleteMaterial();
+        if (deleted.status === "failed") {
+          holder.failure = deleted.code;
+          return deleted;
+        }
+        holder.cleanupPending = false;
+      }
       const existing = await readMaterial();
       if (existing.status === "ready") {
         holder.key = existing.key;
@@ -201,6 +243,11 @@ export async function createKeychainPartitionEncryption(
       if (existing.status === "failed") {
         holder.failure = existing.code;
         return existing;
+      }
+      const census = await envelopeCensus();
+      if (census.keychainDependents > 0) {
+        holder.failure = "item-not-found";
+        return { status: "failed", code: holder.failure };
       }
       const created = await createMaterial();
       if (created.status === "failed") {
@@ -212,37 +259,45 @@ export async function createKeychainPartitionEncryption(
       return { status: "ready" };
     };
     const deleteKey = async (): Promise<KeychainKeyDeletion> => {
+      const census = await envelopeCensus();
+      if (census.deletionBlockers > 0) {
+        holder.failure = "unknown";
+        return { status: "failed", code: holder.failure };
+      }
       const previous = holder.key;
       holder.key = null;
-      const deleted = await transport.send({ op: "delete-key", service });
-      if (!deleted.ok || deleted.op !== "delete-key") {
-        const code = deleted.ok ? "unknown" : deleted.code;
+      const deleted = await deleteMaterial();
+      if (deleted.status === "failed") {
         previous?.fill(0);
-        holder.failure = code;
-        return { status: "failed", code };
+        holder.failure = deleted.code;
+        holder.cleanupPending = true;
+        return deleted;
       }
       previous?.fill(0);
       holder.failure = "item-not-found";
-      return { status: deleted.deleted ? "deleted" : "already-absent" };
+      holder.cleanupPending = false;
+      return deleted;
     };
     return { status: "ready", encryption: readyPort(holder), createdKey, prepareKey, deleteKey };
   };
 
-  const create = async (): Promise<KeychainPartitionEncryptionResult> => {
-    const created = await createMaterial();
-    return created.status === "ready" ? ready(created.key, true) : refused(created.code);
-  };
+  if (options.keyCleanupPending) {
+    if (initialCensus.deletionBlockers > 0) return refused("unknown", true);
+    const deleted = await deleteMaterial();
+    return deleted.status === "failed" ? refused(deleted.code, true) : ready(null, false);
+  }
 
   const read = await readMaterial();
-  if (read.status === "ready") return ready(read.key, false);
-  if (read.status === "missing") {
-    return options.dependentEnvelopes === 0 ? create() : refused("item-not-found");
+  if (read.status === "ready") {
+    if (initialCensus.deletionBlockers > 0) return ready(read.key, false);
+    const deleted = await deleteMaterial();
+    read.key.fill(0);
+    return deleted.status === "failed" ? refused(deleted.code, true) : ready(null, false);
   }
-  if (read.code !== "unreadable-item") return refused(read.code);
-  if (options.dependentEnvelopes > 0) return refused(read.code);
-
-  const deleted = await transport.send({ op: "delete-key", service });
-  if (!deleted.ok) return refused(deleted.code);
-  if (deleted.op !== "delete-key") return refused("unknown");
-  return create();
+  if (read.status === "missing") {
+    return initialCensus.keychainDependents === 0
+      ? ready(null, false)
+      : refused("item-not-found");
+  }
+  return refused(read.code);
 }

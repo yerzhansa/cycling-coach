@@ -8,7 +8,16 @@ import { contained } from "./package-plan.mjs";
 
 export { contained } from "./package-plan.mjs";
 
-export const KEYCHAIN_HELPER_RESOURCE_PATH = "keychain/keychain-helper";
+export const KEYCHAIN_BINDING_ASAR_PATH = "native/keychain-binding.node";
+export const KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN =
+  `dist/self-test-asar/${KEYCHAIN_BINDING_ASAR_PATH}`;
+export const KEYCHAIN_BINDING_FUSE_CONFIGURATION = Object.freeze({
+  runAsNode: false,
+  enableNodeOptionsEnvironmentVariable: false,
+  enableNodeCliInspectArguments: false,
+  enableEmbeddedAsarIntegrityValidation: true,
+  onlyLoadAppFromAsar: true,
+});
 
 const requiredAsarFiles = [
   "out/main/index.js",
@@ -80,6 +89,7 @@ const MACH_O_HEADER_BYTES = 32;
 const MACH_O_64_LITTLE_ENDIAN_MAGIC = 0xfeed_facf;
 const MACH_O_ARM64_CPU_TYPE = 0x0100_000c;
 const MACH_O_EXECUTE_FILE_TYPE = 0x2;
+const MACH_O_BUNDLE_FILE_TYPE = 0x8;
 const MACH_O_UUID_COMMAND = 0x1b;
 const MACH_O_UUID_COMMAND_BYTES = 24;
 const MACH_O_SEGMENT_64_COMMAND = 0x19;
@@ -188,6 +198,9 @@ export function forbiddenPathReason(path) {
   const lower = path.toLowerCase();
   const segments = lower.split("/");
   const base = segments.at(-1) ?? "";
+  if (base === "keychain-helper" || segments.includes("keychain-helper")) {
+    return "retired keychain helper";
+  }
   if (vendoredAgentCliPatterns.some((pattern) => pattern.test(lower))) return "vendored agent CLI";
   if (base.endsWith(".map")) return "source map";
   if (base.startsWith(".env")) return "environment file";
@@ -219,14 +232,14 @@ export function inspectContents(bytes, label) {
   }
 }
 
-export function machoExecutableIdentity(bytes, label) {
+function machoIdentity(bytes, label, expectedFileType, kind) {
   if (
     !Buffer.isBuffer(bytes) ||
     bytes.length < MINIMUM_MACH_O_EXECUTABLE_BYTES ||
     bytes.length > MAXIMUM_MACH_O_EXECUTABLE_BYTES ||
     bytes.readUInt32LE(0) !== MACH_O_64_LITTLE_ENDIAN_MAGIC
   ) {
-    fail("expected a 64-bit little-endian Mach-O executable", label);
+    fail(`expected a 64-bit little-endian Mach-O ${kind}`, label);
   }
   const cpuType = bytes.readUInt32LE(4);
   const cpuSubtype = bytes.readUInt32LE(8);
@@ -234,8 +247,8 @@ export function machoExecutableIdentity(bytes, label) {
   const commandCount = bytes.readUInt32LE(16);
   const commandBytes = bytes.readUInt32LE(20);
   const commandEnd = MACH_O_HEADER_BYTES + commandBytes;
-  if (cpuType !== MACH_O_ARM64_CPU_TYPE || fileType !== MACH_O_EXECUTE_FILE_TYPE) {
-    fail("unsupported Mach-O executable architecture", label);
+  if (cpuType !== MACH_O_ARM64_CPU_TYPE || fileType !== expectedFileType) {
+    fail(`unsupported Mach-O ${kind} architecture`, label);
   }
   if (
     commandCount === 0 ||
@@ -306,6 +319,14 @@ export function machoExecutableIdentity(bytes, label) {
   };
 }
 
+export function machoExecutableIdentity(bytes, label) {
+  return machoIdentity(bytes, label, MACH_O_EXECUTE_FILE_TYPE, "executable");
+}
+
+export function machoBundleIdentity(bytes, label) {
+  return machoIdentity(bytes, label, MACH_O_BUNDLE_FILE_TYPE, "bundle");
+}
+
 function fileSet(value) {
   if (!exactObject(value) || typeof value.from !== "string" || typeof value.to !== "string") {
     fail("invalid builder FileSet");
@@ -348,6 +369,10 @@ export function validateBuilderInventoryAuthority(config, desktopRoot, options =
     config.directories.output !== "dist" ||
     !Array.isArray(config.files) ||
     !Array.isArray(config.extraResources) ||
+    !Array.isArray(config.asarUnpack) ||
+    config.asarUnpack.length !== 1 ||
+    config.asarUnpack[0] !== KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN ||
+    !isDeepStrictEqual(config.electronFuses, KEYCHAIN_BINDING_FUSE_CONFIGURATION) ||
     validateEnvelopeAuthority(config) !== true
   ) {
     fail("invalid builder packaging authority", "electron-builder.yml");
@@ -577,11 +602,13 @@ export function compareAsarStaging(expected, asar) {
     if (
       actualEntry === undefined ||
       actualEntry.type !== expectedEntry.type ||
-      actualEntry.unpacked === true
+      (expectedEntry.type === "file" &&
+        actualEntry.unpacked !== (path === KEYCHAIN_BINDING_ASAR_PATH))
     ) {
       fail("ASAR staging entry is missing or unpacked", `app.asar/${path}`);
     }
     if (
+      path !== KEYCHAIN_BINDING_ASAR_PATH &&
       expectedEntry.type === "file" &&
       (!Buffer.isBuffer(actualEntry.bytes) || !expectedEntry.bytes.equals(actualEntry.bytes))
     ) {
@@ -745,6 +772,20 @@ export function validateRequiredAsarFiles(asar, sourceManifest, options = {}) {
     if (path.split("/").at(-1) === "self-test-runner.cjs") {
       fail("self-test runner must remain external", `app.asar/${path}`);
     }
+  }
+  const binding = asar.get(KEYCHAIN_BINDING_ASAR_PATH);
+  if (options.macos === true) {
+    if (binding === undefined || binding.type !== "file" || binding.unpacked !== true) {
+      fail(
+        "declared keychain binding is missing or packed",
+        `app.asar/${KEYCHAIN_BINDING_ASAR_PATH}`,
+      );
+    }
+  } else if (binding !== undefined) {
+    fail(
+      "macOS keychain binding is forbidden on this platform",
+      `app.asar/${KEYCHAIN_BINDING_ASAR_PATH}`,
+    );
   }
 
   validateManifest(asar, sourceManifest, options);

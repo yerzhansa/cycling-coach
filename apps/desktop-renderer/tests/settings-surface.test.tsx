@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
 import type {
   CredentialDeleteResult,
+  CredentialRecoveryStatus,
+  CredentialResetResult,
   OnboardingLlmConfiguration,
   OnboardingLlmSelection,
   OnboardingLlmSelectionResult,
@@ -177,6 +179,8 @@ interface HarnessOptions {
   readonly chatGptStatus?: ChatGptStatus;
   readonly claudeCliStatus?: () => Promise<ClaudeCliStatus>;
   readonly deleteCredential?: () => Promise<CredentialDeleteResult>;
+  readonly credentialRecoveryStatus?: () => Promise<CredentialRecoveryStatus>;
+  readonly resetAllCredentials?: () => Promise<CredentialResetResult>;
   readonly onDeleted?: () => Promise<void> | void;
   readonly onReconciled?: () => Promise<void> | void;
   readonly releaseNotes?: () => Promise<ReleaseNotesResult>;
@@ -238,6 +242,13 @@ function createHarness(options: HarnessOptions = {}) {
         cleanupPending: false,
       })),
   );
+  const resetAllCredentials = vi.fn(
+    options.resetAllCredentials ??
+      (async (): Promise<CredentialResetResult> => ({
+        status: "reset",
+        keyCleanupPending: false,
+      })),
+  );
   const openSetup = vi.fn();
   const onDeleted = vi.fn(options.onDeleted ?? (async () => {}));
   const onReconciled = vi.fn(options.onReconciled ?? (async () => {}));
@@ -284,6 +295,13 @@ function createHarness(options: HarnessOptions = {}) {
         ]),
     loadChatGptStatus: async () =>
       options.chatGptStatus ?? { state: "absent", runtimeReady: false },
+    loadRecoveryStatus:
+      options.credentialRecoveryStatus ??
+      (async (): Promise<CredentialRecoveryStatus> => ({
+        state: "ready",
+        unverifiedEnvelopes: 0,
+      })),
+    resetAllCredentials,
     ...(options.claudeCliStatus === undefined
       ? {}
       : { loadClaudeCliStatus: options.claudeCliStatus }),
@@ -413,6 +431,7 @@ function createHarness(options: HarnessOptions = {}) {
     calls,
     applyLlmSelection,
     deleteCredential,
+    resetAllCredentials,
     restartToUpdate,
     checkForUpdates,
     openSetup,
@@ -935,6 +954,26 @@ describe("settings lifecycle", () => {
 });
 
 describe("credential deletion", () => {
+  it("offers inline removal when saved credentials are unverified", async () => {
+    const user = userEvent.setup();
+    const subject = await renderSettings({
+      credentialRecoveryStatus: async () => ({ state: "ready", unverifiedEnvelopes: 1 }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Remove all credentials" }));
+
+    const confirmation = screen.getByRole("group", { name: "Remove all credentials?" });
+    await waitFor(() =>
+      expect(within(confirmation).getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    expect(subject.resetAllCredentials).not.toHaveBeenCalled();
+
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Remove all credentials" }),
+    );
+    await waitFor(() => expect(subject.resetAllCredentials).toHaveBeenCalledOnce());
+  });
+
   it("cross-locks setup changes while deletion is confirmed and pending", async () => {
     const user = userEvent.setup();
     const deletion = deferred<CredentialDeleteResult>();

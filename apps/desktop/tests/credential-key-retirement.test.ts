@@ -19,9 +19,9 @@ import { retireKeychainKeyWhenLastEnvelopeGone } from "../src/main/keychain-key-
 import {
   KEYCHAIN_CREDENTIAL_SERVICE,
   KEYCHAIN_KEY_BYTES,
-  type KeychainHelperRequest,
-  type KeychainHelperResponse,
-} from "../src/main/keychain-helper.js";
+  type KeychainBindingRequest,
+  type KeychainBindingResponse,
+} from "../src/main/keychain-binding.js";
 import { createTelegramCredentialVault } from "../src/main/telegram-credential-vault.js";
 
 const posixIt = it.skipIf(process.platform === "win32");
@@ -61,12 +61,12 @@ function keychainPort(key: Buffer): CredentialEncryptionPort {
   };
 }
 
-function transportOf(...responses: readonly KeychainHelperResponse[]) {
+function transportOf(...responses: readonly KeychainBindingResponse[]) {
   const remaining = [...responses];
-  const requests: KeychainHelperRequest[] = [];
+  const requests: KeychainBindingRequest[] = [];
   return {
     requests,
-    send(request: KeychainHelperRequest): Promise<KeychainHelperResponse> {
+    send(request: KeychainBindingRequest): Promise<KeychainBindingResponse> {
       requests.push(request);
       return Promise.resolve(remaining.shift() ?? { ok: false, code: "unknown" });
     },

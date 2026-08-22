@@ -128,15 +128,22 @@ export interface VerifiedMacosReleaseEnvelope {
 
 export function safeMacosReleaseVerificationMessage(error: unknown): string | undefined;
 
-export interface VerifiedMacosKeychainHelper {
+export interface VerifiedMacosKeychainBinding {
+  readonly binding: string;
+  readonly identifier: string;
   readonly teamIdentifier: string;
   readonly designatedRequirement: string;
+  readonly imageIdentity: import("./package-inventory.mjs").MachoExecutableIdentity;
 }
 
-export function verifyMacosKeychainHelper(
+export function verifyMacosKeychainBinding(
   application: string,
-  dependencies?: Pick<VerifyMacosReleaseDependencies, "executeFile">,
-): Promise<VerifiedMacosKeychainHelper>;
+  dependencies?: Pick<VerifyMacosReleaseDependencies, "executeFile"> & {
+    readonly inspectBindingImage?: (
+      binding: string,
+    ) => Promise<import("./package-inventory.mjs").MachoExecutableIdentity>;
+  },
+): Promise<VerifiedMacosKeychainBinding>;
 export function verifyMacosApplication(
   application: string,
   dependencies?: Pick<VerifyMacosReleaseDependencies, "executeFile">,

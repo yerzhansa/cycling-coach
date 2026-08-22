@@ -344,6 +344,9 @@ export function bootRenderer(): Disposer {
     clients,
     loadStatuses: () => window.enduragentAuth.credentialStatuses(),
     loadChatGptStatus: () => window.enduragentAuth.chatgptStatus(),
+    loadRecoveryStatus: () => window.enduragentAuth.credentialRecoveryStatus(),
+    retryCredentialRecovery: () => window.enduragentAuth.retryCredentialRecovery(),
+    resetAllCredentials: () => window.enduragentAuth.resetAllCredentials(),
     loadClaudeCliStatus: () => window.enduragentAuth.claudeCliStatus(),
     deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
     openSetup: openSetupFromSettings,
@@ -428,8 +431,7 @@ export function bootRenderer(): Disposer {
       window.enduragentAuth.getDaemonConnection().then((connection) => connection.generation),
     open: () => onboarding.open(),
     markSettled: () => store.getState().setOnboardingStartupSettled(true),
-    reportSettled: (generation) =>
-      window.enduragentAuth.initialSetupStatusSettled({ generation }),
+    reportSettled: (generation) => window.enduragentAuth.initialSetupStatusSettled({ generation }),
     reportFailure: () => console.error("desktop-initial-setup-settled-report-failure"),
   });
   void clients.getClient().then(

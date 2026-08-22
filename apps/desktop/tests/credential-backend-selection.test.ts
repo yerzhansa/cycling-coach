@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,15 +21,16 @@ import {
   KEYCHAIN_PARTITION_STORAGE_BACKEND,
   SAFE_STORAGE_ENVELOPE_KEY_ID,
   createKeychainPartitionEncryption,
+  sealCredentialEnvelope,
 } from "../src/main/keychain-credential-encryption.js";
 import {
   KEYCHAIN_CREDENTIAL_SERVICE,
   KEYCHAIN_KEY_BYTES,
   KEYCHAIN_TEAM_IDENTIFIER,
-  type KeychainHelperRequest,
-  type KeychainHelperResponse,
-  type KeychainHelperTransport,
-} from "../src/main/keychain-helper.js";
+  type KeychainBindingRequest,
+  type KeychainBindingResponse,
+  type KeychainBindingTransport,
+} from "../src/main/keychain-binding.js";
 import {
   TELEGRAM_PROFILE_FILE_NAME,
   createTelegramCredentialVault,
@@ -38,7 +39,7 @@ import {
 const fixtureRoots: string[] = [];
 const posixIt = it.skipIf(process.platform === "win32");
 const BOT = { id: 123456, username: "synthetic_bot" } as const;
-const PROBE_OK: KeychainHelperResponse = {
+const PROBE_OK: KeychainBindingResponse = {
   ok: true,
   op: "probe",
   teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER,
@@ -74,13 +75,13 @@ function safeStorage(): CredentialEncryptionPort {
   };
 }
 
-interface RecordingTransport extends KeychainHelperTransport {
-  readonly requests: KeychainHelperRequest[];
+interface RecordingTransport extends KeychainBindingTransport {
+  readonly requests: KeychainBindingRequest[];
 }
 
-function transportOf(...responses: readonly KeychainHelperResponse[]): RecordingTransport {
+function transportOf(...responses: readonly KeychainBindingResponse[]): RecordingTransport {
   const remaining = [...responses];
-  const requests: KeychainHelperRequest[] = [];
+  const requests: KeychainBindingRequest[] = [];
   return {
     requests,
     send(request) {
@@ -92,8 +93,8 @@ function transportOf(...responses: readonly KeychainHelperResponse[]): Recording
   };
 }
 
-function readKey(key: Buffer): KeychainHelperResponse {
-  return { ok: true, op: "read-key", key: key.toString("base64") };
+function readKey(key: Buffer): KeychainBindingResponse {
+  return { ok: true, op: "read-key", key };
 }
 
 async function keychainEncryption(key: Buffer): Promise<CredentialEncryptionPort> {
@@ -102,7 +103,7 @@ async function keychainEncryption(key: Buffer): Promise<CredentialEncryptionPort
     createKeychainPartitionEncryption({
       transport: transportOf(PROBE_OK, readKey(key)),
       service: KEYCHAIN_CREDENTIAL_SERVICE,
-      dependentEnvelopes: 0,
+      envelopeCensus: { deletionBlockers: 1, keychainDependents: 1 },
       lockProof,
     }),
   );
@@ -112,7 +113,7 @@ async function keychainEncryption(key: Buffer): Promise<CredentialEncryptionPort
 
 function selection(
   roots: Fixture,
-  transport: KeychainHelperTransport,
+  transport: KeychainBindingTransport,
 ): SelectDesktopCredentialBackendOptions {
   return {
     credentialRoot: roots.credentialRoot,
@@ -181,7 +182,14 @@ afterEach(async () => {
 describe("backend selection", () => {
   posixIt("selects the keychain backend on a team-signed darwin build", async () => {
     const roots = await fixture();
-    const transport = transportOf(PROBE_OK, readKey(randomBytes(KEYCHAIN_KEY_BYTES)));
+    const key = randomBytes(KEYCHAIN_KEY_BYTES);
+    await seedCredential(
+      roots.credentialRoot,
+      "anthropic",
+      "sk-anthropic",
+      await keychainEncryption(key),
+    );
+    const transport = transportOf(PROBE_OK, readKey(key));
 
     const selected = await selectDesktopCredentialBackend(selection(roots, transport));
 
@@ -190,27 +198,26 @@ describe("backend selection", () => {
     expect(selected.encryption.getSelectedStorageBackend?.()).toBe(
       KEYCHAIN_PARTITION_STORAGE_BACKEND,
     );
-    expect(selected.migration).toEqual({
-      status: "complete",
-      migrated: 0,
-      alreadyMigrated: 0,
-      failed: 0,
-      uncertain: 0,
-    });
+    expect(selected.unverifiedEnvelopes).toBe(0);
     expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
   });
 
-  posixIt("keeps safeStorage on a build that carries no team identity", async () => {
+  posixIt("refuses persistence on a macOS build that carries no team identity", async () => {
     const roots = await fixture();
     const legacy = safeStorage();
     await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
+    const decryptString = vi.spyOn(legacy, "decryptString");
     const transport = transportOf({ ok: false, code: "not-team-signed" });
     const options = { ...selection(roots, transport), safeStorage: legacy };
 
     const selected = await selectDesktopCredentialBackend(options);
 
-    expect(selected.status).toBe("safe-storage");
-    expect(selected.encryption).toBe(legacy);
+    expect(selected).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "not-team-signed",
+    });
+    expect(decryptString).not.toHaveBeenCalled();
     expect(transport.requests.map((request) => request.op)).toEqual(["probe"]);
   });
 
@@ -227,17 +234,16 @@ describe("backend selection", () => {
     expect(transport.requests).toHaveLength(0);
   });
 
-  posixIt("migrates eagerly at the first startup on the keychain backend", async () => {
+  posixIt("preserves old envelopes for inline re-entry without calling safeStorage", async () => {
     const roots = await fixture();
     const legacy = safeStorage();
     const key = randomBytes(KEYCHAIN_KEY_BYTES);
     await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
     await seedProfile(roots, "synthetic-token", legacy);
-    const transport = transportOf(
-      PROBE_OK,
-      { ok: false, code: "item-not-found" },
-      { ok: true, op: "create-key", key: key.toString("base64") },
-    );
+    const credentialBefore = await readFile(join(roots.credentialRoot, "anthropic.bin"));
+    const telegramBefore = await readFile(join(roots.telegramRoot, TELEGRAM_PROFILE_FILE_NAME));
+    const decryptString = vi.spyOn(legacy, "decryptString");
+    const transport = transportOf(PROBE_OK, readKey(key));
     const options = {
       ...selection(roots, transport),
       safeStorage: legacy,
@@ -247,31 +253,102 @@ describe("backend selection", () => {
 
     expect(selected.status).toBe("keychain");
     if (selected.status !== "keychain") return;
-    expect(selected.migration).toMatchObject({ status: "complete", migrated: 2 });
-    for (const path of [
-      join(roots.credentialRoot, "anthropic.bin"),
-      join(roots.telegramRoot, TELEGRAM_PROFILE_FILE_NAME),
-    ]) {
-      expect(credentialEnvelopeKeyId(await readFile(path))).toBe(KEYCHAIN_ENVELOPE_KEY_ID);
-    }
+    expect(selected.unverifiedEnvelopes).toBe(2);
+    expect(decryptString).not.toHaveBeenCalled();
+    await expect(readFile(join(roots.credentialRoot, "anthropic.bin"))).resolves.toEqual(
+      credentialBefore,
+    );
+    await expect(readFile(join(roots.telegramRoot, TELEGRAM_PROFILE_FILE_NAME))).resolves.toEqual(
+      telegramBefore,
+    );
     await expect(credentialVault(roots, selected.encryption).credentialStatuses()).resolves.toEqual(
-      expect.arrayContaining([
-        { slot: "anthropic", state: "configured", runtimeState: "stored-inactive" },
-      ]),
+      expect.arrayContaining([{ slot: "anthropic", state: "re-prompt", runtimeState: null }]),
     );
     await expect(telegramVault(roots, selected.encryption).profileStatus()).resolves.toMatchObject({
-      state: "configured",
+      state: "re-prompt",
     });
-    expect(transport.requests.map((request) => request.op)).toEqual([
-      "probe",
-      "read-key",
-      "create-key",
-    ]);
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
   });
+
+  posixIt(
+    "keeps legacy-only recovery keyless through Retry and creates once for explicit re-entry",
+    async () => {
+      const roots = await fixture();
+      const legacy = safeStorage();
+      await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
+      await seedCredential(roots.credentialRoot, "openrouter", "sk-openrouter", legacy);
+      const unknownPath = join(roots.credentialRoot, "openrouter.bin");
+      await writeFile(unknownPath, Buffer.from("unrecognized-envelope"));
+      const keyIdZeroPath = join(roots.credentialRoot, "intervals-icu.bin");
+      const keyIdZero = sealCredentialEnvelope(randomBytes(KEYCHAIN_KEY_BYTES), "legacy-intervals");
+      keyIdZero[CREDENTIAL_ENVELOPE_MAGIC.length] = SAFE_STORAGE_ENVELOPE_KEY_ID;
+      await writeFile(keyIdZeroPath, keyIdZero);
+      keyIdZero.fill(0);
+      const unknownBefore = await readFile(unknownPath);
+      const keyIdZeroBefore = await readFile(keyIdZeroPath);
+      const replacement = randomBytes(KEYCHAIN_KEY_BYTES);
+      const transport = transportOf(
+        PROBE_OK,
+        { ok: false, code: "item-not-found" },
+        PROBE_OK,
+        { ok: false, code: "item-not-found" },
+        { ok: false, code: "item-not-found" },
+        { ok: true, op: "create-key", key: replacement },
+      );
+      const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+      const options = {
+        ...selection(roots, transport),
+        safeStorage: legacy,
+        serializeEnvelopeMutation,
+      };
+      const decryptString = vi.spyOn(legacy, "decryptString");
+
+      const startup = await selectDesktopCredentialBackend(options);
+      const retried = await selectDesktopCredentialBackend(options);
+
+      expect(startup.status).toBe("keychain");
+      expect(retried.status).toBe("keychain");
+      if (startup.status !== "keychain" || retried.status !== "keychain") return;
+      expect(startup.encryption.isEncryptionAvailable()).toBe(false);
+      expect(retried.encryption.isEncryptionAvailable()).toBe(false);
+      expect(retried.unverifiedEnvelopes).toBe(3);
+      expect(transport.requests.map((request) => request.op)).toEqual([
+        "probe",
+        "read-key",
+        "probe",
+        "read-key",
+      ]);
+
+      await expect(
+        serializeEnvelopeMutation((proof) => retried.prepareKey(proof)),
+      ).resolves.toEqual({ status: "ready" });
+      await expect(
+        credentialVault(roots, retried.encryption).writeCredential(
+          { slot: "anthropic", value: "sk-replacement" },
+          { activate: false },
+        ),
+      ).resolves.toMatchObject({ status: "configured" });
+
+      expect(transport.requests.map((request) => request.op)).toEqual([
+        "probe",
+        "read-key",
+        "probe",
+        "read-key",
+        "read-key",
+        "create-key",
+      ]);
+      expect(decryptString).not.toHaveBeenCalled();
+      expect(
+        credentialEnvelopeKeyId(await readFile(join(roots.credentialRoot, "anthropic.bin"))),
+      ).toBe(KEYCHAIN_ENVELOPE_KEY_ID);
+      await expect(readFile(unknownPath)).resolves.toEqual(unknownBefore);
+      await expect(readFile(keyIdZeroPath)).resolves.toEqual(keyIdZeroBefore);
+    },
+  );
 });
 
 describe("unreadable envelopes", () => {
-  posixIt("reports the pass incomplete when an envelope cannot be read", async () => {
+  posixIt("treats an uninspectable file as dependent without legacy decryption", async () => {
     const roots = await fixture();
     const legacy = safeStorage();
     await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
@@ -289,32 +366,22 @@ describe("unreadable envelopes", () => {
 
     expect(selected.status).toBe("keychain");
     if (selected.status !== "keychain") return;
-    expect(selected.migration).toEqual({
-      status: "incomplete",
-      migrated: 0,
-      alreadyMigrated: 0,
-      failed: 1,
-      uncertain: 0,
-    });
-    expect(
-      credentialEnvelopeKeyId(await readFile(join(roots.credentialRoot, "anthropic.bin"))),
-    ).toBe(SAFE_STORAGE_ENVELOPE_KEY_ID);
-    expect(selected.encryption.decryptString(legacy.encryptString("sk-old"))).toBe("sk-old");
+    expect(selected.unverifiedEnvelopes).toBe(1);
+    await expect(readFile(join(roots.credentialRoot, "anthropic.bin"))).resolves.toEqual(
+      legacy.encryptString("sk-anthropic"),
+    );
+    expect(() => selected.encryption.decryptString(legacy.encryptString("sk-old"))).toThrow();
   });
 });
 
 describe("mandatory keychain rule", () => {
-  posixIt("refuses to fall back to safeStorage once an envelope is migrated", async () => {
+  posixIt("never falls back to safeStorage on macOS", async () => {
     const roots = await fixture();
     const legacy = safeStorage();
-    const key = randomBytes(KEYCHAIN_KEY_BYTES);
     await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
     await seedProfile(roots, "synthetic-token", legacy);
-    await selectDesktopCredentialBackend({
-      ...selection(roots, transportOf(PROBE_OK, readKey(key))),
-      safeStorage: legacy,
-    });
-    const migrated = await readFile(join(roots.credentialRoot, "anthropic.bin"));
+    const before = await readFile(join(roots.credentialRoot, "anthropic.bin"));
+    const decryptString = vi.spyOn(legacy, "decryptString");
 
     const selected = await selectDesktopCredentialBackend({
       ...selection(roots, transportOf({ ok: false, code: "not-team-signed" })),
@@ -329,76 +396,37 @@ describe("mandatory keychain rule", () => {
     expect(selected.encryption.getSelectedStorageBackend?.()).toBe(
       KEYCHAIN_PARTITION_STORAGE_BACKEND,
     );
-    await expect(readFile(join(roots.credentialRoot, "anthropic.bin"))).resolves.toEqual(migrated);
+    expect(decryptString).not.toHaveBeenCalled();
+    await expect(readFile(join(roots.credentialRoot, "anthropic.bin"))).resolves.toEqual(before);
   });
 
-  posixIt(
-    "reports a broken helper as encryption-unavailable once an envelope is migrated",
-    async () => {
-      const roots = await fixture();
-      const legacy = safeStorage();
-      const key = randomBytes(KEYCHAIN_KEY_BYTES);
-      await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
-      await selectDesktopCredentialBackend({
-        ...selection(roots, transportOf(PROBE_OK, readKey(key))),
-        safeStorage: legacy,
-      });
-
-      const selected = await selectDesktopCredentialBackend({
-        ...selection(roots, transportOf({ ok: false, code: "unknown" })),
-        safeStorage: legacy,
-      });
-
-      expect(selected.status).toBe("refused");
-      if (selected.status !== "refused") return;
-      expect(selected.reason).toBe("encryption-unavailable");
-      expect(selected.code).toBe("unknown");
-      expect(selected.encryption.isEncryptionAvailable()).toBe(false);
-    },
-  );
-
-  posixIt("keeps a broken helper as storage-failed before any envelope is migrated", async () => {
+  posixIt("checks the helper before reading any credential envelope", async () => {
     const roots = await fixture();
     const legacy = safeStorage();
     await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
+    const readEnvelopeFile = vi.fn(async () => {
+      throw Object.assign(new Error("must not scan"), { code: "EACCES" });
+    });
 
     const selected = await selectDesktopCredentialBackend({
       ...selection(roots, transportOf({ ok: false, code: "unknown" })),
       safeStorage: legacy,
+      readEnvelopeFile,
     });
 
-    expect(selected.status).toBe("refused");
-    if (selected.status !== "refused") return;
-    expect(selected.reason).toBe("storage-failed");
-    expect(selected.encryption.isEncryptionAvailable()).toBe(true);
-  });
-
-  posixIt("refuses when an existing envelope cannot be read", async () => {
-    const roots = await fixture();
-    const legacy = safeStorage();
-    await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
-
-    const selected = await selectDesktopCredentialBackend({
-      ...selection(roots, transportOf({ ok: false, code: "not-team-signed" })),
-      safeStorage: legacy,
-      readEnvelopeFile: (async () => {
-        throw Object.assign(new Error("synthetic read failure"), { code: "EACCES" });
-      }) as never,
+    expect(selected).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unknown",
     });
-
-    expect(selected.status).toBe("refused");
+    expect(readEnvelopeFile).not.toHaveBeenCalled();
   });
 
-  posixIt("leaves every credential untouched when the probe fails after migration", async () => {
+  posixIt("leaves every credential untouched when the helper probe fails", async () => {
     const roots = await fixture();
     const legacy = safeStorage();
-    const key = randomBytes(KEYCHAIN_KEY_BYTES);
     await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
     await seedProfile(roots, "synthetic-token", legacy);
-    await selectDesktopCredentialBackend({
-      ...selection(roots, transportOf(PROBE_OK, readKey(key))),
-      safeStorage: legacy,
-    });
     const selected = await selectDesktopCredentialBackend({
       ...selection(roots, transportOf({ ok: false, code: "not-team-signed" })),
       safeStorage: legacy,
@@ -421,7 +449,7 @@ describe("mandatory keychain rule", () => {
     });
     expect(
       credentialEnvelopeKeyId(await readFile(join(roots.credentialRoot, "anthropic.bin"))),
-    ).toBe(KEYCHAIN_ENVELOPE_KEY_ID);
+    ).toBeUndefined();
   });
 });
 
@@ -430,10 +458,10 @@ describe("keychain failure mapping", () => {
     expect(keychainFailureRefusal("keychain-locked", false)).toBe("encryption-unavailable");
     expect(keychainFailureRefusal("not-team-signed", false)).toBe("encryption-unavailable");
     expect(keychainFailureRefusal("duplicate-item", false)).toBe("storage-failed");
-    expect(keychainFailureRefusal("unreadable-item", false)).toBe("storage-failed");
+    expect(keychainFailureRefusal("unreadable-item", false)).toBe("encryption-unavailable");
     expect(keychainFailureRefusal("item-not-found", false)).toBe("storage-failed");
     expect(keychainFailureRefusal("uninspectable-item", false)).toBe("encryption-unavailable");
-    expect(keychainFailureRefusal("unknown", false)).toBe("storage-failed");
+    expect(keychainFailureRefusal("unknown", false)).toBe("encryption-unavailable");
     expect(keychainFailureRefusal("keychain-locked", true)).toBe("encryption-unavailable");
     expect(keychainFailureRefusal("not-team-signed", true)).toBe("encryption-unavailable");
     expect(keychainFailureRefusal("unknown", true)).toBe("encryption-unavailable");
@@ -474,36 +502,49 @@ describe("keychain failure mapping", () => {
     ).resolves.toEqual({ outcome: "refused", reason: "encryption-unavailable" });
   });
 
-  posixIt("maps a duplicate item on create onto storage-failed in both vaults", async () => {
+  posixIt("maps an unreadable zero-blocker item onto encryption-unavailable", async () => {
+    const roots = await fixture();
+    const transport = transportOf(PROBE_OK, { ok: false, code: "unreadable-item" });
+
+    const selected = await selectDesktopCredentialBackend(selection(roots, transport));
+
+    expect(selected).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unreadable-item",
+    });
+    if (selected.status !== "refused") return;
+    expect(selected.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+  });
+
+  posixIt("defers duplicate-item handling until a credential write creates the key", async () => {
     const roots = await fixture();
     const transport = transportOf(
       PROBE_OK,
+      { ok: false, code: "item-not-found" },
       { ok: false, code: "item-not-found" },
       { ok: false, code: "duplicate-item" },
     );
 
     const selected = await selectDesktopCredentialBackend(selection(roots, transport));
 
-    expect(selected).toMatchObject({
-      status: "refused",
-      reason: "storage-failed",
-      code: "duplicate-item",
-    });
-    if (selected.status !== "refused") return;
-    expect(selected.encryption.isEncryptionAvailable()).toBe(true);
+    expect(selected.status).toBe("keychain");
+    if (selected.status !== "keychain") return;
+    expect(selected.createdKey).toBe(false);
+    expect(selected.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     await expect(
-      credentialVault(roots, selected.encryption).writeCredential({
-        slot: "anthropic",
-        value: "sk-anthropic",
-      }),
-    ).resolves.toEqual({ slot: "anthropic", status: "refused", reason: "storage-failed" });
-    await expect(
-      telegramVault(roots, selected.encryption).replaceProfile({
-        token: "synthetic-token",
-        bot: BOT,
-        authenticatedAthleteHome: roots.athleteHome,
-      }),
-    ).resolves.toEqual({ outcome: "refused", reason: "storage-failed" });
+      serializeEnvelopeMutation((proof) => selected.prepareKey(proof)),
+    ).resolves.toEqual({ status: "failed", code: "duplicate-item" });
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+      "create-key",
+    ]);
   });
 
   posixIt("preserves an invalid item while dependent envelopes need recovery", async () => {
@@ -527,6 +568,27 @@ describe("keychain failure mapping", () => {
     const roots = await fixture();
     const retired = await keychainEncryption(randomBytes(KEYCHAIN_KEY_BYTES));
     await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", retired);
+    const transport = transportOf(PROBE_OK, { ok: false, code: "item-not-found" });
+
+    const selected = await selectDesktopCredentialBackend(selection(roots, transport));
+
+    expect(selected).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "item-not-found",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
+  });
+
+  posixIt("lets a recognised transient key-id one envelope block key creation", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { recursive: true });
+    const transient = sealCredentialEnvelope(
+      randomBytes(KEYCHAIN_KEY_BYTES),
+      "transient-secret",
+    );
+    await writeFile(join(roots.credentialRoot, ".anthropic.bin.pending-1.tmp"), transient);
+    transient.fill(0);
     const transport = transportOf(PROBE_OK, { ok: false, code: "item-not-found" });
 
     const selected = await selectDesktopCredentialBackend(selection(roots, transport));
@@ -587,35 +649,31 @@ describe("keychain failure mapping", () => {
     },
   );
 
-  posixIt("keeps a partly migrated vault readable and writes only keychain envelopes", async () => {
+  posixIt("keeps healthy keychain slots readable while old slots require re-entry", async () => {
     const roots = await fixture();
     const legacy = safeStorage();
+    const key = randomBytes(KEYCHAIN_KEY_BYTES);
+    const keychain = await keychainEncryption(key);
     await seedCredential(roots.credentialRoot, "anthropic", "sk-anthropic", legacy);
-    await seedCredential(roots.credentialRoot, "openrouter", "sk-openrouter", legacy);
-    let renames = 0;
+    await seedCredential(roots.credentialRoot, "openrouter", "sk-openrouter", keychain);
+    const legacyBefore = await readFile(join(roots.credentialRoot, "anthropic.bin"));
 
-    const selected = await selectDesktopCredentialBackend({
-      ...selection(roots, transportOf(PROBE_OK, readKey(randomBytes(KEYCHAIN_KEY_BYTES)))),
-      safeStorage: legacy,
-      renameFile: (async (from: string, to: string) => {
-        renames += 1;
-        if (renames > 1) throw new TypeError("synthetic rename failure");
-        await rename(from, to);
-      }) as never,
-    });
+    const selected = await selectDesktopCredentialBackend(
+      selection(roots, transportOf(PROBE_OK, readKey(key))),
+    );
 
     expect(selected.status).toBe("keychain");
     if (selected.status !== "keychain") return;
-    expect(selected.migration).toMatchObject({ status: "incomplete", migrated: 1, failed: 1 });
-    expect(
-      credentialEnvelopeKeyId(await readFile(join(roots.credentialRoot, "anthropic.bin"))),
-    ).toBe(KEYCHAIN_ENVELOPE_KEY_ID);
+    expect(selected.unverifiedEnvelopes).toBe(1);
+    await expect(readFile(join(roots.credentialRoot, "anthropic.bin"))).resolves.toEqual(
+      legacyBefore,
+    );
     expect(
       credentialEnvelopeKeyId(await readFile(join(roots.credentialRoot, "openrouter.bin"))),
-    ).toBe(SAFE_STORAGE_ENVELOPE_KEY_ID);
+    ).toBe(KEYCHAIN_ENVELOPE_KEY_ID);
     await expect(credentialVault(roots, selected.encryption).credentialStatuses()).resolves.toEqual(
       expect.arrayContaining([
-        { slot: "anthropic", state: "configured", runtimeState: "stored-inactive" },
+        { slot: "anthropic", state: "re-prompt", runtimeState: null },
         { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
       ]),
     );
