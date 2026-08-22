@@ -13,7 +13,7 @@ describe("tray popover markup", () => {
     expect(html).toContain('aria-label="Enduragent menu bar status"');
     expect(html).toContain('aria-label="Enduragent is running"');
     expect(html).toContain('aria-labelledby="residency-heading"');
-    expect(html.match(/<article class="rail-card">/gu)).toHaveLength(2);
+    expect(html.match(/<article\s+class="[^"]*\brail-card\b[^"]*"/gu)).toHaveLength(2);
     for (const copy of [
       "Cycling coach",
       "Ready when you are",
@@ -29,15 +29,15 @@ describe("tray popover markup", () => {
   });
 
   it("keeps script and styling passive and local", async () => {
-    const [html, script, css] = await Promise.all([
+    const [html, script] = await Promise.all([
       readFile(resolve(root, "tray.html"), "utf8"),
       readFile(resolve(root, "src/tray.ts"), "utf8"),
-      readFile(resolve(root, "src/tray.css"), "utf8"),
     ]);
-    const source = `${html}\n${script}\n${css}`;
-    expect(css).toContain("prefers-color-scheme: dark");
-    expect(css).toContain("prefers-reduced-motion: reduce");
-    expect(css).toContain("transition: none");
+    const source = `${html}\n${script}`;
+    expect(html).toContain('href="/src/theme/tailwind.css"');
+    expect(html).not.toContain("tray.css");
+    expect(html).toContain("dark:");
+    expect(html).toContain("motion-reduce:transition-none");
     expect(script).toContain('from "./tray-status.js"');
     expect(script).toContain("window.enduragentTray.onTelegramStatus");
     expect(script).toContain('event.key === "Escape"');

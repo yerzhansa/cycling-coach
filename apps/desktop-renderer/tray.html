@@ -10,31 +10,58 @@
     <title>Enduragent</title>
     <link rel="stylesheet" href="/src/theme/fonts.css" />
     <link rel="stylesheet" href="/src/theme/tokens.css" />
-    <link rel="stylesheet" href="/src/tray.css" />
+    <link rel="stylesheet" href="/src/theme/tailwind.css" />
   </head>
-  <body>
-    <main class="hud" aria-label="Enduragent menu bar status">
-      <header class="window-bar">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <strong>Enduragent</strong>
-        <span class="status-dot" aria-label="Enduragent is running"></span>
+  <body class="m-0 bg-transparent font-sans text-ink">
+    <main
+      class="min-h-[246px] w-[420px] overflow-hidden rounded-card border border-line-2 bg-[color-mix(in_srgb,var(--surface)_88%,transparent)] text-ink shadow-elev-3 backdrop-blur-[22px] motion-reduce:transition-none dark:bg-[color-mix(in_srgb,var(--surface)_94%,transparent)]"
+      aria-label="Enduragent menu bar status"
+    >
+      <header
+        class="grid min-h-12 grid-cols-[24px_1fr_24px] items-center border-b border-line px-5 text-center"
+      >
+        <span
+          class="relative size-[18px] rounded-full border-[1.5px] border-ink before:absolute before:bottom-px before:left-0.5 before:h-[1.5px] before:w-[7px] before:rotate-[42deg] before:bg-ink before:content-[''] after:absolute after:right-0.5 after:bottom-px after:h-[1.5px] after:w-[7px] after:-rotate-[42deg] after:bg-ink after:content-['']"
+          aria-hidden="true"
+        ></span>
+        <strong class="text-sm font-medium tracking-normal">Enduragent</strong>
+        <span
+          class="size-2 justify-self-end rounded-full bg-ok shadow-[0_0_0_4px_color-mix(in_srgb,var(--ok)_var(--tint),transparent)]"
+          aria-label="Enduragent is running"
+        ></span>
       </header>
-      <section class="glance" aria-labelledby="residency-heading">
-        <p class="eyebrow">Cycling coach</p>
-        <h1 id="residency-heading">Ready when you are</h1>
-        <div class="readiness-rail">
-          <article class="rail-card">
-            <span class="metric-label">Residency</span>
-            <strong>Running in the menu bar</strong>
-            <span class="rail-tag">active</span>
+      <section class="px-5 pt-[18px] pb-4" aria-labelledby="residency-heading">
+        <p class="m-0 text-xs font-medium text-ink-3">Cycling coach</p>
+        <h1 id="residency-heading" class="mt-1 mb-[13px] text-xl font-medium tracking-normal">
+          Ready when you are
+        </h1>
+        <div class="grid gap-[7px]">
+          <article
+            class="rail-card grid min-h-[42px] grid-cols-[76px_1fr_auto] items-center gap-2.5 rounded-card border border-line bg-sunk px-[11px] py-2"
+          >
+            <span class="text-xs font-medium text-ink-2">Residency</span>
+            <strong class="text-xs font-medium">Running in the menu bar</strong>
+            <span
+              class="inline-flex h-[18px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-chip border border-line-2 bg-surface px-[5px] text-xs font-medium text-ink"
+              >active</span
+            >
           </article>
-          <article class="rail-card">
-            <span class="metric-label">Telegram</span>
-            <strong id="telegram-status-copy">Checking connection</strong>
-            <span class="rail-tag" id="telegram-status-tag" data-tone="idle">checking</span>
+          <article
+            class="rail-card grid min-h-[42px] grid-cols-[76px_1fr_auto] items-center gap-2.5 rounded-card border border-line bg-sunk px-[11px] py-2"
+          >
+            <span class="text-xs font-medium text-ink-2">Telegram</span>
+            <strong class="text-xs font-medium" id="telegram-status-copy"
+              >Checking connection</strong
+            >
+            <span
+              class="inline-flex h-[18px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-chip border border-line-2 bg-surface px-[5px] text-xs font-medium text-ink data-[tone=failed]:border-transparent data-[tone=failed]:bg-[color-mix(in_srgb,var(--danger)_14%,var(--surface))] data-[tone=failed]:text-danger data-[tone=warning]:border-transparent data-[tone=warning]:bg-[color-mix(in_srgb,var(--warn)_18%,var(--surface))] data-[tone=warning]:text-warn dark:data-[tone=warning]:text-ink"
+              id="telegram-status-tag"
+              data-tone="idle"
+              >checking</span
+            >
           </article>
         </div>
-        <p class="menu-hint">
+        <p class="mx-0.5 mt-[11px] mb-0 text-xs leading-[1.35] text-ink-2">
           Close the window without quitting. Right-click the menu-bar icon for more options.
         </p>
       </section>
