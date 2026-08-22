@@ -58,17 +58,38 @@
   --color-ring: var(--ring);
   --color-sidebar: var(--sidebar);
 
+  --radius-chip: var(--r-chip);
   --radius-ctl: var(--r-ctl);
-  --radius-md: var(--r);
-  --radius-lg: var(--r-lg);
-  --radius-xl: var(--r-xl);
+  --radius-card: var(--r-card);
+  --radius-sm: var(--r-chip);
+  --radius-md: var(--r-ctl);
+  --radius-lg: var(--r-card);
+  --radius-xl: var(--r-card);
+  --radius-full: var(--r-pill);
 
   --font-sans: var(--f-ui);
   --font-mono: var(--f-mono);
+  --text-xs: var(--font-size-xs);
+  --text-xs--line-height: var(--line-height-xs);
+  --text-sm: var(--font-size-sm);
+  --text-sm--line-height: var(--line-height-sm);
+  --text-base: var(--font-size-prose);
+  --text-base--line-height: var(--line-height-prose);
+  --text-lg: var(--font-size-lg);
+  --text-lg--line-height: var(--line-height-lg);
+  --text-xl: var(--font-size-xl);
+  --text-xl--line-height: var(--line-height-xl);
+  --font-weight-normal: var(--weight-regular);
+  --font-weight-medium: var(--weight-medium);
+  --font-weight-semibold: var(--weight-semibold);
+  --tracking-normal: var(--tracking-ui);
 
   --spacing-ctl: var(--ctl-h);
   --spacing-ctl-sm: var(--ctl-h-sm);
   --spacing-ctl-lg: var(--ctl-h-lg);
+  --spacing-ctl-px: var(--ctl-px);
+  --spacing-ctl-px-sm: var(--ctl-px-sm);
+  --spacing-ctl-px-lg: var(--ctl-px-lg);
   --spacing-inset: var(--inset);
   --spacing-row: var(--row-inset);
 

@@ -20,7 +20,10 @@ import { setPrefersDark } from "./matchmedia.js";
 
 const NON_PALETTE_TOKENS = new Set([
   "--r",
+  "--r-chip",
   "--r-ctl",
+  "--r-card",
+  "--r-pill",
   "--r-lg",
   "--r-xl",
   "--ctl-h",
@@ -28,8 +31,23 @@ const NON_PALETTE_TOKENS = new Set([
   "--ctl-h-lg",
   "--ctl-px",
   "--ctl-px-sm",
+  "--ctl-px-lg",
   "--inset",
   "--row-inset",
+  "--font-size-xs",
+  "--line-height-xs",
+  "--font-size-sm",
+  "--line-height-sm",
+  "--font-size-prose",
+  "--line-height-prose",
+  "--font-size-lg",
+  "--line-height-lg",
+  "--font-size-xl",
+  "--line-height-xl",
+  "--weight-regular",
+  "--weight-medium",
+  "--weight-semibold",
+  "--tracking-ui",
   "--scrollbar-w",
   "--scrollbar-thumb",
   "--scrollbar-thumb-hover",
@@ -95,12 +113,9 @@ function expectedProperties(paletteId: string, theme: ResolvedTheme): Map<string
     ["--sunk", `color-mix(in srgb, ${ramp.rail} 55%, ${ramp.bg})`],
     ["--ink", ramp.ink],
     ["--ink-2", ramp.ink2],
-    ["--ink-3", `color-mix(in srgb, ${ramp.ink2} 62%, ${ramp.bg})`],
+    ["--ink-3", `color-mix(in srgb, ${ramp.ink2} 78%, ${ramp.sf})`],
     ["--line", ramp.line],
-    [
-      "--line-2",
-      `color-mix(in srgb, ${ramp.line} ${theme === "dark" ? "93%" : "85%"}, ${ramp.ink2})`,
-    ],
+    ["--line-2", `color-mix(in srgb, ${ramp.line} 25%, ${ramp.ink2})`],
     ["--brand", ramp.br],
     ["--brand-ink", ramp.bri],
     ["--brand-soft", ramp.soft],
@@ -162,13 +177,17 @@ describe("palette engine", () => {
     }
   });
 
-  it("keeps compact Setup copy and control edges readable in every appearance", () => {
+  it("keeps compact copy and control edges readable in every appearance", () => {
     for (const palette of PALETTES) {
       for (const ramp of [palette.l, palette.d]) {
         const setupBackgrounds = [ramp.bg, ramp.sf, mixHex(ramp.rail, 0.55, ramp.bg)];
         for (const background of setupBackgrounds) {
           expect(contrastRatio(ramp.ink2, background)).toBeGreaterThanOrEqual(4.5);
         }
+        expect(contrastRatio(mixHex(ramp.ink2, 0.78, ramp.sf), ramp.sf)).toBeGreaterThanOrEqual(3);
+        expect(contrastRatio(mixHex(ramp.line, 0.25, ramp.ink2), ramp.sf)).toBeGreaterThanOrEqual(
+          3,
+        );
       }
     }
   });
@@ -232,6 +251,69 @@ describe("palette engine", () => {
           `${selector} ${property}: ${declared.get(property)?.toLowerCase() ?? "absent"}`,
         ).toBe(`${selector} ${property}: ${value.toLowerCase()}`);
     }
+  });
+
+  it("declares the Primer type, radius, control, and resting-surface values", async () => {
+    const declared = blockDeclarations(await readTokenSheet(), ":root");
+    expect(
+      Object.fromEntries(
+        [
+          "--font-size-xs",
+          "--line-height-xs",
+          "--font-size-sm",
+          "--line-height-sm",
+          "--font-size-prose",
+          "--line-height-prose",
+          "--font-size-lg",
+          "--line-height-lg",
+          "--font-size-xl",
+          "--line-height-xl",
+          "--weight-regular",
+          "--weight-medium",
+          "--weight-semibold",
+          "--tracking-ui",
+          "--r-chip",
+          "--r-ctl",
+          "--r-card",
+          "--r-pill",
+          "--ctl-h-sm",
+          "--ctl-h",
+          "--ctl-h-lg",
+          "--edge",
+          "--sheen",
+          "--press",
+          "--elev-1",
+          "--grain",
+        ].map((property) => [property, declared.get(property)]),
+      ),
+    ).toEqual({
+      "--font-size-xs": "12px",
+      "--line-height-xs": "16px",
+      "--font-size-sm": "14px",
+      "--line-height-sm": "20px",
+      "--font-size-prose": "16px",
+      "--line-height-prose": "24px",
+      "--font-size-lg": "20px",
+      "--line-height-lg": "28px",
+      "--font-size-xl": "24px",
+      "--line-height-xl": "32px",
+      "--weight-regular": "400",
+      "--weight-medium": "500",
+      "--weight-semibold": "600",
+      "--tracking-ui": "0",
+      "--r-chip": "3px",
+      "--r-ctl": "6px",
+      "--r-card": "12px",
+      "--r-pill": "9999px",
+      "--ctl-h-sm": "28px",
+      "--ctl-h": "32px",
+      "--ctl-h-lg": "40px",
+      "--edge": "0 0 #0000",
+      "--sheen": "0 0 #0000",
+      "--press": "0 0 #0000",
+      "--elev-1": "0 0 #0000",
+      "--grain": "0 0 #0000",
+    });
   });
 
   it("covers the whole colour vocabulary declared in the token sheet", async () => {
