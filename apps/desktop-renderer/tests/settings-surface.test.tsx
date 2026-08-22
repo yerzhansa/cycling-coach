@@ -622,12 +622,12 @@ describe("settings setup inventory", () => {
       within(trainingRow as HTMLElement).getByRole("button", {
         name: "Delete the Intervals.icu connection",
       }).className,
-    ).toContain("text-danger");
+    ).toContain("text-destructive");
     expect(
       within(aiRow as HTMLElement).getByRole("button", {
         name: "Delete the Anthropic credential",
       }).className,
-    ).toMatch(/danger/u);
+    ).toMatch(/destructive/u);
     expect(
       within(trainingRow as HTMLElement).queryByRole("button", {
         name: "Change Intervals.icu",
