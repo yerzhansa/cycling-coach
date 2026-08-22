@@ -9,8 +9,15 @@ import type {
 } from "../../settings/provider-model-controller.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select.js";
 import { COACH_SAVE_ERROR_COPY, COACH_VALIDATION_COPY } from "./copy.js";
-import styles from "./SettingsView.module.css";
+import { settingsStyles as styles } from "./styles.js";
 
 function formState(state: ProviderModelSettingsState): ProviderModelFormState | null {
   if (
@@ -119,62 +126,89 @@ export function CoachSection(): ReactElement {
               </p>
             ) : null}
             <div className={styles.row}>
-              <label className={styles.label} htmlFor="coach-provider">
+              <div className={styles.label} id="coach-provider-label">
                 <span className={styles.rowTitle}>Provider</span>
                 <span className={styles.rowDetail}>
                   {editable.active === null
                     ? "Active coach settings are unavailable or not configured."
                     : `Currently active: ${ONBOARDING_LLM_PROVIDER_LABELS[editable.active.provider]} · ${editable.active.model}`}
                 </span>
-              </label>
-              <select
-                id="coach-provider"
-                className={styles.control}
-                value={draft?.provider.provider ?? ""}
+              </div>
+              <Select
+                items={editable.providers.map((entry) => ({
+                  value: entry.provider,
+                  label: ONBOARDING_LLM_PROVIDER_LABELS[entry.provider],
+                }))}
+                value={draft?.provider.provider ?? null}
                 disabled={mutating}
-                onChange={(event) => {
-                  port?.changeProvider(event.target.value);
+                onValueChange={(value) => {
+                  if (value !== null) port?.changeProvider(value);
                 }}
               >
-                {draft === null ? (
-                  <option value="" disabled>
-                    Choose a provider
-                  </option>
-                ) : null}
-                {editable.providers.map((entry) => (
-                  <option key={entry.provider} value={entry.provider}>
-                    {ONBOARDING_LLM_PROVIDER_LABELS[entry.provider]}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  id="coach-provider"
+                  className={styles.control}
+                  aria-labelledby="coach-provider-label"
+                >
+                  <SelectValue placeholder="Choose a provider" />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {editable.providers.map((entry) => (
+                    <SelectItem key={entry.provider} value={entry.provider}>
+                      {ONBOARDING_LLM_PROVIDER_LABELS[entry.provider]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className={styles.row}>
-              <label className={styles.label} htmlFor="coach-model">
+              <div className={styles.label} id="coach-model-label">
                 <span className={styles.rowTitle}>Model</span>
-              </label>
-              <select
-                id="coach-model"
-                className={styles.control}
-                value={draft?.modelChoice ?? ""}
+              </div>
+              <Select
+                items={
+                  draft === null
+                    ? []
+                    : draft.provider.models
+                        .map((entry) => ({
+                          value: entry.value,
+                          label:
+                            entry.hint === undefined
+                              ? entry.label
+                              : `${entry.label} · ${entry.hint}`,
+                        }))
+                        .concat({ value: CUSTOM_MODEL_SELECTION, label: "Other model…" })
+                }
+                value={draft?.modelChoice ?? null}
                 disabled={mutating || draft === null}
-                onChange={(event) => {
-                  focusCustomModel.current = event.target.value === CUSTOM_MODEL_SELECTION;
-                  port?.changeModel(event.target.value);
+                onValueChange={(value) => {
+                  if (value === null) return;
+                  focusCustomModel.current = value === CUSTOM_MODEL_SELECTION;
+                  port?.changeModel(value);
                 }}
               >
-                {draft === null ? (
-                  <option value="">Choose a provider first</option>
-                ) : (
-                  <>
-                    {draft.provider.models.map((entry) => (
-                      <option key={entry.value} value={entry.value}>
-                        {entry.hint === undefined ? entry.label : `${entry.label} · ${entry.hint}`}
-                      </option>
-                    ))}
-                    <option value={CUSTOM_MODEL_SELECTION}>Other model…</option>
-                  </>
-                )}
-              </select>
+                <SelectTrigger
+                  id="coach-model"
+                  className={styles.control}
+                  aria-labelledby="coach-model-label"
+                >
+                  <SelectValue placeholder="Choose a provider first" />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {draft === null ? null : (
+                    <>
+                      {draft.provider.models.map((entry) => (
+                        <SelectItem key={entry.value} value={entry.value}>
+                          {entry.hint === undefined
+                            ? entry.label
+                            : `${entry.label} · ${entry.hint}`}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value={CUSTOM_MODEL_SELECTION}>Other model…</SelectItem>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
             {custom && draft !== null ? (
               <div className={`${styles.row} ${styles.rowStacked}`}>

@@ -33,7 +33,7 @@ import { BUTTON_PRIMARY, SetupCard } from "./SetupCard.js";
 import { SetupError } from "./SetupRow.js";
 import { TelegramRow } from "./TelegramRow.js";
 import { TrainingRow } from "./TrainingRow.js";
-import settingsStyles from "../settings/SettingsView.module.css";
+import { settingsStyles } from "../settings/styles.js";
 
 export type SetupPlacement = "gate" | "settings";
 

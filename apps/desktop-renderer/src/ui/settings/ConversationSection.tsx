@@ -10,7 +10,7 @@ import {
   MANAGED_BY_ENVIRONMENT_COPY,
   conversationSaveErrorCopy,
 } from "./copy.js";
-import styles from "./SettingsView.module.css";
+import { settingsStyles as styles } from "./styles.js";
 
 function formState(state: SessionSettingsState): SessionSettingsFormState | null {
   if (

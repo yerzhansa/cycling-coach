@@ -1,36 +1,51 @@
 import type { ReactElement } from "react";
+import { cn } from "../../lib/utils.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { PALETTES } from "../../theme/palettes.js";
-import styles from "./PalettePicker.module.css";
 
 export function PalettePicker(): ReactElement {
   const paletteId = useEnduragentStore((state) => state.paletteId);
   const setPaletteId = useEnduragentStore((state) => state.setPaletteId);
 
   return (
-    <div className={styles.grid} role="group" aria-label="App palette">
+    <div
+      className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-3 px-4 py-3.5"
+      role="group"
+      aria-label="App palette"
+    >
       {PALETTES.map((palette) => (
         <button
           key={palette.id}
           type="button"
-          className={
-            palette.id === paletteId ? `${styles.palette} ${styles.on}` : styles.palette
-          }
+          className="flex cursor-pointer flex-col gap-1.5 rounded-ctl border-0 bg-transparent p-0 font-inherit"
           aria-pressed={palette.id === paletteId}
           aria-label={`Use the ${palette.name} palette`}
           onClick={() => {
             setPaletteId(palette.id);
           }}
         >
-          <span className={styles.swatch} aria-hidden="true">
-            <span className={styles.half} style={{ background: palette.l.bg }}>
-              <span className={styles.mark} style={{ background: palette.l.br }} />
+          <span
+            className={cn(
+              "flex h-10 overflow-hidden rounded-ctl border border-line-2 shadow-[var(--edge),var(--elev-1)]",
+              palette.id === paletteId && "outline-2 outline-offset-2 outline-ink",
+            )}
+            aria-hidden="true"
+          >
+            <span className="grid flex-1 place-items-center" style={{ background: palette.l.bg }}>
+              <span className="block size-3 rounded-full" style={{ background: palette.l.br }} />
             </span>
-            <span className={styles.half} style={{ background: palette.d.bg }}>
-              <span className={styles.mark} style={{ background: palette.d.br }} />
+            <span className="grid flex-1 place-items-center" style={{ background: palette.d.bg }}>
+              <span className="block size-3 rounded-full" style={{ background: palette.d.br }} />
             </span>
           </span>
-          <span className={styles.name}>{palette.name}</span>
+          <span
+            className={cn(
+              "text-center text-[11.5px] text-ink-2",
+              palette.id === paletteId && "font-semibold text-ink",
+            )}
+          >
+            {palette.name}
+          </span>
         </button>
       ))}
     </div>

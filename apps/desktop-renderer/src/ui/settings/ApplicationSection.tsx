@@ -4,7 +4,7 @@ import type { DesktopUpdateState } from "../../update/controller.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { RELEASE_NOTES_UNAVAILABLE_COPY } from "./copy.js";
-import styles from "./SettingsView.module.css";
+import { settingsStyles as styles } from "./styles.js";
 
 interface UpdateCopy {
   readonly action: string | null;
