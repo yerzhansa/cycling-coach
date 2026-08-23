@@ -634,8 +634,7 @@ describe("desktop credential encryption startup", () => {
       ],
       [
         { ok: true, op: "retry-created-key-rollback" },
-        { ok: false, code: "keychain-locked" },
-        { ok: true, op: "retry-created-key-rollback" },
+        { ok: false, code: "item-not-found" },
         { ok: true, op: "retry-created-key-rollback" },
       ],
     );
@@ -656,9 +655,12 @@ describe("desktop credential encryption startup", () => {
 
     await expect(prepared.retryKeychain()).resolves.toMatchObject({
       status: "refused",
+      reason: "encryption-unavailable",
+      code: "item-not-found",
       keyCleanupDebt: "creation-rollback",
       keyCleanupPending: true,
     });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
     expect(transport.allRequests.at(-1)?.op).toBe("retry-created-key-rollback");
     await expect(prepared.retryKeychain()).resolves.toMatchObject({ status: "keychain" });
 
@@ -678,6 +680,54 @@ describe("desktop credential encryption startup", () => {
       "read-key",
       "read-key",
       "create-key",
+    ]);
+    expect(transport.allRequests.some((request) => request.op === "delete-key")).toBe(false);
+  });
+
+  it("preserves exact creation rollback debt when explicit reset cannot reconcile it", async () => {
+    const transport = transportWithRollbackRetries(
+      [
+        PROBE_OK,
+        { ok: false, code: "item-not-found" },
+        { ok: false, code: "item-not-found" },
+        {
+          ok: false,
+          code: "unreadable-item",
+          creationRollbackPending: true,
+        },
+        PROBE_OK,
+      ],
+      [
+        { ok: true, op: "retry-created-key-rollback" },
+        { ok: false, code: "item-not-found" },
+      ],
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({ createTransport: () => transport, serializeEnvelopeMutation }),
+    );
+
+    await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.deleteKeyForCredentialReset(proof)),
+    ).resolves.toEqual({ status: "failed", code: "item-not-found" });
+
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "item-not-found",
+      keyCleanupDebt: "creation-rollback",
+      keyCleanupPending: true,
+    });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.allRequests.map((request) => request.op)).toEqual([
+      "probe",
+      "retry-created-key-rollback",
+      "read-key",
+      "read-key",
+      "create-key",
+      "probe",
+      "retry-created-key-rollback",
     ]);
     expect(transport.allRequests.some((request) => request.op === "delete-key")).toBe(false);
   });

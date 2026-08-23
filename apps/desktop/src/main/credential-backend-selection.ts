@@ -120,7 +120,10 @@ async function selectMacCredentialBackend(
     };
   }
   if (keychain.status !== "ready") {
-    const reason = keychainFailureRefusal(keychain.code, deletionBlockers > 0);
+    const reason =
+      keychain.keyCleanupDebt === "none"
+        ? keychainFailureRefusal(keychain.code, deletionBlockers > 0)
+        : "encryption-unavailable";
     return {
       status: "refused",
       encryption: createRefusingKeychainEncryption(

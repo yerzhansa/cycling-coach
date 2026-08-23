@@ -230,6 +230,15 @@ export async function prepareDesktopCredentialEncryption(
       proof: CredentialEnvelopeLockProof,
     ): Promise<KeychainKeyDeletion> {
       if (options.location.platform !== "darwin") return { status: "already-absent" };
+      if (keyCleanupDebt === "creation-rollback") {
+        const reconciled = await refreshSelection(proof);
+        if (reconciled.status !== "keychain") {
+          return {
+            status: "failed",
+            code: reconciled.status === "refused" ? reconciled.code : "unknown",
+          };
+        }
+      }
       const deleted =
         selection.status === "keychain"
           ? await selection.deleteKeyForReset(proof)
@@ -243,7 +252,10 @@ export async function prepareDesktopCredentialEncryption(
               };
             });
       if (deleted.status === "failed") {
-        transitionToUnavailable(deleted.code, "retirement");
+        transitionToUnavailable(
+          deleted.code,
+          keyCleanupDebt === "creation-rollback" ? "creation-rollback" : "retirement",
+        );
         return deleted;
       }
       keyCleanupDebt = "none";
