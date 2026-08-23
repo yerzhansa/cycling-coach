@@ -169,9 +169,7 @@ export interface TelegramCredentialVaultOptions {
   readonly observeSecureStorageFailure?: TelegramSecureStorageObserver;
   readonly serializeEnvelopeMutation?: SerializeCredentialEnvelopeMutation;
   readonly prepareEnvelopeWrite?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
-  readonly revalidateEnvelopeRemoval?: (
-    proof: CredentialEnvelopeLockProof,
-  ) => Promise<boolean>;
+  readonly revalidateEnvelopeRemoval?: (proof: CredentialEnvelopeLockProof) => Promise<boolean>;
   readonly observeEnvelopeRemoved?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
   readonly platform?: NodeJS.Platform;
   readonly openFile?: typeof open;
@@ -793,13 +791,16 @@ export function createTelegramCredentialVault(
     if (removalState === "blocked") {
       return { outcome: "refused", reason: "storage-failed" };
     }
-    if (removalState !== "keychain-dependent") {
+    if (removalState === "unverified" && platform === "darwin") {
       return { outcome: "authorized", keychainDependent: false };
     }
     const profile = await readProfile();
     if (profile.state === "missing") return { outcome: "refused", reason: "not-found" };
     if (profile.state === "wrong-home") {
       return { outcome: "refused", reason: "wrong-home" };
+    }
+    if (removalState === "unverified") {
+      return { outcome: "authorized", keychainDependent: false };
     }
     if (profile.state === "re-prompt") {
       if (profile.reason === "encryption-unavailable" || profile.reason === "unsafe-backend") {
@@ -992,9 +993,7 @@ export function createTelegramCredentialVault(
     preauthorizeProfileRemoval(): Promise<TelegramProfileRemovalAuthorizationResult> {
       return envelopeExclusive(async (proof) => {
         const authorization = await authorizeProfileRemoval(proof, true);
-        return authorization.outcome === "authorized"
-          ? { outcome: "authorized" }
-          : authorization;
+        return authorization.outcome === "authorized" ? { outcome: "authorized" } : authorization;
       });
     },
 
