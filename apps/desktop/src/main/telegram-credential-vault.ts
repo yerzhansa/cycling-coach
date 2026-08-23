@@ -768,7 +768,6 @@ export function createTelegramCredentialVault(
 
     replaceProfile(input): Promise<TelegramProfileReplaceResult> {
       return envelopeExclusive(async (proof) => {
-        if (proof !== undefined) await options.prepareEnvelopeWrite?.(proof);
         const authenticatedAthleteHome = parseAthleteHome(input?.authenticatedAthleteHome);
         if (authenticatedAthleteHome === undefined || authenticatedAthleteHome !== athleteHome) {
           return { outcome: "refused", reason: "wrong-home" };
@@ -779,9 +778,19 @@ export function createTelegramCredentialVault(
         if (token === undefined || id === undefined || username === undefined) {
           return { outcome: "refused", reason: "invalid-input" };
         }
-        const encryptionFailure = observedEncryptionRefusal();
-        if (encryptionFailure !== undefined) {
-          return { outcome: "refused", reason: encryptionFailure };
+        let initialEncryptionFailure = observedEncryptionRefusal();
+        if (
+          initialEncryptionFailure === "encryption-unavailable" &&
+          proof !== undefined &&
+          options.prepareEnvelopeWrite !== undefined
+        ) {
+          try {
+            await options.prepareEnvelopeWrite(proof);
+          } catch {}
+          initialEncryptionFailure = observedEncryptionRefusal();
+        }
+        if (initialEncryptionFailure !== undefined) {
+          return { outcome: "refused", reason: initialEncryptionFailure };
         }
         if (!(await prepareNamespace())) {
           profileUncertain = true;
@@ -806,6 +815,11 @@ export function createTelegramCredentialVault(
         let plaintext: Buffer | undefined;
         let tokenPlaintext: Buffer | undefined;
         try {
+          if (proof !== undefined) await options.prepareEnvelopeWrite?.(proof);
+          const encryptionFailure = observedEncryptionRefusal();
+          if (encryptionFailure !== undefined) {
+            return { outcome: "refused", reason: encryptionFailure };
+          }
           const serialized = JSON.stringify(profile);
           encrypted = options.encryption.encryptString(serialized);
           if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new TypeError();

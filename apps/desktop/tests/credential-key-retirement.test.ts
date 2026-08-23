@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAutomaticKeyRetirementInspector } from "../src/main/automatic-key-retirement.js";
 import {
   createCredentialVault,
   type CredentialEncryptionPort,
@@ -78,10 +79,15 @@ async function retireKey(
   transport: ReturnType<typeof transportOf>,
   lockProof: CredentialEnvelopeLockProof,
 ) {
+  const inspect = createAutomaticKeyRetirementInspector(roots);
   return await retireKeychainKeyWhenLastEnvelopeGone({
-    ...roots,
     lockProof,
-    deleteKey: async () => {
+    retireKey: async (proof) => {
+      const inspection = await inspect(proof);
+      if (inspection.status === "failed") return { status: "failed", code: "unknown" };
+      if (inspection.zeroProof === null) {
+        return { status: "retained", envelopes: inspection.deletionBlockers };
+      }
       const deleted = await transport.send({
         op: "delete-key",
         service: KEYCHAIN_CREDENTIAL_SERVICE,

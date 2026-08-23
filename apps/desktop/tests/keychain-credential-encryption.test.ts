@@ -1,5 +1,11 @@
 import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  createAutomaticKeyRetirementInspector,
+  type InspectAutomaticKeyRetirement,
+} from "../src/main/automatic-key-retirement.js";
 import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import {
   CREDENTIAL_ENVELOPE_IV_BYTES,
@@ -31,6 +37,7 @@ const PROBE_OK: KeychainBindingResponse = {
   op: "probe",
   teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER,
 };
+const serializePreparedEncryption = createCredentialEnvelopeMutationLock();
 
 interface RecordingTransport extends KeychainBindingTransport {
   readonly requests: KeychainBindingRequest[];
@@ -56,22 +63,50 @@ function storedKey(): { readonly key: Buffer; readonly encoded: Buffer } {
 }
 
 async function createEncryption(
-  options: Omit<CreateKeychainPartitionEncryptionOptions, "envelopeCensus" | "lockProof"> & {
-    readonly envelopeCensus?: CreateKeychainPartitionEncryptionOptions["envelopeCensus"];
+  options: Omit<
+    CreateKeychainPartitionEncryptionOptions,
+    "inspectAutomaticRetirement" | "lockProof"
+  > & {
+    readonly envelopeCensus?: TestEnvelopeCensus | (() => Promise<TestEnvelopeCensus>);
   },
 ) {
   const {
     envelopeCensus = { deletionBlockers: 1, keychainDependents: 1 },
     ...keychainOptions
   } = options;
-  const serialize = createCredentialEnvelopeMutationLock();
-  return await serialize((lockProof) =>
+  return await serializePreparedEncryption((lockProof) =>
     createKeychainPartitionEncryption({
       ...keychainOptions,
-      envelopeCensus,
+      inspectAutomaticRetirement: automaticRetirementInspector(envelopeCensus),
       lockProof,
     }),
   );
+}
+
+interface TestEnvelopeCensus {
+  readonly deletionBlockers: number;
+  readonly keychainDependents: number;
+}
+
+function automaticRetirementInspector(
+  census: TestEnvelopeCensus | (() => Promise<TestEnvelopeCensus>),
+): InspectAutomaticKeyRetirement {
+  const nonce = randomBytes(12).toString("hex");
+  const zeroInspector = createAutomaticKeyRetirementInspector({
+    credentialRoot: join(tmpdir(), `missing-credential-${nonce}`),
+    telegramRoot: join(tmpdir(), `missing-telegram-${nonce}`),
+  });
+  return async (proof) => {
+    const current = typeof census === "function" ? await census() : census;
+    if (current.deletionBlockers === 0) return await zeroInspector(proof);
+    return {
+      status: "inspected",
+      deletionBlockers: current.deletionBlockers,
+      keychainDependents: current.keychainDependents,
+      unverified: 0,
+      zeroProof: null,
+    };
+  };
 }
 
 describe("credential envelope", () => {
@@ -156,6 +191,110 @@ describe("keychain partition backend", () => {
     expect(JSON.stringify(transport.requests)).not.toContain(encoded);
   });
 
+  it("revalidates the same persisted key before a later write", async () => {
+    const { encoded } = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: encoded },
+      { ok: true, op: "read-key", key: Buffer.from(encoded) },
+    );
+    const result = await createEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await expect(
+      serializePreparedEncryption((proof) => result.prepareKey(proof)),
+    ).resolves.toEqual({ status: "ready" });
+    expect(result.encryption.isEncryptionAvailable()).toBe(true);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+    ]);
+  });
+
+  it("refuses a write when the persisted key was replaced", async () => {
+    const original = storedKey();
+    const replacement = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: original.encoded },
+      { ok: true, op: "read-key", key: replacement.encoded },
+    );
+    const result = await createEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await expect(
+      serializePreparedEncryption((proof) => result.prepareKey(proof)),
+    ).resolves.toEqual({ status: "failed", code: "unknown" });
+    expect(result.encryption.isEncryptionAvailable()).toBe(false);
+    expect(() => result.encryption.encryptString("must-not-seal")).toThrow(
+      KeychainEncryptionError,
+    );
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+    ]);
+  });
+
+  it("refuses a write when the persisted key disappeared", async () => {
+    const original = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: original.encoded },
+      { ok: false, code: "item-not-found" },
+    );
+    const result = await createEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await expect(
+      serializePreparedEncryption((proof) => result.prepareKey(proof)),
+    ).resolves.toEqual({ status: "failed", code: "item-not-found" });
+    expect(result.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+    ]);
+  });
+
+  it("refuses a write when no-interaction key revalidation is locked", async () => {
+    const original = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: original.encoded },
+      { ok: false, code: "keychain-locked" },
+    );
+    const result = await createEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await expect(
+      serializePreparedEncryption((proof) => result.prepareKey(proof)),
+    ).resolves.toEqual({ status: "failed", code: "keychain-locked" });
+    expect(result.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+    ]);
+  });
+
   it("keeps an absent key missing until an explicit credential write", async () => {
     const { encoded } = storedKey();
     const transport = transportOf(
@@ -175,8 +314,9 @@ describe("keychain partition backend", () => {
     expect(result.encryption.isEncryptionAvailable()).toBe(false);
     expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
 
-    const serialize = createCredentialEnvelopeMutationLock();
-    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+    await expect(
+      serializePreparedEncryption((proof) => result.prepareKey(proof)),
+    ).resolves.toEqual({
       status: "ready",
     });
     expect(result.encryption.isEncryptionAvailable()).toBe(true);
@@ -214,8 +354,9 @@ describe("keychain partition backend", () => {
       "delete-key",
     ]);
 
-    const serialize = createCredentialEnvelopeMutationLock();
-    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+    await expect(
+      serializePreparedEncryption((proof) => result.prepareKey(proof)),
+    ).resolves.toEqual({
       status: "ready",
     });
     expect(transport.requests.map((request) => request.op)).toEqual([
@@ -260,8 +401,9 @@ describe("keychain partition backend", () => {
     if (result.status !== "ready") return;
     expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
 
-    const serialize = createCredentialEnvelopeMutationLock();
-    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+    await expect(
+      serializePreparedEncryption((proof) => result.prepareKey(proof)),
+    ).resolves.toEqual({
       status: "failed",
       code: "duplicate-item",
     });
@@ -372,7 +514,7 @@ describe("keychain partition backend", () => {
       createKeychainPartitionEncryption({
         transport,
         service: KEYCHAIN_CREDENTIAL_SERVICE,
-        envelopeCensus: async () => census,
+        inspectAutomaticRetirement: automaticRetirementInspector(async () => census),
         lockProof,
       }),
     );
@@ -380,7 +522,7 @@ describe("keychain partition backend", () => {
     if (result.status !== "ready") return;
 
     census = { deletionBlockers: 0, keychainDependents: 0 };
-    await expect(serialize((proof) => result.deleteKey(proof))).resolves.toEqual({
+    await expect(serialize((proof) => result.retireKey(proof))).resolves.toEqual({
       status: "failed",
       code: "unknown",
     });
@@ -418,7 +560,7 @@ describe("keychain partition backend", () => {
       createKeychainPartitionEncryption({
         transport,
         service: KEYCHAIN_CREDENTIAL_SERVICE,
-        envelopeCensus: async () => census,
+        inspectAutomaticRetirement: automaticRetirementInspector(async () => census),
         lockProof,
       }),
     );
@@ -426,7 +568,7 @@ describe("keychain partition backend", () => {
     if (result.status !== "ready") return;
 
     census = { deletionBlockers: 0, keychainDependents: 0 };
-    await expect(serialize((proof) => result.deleteKey(proof))).resolves.toEqual({
+    await expect(serialize((proof) => result.retireKey(proof))).resolves.toEqual({
       status: "failed",
       code: "unknown",
     });

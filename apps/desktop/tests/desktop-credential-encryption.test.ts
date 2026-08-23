@@ -148,6 +148,37 @@ describe("desktop credential encryption startup", () => {
     );
   });
 
+  it("publishes encryption unavailable when the persisted key changes before a write", async () => {
+    const replacement = randomBytes(KEYCHAIN_KEY_BYTES);
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY },
+      { ok: true, op: "read-key", key: replacement },
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({
+        createTransport: () => transport,
+        readEnvelopeFile: migratedTelegramEnvelope(),
+        serializeEnvelopeMutation,
+      }),
+    );
+
+    await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
+
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unknown",
+    });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+    ]);
+  });
+
   it("never lets an unpackaged run touch the signed-release service", async () => {
     const transport = transportOf(PROBE_OK, {
       ok: true,

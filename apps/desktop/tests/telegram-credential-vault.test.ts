@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "../src/main/credential-vault.js";
 import {
   TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
@@ -397,6 +398,45 @@ describe("Telegram credential vault", () => {
       code: "ENOENT",
     });
     expect(syncParentDirectory).toHaveBeenCalledOnce();
+  });
+
+  it("revalidates encryption after preparing the profile namespace and before encrypting", async () => {
+    const value = await fixture();
+    await mkdir(value.root, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    let persistedKey = "key-a";
+    const cachedKey = "key-a";
+    let available = true;
+    const encryptString = vi.fn(() => Buffer.from("unused"));
+    const prepareEnvelopeWrite = vi.fn(async () => {
+      if (persistedKey !== cachedKey) available = false;
+    });
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: {
+        isEncryptionAvailable: () => available,
+        encryptString,
+        decryptString: vi.fn(),
+      },
+      createProfileId: () => PROFILE_A,
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      prepareEnvelopeWrite,
+      syncDirectory: vi.fn(async () => {
+        persistedKey = "key-b";
+      }),
+    });
+
+    await expect(
+      vault.replaceProfile({
+        token: "synthetic-token-a",
+        bot: BOT_A,
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toEqual({ outcome: "refused", reason: "encryption-unavailable" });
+    expect(prepareEnvelopeWrite).toHaveBeenCalledOnce();
+    expect(encryptString).not.toHaveBeenCalled();
+    await expect(lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("creates token-independent random profile IDs for successive coherent profiles", async () => {

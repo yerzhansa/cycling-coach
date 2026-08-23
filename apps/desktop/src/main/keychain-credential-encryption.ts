@@ -1,4 +1,10 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  isZeroDeletionBlockerCensusProof,
+  type InspectAutomaticKeyRetirement,
+  type KeychainKeyRetirement,
+  type ZeroDeletionBlockerCensusProof,
+} from "./automatic-key-retirement.js";
 import type { CredentialEnvelopeLockProof } from "./credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
 import {
@@ -19,6 +25,7 @@ const MAGIC = Buffer.from(CREDENTIAL_ENVELOPE_MAGIC, "ascii");
 const HEADER_BYTES = MAGIC.length + 1;
 const MINIMUM_ENVELOPE_BYTES =
   HEADER_BYTES + CREDENTIAL_ENVELOPE_IV_BYTES + CREDENTIAL_ENVELOPE_TAG_BYTES;
+export const CREDENTIAL_ENVELOPE_INSPECTION_BYTES = MINIMUM_ENVELOPE_BYTES;
 
 export class KeychainEncryptionError extends Error {
   constructor(readonly code: KeychainBindingErrorCode) {
@@ -63,7 +70,10 @@ export type KeychainPartitionEncryptionResult =
       readonly encryption: CredentialEncryptionPort;
       readonly createdKey: boolean;
       readonly prepareKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyPreparation>;
-      readonly deleteKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyDeletion>;
+      readonly retireKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyRetirement>;
+      readonly deleteKeyForReset: (
+        proof: CredentialEnvelopeLockProof,
+      ) => Promise<KeychainKeyDeletion>;
     }
   | {
       readonly status: "unavailable";
@@ -85,16 +95,9 @@ export type KeychainPartitionEncryptionResult =
 export interface CreateKeychainPartitionEncryptionOptions {
   readonly transport: KeychainBindingTransport;
   readonly service: string;
-  readonly envelopeCensus:
-    | KeychainEnvelopeCensus
-    | (() => Promise<KeychainEnvelopeCensus>);
+  readonly inspectAutomaticRetirement: InspectAutomaticKeyRetirement;
   readonly keyCleanupPending?: boolean;
   readonly lockProof: CredentialEnvelopeLockProof;
-}
-
-export interface KeychainEnvelopeCensus {
-  readonly deletionBlockers: number;
-  readonly keychainDependents: number;
 }
 
 export function createRefusingKeychainEncryption(
@@ -172,17 +175,18 @@ export async function createKeychainPartitionEncryption(
   if (probe.op !== "probe" || probe.teamIdentifier !== KEYCHAIN_TEAM_IDENTIFIER) {
     return refused("unknown");
   }
-  const envelopeCensus = async (): Promise<KeychainEnvelopeCensus | undefined> => {
+  const inspectAutomaticRetirement = async (proof: CredentialEnvelopeLockProof) => {
+    if (proof !== options.lockProof) return { status: "failed" as const };
     try {
-      return typeof options.envelopeCensus === "function"
-        ? await options.envelopeCensus()
-        : options.envelopeCensus;
+      return await options.inspectAutomaticRetirement(proof);
     } catch {
-      return undefined;
+      return { status: "failed" as const };
     }
   };
-  const initialCensus = await envelopeCensus();
-  if (initialCensus === undefined) return refused("unknown", options.keyCleanupPending ?? false);
+  const initialInspection = await inspectAutomaticRetirement(options.lockProof);
+  if (initialInspection.status === "failed") {
+    return refused("unknown", options.keyCleanupPending ?? false);
+  }
 
   const createMaterial = async (): Promise<
     | Readonly<{ status: "ready"; key: Buffer }>
@@ -192,9 +196,9 @@ export async function createKeychainPartitionEncryption(
     if (!created.ok) return { status: "failed", code: created.code };
     if (created.op !== "create-key") return { status: "failed", code: "unknown" };
     const key = Buffer.from(created.key);
-    return key.length === KEYCHAIN_KEY_BYTES
-      ? { status: "ready", key }
-      : { status: "failed", code: "unknown" };
+    if (key.length === KEYCHAIN_KEY_BYTES) return { status: "ready", key };
+    key.fill(0);
+    return { status: "failed", code: "unknown" };
   };
 
   const readMaterial = async (): Promise<
@@ -210,12 +214,12 @@ export async function createKeychainPartitionEncryption(
     }
     if (read.op !== "read-key") return { status: "failed", code: "unknown" };
     const key = Buffer.from(read.key);
-    return key.length === KEYCHAIN_KEY_BYTES
-      ? { status: "ready", key }
-      : { status: "failed", code: "unknown" };
+    if (key.length === KEYCHAIN_KEY_BYTES) return { status: "ready", key };
+    key.fill(0);
+    return { status: "failed", code: "unknown" };
   };
 
-  const deleteMaterial = async (): Promise<KeychainKeyDeletion> => {
+  const deleteMaterialForReset = async (): Promise<KeychainKeyDeletion> => {
     const deleted = await transport.send({ op: "delete-key", service });
     if (!deleted.ok || deleted.op !== "delete-key") {
       return { status: "failed", code: deleted.ok ? "unknown" : deleted.code };
@@ -223,20 +227,49 @@ export async function createKeychainPartitionEncryption(
     return { status: deleted.deleted ? "deleted" : "already-absent" };
   };
 
+  const deleteMaterial = async (
+    zeroProof: ZeroDeletionBlockerCensusProof,
+  ): Promise<KeychainKeyDeletion> => {
+    if (!isZeroDeletionBlockerCensusProof(zeroProof, options.lockProof)) {
+      return { status: "failed", code: "unknown" };
+    }
+    return await deleteMaterialForReset();
+  };
+
   const ready = (key: Buffer | null, createdKey: boolean): KeychainPartitionEncryptionResult => {
     const holder: KeyHolder = { key, failure: "item-not-found", cleanupPending: false };
-    const prepareKey = async (): Promise<KeychainKeyPreparation> => {
-      if (holder.key !== null) return { status: "ready" };
-      if (holder.cleanupPending) {
-        const census = await envelopeCensus();
-        if (census === undefined || census.deletionBlockers > 0) {
-          holder.failure = "unknown";
-          return { status: "failed", code: holder.failure };
+    const fail = (code: KeychainBindingErrorCode): KeychainKeyPreparation => {
+      holder.failure = code;
+      return { status: "failed", code };
+    };
+    const clearKey = (): void => {
+      holder.key?.fill(0);
+      holder.key = null;
+    };
+    const prepareKey = async (
+      proof: CredentialEnvelopeLockProof,
+    ): Promise<KeychainKeyPreparation> => {
+      if (proof !== options.lockProof) return fail("unknown");
+      if (holder.key !== null) {
+        const persisted = await readMaterial();
+        if (persisted.status === "ready") {
+          const matches = timingSafeEqual(holder.key, persisted.key);
+          persisted.key.fill(0);
+          if (matches) return { status: "ready" };
+          clearKey();
+          return fail("unknown");
         }
-        const deleted = await deleteMaterial();
+        clearKey();
+        return fail(persisted.status === "missing" ? "item-not-found" : persisted.code);
+      }
+      if (holder.cleanupPending) {
+        const inspection = await inspectAutomaticRetirement(proof);
+        if (inspection.status === "failed" || inspection.zeroProof === null) {
+          return fail("unknown");
+        }
+        const deleted = await deleteMaterial(inspection.zeroProof);
         if (deleted.status === "failed") {
-          holder.failure = deleted.code;
-          return deleted;
+          return fail(deleted.code);
         }
         holder.cleanupPending = false;
       }
@@ -247,36 +280,32 @@ export async function createKeychainPartitionEncryption(
         return { status: "ready" };
       }
       if (existing.status === "failed") {
-        holder.failure = existing.code;
-        return existing;
+        return fail(existing.code);
       }
-      const census = await envelopeCensus();
-      if (census === undefined) {
-        holder.failure = "unknown";
-        return { status: "failed", code: holder.failure };
-      }
-      if (census.keychainDependents > 0) {
-        holder.failure = "item-not-found";
-        return { status: "failed", code: holder.failure };
+      const inspection = await inspectAutomaticRetirement(proof);
+      if (inspection.status === "failed") return fail("unknown");
+      if (inspection.keychainDependents > 0) {
+        return fail("item-not-found");
       }
       const created = await createMaterial();
       if (created.status === "failed") {
-        holder.failure = created.code;
-        return created;
+        return fail(created.code);
       }
       holder.key = created.key;
       holder.failure = "item-not-found";
       return { status: "ready" };
     };
-    const deleteKey = async (): Promise<KeychainKeyDeletion> => {
-      const census = await envelopeCensus();
-      if (census === undefined || census.deletionBlockers > 0) {
-        holder.failure = "unknown";
-        return { status: "failed", code: holder.failure };
+    const retireKey = async (
+      proof: CredentialEnvelopeLockProof,
+    ): Promise<KeychainKeyRetirement> => {
+      const inspection = await inspectAutomaticRetirement(proof);
+      if (inspection.status === "failed") return { status: "failed", code: "unknown" };
+      if (inspection.zeroProof === null) {
+        return { status: "retained", envelopes: inspection.deletionBlockers };
       }
       const previous = holder.key;
       holder.key = null;
-      const deleted = await deleteMaterial();
+      const deleted = await deleteMaterial(inspection.zeroProof);
       if (deleted.status === "failed") {
         previous?.fill(0);
         holder.failure = deleted.code;
@@ -288,26 +317,48 @@ export async function createKeychainPartitionEncryption(
       holder.cleanupPending = false;
       return deleted;
     };
-    return { status: "ready", encryption: readyPort(holder), createdKey, prepareKey, deleteKey };
+    const deleteKeyForReset = async (
+      proof: CredentialEnvelopeLockProof,
+    ): Promise<KeychainKeyDeletion> => {
+      if (proof !== options.lockProof) return { status: "failed", code: "unknown" };
+      const previous = holder.key;
+      holder.key = null;
+      const deleted = await deleteMaterialForReset();
+      previous?.fill(0);
+      if (deleted.status === "failed") {
+        holder.failure = deleted.code;
+        holder.cleanupPending = true;
+        return deleted;
+      }
+      holder.failure = "item-not-found";
+      holder.cleanupPending = false;
+      return deleted;
+    };
+    return {
+      status: "ready",
+      encryption: readyPort(holder),
+      createdKey,
+      prepareKey,
+      retireKey,
+      deleteKeyForReset,
+    };
   };
 
   if (options.keyCleanupPending) {
-    if (initialCensus.deletionBlockers > 0) return refused("unknown", true);
-    const deleted = await deleteMaterial();
+    if (initialInspection.zeroProof === null) return refused("unknown", true);
+    const deleted = await deleteMaterial(initialInspection.zeroProof);
     return deleted.status === "failed" ? refused(deleted.code, true) : ready(null, false);
   }
 
   const read = await readMaterial();
   if (read.status === "ready") {
-    if (initialCensus.deletionBlockers > 0) return ready(read.key, false);
-    const deleted = await deleteMaterial();
+    if (initialInspection.zeroProof === null) return ready(read.key, false);
+    const deleted = await deleteMaterial(initialInspection.zeroProof);
     read.key.fill(0);
     return deleted.status === "failed" ? refused(deleted.code, true) : ready(null, false);
   }
   if (read.status === "missing") {
-    return initialCensus.keychainDependents === 0
-      ? ready(null, false)
-      : refused("item-not-found");
+    return initialInspection.keychainDependents > 0 ? refused("item-not-found") : ready(null, false);
   }
   return refused(read.code);
 }
