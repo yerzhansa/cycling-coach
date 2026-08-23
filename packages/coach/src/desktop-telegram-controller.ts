@@ -50,8 +50,6 @@ export interface DesktopTelegramRuntimeFactoryInput {
   }) => Promise<boolean>;
 }
 
-export type DesktopTelegramControllerStatus = TelegramControlSnapshot;
-
 export interface DesktopTelegramController {
   getStatus(): TelegramControlSnapshot;
   configure(token: string): Promise<TelegramControlMutationResult>;

@@ -51,10 +51,6 @@ export interface AcquiredSession {
   mode: "resume" | "rebuild";
 }
 
-export function hashChatId(chatId: string): string {
-  return sha256_16(chatId);
-}
-
 export function claudeCliSessionKey(chatIdHash: string, lane: string, model: string): SessionKey {
   return `${chatIdHash}\0${lane}\0${model}`;
 }

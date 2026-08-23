@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Config, ReferenceRuntime } from "@enduragent/core";
-import { runMigrations } from "@enduragent/kernel/store";
+import { createCanonicalActivityReader, runMigrations } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { createNodeImportRuntime, importFilesWithReport } from "@enduragent/kernel-node/ingest";
@@ -10,6 +10,8 @@ import { openReadonlySqliteStorage, openSqliteStorage } from "@enduragent/kernel
 import { mapActivityLanding } from "@enduragent/sync-intervals-icu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCoachOperations } from "../src/operations.js";
+import { createPersistedAthleteStateSource } from "../src/athlete-state-reader.js";
+import { createRecentRidesSource } from "../src/recent-rides.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 import { createStoreRuntime, type StoreRuntimeDependencies } from "../src/store-runtime.js";
 
@@ -141,6 +143,48 @@ async function coachingSnapshot(
 }
 
 describe("canonical activity coaching cutover", () => {
+  it("returns partial Training state from a file-only canonical import", async () => {
+    const selected = await fixture();
+    try {
+      await expect(
+        selected.operations.importFiles({ paths: [mixedImportPath] }),
+      ).resolves.toMatchObject({
+        files: { imported: 1, quarantined: 0 },
+        publication: { scope: "activities-and-streams", status: "available" },
+      });
+
+      const state = await createPersistedAthleteStateSource({
+        dataDir: selected.home.root,
+        cyclingFtpAnchorResolver: {
+          resolve: async () => ({ kind: "missing", refusal: "missing-cycling-ftp-anchor" }),
+        },
+        now: () => new Date("1998-07-18T12:00:00.000Z"),
+        recentRidesSource: createRecentRidesSource(
+          createCanonicalActivityReader(selected.context.store),
+        ),
+      }).getAthleteState();
+
+      expect(state.trainingContext?.recentRides).toMatchObject({
+        kind: "computed",
+        windowDays: 28,
+        items: [
+          {
+            id: expect.stringMatching(/^[0-9a-f]{64}$/u),
+            localDate: "1998-07-04",
+          },
+        ],
+      });
+      expect(state.trainingContext?.performanceProgress).toEqual({
+        kind: "unavailable",
+        reason: "not-synced",
+      });
+      expect(state.lastSynced).toBeNull();
+    } finally {
+      await selected.runtime.close();
+      await selected.context.store.close();
+    }
+  });
+
   it("reads an import immediately and identically after a credential-free restart", async () => {
     const first = await fixture();
     let firstWriterOpen = true;

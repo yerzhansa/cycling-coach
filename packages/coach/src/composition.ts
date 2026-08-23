@@ -921,8 +921,10 @@ export async function createLocalCoachComposition(
         : dependencies.createRuntime(runtimeOptions);
     if (!input.deferInitialRefresh) {
       await runtime.runWindow();
-      runtime.startScheduler();
-      schedulerStarted = true;
+      if (unapprovedConfig.intervals.apiKey.length > 0) {
+        runtime.startScheduler();
+        schedulerStarted = true;
+      }
     }
     const logger = createSubsystemLogger("agent", input.home.root);
     const getAccessToken = createAccessTokenReader(input.home.configDir);
@@ -941,6 +943,7 @@ export async function createLocalCoachComposition(
     const stateReader = createPersistedAthleteStateSource({
       dataDir: input.home.root,
       cyclingFtpAnchorResolver,
+      now: () => new Date(now()),
       powerProgressSource: powerProgress,
       recentRidesSource: createRecentRidesSource(canonicalActivities),
       droppedActivitiesSource: () => runtime!.currentDroppedActivities(),
@@ -1251,8 +1254,6 @@ export async function createLocalCoachComposition(
               }),
             );
         }
-      } else if (request.intervals !== undefined && initialRefreshStarted && intervalsOwnerReady) {
-        ensureSchedulerStarted();
       }
     };
     const scheduleInitialRefreshRetry = (): void => {
@@ -1314,7 +1315,9 @@ export async function createLocalCoachComposition(
         })
         .then(() => undefined)
         .finally(() => {
-          if (ownerSucceeded) ensureSchedulerStarted();
+          if (ownerSucceeded && unapprovedConfig.intervals.apiKey.length > 0) {
+            ensureSchedulerStarted();
+          }
         })
         .catch((error) => {
           if (!closing) {

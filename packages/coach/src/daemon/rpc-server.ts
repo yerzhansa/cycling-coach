@@ -75,16 +75,6 @@ export const UPGRADE_DRAIN_TIMEOUT_MS = 30_000 as const;
 
 export type UpgradeDrainOutcome = { readonly status: "accepted" } | { readonly status: "timeout" };
 
-export interface UpgradeDrainCoordinator {
-  shutdownForUpgrade(input: {
-    readonly connectionId: string;
-    readonly targetProtocolVersion: number;
-    readonly handoffCapability: string;
-    readonly deadlineMs: number;
-    readonly timer: MonotonicTimer;
-  }): Promise<UpgradeDrainOutcome>;
-}
-
 export interface UpgradeReservation {
   readonly connectionId: string;
   readonly targetProtocolVersion: number;

@@ -273,6 +273,7 @@ export function bootRenderer(): Disposer {
   const rideImportAdapter = createRideImportAdapter({
     imports: rideImports,
     publish: (next) => store.getState().setRideImport(next),
+    onSucceeded: () => void trainingContextController.refresh(),
   });
   store.getState().bindRideImportActions(rideImportAdapter.port);
   const onboardingCompletion = createOnboardingCompletionController({

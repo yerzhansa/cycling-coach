@@ -5,6 +5,7 @@ import {
   EMPTY_DROPPED_ACTIVITIES,
   PowerProgressPanelSchema,
   RecentRidesPanelSchema,
+  UNKNOWN_CYCLING_TRAINING_CONTEXT,
   type AthleteState,
   type DroppedActivities,
   type PowerProgressPanel,
@@ -56,6 +57,7 @@ function isFiniteInstant(value: string): boolean {
 export interface CreatePersistedAthleteStateSourceOptions {
   readonly dataDir: string;
   readonly cyclingFtpAnchorResolver: CyclingFtpAnchorResolver;
+  readonly now?: () => Date;
   readonly powerProgressSource?: {
     readPowerProgress(): Promise<PowerProgressPanel>;
   };
@@ -66,6 +68,34 @@ export interface CreatePersistedAthleteStateSourceOptions {
     }): Promise<RecentRidesPanel>;
   };
   readonly droppedActivitiesSource?: () => DroppedActivities;
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+async function readRecentRides(
+  source: CreatePersistedAthleteStateSourceOptions["recentRidesSource"],
+  asOf: string,
+  asOfEpochSeconds: number,
+): Promise<RecentRidesPanel> {
+  if (source === undefined) return { kind: "unknown", reason: "not-synced" };
+  return source
+    .readRecentRides({ asOf, asOfEpochSeconds })
+    .then((value): RecentRidesPanel => {
+      const parsed = RecentRidesPanelSchema.safeParse(value);
+      return parsed.success ? parsed.data : { kind: "unknown", reason: "temporary-failure" };
+    })
+    .catch(
+      (): RecentRidesPanel => ({
+        kind: "unknown",
+        reason: "temporary-failure",
+      }),
+    );
 }
 
 export function createPersistedAthleteStateSource(
@@ -82,6 +112,32 @@ export function createPersistedAthleteStateSource(
         readJson(errorPath),
       ]);
       if (latestResult.status === "rejected") {
+        if (input.recentRidesSource !== undefined && isMissingFile(latestResult.reason)) {
+          const now = input.now?.() ?? new Date();
+          const asOf = now.toISOString();
+          const recentRides = await readRecentRides(
+            input.recentRidesSource,
+            asOf,
+            Math.floor(now.getTime() / 1_000),
+          );
+          return AthleteStateSchema.parse({
+            schemaVersion: LATEST_SCHEMA_VERSION,
+            lastUpdated: asOf,
+            freshness: "fresh",
+            degraded: false,
+            lastSynced: null,
+            athleteProfile: null,
+            currentStatus: null,
+            derivedMetrics: {},
+            recentActivities: [],
+            plannedWorkouts: [],
+            wellness: null,
+            trainingContext: {
+              ...UNKNOWN_CYCLING_TRAINING_CONTEXT,
+              recentRides,
+            },
+          });
+        }
         throw new AthleteStateUnavailableError("No validated athlete state is available.");
       }
       const latestParsed = LatestJsonSchema.safeParse(latestResult.value);
@@ -139,25 +195,13 @@ export function createPersistedAthleteStateSource(
                   reason: "temporary-failure",
                 }),
               ),
-        asOfEpochS === null || input.recentRidesSource === undefined
+        asOfEpochS === null
           ? Promise.resolve({ kind: "unknown", reason: "not-synced" } as const)
-          : input.recentRidesSource
-              .readRecentRides({
-                asOf: latest.metadata.last_updated,
-                asOfEpochSeconds: asOfEpochS,
-              })
-              .then((value): RecentRidesPanel => {
-                const parsed = RecentRidesPanelSchema.safeParse(value);
-                return parsed.success
-                  ? parsed.data
-                  : { kind: "unknown", reason: "temporary-failure" };
-              })
-              .catch(
-                (): RecentRidesPanel => ({
-                  kind: "unknown",
-                  reason: "temporary-failure",
-                }),
-              ),
+          : readRecentRides(
+              input.recentRidesSource,
+              latest.metadata.last_updated,
+              asOfEpochS,
+            ),
       ]);
       const trainingContext = projectCyclingTrainingContext({
         asOf: latest.metadata.last_updated,
