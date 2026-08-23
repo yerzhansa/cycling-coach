@@ -799,14 +799,14 @@ export function createTelegramCredentialVault(
     if (profile.state === "wrong-home") {
       return { outcome: "refused", reason: "wrong-home" };
     }
-    if (removalState === "unverified") {
-      return { outcome: "authorized", keychainDependent: false };
-    }
     if (profile.state === "re-prompt") {
       if (profile.reason === "encryption-unavailable" || profile.reason === "unsafe-backend") {
         return { outcome: "refused", reason: profile.reason };
       }
       return { outcome: "refused", reason: "storage-failed" };
+    }
+    if (removalState === "unverified") {
+      return { outcome: "authorized", keychainDependent: false };
     }
     if (proof === undefined || options.revalidateEnvelopeRemoval === undefined) {
       return { outcome: "refused", reason: "encryption-unavailable" };
