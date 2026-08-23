@@ -39,8 +39,9 @@ export function resetEncryptedCredentialStorage(
 ): Promise<EncryptedCredentialResetResult> {
   return options.serializeEnvelopeMutation(async (proof) => {
     const removeFile = options.removeFile ?? rm;
-    const syncCredentialDirectory = options.syncCredentialDirectory ?? syncDirectory;
     const platform = options.platform ?? process.platform;
+    const syncCredentialDirectory =
+      platform === "win32" ? undefined : (options.syncCredentialDirectory ?? syncDirectory);
     try {
       let bindings = await bindCredentialEnvelopeRoots(options, platform);
       for (const target of credentialEnvelopeTargets(options)) {
@@ -62,14 +63,16 @@ export function resetEncryptedCredentialStorage(
       }
       bindings = await refreshCredentialEnvelopeRootBindings(bindings);
       guardedRoots = guardedCredentialEnvelopeRoots(options, bindings);
-      for (const binding of [bindings.credentials, bindings.telegram]) {
-        if (binding.state === "missing") continue;
-        try {
-          await useBoundCredentialRoot(binding, platform, () =>
-            syncCredentialDirectory(binding.root),
-          );
-        } catch (error) {
-          if (!isMissingCredentialRootError(error)) throw error;
+      if (syncCredentialDirectory !== undefined) {
+        for (const binding of [bindings.credentials, bindings.telegram]) {
+          if (binding.state === "missing") continue;
+          try {
+            await useBoundCredentialRoot(binding, platform, () =>
+              syncCredentialDirectory(binding.root),
+            );
+          } catch (error) {
+            if (!isMissingCredentialRootError(error)) throw error;
+          }
         }
       }
       if ((await scanCredentialEnvelopes(guardedRoots)).deletionBlockers.length !== 0) {
