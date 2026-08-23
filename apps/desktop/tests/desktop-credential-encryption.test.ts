@@ -9,6 +9,7 @@ import {
   type CredentialEncryptionPort,
 } from "../src/main/credential-vault.js";
 import {
+  desktopCredentialRecoveryFailureState,
   desktopKeychainCredentialService,
   prepareDesktopCredentialEncryption,
   type PrepareDesktopCredentialEncryptionOptions,
@@ -120,6 +121,17 @@ afterAll(async () => {
 });
 
 describe("desktop credential encryption startup", () => {
+  it.each([
+    ["keychain-locked", "locked"],
+    ["item-not-found", "missing"],
+    ["uninspectable-item", "unavailable"],
+    ["unreadable-item", "unavailable"],
+    ["not-team-signed", "unavailable"],
+    ["unknown", "unavailable"],
+  ] as const)("maps %s onto the %s recovery state", (code, expected) => {
+    expect(desktopCredentialRecoveryFailureState(code)).toBe(expected);
+  });
+
   it("separates the signed-release service from the development service", () => {
     expect(desktopKeychainCredentialService(true)).toBe(KEYCHAIN_CREDENTIAL_SERVICE);
     expect(desktopKeychainCredentialService(false)).toBe(KEYCHAIN_CREDENTIAL_SERVICE_DEV);
@@ -549,6 +561,37 @@ describe("desktop credential encryption startup", () => {
       "probe",
       "read-key",
     ]);
+  });
+
+  it("publishes encryption unavailable when a recovery inventory scan fails", async () => {
+    const transport = transportOf(PROBE_OK, { ok: true, op: "read-key", key: KEY });
+    let inventoryAvailable = true;
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({
+        createTransport: () => transport,
+        readEnvelopeFile: migratedTelegramEnvelope(),
+        readEnvelopeDirectory: async () => {
+          if (!inventoryAvailable) {
+            throw Object.assign(new Error("inventory unavailable"), { code: "EACCES" });
+          }
+          return [];
+        },
+      }),
+    );
+    expect(prepared.selection.status).toBe("keychain");
+
+    inventoryAvailable = false;
+
+    await expect(prepared.credentialRecoverySnapshot()).resolves.toMatchObject({
+      selection: {
+        status: "refused",
+        reason: "encryption-unavailable",
+        code: "unknown",
+        keyCleanupPending: false,
+      },
+      unverifiedEnvelopes: 0,
+    });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
   });
 
   it("deletes a readable zero-envelope key during startup without replacing it", async () => {

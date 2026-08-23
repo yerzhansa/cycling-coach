@@ -84,7 +84,10 @@ import {
   createCredentialMutationLock,
   type CredentialEnvelopeLockProof,
 } from "./credential-envelope-lock.js";
-import { prepareDesktopCredentialEncryption } from "./desktop-credential-encryption.js";
+import {
+  desktopCredentialRecoveryFailureState,
+  prepareDesktopCredentialEncryption,
+} from "./desktop-credential-encryption.js";
 import { resetEncryptedCredentialStorage } from "./credential-reset.js";
 import { probePackagedKeychainBackendSelection } from "./keychain-backend-selection-probe.js";
 import {
@@ -507,15 +510,7 @@ async function runDesktop(): Promise<void> {
       if (selected.status === "safe-storage") {
         return { state: "ready", unverifiedEnvelopes: 0 };
       }
-      if (selected.code === "item-not-found") return { state: "missing" };
-      if (
-        selected.code === "keychain-locked" ||
-        selected.code === "uninspectable-item" ||
-        selected.code === "unreadable-item"
-      ) {
-        return { state: "locked" };
-      }
-      return { state: "unavailable" };
+      return { state: desktopCredentialRecoveryFailureState(selected.code) };
     };
     if (process.platform === "darwin") {
       const selected = credentialEncryption.selection;
