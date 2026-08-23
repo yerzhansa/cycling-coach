@@ -5,10 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import { credentialEnvelopeTargets } from "../src/main/credential-envelope-inventory.js";
 import { resetEncryptedCredentialStorage } from "../src/main/credential-reset.js";
-import {
-  CREDENTIAL_DIRECTORY_MODE,
-  CREDENTIAL_FILE_MODE,
-} from "../src/main/credential-vault.js";
+import { CREDENTIAL_DIRECTORY_MODE, CREDENTIAL_FILE_MODE } from "../src/main/credential-vault.js";
 import {
   TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
   TELEGRAM_CREDENTIAL_FILE_MODE,
@@ -85,6 +82,37 @@ describe("encrypted credential reset", () => {
     }
   });
 
+  it("completes Windows reset without invoking POSIX directory sync", async () => {
+    const storage = await fixture();
+    const targets = credentialEnvelopeTargets(storage);
+    const credentialTarget = targets.find((target) => target.vault === "credentials")!;
+    const telegramTarget = targets.find((target) => target.vault === "telegram")!;
+    for (const target of [credentialTarget, telegramTarget]) {
+      await writeFile(join(target.root, target.fileName), Buffer.from("synthetic-envelope"));
+    }
+    const syncCredentialDirectory = vi.fn(async () => {
+      throw new Error("POSIX directory sync must not run on Windows");
+    });
+    const deleteKey = vi.fn(async () => ({ status: "deleted" as const }));
+
+    const result = await resetEncryptedCredentialStorage({
+      ...storage,
+      platform: "win32",
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      deleteKey,
+      syncCredentialDirectory,
+    });
+
+    expect(result).toEqual({ status: "reset", keyCleanupPending: false });
+    expect(syncCredentialDirectory).not.toHaveBeenCalled();
+    expect(deleteKey).toHaveBeenCalledOnce();
+    for (const target of [credentialTarget, telegramTarget]) {
+      await expect(readFile(join(target.root, target.fileName))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
+  });
+
   it("does not delete the shared key while any envelope survives", async () => {
     const storage = await fixture();
     const target = credentialEnvelopeTargets(storage)[0]!;
@@ -126,7 +154,9 @@ describe("encrypted credential reset", () => {
     expect(deleteKey).toHaveBeenCalledOnce();
   });
 
-  it("refuses both roots atomically when one root redirects outside its vault", async ({ skip }) => {
+  it("refuses both roots atomically when one root redirects outside its vault", async ({
+    skip,
+  }) => {
     const storage = await fixture();
     const credentialPath = join(storage.credentialRoot, "anthropic.bin");
     const externalRoot = join(storage.telegramRoot, "..", "external-telegram-vault");
