@@ -1383,6 +1383,42 @@ describe("Telegram credential vault", () => {
     },
   );
 
+  it.each(["linux", "win32"] as const)(
+    "refuses an unreadable unverified %s profile before file mutation",
+    async (platform) => {
+      const value = await fixture();
+      await seedProfile(value);
+      const renameFile = vi.fn(rename);
+      const removeFile = vi.fn(rm);
+      const vault = createTelegramCredentialVault({
+        ...value,
+        platform,
+        encryption: {
+          isEncryptionAvailable: () => true,
+          encryptString: vi.fn(),
+          decryptString: vi.fn(() => {
+            throw new TypeError("synthetic unreadable profile");
+          }),
+        },
+        renameFile,
+        removeFile,
+      });
+
+      await expect(vault.preauthorizeProfileRemoval()).resolves.toEqual({
+        outcome: "refused",
+        reason: "storage-failed",
+      });
+      await expect(vault.deleteProfile()).resolves.toEqual({
+        outcome: "refused",
+        reason: "storage-failed",
+      });
+
+      expect(renameFile).not.toHaveBeenCalled();
+      expect(removeFile).not.toHaveBeenCalled();
+      expect((await lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile()).toBe(true);
+    },
+  );
+
   it("refuses deletion when the tombstone id is invalid instead of rejecting", async () => {
     const value = await fixture();
     await seedProfile(value);
