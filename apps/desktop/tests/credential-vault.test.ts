@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -29,6 +29,13 @@ import {
   type CredentialEncryptionPort,
   type CredentialVaultMutation,
 } from "../src/main/credential-vault.js";
+import {
+  CREDENTIAL_ENVELOPE_MAGIC,
+  SAFE_STORAGE_ENVELOPE_KEY_ID,
+  openCredentialEnvelope,
+  sealCredentialEnvelope,
+} from "../src/main/keychain-credential-encryption.js";
+import { KEYCHAIN_KEY_BYTES } from "../src/main/keychain-binding.js";
 
 const roots: string[] = [];
 const posixIt = it.skipIf(process.platform === "win32");
@@ -70,6 +77,14 @@ function encryption(): CredentialEncryptionPort {
       }
       return value.subarray(5, -4).reverse().toString();
     },
+  };
+}
+
+function keychainEncryption(key = randomBytes(KEYCHAIN_KEY_BYTES)): CredentialEncryptionPort {
+  return {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => sealCredentialEnvelope(key, value),
+    decryptString: (value) => openCredentialEnvelope(key, value),
   };
 }
 
@@ -811,6 +826,7 @@ describe("desktop credential vault", () => {
 
   it("retains a configured envelope when removal key revalidation fails", async () => {
     const root = await temporaryRoot();
+    const encryptionPort = keychainEncryption();
     const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     const applyCredential = vi.fn(async () => undefined);
     const clearCredential = vi.fn(async () => "cleared" as const);
@@ -818,7 +834,7 @@ describe("desktop credential vault", () => {
     const removeCredentialFile = vi.fn(rm);
     const vault = createCredentialVault({
       root,
-      encryption: encryption(),
+      encryption: encryptionPort,
       applyCredential,
       clearCredential,
       serializeEnvelopeMutation,
@@ -831,15 +847,171 @@ describe("desktop credential vault", () => {
     await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
       slot: "anthropic",
       status: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    expect(clearCredential).not.toHaveBeenCalled();
+    expect(revalidateEnvelopeRemoval).toHaveBeenCalledOnce();
+    expect(removeCredentialFile).not.toHaveBeenCalled();
+    expect(applyCredential).toHaveBeenCalledOnce();
+    expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+  });
+
+  it("retains a keychain envelope when encryption is unavailable", async () => {
+    const root = await temporaryRoot();
+    const encryptionPort = keychainEncryption();
+    await storeEncryptedCredential(root, "anthropic", "synthetic-secret", encryptionPort);
+    const decryptString = vi.fn(() => {
+      throw new TypeError();
+    });
+    const clearCredential = vi.fn(async () => "cleared" as const);
+    const revalidateEnvelopeRemoval = vi.fn(async () => true);
+    const vault = createCredentialVault({
+      root,
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString,
+      },
+      applyCredential: vi.fn(async () => undefined),
+      clearCredential,
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+    });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    expect(decryptString).not.toHaveBeenCalled();
+    expect(clearCredential).not.toHaveBeenCalled();
+    expect(revalidateEnvelopeRemoval).not.toHaveBeenCalled();
+    expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+  });
+
+  it("maps a corrupt keychain envelope to storage failure", async () => {
+    const root = await temporaryRoot();
+    await storeEncryptedCredential(root, "anthropic", "synthetic-secret", keychainEncryption());
+    const clearCredential = vi.fn(async () => "cleared" as const);
+    const revalidateEnvelopeRemoval = vi.fn(async () => true);
+    const vault = createCredentialVault({
+      root,
+      encryption: keychainEncryption(),
+      applyCredential: vi.fn(async () => undefined),
+      clearCredential,
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+    });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
       reason: "storage-failed",
     });
 
-    expect(clearCredential).toHaveBeenCalledOnce();
-    expect(revalidateEnvelopeRemoval).toHaveBeenCalledOnce();
-    expect(removeCredentialFile).not.toHaveBeenCalled();
-    expect(applyCredential).toHaveBeenCalledTimes(2);
+    expect(clearCredential).not.toHaveBeenCalled();
+    expect(revalidateEnvelopeRemoval).not.toHaveBeenCalled();
     expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
   });
+
+  it.each(["missing-proof", "missing-hook"] as const)(
+    "retains a keychain envelope with %s",
+    async (missing) => {
+      const root = await temporaryRoot();
+      const encryptionPort = keychainEncryption();
+      await storeEncryptedCredential(root, "anthropic", "synthetic-secret", encryptionPort);
+      const vault = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential: vi.fn(async () => undefined),
+        serializeEnvelopeMutation:
+          missing === "missing-proof"
+            ? async (operation) => await operation(undefined as never)
+            : createCredentialEnvelopeMutationLock(),
+        revalidateEnvelopeRemoval:
+          missing === "missing-hook" ? undefined : vi.fn(async () => true),
+      });
+
+      await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+        slot: "anthropic",
+        status: "refused",
+        reason: "encryption-unavailable",
+      });
+      expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+    },
+  );
+
+  it.each(["false", "throws"] as const)(
+    "does not clear runtime when first key validation %s",
+    async (failure) => {
+      const root = await temporaryRoot();
+      const encryptionPort = keychainEncryption();
+      const clearCredential = vi.fn(async () => "cleared" as const);
+      const revalidateEnvelopeRemoval = vi.fn(async () => {
+        if (failure === "throws") throw new TypeError();
+        return false;
+      });
+      const vault = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential: vi.fn(async () => undefined),
+        clearCredential,
+        serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+        revalidateEnvelopeRemoval,
+      });
+      await vault.writeCredential({ slot: "anthropic", value: "synthetic-secret" });
+
+      await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+        slot: "anthropic",
+        status: "refused",
+        reason: "encryption-unavailable",
+      });
+
+      expect(clearCredential).not.toHaveBeenCalled();
+      expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+    },
+  );
+
+  it.each(["restored", "diverged"] as const)(
+    "retains storage and reports runtime %s after late key replacement",
+    async (compensation) => {
+      const root = await temporaryRoot();
+      const encryptionPort = keychainEncryption();
+      let applyCount = 0;
+      const applyCredential = vi.fn(async () => {
+        applyCount += 1;
+        if (compensation === "diverged" && applyCount > 1) throw new TypeError();
+      });
+      const clearCredential = vi.fn(async () => "cleared" as const);
+      const revalidateEnvelopeRemoval = vi
+        .fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      const vault = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential,
+        clearCredential,
+        serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+        revalidateEnvelopeRemoval,
+      });
+      await vault.writeCredential({ slot: "anthropic", value: "synthetic-secret" });
+
+      await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+        slot: "anthropic",
+        status: "refused",
+        reason:
+          compensation === "restored" ? "encryption-unavailable" : "runtime-state-diverged",
+      });
+
+      expect(clearCredential).toHaveBeenCalledOnce();
+      expect(revalidateEnvelopeRemoval).toHaveBeenCalledTimes(2);
+      expect(applyCredential).toHaveBeenCalledTimes(2);
+      expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+    },
+  );
 
   posixIt("deletes an unverified envelope only after the athlete requests that slot", async () => {
     const root = await temporaryRoot();
@@ -863,6 +1035,60 @@ describe("desktop credential vault", () => {
       cleanupPending: false,
     });
     await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  posixIt("deletes an explicit key-id zero envelope without Keychain access", async () => {
+    const root = await temporaryRoot();
+    await mkdir(root, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const path = join(root, "anthropic.bin");
+    const envelope = sealCredentialEnvelope(
+      randomBytes(KEYCHAIN_KEY_BYTES),
+      "synthetic-legacy-secret",
+    );
+    envelope[CREDENTIAL_ENVELOPE_MAGIC.length] = SAFE_STORAGE_ENVELOPE_KEY_ID;
+    await writeFile(path, envelope, { mode: CREDENTIAL_FILE_MODE });
+    envelope.fill(0);
+    const decryptString = vi.fn();
+    const vault = createCredentialVault({
+      root,
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString,
+      },
+      applyCredential: vi.fn(async () => undefined),
+    });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "deleted",
+      cleanupPending: false,
+    });
+
+    expect(decryptString).not.toHaveBeenCalled();
+    await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not clear stale runtime state when the envelope is missing", async () => {
+    const root = await temporaryRoot();
+    const runtimeState = new Map([["anthropic", "active"]] as const);
+    const clearCredential = vi.fn(async () => "cleared" as const);
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      runtimeState,
+      applyCredential: vi.fn(async () => undefined),
+      clearCredential,
+    });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "not-found",
+    });
+
+    expect(clearCredential).not.toHaveBeenCalled();
+    expect(runtimeState.get("anthropic")).toBe("active");
   });
 
   it("deletes a stored-inactive credential without replacing the active runtime", async () => {
@@ -936,6 +1162,7 @@ describe("desktop credential vault", () => {
 
   it("restores runtime after a retained vault delete failure and surfaces failed reconciliation", async () => {
     const root = await temporaryRoot();
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     let applyCount = 0;
     let restoreFails = false;
     const applyCredential = vi.fn(async () => {
@@ -944,9 +1171,11 @@ describe("desktop credential vault", () => {
     });
     const vault = createCredentialVault({
       root,
-      encryption: encryption(),
+      encryption: keychainEncryption(),
       applyCredential,
       clearCredential: vi.fn(async () => "cleared" as const),
+      serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: vi.fn(async () => true),
       renameCredentialFile: vi.fn(async (from: string, to: string) => {
         if (to.endsWith(".deleted")) throw new TypeError();
         await rename(from, to);

@@ -9,11 +9,20 @@ import {
   type TelegramControlSnapshot,
   type TelegramCredentialInspection,
 } from "@enduragent/coach-contract";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createCredentialEnvelopeMutationLock,
+  type CredentialEnvelopeLockProof,
+} from "../src/main/credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "../src/main/credential-vault.js";
+import {
+  openCredentialEnvelope,
+  sealCredentialEnvelope,
+} from "../src/main/keychain-credential-encryption.js";
+import { KEYCHAIN_KEY_BYTES } from "../src/main/keychain-binding.js";
 import {
   createTelegramControlCoordinator,
   type CreateTelegramControlCoordinatorInput,
@@ -23,7 +32,12 @@ import type {
   TelegramCredentialVault,
   TelegramProfileRecord,
 } from "../src/main/telegram-credential-vault.js";
-import { createTelegramCredentialVault } from "../src/main/telegram-credential-vault.js";
+import {
+  TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
+  TELEGRAM_CREDENTIAL_FILE_MODE,
+  TELEGRAM_PROFILE_FILE_NAME,
+  createTelegramCredentialVault,
+} from "../src/main/telegram-credential-vault.js";
 import { startDesktopTelegram } from "../src/main/telegram-startup.js";
 
 const HOME = "/synthetic/athlete" as AthleteHomeIdentity;
@@ -45,6 +59,15 @@ function realVaultEncryption(): CredentialEncryptionPort {
   };
 }
 
+function keychainVaultEncryption(): CredentialEncryptionPort {
+  const key = Buffer.alloc(KEYCHAIN_KEY_BYTES, 0x2a);
+  return {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => sealCredentialEnvelope(key, value),
+    decryptString: (value) => openCredentialEnvelope(key, value),
+  };
+}
+
 async function realVaultFixture() {
   const base = await mkdtemp(join(await realpath(tmpdir()), "telegram-control-secure-storage-"));
   const homePath = join(base, "athlete-home");
@@ -54,6 +77,36 @@ async function realVaultFixture() {
     root: join(base, "telegram-channel-v1"),
     athleteHome: AthleteHomeIdentitySchema.parse(await realpath(homePath)),
   };
+}
+
+async function keychainControlFixture(
+  revalidateEnvelopeRemoval: (proof: CredentialEnvelopeLockProof) => Promise<boolean>,
+) {
+  const value = await realVaultFixture();
+  const vault = createTelegramCredentialVault({
+    root: value.root,
+    athleteHome: value.athleteHome,
+    encryption: keychainVaultEncryption(),
+    createProfileId: () => PROFILE_ID,
+    serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+    revalidateEnvelopeRemoval,
+  });
+  const replaced = await vault.replaceProfile({
+    token: TOKEN,
+    bot: { id: BOT_ID, username: USERNAME },
+    authenticatedAthleteHome: value.athleteHome,
+  });
+  if (replaced.outcome !== "applied") throw new TypeError();
+  const desired = await vault.setDesiredState(true);
+  if (desired.status !== "stored") throw new TypeError();
+  const runtime = harness();
+  const binding = { ...runtime.binding, athleteHome: value.athleteHome };
+  const coordinator = createTelegramControlCoordinator({
+    selectedAthleteHome: () => value.athleteHome,
+    vault,
+    daemon: { current: () => binding },
+  });
+  return { binding, coordinator, runtime, value, vault };
 }
 
 interface Deferred<T> {
@@ -192,6 +245,10 @@ function harness(
       } catch {
         return { outcome: "refused", reason: "runtime-unavailable" } as const;
       }
+    }),
+    preauthorizeProfileRemoval: vi.fn(async () => {
+      trace.push("vault:preauthorize");
+      return { outcome: "authorized" } as const;
     }),
     deleteProfile: vi.fn(async () => {
       trace.push("vault:delete");
@@ -345,6 +402,7 @@ function expectNoTelegramMutation(runtime: ReturnType<typeof harness>): void {
     runtime.vault.setDesiredState,
     runtime.vault.replaceProfile,
     runtime.vault.applyStoredProfile,
+    runtime.vault.preauthorizeProfileRemoval,
     runtime.vault.deleteProfile,
     runtime.binding.configureTelegram,
     runtime.binding.replaceTelegram,
@@ -599,7 +657,7 @@ describe("Telegram main-process control coordinator", () => {
       "telegram-credential-unsafe-backend" as const,
     ],
   ] as const) {
-    const title = `preserves a reopened real-vault ${reason} refusal across profile-dependent actions`;
+    const title = `preserves a reopened real-vault ${reason} refusal across non-delete actions and explicitly removes it`;
     run(title, async () => {
       const value = await realVaultFixture();
       try {
@@ -620,11 +678,14 @@ describe("Telegram main-process control coordinator", () => {
           enabled: true,
         });
         const observeSecureStorageFailure = vi.fn();
+        const reopenedEncryption = realVaultEncryption();
+        const decryptString = vi.fn(reopenedEncryption.decryptString);
         const reopened = createTelegramCredentialVault({
           ...value,
           ...(selectedBackend === undefined ? {} : { platform: "linux" as const }),
           encryption: {
-            ...realVaultEncryption(),
+            ...reopenedEncryption,
+            decryptString,
             isEncryptionAvailable: () => available,
             ...(selectedBackend === undefined
               ? {}
@@ -653,7 +714,6 @@ describe("Telegram main-process control coordinator", () => {
           () => coordinator.replace(REPLACEMENT_TOKEN),
           () => coordinator.enable(),
           () => coordinator.reconcile(),
-          () => coordinator.remove(),
           () => coordinator.removeWebhook(),
           () => coordinator.beginPairing(),
         ]) {
@@ -664,6 +724,20 @@ describe("Telegram main-process control coordinator", () => {
           });
         }
 
+        await expect(coordinator.remove()).resolves.toEqual({
+          outcome: "applied",
+          current: {
+            channel: { desiredState: "disabled", state: "disabled" },
+            bot: { state: "unconfigured" },
+            pairing: { state: "unpaired" },
+            credentialConfigured: false,
+          },
+        });
+        expect(decryptString).not.toHaveBeenCalled();
+        await expect(lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+
         expect(observeSecureStorageFailure).toHaveBeenCalledWith({
           stage: "encryption-availability",
           reason,
@@ -672,7 +746,9 @@ describe("Telegram main-process control coordinator", () => {
         expect(runtime.binding.inspectTelegramCredential).not.toHaveBeenCalled();
         expect(runtime.binding.replaceTelegram).not.toHaveBeenCalled();
         expect(runtime.binding.enableTelegram).not.toHaveBeenCalled();
-        expect(runtime.binding.disableTelegram).not.toHaveBeenCalled();
+        expect(runtime.binding.disableTelegram).toHaveBeenCalledOnce();
+        expect(runtime.binding.resetTelegramAccess).toHaveBeenCalledOnce();
+        expect(runtime.binding.forgetTelegramCredential).toHaveBeenCalledOnce();
         expect(runtime.binding.deleteTelegramWebhook).not.toHaveBeenCalled();
         expect(runtime.binding.beginTelegramPairing).not.toHaveBeenCalled();
 
@@ -683,13 +759,11 @@ describe("Telegram main-process control coordinator", () => {
         const appliedProfile = vi.fn();
         await expect(
           verified.applyStoredProfile(value.athleteHome, appliedProfile),
-        ).resolves.toMatchObject({ outcome: "applied" });
-        expect(appliedProfile).toHaveBeenCalledWith(
-          expect.objectContaining({ token: TOKEN, bot: { id: BOT_ID, username: USERNAME } }),
-        );
+        ).resolves.toEqual({ outcome: "refused", reason: "missing" });
+        expect(appliedProfile).not.toHaveBeenCalled();
         await expect(verified.desiredState()).resolves.toEqual({
           state: "configured",
-          enabled: true,
+          enabled: false,
         });
       } finally {
         await rm(value.base, { recursive: true, force: true });
@@ -1105,6 +1179,7 @@ describe("Telegram main-process control coordinator", () => {
     await expect(runtime.coordinator.remove()).resolves.toMatchObject({ outcome: "applied" });
     expect(runtime.trace).toEqual([
       "vault:apply",
+      "vault:preauthorize",
       "daemon:disable",
       "daemon:reset-access",
       "daemon:forget",
@@ -1112,6 +1187,276 @@ describe("Telegram main-process control coordinator", () => {
       "vault:delete",
     ]);
     expect(runtime.profile()).toBeUndefined();
+  });
+
+  it("refuses removal authorization before changing daemon, desired, or profile state", async () => {
+    const runtime = harness();
+    const before = runtime.profile();
+    runtime.trace.length = 0;
+    vi.mocked(runtime.vault.preauthorizeProfileRemoval).mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    await expect(runtime.coordinator.remove()).resolves.toMatchObject({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    expect(runtime.trace).toEqual(["vault:apply"]);
+    expect(runtime.profile()).toEqual(before);
+    expect(runtime.desired()).toBe(true);
+    expect(runtime.binding.disableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.resetTelegramAccess).not.toHaveBeenCalled();
+    expect(runtime.binding.forgetTelegramCredential).not.toHaveBeenCalled();
+    expect(runtime.vault.setDesiredState).not.toHaveBeenCalled();
+    expect(runtime.vault.deleteProfile).not.toHaveBeenCalled();
+  });
+
+  it("maps a missing profile during removal authorization to invalid state", async () => {
+    const runtime = harness();
+    const before = runtime.profile();
+    vi.mocked(runtime.vault.preauthorizeProfileRemoval).mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "not-found",
+    });
+
+    await expect(runtime.coordinator.remove()).resolves.toMatchObject({
+      outcome: "refused",
+      reason: "invalid-state",
+    });
+
+    expect(runtime.profile()).toEqual(before);
+    expect(runtime.desired()).toBe(true);
+    expect(runtime.binding.disableTelegram).not.toHaveBeenCalled();
+    expect(runtime.binding.resetTelegramAccess).not.toHaveBeenCalled();
+    expect(runtime.binding.forgetTelegramCredential).not.toHaveBeenCalled();
+    expect(runtime.vault.setDesiredState).not.toHaveBeenCalled();
+    expect(runtime.vault.deleteProfile).not.toHaveBeenCalled();
+  });
+
+  it("leaves a real keychain profile and daemon unchanged when initial removal validation fails", async () => {
+    const revalidateEnvelopeRemoval = vi.fn(
+      async (_proof: CredentialEnvelopeLockProof) => false,
+    );
+    const fixture = await keychainControlFixture(revalidateEnvelopeRemoval);
+    revalidateEnvelopeRemoval.mockClear();
+
+    try {
+      await expect(fixture.coordinator.remove()).resolves.toMatchObject({
+        outcome: "refused",
+        reason: "encryption-unavailable",
+      });
+
+      expect(revalidateEnvelopeRemoval).toHaveBeenCalledOnce();
+      expect(fixture.runtime.binding.disableTelegram).not.toHaveBeenCalled();
+      expect(fixture.runtime.binding.resetTelegramAccess).not.toHaveBeenCalled();
+      expect(fixture.runtime.binding.forgetTelegramCredential).not.toHaveBeenCalled();
+      expect(
+        (await lstat(join(fixture.value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile(),
+      ).toBe(true);
+      await expect(fixture.vault.desiredState()).resolves.toEqual({
+        state: "configured",
+        enabled: true,
+      });
+    } finally {
+      await fixture.coordinator.close();
+      await rm(fixture.value.base, { recursive: true, force: true });
+    }
+  });
+
+  it("retains a real keychain profile and compensates after final removal validation fails", async () => {
+    const revalidateEnvelopeRemoval = vi
+      .fn(async (_proof: CredentialEnvelopeLockProof) => true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const fixture = await keychainControlFixture(revalidateEnvelopeRemoval);
+    revalidateEnvelopeRemoval.mockClear();
+    revalidateEnvelopeRemoval.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    vi.mocked(fixture.runtime.binding.configureTelegram).mockImplementationOnce(
+      async () => {
+        const configured = snapshot(
+          { desiredState: "disabled", state: "disabled" },
+          { pairing: { state: "unpaired" } },
+        );
+        fixture.runtime.setSnapshot(configured);
+        return { outcome: "applied", current: configured };
+      },
+    );
+    vi.mocked(fixture.runtime.binding.enableTelegram).mockImplementationOnce(async () => {
+      const enabled = snapshot(undefined, { pairing: { state: "unpaired" } });
+      fixture.runtime.setSnapshot(enabled);
+      return enabled;
+    });
+
+    try {
+      await expect(fixture.coordinator.remove()).resolves.toMatchObject({
+        outcome: "uncertain",
+        reason: "control-uncertain",
+        current: {
+          channel: { desiredState: "enabled", state: "online" },
+          pairing: { state: "unpaired" },
+          credentialConfigured: true,
+        },
+      });
+
+      expect(revalidateEnvelopeRemoval).toHaveBeenCalledTimes(2);
+      expect(revalidateEnvelopeRemoval.mock.calls[0]?.[0]).toBe(
+        revalidateEnvelopeRemoval.mock.calls[1]?.[0],
+      );
+      expect(fixture.runtime.binding.disableTelegram).toHaveBeenCalledOnce();
+      expect(fixture.runtime.binding.resetTelegramAccess).toHaveBeenCalledOnce();
+      expect(fixture.runtime.binding.forgetTelegramCredential).toHaveBeenCalledOnce();
+      expect(fixture.runtime.binding.configureTelegram).toHaveBeenCalledWith({ token: TOKEN });
+      expect(fixture.runtime.binding.enableTelegram).toHaveBeenCalledOnce();
+      expect(
+        (await lstat(join(fixture.value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile(),
+      ).toBe(true);
+      await expect(fixture.vault.desiredState()).resolves.toEqual({
+        state: "configured",
+        enabled: true,
+      });
+    } finally {
+      await fixture.coordinator.close();
+      await rm(fixture.value.base, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a real keychain profile only after both validations succeed", async () => {
+    const revalidateEnvelopeRemoval = vi.fn(
+      async (_proof: CredentialEnvelopeLockProof) => true,
+    );
+    const fixture = await keychainControlFixture(revalidateEnvelopeRemoval);
+    revalidateEnvelopeRemoval.mockClear();
+
+    try {
+      await expect(fixture.coordinator.remove()).resolves.toMatchObject({ outcome: "applied" });
+
+      expect(revalidateEnvelopeRemoval).toHaveBeenCalledTimes(2);
+      expect(revalidateEnvelopeRemoval.mock.calls[0]?.[0]).toBe(
+        revalidateEnvelopeRemoval.mock.calls[1]?.[0],
+      );
+      await expect(
+        lstat(join(fixture.value.root, TELEGRAM_PROFILE_FILE_NAME)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fixture.vault.desiredState()).resolves.toEqual({
+        state: "configured",
+        enabled: false,
+      });
+    } finally {
+      await fixture.coordinator.close();
+      await rm(fixture.value.base, { recursive: true, force: true });
+    }
+  });
+
+  it("restores daemon credential and desired state after late removal refusal", async () => {
+    const runtime = harness();
+    runtime.trace.length = 0;
+    vi.mocked(runtime.vault.deleteProfile).mockImplementationOnce(async () => {
+      runtime.trace.push("vault:delete-refused");
+      return { outcome: "refused", reason: "encryption-unavailable" };
+    });
+    vi.mocked(runtime.binding.configureTelegram).mockImplementationOnce(async ({ token }) => {
+      runtime.trace.push(`daemon:configure:${token}`);
+      const configured = snapshot(
+        { desiredState: "disabled", state: "disabled" },
+        { pairing: { state: "unpaired" } },
+      );
+      runtime.setSnapshot(configured);
+      return { outcome: "applied", current: configured };
+    });
+    vi.mocked(runtime.binding.enableTelegram).mockImplementationOnce(async () => {
+      runtime.trace.push("daemon:enable");
+      const enabled = snapshot(undefined, { pairing: { state: "unpaired" } });
+      runtime.setSnapshot(enabled);
+      return enabled;
+    });
+
+    await expect(runtime.coordinator.remove()).resolves.toMatchObject({
+      outcome: "uncertain",
+      reason: "control-uncertain",
+      current: {
+        channel: { desiredState: "enabled", state: "online" },
+        pairing: { state: "unpaired" },
+        credentialConfigured: true,
+      },
+    });
+
+    expect(runtime.profile()).toMatchObject({ token: TOKEN });
+    expect(runtime.desired()).toBe(true);
+    expect(runtime.binding.configureTelegram).toHaveBeenCalledWith({ token: TOKEN });
+    expect(runtime.binding.enableTelegram).toHaveBeenCalledOnce();
+    expect(runtime.trace).toEqual([
+      "vault:apply",
+      "vault:preauthorize",
+      "daemon:disable",
+      "daemon:reset-access",
+      "daemon:forget",
+      "vault:desired:false",
+      "vault:delete-refused",
+      `daemon:configure:${TOKEN}`,
+      "vault:desired:true",
+      "daemon:enable",
+    ]);
+  });
+
+  it("reports uncertainty when late removal compensation cannot restore the credential", async () => {
+    const runtime = harness();
+    const before = runtime.profile();
+    vi.mocked(runtime.vault.deleteProfile).mockResolvedValueOnce({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+    vi.mocked(runtime.binding.configureTelegram).mockRejectedValueOnce(
+      new Error("credential restore failed"),
+    );
+
+    await expect(runtime.coordinator.remove()).resolves.toMatchObject({
+      outcome: "uncertain",
+      reason: "control-uncertain",
+    });
+
+    expect(runtime.profile()).toEqual(before);
+    expect(runtime.binding.configureTelegram).toHaveBeenCalledWith({ token: TOKEN });
+    expect(runtime.binding.resetTelegramAccess).toHaveBeenCalledOnce();
+  });
+
+  it("explicitly removes an unreadable unverified envelope without decrypting it", async () => {
+    const value = await realVaultFixture();
+    const decryptString = vi.fn(() => {
+      throw new TypeError();
+    });
+    const vault = createTelegramCredentialVault({
+      root: value.root,
+      athleteHome: value.athleteHome,
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString,
+      },
+    });
+    await vault.setDesiredState(true);
+    await mkdir(value.root, { recursive: true, mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    const profilePath = join(value.root, TELEGRAM_PROFILE_FILE_NAME);
+    await writeFile(profilePath, Buffer.from("unverified-envelope"), {
+      mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+    });
+    const runtime = harness();
+    const binding = { ...runtime.binding, athleteHome: value.athleteHome };
+    const coordinator = createTelegramControlCoordinator({
+      selectedAthleteHome: () => value.athleteHome,
+      vault,
+      daemon: { current: () => binding },
+    });
+
+    try {
+      await expect(coordinator.remove()).resolves.toMatchObject({ outcome: "applied" });
+      expect(decryptString).not.toHaveBeenCalled();
+      await expect(lstat(profilePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await coordinator.close();
+      await rm(value.base, { recursive: true, force: true });
+    }
   });
 
   it("stops Telegram for a global reset without decrypting or deleting the profile itself", async () => {

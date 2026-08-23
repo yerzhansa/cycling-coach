@@ -8,6 +8,14 @@ import {
 import type { CredentialEnvelopeLockProof } from "./credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
 import {
+  CREDENTIAL_ENVELOPE_HEADER_BYTES,
+  CREDENTIAL_ENVELOPE_IV_BYTES,
+  CREDENTIAL_ENVELOPE_MAGIC,
+  CREDENTIAL_ENVELOPE_TAG_BYTES,
+  KEYCHAIN_ENVELOPE_KEY_ID,
+  readCredentialEnvelopeKeyId,
+} from "./credential-envelope-format.js";
+import {
   KEYCHAIN_KEY_BYTES,
   KEYCHAIN_TEAM_IDENTIFIER,
   type KeychainBindingErrorCode,
@@ -15,17 +23,18 @@ import {
 } from "./keychain-binding.js";
 
 export const KEYCHAIN_PARTITION_STORAGE_BACKEND = "keychain_partition_v1" as const;
-export const CREDENTIAL_ENVELOPE_MAGIC = "ENDURAGENT1" as const;
-export const SAFE_STORAGE_ENVELOPE_KEY_ID = 0;
-export const KEYCHAIN_ENVELOPE_KEY_ID = 1;
-export const CREDENTIAL_ENVELOPE_IV_BYTES = 12;
-export const CREDENTIAL_ENVELOPE_TAG_BYTES = 16;
+export {
+  CREDENTIAL_ENVELOPE_HEADER_BYTES,
+  CREDENTIAL_ENVELOPE_INSPECTION_BYTES,
+  CREDENTIAL_ENVELOPE_IV_BYTES,
+  CREDENTIAL_ENVELOPE_MAGIC,
+  CREDENTIAL_ENVELOPE_TAG_BYTES,
+  KEYCHAIN_ENVELOPE_KEY_ID,
+  SAFE_STORAGE_ENVELOPE_KEY_ID,
+  readCredentialEnvelopeKeyId,
+} from "./credential-envelope-format.js";
 
 const MAGIC = Buffer.from(CREDENTIAL_ENVELOPE_MAGIC, "ascii");
-const HEADER_BYTES = MAGIC.length + 1;
-const MINIMUM_ENVELOPE_BYTES =
-  HEADER_BYTES + CREDENTIAL_ENVELOPE_IV_BYTES + CREDENTIAL_ENVELOPE_TAG_BYTES;
-export const CREDENTIAL_ENVELOPE_INSPECTION_BYTES = MINIMUM_ENVELOPE_BYTES;
 
 export class KeychainEncryptionError extends Error {
   constructor(readonly code: KeychainBindingErrorCode) {
@@ -34,12 +43,6 @@ export class KeychainEncryptionError extends Error {
 }
 
 export class CredentialEnvelopeError extends Error {}
-
-export function readCredentialEnvelopeKeyId(envelope: Buffer): number | undefined {
-  if (envelope.length < MINIMUM_ENVELOPE_BYTES) return undefined;
-  if (!envelope.subarray(0, MAGIC.length).equals(MAGIC)) return undefined;
-  return envelope[MAGIC.length];
-}
 
 export function sealCredentialEnvelope(key: Buffer, value: string): Buffer {
   const iv = randomBytes(CREDENTIAL_ENVELOPE_IV_BYTES);
@@ -53,10 +56,13 @@ export function openCredentialEnvelope(key: Buffer, envelope: Buffer): string {
   if (readCredentialEnvelopeKeyId(envelope) !== KEYCHAIN_ENVELOPE_KEY_ID) {
     throw new CredentialEnvelopeError();
   }
-  const iv = envelope.subarray(HEADER_BYTES, HEADER_BYTES + CREDENTIAL_ENVELOPE_IV_BYTES);
+  const iv = envelope.subarray(
+    CREDENTIAL_ENVELOPE_HEADER_BYTES,
+    CREDENTIAL_ENVELOPE_HEADER_BYTES + CREDENTIAL_ENVELOPE_IV_BYTES,
+  );
   const tag = envelope.subarray(envelope.length - CREDENTIAL_ENVELOPE_TAG_BYTES);
   const ciphertext = envelope.subarray(
-    HEADER_BYTES + CREDENTIAL_ENVELOPE_IV_BYTES,
+    CREDENTIAL_ENVELOPE_HEADER_BYTES + CREDENTIAL_ENVELOPE_IV_BYTES,
     envelope.length - CREDENTIAL_ENVELOPE_TAG_BYTES,
   );
   const decipher = createDecipheriv("aes-256-gcm", key, iv);

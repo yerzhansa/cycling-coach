@@ -1340,6 +1340,32 @@ describe("desktop preload ChatGPT auth", () => {
     });
   });
 
+  it("accepts only the exact Keychain deletion refusal envelope", async () => {
+    const result = {
+      credential: "anthropic",
+      status: "refused",
+      reason: "encryption-unavailable",
+    };
+    mocks.invoke.mockResolvedValueOnce(result);
+
+    const copied = await bridge.deleteCredential({ credential: "anthropic" });
+
+    expect(copied).toEqual(result);
+    expect(copied).not.toBe(result);
+
+    for (const malformed of [
+      { ...result, extra: true },
+      { ...result, credential: "unknown" },
+      { ...result, reason: "keychain-unavailable" },
+      { slot: "anthropic", status: "refused", reason: "encryption-unavailable" },
+    ]) {
+      mocks.invoke.mockResolvedValueOnce(malformed);
+      await expect(bridge.deleteCredential({ credential: "anthropic" })).rejects.toBeInstanceOf(
+        TypeError,
+      );
+    }
+  });
+
   it("accepts only the exact credential deletion uncertainty envelope", async () => {
     const result = {
       slot: "anthropic",

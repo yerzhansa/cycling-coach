@@ -126,6 +126,7 @@ describe("keychain key retirement call sites", () => {
       root: roots.credentialRoot,
       encryption,
       serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: async () => true,
       observeEnvelopeRemoved,
       applyCredential: vi.fn(async () => undefined),
       clearCredential: vi.fn(async () => "cleared" as const),
@@ -156,6 +157,7 @@ describe("keychain key retirement call sites", () => {
       root: roots.credentialRoot,
       encryption,
       serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: async () => true,
       observeEnvelopeRemoved: async (proof) => {
         await retireKey(roots, transport, proof, async () => {
           expect(
@@ -199,6 +201,7 @@ describe("keychain key retirement call sites", () => {
       root: roots.credentialRoot,
       encryption,
       serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: async () => true,
       observeEnvelopeRemoved: async (proof) => {
         await retireKey(roots, transport, proof);
       },
@@ -231,6 +234,7 @@ describe("keychain key retirement call sites", () => {
       athleteHome: roots.athleteHome,
       encryption,
       serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: async () => true,
       observeEnvelopeRemoved,
     });
     await expect(
@@ -355,6 +359,7 @@ describe("keychain key retirement call sites", () => {
       athleteHome: roots.athleteHome,
       encryption,
       serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: async () => true,
       observeEnvelopeRemoved: async (proof) => {
         await retireKey(roots, transport, proof);
       },
@@ -380,6 +385,7 @@ describe("keychain key retirement call sites", () => {
       root: roots.credentialRoot,
       encryption,
       serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: async () => true,
       observeEnvelopeRemoved: async () => {
         throw new Error("synthetic retirement failure");
       },
@@ -421,6 +427,7 @@ describe("keychain key retirement call sites", () => {
       root: roots.credentialRoot,
       encryption,
       serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: async () => true,
       observeEnvelopeRemoved: async (proof) => {
         markRetirementStarted?.();
         await retirementBlocked;

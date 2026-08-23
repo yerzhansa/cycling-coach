@@ -1017,6 +1017,43 @@ describe("credential deletion", () => {
     await waitFor(() => expect(subject.resetAllCredentials).toHaveBeenCalledOnce());
   });
 
+  it("shows an inline recovery path when secure storage refuses credential deletion", async () => {
+    const user = userEvent.setup();
+    let recovery: CredentialRecoveryStatus = { state: "ready", unverifiedEnvelopes: 0 };
+    await renderSettings({
+      credentialRecoveryStatus: async () => recovery,
+      deleteCredential: async () => {
+        recovery = { state: "unavailable" };
+        return {
+          credential: "openrouter",
+          status: "refused",
+          reason: "encryption-unavailable",
+        };
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm deletion of the OpenRouter credential" }),
+    );
+
+    const feedback = await screen.findByText(
+      "The credential was retained because secure storage could not confirm its encryption key.",
+    );
+    expect(feedback).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Remove all credentials" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
+    expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+      status: "error",
+      kind: "delete",
+      reason: "encryption-unavailable",
+      recovery: { state: "unavailable" },
+      repairCredential: null,
+    });
+  });
+
   it("cross-locks setup changes while deletion is confirmed and pending", async () => {
     const user = userEvent.setup();
     const deletion = deferred<CredentialDeleteResult>();

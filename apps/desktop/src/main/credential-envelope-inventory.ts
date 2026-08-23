@@ -1,29 +1,33 @@
-import { constants, type Stats } from "node:fs";
-import { lstat, open, opendir } from "node:fs/promises";
+import { opendir } from "node:fs/promises";
 import { join } from "node:path";
-import type { WindowsPrivateDirectoryBinding } from "@enduragent/core";
 import { CREDENTIAL_FILE_MODE, DESKTOP_CREDENTIAL_SLOTS } from "./credential-vault.js";
 import {
-  CREDENTIAL_ENVELOPE_INSPECTION_BYTES,
   KEYCHAIN_ENVELOPE_KEY_ID,
   readCredentialEnvelopeKeyId,
-} from "./keychain-credential-encryption.js";
+} from "./credential-envelope-format.js";
+import {
+  inspectCredentialEnvelopeTarget,
+  type CredentialEnvelopeInspection,
+  type CredentialEnvelopeTarget,
+  type CredentialEnvelopeVault,
+} from "./credential-envelope-inspection.js";
 import {
   TELEGRAM_CREDENTIAL_FILE_MODE,
   TELEGRAM_PROFILE_FILE_NAME,
 } from "./telegram-credential-vault.js";
-import { readWindowsPrivateFilePrefix } from "./windows-private-file.js";
-
-export type CredentialEnvelopeVault = "credentials" | "telegram";
+export {
+  classifyCredentialEnvelopeRemoval,
+  inspectCredentialEnvelopeTarget,
+} from "./credential-envelope-inspection.js";
+export type {
+  CredentialEnvelopeInspection,
+  CredentialEnvelopeRemovalState,
+  CredentialEnvelopeTarget,
+  CredentialEnvelopeVault,
+  InspectCredentialEnvelopeTargetOptions,
+} from "./credential-envelope-inspection.js";
 
 export const CREDENTIAL_ENVELOPE_DIRECTORY_ENTRY_LIMIT = 256;
-
-export interface CredentialEnvelopeTarget {
-  readonly vault: CredentialEnvelopeVault;
-  readonly root: string;
-  readonly fileName: string;
-  readonly mode: number;
-}
 
 export interface CredentialEnvelopeRef extends CredentialEnvelopeTarget {
   readonly keyId: number | undefined;
@@ -59,17 +63,6 @@ export async function readCredentialEnvelopeDirectory(root: string): Promise<str
     await directory.close().catch(() => undefined);
   }
   return entries.sort();
-}
-
-export type CredentialEnvelopeInspection =
-  | Readonly<{ status: "missing" }>
-  | Readonly<{ status: "readable"; contents: Buffer }>
-  | Readonly<{ status: "blocked" }>;
-
-export interface InspectCredentialEnvelopeTargetOptions {
-  readonly platform?: NodeJS.Platform;
-  readonly windowsDirectory?: WindowsPrivateDirectoryBinding;
-  readonly openFile?: typeof open;
 }
 
 export function credentialEnvelopeTargets(
@@ -154,124 +147,6 @@ async function inspectEnvelopeTarget(
     return { ...target, keyId: readCredentialEnvelopeKeyId(inspected.contents) };
   } finally {
     inspected.contents.fill(0);
-  }
-}
-
-function permissions(mode: number): number {
-  return mode & 0o777;
-}
-
-function safePosixEnvelopeMetadata(metadata: Stats, expectedMode: number): boolean {
-  return (
-    metadata.isFile() &&
-    !metadata.isSymbolicLink() &&
-    permissions(metadata.mode) === expectedMode &&
-    (typeof process.getuid !== "function" || metadata.uid === process.getuid())
-  );
-}
-
-function samePosixEnvelopeMetadata(first: Stats, second: Stats): boolean {
-  return (
-    first.dev === second.dev &&
-    first.ino === second.ino &&
-    first.mode === second.mode &&
-    first.uid === second.uid &&
-    first.size === second.size &&
-    first.mtimeMs === second.mtimeMs &&
-    first.ctimeMs === second.ctimeMs &&
-    first.isFile() === second.isFile() &&
-    first.isSymbolicLink() === second.isSymbolicLink()
-  );
-}
-
-async function inspectPosixCredentialEnvelopeTarget(
-  target: CredentialEnvelopeTarget,
-  openFile: typeof open = open,
-): Promise<CredentialEnvelopeInspection> {
-  const path = join(target.root, target.fileName);
-  let beforeOpen: Stats;
-  try {
-    beforeOpen = await lstat(path);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT"
-      ? { status: "missing" }
-      : { status: "blocked" };
-  }
-  if (!safePosixEnvelopeMetadata(beforeOpen, target.mode)) return { status: "blocked" };
-  const flags = constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0);
-  let handle;
-  try {
-    handle = await openFile(path, flags);
-  } catch {
-    return { status: "blocked" };
-  }
-  let contents: Buffer | undefined;
-  try {
-    const opened = await handle.stat();
-    if (
-      !safePosixEnvelopeMetadata(opened, target.mode) ||
-      !samePosixEnvelopeMetadata(beforeOpen, opened) ||
-      !Number.isSafeInteger(opened.size) ||
-      opened.size < 0
-    ) {
-      return { status: "blocked" };
-    }
-    const prefixBytes = Math.min(opened.size, CREDENTIAL_ENVELOPE_INSPECTION_BYTES);
-    contents = Buffer.allocUnsafe(prefixBytes);
-    let offset = 0;
-    while (offset < contents.length) {
-      const read = await handle.read(contents, offset, contents.length - offset, offset);
-      if (read.bytesRead <= 0) return { status: "blocked" };
-      offset += read.bytesRead;
-    }
-    const afterRead = await handle.stat();
-    let current: Stats;
-    try {
-      current = await lstat(path);
-    } catch {
-      return { status: "blocked" };
-    }
-    if (
-      !safePosixEnvelopeMetadata(afterRead, target.mode) ||
-      !safePosixEnvelopeMetadata(current, target.mode) ||
-      !samePosixEnvelopeMetadata(beforeOpen, afterRead) ||
-      !samePosixEnvelopeMetadata(afterRead, current)
-    ) {
-      return { status: "blocked" };
-    }
-    await handle.close();
-    handle = undefined;
-    return { status: "readable", contents };
-  } catch {
-    return { status: "blocked" };
-  } finally {
-    if (handle !== undefined) {
-      contents?.fill(0);
-      await handle.close().catch(() => undefined);
-    }
-  }
-}
-
-export async function inspectCredentialEnvelopeTarget(
-  target: CredentialEnvelopeTarget,
-  options: InspectCredentialEnvelopeTargetOptions = {},
-): Promise<CredentialEnvelopeInspection> {
-  if ((options.platform ?? process.platform) !== "win32") {
-    return await inspectPosixCredentialEnvelopeTarget(target, options.openFile);
-  }
-  if (options.windowsDirectory === undefined) return { status: "blocked" };
-  try {
-    const snapshot = await readWindowsPrivateFilePrefix({
-      directory: options.windowsDirectory,
-      path: join(target.root, target.fileName),
-      maximumReadBytes: CREDENTIAL_ENVELOPE_INSPECTION_BYTES,
-      openFile: options.openFile,
-    });
-    return snapshot === undefined
-      ? { status: "missing" }
-      : { status: "readable", contents: snapshot.contents };
-  } catch {
-    return { status: "blocked" };
   }
 }
 

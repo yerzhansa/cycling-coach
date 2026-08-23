@@ -160,6 +160,7 @@ export interface CreateTelegramControlCoordinatorInput {
     | "profileStatus"
     | "replaceProfile"
     | "applyStoredProfile"
+    | "preauthorizeProfileRemoval"
     | "deleteProfile"
     | "desiredState"
     | "setDesiredState"
@@ -1280,6 +1281,29 @@ export function createTelegramControlCoordinator(
     return (restored.channel.desiredState === "enabled") === enabled ? restored : undefined;
   };
 
+  const compensateFailedRemoval = async (
+    active: TelegramDaemonBinding,
+    priorProfile: TelegramProfileRecord | undefined,
+    priorDesired: boolean,
+  ): Promise<boolean> => {
+    let credentialRestored = false;
+    if (priorProfile !== undefined && isCurrent(active)) {
+      try {
+        const configured = parseMutation(
+          await active.configureTelegram({ token: priorProfile.token }),
+        );
+        credentialRestored =
+          isCurrent(active) &&
+          configured?.outcome === "applied" &&
+          isReadyForProfile(configured.current, priorProfile);
+      } catch {}
+    }
+    const desiredRestored = (await restoreDesired(priorDesired)) === "restored";
+    const runtimeRestored =
+      (await restoreDaemonDesired(active, priorDesired)) !== undefined;
+    return credentialRestored && desiredRestored && runtimeRestored;
+  };
+
   const clearPairingLease = (): void => {
     if (pairingLease === undefined) return;
     if (pairingLease.handle !== undefined) leaseClock.cancel(pairingLease.handle);
@@ -1639,8 +1663,18 @@ export function createTelegramControlCoordinator(
         if ("result" in checked) return checked.result;
         const prior = await captureProfile(checked.active);
         if (prior.state === "uncertain") return uncertain();
-        if (prior.state === "refused") return refused(prior.reason);
-        if (prior.state !== "configured") return refused("invalid-state");
+        const authorization = await input.vault.preauthorizeProfileRemoval();
+        if (authorization.outcome === "uncertain") return uncertain();
+        if (authorization.outcome === "refused") {
+          return refused(
+            authorization.reason === "not-found"
+              ? "invalid-state"
+              : isSecureStorageRefusal(authorization.reason)
+              ? authorization.reason
+              : "storage-failed",
+          );
+        }
+        const priorProfile = prior.state === "configured" ? prior.profile : undefined;
         const previousDesired = checked.desiredState === "enabled";
         const disabled = await guardedSnapshotCall(checked.active, () =>
           checked.active.disableTelegram({}),
@@ -1670,8 +1704,8 @@ export function createTelegramControlCoordinator(
         }
         const deleted = await input.vault.deleteProfile();
         if (deleted.outcome !== "applied") {
-          await restoreDesired(previousDesired);
-          return uncertain();
+          await compensateFailedRemoval(checked.active, priorProfile, previousDesired);
+          return uncertain("control-uncertain");
         }
         return applied(await project(forgotten, checked.active));
       });

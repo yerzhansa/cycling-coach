@@ -1208,6 +1208,77 @@ describe("Telegram credential vault", () => {
     });
   });
 
+  it.each(["missing-proof", "missing-hook"] as const)(
+    "retains a keychain profile with %s",
+    async (missing) => {
+      const value = await fixture();
+      const encryptionPort = keychainEncryption();
+      const seed = createTelegramCredentialVault({
+        ...value,
+        encryption: encryptionPort,
+        createProfileId: () => PROFILE_A,
+      });
+      await seed.replaceProfile({
+        token: "synthetic-token-a",
+        bot: BOT_A,
+        authenticatedAthleteHome: value.athleteHome,
+      });
+      const vault = createTelegramCredentialVault({
+        ...value,
+        encryption: encryptionPort,
+        serializeEnvelopeMutation:
+          missing === "missing-proof"
+            ? async (operation) => await operation(undefined as never)
+            : createCredentialEnvelopeMutationLock(),
+        revalidateEnvelopeRemoval:
+          missing === "missing-hook" ? undefined : vi.fn(async () => true),
+      });
+
+      await expect(vault.deleteProfile()).resolves.toEqual({
+        outcome: "refused",
+        reason: "encryption-unavailable",
+      });
+      expect((await lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile()).toBe(true);
+    },
+  );
+
+  it("retains a keychain profile without decrypting when encryption is unavailable", async () => {
+    const value = await fixture();
+    const encryptionPort = keychainEncryption();
+    const seed = createTelegramCredentialVault({
+      ...value,
+      encryption: encryptionPort,
+      createProfileId: () => PROFILE_A,
+    });
+    await seed.replaceProfile({
+      token: "synthetic-token-a",
+      bot: BOT_A,
+      authenticatedAthleteHome: value.athleteHome,
+    });
+    const decryptString = vi.fn(() => {
+      throw new TypeError();
+    });
+    const revalidateEnvelopeRemoval = vi.fn(async () => true);
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString,
+      },
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+    });
+
+    await expect(vault.deleteProfile()).resolves.toEqual({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+    expect(decryptString).not.toHaveBeenCalled();
+    expect(revalidateEnvelopeRemoval).not.toHaveBeenCalled();
+    expect((await lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile()).toBe(true);
+  });
+
   it("deletes an unverified profile without requiring a Keychain key", async () => {
     const value = await fixture();
     await seedProfile(value);
