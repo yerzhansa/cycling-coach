@@ -685,7 +685,7 @@ describe("Telegram main-process control coordinator", () => {
         const decryptString = vi.fn(reopenedEncryption.decryptString);
         const reopened = createTelegramCredentialVault({
           ...value,
-          ...(selectedBackend === undefined ? {} : { platform: "linux" as const }),
+          platform: selectedBackend === undefined ? "darwin" : "linux",
           encryption: {
             ...reopenedEncryption,
             decryptString,
@@ -1509,6 +1509,7 @@ describe("Telegram main-process control coordinator", () => {
     const vault = createTelegramCredentialVault({
       root: value.root,
       athleteHome: value.athleteHome,
+      platform: "darwin",
       encryption: {
         isEncryptionAvailable: () => false,
         encryptString: vi.fn(),
