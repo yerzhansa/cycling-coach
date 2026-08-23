@@ -65,7 +65,6 @@ import {
   createCredentialRuntimeApplication,
   intervalsAthleteIdForOwnership,
   readSelectedLlmProvider,
-  type DesktopManagedCredential,
   type CredentialRuntimeApplication,
   type RuntimeConfigurationAuthority,
 } from "./credential-runtime.js";
@@ -88,7 +87,7 @@ import {
   desktopCredentialRecoveryFailureState,
   prepareDesktopCredentialEncryption,
 } from "./desktop-credential-encryption.js";
-import { resetEncryptedCredentialStorage } from "./credential-reset.js";
+import { createDesktopCredentialReset } from "./credential-reset-orchestration.js";
 import { probePackagedKeychainBackendSelection } from "./keychain-backend-selection-probe.js";
 import {
   DesktopDaemonLifecycle,
@@ -977,56 +976,21 @@ async function runDesktop(): Promise<void> {
       ...DESKTOP_CREDENTIAL_SLOTS.filter((slot) => slot !== "intervals-icu"),
       CHATGPT_PROFILE_NAME,
     ]);
-    const resetAllCredentials = (): Promise<DesktopCredentialResetResult> =>
-      serializeCredentialMutation(async () => {
-        const binding = activeRuntimeBinding;
-        const lifecycleState = daemonLifecycle?.snapshot();
-        if (binding === undefined || lifecycleState?.status !== "ready") {
-          return { status: "refused", reason: "runtime-unavailable" };
-        }
-        try {
-          const snapshot = await binding.authority.getRuntimeConfig();
-          const activeCredentials: DesktopManagedCredential[] = [];
-          if (
-            snapshot.llm.credential_configured &&
-            managedModelCredentials.has(snapshot.llm.provider)
-          ) {
-            activeCredentials.push(snapshot.llm.provider as DesktopManagedCredential);
-          }
-          if (snapshot.intervals.credential_configured) activeCredentials.push("intervals-icu");
-          for (const credential of activeCredentials) {
-            await binding.credentials.clearCredential(credential);
-          }
-          if (!(await telegramCoordinator.resetRuntimeForCredentialReset())) {
-            return { status: "refused", reason: "runtime-unavailable" };
-          }
-          const currentLifecycleState = daemonLifecycle?.snapshot();
-          if (
-            activeRuntimeBinding !== binding ||
-            currentLifecycleState?.status !== "ready" ||
-            currentLifecycleState.generation !== lifecycleState.generation
-          ) {
-            return { status: "refused", reason: "runtime-unavailable" };
-          }
-        } catch {
-          return { status: "refused", reason: "runtime-unavailable" };
-        }
-        try {
-          deleteChatGptProfile(configDir);
-          const reset = await resetEncryptedCredentialStorage({
-            credentialRoot,
-            telegramRoot: telegramCredentialRoot,
-            serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
-            deleteKey: (proof) => credentialEncryption.deleteKeyForCredentialReset(proof),
-          });
-          if (reset.status !== "reset") {
-            return { status: "refused", reason: "storage-failed" };
-          }
-          credentialRuntimeState.clear();
-          return reset;
-        } catch {
-          return { status: "refused", reason: "storage-failed" };
-        }
+    const resetAllCredentials: () => Promise<DesktopCredentialResetResult> =
+      createDesktopCredentialReset({
+        serializeCredentialMutation,
+        currentRuntimeBinding: () => activeRuntimeBinding,
+        lifecycleSnapshot: () => daemonLifecycle?.snapshot(),
+        managedModelCredentials,
+        resetTelegramRuntime: () => telegramCoordinator.resetRuntimeForCredentialReset(),
+        configDir,
+        deleteChatGptProfile,
+        credentialRoot,
+        telegramRoot: telegramCredentialRoot,
+        serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
+        deleteKeyForCredentialReset: (proof) =>
+          credentialEncryption.deleteKeyForCredentialReset(proof),
+        credentialRuntimeState,
       });
     const claudeCli = createClaudeCliStatus({
       settings: () => readClaudeCliSettings({ configPath: join(configDir, "config.yaml") }),
