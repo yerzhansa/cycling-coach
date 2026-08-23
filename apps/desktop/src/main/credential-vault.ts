@@ -175,9 +175,7 @@ interface CredentialVaultOptions {
   readonly serializeCredentialMutation?: SerializeCredentialMutation;
   readonly serializeEnvelopeMutation?: SerializeCredentialEnvelopeMutation;
   readonly prepareEnvelopeWrite?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
-  readonly revalidateEnvelopeRemoval?: (
-    proof: CredentialEnvelopeLockProof,
-  ) => Promise<boolean>;
+  readonly revalidateEnvelopeRemoval?: (proof: CredentialEnvelopeLockProof) => Promise<boolean>;
   readonly observeEnvelopeRemoved?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
   readonly renameCredentialFile?: typeof rename;
   readonly removeCredentialFile?: typeof rm;
@@ -973,6 +971,8 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
           if (removalState === "blocked") {
             return { slot, status: "refused", reason: "storage-failed" };
           }
+          const runtimeStatus = runtimeState.get(slot);
+          const shouldClearRuntime = runtimeStatus === "active" || runtimeStatus === "failed";
           let credential: ReadCredential | undefined;
           if (removalState === "keychain-dependent") {
             if (encryptionRefusal(options.encryption, platform) !== undefined) {
@@ -1003,8 +1003,22 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
               return { slot, status: "refused", reason: "encryption-unavailable" };
             }
           }
-          const runtimeStatus = runtimeState.get(slot);
-          const shouldClearRuntime = runtimeStatus === "active" || runtimeStatus === "failed";
+          if (removalState === "unverified" && platform !== "darwin" && shouldClearRuntime) {
+            credential = await readSlot(slot);
+            if (credential.state === "missing") {
+              return { slot, status: "refused", reason: "not-found" };
+            }
+            if (credential.state !== "configured" || credential.value === undefined) {
+              return {
+                slot,
+                status: "refused",
+                reason:
+                  encryptionRefusal(options.encryption, platform) === undefined
+                    ? "storage-failed"
+                    : "encryption-unavailable",
+              };
+            }
+          }
           let runtimeCleared = false;
           if (shouldClearRuntime) {
             if (options.clearCredential === undefined) {
