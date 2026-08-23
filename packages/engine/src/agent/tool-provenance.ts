@@ -36,8 +36,3 @@ export function provenanceFromToolResult(name: string, result: unknown): SourceP
   }
   return EMPTY_PROVENANCE;
 }
-
-export function toolResultIsVisibleData(result: unknown): boolean {
-  const value = payloadOf(result);
-  return !isErrorOrCap(value) && isNonEmptyData(value);
-}

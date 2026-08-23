@@ -30,7 +30,6 @@ export const ledgerEventSchema = z.object({
   source: z.enum(LEDGER_EVENT_SOURCES),
 });
 
-export type LedgerEvent = z.infer<typeof ledgerEventSchema>;
 export const LEDGER_FILENAME = "events.jsonl";
 
 export function appendLedgerEvent(
