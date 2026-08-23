@@ -116,6 +116,31 @@ function makeScript(): DesktopFixtureScript {
           recentActivities: [],
           plannedWorkouts: [],
           wellness: {},
+          trainingContext: {
+            performanceProgress: { kind: "unavailable", reason: "not-synced" },
+            recentRides: {
+              kind: "computed",
+              asOf: "1998-07-19T08:00:00.000Z",
+              windowDays: 28,
+              items: [
+                {
+                  id: "a".repeat(64),
+                  subSport: "road",
+                  startEpochSeconds: 900_000_000,
+                  timezoneOffsetSeconds: 0,
+                  localDate: "1998-07-09",
+                  elapsedSeconds: 3_700,
+                  movingSeconds: 3_600,
+                  distanceMeters: 40_000,
+                },
+              ],
+            },
+            anchorZones: { kind: "unknown", reason: "not-synced" },
+            cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
+            plan: { kind: "unknown", reason: "no-plan" },
+            adherence: { kind: "unknown", reason: "insufficient-data" },
+            wellnessTrend: { kind: "unknown", reason: "no-wellness" },
+          },
         });
       }
       if (request.method === "getTranscriptPage") {
@@ -137,7 +162,7 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live", () => {
-  it("embeds first-run Setup in Chat and finishes into a working chat", async () => {
+  it("finishes file-only onboarding into working Chat and Training pages", async () => {
     const fixture = await launchDesktopFixture({
       script: makeScript(),
       token,
@@ -158,6 +183,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       readonly finished: boolean;
       readonly shellRestored: boolean;
       readonly chatWorking: boolean;
+      readonly trainingReady: boolean;
+      readonly recentRideVisible: boolean;
+      readonly syncNeedsAttention: boolean;
     }>(`
       const deadline = Date.now() + 10000;
       const setupSelector =
@@ -273,6 +301,20 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       const composer = document.querySelector(
         '[data-view="chat"][data-onboarding="settled"] textarea#message',
       );
+      const trainingNav = Array.from(
+        document.querySelectorAll('nav[aria-label="Main navigation"] button'),
+      ).find((entry) => entry.textContent?.includes("Training"));
+      trainingNav?.click();
+      const trainingDeadline = Date.now() + 10000;
+      while (
+        document.querySelector('section[aria-label="Training"]') === null &&
+        Date.now() < trainingDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const training = document.querySelector('section[aria-label="Training"]');
+      const recentRides = training?.querySelector('[data-panel="recent-rides"]');
+      const syncChip = document.querySelector(".sync-chip");
       return {
         present,
         chatSetup,
@@ -284,6 +326,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
         finished: document.querySelector("[data-setup-host]") === null,
         shellRestored: document.querySelector('nav[aria-label="Main navigation"]') !== null,
         chatWorking: composer !== null && composer.disabled === false,
+        trainingReady:
+          training !== null &&
+          training.querySelector(".training-status")?.hasAttribute("hidden") === true,
+        recentRideVisible:
+          recentRides?.querySelector('button[aria-label^="Review road ride"]') !== null,
+        syncNeedsAttention: syncChip?.getAttribute("data-status") === "attention",
       };
     `);
     expect(observed).toEqual({
@@ -297,6 +345,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("onboarding live"
       finished: true,
       shellRestored: true,
       chatWorking: true,
+      trainingReady: true,
+      recentRideVisible: true,
+      syncNeedsAttention: false,
     });
   }, 90_000);
 });
