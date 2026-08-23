@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 import { describe, expect, it } from "vitest";
 import { KEYCHAIN_BINDING_BUILD_DIRECTORY } from "../scripts/build-keychain-binding.mjs";
 import { KEYCHAIN_BINDING_ASAR_PATH } from "../scripts/package-inventory.mjs";
@@ -25,7 +25,10 @@ const development = {
 
 describe("keychain binding path", () => {
   it("agrees with the package and build authorities", () => {
-    expect(join(KEYCHAIN_BINDING_ASAR_DIRECTORY, KEYCHAIN_BINDING_FILE_NAME)).toBe(
+    expect(posix.join(KEYCHAIN_BINDING_ASAR_DIRECTORY, KEYCHAIN_BINDING_FILE_NAME)).toBe(
+      KEYCHAIN_BINDING_ASAR_PATH,
+    );
+    expect(win32.join(KEYCHAIN_BINDING_ASAR_DIRECTORY, KEYCHAIN_BINDING_FILE_NAME)).not.toBe(
       KEYCHAIN_BINDING_ASAR_PATH,
     );
     expect(KEYCHAIN_BINDING_DEVELOPMENT_DIRECTORY).toBe(KEYCHAIN_BINDING_BUILD_DIRECTORY);
