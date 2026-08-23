@@ -16,7 +16,6 @@ import type {
 import {
   CUSTOM_MODEL_SELECTION,
   DESKTOP_CREDENTIAL_SLOTS,
-  type DesktopCredentialSlot,
 } from "./constants.js";
 import { handoffCredential, type CredentialDraftPort } from "./credentials.js";
 import type { SetupCommit } from "./lanes.js";
@@ -171,8 +170,6 @@ export const ONBOARDING_STATUS_COLD_START_TIMEOUT_MS = 8_000;
 export const ONBOARDING_STATUS_LOAD_ATTEMPTS = 4;
 export const ONBOARDING_STATUS_RETRY_BASE_DELAY_MS = 500;
 export const ONBOARDING_STATUS_RETRY_MAX_DELAY_MS = 2_000;
-export const CLAUDE_CLI_STATUS_TRANSPORT_TIMEOUT_MS = 75_000;
-
 export function onboardingStatusRetryDelayMs(attempt: number): number {
   const delay = ONBOARDING_STATUS_RETRY_BASE_DELAY_MS * 2 ** attempt;
   return delay > ONBOARDING_STATUS_RETRY_MAX_DELAY_MS
@@ -313,19 +310,6 @@ function intervalsMutationError(
   return result.reason === "storage-uncertain"
     ? "intervals-storage-uncertain"
     : "intervals-runtime-uncertain";
-}
-
-export function credentialSlotStatus(
-  surface: Pick<OnboardingSurfaceState, "statuses" | "wizard">,
-  slot: DesktopCredentialSlot,
-): CredentialSlotStatus {
-  return (
-    surface.statuses.find((entry) => entry.slot === slot) ?? {
-      slot,
-      state: surface.wizard.credentialStatus[slot],
-      runtimeState: null,
-    }
-  );
 }
 
 export function createOnboardingController(

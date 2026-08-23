@@ -25,8 +25,6 @@ import { serializeError } from "../../logging/serialize-error.js";
 import {
   REFERENCE_CAPTURE_STREAM_LIMIT,
   REFERENCE_CAPTURE_STREAM_TYPES,
-  REFERENCE_CAPTURE_STREAM_WINDOW_DAYS,
-  REFERENCE_CAPTURE_WINDOW_DAYS,
   createReferenceCapturePlan,
   selectReferenceCaptureStreamIds,
   type ReferenceCapturePlan,
@@ -58,13 +56,6 @@ import { familyOf } from "../sport-adapter-dispatcher.js";
 
 export { deriveFtpHistory, normalizeStreams } from "@enduragent/kernel/reference/local-bundle";
 
-/** Trailing window pulled for metric computation (covers the widest metric
- *  window — the 42-day sustainability look-back — with margin). */
-export const FETCH_WINDOW_DAYS = REFERENCE_CAPTURE_WINDOW_DAYS;
-/** Only fetch per-activity streams for rides this recent. DFA-α1's trailing
- *  aggregate reads the last few sufficient sessions, so a short window keeps
- *  the request count bounded without starving the metric. */
-export const STREAM_WINDOW_DAYS = REFERENCE_CAPTURE_STREAM_WINDOW_DAYS;
 /** Hard cap on per-activity stream fetches per sync, regardless of window. */
 export const MAX_STREAM_ACTIVITIES = REFERENCE_CAPTURE_STREAM_LIMIT;
 export const PAST_PLAN_WINDOW_DAYS = 7;

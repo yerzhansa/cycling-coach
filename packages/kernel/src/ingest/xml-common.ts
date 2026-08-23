@@ -16,8 +16,6 @@ const DECLARATION = new RegExp(
 const DECIMAL = /^-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/;
 const INTEGER = /^-?[0-9]+$/;
 const ZONED_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/;
-const XMLNS_NAMESPACE = "http://www.w3.org/2000/xmlns/";
-
 export class XmlViolation extends Error {
   readonly quarantine: XmlQuarantine;
 
@@ -208,17 +206,6 @@ export function requiredUnqualifiedAttribute(element: Element, localName: string
     throw quarantine("xml.missing_required", attributePath(element, localName));
   }
   return attribute.value.trim();
-}
-
-export function assertNoForeignAttributes(element: Element, allowedUnqualified: readonly string[]): void {
-  for (let index = 0; index < element.attributes.length; index += 1) {
-    const attribute = element.attributes.item(index);
-    if (!attribute || attribute.namespaceURI === XMLNS_NAMESPACE) continue;
-    const localName = attribute.localName ?? attribute.name;
-    if (attribute.namespaceURI || !allowedUnqualified.includes(localName)) {
-      throw quarantine("xml.namespace", attributePath(element, localName));
-    }
-  }
 }
 
 export function textValue(element: Element): string {
