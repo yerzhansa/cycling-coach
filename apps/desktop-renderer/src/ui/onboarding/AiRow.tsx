@@ -89,7 +89,7 @@ const ENDPOINT_MODE_COPY = [
 ] as const;
 
 const MENU_ITEM_CLASS =
-  "flex w-full cursor-pointer items-start gap-[9px] rounded-md px-[9px] py-[7px] text-left text-ink outline-none data-highlighted:bg-[color-mix(in_srgb,var(--ink)_7%,transparent)]";
+  "relative flex w-full cursor-pointer items-start rounded-md py-[7px] pr-[29px] pl-[9px] text-left text-ink outline-none data-highlighted:bg-[color-mix(in_srgb,var(--ink)_7%,transparent)]";
 
 const MENU_ACTION_CLASS =
   "mt-1.5 cursor-pointer text-xs font-medium text-ink-2 underline underline-offset-[3px] outline-none data-highlighted:text-ink";
@@ -387,11 +387,6 @@ export function AiRow(props: {
                               choose(entry);
                             }}
                           >
-                            <span className="mt-px grid size-[15px] shrink-0 place-items-center text-ok">
-                              <Menu.RadioItemIndicator>
-                                <Check size={11} strokeWidth={3.2} aria-hidden="true" />
-                              </Menu.RadioItemIndicator>
-                            </span>
                             <span className="min-w-0 flex-1">
                               <b className="block text-sm font-medium">
                                 {SETUP_LANE_LABELS[entry]}
@@ -399,6 +394,11 @@ export function AiRow(props: {
                               <i className="mt-px block text-xs text-ink-2 not-italic">
                                 {SETUP_LANE_MENU_HINTS[entry]}
                               </i>
+                            </span>
+                            <span className="absolute top-2 right-[9px] grid size-[15px] place-items-center text-ok">
+                              <Menu.RadioItemIndicator>
+                                <Check size={11} strokeWidth={3.2} aria-hidden="true" />
+                              </Menu.RadioItemIndicator>
                             </span>
                           </Menu.RadioItem>
                         ))}
