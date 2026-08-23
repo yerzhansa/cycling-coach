@@ -234,7 +234,7 @@ describe("StoreRuntime", () => {
     await runtime.close();
   });
 
-  it("runs the legacy lane without capture when the intervals.icu API key is empty", async () => {
+  it("skips both provider lanes when the intervals.icu API key is empty", async () => {
     const { runtime, capture, refreshCurves, produce, reference } = await makeRuntime({
       ...config,
       intervals: { ...config.intervals, apiKey: "" },
@@ -242,13 +242,13 @@ describe("StoreRuntime", () => {
     const result = await runtime.runWindow();
     expect(result).toMatchObject({
       published: false,
-      counts: { storeRequests: 0, legacyRequests: 1, totalRequests: 1 },
+      counts: { storeRequests: 0, legacyRequests: 0, totalRequests: 0 },
       legacySucceeded: true,
     });
     expect(capture).not.toHaveBeenCalled();
     expect(refreshCurves).not.toHaveBeenCalled();
     expect(produce).not.toHaveBeenCalled();
-    expect(reference.runScheduledOnce).toHaveBeenCalledTimes(1);
+    expect(reference.runScheduledOnce).not.toHaveBeenCalled();
     expect(runtime.currentSnapshot()).toBeUndefined();
     await runtime.close();
   });

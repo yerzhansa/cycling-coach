@@ -104,6 +104,56 @@ afterEach(async () => {
 });
 
 describe("persisted athlete state source", () => {
+  it("returns canonical recent rides without a Reference snapshot", async () => {
+    const root = await home();
+    const now = new Date("1998-07-18T12:00:00.000Z");
+    const recentRide = {
+      id: "a".repeat(64),
+      subSport: "road",
+      startEpochSeconds: 900_000_000,
+      timezoneOffsetSeconds: 0,
+      localDate: "1998-07-09",
+      elapsedSeconds: 3_700,
+      movingSeconds: 3_600,
+      distanceMeters: 40_000,
+    } as const;
+    const readRecentRides = vi.fn(async () => ({
+      kind: "computed" as const,
+      asOf: now.toISOString(),
+      windowDays: 28 as const,
+      items: [recentRide],
+    }));
+
+    const state = await createPersistedAthleteStateSource({
+      dataDir: root,
+      cyclingFtpAnchorResolver: resolver,
+      now: () => now,
+      recentRidesSource: { readRecentRides },
+    }).getAthleteState();
+
+    expect(AthleteStateSchema.parse(state)).toEqual(state);
+    expect(readRecentRides).toHaveBeenCalledWith({
+      asOf: now.toISOString(),
+      asOfEpochSeconds: now.getTime() / 1_000,
+    });
+    expect(state).toMatchObject({
+      lastUpdated: now.toISOString(),
+      freshness: "fresh",
+      degraded: false,
+      lastSynced: null,
+      athleteProfile: null,
+      currentStatus: null,
+      derivedMetrics: {},
+      recentActivities: [],
+      plannedWorkouts: [],
+      wellness: null,
+      trainingContext: {
+        recentRides: { kind: "computed", items: [recentRide] },
+        anchorZones: { kind: "unknown", reason: "not-synced" },
+      },
+    });
+  });
+
   it("maps every persisted field into a contract-valid state", async () => {
     const root = await home();
     await writeJson(root, "latest.json", latest("fresh", T1));

@@ -1169,6 +1169,33 @@ describe("local coach composition", () => {
     expect(trace).toEqual(["run-window", "reference-stop", "runtime-close"]);
   });
 
+  it("does not start the scheduler after a credential-free deferred refresh", async () => {
+    const home = await freshHome();
+    const trace: string[] = [];
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(trace),
+        createRuntime: () => runtime(trace),
+        createBackend: () => backend(),
+        createRepository: () => ({
+          insertIfAbsent: async () => false,
+          readCurrent: async () => undefined,
+        }),
+        createResolver: () => missingResolver(),
+      },
+      fakeContext(home),
+      { apiKey: "", athleteId: "" },
+      undefined,
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    await expect(lifecycle.startInitialRefresh()).resolves.toBeUndefined();
+    expect(trace).toEqual(["run-window"]);
+    await lifecycle.close();
+  });
+
   it("defers the daemon refresh, tracks one start, and schedules retries after capture failure", async () => {
     const home = await freshHome();
     const failure = new Error("synthetic persistence failure");
