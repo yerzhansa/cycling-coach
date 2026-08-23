@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAutomaticKeyRetirementInspector } from "../src/main/automatic-key-retirement.js";
 import {
+  CREDENTIAL_DIRECTORY_MODE,
   createCredentialVault,
   type CredentialEncryptionPort,
 } from "../src/main/credential-vault.js";
@@ -17,13 +18,17 @@ import {
   sealCredentialEnvelope,
 } from "../src/main/keychain-credential-encryption.js";
 import { retireKeychainKeyWhenLastEnvelopeGone } from "../src/main/keychain-key-lifetime.js";
+import { syncDirectory } from "../src/main/durable-atomic-replace.js";
 import {
   KEYCHAIN_CREDENTIAL_SERVICE,
   KEYCHAIN_KEY_BYTES,
   type KeychainBindingRequest,
   type KeychainBindingResponse,
 } from "../src/main/keychain-binding.js";
-import { createTelegramCredentialVault } from "../src/main/telegram-credential-vault.js";
+import {
+  createTelegramCredentialVault,
+  TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
+} from "../src/main/telegram-credential-vault.js";
 
 const posixIt = it.skipIf(process.platform === "win32");
 const BOT = { id: 987654, username: "synthetic_bot" } as const;
@@ -78,13 +83,18 @@ async function retireKey(
   roots: Fixture,
   transport: ReturnType<typeof transportOf>,
   lockProof: CredentialEnvelopeLockProof,
+  synchronizeDirectory?: (root: string) => Promise<void>,
 ) {
-  const inspect = createAutomaticKeyRetirementInspector(roots);
+  const inspect = createAutomaticKeyRetirementInspector(roots, process.platform, {
+    syncDirectory: synchronizeDirectory,
+  });
   return await retireKeychainKeyWhenLastEnvelopeGone({
     lockProof,
     retireKey: async (proof) => {
       const inspection = await inspect(proof);
-      if (inspection.status === "failed") return { status: "failed", code: "unknown" };
+      if (inspection.status === "failed") {
+        return { status: "failed", code: "unknown", keyCleanupPending: false };
+      }
       if (inspection.zeroProof === null) {
         return { status: "retained", envelopes: inspection.deletionBlockers };
       }
@@ -92,8 +102,12 @@ async function retireKey(
         op: "delete-key",
         service: KEYCHAIN_CREDENTIAL_SERVICE,
       });
-      if (!deleted.ok) return { status: "failed", code: deleted.code };
-      if (deleted.op !== "delete-key") return { status: "failed", code: "unknown" };
+      if (!deleted.ok) {
+        return { status: "failed", code: deleted.code, keyCleanupPending: true };
+      }
+      if (deleted.op !== "delete-key") {
+        return { status: "failed", code: "unknown", keyCleanupPending: true };
+      }
       return { status: deleted.deleted ? "deleted" : "already-absent" };
     },
   });
@@ -128,6 +142,52 @@ describe("keychain key retirement call sites", () => {
     expect(transport.requests).toEqual([
       { op: "delete-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
     ]);
+  });
+
+  posixIt("keeps the key when credential tombstone cleanup is not durable", async () => {
+    const roots = await fixture();
+    await mkdir(roots.telegramRoot, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    const encryption = keychainPort(randomBytes(KEYCHAIN_KEY_BYTES));
+    const transport = transportOf({ ok: true, op: "delete-key", deleted: true });
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    let deleting = false;
+    let deletionSyncs = 0;
+    const vault = createCredentialVault({
+      root: roots.credentialRoot,
+      encryption,
+      serializeEnvelopeMutation,
+      observeEnvelopeRemoved: async (proof) => {
+        await retireKey(roots, transport, proof, async () => {
+          expect(
+            (await readdir(roots.credentialRoot)).some((entry) => entry.endsWith(".deleted")),
+          ).toBe(false);
+          throw new TypeError("synthetic retirement durability failure");
+        });
+      },
+      syncCredentialDirectory: async (root) => {
+        if (deleting) {
+          deletionSyncs += 1;
+          if (deletionSyncs === 2) throw new TypeError("synthetic final sync failure");
+        }
+        await syncDirectory(root);
+      },
+      applyCredential: vi.fn(async () => undefined),
+      clearCredential: vi.fn(async () => "cleared" as const),
+    });
+    await vault.writeCredential(
+      { slot: "anthropic", value: "sk-anthropic" },
+      { activate: false },
+    );
+
+    deleting = true;
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "deleted",
+      cleanupPending: true,
+    });
+
+    expect(deletionSyncs).toBe(2);
+    expect(transport.requests).toEqual([]);
   });
 
   posixIt("keeps the key while another credential envelope survives", async () => {
@@ -186,6 +246,90 @@ describe("keychain key retirement call sites", () => {
     expect(observeEnvelopeRemoved).toHaveBeenCalledOnce();
     expect(transport.requests).toEqual([
       { op: "delete-key", service: KEYCHAIN_CREDENTIAL_SERVICE },
+    ]);
+  });
+
+  posixIt("keeps the key when Telegram tombstone cleanup is not durable", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const encryption = keychainPort(randomBytes(KEYCHAIN_KEY_BYTES));
+    const transport = transportOf({ ok: true, op: "delete-key", deleted: true });
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    let deleting = false;
+    let deletionSyncs = 0;
+    const vault = createTelegramCredentialVault({
+      root: roots.telegramRoot,
+      athleteHome: roots.athleteHome,
+      encryption,
+      serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: async () => true,
+      observeEnvelopeRemoved: async (proof) => {
+        await retireKey(roots, transport, proof, async () => {
+          expect(
+            (await readdir(roots.telegramRoot)).some((entry) => entry.endsWith(".deleted")),
+          ).toBe(false);
+          throw new TypeError("synthetic retirement durability failure");
+        });
+      },
+      syncDirectory: async (root) => {
+        if (deleting) {
+          deletionSyncs += 1;
+          if (deletionSyncs === 2) throw new TypeError("synthetic final sync failure");
+        }
+        await syncDirectory(root);
+      },
+    });
+    await vault.replaceProfile({
+      token: "123:synthetic",
+      bot: BOT,
+      authenticatedAthleteHome: roots.athleteHome,
+    });
+
+    deleting = true;
+    await expect(vault.deleteProfile()).resolves.toEqual({
+      outcome: "applied",
+      cleanupPending: true,
+    });
+
+    expect(deletionSyncs).toBe(2);
+    expect(transport.requests).toEqual([]);
+  });
+
+  posixIt("creates a zero proof only after syncing both existing vault roots", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(roots.telegramRoot, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    const events: string[] = [];
+    const inspector = createAutomaticKeyRetirementInspector(
+      {
+        ...roots,
+        readEnvelopeDirectory: async (root) => {
+          events.push(`scan:${root}`);
+          return [];
+        },
+      },
+      process.platform,
+      {
+        syncDirectory: async (root) => {
+          events.push(`sync:${root}`);
+          await syncDirectory(root);
+        },
+      },
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+
+    const result = await serializeEnvelopeMutation((proof) => inspector(proof));
+
+    expect(result.status).toBe("inspected");
+    if (result.status !== "inspected") throw new TypeError();
+    expect(result.zeroProof).not.toBeNull();
+    expect(events.slice(0, 2)).toEqual([
+      `sync:${roots.credentialRoot}`,
+      `sync:${roots.telegramRoot}`,
+    ]);
+    expect(events.slice(2)).toEqual([
+      `scan:${roots.credentialRoot}`,
+      `scan:${roots.telegramRoot}`,
     ]);
   });
 

@@ -191,6 +191,38 @@ describe("desktop credential encryption startup", () => {
     ]);
   });
 
+  it("publishes encryption unavailable when removal revalidation sees a replaced key", async () => {
+    const replacement = randomBytes(KEYCHAIN_KEY_BYTES);
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY },
+      { ok: true, op: "read-key", key: replacement },
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({
+        createTransport: () => transport,
+        readEnvelopeFile: migratedTelegramEnvelope(),
+        serializeEnvelopeMutation,
+      }),
+    );
+
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.revalidateEnvelopeRemoval(proof)),
+    ).resolves.toBe(false);
+
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unknown",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+    ]);
+  });
+
   it("never lets an unpackaged run touch the signed-release service", async () => {
     const transport = transportOf(PROBE_OK, {
       ok: true,
@@ -739,7 +771,11 @@ describe("desktop credential encryption startup", () => {
     envelope.remove();
     await expect(
       serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
-    ).resolves.toEqual({ status: "failed", code: "keychain-locked" });
+    ).resolves.toEqual({
+      status: "failed",
+      code: "keychain-locked",
+      keyCleanupPending: true,
+    });
     expect(prepared.selection).toMatchObject({
       status: "refused",
       code: "keychain-locked",
@@ -820,6 +856,53 @@ describe("desktop credential encryption startup", () => {
     expect(transport.requests.some((request) => request.op === "delete-key")).toBe(false);
   });
 
+  it("recovers a surviving credential after a retirement inventory failure", async () => {
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY },
+      PROBE_OK,
+      { ok: true, op: "read-key", key: KEY },
+    );
+    let inventoryAvailable = true;
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({
+        createTransport: () => transport,
+        readEnvelopeFile: migratedTelegramEnvelope(),
+        readEnvelopeDirectory: async () => {
+          if (!inventoryAvailable) {
+            throw Object.assign(new Error("inventory unavailable"), { code: "EACCES" });
+          }
+          return [];
+        },
+        serializeEnvelopeMutation,
+      }),
+    );
+
+    inventoryAvailable = false;
+    await expect(
+      serializeEnvelopeMutation((proof) => prepared.retireKeychainKey(proof)),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "unknown",
+      keyCleanupPending: false,
+    });
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      keyCleanupPending: false,
+    });
+
+    inventoryAvailable = true;
+    await expect(prepared.retryKeychain()).resolves.toMatchObject({ status: "keychain" });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(true);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "probe",
+      "read-key",
+    ]);
+  });
+
   it("never deletes a keychain item from a refusing or safeStorage lane", async () => {
     const transport = transportOf({ ok: false, code: "keychain-locked" });
 
@@ -875,6 +958,9 @@ describe("desktop startup wiring", () => {
 
     expect(source).toMatch(/credentialEncryption\.retireKeychainKey\(proof\)/u);
     expect(source.split("createCredentialEnvelopeMutationLock()")).toHaveLength(2);
+    expect(
+      source.split("revalidateEnvelopeRemoval: revalidateCredentialEnvelopeRemoval"),
+    ).toHaveLength(3);
     expect(source.split("observeEnvelopeRemoved: retireCredentialEncryptionKey")).toHaveLength(3);
   });
 });

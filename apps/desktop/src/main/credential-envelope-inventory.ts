@@ -1,5 +1,5 @@
 import { constants, type Stats } from "node:fs";
-import { lstat, open, readdir } from "node:fs/promises";
+import { lstat, open, opendir } from "node:fs/promises";
 import { join } from "node:path";
 import type { WindowsPrivateDirectoryBinding } from "@enduragent/core";
 import { CREDENTIAL_FILE_MODE, DESKTOP_CREDENTIAL_SLOTS } from "./credential-vault.js";
@@ -15,6 +15,8 @@ import {
 import { readWindowsPrivateFilePrefix } from "./windows-private-file.js";
 
 export type CredentialEnvelopeVault = "credentials" | "telegram";
+
+export const CREDENTIAL_ENVELOPE_DIRECTORY_ENTRY_LIMIT = 256;
 
 export interface CredentialEnvelopeTarget {
   readonly vault: CredentialEnvelopeVault;
@@ -41,6 +43,22 @@ export interface CredentialEnvelopeRoots {
     target: CredentialEnvelopeTarget,
   ) => Promise<CredentialEnvelopeInspection>;
   readonly readEnvelopeDirectory?: (path: string) => Promise<string[]>;
+}
+
+export async function readCredentialEnvelopeDirectory(root: string): Promise<string[]> {
+  const directory = await opendir(root);
+  const entries: string[] = [];
+  try {
+    for await (const entry of directory) {
+      if (entries.length >= CREDENTIAL_ENVELOPE_DIRECTORY_ENTRY_LIMIT) {
+        throw new RangeError("credential envelope directory entry limit exceeded");
+      }
+      entries.push(entry.name);
+    }
+  } finally {
+    await directory.close().catch(() => undefined);
+  }
+  return entries.sort();
 }
 
 export type CredentialEnvelopeInspection =
@@ -279,7 +297,7 @@ export async function scanCredentialEnvelopes(
     (roots.readEnvelopeFile === undefined
       ? inspectCredentialEnvelopeTarget
       : injectedEnvelopeInspector(roots.readEnvelopeFile));
-  const readDirectory = roots.readEnvelopeDirectory ?? readdir;
+  const readDirectory = roots.readEnvelopeDirectory ?? readCredentialEnvelopeDirectory;
   const deletionBlockers: CredentialEnvelopeRef[] = [];
   const canonicalEnvelopes: CredentialEnvelopeRef[] = [];
   const missingCanonicalTargets: CredentialEnvelopeTarget[] = [];
@@ -299,6 +317,9 @@ export async function scanCredentialEnvelopes(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
+    }
+    if (entries.length > CREDENTIAL_ENVELOPE_DIRECTORY_ENTRY_LIMIT) {
+      throw new RangeError("credential envelope directory entry limit exceeded");
     }
     for (const entry of entries) {
       const target = transientCredentialEnvelopeTarget(roots, root, entry);

@@ -173,6 +173,9 @@ interface CredentialVaultOptions {
   readonly serializeCredentialMutation?: SerializeCredentialMutation;
   readonly serializeEnvelopeMutation?: SerializeCredentialEnvelopeMutation;
   readonly prepareEnvelopeWrite?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
+  readonly revalidateEnvelopeRemoval?: (
+    proof: CredentialEnvelopeLockProof,
+  ) => Promise<boolean>;
   readonly observeEnvelopeRemoved?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
   readonly renameCredentialFile?: typeof rename;
   readonly removeCredentialFile?: typeof rm;
@@ -340,7 +343,9 @@ async function validTarget(
 export function createCredentialVault(options: CredentialVaultOptions): CredentialVault {
   if (
     options.serializeEnvelopeMutation === undefined &&
-    (options.prepareEnvelopeWrite !== undefined || options.observeEnvelopeRemoved !== undefined)
+    (options.prepareEnvelopeWrite !== undefined ||
+      options.revalidateEnvelopeRemoval !== undefined ||
+      options.observeEnvelopeRemoved !== undefined)
   ) {
     throw new TypeError();
   }
@@ -957,7 +962,19 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
               return { slot, status: "refused", reason: "runtime-state-diverged" };
             }
           }
-          const removed = await removeStoredCredential(slot);
+          let removalReady = true;
+          if (
+            credential.state === "configured" &&
+            proof !== undefined &&
+            options.revalidateEnvelopeRemoval !== undefined
+          ) {
+            try {
+              removalReady = await options.revalidateEnvelopeRemoval(proof);
+            } catch {
+              removalReady = false;
+            }
+          }
+          const removed = removalReady ? await removeStoredCredential(slot) : "retained";
           if (removed === "uncertain") {
             uncertainSlots.add(slot);
             setRuntimeState(slot, "failed");

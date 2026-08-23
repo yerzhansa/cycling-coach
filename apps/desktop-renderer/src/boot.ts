@@ -380,6 +380,8 @@ export function bootRenderer(): Disposer {
         window.enduragentAuth.removeTelegramAllowedSender({ senderId }),
     },
     beginMutation: () => store.getState().beginSettingsMutation("telegram"),
+    credentialMutationsBlocked: () =>
+      credentialChangesBlocked(store.getState().settings.credentials, false),
     view: telegramAdapter.view,
   });
   store.getState().bindSettingsPorts({

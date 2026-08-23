@@ -14,6 +14,6 @@ export async function retireKeychainKeyWhenLastEnvelopeGone(
   try {
     return await options.retireKey(options.lockProof);
   } catch {
-    return { status: "failed", code: "unknown" };
+    return { status: "failed", code: "unknown", keyCleanupPending: false };
   }
 }

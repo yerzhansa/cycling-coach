@@ -188,7 +188,7 @@ function recoveryCopy(recovery: CredentialRecoveryStatus): string {
     return "Unlock your login Keychain outside Enduragent, then Retry.";
   }
   if (recovery.state === "missing") {
-    return "These credentials cannot be recovered. Remove all credentials and start again.";
+    return "The credential encryption key is missing. Restore it if possible, then Retry, or remove all credentials and start again.";
   }
   if (recovery.state === "unavailable") {
     return "Secure credential storage is unavailable. Retry, or remove all credentials and start again.";
@@ -479,7 +479,7 @@ export function createCredentialSettingsController(input: {
       disposed ||
       operation !== undefined ||
       input.credentialMutationsBlocked?.() ||
-      repairRequiredCredential(currentState) !== null
+      credentialChangesBlocked(currentState, false)
     ) {
       return;
     }
@@ -493,7 +493,7 @@ export function createCredentialSettingsController(input: {
         disposed ||
         operation !== undefined ||
         input.credentialMutationsBlocked?.() ||
-        repairRequiredCredential(currentState) !== null
+        credentialChangesBlocked(currentState, false)
       ) {
         return;
       }
@@ -641,7 +641,9 @@ export function createCredentialSettingsController(input: {
       return Promise.resolve();
     }
     if (content.confirmation === "all") return confirmReset();
-    if (content.repairCredential !== null) return Promise.resolve();
+    if (content.repairCredential !== null || content.recovery.state !== "ready") {
+      return Promise.resolve();
+    }
     const target = content.entries.find((entry) => entry.credential === content.confirmation);
     if (target === undefined) return Promise.resolve();
     const releaseMutation = input.beginMutation();
@@ -810,7 +812,11 @@ export function createCredentialSettingsController(input: {
   input.view.bind({
     onRetry: () => {
       const recovery = contentState()?.recovery;
-      void startLoad(recovery?.state === "locked" || recovery?.state === "unavailable");
+      void startLoad(
+        recovery?.state === "locked" ||
+          recovery?.state === "missing" ||
+          recovery?.state === "unavailable",
+      );
     },
     onRequestDelete: requestDelete,
     onRequestReset: requestReset,

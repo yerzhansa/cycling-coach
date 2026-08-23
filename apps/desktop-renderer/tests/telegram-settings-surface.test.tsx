@@ -8,6 +8,7 @@ import type {
   TelegramControlStatus,
   TelegramSettingsState,
 } from "../src/settings/telegram-controller.js";
+import type { CredentialSettingsState } from "../src/settings/credential-controller.js";
 import { EMPTY_SETTINGS_SURFACE, type TelegramSettingsPort } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { TelegramSection } from "../src/ui/settings/TelegramSection.js";
@@ -38,7 +39,10 @@ function readyState(
   };
 }
 
-function setup(next: TelegramSettingsState) {
+function setup(
+  next: TelegramSettingsState,
+  credentials: CredentialSettingsState = EMPTY_SETTINGS_SURFACE.credentials,
+) {
   const port = {
     retry: vi.fn(),
     pasteToken: vi.fn(),
@@ -54,7 +58,7 @@ function setup(next: TelegramSettingsState) {
     removeSender: vi.fn(),
   } satisfies TelegramSettingsPort;
   useEnduragentStore.setState({
-    settings: { ...EMPTY_SETTINGS_SURFACE, telegram: next },
+    settings: { ...EMPTY_SETTINGS_SURFACE, credentials, telegram: next },
     settingsPorts: { telegram: port } as never,
   });
   render(<TelegramSection />);
@@ -76,6 +80,85 @@ afterEach(() => {
 });
 
 describe("Telegram settings surface", () => {
+  it("disables token storage and connection deletion during credential recovery", async () => {
+    const user = userEvent.setup();
+    const recovery = {
+      status: "ready",
+      entries: [],
+      providerStatuses: [],
+      confirmation: null,
+      announcement: "Unlock your login Keychain outside Enduragent, then Retry.",
+      recovery: { state: "locked" },
+      repairCredential: null,
+      recoveryAvailable: false,
+      focus: null,
+    } as const satisfies CredentialSettingsState;
+    const port = setup(readyState(status()), recovery);
+
+    const paste = screen.getByRole("button", { name: "Paste token from clipboard" });
+    expect(paste).toBeDisabled();
+    await user.click(paste);
+    expect(port.pasteToken).not.toHaveBeenCalled();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          telegram: readyState(
+            status({
+              bot: { state: "ready", username: "desktop_coach_bot" },
+              credentialConfigured: true,
+            }),
+          ),
+        },
+      });
+    });
+
+    const remove = screen.getByRole("button", { name: "Delete" });
+    expect(remove).toBeDisabled();
+    await user.click(remove);
+    expect(port.remove).not.toHaveBeenCalled();
+  });
+
+  it("disables an open Telegram deletion confirmation when recovery becomes blocked", async () => {
+    const user = userEvent.setup();
+    const port = setup(
+      readyState(
+        status({
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          credentialConfigured: true,
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    const confirm = screen.getByRole("button", { name: "Delete connection" });
+    expect(confirm).toBeEnabled();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          credentials: {
+            status: "ready",
+            entries: [],
+            providerStatuses: [],
+            confirmation: null,
+            announcement: "Secure credential storage is unavailable.",
+            recovery: { state: "unavailable" },
+            repairCredential: null,
+            recoveryAvailable: false,
+            focus: null,
+          },
+        },
+      });
+    });
+
+    expect(confirm).toBeDisabled();
+    await user.click(confirm);
+    expect(port.remove).not.toHaveBeenCalled();
+  });
+
   it("explains the dedicated-bot boundary and accepts a token only from the clipboard", async () => {
     const user = userEvent.setup();
     const port = setup(readyState(status()));

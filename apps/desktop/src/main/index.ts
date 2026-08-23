@@ -493,6 +493,9 @@ async function runDesktop(): Promise<void> {
     ): Promise<void> => {
       await credentialEncryption.prepareEnvelopeWrite(proof);
     };
+    const revalidateCredentialEnvelopeRemoval = async (
+      proof: CredentialEnvelopeLockProof,
+    ): Promise<boolean> => await credentialEncryption.revalidateEnvelopeRemoval(proof);
     const retireCredentialEncryptionKey = async (
       proof: CredentialEnvelopeLockProof,
     ): Promise<void> => {
@@ -528,6 +531,7 @@ async function runDesktop(): Promise<void> {
       observeSecureStorageFailure: telegramSecureStorageDiagnostics,
       serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
       prepareEnvelopeWrite: prepareCredentialEnvelopeWrite,
+      revalidateEnvelopeRemoval: revalidateCredentialEnvelopeRemoval,
       observeEnvelopeRemoved: retireCredentialEncryptionKey,
     });
     let activeTelegramBinding: TelegramDaemonBinding | undefined;
@@ -793,6 +797,7 @@ async function runDesktop(): Promise<void> {
       encryption: credentialEncryption.encryption,
       serializeEnvelopeMutation: serializeCredentialEnvelopeMutation,
       prepareEnvelopeWrite: prepareCredentialEnvelopeWrite,
+      revalidateEnvelopeRemoval: revalidateCredentialEnvelopeRemoval,
       observeEnvelopeRemoved: retireCredentialEncryptionKey,
       runtimeState: credentialRuntimeState,
       serializeCredentialMutation,

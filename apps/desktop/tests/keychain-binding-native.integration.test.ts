@@ -140,9 +140,17 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
         source.indexOf("bool ReadyForKeychain"),
         source.indexOf("napi_value Probe"),
       );
+      const statusMapping = source.slice(
+        source.indexOf("const char *StatusCode"),
+        source.indexOf("bool TrustedHost"),
+      );
       const creation = source.slice(
         source.indexOf("napi_value CreateKey"),
         source.indexOf("napi_value DeleteKey"),
+      );
+      const deletion = source.slice(
+        source.indexOf("napi_value DeleteKey"),
+        source.indexOf("NAPI_MODULE_INIT"),
       );
       const accessConstructionStart = source.indexOf("SecAccessRef MakeAccess");
       const accessConstruction = source.slice(
@@ -152,6 +160,16 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       expect(readiness.indexOf("InteractionDisabled()")).toBeLessThan(
         readiness.indexOf("TrustedHost()"),
       );
+      expect(readiness).toContain("StatusCode(interactionStatus)");
+      expect(readiness).not.toContain('Failure(env, "keychain-locked")');
+      expect(statusMapping).toContain(
+        'DefaultKeychainLocked() ? "keychain-locked" : "uninspectable-item"',
+      );
+      expect(statusMapping).toMatch(
+        /case errSecNotAvailable:\s+case errSecNoDefaultKeychain:\s+return "uninspectable-item";/u,
+      );
+      expect(source).toContain("kSecMatchSearchList");
+      expect(source).toContain("kSecUseKeychain");
       expect(accessConstruction).toContain(
         "acceptable = IsExpectedOwnerAcl(authorizations, applications)",
       );
@@ -173,6 +191,10 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       expect(creation).toContain("persistedLength == static_cast<UInt32>(material.size())");
       expect(creation).toContain("timingsafe_bcmp");
       expect(creation).not.toContain("SecItemDelete");
+      expect(deletion).toContain("SecItemCopyMatching");
+      expect(deletion).toContain("InspectPartition(item)");
+      expect(deletion).toContain("SecKeychainItemDelete(item)");
+      expect(deletion).not.toContain("SecItemDelete");
       expect(source).toContain("#define __STDC_WANT_LIB_EXT1__ 1");
       expect(source).toContain("memset_s(material.data(), material.size(), 0, material.size())");
       expect(source).not.toContain("explicit_bzero");

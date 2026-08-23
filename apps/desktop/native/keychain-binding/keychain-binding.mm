@@ -56,6 +56,12 @@ napi_value Success(napi_env env) {
   return result;
 }
 
+bool DefaultKeychainLocked() {
+  SecKeychainStatus status = 0;
+  return SecKeychainGetStatus(nullptr, &status) == errSecSuccess &&
+         (status & kSecUnlockStateStatus) == 0;
+}
+
 const char *StatusCode(OSStatus status) {
   switch (status) {
   case errSecItemNotFound:
@@ -64,8 +70,10 @@ const char *StatusCode(OSStatus status) {
     return "duplicate-item";
   case errSecInteractionNotAllowed:
   case errSecInteractionRequired:
+    return DefaultKeychainLocked() ? "keychain-locked" : "uninspectable-item";
   case errSecNotAvailable:
-    return "keychain-locked";
+  case errSecNoDefaultKeychain:
+    return "uninspectable-item";
   case errSecAuthFailed:
     return "uninspectable-item";
   default:
@@ -97,8 +105,8 @@ bool TrustedHost() {
   return trusted;
 }
 
-bool InteractionDisabled() {
-  return SecKeychainSetUserInteractionAllowed(false) == errSecSuccess;
+OSStatus InteractionDisabled() {
+  return SecKeychainSetUserInteractionAllowed(false);
 }
 
 bool AllowedService(const std::string &service) {
@@ -131,17 +139,53 @@ bool ReadService(napi_env env, napi_callback_info info, std::string &service) {
   return AllowedService(service);
 }
 
-CFMutableDictionaryRef Query(const std::string &service) {
+OSStatus CopyDefaultKeychain(SecKeychainRef &keychain) {
+  keychain = nullptr;
+  const OSStatus status = SecKeychainCopyDefault(&keychain);
+  if (status != errSecSuccess) {
+    if (keychain != nullptr)
+      CFRelease(keychain);
+    keychain = nullptr;
+    return status;
+  }
+  return keychain == nullptr ? errSecNoDefaultKeychain : errSecSuccess;
+}
+
+CFMutableDictionaryRef Query(const std::string &service,
+                             SecKeychainRef keychain, bool adding) {
   CFMutableDictionaryRef query = CFDictionaryCreateMutable(
       kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
       &kCFTypeDictionaryValueCallBacks);
+  if (query == nullptr)
+    return nullptr;
   CFStringRef serviceValue = String(service.c_str());
   CFStringRef accountValue = String(kAccount);
+  if (serviceValue == nullptr || accountValue == nullptr) {
+    if (serviceValue != nullptr)
+      CFRelease(serviceValue);
+    if (accountValue != nullptr)
+      CFRelease(accountValue);
+    CFRelease(query);
+    return nullptr;
+  }
   CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
   CFDictionarySetValue(query, kSecAttrService, serviceValue);
   CFDictionarySetValue(query, kSecAttrAccount, accountValue);
   CFRelease(serviceValue);
   CFRelease(accountValue);
+  if (adding) {
+    CFDictionarySetValue(query, kSecUseKeychain, keychain);
+  } else {
+    const void *values[] = {keychain};
+    CFArrayRef searchList = CFArrayCreate(
+        kCFAllocatorDefault, values, 1, &kCFTypeArrayCallBacks);
+    if (searchList == nullptr) {
+      CFRelease(query);
+      return nullptr;
+    }
+    CFDictionarySetValue(query, kSecMatchSearchList, searchList);
+    CFRelease(searchList);
+  }
   return query;
 }
 
@@ -323,8 +367,9 @@ PartitionInspection InspectPartition(SecKeychainItemRef item) {
 }
 
 bool ReadyForKeychain(napi_env env, napi_value &refusal) {
-  if (!InteractionDisabled()) {
-    refusal = Failure(env, "keychain-locked");
+  const OSStatus interactionStatus = InteractionDisabled();
+  if (interactionStatus != errSecSuccess) {
+    refusal = Failure(env, StatusCode(interactionStatus));
     return false;
   }
   static const bool trusted = TrustedHost();
@@ -351,7 +396,14 @@ napi_value ReadKey(napi_env env, napi_callback_info info) {
   napi_value refusal;
   if (!ReadyForKeychain(env, refusal))
     return refusal;
-  CFMutableDictionaryRef query = Query(service);
+  SecKeychainRef keychain = nullptr;
+  const OSStatus defaultStatus = CopyDefaultKeychain(keychain);
+  if (defaultStatus != errSecSuccess)
+    return Failure(env, StatusCode(defaultStatus));
+  CFMutableDictionaryRef query = Query(service, keychain, false);
+  CFRelease(keychain);
+  if (query == nullptr)
+    return Failure(env, "unknown");
   CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
   CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
   CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
@@ -404,18 +456,30 @@ napi_value CreateKey(napi_env env, napi_callback_info info) {
   napi_value refusal;
   if (!ReadyForKeychain(env, refusal))
     return refusal;
+  SecKeychainRef keychain = nullptr;
+  const OSStatus defaultStatus = CopyDefaultKeychain(keychain);
+  if (defaultStatus != errSecSuccess)
+    return Failure(env, StatusCode(defaultStatus));
   std::array<unsigned char, kKeyBytes> material{};
   if (SecRandomCopyBytes(kSecRandomDefault, material.size(), material.data()) !=
       errSecSuccess) {
+    CFRelease(keychain);
     EraseKey(material);
     return Failure(env, "unknown");
   }
   SecAccessRef access = MakeAccess();
   if (access == nullptr) {
+    CFRelease(keychain);
     EraseKey(material);
     return Failure(env, "unknown");
   }
-  CFMutableDictionaryRef attributes = Query(service);
+  CFMutableDictionaryRef attributes = Query(service, keychain, true);
+  CFRelease(keychain);
+  if (attributes == nullptr) {
+    CFRelease(access);
+    EraseKey(material);
+    return Failure(env, "unknown");
+  }
   CFDataRef data =
       CFDataCreate(kCFAllocatorDefault, material.data(), material.size());
   if (data == nullptr) {
@@ -494,11 +558,42 @@ napi_value DeleteKey(napi_env env, napi_callback_info info) {
   napi_value refusal;
   if (!ReadyForKeychain(env, refusal))
     return refusal;
-  CFMutableDictionaryRef query = Query(service);
-  const OSStatus status = SecItemDelete(query);
+  SecKeychainRef keychain = nullptr;
+  const OSStatus defaultStatus = CopyDefaultKeychain(keychain);
+  if (defaultStatus != errSecSuccess)
+    return Failure(env, StatusCode(defaultStatus));
+  CFMutableDictionaryRef query = Query(service, keychain, false);
+  CFRelease(keychain);
+  if (query == nullptr)
+    return Failure(env, "unknown");
+  CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
+  CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
+  CFTypeRef itemValue = nullptr;
+  OSStatus status = SecItemCopyMatching(query, &itemValue);
   CFRelease(query);
-  if (status != errSecSuccess && status != errSecItemNotFound) {
+  if (status != errSecSuccess && status != errSecItemNotFound)
     return Failure(env, StatusCode(status));
+  if (status == errSecSuccess &&
+      (itemValue == nullptr ||
+       CFGetTypeID(itemValue) != SecKeychainItemGetTypeID())) {
+    if (itemValue != nullptr)
+      CFRelease(itemValue);
+    return Failure(env, "unreadable-item");
+  }
+  if (status == errSecSuccess) {
+    SecKeychainItemRef item =
+        static_cast<SecKeychainItemRef>(const_cast<void *>(itemValue));
+    const PartitionInspection partition = InspectPartition(item);
+    if (partition != PartitionInspection::kPresent) {
+      CFRelease(itemValue);
+      return Failure(env, partition == PartitionInspection::kAbsent
+                              ? "unreadable-item"
+                              : "uninspectable-item");
+    }
+    status = SecKeychainItemDelete(item);
+    CFRelease(itemValue);
+    if (status != errSecSuccess)
+      return Failure(env, StatusCode(status));
   }
   napi_value response = Success(env);
   napi_value deleted;

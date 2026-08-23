@@ -175,6 +175,7 @@ interface HarnessOptions {
   readonly claudeCliStatus?: () => Promise<ClaudeCliStatus>;
   readonly deleteCredential?: () => Promise<CredentialDeleteResult>;
   readonly credentialRecoveryStatus?: () => Promise<CredentialRecoveryStatus>;
+  readonly retryCredentialRecovery?: () => Promise<CredentialRecoveryStatus>;
   readonly resetAllCredentials?: () => Promise<CredentialResetResult>;
   readonly onDeleted?: () => Promise<void> | void;
   readonly onReconciled?: () => Promise<void> | void;
@@ -243,6 +244,13 @@ function createHarness(options: HarnessOptions = {}) {
         keyCleanupPending: false,
       })),
   );
+  const retryCredentialRecovery = vi.fn(
+    options.retryCredentialRecovery ??
+      (async (): Promise<CredentialRecoveryStatus> => ({
+        state: "ready",
+        unverifiedEnvelopes: 0,
+      })),
+  );
   const openSetup = vi.fn();
   const onDeleted = vi.fn(options.onDeleted ?? (async () => {}));
   const onReconciled = vi.fn(options.onReconciled ?? (async () => {}));
@@ -292,6 +300,7 @@ function createHarness(options: HarnessOptions = {}) {
         state: "ready",
         unverifiedEnvelopes: 0,
       })),
+    retryCredentialRecovery,
     resetAllCredentials,
     ...(options.claudeCliStatus === undefined
       ? {}
@@ -410,6 +419,7 @@ function createHarness(options: HarnessOptions = {}) {
     applyLlmSelection,
     deleteCredential,
     resetAllCredentials,
+    retryCredentialRecovery,
     restartToUpdate,
     checkForUpdates,
     openSetup,
@@ -952,6 +962,23 @@ describe("credential deletion", () => {
 
     await user.click(within(confirmation).getByRole("button", { name: "Remove all credentials" }));
     await waitFor(() => expect(subject.resetAllCredentials).toHaveBeenCalledOnce());
+  });
+
+  it("offers Retry when a missing Keychain item may have been restored", async () => {
+    const user = userEvent.setup();
+    let recovery: CredentialRecoveryStatus = { state: "missing" };
+    const subject = await renderSettings({
+      credentialRecoveryStatus: async () => recovery,
+      retryCredentialRecovery: async () => {
+        recovery = { state: "ready", unverifiedEnvelopes: 0 };
+        return recovery;
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(subject.retryCredentialRecovery).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
   });
 
   it("offers explicit full reset after an uncertain per-slot deletion", async () => {

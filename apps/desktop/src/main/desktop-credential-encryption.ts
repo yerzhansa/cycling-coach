@@ -47,6 +47,7 @@ export interface DesktopCredentialEncryption {
   readonly selection: DesktopCredentialBackendSelection;
   readonly service: string;
   prepareEnvelopeWrite(proof: CredentialEnvelopeLockProof): Promise<void>;
+  revalidateEnvelopeRemoval(proof: CredentialEnvelopeLockProof): Promise<boolean>;
   retireKeychainKey(proof: CredentialEnvelopeLockProof): Promise<KeychainKeyRetirement | undefined>;
   retryKeychain(): Promise<DesktopCredentialBackendSelection>;
   deleteKeyForCredentialReset(proof: CredentialEnvelopeLockProof): Promise<KeychainKeyDeletion>;
@@ -175,12 +176,22 @@ export async function prepareDesktopCredentialEncryption(
       const prepared = await selection.prepareKey(proof);
       if (prepared.status === "failed") transitionToUnavailable(prepared.code, false);
     },
+    async revalidateEnvelopeRemoval(proof: CredentialEnvelopeLockProof): Promise<boolean> {
+      if (options.location.platform !== "darwin") return true;
+      if (selection.status !== "keychain") return false;
+      const validated = await selection.validateKey(proof);
+      if (validated.status === "ready") return true;
+      transitionToUnavailable(validated.code, false);
+      return false;
+    },
     async retireKeychainKey(
       proof: CredentialEnvelopeLockProof,
     ): Promise<KeychainKeyRetirement | undefined> {
       if (selection.status !== "keychain") return undefined;
       const retired = await selection.retireKey(proof);
-      if (retired.status === "failed") transitionToUnavailable(retired.code, true);
+      if (retired.status === "failed") {
+        transitionToUnavailable(retired.code, retired.keyCleanupPending);
+      }
       return retired;
     },
     retryKeychain(): Promise<DesktopCredentialBackendSelection> {
