@@ -593,6 +593,37 @@ describe("credential settings controller", () => {
     });
   });
 
+  it("retains the credential and recovery state when its encryption key cannot be confirmed", async () => {
+    let recovery: CredentialRecoveryStatus = { state: "ready", unverifiedEnvelopes: 0 };
+    const { controller, subject } = createSubject({
+      loadRecoveryStatus: async () => recovery,
+      deleteCredential: async () => {
+        recovery = { state: "unavailable" };
+        return {
+          credential: "anthropic",
+          status: "refused",
+          reason: "encryption-unavailable",
+        };
+      },
+    });
+    await controller.activate();
+
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    expect(controller.state()).toMatchObject({
+      status: "error",
+      kind: "delete",
+      reason: "encryption-unavailable",
+      entries: expect.arrayContaining([expect.objectContaining({ credential: "anthropic" })]),
+      announcement:
+        "The credential was retained because secure storage could not confirm its encryption key.",
+      recovery: { state: "unavailable" },
+      repairCredential: null,
+    });
+  });
+
   it("requires authoritative repair when saved and active runtime state diverge", async () => {
     const onReconciled = vi.fn(async () => {});
     const { controller, subject } = createSubject({

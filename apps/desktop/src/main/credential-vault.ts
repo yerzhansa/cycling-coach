@@ -24,6 +24,7 @@ import type {
   SerializeCredentialEnvelopeMutation,
   SerializeCredentialMutation,
 } from "./credential-envelope-lock.js";
+import { classifyCredentialEnvelopeRemoval } from "./credential-envelope-inspection.js";
 import {
   assertWindowsPrivateFileAtPath,
   MAX_WINDOWS_DESKTOP_VAULT_FILE_BYTES,
@@ -89,6 +90,7 @@ export type CredentialDeleteResult =
       readonly reason:
         | "not-found"
         | "managed-by-environment"
+        | "encryption-unavailable"
         | "storage-failed"
         | "runtime-unavailable"
         | "runtime-state-diverged";
@@ -483,7 +485,10 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
 
   const removeStoredCredential = async (
     slot: DesktopCredentialSlot,
-  ): Promise<"deleted" | "cleanup-pending" | "retained" | "uncertain"> => {
+    authorizeRename?: () => Promise<boolean>,
+  ): Promise<
+    "deleted" | "cleanup-pending" | "authorization-refused" | "retained" | "uncertain"
+  > => {
     const target = join(options.root, `${slot}.bin`);
     let id: string;
     try {
@@ -493,6 +498,9 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     }
     if (!/^[A-Za-z0-9-]{1,128}$/.test(id)) return "retained";
     const tombstone = join(options.root, `.${slot}.${id}.deleted`);
+    if (authorizeRename !== undefined && !(await authorizeRename())) {
+      return "authorization-refused";
+    }
     try {
       await renameCredentialFile(target, tombstone);
     } catch {
@@ -939,9 +947,61 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
           if (!isCredentialSlot(slot)) {
             return { slot: "anthropic", status: "refused", reason: "not-found" };
           }
-          const credential = await readSlot(slot);
-          if (credential.state === "missing") {
+          const durability = await reconcileDurability();
+          if (durability === "uncertain") {
+            return { slot, status: "uncertain", reason: "storage-uncertain" };
+          }
+          if (durability !== "verified") {
+            return { slot, status: "refused", reason: "storage-failed" };
+          }
+          const removalState = await classifyCredentialEnvelopeRemoval(
+            {
+              vault: "credentials",
+              root: options.root,
+              fileName: `${slot}.bin`,
+              mode: CREDENTIAL_FILE_MODE,
+            },
+            {
+              platform,
+              windowsDirectory,
+              openFile: options.openCredentialFile,
+            },
+          );
+          if (removalState === "missing") {
             return { slot, status: "refused", reason: "not-found" };
+          }
+          if (removalState === "blocked") {
+            return { slot, status: "refused", reason: "storage-failed" };
+          }
+          let credential: ReadCredential | undefined;
+          if (removalState === "keychain-dependent") {
+            if (encryptionRefusal(options.encryption, platform) !== undefined) {
+              return { slot, status: "refused", reason: "encryption-unavailable" };
+            }
+            credential = await readSlot(slot);
+            if (credential.state === "missing") {
+              return { slot, status: "refused", reason: "not-found" };
+            }
+            if (credential.state !== "configured" || credential.value === undefined) {
+              return {
+                slot,
+                status: "refused",
+                reason:
+                  encryptionRefusal(options.encryption, platform) === undefined
+                    ? "storage-failed"
+                    : "encryption-unavailable",
+              };
+            }
+            if (proof === undefined || options.revalidateEnvelopeRemoval === undefined) {
+              return { slot, status: "refused", reason: "encryption-unavailable" };
+            }
+            let removalReady = false;
+            try {
+              removalReady = await options.revalidateEnvelopeRemoval(proof);
+            } catch {}
+            if (!removalReady) {
+              return { slot, status: "refused", reason: "encryption-unavailable" };
+            }
           }
           const runtimeStatus = runtimeState.get(slot);
           const shouldClearRuntime = runtimeStatus === "active" || runtimeStatus === "failed";
@@ -962,19 +1022,18 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
               return { slot, status: "refused", reason: "runtime-state-diverged" };
             }
           }
-          let removalReady = true;
-          if (
-            credential.state === "configured" &&
-            proof !== undefined &&
-            options.revalidateEnvelopeRemoval !== undefined
-          ) {
-            try {
-              removalReady = await options.revalidateEnvelopeRemoval(proof);
-            } catch {
-              removalReady = false;
-            }
-          }
-          const removed = removalReady ? await removeStoredCredential(slot) : "retained";
+          const removed = await removeStoredCredential(
+            slot,
+            removalState === "keychain-dependent"
+              ? async () => {
+                  try {
+                    return await options.revalidateEnvelopeRemoval!(proof!);
+                  } catch {
+                    return false;
+                  }
+                }
+              : undefined,
+          );
           if (removed === "uncertain") {
             uncertainSlots.add(slot);
             setRuntimeState(slot, "failed");
@@ -993,11 +1052,20 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
               cleanupPending: removed === "cleanup-pending",
             };
           }
-          if (runtimeCleared && credential.value !== undefined && removed === "retained") {
+          if (
+            runtimeCleared &&
+            credential?.value !== undefined &&
+            (removed === "retained" || removed === "authorization-refused")
+          ) {
             try {
               await options.applyCredential(slot, credential.value);
               setRuntimeState(slot, "active");
-              return { slot, status: "refused", reason: "storage-failed" };
+              return {
+                slot,
+                status: "refused",
+                reason:
+                  removed === "authorization-refused" ? "encryption-unavailable" : "storage-failed",
+              };
             } catch {
               setRuntimeState(slot, "failed");
               return { slot, status: "refused", reason: "runtime-state-diverged" };
@@ -1007,7 +1075,12 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
             setRuntimeState(slot, "failed");
             return { slot, status: "refused", reason: "runtime-state-diverged" };
           }
-          return { slot, status: "refused", reason: "storage-failed" };
+          return {
+            slot,
+            status: "refused",
+            reason:
+              removed === "authorization-refused" ? "encryption-unavailable" : "storage-failed",
+          };
         }),
       );
     },

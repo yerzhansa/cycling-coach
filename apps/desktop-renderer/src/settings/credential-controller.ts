@@ -297,6 +297,9 @@ function refusalCopy(
   if (reason === "not-found") {
     return "That credential is no longer stored. Reload to refresh the list.";
   }
+  if (reason === "encryption-unavailable") {
+    return "The credential was retained because secure storage could not confirm its encryption key.";
+  }
   if (reason === "storage-failed") {
     return "The credential remains stored. No deletion was completed. Try again.";
   }

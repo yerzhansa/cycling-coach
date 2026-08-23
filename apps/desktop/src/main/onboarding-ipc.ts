@@ -208,6 +208,7 @@ export type DesktopCredentialDeleteResult =
       readonly reason:
         | "not-found"
         | "managed-by-environment"
+        | "encryption-unavailable"
         | "storage-failed"
         | "runtime-unavailable"
         | "runtime-state-diverged";

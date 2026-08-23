@@ -7,13 +7,15 @@ import {
   type WindowsPrivateDirectoryBinding,
 } from "@enduragent/core";
 import {
-  inspectCredentialEnvelopeTarget,
   readCredentialEnvelopeDirectory,
   scanCredentialEnvelopes,
   type CredentialEnvelopeInventory,
   type CredentialEnvelopeRoots,
-  type CredentialEnvelopeVault,
 } from "./credential-envelope-inventory.js";
+import {
+  inspectCredentialEnvelopeTarget,
+  type CredentialEnvelopeVault,
+} from "./credential-envelope-inspection.js";
 import { CREDENTIAL_DIRECTORY_MODE } from "./credential-vault.js";
 import { TELEGRAM_CREDENTIAL_DIRECTORY_MODE } from "./telegram-credential-vault.js";
 

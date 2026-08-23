@@ -26,6 +26,7 @@ import {
   type DesktopCredentialSlot,
 } from "../src/main/credential-vault.js";
 import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
+import { classifyCredentialEnvelopeRemoval } from "../src/main/credential-envelope-inspection.js";
 import {
   CREDENTIAL_ENVELOPE_DIRECTORY_ENTRY_LIMIT,
   credentialEnvelopeTargets,
@@ -163,19 +164,25 @@ async function retireKey(
 }
 
 function credentialVault(roots: Fixture, encryption: CredentialEncryptionPort) {
+  const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
   return createCredentialVault({
     root: roots.credentialRoot,
     encryption,
     applyCredential: vi.fn(async () => undefined),
     clearCredential: vi.fn(async () => "not-active" as const),
+    serializeEnvelopeMutation,
+    revalidateEnvelopeRemoval: vi.fn(async () => true),
   });
 }
 
 function telegramVault(roots: Fixture, encryption: CredentialEncryptionPort) {
+  const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
   return createTelegramCredentialVault({
     root: roots.telegramRoot,
     athleteHome: roots.athleteHome,
     encryption,
+    serializeEnvelopeMutation,
+    revalidateEnvelopeRemoval: vi.fn(async () => true),
   });
 }
 
@@ -333,6 +340,30 @@ describe("keychain key retirement", () => {
       expect(windowsInspection.contents).toHaveLength(40);
       windowsInspection.contents.fill(0);
     }
+    envelope.fill(0);
+  });
+
+  posixIt("classifies equivalent envelopes identically in both vaults", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(roots.telegramRoot, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    const envelope = sealCredentialEnvelope(
+      randomBytes(KEYCHAIN_KEY_BYTES),
+      "classifier-parity",
+    );
+    await writeFile(join(roots.credentialRoot, "anthropic.bin"), envelope, { mode: 0o600 });
+    await writeFile(join(roots.telegramRoot, TELEGRAM_PROFILE_FILE_NAME), envelope, {
+      mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+    });
+    const targets = credentialEnvelopeTargets(roots).filter(
+      (target) =>
+        target.fileName === "anthropic.bin" || target.fileName === TELEGRAM_PROFILE_FILE_NAME,
+    );
+
+    await expect(
+      Promise.all(targets.map((target) => classifyCredentialEnvelopeRemoval(target))),
+    ).resolves.toEqual(["keychain-dependent", "keychain-dependent"]);
+
     envelope.fill(0);
   });
 

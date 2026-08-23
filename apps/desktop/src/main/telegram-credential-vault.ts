@@ -23,15 +23,11 @@ import type {
   CredentialEnvelopeLockProof,
   SerializeCredentialEnvelopeMutation,
 } from "./credential-envelope-lock.js";
-import { inspectCredentialEnvelopeTarget } from "./credential-envelope-inventory.js";
+import { classifyCredentialEnvelopeRemoval } from "./credential-envelope-inspection.js";
 import {
   durablyReplaceReversible,
   type ReversibleDurableReplaceOutcome,
 } from "./durable-atomic-replace.js";
-import {
-  KEYCHAIN_ENVELOPE_KEY_ID,
-  readCredentialEnvelopeKeyId,
-} from "./keychain-credential-encryption.js";
 import {
   emitTelegramSecureStorageFailure,
   type TelegramSecureStorageObserver,
@@ -121,6 +117,19 @@ export type TelegramProfileDeleteResult =
     }>
   | Readonly<{ outcome: "uncertain"; reason: "storage-uncertain" }>;
 
+export type TelegramProfileRemovalAuthorizationResult =
+  | Readonly<{ outcome: "authorized" }>
+  | Readonly<{
+      outcome: "refused";
+      reason:
+        | "not-found"
+        | "wrong-home"
+        | "encryption-unavailable"
+        | "unsafe-backend"
+        | "storage-failed";
+    }>
+  | Readonly<{ outcome: "uncertain"; reason: "storage-uncertain" }>;
+
 export type TelegramDesiredState =
   | Readonly<{ state: "configured"; enabled: boolean }>
   | Readonly<{ state: "missing" | "re-prompt" | "wrong-home" | "uncertain"; enabled: false }>;
@@ -141,6 +150,7 @@ export interface TelegramCredentialVault {
     authenticatedAthleteHome: AthleteHomeIdentity,
     applyProfile: (profile: TelegramProfileRecord) => Promise<void>,
   ): Promise<TelegramProfileApplyResult>;
+  preauthorizeProfileRemoval(): Promise<TelegramProfileRemovalAuthorizationResult>;
   deleteProfile(): Promise<TelegramProfileDeleteResult>;
   desiredState(): Promise<TelegramDesiredState>;
   setDesiredState(enabled: boolean): Promise<TelegramDesiredStateWriteResult>;
@@ -706,8 +716,10 @@ export function createTelegramCredentialVault(
     }
   };
 
-  const removeStoredProfile = async (): Promise<
-    "deleted" | "cleanup-pending" | "retained" | "uncertain"
+  const removeStoredProfile = async (
+    authorizeRename?: () => Promise<boolean>,
+  ): Promise<
+    "deleted" | "cleanup-pending" | "authorization-refused" | "retained" | "uncertain"
   > => {
     if (
       (await secureDirectoryState(options.root, platform, bindCredentialDirectory)) !== "secure"
@@ -724,6 +736,9 @@ export function createTelegramCredentialVault(
     }
     if (!/^[A-Za-z0-9-]{1,128}$/.test(id)) return "retained";
     const tombstone = join(options.root, `.${TELEGRAM_PROFILE_FILE_NAME}.${id}.deleted`);
+    if (authorizeRename !== undefined && !(await authorizeRename())) {
+      return "authorization-refused";
+    }
     try {
       await renameFile(target, tombstone);
       transientArtifactsMayExist = true;
@@ -750,10 +765,18 @@ export function createTelegramCredentialVault(
     }
   };
 
-  const profileEnvelopeRemovalState = async (): Promise<
-    "missing" | "blocked" | "keychain-dependent" | "unverified"
+  const authorizeProfileRemoval = async (
+    proof: CredentialEnvelopeLockProof | undefined,
+    validateImmediately: boolean,
+  ): Promise<
+    | Readonly<{ outcome: "authorized"; keychainDependent: boolean }>
+    | Exclude<TelegramProfileRemovalAuthorizationResult, { outcome: "authorized" }>
   > => {
-    const inspected = await inspectCredentialEnvelopeTarget(
+    if (!(await prepareNamespace())) {
+      return { outcome: "uncertain", reason: "storage-uncertain" };
+    }
+    if (profileUncertain) return { outcome: "uncertain", reason: "storage-uncertain" };
+    const removalState = await classifyCredentialEnvelopeRemoval(
       {
         vault: "telegram",
         root: options.root,
@@ -766,14 +789,37 @@ export function createTelegramCredentialVault(
         openFile: options.openFile,
       },
     );
-    if (inspected.status !== "readable") return inspected.status;
-    try {
-      return readCredentialEnvelopeKeyId(inspected.contents) === KEYCHAIN_ENVELOPE_KEY_ID
-        ? "keychain-dependent"
-        : "unverified";
-    } finally {
-      inspected.contents.fill(0);
+    if (removalState === "missing") return { outcome: "refused", reason: "not-found" };
+    if (removalState === "blocked") {
+      return { outcome: "refused", reason: "storage-failed" };
     }
+    if (removalState !== "keychain-dependent") {
+      return { outcome: "authorized", keychainDependent: false };
+    }
+    const profile = await readProfile();
+    if (profile.state === "missing") return { outcome: "refused", reason: "not-found" };
+    if (profile.state === "wrong-home") {
+      return { outcome: "refused", reason: "wrong-home" };
+    }
+    if (profile.state === "re-prompt") {
+      if (profile.reason === "encryption-unavailable" || profile.reason === "unsafe-backend") {
+        return { outcome: "refused", reason: profile.reason };
+      }
+      return { outcome: "refused", reason: "storage-failed" };
+    }
+    if (proof === undefined || options.revalidateEnvelopeRemoval === undefined) {
+      return { outcome: "refused", reason: "encryption-unavailable" };
+    }
+    if (validateImmediately) {
+      let removalReady = false;
+      try {
+        removalReady = await options.revalidateEnvelopeRemoval(proof);
+      } catch {}
+      if (!removalReady) {
+        return { outcome: "refused", reason: "encryption-unavailable" };
+      }
+    }
+    return { outcome: "authorized", keychainDependent: true };
   };
 
   return {
@@ -943,43 +989,30 @@ export function createTelegramCredentialVault(
       });
     },
 
+    preauthorizeProfileRemoval(): Promise<TelegramProfileRemovalAuthorizationResult> {
+      return envelopeExclusive(async (proof) => {
+        const authorization = await authorizeProfileRemoval(proof, true);
+        return authorization.outcome === "authorized"
+          ? { outcome: "authorized" }
+          : authorization;
+      });
+    },
+
     deleteProfile(): Promise<TelegramProfileDeleteResult> {
       return envelopeExclusive(async (proof) => {
-        if (!(await prepareNamespace())) {
-          return { outcome: "uncertain", reason: "storage-uncertain" };
-        }
-        if (profileUncertain) return { outcome: "uncertain", reason: "storage-uncertain" };
-        const removalState = await profileEnvelopeRemovalState();
-        if (removalState === "missing") return { outcome: "refused", reason: "not-found" };
-        if (removalState === "blocked") {
-          return { outcome: "refused", reason: "storage-failed" };
-        }
-        if (removalState === "keychain-dependent") {
-          const profile = await readProfile();
-          if (profile.state === "missing") return { outcome: "refused", reason: "not-found" };
-          if (profile.state === "wrong-home") {
-            return { outcome: "refused", reason: "wrong-home" };
-          }
-          if (profile.state === "re-prompt") {
-            if (
-              profile.reason === "encryption-unavailable" ||
-              profile.reason === "unsafe-backend"
-            ) {
-              return { outcome: "refused", reason: profile.reason };
-            }
-            return { outcome: "refused", reason: "storage-failed" };
-          }
-          if (proof !== undefined && options.revalidateEnvelopeRemoval !== undefined) {
-            let removalReady = false;
-            try {
-              removalReady = await options.revalidateEnvelopeRemoval(proof);
-            } catch {}
-            if (!removalReady) {
-              return { outcome: "refused", reason: "encryption-unavailable" };
-            }
-          }
-        }
-        const removed = await removeStoredProfile();
+        const authorization = await authorizeProfileRemoval(proof, false);
+        if (authorization.outcome !== "authorized") return authorization;
+        const removed = await removeStoredProfile(
+          authorization.keychainDependent
+            ? async () => {
+                try {
+                  return await options.revalidateEnvelopeRemoval!(proof!);
+                } catch {
+                  return false;
+                }
+              }
+            : undefined,
+        );
         if (removed === "deleted" || removed === "cleanup-pending") {
           if (proof !== undefined) {
             try {
@@ -987,6 +1020,9 @@ export function createTelegramCredentialVault(
             } catch {}
           }
           return { outcome: "applied", cleanupPending: removed === "cleanup-pending" };
+        }
+        if (removed === "authorization-refused") {
+          return { outcome: "refused", reason: "encryption-unavailable" };
         }
         if (removed === "uncertain") profileUncertain = true;
         observeFailure(

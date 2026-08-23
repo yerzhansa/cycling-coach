@@ -104,6 +104,7 @@ const REASONS = new Set([
 const DELETE_REASONS = new Set([
   "not-found",
   "managed-by-environment",
+  "encryption-unavailable",
   "storage-failed",
   "runtime-unavailable",
   "runtime-state-diverged",

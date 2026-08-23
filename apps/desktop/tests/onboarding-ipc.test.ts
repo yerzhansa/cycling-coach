@@ -475,6 +475,26 @@ describe("desktop onboarding IPC", () => {
     expect(subject.getRuntimeConfig).not.toHaveBeenCalled();
   });
 
+  it("projects Keychain deletion refusal without exposing private storage details", async () => {
+    const subject = harness();
+    vi.mocked(subject.vault.deleteCredential).mockResolvedValueOnce({
+      slot: "anthropic",
+      status: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    const result = await subject.invoke(DESKTOP_CREDENTIAL_DELETE_CHANNEL, subject.trustedEvent, {
+      credential: "anthropic",
+    });
+
+    expect(result).toEqual({
+      credential: "anthropic",
+      status: "refused",
+      reason: "encryption-unavailable",
+    });
+    expect(Object.keys(result as object)).toEqual(["credential", "status", "reason"]);
+  });
+
   it("projects credential deletion uncertainty as its exact slot envelope", async () => {
     const subject = harness();
     vi.mocked(subject.vault.deleteCredential).mockResolvedValueOnce({
