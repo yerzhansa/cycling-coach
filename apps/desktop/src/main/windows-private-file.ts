@@ -19,6 +19,10 @@ export interface WindowsPrivateFileSnapshot {
   readonly modifiedAt: number;
 }
 
+export interface WindowsPrivateFilePrefixSnapshot {
+  readonly contents: Buffer;
+}
+
 export class WindowsPrivateFileMaximumBytesExceededError extends WindowsPrivatePathPolicyError {
   constructor() {
     super("read-check", "corruption");
@@ -30,6 +34,14 @@ export interface ReadWindowsPrivateFileInput {
   readonly path: string;
   readonly minimumBytes?: number;
   readonly maximumBytes: number;
+  readonly allowedLinks?: 1 | 2;
+  readonly openFile?: typeof open;
+}
+
+export interface ReadWindowsPrivateFilePrefixInput {
+  readonly directory: WindowsPrivateDirectoryBinding;
+  readonly path: string;
+  readonly maximumReadBytes: number;
   readonly allowedLinks?: 1 | 2;
   readonly openFile?: typeof open;
 }
@@ -165,6 +177,110 @@ export async function readWindowsPrivateFile(
       assertWindowsPrivateDirectoryStable(input.directory);
       await handle.close();
       return { contents, modifiedAt: afterRead.mtimeMs };
+    } catch (error) {
+      contents?.fill(0);
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
+  } catch (error) {
+    throw classifyWindowsPrivatePathFailure("read-check", error);
+  }
+}
+
+export async function readWindowsPrivateFilePrefix(
+  input: ReadWindowsPrivateFilePrefixInput,
+): Promise<WindowsPrivateFilePrefixSnapshot | undefined> {
+  const allowedLinks = input.allowedLinks ?? 1;
+  try {
+    assertWindowsPrivateDirectoryStable(input.directory);
+    let beforeOpen: Stats;
+    try {
+      beforeOpen = await lstat(input.path);
+    } catch (error) {
+      if (isMissing(error)) {
+        assertWindowsPrivateDirectoryStable(input.directory);
+        return undefined;
+      }
+      throw error;
+    }
+    assertWindowsPrivateFileMetadata(beforeOpen, allowedLinks);
+    assertWindowsPrivateFileBinding(
+      input.directory,
+      input.path,
+      windowsPrivatePathIdentity(beforeOpen),
+      allowedLinks,
+    );
+    const handle = await (input.openFile ?? open)(input.path, constants.O_RDONLY);
+    let contents: Buffer | undefined;
+    try {
+      const opened = await handle.stat();
+      assertWindowsPrivateFileMetadata(opened, allowedLinks);
+      assertWindowsPrivateFileBinding(
+        input.directory,
+        input.path,
+        windowsPrivatePathIdentity(opened),
+        allowedLinks,
+      );
+      const bounded =
+        Number.isSafeInteger(opened.size) &&
+        opened.size >= 0 &&
+        Number.isSafeInteger(input.maximumReadBytes) &&
+        input.maximumReadBytes > 0;
+      assertWindowsPrivatePathRead({
+        bounded,
+        identityStable: sameWindowsPrivatePathIdentity(
+          windowsPrivatePathIdentity(beforeOpen),
+          windowsPrivatePathIdentity(opened),
+        ),
+        contentValid: true,
+        authenticatedHomeBinding: true,
+      });
+      const prefixBytes = Math.min(opened.size, input.maximumReadBytes);
+      contents = Buffer.allocUnsafe(prefixBytes);
+      let offset = 0;
+      while (offset < contents.length) {
+        const read = await handle.read(contents, offset, contents.length - offset, offset);
+        if (read.bytesRead <= 0) {
+          assertWindowsPrivatePathRead({
+            bounded: true,
+            identityStable: true,
+            contentValid: false,
+            authenticatedHomeBinding: true,
+          });
+        }
+        offset += read.bytesRead;
+      }
+      const afterRead = await handle.stat();
+      assertWindowsPrivateFileMetadata(afterRead, allowedLinks);
+      const current = assertWindowsPrivateFileBinding(
+        input.directory,
+        input.path,
+        windowsPrivatePathIdentity(afterRead),
+        allowedLinks,
+      );
+      assertWindowsPrivatePathRead({
+        bounded: true,
+        identityStable:
+          sameWindowsPrivatePathIdentity(
+            windowsPrivatePathIdentity(beforeOpen),
+            windowsPrivatePathIdentity(opened),
+          ) &&
+          sameWindowsPrivatePathIdentity(
+            windowsPrivatePathIdentity(opened),
+            windowsPrivatePathIdentity(afterRead),
+          ) &&
+          opened.size === afterRead.size &&
+          opened.size === current.size &&
+          opened.mtimeMs === afterRead.mtimeMs &&
+          opened.mtimeMs === current.mtimeMs &&
+          opened.ctimeMs === afterRead.ctimeMs &&
+          opened.ctimeMs === current.ctimeMs,
+        contentValid: offset === prefixBytes,
+        authenticatedHomeBinding: true,
+      });
+      assertWindowsPrivateDirectoryStable(input.directory);
+      await handle.close();
+      return { contents };
     } catch (error) {
       contents?.fill(0);
       await handle.close().catch(() => undefined);

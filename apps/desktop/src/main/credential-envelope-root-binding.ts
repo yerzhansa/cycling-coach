@@ -1,12 +1,13 @@
 import type { Stats } from "node:fs";
-import { lstat, readFile, readdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { lstat, readdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
   assertWindowsPrivateDirectoryStable,
   bindWindowsPrivateDirectory,
   type WindowsPrivateDirectoryBinding,
 } from "@enduragent/core";
 import {
+  inspectCredentialEnvelopeTarget,
   scanCredentialEnvelopes,
   type CredentialEnvelopeInventory,
   type CredentialEnvelopeRoots,
@@ -184,10 +185,33 @@ export function guardedCredentialEnvelopeRoots(
   return {
     credentialRoot: roots.credentialRoot,
     telegramRoot: roots.telegramRoot,
-    readEnvelopeFile: async (path) => {
-      const binding = bindingForRoot(bindings, dirname(path));
-      const read = roots.readEnvelopeFile ?? ((target: string) => readFile(target));
-      return useBoundCredentialRoot(binding, bindings.platform, () => read(path));
+    inspectEnvelopeTarget: async (target) => {
+      const binding = bindingForRoot(bindings, target.root);
+      if (binding.state === "missing") {
+        await assertCredentialEnvelopeRootStable(binding, bindings.platform);
+        return { status: "missing" as const };
+      }
+      return useBoundCredentialRoot(binding, bindings.platform, async () => {
+        if (roots.inspectEnvelopeTarget !== undefined) {
+          return await roots.inspectEnvelopeTarget(target);
+        }
+        if (roots.readEnvelopeFile !== undefined) {
+          try {
+            return {
+              status: "readable" as const,
+              contents: await roots.readEnvelopeFile(join(target.root, target.fileName)),
+            };
+          } catch (error) {
+            return (error as NodeJS.ErrnoException).code === "ENOENT"
+              ? { status: "missing" as const }
+              : { status: "blocked" as const };
+          }
+        }
+        return await inspectCredentialEnvelopeTarget(target, {
+          platform: bindings.platform,
+          windowsDirectory: binding.state === "bound" ? binding.windowsDirectory : undefined,
+        });
+      });
     },
     readEnvelopeDirectory: async (root) => {
       const binding = bindingForRoot(bindings, root);

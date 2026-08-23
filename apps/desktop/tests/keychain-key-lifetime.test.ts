@@ -1,16 +1,23 @@
 import { randomBytes } from "node:crypto";
+import { execFile } from "node:child_process";
 import {
+  chmod,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   realpath,
+  rename,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { bindWindowsPrivateDirectory } from "@enduragent/core";
+import { createAutomaticKeyRetirementInspector } from "../src/main/automatic-key-retirement.js";
 import {
   createCredentialVault,
   CREDENTIAL_DIRECTORY_MODE,
@@ -18,7 +25,11 @@ import {
   type DesktopCredentialSlot,
 } from "../src/main/credential-vault.js";
 import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
-import { scanCredentialEnvelopes } from "../src/main/credential-envelope-inventory.js";
+import {
+  credentialEnvelopeTargets,
+  inspectCredentialEnvelopeTarget,
+  scanCredentialEnvelopes,
+} from "../src/main/credential-envelope-inventory.js";
 import {
   createKeychainPartitionEncryption,
   sealCredentialEnvelope,
@@ -34,6 +45,7 @@ import {
 import { retireKeychainKeyWhenLastEnvelopeGone } from "../src/main/keychain-key-lifetime.js";
 import {
   TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
+  TELEGRAM_CREDENTIAL_FILE_MODE,
   TELEGRAM_PROFILE_FILE_NAME,
   createTelegramCredentialVault,
 } from "../src/main/telegram-credential-vault.js";
@@ -46,6 +58,7 @@ const PROBE_OK: KeychainBindingResponse = {
   op: "probe",
   teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER,
 };
+const execFileAsync = promisify(execFile);
 
 interface Fixture {
   readonly credentialRoot: string;
@@ -93,7 +106,13 @@ async function keychainEncryption(): Promise<CredentialEncryptionPort> {
         key: randomBytes(KEYCHAIN_KEY_BYTES),
       }),
       service: KEYCHAIN_CREDENTIAL_SERVICE,
-      envelopeCensus: { deletionBlockers: 1, keychainDependents: 1 },
+      inspectAutomaticRetirement: async () => ({
+        status: "inspected",
+        deletionBlockers: 1,
+        keychainDependents: 1,
+        unverified: 0,
+        zeroProof: null,
+      }),
       lockProof,
     }),
   );
@@ -108,13 +127,20 @@ async function retireKey(
   readEnvelopeDirectory?: (path: string) => Promise<string[]>,
 ) {
   const serialize = createCredentialEnvelopeMutationLock();
+  const inspect = createAutomaticKeyRetirementInspector({
+    ...roots,
+    readEnvelopeFile,
+    readEnvelopeDirectory,
+  });
   return await serialize((lockProof) =>
     retireKeychainKeyWhenLastEnvelopeGone({
-      ...roots,
-      readEnvelopeFile,
-      readEnvelopeDirectory,
       lockProof,
-      deleteKey: async () => {
+      retireKey: async (proof) => {
+        const inspection = await inspect(proof);
+        if (inspection.status === "failed") return { status: "failed", code: "unknown" };
+        if (inspection.zeroProof === null) {
+          return { status: "retained", envelopes: inspection.deletionBlockers };
+        }
         const deleted = await transport.send({
           op: "delete-key",
           service: KEYCHAIN_CREDENTIAL_SERVICE,
@@ -202,6 +228,145 @@ describe("keychain key retirement", () => {
     ).resolves.toEqual({ status: "deleted" });
     expect(readEnvelopeFile).not.toHaveBeenCalled();
     expect(readEnvelopeDirectory).not.toHaveBeenCalled();
+  });
+
+  posixIt("keeps the key for a dangling canonical envelope symlink", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await symlink(
+      join(roots.credentialRoot, "missing-envelope"),
+      join(roots.credentialRoot, "anthropic.bin"),
+    );
+    const transport = transportOf();
+
+    await expect(retireKey(roots, transport)).resolves.toEqual({
+      status: "retained",
+      envelopes: 1,
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  posixIt("keeps the key for a canonical envelope symlink to a readable file", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const source = join(roots.credentialRoot, "source-envelope");
+    await writeFile(source, Buffer.alloc(64), { mode: 0o600 });
+    await symlink(source, join(roots.credentialRoot, "anthropic.bin"));
+    const transport = transportOf();
+
+    await expect(retireKey(roots, transport)).resolves.toEqual({
+      status: "retained",
+      envelopes: 1,
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  posixIt("inspects a canonical FIFO without opening or waiting on it", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const fifo = join(roots.credentialRoot, "anthropic.bin");
+    await execFileAsync("mkfifo", [fifo]);
+    await chmod(fifo, 0o600);
+    const transport = transportOf();
+
+    await expect(
+      Promise.race([
+        retireKey(roots, transport),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("FIFO read waited")), 1_000)),
+      ]),
+    ).resolves.toEqual({ status: "retained", envelopes: 1 });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  posixIt("keeps the key for a canonical envelope with unsafe permissions", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await writeFile(join(roots.credentialRoot, "anthropic.bin"), Buffer.alloc(64), {
+      mode: 0o644,
+    });
+
+    await expect(retireKey(roots, transportOf())).resolves.toEqual({
+      status: "retained",
+      envelopes: 1,
+    });
+  });
+
+  posixIt("reads only the classification prefix from a huge sparse envelope", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const path = join(roots.credentialRoot, "anthropic.bin");
+    const envelope = sealCredentialEnvelope(randomBytes(KEYCHAIN_KEY_BYTES), "bounded-prefix");
+    const handle = await open(path, "w", 0o600);
+    await handle.write(envelope, 0, envelope.length, 0);
+    await handle.truncate(128 * 1024 * 1024);
+    await handle.close();
+    const target = credentialEnvelopeTargets(roots).find(
+      (candidate) => candidate.fileName === "anthropic.bin",
+    )!;
+
+    const inspected = await inspectCredentialEnvelopeTarget(target);
+
+    expect(inspected.status).toBe("readable");
+    if (inspected.status === "readable") {
+      expect(inspected.contents).toHaveLength(40);
+      inspected.contents.fill(0);
+    }
+    const windowsInspection = await inspectCredentialEnvelopeTarget(target, {
+      platform: "win32",
+      windowsDirectory: bindWindowsPrivateDirectory(
+        dirname(roots.credentialRoot),
+        roots.credentialRoot,
+      ),
+    });
+    expect(windowsInspection.status).toBe("readable");
+    if (windowsInspection.status === "readable") {
+      expect(windowsInspection.contents).toHaveLength(40);
+      windowsInspection.contents.fill(0);
+    }
+    envelope.fill(0);
+  });
+
+  posixIt("blocks deletion when a canonical envelope is replaced during inspection", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const path = join(roots.credentialRoot, "anthropic.bin");
+    const displaced = `${path}.old`;
+    await writeFile(path, Buffer.alloc(64), { mode: 0o600 });
+    const target = credentialEnvelopeTargets(roots).find(
+      (candidate) => candidate.fileName === "anthropic.bin",
+    )!;
+    const openAndReplace: typeof open = async (...arguments_) => {
+      const handle = await open(...arguments_);
+      await rename(path, displaced);
+      await writeFile(path, Buffer.alloc(64, 1), { mode: 0o600 });
+      return handle;
+    };
+
+    await expect(
+      inspectCredentialEnvelopeTarget(target, { openFile: openAndReplace }),
+    ).resolves.toEqual({ status: "blocked" });
+  });
+
+  posixIt("blocks deletion when a canonical envelope appears after the first check", async () => {
+    const roots = await fixture();
+    const envelope = sealCredentialEnvelope(randomBytes(KEYCHAIN_KEY_BYTES), "appeared");
+    let anthropicInspections = 0;
+
+    const inventory = await scanCredentialEnvelopes({
+      ...roots,
+      inspectEnvelopeTarget: async (target) => {
+        if (target.fileName !== "anthropic.bin") return { status: "missing" };
+        anthropicInspections += 1;
+        return anthropicInspections === 1
+          ? { status: "missing" }
+          : { status: "readable", contents: Buffer.from(envelope) };
+      },
+      readEnvelopeDirectory: async () => [],
+    });
+
+    expect(inventory.deletionBlockers).toHaveLength(1);
+    expect(inventory.keychainDependents).toBe(1);
+    envelope.fill(0);
   });
 
   posixIt("keeps the key while any envelope survives in either vault", async () => {
@@ -322,6 +487,7 @@ describe("keychain key retirement", () => {
     await writeFile(
       join(roots.telegramRoot, `.${TELEGRAM_PROFILE_FILE_NAME}.write-1.tmp`),
       envelope,
+      { mode: TELEGRAM_CREDENTIAL_FILE_MODE },
     );
     envelope.fill(0);
 

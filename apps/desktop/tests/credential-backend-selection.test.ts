@@ -23,6 +23,7 @@ import { assertPosixCredentialRoot } from "../src/main/credential-envelope-root-
 import {
   createCredentialVault,
   CREDENTIAL_DIRECTORY_MODE,
+  CREDENTIAL_FILE_MODE,
   type CredentialEncryptionPort,
   type DesktopCredentialSlot,
 } from "../src/main/credential-vault.js";
@@ -116,7 +117,13 @@ async function keychainEncryption(key: Buffer): Promise<CredentialEncryptionPort
     createKeychainPartitionEncryption({
       transport: transportOf(PROBE_OK, readKey(key)),
       service: KEYCHAIN_CREDENTIAL_SERVICE,
-      envelopeCensus: { deletionBlockers: 1, keychainDependents: 1 },
+      inspectAutomaticRetirement: async () => ({
+        status: "inspected",
+        deletionBlockers: 1,
+        keychainDependents: 1,
+        unverified: 0,
+        zeroProof: null,
+      }),
       lockProof,
     }),
   );
@@ -673,7 +680,11 @@ describe("keychain failure mapping", () => {
       { ok: false, code: "duplicate-item" },
     );
 
-    const selected = await selectDesktopCredentialBackend(selection(roots, transport));
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const selected = await selectDesktopCredentialBackend({
+      ...selection(roots, transport),
+      serializeEnvelopeMutation,
+    });
 
     expect(selected.status).toBe("keychain");
     if (selected.status !== "keychain") return;
@@ -681,7 +692,6 @@ describe("keychain failure mapping", () => {
     expect(selected.encryption.isEncryptionAvailable()).toBe(false);
     expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
 
-    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     await expect(
       serializeEnvelopeMutation((proof) => selected.prepareKey(proof)),
     ).resolves.toEqual({ status: "failed", code: "duplicate-item" });
@@ -733,7 +743,9 @@ describe("keychain failure mapping", () => {
       randomBytes(KEYCHAIN_KEY_BYTES),
       "transient-secret",
     );
-    await writeFile(join(roots.credentialRoot, ".anthropic.bin.pending-1.tmp"), transient);
+    await writeFile(join(roots.credentialRoot, ".anthropic.bin.pending-1.tmp"), transient, {
+      mode: CREDENTIAL_FILE_MODE,
+    });
     transient.fill(0);
     const transport = transportOf(PROBE_OK, { ok: false, code: "item-not-found" });
 

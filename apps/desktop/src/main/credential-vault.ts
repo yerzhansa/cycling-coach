@@ -638,6 +638,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
   const writeCredential = async (
     input: CredentialWriteInput,
     behavior?: CredentialWriteBehavior,
+    proof?: CredentialEnvelopeLockProof,
   ): Promise<CredentialWriteResult> => {
     if (!isCredentialSlot(input?.slot) || typeof input.value !== "string") {
       return {
@@ -669,9 +670,19 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     ) {
       return { slot: input.slot, status: "refused", reason: "invalid-input" };
     }
-    const encryptionFailure = encryptionRefusal(options.encryption, platform);
-    if (encryptionFailure !== undefined) {
-      return { slot: input.slot, status: "refused", reason: encryptionFailure };
+    let initialEncryptionFailure = encryptionRefusal(options.encryption, platform);
+    if (
+      initialEncryptionFailure === "encryption-unavailable" &&
+      proof !== undefined &&
+      options.prepareEnvelopeWrite !== undefined
+    ) {
+      try {
+        await options.prepareEnvelopeWrite(proof);
+      } catch {}
+      initialEncryptionFailure = encryptionRefusal(options.encryption, platform);
+    }
+    if (initialEncryptionFailure !== undefined) {
+      return { slot: input.slot, status: "refused", reason: initialEncryptionFailure };
     }
     const durability = await reconcileDurability();
     if (durability === "uncertain") {
@@ -716,6 +727,11 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
+      }
+      if (proof !== undefined) await options.prepareEnvelopeWrite?.(proof);
+      const encryptionFailure = encryptionRefusal(options.encryption, platform);
+      if (encryptionFailure !== undefined) {
+        return { slot: input.slot, status: "refused", reason: encryptionFailure };
       }
       encrypted = options.encryption.encryptString(value);
       if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new TypeError();
@@ -843,8 +859,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     writeCredential(input, behavior): Promise<CredentialWriteResult> {
       return serializeCredentialMutation(() =>
         envelopeExclusive(async (proof) => {
-          if (proof !== undefined) await options.prepareEnvelopeWrite?.(proof);
-          return await writeCredential(input, behavior);
+          return await writeCredential(input, behavior, proof);
         }),
       );
     },
@@ -854,7 +869,6 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
     ): Promise<T> {
       return serializeCredentialMutation(() =>
         envelopeExclusive(async (proof) => {
-          if (proof !== undefined) await options.prepareEnvelopeWrite?.(proof);
           let active = true;
           const mutation = Object.freeze({
             writeCredential(
@@ -862,7 +876,7 @@ export function createCredentialVault(options: CredentialVaultOptions): Credenti
               behavior?: CredentialWriteBehavior,
             ): Promise<CredentialWriteResult> {
               if (!active) throw new TypeError();
-              return writeCredential(input, behavior);
+              return writeCredential(input, behavior, proof);
             },
             credentialStatuses(): Promise<readonly CredentialSlotStatus[]> {
               if (!active) throw new TypeError();

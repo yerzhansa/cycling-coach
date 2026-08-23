@@ -7,10 +7,9 @@ import type {
   CredentialEnvelopeLockProof,
   SerializeCredentialEnvelopeMutation,
 } from "./credential-envelope-lock.js";
-import {
-  scanCredentialEnvelopes,
-  type CredentialEnvelopeRoots,
-} from "./credential-envelope-inventory.js";
+import type { KeychainKeyRetirement } from "./automatic-key-retirement.js";
+import type { CredentialEnvelopeRoots } from "./credential-envelope-inventory.js";
+import { scanBoundCredentialEnvelopes } from "./credential-envelope-root-binding.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
 import {
   createRefusingKeychainEncryption,
@@ -25,10 +24,6 @@ import {
   type KeychainBindingTransport,
 } from "./keychain-binding.js";
 import { resolveKeychainBindingPath, type KeychainBindingLocation } from "./keychain-binding-path.js";
-import {
-  retireKeychainKeyWhenLastEnvelopeGone,
-  type KeychainKeyRetirement,
-} from "./keychain-key-lifetime.js";
 
 const UNAVAILABLE_BINDING_RESPONSE: KeychainBindingResponse = Object.freeze({
   ok: false,
@@ -176,11 +171,7 @@ export async function prepareDesktopCredentialEncryption(
       proof: CredentialEnvelopeLockProof,
     ): Promise<KeychainKeyRetirement | undefined> {
       if (selection.status !== "keychain") return undefined;
-      const retired = await retireKeychainKeyWhenLastEnvelopeGone({
-        ...roots,
-        lockProof: proof,
-        deleteKey: selection.deleteKey,
-      });
+      const retired = await selection.retireKey(proof);
       if (retired.status === "failed") transitionToUnavailable(retired.code, true);
       return retired;
     },
@@ -196,7 +187,10 @@ export async function prepareDesktopCredentialEncryption(
         if (current.status !== "keychain") {
           return { selection: current, unverifiedEnvelopes: 0 };
         }
-        const inventory = await scanCredentialEnvelopes(roots);
+        const { inventory } = await scanBoundCredentialEnvelopes(
+          roots,
+          options.location.platform,
+        );
         return { selection: current, unverifiedEnvelopes: inventory.unverified };
       });
     },
@@ -206,7 +200,7 @@ export async function prepareDesktopCredentialEncryption(
       if (options.location.platform !== "darwin") return { status: "already-absent" };
       const deleted =
         selection.status === "keychain"
-          ? await selection.deleteKey(proof)
+          ? await selection.deleteKeyForReset(proof)
           : await transport.send({ op: "delete-key", service }).then((response) => {
               if (!response.ok) return { status: "failed" as const, code: response.code };
               if (response.op !== "delete-key") {

@@ -2,9 +2,12 @@ import type {
   CredentialEnvelopeLockProof,
   SerializeCredentialEnvelopeMutation,
 } from "./credential-envelope-lock.js";
+import {
+  createAutomaticKeyRetirementInspector,
+  type KeychainKeyRetirement,
+} from "./automatic-key-retirement.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
 import type { CredentialEnvelopeRoots } from "./credential-envelope-inventory.js";
-import { scanBoundCredentialEnvelopes } from "./credential-envelope-root-binding.js";
 import {
   createKeychainPartitionEncryption,
   createRefusingKeychainEncryption,
@@ -22,7 +25,10 @@ export type DesktopCredentialBackendSelection =
       unverifiedEnvelopes: number;
       createdKey: boolean;
       prepareKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyPreparation>;
-      deleteKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyDeletion>;
+      retireKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyRetirement>;
+      deleteKeyForReset: (
+        proof: CredentialEnvelopeLockProof,
+      ) => Promise<KeychainKeyDeletion>;
     }>
   | Readonly<{ status: "safe-storage"; encryption: CredentialEncryptionPort }>
   | Readonly<{
@@ -82,21 +88,21 @@ async function selectMacCredentialBackend(
 ): Promise<DesktopCredentialBackendSelection> {
   let deletionBlockers = 0;
   let unverifiedEnvelopes = 0;
+  const inspect = createAutomaticKeyRetirementInspector(
+    options,
+    options.platform ?? process.platform,
+  );
   const keychain = await createKeychainPartitionEncryption({
     transport: options.transport,
     service: options.service,
     keyCleanupPending: options.keyCleanupPending,
-    envelopeCensus: async () => {
-      const { inventory } = await scanBoundCredentialEnvelopes(
-        options,
-        options.platform ?? process.platform,
-      );
-      deletionBlockers = inventory.deletionBlockers.length;
-      unverifiedEnvelopes = inventory.unverified;
-      return {
-        deletionBlockers,
-        keychainDependents: inventory.keychainDependents,
-      };
+    inspectAutomaticRetirement: async (currentProof) => {
+      const inspection = await inspect(currentProof);
+      if (inspection.status === "inspected") {
+        deletionBlockers = inspection.deletionBlockers;
+        unverifiedEnvelopes = inspection.unverified;
+      }
+      return inspection;
     },
     lockProof: proof,
   });
@@ -128,6 +134,7 @@ async function selectMacCredentialBackend(
     unverifiedEnvelopes,
     createdKey: keychain.createdKey,
     prepareKey: keychain.prepareKey,
-    deleteKey: keychain.deleteKey,
+    retireKey: keychain.retireKey,
+    deleteKeyForReset: keychain.deleteKeyForReset,
   };
 }

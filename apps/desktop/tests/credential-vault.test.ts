@@ -15,7 +15,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCredentialMutationLock } from "../src/main/credential-envelope-lock.js";
+import {
+  createCredentialEnvelopeMutationLock,
+  createCredentialMutationLock,
+} from "../src/main/credential-envelope-lock.js";
 import {
   CREDENTIAL_DIRECTORY_MODE,
   CREDENTIAL_FILE_MODE,
@@ -556,6 +559,46 @@ describe("desktop credential vault", () => {
     expect(() =>
       escaped!.writeCredential({ slot: "anthropic", value: "synthetic-secret" }),
     ).toThrow(TypeError);
+    await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("revalidates encryption at the delayed exclusive mutation write boundary", async () => {
+    const root = await temporaryRoot();
+    let persistedKey = "key-a";
+    const cachedKey = "key-a";
+    let available = true;
+    const encryptString = vi.fn((value: string) => Buffer.from(value));
+    const prepareEnvelopeWrite = vi.fn(async () => {
+      if (persistedKey !== cachedKey) available = false;
+    });
+    const vault = createCredentialVault({
+      root,
+      encryption: {
+        isEncryptionAvailable: () => available,
+        encryptString,
+        decryptString: vi.fn(),
+      },
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      prepareEnvelopeWrite,
+      applyCredential: vi.fn(async () => undefined),
+    });
+
+    const result = await vault.runExclusiveMutation(async (mutation) => {
+      expect(prepareEnvelopeWrite).not.toHaveBeenCalled();
+      persistedKey = "key-b";
+      return await mutation.writeCredential(
+        { slot: "anthropic", value: "synthetic-secret" },
+        { activate: false },
+      );
+    });
+
+    expect(result).toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "encryption-unavailable",
+    });
+    expect(prepareEnvelopeWrite).toHaveBeenCalledOnce();
+    expect(encryptString).not.toHaveBeenCalled();
     await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 

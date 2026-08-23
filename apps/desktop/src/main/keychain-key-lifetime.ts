@@ -1,37 +1,18 @@
-import type { CredentialEnvelopeRoots } from "./credential-envelope-inventory.js";
-import {
-  assertCredentialEnvelopeRootsStable,
-  scanBoundCredentialEnvelopes,
-} from "./credential-envelope-root-binding.js";
 import type { CredentialEnvelopeLockProof } from "./credential-envelope-lock.js";
-import type { KeychainKeyDeletion } from "./keychain-credential-encryption.js";
-import type { KeychainBindingErrorCode } from "./keychain-binding.js";
+import type { KeychainKeyRetirement } from "./automatic-key-retirement.js";
 
-export type KeychainKeyRetirement =
-  | Readonly<{ status: "retained"; envelopes: number }>
-  | Readonly<{ status: "deleted" }>
-  | Readonly<{ status: "already-absent" }>
-  | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>;
+export type { KeychainKeyRetirement } from "./automatic-key-retirement.js";
 
-export interface RetireKeychainKeyOptions extends CredentialEnvelopeRoots {
+export interface RetireKeychainKeyOptions {
   readonly lockProof: CredentialEnvelopeLockProof;
-  readonly deleteKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyDeletion>;
-  readonly platform?: NodeJS.Platform;
+  readonly retireKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyRetirement>;
 }
 
 export async function retireKeychainKeyWhenLastEnvelopeGone(
   options: RetireKeychainKeyOptions,
 ): Promise<KeychainKeyRetirement> {
   try {
-    const { bindings, inventory } = await scanBoundCredentialEnvelopes(
-      options,
-      options.platform ?? process.platform,
-    );
-    if (inventory.deletionBlockers.length > 0) {
-      return { status: "retained", envelopes: inventory.deletionBlockers.length };
-    }
-    await assertCredentialEnvelopeRootsStable(bindings);
-    return await options.deleteKey(options.lockProof);
+    return await options.retireKey(options.lockProof);
   } catch {
     return { status: "failed", code: "unknown" };
   }
