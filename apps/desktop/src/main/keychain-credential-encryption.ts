@@ -7,6 +7,7 @@ import {
 } from "./automatic-key-retirement.js";
 import type { CredentialEnvelopeLockProof } from "./credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
+import type { KeyCleanupDebt } from "./key-cleanup-debt.js";
 import {
   CREDENTIAL_ENVELOPE_HEADER_BYTES,
   CREDENTIAL_ENVELOPE_IV_BYTES,
@@ -19,6 +20,7 @@ import {
   KEYCHAIN_KEY_BYTES,
   KEYCHAIN_TEAM_IDENTIFIER,
   type KeychainBindingErrorCode,
+  type KeychainBindingResponse,
   type KeychainBindingTransport,
 } from "./keychain-binding.js";
 
@@ -85,25 +87,26 @@ export type KeychainPartitionEncryptionResult =
   | {
       readonly status: "unavailable";
       readonly code: KeychainBindingErrorCode;
-      readonly keyCleanupPending: boolean;
+      readonly keyCleanupDebt: KeyCleanupDebt;
       readonly encryption: CredentialEncryptionPort;
     }
   | {
       readonly status: "storage-failed";
       readonly code: KeychainBindingErrorCode;
-      readonly keyCleanupPending: boolean;
+      readonly keyCleanupDebt: KeyCleanupDebt;
       readonly encryption: CredentialEncryptionPort;
     }
   | {
       readonly status: "unsupported";
       readonly code: "not-team-signed";
+      readonly keyCleanupDebt: KeyCleanupDebt;
     };
 
 export interface CreateKeychainPartitionEncryptionOptions {
   readonly transport: KeychainBindingTransport;
   readonly service: string;
   readonly inspectAutomaticRetirement: InspectAutomaticKeyRetirement;
-  readonly keyCleanupPending?: boolean;
+  readonly keyCleanupDebt?: KeyCleanupDebt;
   readonly lockProof: CredentialEnvelopeLockProof;
 }
 
@@ -124,7 +127,16 @@ export function createRefusingKeychainEncryption(
 
 export type KeychainKeyPreparation =
   | Readonly<{ status: "ready" }>
-  | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>;
+  | Readonly<{
+      status: "failed";
+      code: KeychainBindingErrorCode;
+      keyCleanupDebt: Exclude<KeyCleanupDebt, "none">;
+    }>
+  | Readonly<{
+      status: "failed";
+      code: KeychainBindingErrorCode;
+      keyCleanupDebt?: "none";
+    }>;
 
 export type KeychainKeyDeletion =
   | Readonly<{ status: "deleted" | "already-absent" }>
@@ -133,7 +145,7 @@ export type KeychainKeyDeletion =
 interface KeyHolder {
   key: Buffer | null;
   failure: KeychainBindingErrorCode;
-  cleanupPending: boolean;
+  cleanupDebt: KeyCleanupDebt;
 }
 
 function readyPort(holder: KeyHolder): CredentialEncryptionPort {
@@ -151,20 +163,20 @@ function readyPort(holder: KeyHolder): CredentialEncryptionPort {
 
 function refused(
   code: KeychainBindingErrorCode,
-  keyCleanupPending = false,
+  keyCleanupDebt: KeyCleanupDebt = "none",
 ): KeychainPartitionEncryptionResult {
   if (code === "keychain-locked" || code === "uninspectable-item" || code === "item-not-found") {
     return {
       status: "unavailable",
       code,
-      keyCleanupPending,
+      keyCleanupDebt,
       encryption: createRefusingKeychainEncryption(code, false),
     };
   }
   return {
     status: "storage-failed",
     code,
-    keyCleanupPending,
+    keyCleanupDebt,
     encryption: createRefusingKeychainEncryption(code, true),
   };
 }
@@ -173,15 +185,33 @@ export async function createKeychainPartitionEncryption(
   options: CreateKeychainPartitionEncryptionOptions,
 ): Promise<KeychainPartitionEncryptionResult> {
   const { transport, service } = options;
+  const retryCreationRollback = async (): Promise<
+    | Readonly<{ status: "ready" }>
+    | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>
+  > => {
+    try {
+      const retried = await transport.send({ op: "retry-created-key-rollback", service });
+      if (!retried.ok) return { status: "failed", code: retried.code };
+      return retried.op === "retry-created-key-rollback"
+        ? { status: "ready" }
+        : { status: "failed", code: "unknown" };
+    } catch {
+      return { status: "failed", code: "unknown" };
+    }
+  };
+  let initialCleanupDebt = options.keyCleanupDebt ?? "none";
   const probe = await transport.send({ op: "probe", service });
   if (!probe.ok) {
     return probe.code === "not-team-signed"
-      ? { status: "unsupported", code: "not-team-signed" }
-      : refused(probe.code);
+      ? { status: "unsupported", code: "not-team-signed", keyCleanupDebt: initialCleanupDebt }
+      : refused(probe.code, initialCleanupDebt);
   }
   if (probe.op !== "probe" || probe.teamIdentifier !== KEYCHAIN_TEAM_IDENTIFIER) {
-    return refused("unknown");
+    return refused("unknown", initialCleanupDebt);
   }
+  const retried = await retryCreationRollback();
+  if (retried.status === "failed") return refused(retried.code, "creation-rollback");
+  if (initialCleanupDebt === "creation-rollback") initialCleanupDebt = "none";
   const inspectAutomaticRetirement = async (proof: CredentialEnvelopeLockProof) => {
     if (proof !== options.lockProof) return { status: "failed" as const };
     try {
@@ -192,20 +222,38 @@ export async function createKeychainPartitionEncryption(
   };
   const initialInspection = await inspectAutomaticRetirement(options.lockProof);
   if (initialInspection.status === "failed") {
-    return refused("unknown", options.keyCleanupPending ?? false);
+    return refused("unknown", initialCleanupDebt);
   }
 
   const createMaterial = async (): Promise<
     | Readonly<{ status: "ready"; key: Buffer }>
-    | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>
+    | Readonly<{
+        status: "failed";
+        code: KeychainBindingErrorCode;
+        keyCleanupDebt: KeyCleanupDebt;
+      }>
   > => {
-    const created = await transport.send({ op: "create-key", service });
-    if (!created.ok) return { status: "failed", code: created.code };
-    if (created.op !== "create-key") return { status: "failed", code: "unknown" };
+    let created: KeychainBindingResponse;
+    try {
+      created = await transport.send({ op: "create-key", service });
+    } catch {
+      return { status: "failed", code: "unknown", keyCleanupDebt: "creation-rollback" };
+    }
+    if (!created.ok) {
+      return {
+        status: "failed",
+        code: created.code,
+        keyCleanupDebt:
+          created.creationRollbackPending === false ? "none" : "creation-rollback",
+      };
+    }
+    if (created.op !== "create-key") {
+      return { status: "failed", code: "unknown", keyCleanupDebt: "creation-rollback" };
+    }
     const key = Buffer.from(created.key);
     if (key.length === KEYCHAIN_KEY_BYTES) return { status: "ready", key };
     key.fill(0);
-    return { status: "failed", code: "unknown" };
+    return { status: "failed", code: "unknown", keyCleanupDebt: "creation-rollback" };
   };
 
   const readMaterial = async (): Promise<
@@ -244,10 +292,16 @@ export async function createKeychainPartitionEncryption(
   };
 
   const ready = (key: Buffer | null, createdKey: boolean): KeychainPartitionEncryptionResult => {
-    const holder: KeyHolder = { key, failure: "item-not-found", cleanupPending: false };
-    const fail = (code: KeychainBindingErrorCode): KeychainKeyPreparation => {
+    const holder: KeyHolder = { key, failure: "item-not-found", cleanupDebt: "none" };
+    const fail = (
+      code: KeychainBindingErrorCode,
+      keyCleanupDebt: KeyCleanupDebt = holder.cleanupDebt,
+    ): KeychainKeyPreparation => {
       holder.failure = code;
-      return { status: "failed", code };
+      holder.cleanupDebt = keyCleanupDebt;
+      return keyCleanupDebt === "none"
+        ? { status: "failed", code }
+        : { status: "failed", code, keyCleanupDebt };
     };
     const clearKey = (): void => {
       holder.key?.fill(0);
@@ -276,16 +330,21 @@ export async function createKeychainPartitionEncryption(
     ): Promise<KeychainKeyPreparation> => {
       if (proof !== options.lockProof) return fail("unknown");
       if (holder.key !== null) return await validateKey(proof);
-      if (holder.cleanupPending) {
+      if (holder.cleanupDebt === "creation-rollback") {
+        const retried = await retryCreationRollback();
+        if (retried.status === "failed") return fail(retried.code, "creation-rollback");
+        holder.cleanupDebt = "none";
+      }
+      if (holder.cleanupDebt === "retirement") {
         const inspection = await inspectAutomaticRetirement(proof);
         if (inspection.status === "failed" || inspection.zeroProof === null) {
-          return fail("unknown");
+          return fail("unknown", "retirement");
         }
         const deleted = await deleteMaterial(inspection.zeroProof);
         if (deleted.status === "failed") {
-          return fail(deleted.code);
+          return fail(deleted.code, "retirement");
         }
-        holder.cleanupPending = false;
+        holder.cleanupDebt = "none";
       }
       const existing = await readMaterial();
       if (existing.status === "ready") {
@@ -303,7 +362,7 @@ export async function createKeychainPartitionEncryption(
       }
       const created = await createMaterial();
       if (created.status === "failed") {
-        return fail(created.code);
+        return fail(created.code, created.keyCleanupDebt);
       }
       holder.key = created.key;
       holder.failure = "item-not-found";
@@ -316,6 +375,7 @@ export async function createKeychainPartitionEncryption(
       if (inspection.status === "failed") {
         clearKey();
         holder.failure = "unknown";
+        holder.cleanupDebt = "none";
         return { status: "failed", code: "unknown", keyCleanupPending: false };
       }
       if (inspection.zeroProof === null) {
@@ -327,12 +387,12 @@ export async function createKeychainPartitionEncryption(
       if (deleted.status === "failed") {
         previous?.fill(0);
         holder.failure = deleted.code;
-        holder.cleanupPending = true;
+        holder.cleanupDebt = "retirement";
         return { ...deleted, keyCleanupPending: true };
       }
       previous?.fill(0);
       holder.failure = "item-not-found";
-      holder.cleanupPending = false;
+      holder.cleanupDebt = "none";
       return deleted;
     };
     const deleteKeyForReset = async (
@@ -345,11 +405,11 @@ export async function createKeychainPartitionEncryption(
       previous?.fill(0);
       if (deleted.status === "failed") {
         holder.failure = deleted.code;
-        holder.cleanupPending = true;
+        holder.cleanupDebt = "retirement";
         return deleted;
       }
       holder.failure = "item-not-found";
-      holder.cleanupPending = false;
+      holder.cleanupDebt = "none";
       return deleted;
     };
     return {
@@ -363,10 +423,12 @@ export async function createKeychainPartitionEncryption(
     };
   };
 
-  if (options.keyCleanupPending) {
-    if (initialInspection.zeroProof === null) return refused("unknown", true);
+  if (initialCleanupDebt === "retirement") {
+    if (initialInspection.zeroProof === null) return refused("unknown", "retirement");
     const deleted = await deleteMaterial(initialInspection.zeroProof);
-    return deleted.status === "failed" ? refused(deleted.code, true) : ready(null, false);
+    return deleted.status === "failed"
+      ? refused(deleted.code, "retirement")
+      : ready(null, false);
   }
 
   const read = await readMaterial();
@@ -374,7 +436,9 @@ export async function createKeychainPartitionEncryption(
     if (initialInspection.zeroProof === null) return ready(read.key, false);
     const deleted = await deleteMaterial(initialInspection.zeroProof);
     read.key.fill(0);
-    return deleted.status === "failed" ? refused(deleted.code, true) : ready(null, false);
+    return deleted.status === "failed"
+      ? refused(deleted.code, "retirement")
+      : ready(null, false);
   }
   if (read.status === "missing") {
     return initialInspection.keychainDependents > 0 ? refused("item-not-found") : ready(null, false);

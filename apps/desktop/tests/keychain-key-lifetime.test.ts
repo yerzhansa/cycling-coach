@@ -104,11 +104,15 @@ async function keychainEncryption(): Promise<CredentialEncryptionPort> {
   const serialize = createCredentialEnvelopeMutationLock();
   const result = await serialize((lockProof) =>
     createKeychainPartitionEncryption({
-      transport: transportOf(PROBE_OK, {
-        ok: true,
-        op: "read-key",
-        key: randomBytes(KEYCHAIN_KEY_BYTES),
-      }),
+      transport: transportOf(
+        PROBE_OK,
+        { ok: true, op: "retry-created-key-rollback" },
+        {
+          ok: true,
+          op: "read-key",
+          key: randomBytes(KEYCHAIN_KEY_BYTES),
+        },
+      ),
       service: KEYCHAIN_CREDENTIAL_SERVICE,
       inspectAutomaticRetirement: async () => ({
         status: "inspected",

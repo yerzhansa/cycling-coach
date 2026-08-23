@@ -11,6 +11,7 @@ import type { KeychainKeyRetirement } from "./automatic-key-retirement.js";
 import type { CredentialEnvelopeRoots } from "./credential-envelope-inventory.js";
 import { scanBoundCredentialEnvelopes } from "./credential-envelope-root-binding.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
+import type { KeyCleanupDebt } from "./key-cleanup-debt.js";
 import {
   createRefusingKeychainEncryption,
   type KeychainKeyDeletion,
@@ -94,17 +95,20 @@ export async function prepareDesktopCredentialEncryption(
     });
   } catch {
     const unavailable = options.location.platform === "darwin";
+    const keyCleanupDebt: KeyCleanupDebt = "none";
     selection = {
       status: "refused",
       encryption: createRefusingKeychainEncryption("unknown", !unavailable),
       reason: unavailable ? "encryption-unavailable" : "storage-failed",
       code: "unknown",
-      keyCleanupPending: false,
+      keyCleanupDebt,
+      keyCleanupPending: keyCleanupDebt !== "none",
     };
   }
   let currentEncryption = selection.encryption;
-  let keyCleanupPending = selection.status === "refused" && selection.keyCleanupPending;
-  let refreshBeforeWrite = keyCleanupPending;
+  let keyCleanupDebt: KeyCleanupDebt =
+    selection.status === "refused" ? selection.keyCleanupDebt : "none";
+  let refreshBeforeWrite = keyCleanupDebt !== "none";
   const encryption: CredentialEncryptionPort = {
     isEncryptionAvailable: () => currentEncryption.isEncryptionAvailable(),
     encryptString: (value) => currentEncryption.encryptString(value),
@@ -113,52 +117,51 @@ export async function prepareDesktopCredentialEncryption(
   };
   const transitionToUnavailable = (
     code: KeychainBindingErrorCode,
-    cleanupPending: boolean,
+    cleanupDebt: KeyCleanupDebt,
   ): void => {
     selection = {
       status: "refused",
       encryption: createRefusingKeychainEncryption(code, false),
       reason: "encryption-unavailable",
       code,
-      keyCleanupPending: cleanupPending,
+      keyCleanupDebt: cleanupDebt,
+      keyCleanupPending: cleanupDebt !== "none",
     };
     currentEncryption = selection.encryption;
-    keyCleanupPending = cleanupPending;
-    refreshBeforeWrite = cleanupPending;
+    keyCleanupDebt = cleanupDebt;
+    refreshBeforeWrite = cleanupDebt !== "none";
   };
   const refreshSelection = async (
     proof: CredentialEnvelopeLockProof,
   ): Promise<DesktopCredentialBackendSelection> => {
-    const pendingBeforeRefresh = keyCleanupPending;
     try {
-      let next = await selectDesktopCredentialBackendLocked(
+      const next = await selectDesktopCredentialBackendLocked(
         {
           ...roots,
           transport,
           service,
           safeStorage: options.safeStorage,
           platform: options.location.platform,
-          keyCleanupPending,
+          keyCleanupDebt,
           serializeEnvelopeMutation: options.serializeEnvelopeMutation,
         },
         proof,
       );
-      if (next.status === "refused" && pendingBeforeRefresh && !next.keyCleanupPending) {
-        next = { ...next, keyCleanupPending: true };
-      }
       selection = next;
       currentEncryption = next.encryption;
-      keyCleanupPending = next.status === "refused" && next.keyCleanupPending;
-      refreshBeforeWrite = keyCleanupPending;
+      keyCleanupDebt = next.status === "refused" ? next.keyCleanupDebt : "none";
+      refreshBeforeWrite = keyCleanupDebt !== "none";
     } catch {
       selection = {
         status: "refused",
         encryption: createRefusingKeychainEncryption("unknown", false),
         reason: "encryption-unavailable",
         code: "unknown",
-        keyCleanupPending,
+        keyCleanupDebt,
+        keyCleanupPending: keyCleanupDebt !== "none",
       };
       currentEncryption = selection.encryption;
+      refreshBeforeWrite = keyCleanupDebt !== "none";
     }
     return selection;
   };
@@ -174,14 +177,16 @@ export async function prepareDesktopCredentialEncryption(
       }
       if (selection.status !== "keychain") return;
       const prepared = await selection.prepareKey(proof);
-      if (prepared.status === "failed") transitionToUnavailable(prepared.code, false);
+      if (prepared.status === "failed") {
+        transitionToUnavailable(prepared.code, prepared.keyCleanupDebt ?? "none");
+      }
     },
     async revalidateEnvelopeRemoval(proof: CredentialEnvelopeLockProof): Promise<boolean> {
       if (options.location.platform !== "darwin") return true;
       if (selection.status !== "keychain") return false;
       const validated = await selection.validateKey(proof);
       if (validated.status === "ready") return true;
-      transitionToUnavailable(validated.code, false);
+      transitionToUnavailable(validated.code, validated.keyCleanupDebt ?? "none");
       return false;
     },
     async retireKeychainKey(
@@ -190,7 +195,10 @@ export async function prepareDesktopCredentialEncryption(
       if (selection.status !== "keychain") return undefined;
       const retired = await selection.retireKey(proof);
       if (retired.status === "failed") {
-        transitionToUnavailable(retired.code, retired.keyCleanupPending);
+        transitionToUnavailable(
+          retired.code,
+          retired.keyCleanupPending ? "retirement" : "none",
+        );
       }
       return retired;
     },
@@ -213,7 +221,7 @@ export async function prepareDesktopCredentialEncryption(
           );
           return { selection: current, unverifiedEnvelopes: inventory.unverified };
         } catch {
-          transitionToUnavailable("unknown", false);
+          transitionToUnavailable("unknown", keyCleanupDebt);
           return { selection, unverifiedEnvelopes: 0 };
         }
       });
@@ -235,10 +243,10 @@ export async function prepareDesktopCredentialEncryption(
               };
             });
       if (deleted.status === "failed") {
-        transitionToUnavailable(deleted.code, true);
+        transitionToUnavailable(deleted.code, "retirement");
         return deleted;
       }
-      keyCleanupPending = false;
+      keyCleanupDebt = "none";
       refreshBeforeWrite = false;
       await refreshSelection(proof);
       return deleted;

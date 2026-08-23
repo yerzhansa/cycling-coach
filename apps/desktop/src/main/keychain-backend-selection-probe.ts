@@ -35,6 +35,9 @@ export function createKeychainBackendSelectionProbeTransport(
   return {
     async send(request): Promise<KeychainBindingResponse> {
       if (request.op === "read-key") return SYNTHETIC_MISSING_KEY;
+      if (request.op === "retry-created-key-rollback") {
+        return { ok: true, op: "retry-created-key-rollback" };
+      }
       if (request.op === "create-key" || request.op === "delete-key") {
         throw new Error("release backend selection probe refused key mutation");
       }

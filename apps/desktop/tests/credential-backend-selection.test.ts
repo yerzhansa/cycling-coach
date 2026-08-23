@@ -91,14 +91,21 @@ function safeStorage(): CredentialEncryptionPort {
 
 interface RecordingTransport extends KeychainBindingTransport {
   readonly requests: KeychainBindingRequest[];
+  readonly allRequests: KeychainBindingRequest[];
 }
 
 function transportOf(...responses: readonly KeychainBindingResponse[]): RecordingTransport {
   const remaining = [...responses];
   const requests: KeychainBindingRequest[] = [];
+  const allRequests: KeychainBindingRequest[] = [];
   return {
     requests,
+    allRequests,
     send(request) {
+      allRequests.push(request);
+      if (request.op === "retry-created-key-rollback") {
+        return Promise.resolve({ ok: true, op: "retry-created-key-rollback" });
+      }
       requests.push(request);
       const next = remaining.shift();
       if (next === undefined) throw new Error("unexpected helper request");
@@ -740,7 +747,7 @@ describe("keychain failure mapping", () => {
       PROBE_OK,
       { ok: false, code: "item-not-found" },
       { ok: false, code: "item-not-found" },
-      { ok: false, code: "duplicate-item" },
+      { ok: false, code: "duplicate-item", creationRollbackPending: false },
     );
 
     const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();

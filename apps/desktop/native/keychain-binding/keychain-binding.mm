@@ -6,8 +6,10 @@
 #include <string.h>
 
 #include <array>
+#include <new>
 #include <string>
 
+#include "creation-rollback.h"
 #include "partition-description.h"
 
 namespace {
@@ -18,8 +20,27 @@ constexpr char kDevelopmentService[] = "icu.enduragent.desktop.dev";
 constexpr char kAccount[] = "credential-encryption-key-v1";
 constexpr size_t kKeyBytes = 32;
 
+using enduragent::keychain::CreationRollbackAddResult;
+using enduragent::keychain::CreationRollbackBufferResult;
+using enduragent::keychain::CreationRollbackContentResult;
+using enduragent::keychain::CreationRollbackDebt;
+using enduragent::keychain::CreationRollbackDependencies;
+using enduragent::keychain::CreationRollbackResult;
+using enduragent::keychain::ReleaseCreationRollbackDebt;
+using enduragent::keychain::RetryCreationRollback;
+using enduragent::keychain::RunCreationRollbackTransaction;
+
+struct BindingState {
+  CreationRollbackDebt creationDebt;
+};
+
+void EraseBytes(void *bytes, size_t length) {
+  if (bytes != nullptr && length > 0)
+    memset_s(bytes, length, 0, length);
+}
+
 void EraseKey(std::array<unsigned char, kKeyBytes> &material) {
-  memset_s(material.data(), material.size(), 0, material.size());
+  EraseBytes(material.data(), material.size());
 }
 
 CFStringRef String(const char *value) {
@@ -27,32 +48,54 @@ CFStringRef String(const char *value) {
                                    kCFStringEncodingUTF8);
 }
 
-napi_value Text(napi_env env, const char *value) {
-  napi_value result;
-  napi_create_string_utf8(env, value, NAPI_AUTO_LENGTH, &result);
-  return result;
+bool Text(napi_env env, const char *value, napi_value &result) {
+  return napi_create_string_utf8(env, value, NAPI_AUTO_LENGTH, &result) ==
+         napi_ok;
 }
 
-void Set(napi_env env, napi_value object, const char *key, napi_value value) {
-  napi_set_named_property(env, object, key, value);
+bool Set(napi_env env, napi_value object, const char *key, napi_value value) {
+  return napi_set_named_property(env, object, key, value) == napi_ok;
+}
+
+napi_value NapiError(napi_env env) {
+  if (napi_throw_error(env, nullptr, "keychain binding response failed") !=
+      napi_ok)
+    return nullptr;
+  return nullptr;
+}
+
+bool ResultShell(napi_env env, bool succeeded, napi_value &result) {
+  napi_value ok = nullptr;
+  return napi_create_object(env, &result) == napi_ok &&
+         napi_get_boolean(env, succeeded, &ok) == napi_ok &&
+         Set(env, result, "ok", ok);
 }
 
 napi_value Failure(napi_env env, const char *code) {
-  napi_value result;
-  napi_create_object(env, &result);
-  napi_value ok;
-  napi_get_boolean(env, false, &ok);
-  Set(env, result, "ok", ok);
-  Set(env, result, "code", Text(env, code));
+  napi_value result = nullptr;
+  napi_value codeValue = nullptr;
+  if (!ResultShell(env, false, result) || !Text(env, code, codeValue) ||
+      !Set(env, result, "code", codeValue))
+    return NapiError(env);
+  return result;
+}
+
+napi_value CreationFailure(napi_env env, const char *code, bool pending) {
+  napi_value result = nullptr;
+  napi_value codeValue = nullptr;
+  napi_value pendingValue = nullptr;
+  if (!ResultShell(env, false, result) || !Text(env, code, codeValue) ||
+      !Set(env, result, "code", codeValue) ||
+      napi_get_boolean(env, pending, &pendingValue) != napi_ok ||
+      !Set(env, result, "creationRollbackPending", pendingValue))
+    return NapiError(env);
   return result;
 }
 
 napi_value Success(napi_env env) {
-  napi_value result;
-  napi_create_object(env, &result);
-  napi_value ok;
-  napi_get_boolean(env, true, &ok);
-  Set(env, result, "ok", ok);
+  napi_value result = nullptr;
+  if (!ResultShell(env, true, result))
+    return NapiError(env);
   return result;
 }
 
@@ -366,26 +409,152 @@ PartitionInspection InspectPartition(SecKeychainItemRef item) {
   return result;
 }
 
-bool ReadyForKeychain(napi_env env, napi_value &refusal) {
-  const OSStatus interactionStatus = InteractionDisabled();
-  if (interactionStatus != errSecSuccess) {
-    refusal = Failure(env, StatusCode(interactionStatus));
-    return false;
+struct NativeCreationContext {
+  napi_env env;
+  CFMutableDictionaryRef attributes;
+  napi_value response = nullptr;
+  bool napiFailure = false;
+};
+
+const char *PrepareCreationResponse(void *value) {
+  auto &context = *static_cast<NativeCreationContext *>(value);
+  if (!ResultShell(context.env, true, context.response)) {
+    context.napiFailure = true;
+    return "unknown";
   }
-  static const bool trusted = TrustedHost();
-  if (!trusted) {
-    refusal = Failure(env, "not-team-signed");
-    return false;
+  return nullptr;
+}
+
+CreationRollbackAddResult AddCreatedItem(void *value) {
+  auto &context = *static_cast<NativeCreationContext *>(value);
+  CFTypeRef itemValue = nullptr;
+  const OSStatus status = SecItemAdd(context.attributes, &itemValue);
+  if (status != errSecSuccess)
+    return {StatusCode(status), const_cast<void *>(itemValue), false};
+  const bool exact = itemValue != nullptr &&
+                     CFGetTypeID(itemValue) == SecKeychainItemGetTypeID();
+  return {nullptr, const_cast<void *>(itemValue), exact};
+}
+
+const char *InspectCreatedItem(void *, void *value) {
+  const PartitionInspection partition = InspectPartition(
+      static_cast<SecKeychainItemRef>(value));
+  if (partition == PartitionInspection::kPresent)
+    return nullptr;
+  return partition == PartitionInspection::kAbsent ? "unreadable-item"
+                                                    : "uninspectable-item";
+}
+
+CreationRollbackContentResult CopyCreatedContent(void *, void *value) {
+  UInt32 length = 0;
+  void *bytes = nullptr;
+  const OSStatus status = SecKeychainItemCopyContent(
+      static_cast<SecKeychainItemRef>(value), nullptr, nullptr, &length,
+      &bytes);
+  return {status == errSecSuccess ? nullptr : StatusCode(status), bytes,
+          static_cast<size_t>(length)};
+}
+
+const char *FreeCreatedContent(void *, void *bytes, size_t length) {
+  EraseBytes(bytes, length);
+  return SecKeychainItemFreeContent(nullptr, bytes) == errSecSuccess
+             ? nullptr
+             : "uninspectable-item";
+}
+
+CreationRollbackBufferResult CreateKeyBuffer(void *value,
+                                             const unsigned char *material,
+                                             size_t length) {
+  auto &context = *static_cast<NativeCreationContext *>(value);
+  napi_value key = nullptr;
+  void *bytes = nullptr;
+  if (napi_create_buffer_copy(context.env, length, material, &bytes, &key) !=
+      napi_ok) {
+    context.napiFailure = true;
+    return {"unknown", key, static_cast<unsigned char *>(bytes),
+            bytes == nullptr ? 0 : length};
   }
+  return {nullptr, key, static_cast<unsigned char *>(bytes), length};
+}
+
+const char *PublishKeyBuffer(void *value, void *key) {
+  auto &context = *static_cast<NativeCreationContext *>(value);
+  if (!Set(context.env, context.response, "key",
+           static_cast<napi_value>(key))) {
+    context.napiFailure = true;
+    return "unknown";
+  }
+  return nullptr;
+}
+
+void WipeKeyBuffer(void *, unsigned char *bytes, size_t length) {
+  EraseBytes(bytes, length);
+}
+
+const char *DeleteCreatedItem(void *, void *value) {
+  const OSStatus status =
+      SecKeychainItemDelete(static_cast<SecKeychainItemRef>(value));
+  return status == errSecSuccess ? nullptr : StatusCode(status);
+}
+
+void ReleaseCreatedRef(void *, void *value) {
+  CFRelease(static_cast<CFTypeRef>(value));
+}
+
+void EraseCreatedMaterial(void *, unsigned char *material, size_t length) {
+  EraseBytes(material, length);
+}
+
+CreationRollbackDependencies NativeCreationDependencies(void *context) {
+  return {context,
+          PrepareCreationResponse,
+          AddCreatedItem,
+          InspectCreatedItem,
+          CopyCreatedContent,
+          FreeCreatedContent,
+          CreateKeyBuffer,
+          PublishKeyBuffer,
+          WipeKeyBuffer,
+          DeleteCreatedItem,
+          ReleaseCreatedRef,
+          EraseCreatedMaterial};
+}
+
+bool GetBindingState(napi_env env, BindingState *&state) {
+  void *value = nullptr;
+  if (napi_get_instance_data(env, &value) != napi_ok || value == nullptr)
+    return false;
+  state = static_cast<BindingState *>(value);
   return true;
 }
 
+void FinalizeBindingState(napi_env, void *value, void *) {
+  auto *state = static_cast<BindingState *>(value);
+  if (state == nullptr)
+    return;
+  const CreationRollbackDependencies dependencies =
+      NativeCreationDependencies(nullptr);
+  ReleaseCreationRollbackDebt(state->creationDebt, dependencies);
+  delete state;
+}
+
+const char *ReadinessFailure() {
+  const OSStatus interactionStatus = InteractionDisabled();
+  if (interactionStatus != errSecSuccess)
+    return StatusCode(interactionStatus);
+  static const bool trusted = TrustedHost();
+  return trusted ? nullptr : "not-team-signed";
+}
+
 napi_value Probe(napi_env env, napi_callback_info) {
-  napi_value refusal;
-  if (!ReadyForKeychain(env, refusal))
-    return refusal;
+  const char *refusal = ReadinessFailure();
+  if (refusal != nullptr)
+    return Failure(env, refusal);
   napi_value result = Success(env);
-  Set(env, result, "teamIdentifier", Text(env, kTeamIdentifier));
+  napi_value identifier = nullptr;
+  if (result == nullptr || !Text(env, kTeamIdentifier, identifier) ||
+      !Set(env, result, "teamIdentifier", identifier))
+    return NapiError(env);
   return result;
 }
 
@@ -393,9 +562,16 @@ napi_value ReadKey(napi_env env, napi_callback_info info) {
   std::string service;
   if (!ReadService(env, info, service))
     return Failure(env, "unknown");
-  napi_value refusal;
-  if (!ReadyForKeychain(env, refusal))
-    return refusal;
+  const char *refusal = ReadinessFailure();
+  if (refusal != nullptr)
+    return Failure(env, refusal);
+  BindingState *state = nullptr;
+  if (!GetBindingState(env, state))
+    return Failure(env, "unknown");
+  const CreationRollbackResult retry = RetryCreationRollback(
+      service, state->creationDebt, NativeCreationDependencies(nullptr));
+  if (!retry.ok)
+    return Failure(env, retry.code);
   SecKeychainRef keychain = nullptr;
   const OSStatus defaultStatus = CopyDefaultKeychain(keychain);
   if (defaultStatus != errSecSuccess)
@@ -440,124 +616,112 @@ napi_value ReadKey(napi_env env, napi_callback_info info) {
                             ? "unreadable-item"
                             : "uninspectable-item");
   }
-  napi_value key;
-  napi_create_buffer_copy(env, kKeyBytes, CFDataGetBytePtr(data), nullptr,
-                          &key);
+  napi_value key = nullptr;
+  void *keyBytes = nullptr;
+  const napi_status bufferStatus = napi_create_buffer_copy(
+      env, kKeyBytes, CFDataGetBytePtr(data), &keyBytes, &key);
   CFRelease(resultValue);
+  if (bufferStatus != napi_ok) {
+    EraseBytes(keyBytes, keyBytes == nullptr ? 0 : kKeyBytes);
+    return NapiError(env);
+  }
   napi_value response = Success(env);
-  Set(env, response, "key", key);
+  if (response == nullptr || !Set(env, response, "key", key)) {
+    EraseBytes(keyBytes, kKeyBytes);
+    return NapiError(env);
+  }
   return response;
 }
 
 napi_value CreateKey(napi_env env, napi_callback_info info) {
   std::string service;
   if (!ReadService(env, info, service))
-    return Failure(env, "unknown");
-  napi_value refusal;
-  if (!ReadyForKeychain(env, refusal))
-    return refusal;
+    return CreationFailure(env, "unknown", false);
+  const char *refusal = ReadinessFailure();
+  if (refusal != nullptr)
+    return CreationFailure(env, refusal, false);
+  BindingState *state = nullptr;
+  if (!GetBindingState(env, state))
+    return CreationFailure(env, "unknown", false);
+  const CreationRollbackResult retry = RetryCreationRollback(
+      service, state->creationDebt, NativeCreationDependencies(nullptr));
+  if (!retry.ok)
+    return CreationFailure(env, retry.code,
+                           retry.creationRollbackPending);
   SecKeychainRef keychain = nullptr;
   const OSStatus defaultStatus = CopyDefaultKeychain(keychain);
   if (defaultStatus != errSecSuccess)
-    return Failure(env, StatusCode(defaultStatus));
+    return CreationFailure(env, StatusCode(defaultStatus), false);
   std::array<unsigned char, kKeyBytes> material{};
   if (SecRandomCopyBytes(kSecRandomDefault, material.size(), material.data()) !=
       errSecSuccess) {
     CFRelease(keychain);
     EraseKey(material);
-    return Failure(env, "unknown");
+    return CreationFailure(env, "unknown", false);
   }
   SecAccessRef access = MakeAccess();
   if (access == nullptr) {
     CFRelease(keychain);
     EraseKey(material);
-    return Failure(env, "unknown");
+    return CreationFailure(env, "unknown", false);
   }
   CFMutableDictionaryRef attributes = Query(service, keychain, true);
   CFRelease(keychain);
   if (attributes == nullptr) {
     CFRelease(access);
     EraseKey(material);
-    return Failure(env, "unknown");
+    return CreationFailure(env, "unknown", false);
   }
-  CFDataRef data =
-      CFDataCreate(kCFAllocatorDefault, material.data(), material.size());
+  CFDataRef data = CFDataCreateWithBytesNoCopy(
+      kCFAllocatorDefault, material.data(), material.size(), kCFAllocatorNull);
   if (data == nullptr) {
     CFRelease(attributes);
     CFRelease(access);
     EraseKey(material);
-    return Failure(env, "unknown");
+    return CreationFailure(env, "unknown", false);
   }
   CFDictionarySetValue(attributes, kSecValueData, data);
   CFDictionarySetValue(attributes, kSecAttrAccess, access);
   CFDictionarySetValue(attributes, kSecReturnRef, kCFBooleanTrue);
-  CFTypeRef itemValue = nullptr;
-  const OSStatus status = SecItemAdd(attributes, &itemValue);
+  NativeCreationContext context{env, attributes};
+  const CreationRollbackResult result = RunCreationRollbackTransaction(
+      service, material.data(), material.size(), state->creationDebt,
+      NativeCreationDependencies(&context));
   CFRelease(attributes);
   CFRelease(data);
   CFRelease(access);
-  if (status != errSecSuccess) {
-    if (itemValue != nullptr)
-      CFRelease(itemValue);
-    EraseKey(material);
-    return Failure(env, StatusCode(status));
-  }
-  if (itemValue == nullptr ||
-      CFGetTypeID(itemValue) != SecKeychainItemGetTypeID()) {
-    if (itemValue != nullptr)
-      CFRelease(itemValue);
-    EraseKey(material);
-    return Failure(env, "unreadable-item");
-  }
-  const PartitionInspection partition = InspectPartition(
-      static_cast<SecKeychainItemRef>(const_cast<void *>(itemValue)));
-  if (partition != PartitionInspection::kPresent) {
-    CFRelease(itemValue);
-    EraseKey(material);
-    return Failure(env, partition == PartitionInspection::kAbsent
-                            ? "unreadable-item"
-                            : "uninspectable-item");
-  }
-  UInt32 persistedLength = 0;
-  void *persistedData = nullptr;
-  const OSStatus persistedStatus = SecKeychainItemCopyContent(
-      static_cast<SecKeychainItemRef>(const_cast<void *>(itemValue)), nullptr,
-      nullptr, &persistedLength, &persistedData);
-  const bool persistedMatches =
-      persistedStatus == errSecSuccess && persistedData != nullptr &&
-      persistedLength == static_cast<UInt32>(material.size()) &&
-      timingsafe_bcmp(persistedData, material.data(), material.size()) == 0;
-  OSStatus freeStatus = errSecSuccess;
-  if (persistedData != nullptr)
-    freeStatus = SecKeychainItemFreeContent(nullptr, persistedData);
-  CFRelease(itemValue);
-  if (persistedStatus != errSecSuccess) {
-    EraseKey(material);
-    return Failure(env, StatusCode(persistedStatus));
-  }
-  if (freeStatus != errSecSuccess) {
-    EraseKey(material);
-    return Failure(env, "uninspectable-item");
-  }
-  if (!persistedMatches) {
-    EraseKey(material);
-    return Failure(env, "unreadable-item");
-  }
-  napi_value key;
-  napi_create_buffer_copy(env, material.size(), material.data(), nullptr, &key);
-  EraseKey(material);
-  napi_value response = Success(env);
-  Set(env, response, "key", key);
-  return response;
+  if (result.ok)
+    return context.response;
+  return CreationFailure(env, result.code, result.creationRollbackPending);
+}
+
+napi_value RetryCreatedKeyRollback(napi_env env, napi_callback_info info) {
+  std::string service;
+  if (!ReadService(env, info, service))
+    return Failure(env, "unknown");
+  const char *refusal = ReadinessFailure();
+  if (refusal != nullptr)
+    return Failure(env, refusal);
+  BindingState *state = nullptr;
+  if (!GetBindingState(env, state))
+    return Failure(env, "unknown");
+  const CreationRollbackResult retry = RetryCreationRollback(
+      service, state->creationDebt, NativeCreationDependencies(nullptr));
+  return retry.ok ? Success(env) : Failure(env, retry.code);
 }
 
 napi_value DeleteKey(napi_env env, napi_callback_info info) {
   std::string service;
   if (!ReadService(env, info, service))
     return Failure(env, "unknown");
-  napi_value refusal;
-  if (!ReadyForKeychain(env, refusal))
-    return refusal;
+  const char *refusal = ReadinessFailure();
+  if (refusal != nullptr)
+    return Failure(env, refusal);
+  BindingState *state = nullptr;
+  if (!GetBindingState(env, state))
+    return Failure(env, "unknown");
+  if (state->creationDebt.pending)
+    return Failure(env, "uninspectable-item");
   SecKeychainRef keychain = nullptr;
   const OSStatus defaultStatus = CopyDefaultKeychain(keychain);
   if (defaultStatus != errSecSuccess)
@@ -596,15 +760,25 @@ napi_value DeleteKey(napi_env env, napi_callback_info info) {
       return Failure(env, StatusCode(status));
   }
   napi_value response = Success(env);
-  napi_value deleted;
-  napi_get_boolean(env, status == errSecSuccess, &deleted);
-  Set(env, response, "deleted", deleted);
+  napi_value deleted = nullptr;
+  if (response == nullptr ||
+      napi_get_boolean(env, status == errSecSuccess, &deleted) != napi_ok ||
+      !Set(env, response, "deleted", deleted))
+    return NapiError(env);
   return response;
 }
 
 }
 
 NAPI_MODULE_INIT() {
+  auto *state = new (std::nothrow) BindingState();
+  if (state == nullptr)
+    return NapiError(env);
+  if (napi_set_instance_data(env, state, FinalizeBindingState, nullptr) !=
+      napi_ok) {
+    delete state;
+    return NapiError(env);
+  }
   const napi_property_descriptor properties[] = {
       {"probe", nullptr, Probe, nullptr, nullptr, nullptr, napi_default,
        nullptr},
@@ -612,10 +786,14 @@ NAPI_MODULE_INIT() {
        nullptr},
       {"createKey", nullptr, CreateKey, nullptr, nullptr, nullptr, napi_default,
        nullptr},
+      {"retryCreatedKeyRollback", nullptr, RetryCreatedKeyRollback, nullptr,
+       nullptr, nullptr, napi_default, nullptr},
       {"deleteKey", nullptr, DeleteKey, nullptr, nullptr, nullptr, napi_default,
        nullptr},
   };
-  napi_define_properties(
-      env, exports, sizeof(properties) / sizeof(properties[0]), properties);
+  if (napi_define_properties(
+          env, exports, sizeof(properties) / sizeof(properties[0]),
+          properties) != napi_ok)
+    return NapiError(env);
   return exports;
 }

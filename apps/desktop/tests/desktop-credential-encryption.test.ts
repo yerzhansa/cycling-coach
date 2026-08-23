@@ -50,11 +50,30 @@ function safeStoragePort(): CredentialEncryptionPort {
 }
 
 function transportOf(...answers: readonly KeychainBindingResponse[]) {
+  return transportWithRollbackRetries(answers, []);
+}
+
+function transportWithRollbackRetries(
+  answers: readonly KeychainBindingResponse[],
+  rollbackAnswers: readonly KeychainBindingResponse[],
+) {
   const requests: KeychainBindingRequest[] = [];
+  const allRequests: KeychainBindingRequest[] = [];
   const queue = [...answers];
+  const rollbackQueue = [...rollbackAnswers];
   return {
     requests,
-    send: vi.fn(async (request: KeychainBindingRequest) => {
+    allRequests,
+    send: vi.fn(async (request: KeychainBindingRequest): Promise<KeychainBindingResponse> => {
+      allRequests.push(request);
+      if (request.op === "retry-created-key-rollback") {
+        return (
+          rollbackQueue.shift() ?? {
+            ok: true,
+            op: "retry-created-key-rollback",
+          }
+        );
+      }
       requests.push(request);
       return queue.shift() ?? ({ ok: false, code: "unknown" } as KeychainBindingResponse);
     }),
@@ -593,6 +612,74 @@ describe("desktop credential encryption startup", () => {
       "probe",
       "read-key",
     ]);
+  });
+
+  it("keeps failed creation unavailable until exact rollback succeeds", async () => {
+    const replacement = randomBytes(KEY.length);
+    const transport = transportWithRollbackRetries(
+      [
+        PROBE_OK,
+        { ok: false, code: "item-not-found" },
+        { ok: false, code: "item-not-found" },
+        {
+          ok: false,
+          code: "unreadable-item",
+          creationRollbackPending: true,
+        },
+        PROBE_OK,
+        PROBE_OK,
+        { ok: false, code: "item-not-found" },
+        { ok: false, code: "item-not-found" },
+        { ok: true, op: "create-key", key: replacement },
+      ],
+      [
+        { ok: true, op: "retry-created-key-rollback" },
+        { ok: false, code: "keychain-locked" },
+        { ok: true, op: "retry-created-key-rollback" },
+        { ok: true, op: "retry-created-key-rollback" },
+      ],
+    );
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const prepared = await prepareDesktopCredentialEncryption(
+      options({ createTransport: () => transport, serializeEnvelopeMutation }),
+    );
+
+    await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
+    expect(prepared.selection).toMatchObject({
+      status: "refused",
+      code: "unreadable-item",
+      keyCleanupDebt: "creation-rollback",
+      keyCleanupPending: true,
+    });
+    expect(prepared.encryption.isEncryptionAvailable()).toBe(false);
+    expect(() => prepared.encryption.encryptString("must-not-seal")).toThrow();
+
+    await expect(prepared.retryKeychain()).resolves.toMatchObject({
+      status: "refused",
+      keyCleanupDebt: "creation-rollback",
+      keyCleanupPending: true,
+    });
+    expect(transport.allRequests.at(-1)?.op).toBe("retry-created-key-rollback");
+    await expect(prepared.retryKeychain()).resolves.toMatchObject({ status: "keychain" });
+
+    await serializeEnvelopeMutation((proof) => prepared.prepareEnvelopeWrite(proof));
+    const sealed = prepared.encryption.encryptString("post-rollback-secret");
+    expect(prepared.encryption.decryptString(sealed)).toBe("post-rollback-secret");
+    expect(transport.allRequests.map((request) => request.op)).toEqual([
+      "probe",
+      "retry-created-key-rollback",
+      "read-key",
+      "read-key",
+      "create-key",
+      "probe",
+      "retry-created-key-rollback",
+      "probe",
+      "retry-created-key-rollback",
+      "read-key",
+      "read-key",
+      "create-key",
+    ]);
+    expect(transport.allRequests.some((request) => request.op === "delete-key")).toBe(false);
   });
 
   it("publishes encryption unavailable when a recovery inventory scan fails", async () => {

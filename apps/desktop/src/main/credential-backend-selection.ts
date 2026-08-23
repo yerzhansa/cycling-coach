@@ -8,6 +8,7 @@ import {
 } from "./automatic-key-retirement.js";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
 import type { CredentialEnvelopeRoots } from "./credential-envelope-inventory.js";
+import type { KeyCleanupDebt } from "./key-cleanup-debt.js";
 import {
   createKeychainPartitionEncryption,
   createRefusingKeychainEncryption,
@@ -37,6 +38,7 @@ export type DesktopCredentialBackendSelection =
       encryption: CredentialEncryptionPort;
       reason: DesktopCredentialBackendRefusal;
       code: KeychainBindingErrorCode;
+      keyCleanupDebt: KeyCleanupDebt;
       keyCleanupPending: boolean;
     }>;
 
@@ -45,7 +47,7 @@ export interface SelectDesktopCredentialBackendOptions extends CredentialEnvelop
   readonly service: string;
   readonly safeStorage: CredentialEncryptionPort;
   readonly platform?: NodeJS.Platform;
-  readonly keyCleanupPending?: boolean;
+  readonly keyCleanupDebt?: KeyCleanupDebt;
   readonly serializeEnvelopeMutation: SerializeCredentialEnvelopeMutation;
 }
 
@@ -96,7 +98,7 @@ async function selectMacCredentialBackend(
   const keychain = await createKeychainPartitionEncryption({
     transport: options.transport,
     service: options.service,
-    keyCleanupPending: options.keyCleanupPending,
+    keyCleanupDebt: options.keyCleanupDebt,
     inspectAutomaticRetirement: async (currentProof) => {
       const inspection = await inspect(currentProof);
       if (inspection.status === "inspected") {
@@ -113,7 +115,8 @@ async function selectMacCredentialBackend(
       encryption: createRefusingKeychainEncryption(keychain.code, false),
       reason: "encryption-unavailable",
       code: keychain.code,
-      keyCleanupPending: false,
+      keyCleanupDebt: keychain.keyCleanupDebt,
+      keyCleanupPending: keychain.keyCleanupDebt !== "none",
     };
   }
   if (keychain.status !== "ready") {
@@ -126,7 +129,8 @@ async function selectMacCredentialBackend(
       ),
       reason,
       code: keychain.code,
-      keyCleanupPending: keychain.keyCleanupPending,
+      keyCleanupDebt: keychain.keyCleanupDebt,
+      keyCleanupPending: keychain.keyCleanupDebt !== "none",
     };
   }
   return {

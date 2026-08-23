@@ -96,6 +96,9 @@ function memoryTransport(initialKey: Buffer): KeychainBindingTransport {
         key ??= randomBytes(KEYCHAIN_KEY_BYTES);
         return { ok: true, op: "create-key", key: Buffer.from(key) };
       }
+      if (request.op === "retry-created-key-rollback") {
+        return { ok: true, op: "retry-created-key-rollback" };
+      }
       const deleted = key !== undefined;
       key?.fill(0);
       key = undefined;
@@ -134,7 +137,9 @@ function fileTransport(keyPath: string): KeychainBindingTransport {
       if (request.op === "create-key") {
         const existing = await readFileKey(keyPath);
         if (existing.ok) return { ...existing, op: "create-key" };
-        if (existing.code !== "item-not-found") return existing;
+        if (existing.code !== "item-not-found") {
+          return { ...existing, creationRollbackPending: false };
+        }
         const key = randomBytes(KEYCHAIN_KEY_BYTES);
         try {
           await writeFile(keyPath, key, { flag: "wx", mode: 0o600 });
@@ -142,12 +147,17 @@ function fileTransport(keyPath: string): KeychainBindingTransport {
         } catch (error) {
           return (error as NodeJS.ErrnoException).code === "EEXIST"
             ? await readFileKey(keyPath).then((response) =>
-                response.ok ? { ...response, op: "create-key" } : response,
+                response.ok
+                  ? { ...response, op: "create-key" }
+                  : { ...response, creationRollbackPending: false },
               )
-            : { ok: false, code: "unknown" };
+            : { ok: false, code: "unknown", creationRollbackPending: false };
         } finally {
           key.fill(0);
         }
+      }
+      if (request.op === "retry-created-key-rollback") {
+        return { ok: true, op: "retry-created-key-rollback" };
       }
       try {
         await unlink(keyPath);
