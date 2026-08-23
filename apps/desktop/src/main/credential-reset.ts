@@ -15,7 +15,9 @@ import {
   credentialRootBindingForVault,
   guardedCredentialEnvelopeRoots,
   isMissingCredentialRootError,
+  refreshCredentialEnvelopeRootBindings,
   useBoundCredentialRoot,
+  useBoundCredentialRootMutation,
 } from "./credential-envelope-root-binding.js";
 import { syncDirectory } from "./durable-atomic-replace.js";
 import type { KeychainKeyDeletion } from "./keychain-credential-encryption.js";
@@ -40,23 +42,26 @@ export function resetEncryptedCredentialStorage(
     const syncCredentialDirectory = options.syncCredentialDirectory ?? syncDirectory;
     const platform = options.platform ?? process.platform;
     try {
-      const bindings = await bindCredentialEnvelopeRoots(options, platform);
-      const guardedRoots = guardedCredentialEnvelopeRoots(options, bindings);
+      let bindings = await bindCredentialEnvelopeRoots(options, platform);
       for (const target of credentialEnvelopeTargets(options)) {
         const binding = credentialRootBindingForVault(bindings, target.vault);
         if (binding.state === "missing") continue;
-        await useBoundCredentialRoot(binding, platform, () =>
+        await useBoundCredentialRootMutation(binding, platform, () =>
           removeFile(join(target.root, target.fileName), { force: true }),
         );
       }
+      bindings = await refreshCredentialEnvelopeRootBindings(bindings);
+      let guardedRoots = guardedCredentialEnvelopeRoots(options, bindings);
       const remaining = await scanCredentialEnvelopes(guardedRoots);
       for (const blocker of remaining.deletionBlockers) {
         const binding = credentialRootBindingForVault(bindings, blocker.vault);
         if (binding.state === "missing") throw new TypeError("missing credential root was scanned");
-        await useBoundCredentialRoot(binding, platform, () =>
+        await useBoundCredentialRootMutation(binding, platform, () =>
           removeFile(join(blocker.root, blocker.fileName), { force: true }),
         );
       }
+      bindings = await refreshCredentialEnvelopeRootBindings(bindings);
+      guardedRoots = guardedCredentialEnvelopeRoots(options, bindings);
       for (const binding of [bindings.credentials, bindings.telegram]) {
         if (binding.state === "missing") continue;
         try {

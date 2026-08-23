@@ -70,6 +70,7 @@ export type KeychainPartitionEncryptionResult =
       readonly encryption: CredentialEncryptionPort;
       readonly createdKey: boolean;
       readonly prepareKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyPreparation>;
+      readonly validateKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyPreparation>;
       readonly retireKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyRetirement>;
       readonly deleteKeyForReset: (
         proof: CredentialEnvelopeLockProof,
@@ -246,7 +247,7 @@ export async function createKeychainPartitionEncryption(
       holder.key?.fill(0);
       holder.key = null;
     };
-    const prepareKey = async (
+    const validateKey = async (
       proof: CredentialEnvelopeLockProof,
     ): Promise<KeychainKeyPreparation> => {
       if (proof !== options.lockProof) return fail("unknown");
@@ -262,6 +263,13 @@ export async function createKeychainPartitionEncryption(
         clearKey();
         return fail(persisted.status === "missing" ? "item-not-found" : persisted.code);
       }
+      return fail(holder.failure);
+    };
+    const prepareKey = async (
+      proof: CredentialEnvelopeLockProof,
+    ): Promise<KeychainKeyPreparation> => {
+      if (proof !== options.lockProof) return fail("unknown");
+      if (holder.key !== null) return await validateKey(proof);
       if (holder.cleanupPending) {
         const inspection = await inspectAutomaticRetirement(proof);
         if (inspection.status === "failed" || inspection.zeroProof === null) {
@@ -299,7 +307,11 @@ export async function createKeychainPartitionEncryption(
       proof: CredentialEnvelopeLockProof,
     ): Promise<KeychainKeyRetirement> => {
       const inspection = await inspectAutomaticRetirement(proof);
-      if (inspection.status === "failed") return { status: "failed", code: "unknown" };
+      if (inspection.status === "failed") {
+        clearKey();
+        holder.failure = "unknown";
+        return { status: "failed", code: "unknown", keyCleanupPending: false };
+      }
       if (inspection.zeroProof === null) {
         return { status: "retained", envelopes: inspection.deletionBlockers };
       }
@@ -310,7 +322,7 @@ export async function createKeychainPartitionEncryption(
         previous?.fill(0);
         holder.failure = deleted.code;
         holder.cleanupPending = true;
-        return deleted;
+        return { ...deleted, keyCleanupPending: true };
       }
       previous?.fill(0);
       holder.failure = "item-not-found";
@@ -339,6 +351,7 @@ export async function createKeychainPartitionEncryption(
       encryption: readyPort(holder),
       createdKey,
       prepareKey,
+      validateKey,
       retireKey,
       deleteKeyForReset,
     };

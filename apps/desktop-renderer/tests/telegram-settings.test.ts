@@ -45,7 +45,7 @@ const SENDERS = Object.freeze({
   senders: Object.freeze([{ senderId: 101, role: "primary" as const }]),
 }) satisfies TelegramAllowedSenders;
 
-function setup() {
+function setup(options: { readonly credentialMutationsBlocked?: () => boolean } = {}) {
   const states: TelegramSettingsState[] = [];
   let handlers!: Parameters<TelegramSettingsView["bind"]>[0];
   let poll: (() => void) | undefined;
@@ -137,6 +137,9 @@ function setup() {
   const controller = createTelegramSettingsController({
     bridge,
     beginMutation: () => release,
+    ...(options.credentialMutationsBlocked === undefined
+      ? {}
+      : { credentialMutationsBlocked: options.credentialMutationsBlocked }),
     view,
     pollIntervalMs: 10,
     setInterval: ((callback: () => void) => {
@@ -247,6 +250,20 @@ describe("Telegram settings controller", () => {
       status: "ready",
       telegram: { credentialConfigured: true, bot: { username: "synthetic_bot" } },
     });
+  });
+
+  it("blocks credential-changing Telegram actions while allowing recovery checks", async () => {
+    const runtime = setup({ credentialMutationsBlocked: () => true });
+    await runtime.controller.activate();
+
+    runtime.handlers.onPasteToken();
+    runtime.handlers.onRemove();
+
+    expect(runtime.bridge.pasteTokenFromClipboard).not.toHaveBeenCalled();
+    expect(runtime.bridge.remove).not.toHaveBeenCalled();
+
+    runtime.handlers.onReconcile();
+    await vi.waitFor(() => expect(runtime.bridge.reconcile).toHaveBeenCalledOnce());
   });
 
   it("announces a fresh clipboard connection with the connected bot", async () => {

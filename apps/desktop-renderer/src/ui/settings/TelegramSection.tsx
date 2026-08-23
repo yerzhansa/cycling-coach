@@ -12,6 +12,7 @@ import {
   type TelegramControlStatus,
   type TelegramSettingsState,
 } from "../../settings/telegram-controller.js";
+import { credentialChangesBlocked } from "../../settings/credential-controller.js";
 import { PLATFORM_COPY } from "../../platform-copy.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
@@ -133,6 +134,7 @@ function parseSenderId(value: string): number | null {
 
 export function TelegramSection(): ReactElement {
   const state = useEnduragentStore((store) => store.settings.telegram);
+  const credentialState = useEnduragentStore((store) => store.settings.credentials);
   const mutating = useEnduragentStore((store) => settingsMutationActive(store.settings));
   const port = useEnduragentStore((store) => store.settingsPorts?.telegram ?? null);
   const current = content(state);
@@ -161,6 +163,7 @@ export function TelegramSection(): ReactElement {
   const loading = state.status === "closed" || state.status === "loading";
   const working = state.status === "working";
   const busy = mutating || loading || working;
+  const credentialMutationBlocked = credentialChangesBlocked(credentialState, false);
   const removing = state.status === "working" && state.operation === "remove";
   const removingSender = state.status === "working" && state.operation === "remove-sender";
   const botUsername =
@@ -392,7 +395,7 @@ export function TelegramSection(): ReactElement {
                 ref={deleteTrigger}
                 variant="destructive"
                 size="sm"
-                disabled={busy || confirmRemove}
+                disabled={busy || credentialMutationBlocked || confirmRemove}
                 onClick={() => {
                   setConfirmRemove(true);
                 }}
@@ -459,7 +462,7 @@ export function TelegramSection(): ReactElement {
                 type="button"
                 variant="default"
                 size="sm"
-                disabled={busy}
+                disabled={busy || credentialMutationBlocked}
                 onClick={() => {
                   port?.pasteToken();
                 }}
@@ -500,7 +503,7 @@ export function TelegramSection(): ReactElement {
             confirmLabel="Delete connection"
             focusTarget={null}
             cancelDisabled={busy}
-            confirmDisabled={busy}
+            confirmDisabled={busy || credentialMutationBlocked}
             confirmBusy={removing}
             onCancel={() => {
               setConfirmRemove(false);

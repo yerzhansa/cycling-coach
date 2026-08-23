@@ -1,6 +1,15 @@
 import type { CredentialEnvelopeLockProof } from "./credential-envelope-lock.js";
-import type { CredentialEnvelopeRoots } from "./credential-envelope-inventory.js";
-import { scanBoundCredentialEnvelopes } from "./credential-envelope-root-binding.js";
+import {
+  scanCredentialEnvelopes,
+  type CredentialEnvelopeRoots,
+} from "./credential-envelope-inventory.js";
+import {
+  assertCredentialEnvelopeRootsStable,
+  bindCredentialEnvelopeRoots,
+  guardedCredentialEnvelopeRoots,
+  useBoundCredentialRoot,
+} from "./credential-envelope-root-binding.js";
+import { syncDirectory } from "./durable-atomic-replace.js";
 import type { KeychainBindingErrorCode } from "./keychain-binding.js";
 
 const zeroDeletionBlockerCensusProof = Symbol("zero-deletion-blocker-census-proof");
@@ -28,15 +37,36 @@ export type KeychainKeyRetirement =
   | Readonly<{ status: "retained"; envelopes: number }>
   | Readonly<{ status: "deleted" }>
   | Readonly<{ status: "already-absent" }>
-  | Readonly<{ status: "failed"; code: KeychainBindingErrorCode }>;
+  | Readonly<{
+      status: "failed";
+      code: KeychainBindingErrorCode;
+      keyCleanupPending: boolean;
+    }>;
+
+export interface AutomaticKeyRetirementInspectorOptions {
+  readonly syncDirectory?: (root: string) => Promise<void>;
+}
 
 export function createAutomaticKeyRetirementInspector(
   roots: CredentialEnvelopeRoots,
   platform: NodeJS.Platform = process.platform,
+  options: AutomaticKeyRetirementInspectorOptions = {},
 ): InspectAutomaticKeyRetirement {
+  const synchronizeDirectory =
+    options.syncDirectory ?? (platform === "win32" ? async () => undefined : syncDirectory);
   return async (lockProof) => {
     try {
-      const { inventory } = await scanBoundCredentialEnvelopes(roots, platform);
+      const bindings = await bindCredentialEnvelopeRoots(roots, platform);
+      for (const binding of [bindings.credentials, bindings.telegram]) {
+        if (binding.state === "missing") continue;
+        await useBoundCredentialRoot(binding, platform, () =>
+          synchronizeDirectory(binding.root),
+        );
+      }
+      const inventory = await scanCredentialEnvelopes(
+        guardedCredentialEnvelopeRoots(roots, bindings),
+      );
+      await assertCredentialEnvelopeRootsStable(bindings);
       const deletionBlockers = inventory.deletionBlockers.length;
       return {
         status: "inspected",

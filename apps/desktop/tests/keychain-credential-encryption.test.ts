@@ -245,6 +245,32 @@ describe("keychain partition backend", () => {
     ]);
   });
 
+  it("revalidates a removal without creating or deleting key material", async () => {
+    const original = storedKey();
+    const replacement = storedKey();
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: true, op: "read-key", key: original.encoded },
+      { ok: true, op: "read-key", key: replacement.encoded },
+    );
+    const result = await createEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+    });
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await expect(
+      serializePreparedEncryption((proof) => result.validateKey(proof)),
+    ).resolves.toEqual({ status: "failed", code: "unknown" });
+    expect(result.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual([
+      "probe",
+      "read-key",
+      "read-key",
+    ]);
+  });
+
   it("refuses a write when the persisted key disappeared", async () => {
     const original = storedKey();
     const transport = transportOf(
@@ -525,6 +551,7 @@ describe("keychain partition backend", () => {
     await expect(serialize((proof) => result.retireKey(proof))).resolves.toEqual({
       status: "failed",
       code: "unknown",
+      keyCleanupPending: true,
     });
     expect(result.encryption.isEncryptionAvailable()).toBe(false);
     expect(() => result.encryption.encryptString("orphan-candidate")).toThrow(
@@ -545,6 +572,45 @@ describe("keychain partition backend", () => {
     ]);
     const sealed = result.encryption.encryptString("post-cleanup-secret");
     expect(openCredentialEnvelope(replacement.key, sealed)).toBe("post-cleanup-secret");
+  });
+
+  it("does not record cleanup debt when retirement inspection fails before deletion", async () => {
+    const original = storedKey();
+    let inspectionFails = false;
+    const transport = transportOf(PROBE_OK, {
+      ok: true,
+      op: "read-key",
+      key: original.encoded,
+    });
+    const serialize = createCredentialEnvelopeMutationLock();
+    const result = await serialize((lockProof) =>
+      createKeychainPartitionEncryption({
+        transport,
+        service: KEYCHAIN_CREDENTIAL_SERVICE,
+        inspectAutomaticRetirement: async () =>
+          inspectionFails
+            ? { status: "failed" }
+            : {
+                status: "inspected",
+                deletionBlockers: 1,
+                keychainDependents: 1,
+                unverified: 0,
+                zeroProof: null,
+              },
+        lockProof,
+      }),
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    inspectionFails = true;
+    await expect(serialize((proof) => result.retireKey(proof))).resolves.toEqual({
+      status: "failed",
+      code: "unknown",
+      keyCleanupPending: false,
+    });
+    expect(result.encryption.isEncryptionAvailable()).toBe(false);
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe", "read-key"]);
   });
 
   it("refuses pending cleanup when a blocker appears", async () => {
@@ -571,6 +637,7 @@ describe("keychain partition backend", () => {
     await expect(serialize((proof) => result.retireKey(proof))).resolves.toEqual({
       status: "failed",
       code: "unknown",
+      keyCleanupPending: true,
     });
     census = { deletionBlockers: 1, keychainDependents: 0 };
     await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({

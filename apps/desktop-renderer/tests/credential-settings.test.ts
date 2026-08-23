@@ -267,6 +267,39 @@ describe("credential settings controller", () => {
     );
   });
 
+  it("retries a missing Keychain item from the inline recovery message", async () => {
+    const retryRecovery = vi.fn(async () => ({ state: "ready", unverifiedEnvelopes: 0 }) as const);
+    const { controller, subject } = createSubject({
+      recovery: { state: "missing" },
+      retryRecovery,
+    });
+    await controller.activate();
+
+    subject.retry();
+    await vi.waitFor(() => expect(retryRecovery).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(content(controller.state()).recovery).toEqual({
+        state: "ready",
+        unverifiedEnvelopes: 0,
+      }),
+    );
+  });
+
+  it.each([
+    { state: "locked" },
+    { state: "missing" },
+    { state: "unavailable" },
+  ] as const)("blocks individual deletion during $state recovery but keeps full reset available", async (recovery) => {
+    const { controller, subject } = createSubject({ recovery });
+    await controller.activate();
+
+    subject.requestDelete("anthropic");
+    expect(controller.state()).toMatchObject({ status: "ready", confirmation: null });
+
+    subject.requestReset();
+    expect(controller.state()).toMatchObject({ status: "confirming", confirmation: "all" });
+  });
+
   it("confirmation-gates the inline missing-key reset and focuses Cancel first", async () => {
     const { controller, subject, resetAllCredentials } = createSubject({
       recovery: { state: "missing" },
@@ -274,7 +307,7 @@ describe("credential settings controller", () => {
     await controller.activate();
 
     expect(content(controller.state()).announcement).toBe(
-      "These credentials cannot be recovered. Remove all credentials and start again.",
+      "The credential encryption key is missing. Restore it if possible, then Retry, or remove all credentials and start again.",
     );
     subject.requestReset();
     expect(controller.state()).toMatchObject({

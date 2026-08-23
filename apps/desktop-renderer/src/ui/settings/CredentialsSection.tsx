@@ -89,8 +89,7 @@ export function CredentialDeleteButton(props: {
     (store) => store.onboarding.wizard.credentialStatus["intervals-icu"] === "configured",
   );
   const target = "focus" in state ? state.focus : null;
-  const confirmation = content(state)?.confirmation ?? null;
-  const repairRequired = repairRequiredCredential(state) !== null;
+  const changesBlocked = credentialChangesBlocked(state, mutating);
   const intervalsFallback = props.credential === "intervals-icu" && intervalsConnected;
 
   useEffect(() => {
@@ -111,11 +110,9 @@ export function CredentialDeleteButton(props: {
       disabled={
         port === null ||
         state.status === "loading" ||
-        mutating ||
         setupLoading ||
         onboardingMutating ||
-        confirmation !== null ||
-        repairRequired
+        changesBlocked
       }
       aria-label={
         props.credential === "intervals-icu"
@@ -266,7 +263,10 @@ export function CredentialSettingsFeedback(): ReactElement | null {
   const current = content(state);
   const recovery = current?.recovery;
   const resetConfirmation = current?.confirmation === "all";
-  const canRetryRecovery = recovery?.state === "locked" || recovery?.state === "unavailable";
+  const canRetryRecovery =
+    recovery?.state === "locked" ||
+    recovery?.state === "missing" ||
+    recovery?.state === "unavailable";
   const canReset =
     recovery !== undefined &&
     (repairRequired !== null || recovery.state !== "ready" || recovery.unverifiedEnvelopes > 0);

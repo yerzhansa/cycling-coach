@@ -311,6 +311,69 @@ describe("backend selection", () => {
     },
   );
 
+  posixIt("refuses startup key retirement when vault contents change during census", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(roots.telegramRoot, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    const readEnvelopeDirectory = vi.fn(async (root: string) => {
+      if (root === roots.credentialRoot) {
+        await writeFile(join(root, "anthropic.bin"), Buffer.alloc(64), {
+          mode: CREDENTIAL_FILE_MODE,
+        });
+      }
+      return [];
+    });
+    const transport = transportOf(
+      PROBE_OK,
+      readKey(randomBytes(KEYCHAIN_KEY_BYTES)),
+      { ok: true, op: "delete-key", deleted: true },
+    );
+
+    const selected = await selectDesktopCredentialBackend({
+      ...selection(roots, transport),
+      readEnvelopeDirectory,
+    });
+
+    expect(selected).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unknown",
+    });
+    expect(readEnvelopeDirectory).toHaveBeenCalledOnce();
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe"]);
+  });
+
+  posixIt("refuses retirement when a transient is replaced under the same name", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(roots.telegramRoot, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    const transientName = ".anthropic.bin.write-1.tmp";
+    const transientPath = join(roots.credentialRoot, transientName);
+    await writeFile(transientPath, Buffer.alloc(64), { mode: CREDENTIAL_FILE_MODE });
+    const transport = transportOf(
+      PROBE_OK,
+      readKey(randomBytes(KEYCHAIN_KEY_BYTES)),
+      { ok: true, op: "delete-key", deleted: true },
+    );
+
+    const selected = await selectDesktopCredentialBackend({
+      ...selection(roots, transport),
+      inspectEnvelopeTarget: async (target) => {
+        if (target.fileName !== transientName) return { status: "missing" };
+        await rm(transientPath);
+        await writeFile(transientPath, Buffer.alloc(64, 1), { mode: CREDENTIAL_FILE_MODE });
+        return { status: "missing" };
+      },
+    });
+
+    expect(selected).toMatchObject({
+      status: "refused",
+      reason: "encryption-unavailable",
+      code: "unknown",
+    });
+    expect(transport.requests.map((request) => request.op)).toEqual(["probe"]);
+  });
+
   posixIt("retires an orphan key when both bound roots are stably empty", async () => {
     const roots = await fixture();
     await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });

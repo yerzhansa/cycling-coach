@@ -1,5 +1,5 @@
-import type { Stats } from "node:fs";
-import { lstat, readdir } from "node:fs/promises";
+import type { BigIntStats, Stats } from "node:fs";
+import { lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   assertWindowsPrivateDirectoryStable,
@@ -8,6 +8,7 @@ import {
 } from "@enduragent/core";
 import {
   inspectCredentialEnvelopeTarget,
+  readCredentialEnvelopeDirectory,
   scanCredentialEnvelopes,
   type CredentialEnvelopeInventory,
   type CredentialEnvelopeRoots,
@@ -21,6 +22,28 @@ interface CredentialRootIdentity {
   readonly ino: number | bigint;
 }
 
+interface CredentialRootEntryIdentity {
+  readonly name: string;
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mode: bigint;
+  readonly uid: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+  readonly birthtimeNs: bigint;
+}
+
+interface CredentialRootContents {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mode: bigint;
+  readonly uid: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+  readonly entries: readonly CredentialRootEntryIdentity[];
+}
+
 export type CredentialEnvelopeRootBinding =
   | Readonly<{
       state: "missing";
@@ -32,6 +55,7 @@ export type CredentialEnvelopeRootBinding =
       root: string;
       expectedMode: number;
       identity: CredentialRootIdentity;
+      contents: CredentialRootContents;
       windowsDirectory?: WindowsPrivateDirectoryBinding;
     }>;
 
@@ -56,6 +80,81 @@ export function isMissingCredentialRootError(error: unknown): boolean {
 
 function missingPath(path: string): NodeJS.ErrnoException {
   return Object.assign(new Error("credential root is missing"), { code: "ENOENT", path });
+}
+
+function entryIdentity(name: string, metadata: BigIntStats): CredentialRootEntryIdentity {
+  return Object.freeze({
+    name,
+    dev: metadata.dev,
+    ino: metadata.ino,
+    mode: metadata.mode,
+    uid: metadata.uid,
+    size: metadata.size,
+    mtimeNs: metadata.mtimeNs,
+    ctimeNs: metadata.ctimeNs,
+    birthtimeNs: metadata.birthtimeNs,
+  });
+}
+
+function sameEntry(
+  first: CredentialRootEntryIdentity,
+  second: CredentialRootEntryIdentity,
+): boolean {
+  return (
+    first.name === second.name &&
+    first.dev === second.dev &&
+    first.ino === second.ino &&
+    first.mode === second.mode &&
+    first.uid === second.uid &&
+    first.size === second.size &&
+    first.mtimeNs === second.mtimeNs &&
+    first.ctimeNs === second.ctimeNs &&
+    first.birthtimeNs === second.birthtimeNs
+  );
+}
+
+function sameContents(first: CredentialRootContents, second: CredentialRootContents): boolean {
+  return (
+    first.dev === second.dev &&
+    first.ino === second.ino &&
+    first.mode === second.mode &&
+    first.uid === second.uid &&
+    first.mtimeNs === second.mtimeNs &&
+    first.ctimeNs === second.ctimeNs &&
+    first.entries.length === second.entries.length &&
+    first.entries.every((entry, index) => sameEntry(entry, second.entries[index]!))
+  );
+}
+
+function sameRootMetadata(first: BigIntStats, second: BigIntStats): boolean {
+  return (
+    first.dev === second.dev &&
+    first.ino === second.ino &&
+    first.mode === second.mode &&
+    first.uid === second.uid &&
+    first.mtimeNs === second.mtimeNs &&
+    first.ctimeNs === second.ctimeNs
+  );
+}
+
+async function readCredentialRootContents(root: string): Promise<CredentialRootContents> {
+  const before = await lstat(root, { bigint: true });
+  const names = await readCredentialEnvelopeDirectory(root);
+  const entries: CredentialRootEntryIdentity[] = [];
+  for (const name of names) {
+    entries.push(entryIdentity(name, await lstat(join(root, name), { bigint: true })));
+  }
+  const after = await lstat(root, { bigint: true });
+  if (!sameRootMetadata(before, after)) throw new TypeError("credential root changed");
+  return Object.freeze({
+    dev: after.dev,
+    ino: after.ino,
+    mode: after.mode,
+    uid: after.uid,
+    mtimeNs: after.mtimeNs,
+    ctimeNs: after.ctimeNs,
+    entries: Object.freeze(entries),
+  });
 }
 
 export function assertPosixCredentialRoot(metadata: Stats, expectedMode: number): void {
@@ -83,20 +182,30 @@ async function bindCredentialRoot(
   }
   if (platform === "win32") {
     const windowsDirectory = bindWindowsPrivateDirectory(dirname(root), root);
+    const contents = await readCredentialRootContents(root);
+    assertWindowsPrivateDirectoryStable(windowsDirectory);
     return {
       state: "bound",
       root,
       expectedMode,
       identity: windowsDirectory.identity,
+      contents,
       windowsDirectory,
     };
   }
   assertPosixCredentialRoot(metadata, expectedMode);
+  const contents = await readCredentialRootContents(root);
+  const confirmedMetadata = await lstat(root);
+  assertPosixCredentialRoot(confirmedMetadata, expectedMode);
+  if (confirmedMetadata.dev !== metadata.dev || confirmedMetadata.ino !== metadata.ino) {
+    throw new TypeError("credential root changed");
+  }
   return {
     state: "bound",
     root,
     expectedMode,
     identity: { dev: metadata.dev, ino: metadata.ino },
+    contents,
   };
 }
 
@@ -124,7 +233,7 @@ export function credentialRootBindingForVault(
   return bindings[vault];
 }
 
-export async function assertCredentialEnvelopeRootStable(
+export async function assertCredentialEnvelopeRootIdentityStable(
   binding: CredentialEnvelopeRootBinding,
   platform: NodeJS.Platform,
 ): Promise<void> {
@@ -139,13 +248,44 @@ export async function assertCredentialEnvelopeRootStable(
   }
   if (platform === "win32") {
     assertWindowsPrivateDirectoryStable(binding.windowsDirectory!);
-    return;
+  } else {
+    const metadata = await lstat(binding.root);
+    assertPosixCredentialRoot(metadata, binding.expectedMode);
+    if (metadata.dev !== binding.identity.dev || metadata.ino !== binding.identity.ino) {
+      throw new TypeError("credential root changed");
+    }
   }
-  const metadata = await lstat(binding.root);
-  assertPosixCredentialRoot(metadata, binding.expectedMode);
-  if (metadata.dev !== binding.identity.dev || metadata.ino !== binding.identity.ino) {
+}
+
+export async function assertCredentialEnvelopeRootStable(
+  binding: CredentialEnvelopeRootBinding,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  await assertCredentialEnvelopeRootIdentityStable(binding, platform);
+  if (binding.state === "missing") return;
+  const contents = await readCredentialRootContents(binding.root);
+  if (!sameContents(binding.contents, contents)) {
     throw new TypeError("credential root changed");
   }
+}
+
+export async function refreshCredentialEnvelopeRootBindings(
+  bindings: CredentialEnvelopeRootBindings,
+): Promise<CredentialEnvelopeRootBindings> {
+  const refresh = async (
+    binding: CredentialEnvelopeRootBinding,
+  ): Promise<CredentialEnvelopeRootBinding> => {
+    await assertCredentialEnvelopeRootIdentityStable(binding, bindings.platform);
+    if (binding.state === "missing") return binding;
+    const contents = await readCredentialRootContents(binding.root);
+    await assertCredentialEnvelopeRootIdentityStable(binding, bindings.platform);
+    return { ...binding, contents };
+  };
+  return {
+    platform: bindings.platform,
+    credentials: await refresh(bindings.credentials),
+    telegram: await refresh(bindings.telegram),
+  };
 }
 
 export async function assertCredentialEnvelopeRootsStable(
@@ -166,6 +306,20 @@ export async function useBoundCredentialRoot<T>(
     return await operation();
   } finally {
     await assertCredentialEnvelopeRootStable(binding, platform);
+  }
+}
+
+export async function useBoundCredentialRootMutation<T>(
+  binding: CredentialEnvelopeRootBinding,
+  platform: NodeJS.Platform,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (binding.state === "missing") throw missingPath(binding.root);
+  await assertCredentialEnvelopeRootIdentityStable(binding, platform);
+  try {
+    return await operation();
+  } finally {
+    await assertCredentialEnvelopeRootIdentityStable(binding, platform);
   }
 }
 
@@ -215,7 +369,7 @@ export function guardedCredentialEnvelopeRoots(
     },
     readEnvelopeDirectory: async (root) => {
       const binding = bindingForRoot(bindings, root);
-      const readDirectory = roots.readEnvelopeDirectory ?? ((target: string) => readdir(target));
+      const readDirectory = roots.readEnvelopeDirectory ?? readCredentialEnvelopeDirectory;
       return useBoundCredentialRoot(binding, bindings.platform, () => readDirectory(root));
     },
   };

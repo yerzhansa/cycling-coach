@@ -21,13 +21,16 @@ import { createAutomaticKeyRetirementInspector } from "../src/main/automatic-key
 import {
   createCredentialVault,
   CREDENTIAL_DIRECTORY_MODE,
+  CREDENTIAL_FILE_MODE,
   type CredentialEncryptionPort,
   type DesktopCredentialSlot,
 } from "../src/main/credential-vault.js";
 import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import {
+  CREDENTIAL_ENVELOPE_DIRECTORY_ENTRY_LIMIT,
   credentialEnvelopeTargets,
   inspectCredentialEnvelopeTarget,
+  readCredentialEnvelopeDirectory,
   scanCredentialEnvelopes,
 } from "../src/main/credential-envelope-inventory.js";
 import {
@@ -137,7 +140,9 @@ async function retireKey(
       lockProof,
       retireKey: async (proof) => {
         const inspection = await inspect(proof);
-        if (inspection.status === "failed") return { status: "failed", code: "unknown" };
+        if (inspection.status === "failed") {
+          return { status: "failed", code: "unknown", keyCleanupPending: false };
+        }
         if (inspection.zeroProof === null) {
           return { status: "retained", envelopes: inspection.deletionBlockers };
         }
@@ -145,8 +150,12 @@ async function retireKey(
           op: "delete-key",
           service: KEYCHAIN_CREDENTIAL_SERVICE,
         });
-        if (!deleted.ok) return { status: "failed", code: deleted.code };
-        if (deleted.op !== "delete-key") return { status: "failed", code: "unknown" };
+        if (!deleted.ok) {
+          return { status: "failed", code: deleted.code, keyCleanupPending: true };
+        }
+        if (deleted.op !== "delete-key") {
+          return { status: "failed", code: "unknown", keyCleanupPending: true };
+        }
         return { status: deleted.deleted ? "deleted" : "already-absent" };
       },
     }),
@@ -212,6 +221,7 @@ describe("keychain key retirement", () => {
     await expect(retireKey(roots, transport)).resolves.toEqual({
       status: "failed",
       code: "unknown",
+      keyCleanupPending: false,
     });
     expect(transport.requests).toHaveLength(0);
     await expect(readFile(hiddenEnvelope, "utf8")).resolves.toBe("hidden-envelope");
@@ -415,13 +425,20 @@ describe("keychain key retirement", () => {
   posixIt("keeps the key while an envelope exists but cannot be read", async () => {
     const roots = await fixture();
     await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const envelopePath = join(roots.credentialRoot, "anthropic.bin");
+    await writeFile(envelopePath, "unreadable-envelope", { mode: CREDENTIAL_FILE_MODE });
+    const readEnvelopeFile = vi.fn(async (path: string) => {
+      if (path === envelopePath) {
+        throw Object.assign(new Error("synthetic read failure"), { code: "EACCES" });
+      }
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
     const transport = transportOf();
 
-    await expect(
-      retireKey(roots, transport, (async () => {
-        throw Object.assign(new Error("synthetic read failure"), { code: "EACCES" });
-      }) as never),
-    ).resolves.toMatchObject({ status: "retained" });
+    await expect(retireKey(roots, transport, readEnvelopeFile)).resolves.toMatchObject({
+      status: "retained",
+    });
+    expect(readEnvelopeFile).toHaveBeenCalledWith(envelopePath);
     expect(transport.requests).toHaveLength(0);
   });
 
@@ -477,6 +494,30 @@ describe("keychain key retirement", () => {
     expect(transport.requests).toHaveLength(0);
   });
 
+  posixIt("fails closed when a credential directory exceeds the census limit", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await Promise.all(
+      Array.from({ length: CREDENTIAL_ENVELOPE_DIRECTORY_ENTRY_LIMIT + 1 }, (_, index) =>
+        writeFile(join(roots.credentialRoot, `entry-${index}`), "ignored"),
+      ),
+    );
+
+    await expect(readCredentialEnvelopeDirectory(roots.credentialRoot)).rejects.toThrow(
+      "credential envelope directory entry limit exceeded",
+    );
+    await expect(
+      scanCredentialEnvelopes({
+        ...roots,
+        readEnvelopeDirectory: async () =>
+          Array.from(
+            { length: CREDENTIAL_ENVELOPE_DIRECTORY_ENTRY_LIMIT + 1 },
+            (_, index) => `entry-${index}`,
+          ),
+      }),
+    ).rejects.toThrow("credential envelope directory entry limit exceeded");
+  });
+
   posixIt("counts a transient key-id one envelope as a keychain dependent", async () => {
     const roots = await fixture();
     await mkdir(roots.telegramRoot, {
@@ -521,6 +562,10 @@ describe("keychain key retirement", () => {
 
     await expect(
       retireKey(roots, transportOf({ ok: false, code: "keychain-locked" })),
-    ).resolves.toEqual({ status: "failed", code: "keychain-locked" });
+    ).resolves.toEqual({
+      status: "failed",
+      code: "keychain-locked",
+      keyCleanupPending: true,
+    });
   });
 });

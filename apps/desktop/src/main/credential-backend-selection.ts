@@ -25,6 +25,7 @@ export type DesktopCredentialBackendSelection =
       unverifiedEnvelopes: number;
       createdKey: boolean;
       prepareKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyPreparation>;
+      validateKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyPreparation>;
       retireKey: (proof: CredentialEnvelopeLockProof) => Promise<KeychainKeyRetirement>;
       deleteKeyForReset: (
         proof: CredentialEnvelopeLockProof,
@@ -134,6 +135,7 @@ async function selectMacCredentialBackend(
     unverifiedEnvelopes,
     createdKey: keychain.createdKey,
     prepareKey: keychain.prepareKey,
+    validateKey: keychain.validateKey,
     retireKey: keychain.retireKey,
     deleteKeyForReset: keychain.deleteKeyForReset,
   };

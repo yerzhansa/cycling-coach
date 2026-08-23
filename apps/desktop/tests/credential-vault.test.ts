@@ -809,6 +809,38 @@ describe("desktop credential vault", () => {
     });
   });
 
+  it("retains a configured envelope when removal key revalidation fails", async () => {
+    const root = await temporaryRoot();
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const applyCredential = vi.fn(async () => undefined);
+    const clearCredential = vi.fn(async () => "cleared" as const);
+    const revalidateEnvelopeRemoval = vi.fn(async () => false);
+    const removeCredentialFile = vi.fn(rm);
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      applyCredential,
+      clearCredential,
+      serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval,
+      removeCredentialFile,
+    });
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+    removeCredentialFile.mockClear();
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "storage-failed",
+    });
+
+    expect(clearCredential).toHaveBeenCalledOnce();
+    expect(revalidateEnvelopeRemoval).toHaveBeenCalledOnce();
+    expect(removeCredentialFile).not.toHaveBeenCalled();
+    expect(applyCredential).toHaveBeenCalledTimes(2);
+    expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+  });
+
   posixIt("deletes an unverified envelope only after the athlete requests that slot", async () => {
     const root = await temporaryRoot();
     await mkdir(root, { mode: CREDENTIAL_DIRECTORY_MODE });

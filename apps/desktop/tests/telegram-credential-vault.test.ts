@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -17,6 +18,11 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "../src/main/credential-vault.js";
+import {
+  openCredentialEnvelope,
+  sealCredentialEnvelope,
+} from "../src/main/keychain-credential-encryption.js";
+import { KEYCHAIN_KEY_BYTES } from "../src/main/keychain-binding.js";
 import {
   TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
   TELEGRAM_CREDENTIAL_FILE_MODE,
@@ -90,6 +96,15 @@ function encryption(): CredentialEncryptionPort {
       }
       return Buffer.from(value.subarray(5, -4)).reverse().toString("utf8");
     },
+  };
+}
+
+function keychainEncryption(): CredentialEncryptionPort {
+  const key = randomBytes(KEYCHAIN_KEY_BYTES);
+  return {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => sealCredentialEnvelope(key, value),
+    decryptString: (value) => openCredentialEnvelope(key, value),
   };
 }
 
@@ -1152,6 +1167,71 @@ describe("Telegram credential vault", () => {
     const reopened = createTelegramCredentialVault({ ...value, encryption: encryption() });
     await expect(reopened.profileStatus()).resolves.toEqual({ state: "missing" });
     expect((await readdir(value.root)).some((entry) => entry.endsWith(".deleted"))).toBe(false);
+  });
+
+  it("retains a configured profile when removal key revalidation fails", async () => {
+    const value = await fixture();
+    const encryptionPort = keychainEncryption();
+    const seed = createTelegramCredentialVault({
+      ...value,
+      encryption: encryptionPort,
+      createProfileId: () => PROFILE_A,
+    });
+    await expect(
+      seed.replaceProfile({
+        token: "synthetic-token-a",
+        bot: BOT_A,
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toMatchObject({ outcome: "applied", profileId: PROFILE_A });
+    const revalidateEnvelopeRemoval = vi.fn(async () => false);
+    const removeFile = vi.fn(rm);
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: encryptionPort,
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+      removeFile,
+    });
+    removeFile.mockClear();
+
+    await expect(vault.deleteProfile()).resolves.toEqual({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    expect(revalidateEnvelopeRemoval).toHaveBeenCalledOnce();
+    expect(removeFile).not.toHaveBeenCalled();
+    await expect(vault.profileStatus()).resolves.toMatchObject({
+      state: "configured",
+      profileId: PROFILE_A,
+    });
+  });
+
+  it("deletes an unverified profile without requiring a Keychain key", async () => {
+    const value = await fixture();
+    await seedProfile(value);
+    const revalidateEnvelopeRemoval = vi.fn(async () => false);
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString: vi.fn(),
+      },
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+    });
+
+    await expect(vault.deleteProfile()).resolves.toEqual({
+      outcome: "applied",
+      cleanupPending: false,
+    });
+
+    expect(revalidateEnvelopeRemoval).not.toHaveBeenCalled();
+    await expect(lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("refuses deletion when the tombstone id is invalid instead of rejecting", async () => {
