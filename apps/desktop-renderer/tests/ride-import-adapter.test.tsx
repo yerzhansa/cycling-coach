@@ -31,7 +31,12 @@ function importResult(imported: number, quarantined = 0): ImportFilesRpcResult {
   };
 }
 
-function harness(options: { readonly importFiles?: RideImportTransport["importFiles"] } = {}) {
+function harness(
+  options: {
+    readonly importFiles?: RideImportTransport["importFiles"];
+    readonly onSucceeded?: () => void;
+  } = {},
+) {
   const chooseImportFiles = vi.fn<RideImportTransport["chooseImportFiles"]>(async () => [...PATHS]);
   const importFiles = vi.fn<RideImportTransport["importFiles"]>(
     options.importFiles ?? (async () => importResult(1)),
@@ -41,6 +46,7 @@ function harness(options: { readonly importFiles?: RideImportTransport["importFi
   const published: RideImportState[] = [];
   const adapter = createRideImportAdapter({
     imports: controller,
+    ...(options.onSucceeded === undefined ? {} : { onSucceeded: options.onSucceeded }),
     publish: (next) => {
       published.push(next);
       owners.push(next.owner);
@@ -79,6 +85,65 @@ afterEach(() => {
 });
 
 describe("resident ride import glue", () => {
+  it("refreshes Training after a file-only onboarding import succeeds", async () => {
+    const onSucceeded = vi.fn(() => {
+      useEnduragentStore.getState().setTraining({
+        ...EMPTY_TRAINING_SURFACE,
+        status: "ready",
+        metadata: {
+          lastUpdated: "1998-07-18T12:00:00.000Z",
+          lastSynced: null,
+          freshness: "fresh",
+          degraded: false,
+        },
+        trainingContext: {
+          performanceProgress: { kind: "unavailable", reason: "not-synced" },
+          recentRides: {
+            kind: "computed",
+            asOf: "1998-07-18T12:00:00.000Z",
+            windowDays: 28,
+            items: [
+              {
+                id: "a".repeat(64),
+                subSport: "road",
+                startEpochSeconds: 900_000_000,
+                timezoneOffsetSeconds: 0,
+                localDate: "1998-07-09",
+                elapsedSeconds: 3_700,
+                movingSeconds: 3_600,
+                distanceMeters: 40_000,
+              },
+            ],
+          },
+          anchorZones: { kind: "unknown", reason: "not-synced" },
+          cyclingLoad: { kind: "unknown", reason: "no-platform-load" },
+          plan: { kind: "unknown", reason: "no-plan" },
+          adherence: { kind: "unknown", reason: "insufficient-data" },
+          wellnessTrend: { kind: "unknown", reason: "no-wellness" },
+        },
+      });
+    });
+    const subject = harness({ onSucceeded });
+    useEnduragentStore.getState().setTraining({
+      ...EMPTY_TRAINING_SURFACE,
+      status: "unavailable",
+    });
+    render(<TrainingView />);
+
+    expect(screen.getByText("Training data unavailable")).toBeInTheDocument();
+    await act(async () => {
+      await subject.controller.importPaths("onboarding", [...PATHS]);
+    });
+
+    expect(onSucceeded).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Training data unavailable")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Review road ride from 1998-07-09 · 16:00, 1h 2m, 40.0 km",
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("publishes the controller state into the store from the first subscription", () => {
     const subject = harness();
 

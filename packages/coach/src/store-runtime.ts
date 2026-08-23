@@ -380,6 +380,20 @@ LIMIT 1`,
   }
 
   private async runWindowInternal(admissionSignal: AbortSignal): Promise<StoreWindowResult> {
+    admissionSignal.throwIfAborted();
+    const config = this.options.readConfig?.() ?? this.options.config;
+    if (config.intervals.apiKey.length === 0) {
+      return Object.freeze({
+        published: false,
+        counts: createPhysicalRequestLedger({
+          storeLimit: STORE_REQUEST_LIMIT,
+          legacyLimit: LEGACY_REQUEST_LIMIT,
+          totalLimit: TOTAL_REQUEST_LIMIT,
+        }).snapshot(),
+        legacySucceeded: true,
+        droppedActivities: this.droppedActivitiesValue,
+      });
+    }
     const ledger = createPhysicalRequestLedger({ storeLimit: 64, legacyLimit: 15, totalLimit: 79 });
     const controller = new AbortController();
     const abortWindow = (): void => controller.abort(admissionSignal.reason);
@@ -399,28 +413,22 @@ LIMIT 1`,
     };
     try {
       controller.signal.throwIfAborted();
-      const config = this.options.readConfig?.() ?? this.options.config;
-      const capturePromise =
-        config.intervals.apiKey.length === 0
-          ? Promise.resolve(undefined)
-          : this.dependencies.capture({
-              env: this.options.env,
-              ...(this.options.writerContext === undefined
-                ? {}
-                : { writerContext: this.options.writerContext }),
-              apiKey: config.intervals.apiKey,
-              athleteId: config.intervals.athleteId,
-              reviewedOn: now.toISOString().slice(0, 10),
-              reason: this.snapshotValue === undefined ? "initial" : "provider-refresh",
-              ...(this.snapshotValue === undefined
-                ? {}
-                : { replacesCaptureId: this.snapshotValue.captureId }),
-              budget,
-              attemptLedger: ledger,
-              ...(this.options.platform === undefined
-                ? {}
-                : { platform: this.options.platform }),
-            });
+      const capturePromise = this.dependencies.capture({
+        env: this.options.env,
+        ...(this.options.writerContext === undefined
+          ? {}
+          : { writerContext: this.options.writerContext }),
+        apiKey: config.intervals.apiKey,
+        athleteId: config.intervals.athleteId,
+        reviewedOn: now.toISOString().slice(0, 10),
+        reason: this.snapshotValue === undefined ? "initial" : "provider-refresh",
+        ...(this.snapshotValue === undefined
+          ? {}
+          : { replacesCaptureId: this.snapshotValue.captureId }),
+        budget,
+        attemptLedger: ledger,
+        ...(this.options.platform === undefined ? {} : { platform: this.options.platform }),
+      });
       const legacyPromise = this.options.reference.runScheduledOnce(controller.signal);
       const [captureResult, legacyResult] = await Promise.allSettled([
         capturePromise,

@@ -9,10 +9,13 @@ export interface RideImportAdapter {
 export function createRideImportAdapter(input: {
   readonly imports: RideImportController;
   readonly publish: (next: RideImportState) => void;
+  readonly onSucceeded?: () => void;
 }): RideImportAdapter {
   let disposed = false;
   const unsubscribe = input.imports.subscribe((state) => {
-    if (!disposed) input.publish(state);
+    if (disposed) return;
+    input.publish(state);
+    if (state.status === "succeeded") input.onSucceeded?.();
   });
 
   return {
