@@ -34,6 +34,14 @@ export function desktopKeychainCredentialService(packaged: boolean): string {
   return packaged ? KEYCHAIN_CREDENTIAL_SERVICE : KEYCHAIN_CREDENTIAL_SERVICE_DEV;
 }
 
+export function desktopCredentialRecoveryFailureState(
+  code: KeychainBindingErrorCode,
+): "locked" | "missing" | "unavailable" {
+  if (code === "keychain-locked") return "locked";
+  if (code === "item-not-found") return "missing";
+  return "unavailable";
+}
+
 export interface DesktopCredentialEncryption {
   readonly encryption: CredentialEncryptionPort;
   readonly selection: DesktopCredentialBackendSelection;
@@ -187,11 +195,16 @@ export async function prepareDesktopCredentialEncryption(
         if (current.status !== "keychain") {
           return { selection: current, unverifiedEnvelopes: 0 };
         }
-        const { inventory } = await scanBoundCredentialEnvelopes(
-          roots,
-          options.location.platform,
-        );
-        return { selection: current, unverifiedEnvelopes: inventory.unverified };
+        try {
+          const { inventory } = await scanBoundCredentialEnvelopes(
+            roots,
+            options.location.platform,
+          );
+          return { selection: current, unverifiedEnvelopes: inventory.unverified };
+        } catch {
+          transitionToUnavailable("unknown", false);
+          return { selection, unverifiedEnvelopes: 0 };
+        }
       });
     },
     async deleteKeyForCredentialReset(
