@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildKeychainBinding,
+  KEYCHAIN_BINDING_CREATION_ROLLBACK_SOURCE,
   KEYCHAIN_BINDING_MINIMUM_MACOS,
   keychainBindingBuildPath,
   keychainBindingCompilerAvailable,
@@ -35,6 +36,7 @@ const alternatePartitionDescription = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>`;
 let root = "";
 let parserHarness = "";
+let creationRollbackHarness = "";
 
 function plistDictionary(contents: string) {
   return `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>${contents}</dict></plist>`;
@@ -114,6 +116,29 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       if (compile.status !== 0 || compile.signal !== null) {
         throw new Error(compile.stderr || "partition description harness compilation failed");
       }
+      creationRollbackHarness = join(root, "creation-rollback-harness");
+      const creationRollbackCompile = spawnSync(
+        "xcrun",
+        [
+          "clang++",
+          join(root, "native/keychain-binding/creation-rollback-harness.cc"),
+          join(root, KEYCHAIN_BINDING_CREATION_ROLLBACK_SOURCE),
+          "-std=c++20",
+          "-O2",
+          "-arch",
+          "arm64",
+          `-mmacosx-version-min=${KEYCHAIN_BINDING_MINIMUM_MACOS}`,
+          "-o",
+          creationRollbackHarness,
+        ],
+        { encoding: "utf8", timeout: COMPILE_TIMEOUT_MS },
+      );
+      if (creationRollbackCompile.error !== undefined) throw creationRollbackCompile.error;
+      if (creationRollbackCompile.status !== 0 || creationRollbackCompile.signal !== null) {
+        throw new Error(
+          creationRollbackCompile.stderr || "creation rollback harness compilation failed",
+        );
+      }
     }, COMPILE_TIMEOUT_MS);
 
     afterAll(async () => {
@@ -124,20 +149,45 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       const transport = createKeychainBindingTransport({
         bindingPath: keychainBindingBuildPath(root),
       });
-      for (const op of ["probe", "read-key", "create-key", "delete-key"] as const) {
+      for (const op of [
+        "probe",
+        "read-key",
+        "create-key",
+        "retry-created-key-rollback",
+        "delete-key",
+      ] as const) {
         await expect(
           transport.send({ op, service: KEYCHAIN_CREDENTIAL_SERVICE_DEV }),
-        ).resolves.toEqual({ ok: false, code: "not-team-signed" });
+        ).resolves.toEqual(
+          op === "create-key"
+            ? { ok: false, code: "not-team-signed", creationRollbackPending: false }
+            : { ok: false, code: "not-team-signed" },
+        );
       }
     });
 
-    it("pins promptless persisted-key validation and secure erasure", async () => {
+    it("passes the deterministic creation rollback transaction harness", () => {
+      const result = spawnSync(creationRollbackHarness, [], {
+        encoding: "utf8",
+        timeout: COMPILE_TIMEOUT_MS,
+      });
+      if (result.error !== undefined) throw result.error;
+      expect(result.signal).toBeNull();
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+    });
+
+    it("pins promptless validation and exact-reference creation rollback", async () => {
       const source = await readFile(
         join(desktopRoot, "native/keychain-binding/keychain-binding.mm"),
         "utf8",
       );
+      const transactionSource = await readFile(
+        join(desktopRoot, KEYCHAIN_BINDING_CREATION_ROLLBACK_SOURCE),
+        "utf8",
+      );
       const readiness = source.slice(
-        source.indexOf("bool ReadyForKeychain"),
+        source.indexOf("const char *ReadinessFailure"),
         source.indexOf("napi_value Probe"),
       );
       const statusMapping = source.slice(
@@ -146,11 +196,23 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       );
       const creation = source.slice(
         source.indexOf("napi_value CreateKey"),
-        source.indexOf("napi_value DeleteKey"),
+        source.indexOf("napi_value RetryCreatedKeyRollback"),
+      );
+      const reading = source.slice(
+        source.indexOf("napi_value ReadKey"),
+        source.indexOf("napi_value CreateKey"),
       );
       const deletion = source.slice(
         source.indexOf("napi_value DeleteKey"),
         source.indexOf("NAPI_MODULE_INIT"),
+      );
+      const rollbackDeletion = source.slice(
+        source.indexOf("const char *DeleteCreatedItem"),
+        source.indexOf("void ReleaseCreatedRef"),
+      );
+      const finalizer = source.slice(
+        source.indexOf("void FinalizeBindingState"),
+        source.indexOf("const char *ReadinessFailure"),
       );
       const accessConstructionStart = source.indexOf("SecAccessRef MakeAccess");
       const accessConstruction = source.slice(
@@ -179,24 +241,47 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       expect(accessConstruction).toContain(
         "InspectAccess(access) != PartitionInspection::kPresent",
       );
-      expect(creation.indexOf("InspectPartition(")).toBeLessThan(
-        creation.indexOf("SecKeychainItemCopyContent"),
+      expect(reading.indexOf("RetryCreationRollback(")).toBeLessThan(
+        reading.indexOf("CopyDefaultKeychain"),
       );
-      expect(creation.indexOf("SecKeychainItemCopyContent")).toBeLessThan(
-        creation.indexOf("SecKeychainItemFreeContent"),
+      expect(creation.indexOf("RetryCreationRollback(")).toBeLessThan(
+        creation.indexOf("CopyDefaultKeychain"),
       );
-      expect(creation.indexOf("SecKeychainItemFreeContent")).toBeLessThan(
-        creation.indexOf("napi_create_buffer_copy"),
+      expect(creation).toContain("RunCreationRollbackTransaction(");
+      expect(creation).toContain("CreationFailure(env, result.code");
+      expect(source).toContain('"creationRollbackPending"');
+      expect(source).toContain('"retryCreatedKeyRollback"');
+      expect(transactionSource.indexOf("dependencies.inspect(")).toBeLessThan(
+        transactionSource.indexOf("dependencies.copyContent("),
       );
-      expect(creation).toContain("persistedLength == static_cast<UInt32>(material.size())");
-      expect(creation).toContain("timingsafe_bcmp");
-      expect(creation).not.toContain("SecItemDelete");
+      expect(transactionSource.indexOf("dependencies.freeContent(")).toBeLessThan(
+        transactionSource.indexOf("dependencies.createBuffer("),
+      );
+      expect(transactionSource.indexOf("dependencies.createBuffer(")).toBeLessThan(
+        transactionSource.indexOf("dependencies.publishBuffer("),
+      );
+      expect(transactionSource).toContain("dependencies.wipeBuffer(");
+      expect(transactionSource).toContain("dependencies.deleteExact(");
+      expect(transactionSource).not.toContain("SecItemDelete");
+      expect(transactionSource).not.toContain("SecItemCopyMatching");
+      expect(rollbackDeletion).toContain("SecKeychainItemDelete(");
+      expect(rollbackDeletion).not.toContain("SecItemDelete");
+      expect(finalizer).toContain("ReleaseCreationRollbackDebt(");
+      expect(finalizer).not.toContain("DeleteCreatedItem");
       expect(deletion).toContain("SecItemCopyMatching");
       expect(deletion).toContain("InspectPartition(item)");
       expect(deletion).toContain("SecKeychainItemDelete(item)");
+      expect(deletion).not.toContain("RetryCreationRollback");
+      expect(deletion.indexOf("state->creationDebt.pending")).toBeLessThan(
+        deletion.indexOf("CopyDefaultKeychain"),
+      );
       expect(deletion).not.toContain("SecItemDelete");
       expect(source).toContain("#define __STDC_WANT_LIB_EXT1__ 1");
-      expect(source).toContain("memset_s(material.data(), material.size(), 0, material.size())");
+      expect(source).toContain("memset_s(bytes, length, 0, length)");
+      expect(source).toContain("CFDataCreateWithBytesNoCopy(");
+      expect(source).toContain("kCFAllocatorNull");
+      expect(source).toContain("napi_set_instance_data(");
+      expect(source).toMatch(/napi_define_properties\([\s\S]*?\) != napi_ok/u);
       expect(source).not.toContain("explicit_bzero");
       expect(source).not.toContain("material.fill");
     });

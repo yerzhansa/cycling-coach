@@ -25,6 +25,43 @@ describe("keychain binding adapter", () => {
     expect(parseKeychainBindingResponse("create-key", { ok: true, key: randomBytes(16) })).toEqual({
       ok: false,
       code: "unknown",
+      creationRollbackPending: true,
+    });
+    expect(
+      parseKeychainBindingResponse("create-key", {
+        ok: false,
+        code: "unreadable-item",
+        creationRollbackPending: false,
+      }),
+    ).toEqual({
+      ok: false,
+      code: "unreadable-item",
+      creationRollbackPending: false,
+    });
+    expect(
+      parseKeychainBindingResponse("create-key", {
+        ok: false,
+        code: "unreadable-item",
+        creationRollbackPending: true,
+      }),
+    ).toEqual({
+      ok: false,
+      code: "unreadable-item",
+      creationRollbackPending: true,
+    });
+    for (const malformed of [
+      { ok: false, code: "unreadable-item" },
+      { ok: false, code: "unreadable-item", creationRollbackPending: "true" },
+    ]) {
+      expect(parseKeychainBindingResponse("create-key", malformed)).toEqual({
+        ok: false,
+        code: "unknown",
+        creationRollbackPending: true,
+      });
+    }
+    expect(parseKeychainBindingResponse("retry-created-key-rollback", { ok: true })).toEqual({
+      ok: true,
+      op: "retry-created-key-rollback",
     });
     expect(parseKeychainBindingResponse("delete-key", { ok: true, deleted: false })).toEqual({
       ok: true,
@@ -43,6 +80,7 @@ describe("keychain binding adapter", () => {
       probe: vi.fn(() => ({ ok: true, teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER })),
       readKey: vi.fn(() => ({ ok: true, key })),
       createKey: vi.fn(() => ({ ok: true, key })),
+      retryCreatedKeyRollback: vi.fn(() => ({ ok: true })),
       deleteKey: vi.fn(() => ({ ok: true, deleted: true })),
     };
     const loadBinding = vi.fn(() => binding);
@@ -57,8 +95,39 @@ describe("keychain binding adapter", () => {
     await expect(
       transport.send({ op: "read-key", service: KEYCHAIN_CREDENTIAL_SERVICE }),
     ).resolves.toEqual({ ok: true, op: "read-key", key });
+    await expect(
+      transport.send({
+        op: "retry-created-key-rollback",
+        service: KEYCHAIN_CREDENTIAL_SERVICE,
+      }),
+    ).resolves.toEqual({ ok: true, op: "retry-created-key-rollback" });
     expect(loadBinding).toHaveBeenCalledOnce();
     expect(binding.readKey).toHaveBeenCalledWith(KEYCHAIN_CREDENTIAL_SERVICE);
+    expect(binding.retryCreatedKeyRollback).toHaveBeenCalledWith(KEYCHAIN_CREDENTIAL_SERVICE);
+  });
+
+  it("fails closed when native creation throws", async () => {
+    const binding = {
+      probe: vi.fn(() => ({ ok: true, teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER })),
+      readKey: vi.fn(() => ({ ok: false, code: "item-not-found" })),
+      createKey: vi.fn(() => {
+        throw new Error("synthetic creation failure");
+      }),
+      retryCreatedKeyRollback: vi.fn(() => ({ ok: true })),
+      deleteKey: vi.fn(() => ({ ok: true, deleted: true })),
+    };
+    const transport = createKeychainBindingTransport({
+      bindingPath: "/synthetic/keychain-binding.node",
+      loadBinding: () => binding,
+    });
+
+    await expect(
+      transport.send({ op: "create-key", service: KEYCHAIN_CREDENTIAL_SERVICE }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "unknown",
+      creationRollbackPending: true,
+    });
   });
 
   it("maps missing, replaced, and wrong-shape native modules to unknown", async () => {
@@ -71,6 +140,7 @@ describe("keychain binding adapter", () => {
         probe: () => ({ ok: true, teamIdentifier: "OTHERTEAM" }),
         readKey: () => ({ ok: true, key: Buffer.alloc(KEYCHAIN_KEY_BYTES) }),
         createKey: () => ({ ok: true, key: Buffer.alloc(KEYCHAIN_KEY_BYTES) }),
+        retryCreatedKeyRollback: () => ({ ok: true }),
         deleteKey: () => ({ ok: true, deleted: true }),
       }),
     ]) {

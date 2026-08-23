@@ -41,14 +41,31 @@ const serializePreparedEncryption = createCredentialEnvelopeMutationLock();
 
 interface RecordingTransport extends KeychainBindingTransport {
   readonly requests: KeychainBindingRequest[];
+  readonly allRequests: KeychainBindingRequest[];
 }
 
 function transportOf(...responses: readonly KeychainBindingResponse[]): RecordingTransport {
+  return transportWithRollbackRetries(responses, []);
+}
+
+function transportWithRollbackRetries(
+  responses: readonly KeychainBindingResponse[],
+  rollbackResponses: readonly KeychainBindingResponse[],
+): RecordingTransport {
   const remaining = [...responses];
+  const remainingRollback = [...rollbackResponses];
   const requests: KeychainBindingRequest[] = [];
+  const allRequests: KeychainBindingRequest[] = [];
   return {
     requests,
+    allRequests,
     send(request) {
+      allRequests.push(request);
+      if (request.op === "retry-created-key-rollback") {
+        return Promise.resolve(
+          remainingRollback.shift() ?? { ok: true, op: "retry-created-key-rollback" },
+        );
+      }
       requests.push(request);
       const next = remaining.shift();
       if (next === undefined) throw new Error("unexpected helper request");
@@ -357,6 +374,113 @@ describe("keychain partition backend", () => {
     ).toBe(true);
   });
 
+  it("retries failed creation through exact rollback before another census or read", async () => {
+    const replacement = storedKey();
+    const transport = transportWithRollbackRetries(
+      [
+        PROBE_OK,
+        { ok: false, code: "item-not-found" },
+        { ok: false, code: "item-not-found" },
+        {
+          ok: false,
+          code: "unreadable-item",
+          creationRollbackPending: true,
+        },
+        { ok: false, code: "item-not-found" },
+        { ok: true, op: "create-key", key: replacement.encoded },
+      ],
+      [
+        { ok: true, op: "retry-created-key-rollback" },
+        { ok: false, code: "keychain-locked" },
+        { ok: true, op: "retry-created-key-rollback" },
+      ],
+    );
+    const inspect = automaticRetirementInspector({
+      deletionBlockers: 0,
+      keychainDependents: 0,
+    });
+    let inspections = 0;
+    const serialize = createCredentialEnvelopeMutationLock();
+    const result = await serialize((lockProof) =>
+      createKeychainPartitionEncryption({
+        transport,
+        service: KEYCHAIN_CREDENTIAL_SERVICE,
+        inspectAutomaticRetirement: async (proof) => {
+          inspections += 1;
+          return await inspect(proof);
+        },
+        lockProof,
+      }),
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+      status: "failed",
+      code: "unreadable-item",
+      keyCleanupDebt: "creation-rollback",
+    });
+    expect(result.encryption.isEncryptionAvailable()).toBe(false);
+    expect(() => result.encryption.encryptString("must-not-seal")).toThrow(
+      KeychainEncryptionError,
+    );
+    const inspectionsBeforeRetry = inspections;
+    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+      status: "failed",
+      code: "keychain-locked",
+      keyCleanupDebt: "creation-rollback",
+    });
+    expect(inspections).toBe(inspectionsBeforeRetry);
+    expect(transport.allRequests.at(-1)?.op).toBe("retry-created-key-rollback");
+
+    await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
+      status: "ready",
+    });
+    expect(transport.allRequests.map((request) => request.op)).toEqual([
+      "probe",
+      "retry-created-key-rollback",
+      "read-key",
+      "read-key",
+      "create-key",
+      "retry-created-key-rollback",
+      "retry-created-key-rollback",
+      "read-key",
+      "create-key",
+    ]);
+    expect(transport.allRequests.some((request) => request.op === "delete-key")).toBe(false);
+    expect(result.encryption.isEncryptionAvailable()).toBe(true);
+  });
+
+  it("does not record creation rollback debt after confirmed cleanup", async () => {
+    const transport = transportOf(
+      PROBE_OK,
+      { ok: false, code: "item-not-found" },
+      { ok: false, code: "item-not-found" },
+      {
+        ok: false,
+        code: "unreadable-item",
+        creationRollbackPending: false,
+      },
+    );
+    const result = await createEncryption({
+      transport,
+      service: KEYCHAIN_CREDENTIAL_SERVICE,
+      envelopeCensus: { deletionBlockers: 0, keychainDependents: 0 },
+    });
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    await expect(
+      serializePreparedEncryption((proof) => result.prepareKey(proof)),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "unreadable-item",
+    });
+    expect(transport.requests.some((request) => request.op === "retry-created-key-rollback")).toBe(
+      false,
+    );
+  });
+
   it("deletes a readable orphan but defers replacement until a write", async () => {
     const { encoded } = storedKey();
     const transport = transportOf(
@@ -416,7 +540,7 @@ describe("keychain partition backend", () => {
       PROBE_OK,
       { ok: false, code: "item-not-found" },
       { ok: false, code: "item-not-found" },
-      { ok: false, code: "duplicate-item" },
+      { ok: false, code: "duplicate-item", creationRollbackPending: false },
     );
     const result = await createEncryption({
       transport,
@@ -444,7 +568,11 @@ describe("keychain partition backend", () => {
       transport,
       service: KEYCHAIN_CREDENTIAL_SERVICE,
     });
-    expect(result).toEqual({ status: "unsupported", code: "not-team-signed" });
+    expect(result).toEqual({
+      status: "unsupported",
+      code: "not-team-signed",
+      keyCleanupDebt: "none",
+    });
     expect(transport.requests.map((request) => request.op)).toEqual(["probe"]);
   });
 
@@ -643,6 +771,7 @@ describe("keychain partition backend", () => {
     await expect(serialize((proof) => result.prepareKey(proof))).resolves.toEqual({
       status: "failed",
       code: "unknown",
+      keyCleanupDebt: "retirement",
     });
     expect(transport.requests.map((request) => request.op)).toEqual([
       "probe",

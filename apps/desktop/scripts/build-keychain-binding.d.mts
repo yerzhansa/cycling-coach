@@ -1,6 +1,7 @@
 export const KEYCHAIN_BINDING_FILE: "keychain-binding.node";
 export const KEYCHAIN_BINDING_BUILD_DIRECTORY: "dist/keychain-binding";
 export const KEYCHAIN_BINDING_SOURCE: "native/keychain-binding/keychain-binding.mm";
+export const KEYCHAIN_BINDING_CREATION_ROLLBACK_SOURCE: "native/keychain-binding/creation-rollback.cc";
 export const KEYCHAIN_BINDING_PARTITION_DESCRIPTION_SOURCE: "native/keychain-binding/partition-description.mm";
 export const KEYCHAIN_BINDING_MINIMUM_MACOS: "12.0";
 export const KEYCHAIN_BINDING_NAPI_VERSION: "9";

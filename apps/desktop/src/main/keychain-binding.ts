@@ -4,6 +4,7 @@ export const KEYCHAIN_BINDING_OPERATIONS = [
   "probe",
   "read-key",
   "create-key",
+  "retry-created-key-rollback",
   "delete-key",
 ] as const;
 
@@ -48,8 +49,13 @@ export type KeychainBindingResponse =
       readonly deleted: boolean;
     }
   | {
+      readonly ok: true;
+      readonly op: "retry-created-key-rollback";
+    }
+  | {
       readonly ok: false;
       readonly code: KeychainBindingErrorCode;
+      readonly creationRollbackPending?: boolean;
     };
 
 export interface KeychainBindingTransport {
@@ -60,6 +66,7 @@ interface NativeKeychainBinding {
   probe(): unknown;
   readKey(service: string): unknown;
   createKey(service: string): unknown;
+  retryCreatedKeyRollback(service: string): unknown;
   deleteKey(service: string): unknown;
 }
 
@@ -71,6 +78,15 @@ export interface KeychainBindingTransportOptions {
 }
 
 const UNKNOWN_RESPONSE: KeychainBindingResponse = Object.freeze({ ok: false, code: "unknown" });
+const CREATION_ROLLBACK_UNKNOWN_RESPONSE: KeychainBindingResponse = Object.freeze({
+  ok: false,
+  code: "unknown",
+  creationRollbackPending: true,
+});
+
+function unknownResponse(operation: KeychainBindingOperation): KeychainBindingResponse {
+  return operation === "create-key" ? CREATION_ROLLBACK_UNKNOWN_RESPONSE : UNKNOWN_RESPONSE;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -88,6 +104,7 @@ function nativeBinding(value: unknown): NativeKeychainBinding | undefined {
     typeof value.probe !== "function" ||
     typeof value.readKey !== "function" ||
     typeof value.createKey !== "function" ||
+    typeof value.retryCreatedKeyRollback !== "function" ||
     typeof value.deleteKey !== "function"
   ) {
     return undefined;
@@ -99,24 +116,36 @@ export function parseKeychainBindingResponse(
   operation: KeychainBindingOperation,
   value: unknown,
 ): KeychainBindingResponse {
-  if (!isRecord(value)) return UNKNOWN_RESPONSE;
+  if (!isRecord(value)) return unknownResponse(operation);
   if (value.ok === false) {
+    if (operation === "create-key") {
+      return isErrorCode(value.code) && typeof value.creationRollbackPending === "boolean"
+        ? {
+            ok: false,
+            code: value.code,
+            creationRollbackPending: value.creationRollbackPending,
+          }
+        : CREATION_ROLLBACK_UNKNOWN_RESPONSE;
+    }
     return isErrorCode(value.code) ? { ok: false, code: value.code } : UNKNOWN_RESPONSE;
   }
-  if (value.ok !== true) return UNKNOWN_RESPONSE;
+  if (value.ok !== true) return unknownResponse(operation);
   if (operation === "probe") {
     return value.teamIdentifier === KEYCHAIN_TEAM_IDENTIFIER
       ? { ok: true, op: "probe", teamIdentifier: value.teamIdentifier }
-      : UNKNOWN_RESPONSE;
+      : unknownResponse(operation);
   }
   if (operation === "read-key" || operation === "create-key") {
     return Buffer.isBuffer(value.key) && value.key.length === KEYCHAIN_KEY_BYTES
       ? { ok: true, op: operation, key: Buffer.from(value.key) }
-      : UNKNOWN_RESPONSE;
+      : unknownResponse(operation);
+  }
+  if (operation === "retry-created-key-rollback") {
+    return { ok: true, op: "retry-created-key-rollback" };
   }
   return typeof value.deleted === "boolean"
     ? { ok: true, op: "delete-key", deleted: value.deleted }
-    : UNKNOWN_RESPONSE;
+    : unknownResponse(operation);
 }
 
 export function createKeychainBindingTransport(
@@ -131,7 +160,7 @@ export function createKeychainBindingTransport(
   } catch {}
   return {
     async send(request: KeychainBindingRequest): Promise<KeychainBindingResponse> {
-      if (binding === undefined) return UNKNOWN_RESPONSE;
+      if (binding === undefined) return unknownResponse(request.op);
       try {
         const response =
           request.op === "probe"
@@ -140,10 +169,12 @@ export function createKeychainBindingTransport(
               ? binding.readKey(request.service)
               : request.op === "create-key"
                 ? binding.createKey(request.service)
-                : binding.deleteKey(request.service);
+                : request.op === "retry-created-key-rollback"
+                  ? binding.retryCreatedKeyRollback(request.service)
+                  : binding.deleteKey(request.service);
         return parseKeychainBindingResponse(request.op, response);
       } catch {
-        return UNKNOWN_RESPONSE;
+        return unknownResponse(request.op);
       }
     },
   };
