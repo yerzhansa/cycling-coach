@@ -557,7 +557,7 @@ describe("credential settings controller", () => {
     await controller.activate();
     subject.requestReset();
     subject.confirmDelete();
-    await vi.waitFor(() => expect(controller.state().resetUncertain).toBe(true));
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
 
     subject.requestDelete("anthropic");
     subject.requestReset();
@@ -604,7 +604,7 @@ describe("credential settings controller", () => {
     await controller.activate();
     subject.requestReset();
     subject.confirmDelete();
-    await vi.waitFor(() => expect(controller.state().resetUncertain).toBe(true));
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
 
     controller.close();
     expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
@@ -612,6 +612,118 @@ describe("credential settings controller", () => {
     await controller.activate();
     expect(onReconciled).toHaveBeenCalledOnce();
     expect(controller.state().status).toBe("ready");
+    expect(controller.state().resetUncertain).toBeUndefined();
+  });
+
+  it("preserves reset uncertainty when closed while the reset is pending", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    let resolveReconciliation!: () => void;
+    const reconciliation = new Promise<void>((resolve) => {
+      resolveReconciliation = resolve;
+    });
+    const onReconciled = vi.fn(() => reconciliation);
+    const { controller, subject, resetAllCredentials, releaseMutation } = createSubject({
+      onReconciled,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    expect(controller.state()).toMatchObject({ status: "deleting", resetUncertain: true });
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReset({ status: "refused", reason: "storage-failed" });
+    await vi.waitFor(() => expect(releaseMutation).toHaveBeenCalled());
+
+    void controller.activate();
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
+    expect(controller.state()).toMatchObject({ status: "loading", resetUncertain: true });
+    resolveReconciliation();
+    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+    expect(controller.state().resetUncertain).toBeUndefined();
+  });
+
+  it("preserves reset uncertainty when closed while the authoritative reload is pending", async () => {
+    let resolveReload!: (statuses: readonly CredentialSlotStatus[]) => void;
+    const reload = new Promise<readonly CredentialSlotStatus[]>((resolve) => {
+      resolveReload = resolve;
+    });
+    let loadCount = 0;
+    const loadStatuses = vi.fn(() => {
+      loadCount += 1;
+      return loadCount === 2
+        ? reload
+        : Promise.resolve([
+            { slot: "anthropic", state: "configured", runtimeState: "active" },
+          ] as const);
+    });
+    let resolveReconciliation!: () => void;
+    const reconciliation = new Promise<void>((resolve) => {
+      resolveReconciliation = resolve;
+    });
+    const onReconciled = vi.fn(() => reconciliation);
+    const { controller, subject, releaseMutation } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(loadStatuses).toHaveBeenCalledTimes(2));
+
+    expect(controller.state()).toMatchObject({ status: "deleting", resetUncertain: true });
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReload([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
+    await vi.waitFor(() => expect(releaseMutation).toHaveBeenCalled());
+
+    void controller.activate();
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
+    expect(controller.state()).toMatchObject({ status: "loading", resetUncertain: true });
+    resolveReconciliation();
+    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+    expect(controller.state().resetUncertain).toBeUndefined();
+  });
+
+  it("preserves reset uncertainty when closed while reconciliation is pending", async () => {
+    let resolveFirstReconciliation!: () => void;
+    const firstReconciliation = new Promise<void>((resolve) => {
+      resolveFirstReconciliation = resolve;
+    });
+    let resolveSecondReconciliation!: () => void;
+    const secondReconciliation = new Promise<void>((resolve) => {
+      resolveSecondReconciliation = resolve;
+    });
+    const onReconciled = vi
+      .fn<() => Promise<void>>()
+      .mockReturnValueOnce(firstReconciliation)
+      .mockReturnValueOnce(secondReconciliation);
+    const { controller, subject, releaseMutation } = createSubject({
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
+
+    expect(controller.state()).toMatchObject({ status: "deleting", resetUncertain: true });
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveFirstReconciliation();
+    await vi.waitFor(() => expect(releaseMutation).toHaveBeenCalled());
+
+    void controller.activate();
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledTimes(2));
+    expect(controller.state()).toMatchObject({ status: "loading", resetUncertain: true });
+    resolveSecondReconciliation();
+    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
     expect(controller.state().resetUncertain).toBeUndefined();
   });
 

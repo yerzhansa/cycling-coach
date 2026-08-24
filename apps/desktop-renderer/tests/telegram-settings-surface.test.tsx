@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buttonVariants } from "../src/components/ui/button.js";
@@ -414,6 +414,58 @@ describe("Telegram settings surface", () => {
     await user.type(senderId, "303");
     await user.click(screen.getByRole("button", { name: "Add user" }));
     expect(port.addSender).toHaveBeenCalledWith(303);
+  });
+
+  it("blocks allowed-user changes while credential reset is uncertain", async () => {
+    const user = userEvent.setup();
+    const connected = status({
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "desktop_coach_bot" },
+      pairing: { state: "paired" },
+      credentialConfigured: true,
+    });
+    const port = setup(
+      readyState(connected, {
+        senders: [
+          { senderId: 101, role: "primary" },
+          { senderId: 202, role: "additional" },
+        ],
+      }),
+    );
+
+    await user.click(screen.getByText("Advanced · allowed users"));
+    const senderId = screen.getByLabelText("Add a Telegram user ID");
+    await user.type(senderId, "303");
+    const removeSender = screen.getByRole("button", { name: "Remove Telegram user 202" });
+    await user.click(removeSender);
+    const confirmation = screen.getByRole("group", { name: "Remove Telegram user 202?" });
+
+    act(() => {
+      useEnduragentStore.setState((current) => ({
+        settings: {
+          ...current.settings,
+          credentials: {
+            status: "error",
+            kind: "load",
+            announcement: "Credential removal could not be verified.",
+            repairCredential: null,
+            resetUncertain: true,
+            recoveryAvailable: true,
+            focus: { target: "feedback" },
+          },
+        },
+      }));
+    });
+
+    expect(senderId).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add user" })).toBeDisabled();
+    expect(removeSender).toBeDisabled();
+    const confirm = within(confirmation).getByRole("button", { name: "Remove user" });
+    expect(confirm).toBeDisabled();
+    fireEvent.submit(senderId.closest("form")!);
+    await user.click(confirm);
+    expect(port.addSender).not.toHaveBeenCalled();
+    expect(port.removeSender).not.toHaveBeenCalled();
   });
 
   it("truthfully explains automatic recovery when paired-user loading fails", async () => {

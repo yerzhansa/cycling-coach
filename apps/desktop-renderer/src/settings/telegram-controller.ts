@@ -655,8 +655,7 @@ export function createTelegramSettingsController(input: {
     if (
       disposed ||
       operation !== undefined ||
-      ((action === "paste-token" || action === "remove") &&
-        input.credentialMutationsBlocked?.())
+      ((action === "paste-token" || action === "remove") && input.credentialMutationsBlocked?.())
     ) {
       return;
     }
@@ -737,7 +736,7 @@ export function createTelegramSettingsController(input: {
     action: "add-sender" | "remove-sender",
     invoke: () => Promise<TelegramAllowedSendersMutationResult>,
   ): void => {
-    if (disposed || operation !== undefined) return;
+    if (disposed || operation !== undefined || input.credentialMutationsBlocked?.()) return;
     const release = input.beginMutation();
     if (release === null) return;
     const previous = readCurrentContent();
