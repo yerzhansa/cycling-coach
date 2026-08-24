@@ -75,7 +75,11 @@ export function resetEncryptedCredentialStorage(
           }
         }
       }
-      if ((await scanCredentialEnvelopes(guardedRoots)).deletionBlockers.length !== 0) {
+      const finalInventory = await scanCredentialEnvelopes(guardedRoots);
+      if (
+        finalInventory.deletionBlockers.length !== 0 ||
+        finalInventory.unexplainedDeletionBlockers.length !== 0
+      ) {
         return { status: "failed" };
       }
       await assertCredentialEnvelopeRootsStable(bindings);

@@ -67,7 +67,8 @@ export function createAutomaticKeyRetirementInspector(
         guardedCredentialEnvelopeRoots(roots, bindings),
       );
       await assertCredentialEnvelopeRootsStable(bindings);
-      const deletionBlockers = inventory.deletionBlockers.length;
+      const deletionBlockers =
+        inventory.deletionBlockers.length + inventory.unexplainedDeletionBlockers.length;
       return {
         status: "inspected",
         deletionBlockers,

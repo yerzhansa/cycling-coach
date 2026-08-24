@@ -13,8 +13,10 @@ import {
 } from "./credential-envelope-inspection.js";
 import {
   TELEGRAM_CREDENTIAL_FILE_MODE,
+  TELEGRAM_DESIRED_STATE_FILE_NAME,
   TELEGRAM_PROFILE_FILE_NAME,
 } from "./telegram-credential-vault.js";
+import { TELEGRAM_POWER_STATE_FILE_NAME } from "./telegram-power.js";
 export {
   classifyCredentialEnvelopeRemoval,
   inspectCredentialEnvelopeTarget,
@@ -33,8 +35,15 @@ export interface CredentialEnvelopeRef extends CredentialEnvelopeTarget {
   readonly keyId: number | undefined;
 }
 
+export interface UnexplainedCredentialVaultEntry {
+  readonly vault: CredentialEnvelopeVault;
+  readonly root: string;
+  readonly fileName: string;
+}
+
 export interface CredentialEnvelopeInventory {
   readonly deletionBlockers: readonly CredentialEnvelopeRef[];
+  readonly unexplainedDeletionBlockers: readonly UnexplainedCredentialVaultEntry[];
   readonly keychainDependents: number;
   readonly unverified: number;
 }
@@ -131,6 +140,64 @@ function transientCredentialEnvelopeTarget(
   return undefined;
 }
 
+function knownNonEnvelopeTelegramEntryName(entry: string): boolean {
+  for (const [fileName, suffixes] of [
+    [TELEGRAM_DESIRED_STATE_FILE_NAME, [".tmp", ".deleted"]],
+    [TELEGRAM_POWER_STATE_FILE_NAME, [".tmp"]],
+  ] as const) {
+    if (entry === fileName) return true;
+    const prefix = `.${fileName}.`;
+    if (!entry.startsWith(prefix)) continue;
+    for (const suffix of suffixes) {
+      if (!entry.endsWith(suffix)) continue;
+      const id = entry.slice(prefix.length, -suffix.length);
+      if (/^[A-Za-z0-9-]{1,128}$/.test(id)) return true;
+    }
+  }
+  return false;
+}
+
+async function isVerifiedNonEnvelopeTelegramEntry(
+  root: string,
+  entry: string,
+  inspect: (target: CredentialEnvelopeTarget) => Promise<CredentialEnvelopeInspection>,
+): Promise<boolean> {
+  let inspected: CredentialEnvelopeInspection;
+  try {
+    inspected = await inspect({
+      vault: "telegram",
+      root,
+      fileName: entry,
+      mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+    });
+  } catch {
+    return false;
+  }
+  if (inspected.status !== "readable") return false;
+  try {
+    return readCredentialEnvelopeKeyId(inspected.contents) !== KEYCHAIN_ENVELOPE_KEY_ID;
+  } finally {
+    inspected.contents.fill(0);
+  }
+}
+
+function canonicalEnvelopeEntry(
+  roots: CredentialEnvelopeRoots,
+  root: string,
+  entry: string,
+): boolean {
+  return credentialEnvelopeTargets(roots).some(
+    (target) => target.root === root && target.fileName === entry,
+  );
+}
+
+function credentialEnvelopeVaultForRoot(
+  roots: CredentialEnvelopeRoots,
+  root: string,
+): CredentialEnvelopeVault {
+  return root === roots.credentialRoot ? "credentials" : "telegram";
+}
+
 async function inspectEnvelopeTarget(
   target: CredentialEnvelopeTarget,
   inspect: (target: CredentialEnvelopeTarget) => Promise<CredentialEnvelopeInspection>,
@@ -174,6 +241,7 @@ export async function scanCredentialEnvelopes(
       : injectedEnvelopeInspector(roots.readEnvelopeFile));
   const readDirectory = roots.readEnvelopeDirectory ?? readCredentialEnvelopeDirectory;
   const deletionBlockers: CredentialEnvelopeRef[] = [];
+  const unexplainedDeletionBlockers: UnexplainedCredentialVaultEntry[] = [];
   const canonicalEnvelopes: CredentialEnvelopeRef[] = [];
   const missingCanonicalTargets: CredentialEnvelopeTarget[] = [];
   for (const target of credentialEnvelopeTargets(roots)) {
@@ -197,10 +265,25 @@ export async function scanCredentialEnvelopes(
       throw new RangeError("credential envelope directory entry limit exceeded");
     }
     for (const entry of entries) {
+      if (canonicalEnvelopeEntry(roots, root, entry)) continue;
       const target = transientCredentialEnvelopeTarget(roots, root, entry);
-      if (target === undefined) continue;
-      const inspected = await inspectEnvelopeTarget(target, inspect);
-      if (inspected !== undefined) deletionBlockers.push(inspected);
+      if (target !== undefined) {
+        const inspected = await inspectEnvelopeTarget(target, inspect);
+        if (inspected !== undefined) deletionBlockers.push(inspected);
+        continue;
+      }
+      if (
+        root === roots.telegramRoot &&
+        knownNonEnvelopeTelegramEntryName(entry) &&
+        (await isVerifiedNonEnvelopeTelegramEntry(root, entry, inspect))
+      ) {
+        continue;
+      }
+      unexplainedDeletionBlockers.push({
+        vault: credentialEnvelopeVaultForRoot(roots, root),
+        root,
+        fileName: entry,
+      });
     }
   }
   for (const target of missingCanonicalTargets) {
@@ -215,9 +298,9 @@ export async function scanCredentialEnvelopes(
   ).length;
   return {
     deletionBlockers,
+    unexplainedDeletionBlockers,
     keychainDependents,
-    unverified: canonicalEnvelopes.filter(
-      (envelope) => envelope.keyId !== KEYCHAIN_ENVELOPE_KEY_ID,
-    ).length,
+    unverified: canonicalEnvelopes.filter((envelope) => envelope.keyId !== KEYCHAIN_ENVELOPE_KEY_ID)
+      .length,
   };
 }
