@@ -531,6 +531,19 @@ describe("shell", () => {
     expect(screen.queryByRole("navigation", { name: "Main navigation" })).toBeNull();
   });
 
+  it("preserves global reset uncertainty when settings panes close", () => {
+    useEnduragentStore.getState().patchSettings({
+      credentials: { status: "closed", resetUncertain: true },
+    });
+
+    useEnduragentStore.getState().closeSettingsPanes();
+
+    expect(useEnduragentStore.getState().settings.credentials).toEqual({
+      status: "closed",
+      resetUncertain: true,
+    });
+  });
+
   it("holds a repair-triggered gate after reconciliation until Start coaching", () => {
     const requireCompletion = vi.fn(() => {
       useEnduragentStore.setState((state) => ({

@@ -13,6 +13,7 @@ import type {
   CredentialSlotStatus,
 } from "../src/onboarding/machine.js";
 import {
+  credentialChangesBlocked,
   createCredentialSettingsController,
   type CredentialSettingsState,
   type CredentialSettingsView,
@@ -336,6 +337,55 @@ describe("credential settings controller", () => {
     });
   });
 
+  it.each(
+    (["reset", "refused"] as const).flatMap((resultStatus) =>
+      [true, false].flatMap((reloadSucceeds) =>
+        [true, false].map((callbackSucceeds) => ({
+          resultStatus,
+          reloadSucceeds,
+          callbackSucceeds,
+        })),
+      ),
+    ),
+  )(
+    "tracks reset uncertainty for $resultStatus with reload=$reloadSucceeds and callback=$callbackSucceeds",
+    async ({ resultStatus, reloadSucceeds, callbackSucceeds }) => {
+      let loadCount = 0;
+      const loadStatuses = vi.fn(async () => {
+        loadCount += 1;
+        if (loadCount === 2 && !reloadSucceeds) {
+          throw new Error("synthetic reset reload failure");
+        }
+        return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+      });
+      const callback = vi.fn(async () => {
+        if (!callbackSucceeds) throw new Error("synthetic reset callback failure");
+      });
+      const { controller, subject } = createSubject({
+        loadStatuses,
+        ...(resultStatus === "reset" ? { onDeleted: callback } : { onReconciled: callback }),
+        reset: async () =>
+          resultStatus === "reset"
+            ? { status: "reset", keyCleanupPending: false }
+            : { status: "refused", reason: "storage-failed" },
+      });
+      await controller.activate();
+
+      subject.requestReset();
+      subject.confirmDelete();
+      const uncertain = !reloadSucceeds || !callbackSucceeds;
+      await vi.waitFor(() =>
+        expect(controller.state().status).toBe(
+          uncertain ? "error" : resultStatus === "reset" ? "deleted" : "ready",
+        ),
+      );
+
+      expect(callback).toHaveBeenCalledTimes(reloadSucceeds ? 1 : 0);
+      expect(controller.state().resetUncertain).toBe(uncertain ? true : undefined);
+      expect(credentialChangesBlocked(controller.state(), false)).toBe(uncertain);
+    },
+  );
+
   it("reloads authoritative credential state when reset refuses after a partial mutation", async () => {
     let backingStatuses: readonly CredentialSlotStatus[] = [
       { slot: "anthropic", state: "configured", runtimeState: "active" },
@@ -438,6 +488,7 @@ describe("credential settings controller", () => {
       announcement:
         "Credential removal could not be verified because Settings could not reload. Reconnect and reload.",
       repairCredential: null,
+      resetUncertain: true,
       recoveryAvailable: true,
       focus: { target: "feedback" },
     });
@@ -478,10 +529,113 @@ describe("credential settings controller", () => {
       announcement:
         "Credential removal could not be verified because Settings could not reload. Reconnect and reload.",
       repairCredential: "anthropic",
+      resetUncertain: true,
       recoveryAvailable: true,
       focus: { target: "feedback" },
     });
     expect(releaseMutation).toHaveBeenCalled();
+  });
+
+  it("retains reset uncertainty across failed reload, failed reconciliation, and a successful retry", async () => {
+    let loadCount = 0;
+    const loadStatuses = vi.fn(async () => {
+      loadCount += 1;
+      if (loadCount === 2 || loadCount === 3) {
+        throw new Error("synthetic authoritative reload failure");
+      }
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onReconciled = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("synthetic reconciliation failure"))
+      .mockResolvedValueOnce();
+    const { controller, subject, resetAllCredentials } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: async () => ({ status: "reset", keyCleanupPending: false }),
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().resetUncertain).toBe(true));
+
+    subject.requestDelete("anthropic");
+    subject.requestReset();
+    subject.confirmDelete();
+    expect(resetAllCredentials).toHaveBeenCalledOnce();
+
+    subject.retry();
+    await vi.waitFor(() => expect(loadStatuses).toHaveBeenCalledTimes(3));
+    expect(controller.state()).toMatchObject({
+      status: "error",
+      kind: "load",
+      resetUncertain: true,
+    });
+    expect(onReconciled).not.toHaveBeenCalled();
+
+    subject.retry();
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
+    expect(controller.state()).toMatchObject({
+      status: "error",
+      kind: "load",
+      resetUncertain: true,
+    });
+
+    subject.retry();
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+    expect(controller.state().resetUncertain).toBeUndefined();
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(false);
+  });
+
+  it("preserves reset uncertainty through close and reopen until reconciliation succeeds", async () => {
+    let loadCount = 0;
+    const loadStatuses = vi.fn(async () => {
+      loadCount += 1;
+      if (loadCount === 2) throw new Error("synthetic reset reload failure");
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().resetUncertain).toBe(true));
+
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+
+    await controller.activate();
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(controller.state().status).toBe("ready");
+    expect(controller.state().resetUncertain).toBeUndefined();
+  });
+
+  it("keeps ordinary load errors mutable when no reset was attempted", async () => {
+    const onReconciled = vi.fn(async () => {});
+    const { controller } = createSubject({
+      loadStatuses: async () => {
+        throw new Error("synthetic initial load failure");
+      },
+      onReconciled,
+    });
+
+    await controller.activate();
+
+    expect(controller.state()).toEqual({
+      status: "error",
+      kind: "load",
+      announcement: "Saved credentials aren’t available. Reconnect and reload.",
+      repairCredential: null,
+      recoveryAvailable: false,
+      focus: null,
+    });
+    expect(onReconciled).not.toHaveBeenCalled();
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(false);
   });
 
   it("builds a provider, kind, and coarse-state-only list for every stored credential kind", async () => {
