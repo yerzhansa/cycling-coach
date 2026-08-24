@@ -17,16 +17,20 @@ describe("keychain binding adapter", () => {
         teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER,
       }),
     ).toEqual({ ok: true, op: "probe", teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER });
-    expect(parseKeychainBindingResponse("read-key", { ok: true, key })).toEqual({
+    const read = parseKeychainBindingResponse("read-key", { ok: true, key });
+    expect(read).toEqual({
       ok: true,
       op: "read-key",
       key,
     });
-    expect(parseKeychainBindingResponse("create-key", { ok: true, key: randomBytes(16) })).toEqual({
+    expect(read.ok && read.op === "read-key" ? read.key : undefined).toBe(key);
+    const wrongLength = randomBytes(16);
+    expect(parseKeychainBindingResponse("create-key", { ok: true, key: wrongLength })).toEqual({
       ok: false,
       code: "unknown",
       creationRollbackPending: true,
     });
+    expect(wrongLength).toEqual(Buffer.alloc(16));
     expect(
       parseKeychainBindingResponse("create-key", {
         ok: false,
@@ -74,6 +78,27 @@ describe("keychain binding adapter", () => {
     });
   });
 
+  it("wipes key buffers discarded from malformed and unrelated responses", () => {
+    const failed = randomBytes(KEYCHAIN_KEY_BYTES);
+    const unrelated = randomBytes(KEYCHAIN_KEY_BYTES);
+    expect(
+      parseKeychainBindingResponse("read-key", {
+        ok: false,
+        code: "unreadable-item",
+        key: failed,
+      }),
+    ).toEqual({ ok: false, code: "unreadable-item" });
+    expect(
+      parseKeychainBindingResponse("probe", {
+        ok: true,
+        teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER,
+        key: unrelated,
+      }),
+    ).toEqual({ ok: true, op: "probe", teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER });
+    expect(failed).toEqual(Buffer.alloc(KEYCHAIN_KEY_BYTES));
+    expect(unrelated).toEqual(Buffer.alloc(KEYCHAIN_KEY_BYTES));
+  });
+
   it("keeps the lifecycle seam asynchronous around an injected native fake", async () => {
     const key = randomBytes(KEYCHAIN_KEY_BYTES);
     const binding = {
@@ -92,9 +117,9 @@ describe("keychain binding adapter", () => {
     await expect(
       transport.send({ op: "probe", service: KEYCHAIN_CREDENTIAL_SERVICE }),
     ).resolves.toEqual({ ok: true, op: "probe", teamIdentifier: KEYCHAIN_TEAM_IDENTIFIER });
-    await expect(
-      transport.send({ op: "read-key", service: KEYCHAIN_CREDENTIAL_SERVICE }),
-    ).resolves.toEqual({ ok: true, op: "read-key", key });
+    const read = await transport.send({ op: "read-key", service: KEYCHAIN_CREDENTIAL_SERVICE });
+    expect(read).toEqual({ ok: true, op: "read-key", key });
+    expect(read.ok && read.op === "read-key" ? read.key : undefined).toBe(key);
     await expect(
       transport.send({
         op: "retry-created-key-rollback",

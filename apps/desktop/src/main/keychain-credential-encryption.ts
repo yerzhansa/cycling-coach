@@ -148,6 +148,15 @@ interface KeyHolder {
   cleanupDebt: KeyCleanupDebt;
 }
 
+function responseKey(response: KeychainBindingResponse): Buffer | undefined {
+  const key = (response as { readonly key?: unknown }).key;
+  return Buffer.isBuffer(key) ? key : undefined;
+}
+
+function wipeResponseKey(response: KeychainBindingResponse): void {
+  responseKey(response)?.fill(0);
+}
+
 function readyPort(holder: KeyHolder): CredentialEncryptionPort {
   const currentKey = (): Buffer => {
     if (holder.key === null) throw new KeychainEncryptionError(holder.failure);
@@ -191,6 +200,7 @@ export async function createKeychainPartitionEncryption(
   > => {
     try {
       const retried = await transport.send({ op: "retry-created-key-rollback", service });
+      wipeResponseKey(retried);
       if (!retried.ok) return { status: "failed", code: retried.code };
       return retried.op === "retry-created-key-rollback"
         ? { status: "ready" }
@@ -201,6 +211,7 @@ export async function createKeychainPartitionEncryption(
   };
   let initialCleanupDebt = options.keyCleanupDebt ?? "none";
   const probe = await transport.send({ op: "probe", service });
+  wipeResponseKey(probe);
   if (!probe.ok) {
     return probe.code === "not-team-signed"
       ? { status: "unsupported", code: "not-team-signed", keyCleanupDebt: initialCleanupDebt }
@@ -240,6 +251,7 @@ export async function createKeychainPartitionEncryption(
       return { status: "failed", code: "unknown", keyCleanupDebt: "creation-rollback" };
     }
     if (!created.ok) {
+      wipeResponseKey(created);
       return {
         status: "failed",
         code: created.code,
@@ -248,9 +260,13 @@ export async function createKeychainPartitionEncryption(
       };
     }
     if (created.op !== "create-key") {
+      wipeResponseKey(created);
       return { status: "failed", code: "unknown", keyCleanupDebt: "creation-rollback" };
     }
-    const key = Buffer.from(created.key);
+    const key = responseKey(created);
+    if (key === undefined) {
+      return { status: "failed", code: "unknown", keyCleanupDebt: "creation-rollback" };
+    }
     if (key.length === KEYCHAIN_KEY_BYTES) return { status: "ready", key };
     key.fill(0);
     return { status: "failed", code: "unknown", keyCleanupDebt: "creation-rollback" };
@@ -263,12 +279,17 @@ export async function createKeychainPartitionEncryption(
   > => {
     const read = await transport.send({ op: "read-key", service });
     if (!read.ok) {
+      wipeResponseKey(read);
       return read.code === "item-not-found"
         ? { status: "missing" }
         : { status: "failed", code: read.code };
     }
-    if (read.op !== "read-key") return { status: "failed", code: "unknown" };
-    const key = Buffer.from(read.key);
+    if (read.op !== "read-key") {
+      wipeResponseKey(read);
+      return { status: "failed", code: "unknown" };
+    }
+    const key = responseKey(read);
+    if (key === undefined) return { status: "failed", code: "unknown" };
     if (key.length === KEYCHAIN_KEY_BYTES) return { status: "ready", key };
     key.fill(0);
     return { status: "failed", code: "unknown" };
@@ -276,6 +297,7 @@ export async function createKeychainPartitionEncryption(
 
   const deleteMaterialForReset = async (): Promise<KeychainKeyDeletion> => {
     const deleted = await transport.send({ op: "delete-key", service });
+    wipeResponseKey(deleted);
     if (!deleted.ok || deleted.op !== "delete-key") {
       return { status: "failed", code: deleted.ok ? "unknown" : deleted.code };
     }
@@ -315,7 +337,7 @@ export async function createKeychainPartitionEncryption(
         const persisted = await readMaterial();
         if (persisted.status === "ready") {
           const matches = timingSafeEqual(holder.key, persisted.key);
-          persisted.key.fill(0);
+          if (persisted.key !== holder.key) persisted.key.fill(0);
           if (matches) return { status: "ready" };
           clearKey();
           return fail("unknown");
