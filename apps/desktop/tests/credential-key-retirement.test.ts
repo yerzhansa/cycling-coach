@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -335,6 +335,21 @@ describe("keychain key retirement call sites", () => {
       `scan:${roots.credentialRoot}`,
       `scan:${roots.telegramRoot}`,
     ]);
+  });
+
+  posixIt("never creates a zero proof while an unexplained vault entry remains", async () => {
+    const roots = await fixture();
+    await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
+    await writeFile(join(roots.credentialRoot, "future-entry"), "unexplained");
+    const transport = transportOf();
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+
+    const result = await serializeEnvelopeMutation((proof) =>
+      retireKey(roots, transport, proof),
+    );
+
+    expect(result).toEqual({ status: "retained", envelopes: 1 });
+    expect(transport.requests).toEqual([]);
   });
 
   posixIt("keeps the key when a credential envelope outlives the Telegram profile", async () => {

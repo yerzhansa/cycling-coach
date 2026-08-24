@@ -50,9 +50,11 @@ import { retireKeychainKeyWhenLastEnvelopeGone } from "../src/main/keychain-key-
 import {
   TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
   TELEGRAM_CREDENTIAL_FILE_MODE,
+  TELEGRAM_DESIRED_STATE_FILE_NAME,
   TELEGRAM_PROFILE_FILE_NAME,
   createTelegramCredentialVault,
 } from "../src/main/telegram-credential-vault.js";
+import { TELEGRAM_POWER_STATE_FILE_NAME } from "../src/main/telegram-power.js";
 
 const fixtureRoots: string[] = [];
 const posixIt = it.skipIf(process.platform === "win32");
@@ -277,7 +279,7 @@ describe("keychain key retirement", () => {
 
     await expect(retireKey(roots, transport)).resolves.toEqual({
       status: "retained",
-      envelopes: 1,
+      envelopes: 2,
     });
     expect(transport.requests).toHaveLength(0);
   });
@@ -351,10 +353,7 @@ describe("keychain key retirement", () => {
     const roots = await fixture();
     await mkdir(roots.credentialRoot, { mode: CREDENTIAL_DIRECTORY_MODE });
     await mkdir(roots.telegramRoot, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
-    const envelope = sealCredentialEnvelope(
-      randomBytes(KEYCHAIN_KEY_BYTES),
-      "classifier-parity",
-    );
+    const envelope = sealCredentialEnvelope(randomBytes(KEYCHAIN_KEY_BYTES), "classifier-parity");
     await writeFile(join(roots.credentialRoot, "anthropic.bin"), envelope, { mode: 0o600 });
     await writeFile(join(roots.telegramRoot, TELEGRAM_PROFILE_FILE_NAME), envelope, {
       mode: TELEGRAM_CREDENTIAL_FILE_MODE,
@@ -494,7 +493,7 @@ describe("keychain key retirement", () => {
 
     await expect(retireKey(roots, transport)).resolves.toEqual({
       status: "retained",
-      envelopes: 2,
+      envelopes: 3,
     });
     expect(transport.requests).toHaveLength(0);
   });
@@ -574,18 +573,105 @@ describe("keychain key retirement", () => {
     expect(inventory.unverified).toBe(0);
   });
 
-  posixIt("ignores files outside the credential transient namespaces", async () => {
+  posixIt("keeps unexplained entries separate from envelope recovery counts", async () => {
     const roots = await fixture();
     await mkdir(roots.credentialRoot, { recursive: true, mode: CREDENTIAL_DIRECTORY_MODE });
     await mkdir(roots.telegramRoot, { recursive: true, mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
-    await writeFile(join(roots.credentialRoot, ".unknown.bin.cleanup.tmp"), "unrelated");
+    await writeFile(join(roots.credentialRoot, "future-credential-state"), "unexplained");
+    await mkdir(join(roots.telegramRoot, "future-telegram-state"));
+    const transport = transportOf();
+
+    const inventory = await scanCredentialEnvelopes(roots);
+
+    expect(inventory.deletionBlockers).toEqual([]);
+    expect(inventory.unexplainedDeletionBlockers).toEqual([
+      {
+        vault: "credentials",
+        root: roots.credentialRoot,
+        fileName: "future-credential-state",
+      },
+      {
+        vault: "telegram",
+        root: roots.telegramRoot,
+        fileName: "future-telegram-state",
+      },
+    ]);
+    expect(inventory.keychainDependents).toBe(0);
+    expect(inventory.unverified).toBe(0);
+    await expect(retireKey(roots, transport)).resolves.toEqual({
+      status: "retained",
+      envelopes: 2,
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  posixIt("exempts only exact bounded Telegram non-envelope vault state", async () => {
+    const roots = await fixture();
+    await mkdir(roots.telegramRoot, { recursive: true, mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    await writeFile(join(roots.telegramRoot, TELEGRAM_DESIRED_STATE_FILE_NAME), "known-state", {
+      mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+    });
     await writeFile(
-      join(roots.telegramRoot, ".telegram-desired-state.json.cleanup.deleted"),
-      "unrelated",
+      join(roots.telegramRoot, `.${TELEGRAM_DESIRED_STATE_FILE_NAME}.cleanup-1.deleted`),
+      "known-transient",
+      { mode: TELEGRAM_CREDENTIAL_FILE_MODE },
+    );
+    await writeFile(join(roots.telegramRoot, TELEGRAM_POWER_STATE_FILE_NAME), "known-power-state", {
+      mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+    });
+    await writeFile(
+      join(roots.telegramRoot, `.${TELEGRAM_POWER_STATE_FILE_NAME}.cleanup-1.tmp`),
+      "known-power-transient",
+      { mode: TELEGRAM_CREDENTIAL_FILE_MODE },
     );
     const transport = transportOf({ ok: true, op: "delete-key", deleted: true });
 
     await expect(retireKey(roots, transport)).resolves.toEqual({ status: "deleted" });
+  });
+
+  posixIt("blocks unsafe and keychain-backed Telegram state lookalikes", async () => {
+    const roots = await fixture();
+    await mkdir(roots.telegramRoot, { recursive: true, mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    await mkdir(join(roots.telegramRoot, TELEGRAM_DESIRED_STATE_FILE_NAME));
+    const keychainEnvelope = sealCredentialEnvelope(
+      randomBytes(KEYCHAIN_KEY_BYTES),
+      "not-desired-state",
+    );
+    const transient = `.${TELEGRAM_DESIRED_STATE_FILE_NAME}.cleanup-1.tmp`;
+    await writeFile(join(roots.telegramRoot, transient), keychainEnvelope, {
+      mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+    });
+    keychainEnvelope.fill(0);
+
+    const inventory = await scanCredentialEnvelopes(roots);
+
+    expect(inventory.deletionBlockers).toEqual([]);
+    expect(inventory.unexplainedDeletionBlockers.map((entry) => entry.fileName)).toEqual([
+      transient,
+      TELEGRAM_DESIRED_STATE_FILE_NAME,
+    ]);
+    expect(inventory.keychainDependents).toBe(0);
+    expect(inventory.unverified).toBe(0);
+  });
+
+  posixIt("blocks a keychain-backed Telegram power-state lookalike", async () => {
+    const roots = await fixture();
+    await mkdir(roots.telegramRoot, { recursive: true, mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    const keychainEnvelope = sealCredentialEnvelope(
+      randomBytes(KEYCHAIN_KEY_BYTES),
+      "not-power-state",
+    );
+    await writeFile(join(roots.telegramRoot, TELEGRAM_POWER_STATE_FILE_NAME), keychainEnvelope, {
+      mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+    });
+    keychainEnvelope.fill(0);
+
+    const inventory = await scanCredentialEnvelopes(roots);
+
+    expect(inventory.deletionBlockers).toEqual([]);
+    expect(inventory.unexplainedDeletionBlockers.map((entry) => entry.fileName)).toEqual([
+      TELEGRAM_POWER_STATE_FILE_NAME,
+    ]);
   });
 
   posixIt("reports an absent item and a refused delete apart", async () => {
