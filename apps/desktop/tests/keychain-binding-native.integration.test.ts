@@ -244,6 +244,40 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       expect(reading.indexOf("RetryCreationRollback(")).toBeLessThan(
         reading.indexOf("CopyDefaultKeychain"),
       );
+      expect(reading).not.toContain("kSecReturnData");
+      expect(reading.match(/SecKeychainItemCopyContent\(/gu)).toHaveLength(1);
+      const contentCleanup = reading.slice(reading.indexOf("SecKeychainItemCopyContent("));
+      const eraseOffsets = [...contentCleanup.matchAll(/EraseBytes\(contentBytes/gu)].map(
+        (match) => match.index,
+      );
+      const freeOffsets = [
+        ...contentCleanup.matchAll(/SecKeychainItemFreeContent\(nullptr, contentBytes\)/gu),
+      ].map((match) => match.index);
+      expect(eraseOffsets).toHaveLength(3);
+      expect(freeOffsets).toHaveLength(3);
+      for (const [index, eraseOffset] of eraseOffsets.entries()) {
+        const freeOffset = freeOffsets[index]!;
+        expect(eraseOffset).toBeLessThan(freeOffset);
+        if (index + 1 < eraseOffsets.length) {
+          expect(freeOffset).toBeLessThan(eraseOffsets[index + 1]!);
+        }
+      }
+      const bufferFailure = reading.slice(
+        reading.indexOf("if (bufferStatus != napi_ok || freeStatus != errSecSuccess)"),
+        reading.indexOf("napi_value response"),
+      );
+      const publicationFailure = reading.slice(
+        reading.indexOf('if (response == nullptr || !Set(env, response, "key", key))'),
+        reading.indexOf("return response;"),
+      );
+      expect(bufferFailure.match(/EraseBytes\(keyBytes/gu)).toHaveLength(1);
+      expect(bufferFailure.indexOf("EraseBytes(keyBytes")).toBeLessThan(
+        bufferFailure.indexOf("return bufferStatus"),
+      );
+      expect(publicationFailure.match(/EraseBytes\(keyBytes/gu)).toHaveLength(1);
+      expect(publicationFailure.indexOf("EraseBytes(keyBytes")).toBeLessThan(
+        publicationFailure.indexOf("return NapiError(env)"),
+      );
       expect(creation.indexOf("RetryCreationRollback(")).toBeLessThan(
         creation.indexOf("CopyDefaultKeychain"),
       );

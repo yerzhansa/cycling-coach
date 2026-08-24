@@ -117,6 +117,15 @@ export function parseKeychainBindingResponse(
   value: unknown,
 ): KeychainBindingResponse {
   if (!isRecord(value)) return unknownResponse(operation);
+  const key = Buffer.isBuffer(value.key) ? value.key : undefined;
+  if (
+    value.ok === true &&
+    (operation === "read-key" || operation === "create-key") &&
+    key?.length === KEYCHAIN_KEY_BYTES
+  ) {
+    return { ok: true, op: operation, key };
+  }
+  key?.fill(0);
   if (value.ok === false) {
     if (operation === "create-key") {
       return isErrorCode(value.code) && typeof value.creationRollbackPending === "boolean"
@@ -135,11 +144,7 @@ export function parseKeychainBindingResponse(
       ? { ok: true, op: "probe", teamIdentifier: value.teamIdentifier }
       : unknownResponse(operation);
   }
-  if (operation === "read-key" || operation === "create-key") {
-    return Buffer.isBuffer(value.key) && value.key.length === KEYCHAIN_KEY_BYTES
-      ? { ok: true, op: operation, key: Buffer.from(value.key) }
-      : unknownResponse(operation);
-  }
+  if (operation === "read-key" || operation === "create-key") return unknownResponse(operation);
   if (operation === "retry-created-key-rollback") {
     return { ok: true, op: "retry-created-key-rollback" };
   }

@@ -580,50 +580,58 @@ napi_value ReadKey(napi_env env, napi_callback_info info) {
   CFRelease(keychain);
   if (query == nullptr)
     return Failure(env, "unknown");
-  CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
   CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
   CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
-  CFTypeRef resultValue = nullptr;
-  const OSStatus status = SecItemCopyMatching(query, &resultValue);
+  CFTypeRef itemValue = nullptr;
+  const OSStatus status = SecItemCopyMatching(query, &itemValue);
   CFRelease(query);
   if (status != errSecSuccess)
     return Failure(env, StatusCode(status));
-  if (resultValue == nullptr ||
-      CFGetTypeID(resultValue) != CFDictionaryGetTypeID()) {
-    if (resultValue != nullptr)
-      CFRelease(resultValue);
-    return Failure(env, "unreadable-item");
-  }
-  CFDictionaryRef result = static_cast<CFDictionaryRef>(resultValue);
-  CFTypeRef dataValue = CFDictionaryGetValue(result, kSecValueData);
-  CFTypeRef itemValue = CFDictionaryGetValue(result, kSecValueRef);
-  if (dataValue == nullptr || CFGetTypeID(dataValue) != CFDataGetTypeID() ||
-      itemValue == nullptr ||
+  if (itemValue == nullptr ||
       CFGetTypeID(itemValue) != SecKeychainItemGetTypeID()) {
-    CFRelease(resultValue);
+    if (itemValue != nullptr)
+      CFRelease(itemValue);
     return Failure(env, "unreadable-item");
   }
-  CFDataRef data = static_cast<CFDataRef>(dataValue);
-  if (CFDataGetLength(data) != static_cast<CFIndex>(kKeyBytes)) {
-    CFRelease(resultValue);
-    return Failure(env, "unreadable-item");
-  }
-  const PartitionInspection partition = InspectPartition(
-      static_cast<SecKeychainItemRef>(const_cast<void *>(itemValue)));
+  SecKeychainItemRef item =
+      static_cast<SecKeychainItemRef>(const_cast<void *>(itemValue));
+  const PartitionInspection partition = InspectPartition(item);
   if (partition != PartitionInspection::kPresent) {
-    CFRelease(resultValue);
+    CFRelease(itemValue);
     return Failure(env, partition == PartitionInspection::kAbsent
                             ? "unreadable-item"
                             : "uninspectable-item");
   }
+  UInt32 contentLength = 0;
+  void *contentBytes = nullptr;
+  const OSStatus contentStatus = SecKeychainItemCopyContent(
+      item, nullptr, nullptr, &contentLength, &contentBytes);
+  CFRelease(itemValue);
+  if (contentStatus != errSecSuccess) {
+    EraseBytes(contentBytes, static_cast<size_t>(contentLength));
+    if (contentBytes != nullptr)
+      SecKeychainItemFreeContent(nullptr, contentBytes);
+    return Failure(env, StatusCode(contentStatus));
+  }
+  if (contentBytes == nullptr || contentLength != kKeyBytes) {
+    EraseBytes(contentBytes, static_cast<size_t>(contentLength));
+    OSStatus freeStatus = errSecSuccess;
+    if (contentBytes != nullptr)
+      freeStatus = SecKeychainItemFreeContent(nullptr, contentBytes);
+    return Failure(env, freeStatus == errSecSuccess ? "unreadable-item"
+                                                    : "uninspectable-item");
+  }
   napi_value key = nullptr;
   void *keyBytes = nullptr;
   const napi_status bufferStatus = napi_create_buffer_copy(
-      env, kKeyBytes, CFDataGetBytePtr(data), &keyBytes, &key);
-  CFRelease(resultValue);
-  if (bufferStatus != napi_ok) {
+      env, kKeyBytes, contentBytes, &keyBytes, &key);
+  EraseBytes(contentBytes, static_cast<size_t>(contentLength));
+  const OSStatus freeStatus =
+      SecKeychainItemFreeContent(nullptr, contentBytes);
+  if (bufferStatus != napi_ok || freeStatus != errSecSuccess) {
     EraseBytes(keyBytes, keyBytes == nullptr ? 0 : kKeyBytes);
-    return NapiError(env);
+    return bufferStatus != napi_ok ? NapiError(env)
+                                   : Failure(env, "uninspectable-item");
   }
   napi_value response = Success(env);
   if (response == nullptr || !Set(env, response, "key", key)) {
