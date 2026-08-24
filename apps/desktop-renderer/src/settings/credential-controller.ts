@@ -79,7 +79,9 @@ interface CredentialSettingsContent {
   readonly focus: CredentialSettingsFocus;
 }
 
-export type CredentialSettingsState =
+export type CredentialSettingsState = {
+  readonly resetUncertain?: boolean;
+} & (
   | {
       readonly status: "closed";
       readonly repairCredential?: DesktopCredentialId | null;
@@ -106,7 +108,8 @@ export type CredentialSettingsState =
       readonly repairCredential: DesktopCredentialId | null;
       readonly recoveryAvailable: boolean;
       readonly focus: CredentialSettingsFocus;
-    };
+    }
+);
 
 export function repairRequiredCredential(
   state: CredentialSettingsState,
@@ -118,7 +121,13 @@ export function credentialChangesBlocked(
   state: CredentialSettingsState,
   settingsMutationActive: boolean,
 ): boolean {
-  if (settingsMutationActive || repairRequiredCredential(state) !== null) return true;
+  if (
+    settingsMutationActive ||
+    state.resetUncertain === true ||
+    repairRequiredCredential(state) !== null
+  ) {
+    return true;
+  }
   if (
     state.status === "ready" ||
     state.status === "confirming" ||
@@ -387,9 +396,12 @@ export function createCredentialSettingsController(input: {
   const startLoad = (retryRecovery = false): Promise<void> => {
     if (disposed || operation !== undefined) return operation ?? Promise.resolve();
     const repairCredential = repairRequiredCredential(currentState);
+    const resetUncertain = currentState.resetUncertain === true;
     const repairAnnouncement =
       repairCredential === null
-        ? ""
+        ? resetUncertain && "announcement" in currentState
+          ? currentState.announcement
+          : ""
         : "announcement" in currentState && currentState.announcement.length > 0
           ? currentState.announcement
           : UNCERTAIN_DELETE_ANNOUNCEMENT;
@@ -398,15 +410,16 @@ export function createCredentialSettingsController(input: {
       status: "loading",
       announcement: repairAnnouncement,
       repairCredential,
+      ...(resetUncertain ? { resetUncertain: true } : {}),
       recoveryAvailable: false,
-      focus: repairCredential === null ? null : { target: "feedback" },
+      focus: repairCredential === null && !resetUncertain ? null : { target: "feedback" },
     });
     const pending = (async () => {
       try {
         if (retryRecovery) await input.retryCredentialRecovery?.();
         const loaded = await loadEntries();
         if (disposed || generation !== operationGeneration) return;
-        if (repairCredential !== null) await input.onReconciled?.();
+        if (repairCredential !== null || resetUncertain) await input.onReconciled?.();
         if (disposed || generation !== operationGeneration) return;
         render({
           status: "ready",
@@ -430,8 +443,9 @@ export function createCredentialSettingsController(input: {
               ? "Saved credentials aren’t available. Reconnect and reload."
               : repairAnnouncement,
           repairCredential,
+          ...(resetUncertain ? { resetUncertain: true } : {}),
           recoveryAvailable: false,
-          focus: repairCredential === null ? null : { target: "feedback" },
+          focus: repairCredential === null && !resetUncertain ? null : { target: "feedback" },
         });
       }
     })().finally(() => {
@@ -505,7 +519,14 @@ export function createCredentialSettingsController(input: {
   };
 
   const requestReset = (): void => {
-    if (disposed || operation !== undefined || input.credentialMutationsBlocked?.()) return;
+    if (
+      disposed ||
+      operation !== undefined ||
+      currentState.resetUncertain === true ||
+      input.credentialMutationsBlocked?.()
+    ) {
+      return;
+    }
     const content = contentState();
     if (
       content === null ||
@@ -595,6 +616,7 @@ export function createCredentialSettingsController(input: {
               ? "Credential removal could not be verified because Settings could not reload. Reconnect and reload."
               : "Credentials were removed, but Settings could not reload. Reconnect and reload.",
           repairCredential: result.status === "refused" ? content.repairCredential : null,
+          resetUncertain: true,
           recoveryAvailable: true,
           focus: { target: "feedback" },
         });
@@ -641,7 +663,12 @@ export function createCredentialSettingsController(input: {
   };
 
   const confirmDelete = (): Promise<void> => {
-    if (disposed || operation !== undefined || input.credentialMutationsBlocked?.()) {
+    if (
+      disposed ||
+      operation !== undefined ||
+      currentState.resetUncertain === true ||
+      input.credentialMutationsBlocked?.()
+    ) {
       return operation ?? Promise.resolve();
     }
     const content = contentState();
@@ -795,7 +822,14 @@ export function createCredentialSettingsController(input: {
 
   const openSetup = (): void => {
     const content = contentState();
-    if (disposed || operation !== undefined || content?.recoveryAvailable !== true) return;
+    if (
+      disposed ||
+      operation !== undefined ||
+      currentState.resetUncertain === true ||
+      content?.recoveryAvailable !== true
+    ) {
+      return;
+    }
     currentState = { status: "closed" };
     input.openSetup();
   };
@@ -811,9 +845,11 @@ export function createCredentialSettingsController(input: {
     ++generation;
     operation = undefined;
     const repairCredential = repairRequiredCredential(currentState);
+    const resetUncertain = currentState.resetUncertain === true;
     currentState = {
       status: "closed",
       ...(repairCredential === null ? {} : { repairCredential }),
+      ...(resetUncertain ? { resetUncertain: true } : {}),
     };
   };
 
