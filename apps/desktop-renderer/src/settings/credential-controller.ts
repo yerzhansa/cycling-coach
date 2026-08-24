@@ -845,9 +845,9 @@ export function createCredentialSettingsController(input: {
   const close = (): void => {
     if (disposed) return;
     ++generation;
-    operation = undefined;
     const repairCredential = repairRequiredCredential(currentState);
     const resetUncertain = currentState.resetUncertain === true;
+    if (!resetUncertain) operation = undefined;
     currentState = {
       status: "closed",
       ...(repairCredential === null ? {} : { repairCredential }),
@@ -873,10 +873,16 @@ export function createCredentialSettingsController(input: {
   });
 
   return {
-    activate() {
-      if (disposed) return Promise.resolve();
-      if (currentState.status !== "closed") return operation ?? Promise.resolve();
-      return startLoad();
+    async activate() {
+      if (disposed) return;
+      if (currentState.status !== "closed") {
+        await operation;
+        return;
+      }
+      const reopenBarrier = currentState.resetUncertain === true ? operation : undefined;
+      if (reopenBarrier !== undefined) await reopenBarrier;
+      if (disposed || currentState.status !== "closed") return;
+      await startLoad();
     },
     close,
     state: () => currentState,

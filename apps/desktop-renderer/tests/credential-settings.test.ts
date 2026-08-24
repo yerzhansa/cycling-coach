@@ -637,14 +637,17 @@ describe("credential settings controller", () => {
     expect(controller.state()).toMatchObject({ status: "deleting", resetUncertain: true });
     controller.close();
     expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
-    resolveReset({ status: "refused", reason: "storage-failed" });
-    await vi.waitFor(() => expect(releaseMutation).toHaveBeenCalled());
+    const reopening = controller.activate();
+    expect(onReconciled).not.toHaveBeenCalled();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
 
-    void controller.activate();
+    resolveReset({ status: "refused", reason: "storage-failed" });
     await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
     expect(controller.state()).toMatchObject({ status: "loading", resetUncertain: true });
     resolveReconciliation();
-    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+    await reopening;
+    expect(releaseMutation).toHaveBeenCalled();
+    expect(controller.state().status).toBe("ready");
     expect(controller.state().resetUncertain).toBeUndefined();
   });
 
@@ -680,14 +683,17 @@ describe("credential settings controller", () => {
     expect(controller.state()).toMatchObject({ status: "deleting", resetUncertain: true });
     controller.close();
     expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
-    resolveReload([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
-    await vi.waitFor(() => expect(releaseMutation).toHaveBeenCalled());
+    const reopening = controller.activate();
+    expect(onReconciled).not.toHaveBeenCalled();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
 
-    void controller.activate();
+    resolveReload([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
     await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
     expect(controller.state()).toMatchObject({ status: "loading", resetUncertain: true });
     resolveReconciliation();
-    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+    await reopening;
+    expect(releaseMutation).toHaveBeenCalled();
+    expect(controller.state().status).toBe("ready");
     expect(controller.state().resetUncertain).toBeUndefined();
   });
 
@@ -716,14 +722,17 @@ describe("credential settings controller", () => {
     expect(controller.state()).toMatchObject({ status: "deleting", resetUncertain: true });
     controller.close();
     expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
-    resolveFirstReconciliation();
-    await vi.waitFor(() => expect(releaseMutation).toHaveBeenCalled());
+    const reopening = controller.activate();
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
 
-    void controller.activate();
+    resolveFirstReconciliation();
     await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledTimes(2));
     expect(controller.state()).toMatchObject({ status: "loading", resetUncertain: true });
     resolveSecondReconciliation();
-    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+    await reopening;
+    expect(releaseMutation).toHaveBeenCalled();
+    expect(controller.state().status).toBe("ready");
     expect(controller.state().resetUncertain).toBeUndefined();
   });
 
