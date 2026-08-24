@@ -576,28 +576,14 @@ export function createCredentialSettingsController(input: {
         result = { status: "refused", reason: "storage-failed" };
       }
       if (disposed || generation !== operationGeneration) return;
-      if (result.status === "refused") {
-        releaseMutation();
-        render({
-          status: "ready",
-          entries: content.entries,
-          providerStatuses: content.providerStatuses,
-          confirmation: null,
-          announcement:
-            result.reason === "runtime-unavailable"
-              ? "Enduragent could not stop every active credential. Retry to finish removing credentials."
-              : "Enduragent could not remove every stored credential. Retry.",
-          recovery: content.recovery,
-          repairCredential: content.repairCredential,
-          recoveryAvailable: content.recoveryAvailable,
-          focus: { target: "feedback" },
-        });
-        return;
-      }
       let loaded: Awaited<ReturnType<typeof loadEntries>>;
       try {
         loaded = await loadEntries();
-        await input.onDeleted?.();
+        if (result.status === "refused") {
+          await input.onReconciled?.();
+        } else {
+          await input.onDeleted?.();
+        }
       } catch {
         if (disposed || generation !== operationGeneration) return;
         releaseMutation();
@@ -605,8 +591,10 @@ export function createCredentialSettingsController(input: {
           status: "error",
           kind: "load",
           announcement:
-            "Credentials were removed, but Settings could not reload. Reconnect and reload.",
-          repairCredential: null,
+            result.status === "refused"
+              ? "Credential removal could not be verified because Settings could not reload. Reconnect and reload."
+              : "Credentials were removed, but Settings could not reload. Reconnect and reload.",
+          repairCredential: result.status === "refused" ? content.repairCredential : null,
           recoveryAvailable: true,
           focus: { target: "feedback" },
         });
@@ -614,6 +602,23 @@ export function createCredentialSettingsController(input: {
       }
       if (disposed || generation !== operationGeneration) return;
       releaseMutation();
+      if (result.status === "refused") {
+        render({
+          status: "ready",
+          entries: loaded.entries,
+          providerStatuses: loaded.providerStatuses,
+          confirmation: null,
+          announcement:
+            result.reason === "runtime-unavailable"
+              ? "Enduragent could not stop every active credential. Retry to finish removing credentials."
+              : "Enduragent could not remove every stored credential. Retry.",
+          recovery: loaded.recovery,
+          repairCredential: null,
+          recoveryAvailable: false,
+          focus: { target: "feedback" },
+        });
+        return;
+      }
       render({
         status: "deleted",
         entries: loaded.entries,
