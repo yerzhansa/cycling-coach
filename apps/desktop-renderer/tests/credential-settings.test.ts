@@ -84,7 +84,9 @@ function fakeView() {
 
 function createSubject(input: {
   readonly runtime?: RuntimeConfigSnapshot;
+  readonly loadRuntime?: () => Promise<RuntimeConfigSnapshot>;
   readonly statuses?: readonly CredentialSlotStatus[];
+  readonly loadStatuses?: () => Promise<readonly CredentialSlotStatus[]>;
   readonly chatGpt?: ChatGptStatus;
   readonly deletion?: CredentialDeleteResult;
   readonly deleteCredential?: (input: {
@@ -112,7 +114,7 @@ function createSubject(input: {
     input.recovery ?? ({ state: "ready", unverifiedEnvelopes: 0 } as const);
   const subject = fakeView();
   const client = {
-    call: vi.fn(async () => activeRuntime),
+    call: vi.fn(async () => (await input.loadRuntime?.()) ?? activeRuntime),
   };
   const clients = {
     getClient: vi.fn(async () => client),
@@ -160,9 +162,10 @@ function createSubject(input: {
     }
     return result;
   });
+  const releaseMutation = vi.fn();
   const controller = createCredentialSettingsController({
     clients,
-    loadStatuses: async () => statuses,
+    loadStatuses: async () => (await input.loadStatuses?.()) ?? statuses,
     loadChatGptStatus: async () => chatGpt,
     loadRecoveryStatus: async () => (await input.loadRecoveryStatus?.()) ?? recovery,
     retryCredentialRecovery: async () => {
@@ -178,10 +181,10 @@ function createSubject(input: {
     ...(input.credentialMutationsBlocked === undefined
       ? {}
       : { credentialMutationsBlocked: input.credentialMutationsBlocked }),
-    beginMutation: () => vi.fn(),
+    beginMutation: () => releaseMutation,
     view: subject.view,
   });
-  return { controller, subject, deleteCredential, resetAllCredentials };
+  return { controller, subject, deleteCredential, resetAllCredentials, releaseMutation };
 }
 
 function content(state: CredentialSettingsState) {
@@ -285,20 +288,19 @@ describe("credential settings controller", () => {
     );
   });
 
-  it.each([
-    { state: "locked" },
-    { state: "missing" },
-    { state: "unavailable" },
-  ] as const)("blocks individual deletion during $state recovery but keeps full reset available", async (recovery) => {
-    const { controller, subject } = createSubject({ recovery });
-    await controller.activate();
+  it.each([{ state: "locked" }, { state: "missing" }, { state: "unavailable" }] as const)(
+    "blocks individual deletion during $state recovery but keeps full reset available",
+    async (recovery) => {
+      const { controller, subject } = createSubject({ recovery });
+      await controller.activate();
 
-    subject.requestDelete("anthropic");
-    expect(controller.state()).toMatchObject({ status: "ready", confirmation: null });
+      subject.requestDelete("anthropic");
+      expect(controller.state()).toMatchObject({ status: "ready", confirmation: null });
 
-    subject.requestReset();
-    expect(controller.state()).toMatchObject({ status: "confirming", confirmation: "all" });
-  });
+      subject.requestReset();
+      expect(controller.state()).toMatchObject({ status: "confirming", confirmation: "all" });
+    },
+  );
 
   it("confirmation-gates the inline missing-key reset and focuses Cancel first", async () => {
     const { controller, subject, resetAllCredentials } = createSubject({
@@ -332,6 +334,154 @@ describe("credential settings controller", () => {
       announcement: "All credentials were removed. Set them up again when you’re ready.",
       focus: { target: "setup-open" },
     });
+  });
+
+  it("reloads authoritative credential state when reset refuses after a partial mutation", async () => {
+    let backingStatuses: readonly CredentialSlotStatus[] = [
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+    ];
+    let backingRuntime = runtime();
+    let backingRecovery: CredentialRecoveryStatus = {
+      state: "ready",
+      unverifiedEnvelopes: 0,
+    };
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject } = createSubject({
+      chatGpt: { state: "absent", runtimeReady: false },
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      },
+      loadStatuses: async () => backingStatuses,
+      loadRuntime: async () => backingRuntime,
+      loadRecoveryStatus: async () => backingRecovery,
+      claudeCli: async () => ({
+        state: "ready",
+        email: "athlete@example.test",
+        plan: "Max",
+      }),
+      onReconciled,
+      reset: async () => {
+        backingStatuses = [
+          { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+        ];
+        backingRuntime = runtime(
+          {
+            provider: "claude-cli",
+            model: "sonnet",
+            credential_configured: true,
+          },
+          {
+            athlete_id: "synthetic-athlete",
+            credential_configured: false,
+            managedByEnvironment: { athleteId: false },
+          },
+        );
+        backingRecovery = { state: "unavailable" };
+        return { status: "refused", reason: "storage-failed" };
+      },
+    });
+    await controller.activate();
+    expect(content(controller.state()).entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ credential: "anthropic" })]),
+    );
+
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() =>
+      expect(controller.state()).toMatchObject({
+        status: "error",
+        repairCredential: "anthropic",
+      }),
+    );
+
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(controller.state()).toMatchObject({
+      status: "ready",
+      entries: [expect.objectContaining({ credential: "openrouter" })],
+      providerStatuses: [expect.objectContaining({ provider: "claude-cli", state: "ready" })],
+      recovery: { state: "unavailable" },
+      repairCredential: null,
+      recoveryAvailable: false,
+      announcement: "Enduragent could not remove every stored credential. Retry.",
+      focus: { target: "feedback" },
+    });
+  });
+
+  it("enters the repair-safe load error when refused reset state cannot reload", async () => {
+    const loadStatuses = vi
+      .fn<() => Promise<readonly CredentialSlotStatus[]>>()
+      .mockResolvedValueOnce([{ slot: "anthropic", state: "configured", runtimeState: "active" }])
+      .mockRejectedValueOnce(new Error("synthetic reload failure"));
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    expect(onReconciled).not.toHaveBeenCalled();
+    expect(controller.state()).toEqual({
+      status: "error",
+      kind: "load",
+      announcement:
+        "Credential removal could not be verified because Settings could not reload. Reconnect and reload.",
+      repairCredential: null,
+      recoveryAvailable: true,
+      focus: { target: "feedback" },
+    });
+  });
+
+  it("retains repair debt when refused reset reconciliation fails after reload", async () => {
+    const onReconciled = vi.fn(async () => {
+      throw new Error("synthetic reconciliation failure");
+    });
+    const { controller, subject, releaseMutation } = createSubject({
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      },
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() =>
+      expect(controller.state()).toMatchObject({
+        status: "error",
+        repairCredential: "anthropic",
+      }),
+    );
+    releaseMutation.mockClear();
+
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(controller.state()).toEqual({
+      status: "error",
+      kind: "load",
+      announcement:
+        "Credential removal could not be verified because Settings could not reload. Reconnect and reload.",
+      repairCredential: "anthropic",
+      recoveryAvailable: true,
+      focus: { target: "feedback" },
+    });
+    expect(releaseMutation).toHaveBeenCalled();
   });
 
   it("builds a provider, kind, and coarse-state-only list for every stored credential kind", async () => {
