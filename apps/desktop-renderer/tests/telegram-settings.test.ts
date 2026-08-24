@@ -258,9 +258,13 @@ describe("Telegram settings controller", () => {
 
     runtime.handlers.onPasteToken();
     runtime.handlers.onRemove();
+    runtime.handlers.onAddSender(202);
+    runtime.handlers.onRemoveSender(202);
 
     expect(runtime.bridge.pasteTokenFromClipboard).not.toHaveBeenCalled();
     expect(runtime.bridge.remove).not.toHaveBeenCalled();
+    expect(runtime.bridge.addAllowedSender).not.toHaveBeenCalled();
+    expect(runtime.bridge.removeAllowedSender).not.toHaveBeenCalled();
 
     runtime.handlers.onReconcile();
     await vi.waitFor(() => expect(runtime.bridge.reconcile).toHaveBeenCalledOnce());

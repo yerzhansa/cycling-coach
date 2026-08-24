@@ -238,6 +238,7 @@ export function TelegramSection(): ReactElement {
 
   const submitSender = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
+    if (credentialMutationBlocked) return;
     const senderId = parseSenderId(senderDraft);
     if (senderId === null) {
       setSenderError("Enter a numeric Telegram user ID with at least two digits.");
@@ -632,7 +633,9 @@ export function TelegramSection(): ReactElement {
                           type="button"
                           variant="destructive"
                           size="sm"
-                          disabled={busy || confirmRemoveSenderId !== null}
+                          disabled={
+                            busy || credentialMutationBlocked || confirmRemoveSenderId !== null
+                          }
                           aria-label={"Remove Telegram user " + sender.senderId}
                           onClick={(event) => {
                             removeSenderTrigger.current = event.currentTarget;
@@ -649,13 +652,14 @@ export function TelegramSection(): ReactElement {
                             confirmLabel="Remove user"
                             focusTarget={null}
                             cancelDisabled={busy}
-                            confirmDisabled={busy}
+                            confirmDisabled={busy || credentialMutationBlocked}
                             confirmBusy={removingSender}
                             onCancel={() => {
                               setConfirmRemoveSenderId(null);
                               queueMicrotask(() => removeSenderTrigger.current?.focus());
                             }}
                             onConfirm={() => {
+                              if (credentialMutationBlocked) return;
                               port?.removeSender(sender.senderId);
                             }}
                           />
@@ -679,7 +683,7 @@ export function TelegramSection(): ReactElement {
                   spellCheck={false}
                   className={FIELD_CLASS}
                   value={senderDraft}
-                  disabled={busy}
+                  disabled={busy || credentialMutationBlocked}
                   aria-invalid={senderError === null ? undefined : "true"}
                   aria-describedby="telegram-sender-help telegram-sender-error"
                   onChange={(event) => {
@@ -687,7 +691,12 @@ export function TelegramSection(): ReactElement {
                     setSenderError(null);
                   }}
                 />
-                <Button type="submit" variant="outline" size="sm" disabled={busy}>
+                <Button
+                  type="submit"
+                  variant="outline"
+                  size="sm"
+                  disabled={busy || credentialMutationBlocked}
+                >
                   Add user
                 </Button>
               </div>

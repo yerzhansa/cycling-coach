@@ -583,6 +583,7 @@ export function createCredentialSettingsController(input: {
       announcement: "Removing all credentials…",
       recovery: content.recovery,
       repairCredential: content.repairCredential,
+      resetUncertain: true,
       recoveryAvailable: content.recoveryAvailable,
       focus: { target: "confirmation-delete" },
     });
@@ -600,6 +601,7 @@ export function createCredentialSettingsController(input: {
       let loaded: Awaited<ReturnType<typeof loadEntries>>;
       try {
         loaded = await loadEntries();
+        if (disposed || generation !== operationGeneration) return;
         if (result.status === "refused") {
           await input.onReconciled?.();
         } else {
