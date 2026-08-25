@@ -702,14 +702,7 @@ describe("credential settings controller", () => {
     const firstReconciliation = new Promise<void>((resolve) => {
       resolveFirstReconciliation = resolve;
     });
-    let resolveSecondReconciliation!: () => void;
-    const secondReconciliation = new Promise<void>((resolve) => {
-      resolveSecondReconciliation = resolve;
-    });
-    const onReconciled = vi
-      .fn<() => Promise<void>>()
-      .mockReturnValueOnce(firstReconciliation)
-      .mockReturnValueOnce(secondReconciliation);
+    const onReconciled = vi.fn<() => Promise<void>>(() => firstReconciliation);
     const { controller, subject, releaseMutation } = createSubject({
       onReconciled,
       reset: async () => ({ status: "refused", reason: "storage-failed" }),
@@ -723,14 +716,19 @@ describe("credential settings controller", () => {
     controller.close();
     expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
     const reopening = controller.activate();
+    let reopened = false;
+    void reopening.then(() => {
+      reopened = true;
+    });
+    await Promise.resolve();
     expect(onReconciled).toHaveBeenCalledOnce();
+    expect(reopened).toBe(false);
     expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
 
     resolveFirstReconciliation();
-    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledTimes(2));
-    expect(controller.state()).toMatchObject({ status: "loading", resetUncertain: true });
-    resolveSecondReconciliation();
     await reopening;
+    expect(reopened).toBe(true);
+    expect(onReconciled).toHaveBeenCalledOnce();
     expect(releaseMutation).toHaveBeenCalled();
     expect(controller.state().status).toBe("ready");
     expect(controller.state().resetUncertain).toBeUndefined();

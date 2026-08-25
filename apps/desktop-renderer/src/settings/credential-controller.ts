@@ -150,7 +150,7 @@ export interface CredentialSettingsView {
     readonly onSetupOpened: () => void;
     readonly onOpenSetup: () => void;
   }): void;
-  render(state: Exclude<CredentialSettingsState, { readonly status: "closed" }>): void;
+  render(state: CredentialSettingsState): void;
   dispose(): void;
 }
 
@@ -340,10 +340,11 @@ export function createCredentialSettingsController(input: {
   let generation = 0;
   let disposed = false;
   let operation: Promise<void> | undefined;
+  let activeResetOperation: symbol | undefined;
   let reconnectRequired = false;
   let failedClient: CoachClient | undefined;
 
-  const render = (state: Exclude<CredentialSettingsState, { readonly status: "closed" }>): void => {
+  const render = (state: CredentialSettingsState): void => {
     currentState = state;
     input.view.render(state);
   };
@@ -574,6 +575,8 @@ export function createCredentialSettingsController(input: {
     if (content === null || content.confirmation !== "all") return Promise.resolve();
     const releaseMutation = input.beginMutation();
     if (releaseMutation === null) return Promise.resolve();
+    const resetOperation = Symbol();
+    activeResetOperation = resetOperation;
     const operationGeneration = ++generation;
     render({
       status: "deleting",
@@ -624,7 +627,7 @@ export function createCredentialSettingsController(input: {
         });
         return;
       }
-      if (disposed || generation !== operationGeneration) return;
+      if (disposed || activeResetOperation !== resetOperation) return;
       releaseMutation();
       if (result.status === "refused") {
         render({
@@ -643,6 +646,10 @@ export function createCredentialSettingsController(input: {
         });
         return;
       }
+      if (generation !== operationGeneration) {
+        render({ status: "closed" });
+        return;
+      }
       render({
         status: "deleted",
         entries: loaded.entries,
@@ -658,6 +665,7 @@ export function createCredentialSettingsController(input: {
       });
     })().finally(() => {
       releaseMutation();
+      if (activeResetOperation === resetOperation) activeResetOperation = undefined;
       if (operation === pending) operation = undefined;
     });
     operation = pending;
@@ -891,6 +899,7 @@ export function createCredentialSettingsController(input: {
       disposed = true;
       ++generation;
       operation = undefined;
+      activeResetOperation = undefined;
       currentState = { status: "closed" };
       input.view.dispose();
     },
