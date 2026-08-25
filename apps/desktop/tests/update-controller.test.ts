@@ -100,6 +100,7 @@ function fakeUpdater() {
     autoRunAppAfterInstall: false,
     allowPrerelease: true,
     allowDowngrade: true,
+    disableWebInstaller: false,
     checkForUpdates: vi.fn<DesktopAutoUpdater["checkForUpdates"]>(),
     downloadUpdate: vi.fn<DesktopAutoUpdater["downloadUpdate"]>(async () => []),
     quitAndInstall: vi.fn(),
@@ -258,6 +259,7 @@ describe("desktop update controller", () => {
       autoRunAppAfterInstall: true,
       allowPrerelease: false,
       allowDowngrade: false,
+      disableWebInstaller: true,
     });
     expect(fake.updater.checkForUpdates).toHaveBeenCalledOnce();
     expect(subject.timer.unref).toHaveBeenCalledOnce();
