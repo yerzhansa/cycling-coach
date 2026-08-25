@@ -615,6 +615,126 @@ describe("credential settings controller", () => {
     expect(controller.state().resetUncertain).toBeUndefined();
   });
 
+  it("reconciles a successful reset after closing while the reset RPC is pending", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    const loadStatuses = vi.fn(async () => {
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onDeleted = vi.fn(async () => {});
+    const openSetup = vi.fn();
+    const { controller, subject, resetAllCredentials, releaseMutation } = createSubject({
+      loadStatuses,
+      loadRuntime: async () => runtime(),
+      onDeleted,
+      openSetup,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReset({ status: "reset", keyCleanupPending: false });
+
+    await vi.waitFor(() => {
+      expect(loadStatuses).toHaveBeenCalledTimes(2);
+      expect(onDeleted).toHaveBeenCalledOnce();
+      expect(releaseMutation).toHaveBeenCalledOnce();
+      expect(controller.state()).toEqual({ status: "closed" });
+    });
+
+    await controller.activate();
+    expect(loadStatuses).toHaveBeenCalledTimes(3);
+    expect(onDeleted).toHaveBeenCalledOnce();
+    expect(controller.state().status).toBe("ready");
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(false);
+
+    subject.requestDelete("anthropic");
+    expect(controller.state()).toMatchObject({ status: "confirming", confirmation: "anthropic" });
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("deleted"));
+    await Promise.resolve();
+    subject.openSetup();
+    expect(openSetup).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles a refused reset after closing while the reset RPC is pending", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    const loadStatuses = vi.fn(async () => {
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject, resetAllCredentials, releaseMutation } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReset({ status: "refused", reason: "storage-failed" });
+
+    await vi.waitFor(() => {
+      expect(loadStatuses).toHaveBeenCalledTimes(2);
+      expect(onReconciled).toHaveBeenCalledOnce();
+      expect(releaseMutation).toHaveBeenCalledOnce();
+      expect(controller.state()).toEqual({ status: "closed" });
+    });
+
+    await controller.activate();
+    expect(loadStatuses).toHaveBeenCalledTimes(3);
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(controller.state().status).toBe("ready");
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(false);
+  });
+
+  it("keeps reset uncertainty when a closed reset cannot reload authoritative state", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    let loadCount = 0;
+    const loadStatuses = vi.fn(async () => {
+      loadCount += 1;
+      if (loadCount === 2) throw new Error("synthetic authoritative reload failure");
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onDeleted = vi.fn(async () => {});
+    const { controller, subject, resetAllCredentials, releaseMutation } = createSubject({
+      loadStatuses,
+      onDeleted,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReset({ status: "reset", keyCleanupPending: false });
+
+    await vi.waitFor(() => {
+      expect(loadStatuses).toHaveBeenCalledTimes(2);
+      expect(releaseMutation).toHaveBeenCalledOnce();
+    });
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(true);
+  });
+
   it("preserves reset uncertainty when closed while the reset is pending", async () => {
     let resolveReset!: (result: CredentialResetResult) => void;
     const reset = new Promise<CredentialResetResult>((resolve) => {
@@ -643,7 +763,7 @@ describe("credential settings controller", () => {
 
     resolveReset({ status: "refused", reason: "storage-failed" });
     await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
-    expect(controller.state()).toMatchObject({ status: "loading", resetUncertain: true });
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
     resolveReconciliation();
     await reopening;
     expect(releaseMutation).toHaveBeenCalled();
@@ -689,7 +809,7 @@ describe("credential settings controller", () => {
 
     resolveReload([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
     await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
-    expect(controller.state()).toMatchObject({ status: "loading", resetUncertain: true });
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
     resolveReconciliation();
     await reopening;
     expect(releaseMutation).toHaveBeenCalled();

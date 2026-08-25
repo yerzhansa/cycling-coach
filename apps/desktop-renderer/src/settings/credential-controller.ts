@@ -600,18 +600,28 @@ export function createCredentialSettingsController(input: {
       } catch {
         result = { status: "refused", reason: "storage-failed" };
       }
-      if (disposed || generation !== operationGeneration) return;
+      if (disposed) return;
       let loaded: Awaited<ReturnType<typeof loadEntries>>;
       try {
         loaded = await loadEntries();
-        if (disposed || generation !== operationGeneration) return;
+        if (disposed) return;
         if (result.status === "refused") {
           await input.onReconciled?.();
         } else {
           await input.onDeleted?.();
         }
       } catch {
-        if (disposed || generation !== operationGeneration) return;
+        if (disposed) return;
+        if (generation !== operationGeneration) {
+          const repairCredential =
+            result.status === "refused" ? repairRequiredCredential(currentState) : null;
+          render({
+            status: "closed",
+            ...(repairCredential === null ? {} : { repairCredential }),
+            resetUncertain: true,
+          });
+          return;
+        }
         releaseMutation();
         render({
           status: "error",
@@ -628,6 +638,15 @@ export function createCredentialSettingsController(input: {
         return;
       }
       if (disposed || activeResetOperation !== resetOperation) return;
+      if (generation !== operationGeneration) {
+        const repairCredential =
+          result.status === "refused" ? repairRequiredCredential(currentState) : null;
+        render({
+          status: "closed",
+          ...(repairCredential === null ? {} : { repairCredential }),
+        });
+        return;
+      }
       releaseMutation();
       if (result.status === "refused") {
         render({
@@ -644,10 +663,6 @@ export function createCredentialSettingsController(input: {
           recoveryAvailable: false,
           focus: { target: "feedback" },
         });
-        return;
-      }
-      if (generation !== operationGeneration) {
-        render({ status: "closed" });
         return;
       }
       render({
