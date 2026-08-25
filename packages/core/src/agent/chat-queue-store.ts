@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
+  CHAT_ATTACHMENT_LIMITS,
   ChatQueueSnapshotSchema,
   type ChatQueueSnapshot,
   type QueuedChatMessage,
@@ -32,7 +33,7 @@ import {
   type WindowsPrivateDirectoryBinding,
 } from "../io/windows-private-path-policy.js";
 
-const StoredItemSchema = z
+const LegacyStoredItemSchema = z
   .object({
     queuedMessageId: z.string().min(1),
     submissionId: z.string().min(1),
@@ -40,6 +41,28 @@ const StoredItemSchema = z
     kind: z.enum(["ordinary", "slash-command"]),
   })
   .strict();
+
+const StoredItemSchema = LegacyStoredItemSchema.extend({
+  messageId: z.string().min(1),
+  attachmentIds: z.array(z.string().min(1)).max(CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage),
+})
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.attachmentIds).size !== value.attachmentIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["attachmentIds"],
+        message: "attachment ids must be unique",
+      });
+    }
+    if (value.kind === "slash-command" && value.attachmentIds.length !== 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["attachmentIds"],
+        message: "slash commands are text-only",
+      });
+    }
+  });
 
 const StoredClaimSchema = z
   .object({
@@ -50,29 +73,53 @@ const StoredClaimSchema = z
   })
   .strict();
 
-const StoredQueueSchema = z
+function validateQueueHead(
+  value: {
+    readonly items: readonly { readonly queuedMessageId: string; readonly submissionId: string }[];
+    readonly claim?: z.infer<typeof StoredClaimSchema>;
+  },
+  context: z.RefinementCtx,
+): void {
+  const ids = value.items.map((item) => item.queuedMessageId);
+  const submissions = value.items.map((item) => item.submissionId);
+  if (new Set(ids).size !== ids.length) {
+    context.addIssue({ code: "custom", path: ["items"], message: "duplicate queue ids" });
+  }
+  if (new Set(submissions).size !== submissions.length) {
+    context.addIssue({ code: "custom", path: ["items"], message: "duplicate submissions" });
+  }
+  if (
+    value.claim !== undefined &&
+    (value.claim.queuedMessageIds.length > ids.length ||
+      value.claim.queuedMessageIds.some((id, index) => id !== ids[index]))
+  ) {
+    context.addIssue({ code: "custom", path: ["claim"], message: "claim is not queue head" });
+  }
+}
+
+const LegacyStoredQueueSchema = z
   .object({
     schemaVersion: z.literal(1),
+    revision: z.number().int().nonnegative(),
+    items: z.array(LegacyStoredItemSchema),
+    claim: StoredClaimSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateQueueHead);
+
+const StoredQueueSchema = z
+  .object({
+    schemaVersion: z.literal(2),
     revision: z.number().int().nonnegative(),
     items: z.array(StoredItemSchema),
     claim: StoredClaimSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    const ids = value.items.map((item) => item.queuedMessageId);
-    const submissions = value.items.map((item) => item.submissionId);
-    if (new Set(ids).size !== ids.length) {
-      context.addIssue({ code: "custom", path: ["items"], message: "duplicate queue ids" });
-    }
-    if (new Set(submissions).size !== submissions.length) {
-      context.addIssue({ code: "custom", path: ["items"], message: "duplicate submissions" });
-    }
-    if (
-      value.claim !== undefined &&
-      (value.claim.queuedMessageIds.length > ids.length ||
-        value.claim.queuedMessageIds.some((id, index) => id !== ids[index]))
-    ) {
-      context.addIssue({ code: "custom", path: ["claim"], message: "claim is not queue head" });
+    validateQueueHead(value, context);
+    const messageIds = value.items.map((item) => item.messageId);
+    if (new Set(messageIds).size !== messageIds.length) {
+      context.addIssue({ code: "custom", path: ["items"], message: "duplicate message ids" });
     }
   });
 
@@ -85,7 +132,23 @@ export interface ChatQueueStoreHooks {
 }
 
 function emptyQueue(): StoredQueue {
-  return { schemaVersion: 1, revision: 0, items: [] };
+  return { schemaVersion: 2, revision: 0, items: [] };
+}
+
+function parseStoredQueue(value: unknown): StoredQueue {
+  const current = StoredQueueSchema.safeParse(value);
+  if (current.success) return current.data;
+  const legacy = LegacyStoredQueueSchema.parse(value);
+  return StoredQueueSchema.parse({
+    schemaVersion: 2,
+    revision: legacy.revision,
+    items: legacy.items.map((item) => ({
+      ...item,
+      messageId: item.queuedMessageId,
+      attachmentIds: [],
+    })),
+    ...(legacy.claim === undefined ? {} : { claim: legacy.claim }),
+  });
 }
 
 function safeName(chatId: string): string {
@@ -141,16 +204,20 @@ export class ChatQueueStore {
     submissionId: string,
     text: string,
     queuedMessageId: string,
+    messageId = queuedMessageId,
+    attachmentIds: readonly string[] = [],
   ): ChatQueueSnapshot {
     const state = this.read(chatId);
     const duplicate = state.items.find((item) => item.submissionId === submissionId);
     if (duplicate !== undefined) return this.snapshot(state);
-    const item = {
+    const item = StoredItemSchema.parse({
       queuedMessageId,
+      messageId,
       submissionId,
       text,
       kind: /^\s*\//u.test(text) ? ("slash-command" as const) : ("ordinary" as const),
-    };
+      attachmentIds: [...attachmentIds],
+    });
     this.freshIds.add(queuedMessageId);
     return this.commit(chatId, {
       ...state,
@@ -193,7 +260,7 @@ export class ChatQueueStore {
     const claimed = new Set(state.claim.queuedMessageIds);
     const items = state.items.filter((item) => !claimed.has(item.queuedMessageId));
     state.claim.queuedMessageIds.forEach((id) => this.freshIds.delete(id));
-    return this.commit(chatId, { schemaVersion: 1, revision: state.revision + 1, items });
+    return this.commit(chatId, { schemaVersion: 2, revision: state.revision + 1, items });
   }
 
   requireRetry(chatId: string, claimId: string): ChatQueueSnapshot {
@@ -224,7 +291,7 @@ export class ChatQueueStore {
     const state = this.read(chatId);
     if (state.items.length === 0 && state.claim === undefined) return this.snapshot(state);
     state.items.forEach((item) => this.freshIds.delete(item.queuedMessageId));
-    return this.commit(chatId, { schemaVersion: 1, revision: state.revision + 1, items: [] });
+    return this.commit(chatId, { schemaVersion: 2, revision: state.revision + 1, items: [] });
   }
 
   reconcile(chatId: string, completedTurnIds: ReadonlySet<string>): ChatQueueSnapshot {
@@ -290,7 +357,7 @@ export class ChatQueueStore {
       this.hooks.afterFileRead?.(path, descriptor);
       let parsed: StoredQueue;
       try {
-        parsed = StoredQueueSchema.parse(JSON.parse(contents));
+        parsed = parseStoredQueue(JSON.parse(contents));
       } catch (error) {
         if (this.platform === "win32") {
           assertWindowsPrivatePathRead({

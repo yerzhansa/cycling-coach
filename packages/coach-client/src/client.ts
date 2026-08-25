@@ -112,6 +112,7 @@ interface OutboundFrame {
 const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   chat: 11 * 60_000,
   stopChat: 10_000,
+  admitChatAttachment: 120_000,
   enqueueChatMessage: 30_000,
   getChatQueue: 30_000,
   removeQueuedChatMessage: 30_000,

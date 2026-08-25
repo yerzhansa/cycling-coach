@@ -33,9 +33,11 @@ describe("desktop turn state", () => {
   it("keeps an active durable claim hidden across newer queue snapshots", () => {
     const item = (id: string, position: number) => ({
       queuedMessageId: id,
+      messageId: `message-${id}`,
       submissionId: `submission-${id}`,
       text: id,
       kind: "ordinary" as const,
+      attachmentIds: [],
       position,
       restored: false,
     });
@@ -76,9 +78,11 @@ describe("desktop turn state", () => {
       items: [
         {
           queuedMessageId: "queued-1",
+          messageId: "message-1",
           submissionId: "submission-1",
           text: "Later",
           kind: "ordinary" as const,
+          attachmentIds: [],
           position: 0,
           restored: false,
         },

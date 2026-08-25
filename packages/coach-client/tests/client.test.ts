@@ -45,6 +45,16 @@ const telegramControlSnapshot = {
 const rpcDeadlineCases = [
   ["chat", { chatId: "chat-1", message: "deadline" }, 660_000],
   ["stopChat", { chatId: "chat-1", turnId: "turn-1" }, 10_000],
+  [
+    "admitChatAttachment",
+    {
+      chatId: "desktop",
+      selectionId: "selection-1",
+      source: "picker",
+      candidate: { kind: "native-path", sourcePath: "/tmp/activity.fit" },
+    },
+    120_000,
+  ],
   ["enqueueChatMessage", { chatId: "chat-1", submissionId: "submission-1", text: "Hello" }, 30_000],
   ["getChatQueue", { chatId: "chat-1" }, 30_000],
   ["removeQueuedChatMessage", { chatId: "chat-1", queuedMessageId: "queued-1" }, 30_000],
@@ -811,6 +821,13 @@ describe("RPC receive and observers", () => {
       const results = {
         chat: { text: "answer" },
         stopChat: { stopped: true },
+        admitChatAttachment: {
+          selectionId: "selection-1",
+          displayName: "activity.fit",
+          status: "storage_failed",
+          failureCode: "admission_unavailable",
+          retryable: false,
+        },
         enqueueChatMessage: { schemaVersion: 1, revision: 1, items: [] },
         getChatQueue: { schemaVersion: 1, revision: 1, items: [] },
         removeQueuedChatMessage: { schemaVersion: 1, revision: 2, items: [] },
@@ -1030,9 +1047,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("chat", { chatId: "chat-1", message: "hello" })).resolves.toEqual({
       text: "answer",
     });
-    await expect(
-      client.call("stopChat", { chatId: "chat-1", turnId: "turn-1" }),
-    ).resolves.toEqual({
+    await expect(client.call("stopChat", { chatId: "chat-1", turnId: "turn-1" })).resolves.toEqual({
       stopped: true,
     });
     await expect(client.call("resetSession", { chatId: "chat-1" })).resolves.toEqual({

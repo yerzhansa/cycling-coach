@@ -156,6 +156,8 @@ export interface ChatStorePort {
     submissionId: string,
     text: string,
     queuedMessageId: string,
+    messageId?: string,
+    attachmentIds?: readonly string[],
   ): ChatQueueSnapshot;
   removeQueuedChatMessage?(chatId: string, queuedMessageId: string): ChatQueueSnapshot;
   claimChatQueue?(

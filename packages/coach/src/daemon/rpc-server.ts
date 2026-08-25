@@ -42,6 +42,7 @@ import {
   type SetDailySpendCapRpcParams,
   type SpendSummary,
 } from "@enduragent/coach-contract";
+import { unavailableChatAttachmentAdmission } from "../attachment-operations.js";
 import type { WriterProtocolHandlers } from "@enduragent/kernel-node/lock";
 import WebSocket, { WebSocketServer, type RawData } from "ws";
 import type { DaemonHealthState } from "./healthz-server.js";
@@ -866,6 +867,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     if (
       generic.data.method === "chat" ||
       generic.data.method === "stopChat" ||
+      generic.data.method === "admitChatAttachment" ||
       generic.data.method === "enqueueChatMessage" ||
       generic.data.method === "getChatQueue" ||
       generic.data.method === "removeQueuedChatMessage" ||
@@ -882,6 +884,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       const chatId = (params.data as { readonly chatId: string }).chatId;
       if (
         chatId.startsWith("telegram:") ||
+        (generic.data.method === "admitChatAttachment" && chatId !== "desktop") ||
         (state.authority === "renderer" && chatId !== "desktop")
       ) {
         void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
@@ -947,6 +950,19 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 input.engine.stopChat === undefined
                   ? { stopped: false }
                   : await input.engine.stopChat(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "admitChatAttachment":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.admitChatAttachment.requestSchema.parse(
+                generic.data.params,
+              );
+              result =
+                input.operations.admitChatAttachment === undefined
+                  ? unavailableChatAttachmentAdmission(request)
+                  : await input.operations.admitChatAttachment(request);
             } catch (error) {
               invocationFailure = { error };
             }

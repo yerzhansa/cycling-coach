@@ -218,6 +218,8 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
         request.submissionId,
         request.text,
         input.ports.randomId(),
+        input.ports.randomId(),
+        request.attachmentIds,
       ),
     getChatQueue: async (request) => snapshot(request.chatId),
     removeQueuedChatMessage: async (request) =>
