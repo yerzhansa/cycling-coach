@@ -1,0 +1,220 @@
+import { describe, expect, it } from "vitest";
+import {
+  ExecutePlanTransitionRpcResultSchema,
+  GetPlanStateRpcResultSchema,
+  PLAN_TRANSITION_IDS,
+  PlanAttentionSchema,
+  PlanHydrationStateSchema,
+  PlanProgressEventSchema,
+  PlanScenarioIdSchema,
+  PlanTransitionCommandSchema,
+  type PlanTransitionCommand,
+} from "../src/planning.js";
+
+const commandId = "command-1";
+const planId = "plan-1";
+const draftId = "draft-1";
+const conversationId = "conversation-1";
+const proposalId = "proposal-1";
+const workoutId = "workout-1";
+const eventId = "event-1";
+
+const commands = [
+  { transitionId: "PL-T01", commandId, sourceConversationId: null },
+  { transitionId: "PL-T02", commandId, conversationId, filePath: "/tmp/course.gpx" },
+  { transitionId: "PL-T03", commandId, conversationId },
+  { transitionId: "PL-T04", commandId, conversationId, source: "manual", watts: 282 },
+  { transitionId: "PL-T05", commandId, conversationId, text: "Four days each week" },
+  { transitionId: "PL-T06", commandId, conversationId },
+  { transitionId: "PL-T07", commandId, draftId, text: "Move Friday to Thursday" },
+  { transitionId: "PL-T08", commandId, draftId, startDate: "1998-07-13" },
+  {
+    transitionId: "PL-T09",
+    commandId,
+    draftId,
+    course: { action: "attach", filePath: "/tmp/course.fit" },
+  },
+  { transitionId: "PL-T10", commandId, draftId },
+  { transitionId: "PL-T11", commandId, draftId, expectedRevision: 2 },
+  { transitionId: "PL-T12", commandId, planId },
+  { transitionId: "PL-T13", commandId, planId, workoutId },
+  { transitionId: "PL-T14", commandId, planId, workoutId, activityId: "activity-1" },
+  { transitionId: "PL-T15", commandId, planId, workoutId, eventId },
+  { transitionId: "PL-T16", commandId, planId, workoutId, eventId },
+  { transitionId: "PL-T17", commandId, planId, proposalId },
+  { transitionId: "PL-T18", commandId, proposalId, text: "Make it thirty minutes" },
+  { transitionId: "PL-T19", commandId, proposalId, expectedRevision: 3 },
+  { transitionId: "PL-T20", commandId, proposalId },
+  { transitionId: "PL-T21", commandId, planId, ledgerId: "ledger-1" },
+  { transitionId: "PL-T22", commandId, planId, setting: "auto-apply", value: true },
+  { transitionId: "PL-T23", commandId, planId },
+  { transitionId: "PL-T24", commandId, planId },
+  { transitionId: "PL-T25", commandId, planId },
+  {
+    transitionId: "PL-T26",
+    commandId,
+    activePlanId: planId,
+    draftId,
+    expectedRevision: 4,
+  },
+  { transitionId: "PL-T27", commandId, planId, replacementPlanId: "plan-2" },
+  { transitionId: "PL-T28", commandId, planId },
+  { transitionId: "PL-T29", commandId, planId, asOf: "1998-10-05" },
+  { transitionId: "PL-T30", commandId, planId, outcome: "completed" },
+  { transitionId: "PL-T31", commandId, planId },
+  { transitionId: "PL-T32", commandId, planId },
+  { transitionId: "PL-T33", commandId, planId },
+  { transitionId: "PL-T34", commandId, attentionId: "attention-1" },
+  { transitionId: "PL-T35", commandId, planId, weekStart: "1998-08-17" },
+  {
+    transitionId: "PL-T36",
+    commandId,
+    sourceConversationId: conversationId,
+    requestId: "request-1",
+  },
+  { transitionId: "PL-T37", commandId, sourceConversationId: conversationId },
+  { transitionId: "PL-T38", commandId, planId, proposalId, expectedRevision: 5 },
+  {
+    transitionId: "PL-T39",
+    commandId,
+    action: "open",
+    sourceScenarioId: "PL-S004",
+    destinationScenarioId: "PL-S021",
+    returnFocusId: "workout-row-1",
+  },
+] satisfies PlanTransitionCommand[];
+
+const state = {
+  schemaVersion: 1 as const,
+  scenarioId: "PL-S004",
+  lifecycle: "active" as const,
+  planId,
+  revision: 6,
+  title: "Gran Fondo Almaty",
+  summary: "Build phase",
+  projection: "active" as const,
+  transitions: [
+    { transitionId: "PL-T13" as const, status: "available" as const, reason: null },
+    { transitionId: "PL-T23" as const, status: "available" as const, reason: null },
+  ],
+  reconciliation: {
+    status: "not-started" as const,
+    created: 0,
+    pending: 0,
+    failed: 0,
+    total: 0,
+    currentThrough: null,
+    error: null,
+  },
+  attention: { count: 0, destination: "none" as const, items: [] },
+  activeOperation: null,
+  data: { week: 6 },
+};
+
+describe("planning contract", () => {
+  it("accepts every canonical scenario identifier and rejects identifiers outside the ledger", () => {
+    for (let index = 1; index <= 105; index += 1) {
+      expect(PlanScenarioIdSchema.parse(`PL-S${String(index).padStart(3, "0")}`)).toBe(
+        `PL-S${String(index).padStart(3, "0")}`,
+      );
+    }
+    for (const value of ["PL-S000", "PL-S106", "PL-S01", "PL-T01"]) {
+      expect(PlanScenarioIdSchema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("accepts one strict command for every lifecycle transition", () => {
+    expect(commands.map((command) => PlanTransitionCommandSchema.parse(command).transitionId)).toEqual(
+      PLAN_TRANSITION_IDS,
+    );
+  });
+
+  it("rejects missing, extra, and transition-specific command fields", () => {
+    expect(
+      PlanTransitionCommandSchema.safeParse({ transitionId: "PL-T12", commandId, planId, extra: true })
+        .success,
+    ).toBe(false);
+    expect(
+      PlanTransitionCommandSchema.safeParse({ transitionId: "PL-T08", commandId, draftId }).success,
+    ).toBe(false);
+    expect(
+      PlanTransitionCommandSchema.safeParse({
+        transitionId: "PL-T04",
+        commandId,
+        conversationId,
+        source: "manual",
+        watts: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanTransitionCommandSchema.safeParse({
+        transitionId: "PL-T09",
+        commandId,
+        draftId,
+        course: { action: "remove" },
+      }).success,
+    ).toBe(true);
+    expect(
+      PlanTransitionCommandSchema.safeParse({
+        transitionId: "PL-T04",
+        commandId,
+        conversationId,
+        source: "intervals-ftp",
+        watts: 282,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("encodes the approved attention count and destination rule", () => {
+    expect(PlanAttentionSchema.parse({ count: 0, destination: "none", items: [] })).toEqual({
+      count: 0,
+      destination: "none",
+      items: [],
+    });
+    const item = {
+      id: "attention-1",
+      title: "Confirm Sunday endurance",
+      scenarioId: "PL-S028",
+      priority: "dated",
+      affectedDate: "1998-08-23",
+    };
+    expect(PlanAttentionSchema.safeParse({ count: 1, destination: "direct", items: [item] }).success).toBe(
+      true,
+    );
+    expect(PlanAttentionSchema.safeParse({ count: 1, destination: "list", items: [item] }).success).toBe(
+      false,
+    );
+  });
+
+  it("keeps loading, stale, failed, and unsupported hydration explicit", () => {
+    expect(PlanHydrationStateSchema.parse({ status: "loading" })).toEqual({ status: "loading" });
+    expect(
+      PlanHydrationStateSchema.parse({
+        status: "unsupported-capability",
+        capability: "planning",
+      }),
+    ).toEqual({ status: "unsupported-capability", capability: "planning" });
+    expect(
+      GetPlanStateRpcResultSchema.parse({ status: "ready", state }),
+    ).toEqual({ status: "ready", state });
+    expect(
+      GetPlanStateRpcResultSchema.safeParse({ status: "failed" }).success,
+    ).toBe(false);
+  });
+
+  it("validates transition progress and terminal results", () => {
+    const progress = {
+      commandId,
+      transitionId: "PL-T12" as const,
+      operationId: "operation-1",
+      phase: "completed" as const,
+      completed: 7,
+      total: 7,
+    };
+    expect(PlanProgressEventSchema.parse(progress)).toEqual(progress);
+    expect(PlanProgressEventSchema.safeParse({ ...progress, completed: 6 }).success).toBe(false);
+    expect(
+      ExecutePlanTransitionRpcResultSchema.parse({ status: "completed", state }),
+    ).toEqual({ status: "completed", state });
+  });
+});

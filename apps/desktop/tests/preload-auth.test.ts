@@ -59,6 +59,9 @@ interface AuthBridge {
   getTranscriptPage(input: unknown): Promise<unknown>;
   listArchivedConversations(): Promise<unknown>;
   getArchivedTranscriptPage(input: unknown): Promise<unknown>;
+  getPlanState(): Promise<unknown>;
+  executePlanTransition(input: unknown): Promise<unknown>;
+  onPlanProgress(listener: (progress: unknown) => void): () => void;
   credentialStatuses(): Promise<unknown>;
   deleteCredential(input: unknown): Promise<unknown>;
   retryFailedCredentials(): Promise<unknown>;
@@ -334,9 +337,11 @@ describe("desktop preload ChatGPT auth", () => {
         "deleteCredential",
         "disableTelegram",
         "enableTelegram",
+        "executePlanTransition",
         "exportTrainingFile",
         "getUpdateState",
         "getDaemonConnection",
+        "getPlanState",
         "getTranscriptPage",
         "initialSetupStatusSettled",
         "listArchivedConversations",
@@ -345,6 +350,7 @@ describe("desktop preload ChatGPT auth", () => {
         "llmConfiguration",
         "checkForUpdates",
         "onDroppedImportFiles",
+        "onPlanProgress",
         "onChatgptLoginProgress",
         "onUpdateState",
         "pasteIntervalsApiKeyFromClipboard",
@@ -389,6 +395,84 @@ describe("desktop preload ChatGPT auth", () => {
 
   it("keeps the release-gate smoke bridge list byte-equal to the sorted public bridge", () => {
     expect(pinnedSmokeBridgeKeys()).toEqual(Object.keys(bridge).sort());
+  });
+
+  it("validates and copies strict Planning state, commands, and progress", async () => {
+    const state = {
+      schemaVersion: 1,
+      scenarioId: "PL-S001",
+      lifecycle: "none",
+      planId: null,
+      revision: 0,
+      title: "Plan",
+      summary: "No active Plan",
+      projection: "no-plan",
+      transitions: [{ transitionId: "PL-T01", status: "available", reason: null }],
+      reconciliation: {
+        status: "not-applicable",
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: null,
+        error: null,
+      },
+      attention: { count: 0, destination: "none", items: [] },
+      activeOperation: null,
+      data: {},
+    };
+    const command = {
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    };
+    mocks.invoke
+      .mockResolvedValueOnce({ status: "ready", state })
+      .mockResolvedValueOnce({ status: "completed", state });
+
+    await expect(bridge.getPlanState()).resolves.toEqual({ status: "ready", state });
+    await expect(bridge.executePlanTransition(command)).resolves.toEqual({
+      status: "completed",
+      state,
+    });
+    expect(mocks.invoke.mock.calls).toEqual([
+      ["desktop:plan:get-state"],
+      ["desktop:plan:execute-transition", command],
+    ]);
+
+    const received: unknown[] = [];
+    const dispose = bridge.onPlanProgress((value) => received.push(value));
+    const listener = mocks.on.mock.calls.find(
+      ([channel]) => channel === "desktop:plan:progress",
+    )?.[1] as (_event: unknown, value: unknown) => void;
+    const progress = {
+      commandId: "command-1",
+      transitionId: "PL-T01",
+      operationId: "operation-1",
+      phase: "completed",
+      completed: 1,
+      total: 1,
+    };
+    listener(undefined, progress);
+    listener(undefined, { ...progress, total: 0 });
+    expect(received).toEqual([progress]);
+    expect(received[0]).not.toBe(progress);
+    dispose();
+    listener(undefined, progress);
+    expect(received).toHaveLength(1);
+  });
+
+  it("rejects malformed Planning commands and daemon results", async () => {
+    await expect(
+      bridge.executePlanTransition({ transitionId: "PL-T01", commandId: "command-1" }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    mocks.invoke.mockResolvedValueOnce({
+      status: "ready",
+      state: { schemaVersion: 1, scenarioId: "PL-S999" },
+    });
+    await expect(bridge.getPlanState()).rejects.toBeInstanceOf(TypeError);
   });
 
   it("exports only a closed training request and validates the minimized result", async () => {
