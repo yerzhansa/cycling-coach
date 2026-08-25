@@ -54,6 +54,17 @@ const DRAFT_STATES = new Set<ChatAttachmentDraftState>([
   "submitting",
   "clearing",
 ]);
+const STATUS_TRANSITIONS: Readonly<
+  Record<ChatAttachmentStatus, ReadonlySet<ChatAttachmentStatus>>
+> = {
+  preprocessing: new Set(["ready", "blocked", "failed"]),
+  blocked: new Set(["preprocessing"]),
+  failed: new Set(["preprocessing", "importing"]),
+  ready: new Set(["importing", "sent"]),
+  importing: new Set(["imported", "failed"]),
+  imported: new Set(["sent"]),
+  sent: new Set(),
+};
 
 function integer(value: number, name: string, minimum = 0): void {
   if (!Number.isSafeInteger(value) || value < minimum) {
@@ -534,7 +545,108 @@ export function createChatAttachmentRepository(
              VALUES (?,?,?,?,?) ON CONFLICT(message_id,attachment_id) DO NOTHING`,
             [messageId, conversationId, attachmentId, ordinal, createdAtMs],
           );
+          const linked = await store.get(
+            `UPDATE chat_attachment SET message_id=?,updated_at_ms=MAX(updated_at_ms,?)
+              WHERE id=? AND conversation_id=? AND (message_id IS NULL OR message_id=?)
+              RETURNING ${ATTACHMENT_COLUMNS}`,
+            [messageId, createdAtMs, attachmentId, conversationId, messageId],
+          );
+          if (linked === undefined) {
+            throw new ChatAttachmentInvariantError(
+              "attachment_message_conflict",
+              "attachment is already linked to another message",
+            );
+          }
         }
+      });
+    },
+
+    async transitionAttachment({
+      conversationId,
+      attachmentId,
+      from,
+      to,
+      stateJson,
+      messageId,
+      updatedAtMs,
+    }) {
+      if (
+        conversationId.length < 1 ||
+        conversationId.length > 512 ||
+        !SAFE_ID.test(attachmentId) ||
+        !STATUSES.has(to) ||
+        from.length === 0 ||
+        from.some((status) => !STATUSES.has(status)) ||
+        new Set(from).size !== from.length ||
+        (messageId !== null && (messageId.length < 1 || messageId.length > 512))
+      ) {
+        throw new ChatAttachmentInvariantError(
+          "invalid_attachment_transition",
+          "attachment transition is invalid",
+        );
+      }
+      if (stateJson !== null) {
+        try {
+          JSON.parse(stateJson);
+        } catch {
+          throw new ChatAttachmentInvariantError(
+            "invalid_state_json",
+            "attachment state is invalid JSON",
+          );
+        }
+      }
+      integer(updatedAtMs, "updated_at_ms");
+      return store.transaction(async () => {
+        const selected = await store.get(
+          `SELECT ${ATTACHMENT_COLUMNS} FROM chat_attachment WHERE id=? AND conversation_id=?`,
+          [attachmentId, conversationId],
+        );
+        if (selected === undefined) {
+          throw new ChatAttachmentInvariantError("attachment_missing", "attachment is missing");
+        }
+        const current = mapAttachment(selected);
+        if (current.status === to) {
+          if (current.state_json !== stateJson || current.message_id !== messageId) {
+            throw new ChatAttachmentInvariantError(
+              "attachment_replay_conflict",
+              "attachment transition replay conflicts with durable state",
+            );
+          }
+          return current;
+        }
+        if (
+          !from.includes(current.status) ||
+          !STATUS_TRANSITIONS[current.status].has(to) ||
+          updatedAtMs < current.updated_at_ms ||
+          (current.message_id !== null && current.message_id !== messageId)
+        ) {
+          throw new ChatAttachmentInvariantError(
+            "attachment_transition_conflict",
+            "attachment transition conflicts with durable state",
+          );
+        }
+        const updated = await store.get(
+          `UPDATE chat_attachment SET status=?,state_json=?,message_id=?,updated_at_ms=?
+            WHERE id=? AND conversation_id=? AND status=? AND updated_at_ms=?
+            RETURNING ${ATTACHMENT_COLUMNS}`,
+          [
+            to,
+            stateJson,
+            messageId,
+            updatedAtMs,
+            attachmentId,
+            conversationId,
+            current.status,
+            current.updated_at_ms,
+          ],
+        );
+        if (updated === undefined) {
+          throw new ChatAttachmentInvariantError(
+            "attachment_transition_conflict",
+            "attachment changed during transition",
+          );
+        }
+        return mapAttachment(updated);
       });
     },
 

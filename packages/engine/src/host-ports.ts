@@ -172,6 +172,37 @@ export interface ChatStorePort {
   clearChatQueue?(chatId: string): ChatQueueSnapshot;
 }
 
+export interface ChatAttachmentActivitySummary {
+  readonly attachmentId: string;
+  readonly messageId: string;
+  readonly activityIds: readonly string[];
+  readonly sessions: readonly {
+    readonly activityId: string;
+    readonly sport: string;
+    readonly startUtc: number;
+    readonly elapsedSeconds: number | null;
+    readonly distanceMeters: number | null;
+  }[];
+}
+
+export interface ChatAttachmentTurnPreparation {
+  readonly activities: readonly ChatAttachmentActivitySummary[];
+}
+
+export interface ChatAttachmentTurnPort {
+  prepareQueuedTurn(input: {
+    readonly chatId: string;
+    readonly messages: readonly {
+      readonly messageId: string;
+      readonly attachmentIds: readonly string[];
+    }[];
+  }): Promise<ChatAttachmentTurnPreparation>;
+  completeQueuedTurn(input: {
+    readonly chatId: string;
+    readonly messageIds: readonly string[];
+  }): Promise<void>;
+}
+
 export type TranscriptConversationBoundaryReason = "explicit-reset" | "stale-reset";
 
 export interface ConversationResetInput {
@@ -404,6 +435,7 @@ export interface EngineHostPorts {
   readonly memory: MemoryStorePort;
   readonly planPersistence?: PlanPersistencePort;
   readonly chatStore: ChatStorePort;
+  readonly chatAttachments?: ChatAttachmentTurnPort;
   readonly transcriptWriter: TranscriptWriterPort;
   readonly coachDecisions?: CoachDecisionStorePort;
   readonly secrets: SecretsPort;

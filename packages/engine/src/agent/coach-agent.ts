@@ -685,7 +685,11 @@ export class CoachAgent {
   async chat(
     chatId: string,
     userMessage: string,
-    turn?: { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance },
+    turn?: {
+      resolvedCs?: ResolvedCs | null;
+      referenceProvenance?: SourceProvenance;
+      attachmentContext?: string;
+    },
     onEvent?: TurnEventHandler,
     onDecision?: (decision: CoachDecisionReadModel) => void,
     requestedTurnId?: string,
@@ -909,6 +913,10 @@ export class CoachAgent {
           archivedAt !== undefined
             ? { role: "system", content: archiveMarker(archivedAt) }
             : undefined;
+        const attachmentContextMsg: ModelMessage | undefined =
+          turn?.attachmentContext === undefined
+            ? undefined
+            : { role: "system", content: turn.attachmentContext };
 
         // Build messages array with new user message
         const userTurnMessage = setMessageProvenance(
@@ -918,6 +926,7 @@ export class CoachAgent {
         let messages: ModelMessage[] = [
           ...(summaryMsg ? [summaryMsg] : []),
           ...(archiveMarkerMsg ? [archiveMarkerMsg] : []),
+          ...(attachmentContextMsg ? [attachmentContextMsg] : []),
           ...requeued,
           ...kept,
           userTurnMessage,

@@ -200,9 +200,79 @@ describe("chat attachment repository", () => {
       createdAtMs: 6,
     });
     await expect(repository.listMessageAttachments("message-1")).resolves.toMatchObject([
-      { id: "attachment-1", object_id: "object-1" },
-      { id: "attachment-2", object_id: "object-2" },
+      { id: "attachment-1", object_id: "object-1", message_id: "message-1" },
+      { id: "attachment-2", object_id: "object-2", message_id: "message-1" },
     ]);
+  });
+
+  it("moves attachments through strict replay-safe durable states", async () => {
+    const repository = createChatAttachmentRepository(store);
+    const object = objectRow("object-1", "chat-a", "1".repeat(64));
+    await repository.reserveObject({ object, limits: LIMITS });
+    const activity = {
+      ...attachmentRow("attachment-1", object),
+      kind: "activity" as const,
+      display_name: "ride.fit",
+      media_type: "application/vnd.ant.fit",
+      extension: "fit",
+    };
+    await repository.commitAdmission({
+      objectId: object.id,
+      attachment: activity,
+      draftUpdatedAtMs: 3,
+    });
+    const parsed = JSON.stringify({ kind: "parsed-activity", parsedActivityId: "parsed-1" });
+    await expect(
+      repository.transitionAttachment({
+        conversationId: "chat-a",
+        attachmentId: "attachment-1",
+        from: ["preprocessing"],
+        to: "ready",
+        stateJson: parsed,
+        messageId: null,
+        updatedAtMs: 4,
+      }),
+    ).resolves.toMatchObject({ status: "ready", state_json: parsed, message_id: null });
+    await repository.linkMessage({
+      conversationId: "chat-a",
+      messageId: "message-1",
+      attachmentIds: ["attachment-1"],
+      createdAtMs: 5,
+    });
+    await expect(
+      repository.transitionAttachment({
+        conversationId: "chat-a",
+        attachmentId: "attachment-1",
+        from: ["ready", "failed"],
+        to: "importing",
+        stateJson: parsed,
+        messageId: "message-1",
+        updatedAtMs: 6,
+      }),
+    ).resolves.toMatchObject({ status: "importing", message_id: "message-1" });
+    await expect(
+      repository.transitionAttachment({
+        conversationId: "chat-a",
+        attachmentId: "attachment-1",
+        from: ["ready", "failed"],
+        to: "importing",
+        stateJson: parsed,
+        messageId: "message-1",
+        updatedAtMs: 6,
+      }),
+    ).resolves.toMatchObject({ status: "importing", updated_at_ms: 6 });
+
+    await expect(
+      repository.transitionAttachment({
+        conversationId: "chat-a",
+        attachmentId: "attachment-1",
+        from: ["importing"],
+        to: "imported",
+        stateJson: JSON.stringify({ kind: "canonical-activity", activityIds: ["activity-1"] }),
+        messageId: "message-2",
+        updatedAtMs: 7,
+      }),
+    ).rejects.toMatchObject({ code: "attachment_transition_conflict" });
   });
 
   it("serializes competing reservations so aggregate capacity cannot be oversubscribed", async () => {

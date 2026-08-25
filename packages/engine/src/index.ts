@@ -7,7 +7,7 @@ import type {
 } from "@enduragent/coach-contract";
 import { CoachAgent } from "./agent/coach-agent.js";
 import { extractAccountId } from "./agent/codex/jwt.js";
-import type { EngineHostPorts } from "./host-ports.js";
+import type { ChatAttachmentActivitySummary, EngineHostPorts } from "./host-ports.js";
 import type { Sport } from "./sport.js";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import type { SourceProvenance } from "./provenance.js";
@@ -22,6 +22,9 @@ export type {
   CallerRole,
   ChatLineage,
   ChatStorePort,
+  ChatAttachmentActivitySummary,
+  ChatAttachmentTurnPort,
+  ChatAttachmentTurnPreparation,
   CoachDecisionStorePort,
   ConversationResetInput,
   EngineConfig,
@@ -94,6 +97,16 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
     queuePort("getChatQueue").call(input.ports.chatStore, chatId);
   const queueText = (items: readonly QueuedChatMessage[]): string =>
     items.map((item) => item.text).join("\n\n");
+  const activityContext = (
+    activities: readonly ChatAttachmentActivitySummary[],
+  ): string | undefined =>
+    activities.length === 0
+      ? undefined
+      : [
+          "Canonical Training activities imported for this athlete turn.",
+          "Use only these normalized local fields; raw attachment bytes were not provided.",
+          JSON.stringify(activities),
+        ].join("\n");
   const runQueue = (
     chatId: string,
     mode: "resume" | "command" | "retry",
@@ -151,11 +164,24 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       }
       let interrupted = false;
       try {
+        const attachmentPreparation = await input.ports.chatAttachments?.prepareQueuedTurn({
+          chatId,
+          messages: selected.map((item) => ({
+            messageId: item.messageId,
+            attachmentIds: item.attachmentIds,
+          })),
+        });
+        const normalizedActivityContext =
+          attachmentPreparation === undefined
+            ? undefined
+            : activityContext(attachmentPreparation.activities);
         let decision;
         const text = await agent.chat(
           chatId,
           queueText(selected),
-          undefined,
+          normalizedActivityContext === undefined
+            ? undefined
+            : { attachmentContext: normalizedActivityContext },
           (event) => {
             if (event.type === "interrupted") interrupted = true;
             onEvent?.(event);
@@ -175,6 +201,10 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
             response: decision === undefined ? { text } : { text, decision },
           };
         }
+        await input.ports.chatAttachments?.completeQueuedTurn({
+          chatId,
+          messageIds: selected.map((item) => item.messageId),
+        });
         return {
           snapshot: queuePort("completeChatQueueClaim").call(
             input.ports.chatStore,

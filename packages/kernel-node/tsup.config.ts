@@ -7,6 +7,7 @@ export default defineConfig({
     "archive/index": "src/archive/index.ts",
     "chat-attachments/index": "src/chat-attachments/index.ts",
     "chat-attachments/document-reader-worker": "src/chat-attachments/document-reader-worker.ts",
+    "chat-attachments/activity-reader-worker": "src/chat-attachments/activity-reader-worker.ts",
     "lock/index": "src/lock/index.ts",
     "store-export/index": "src/store-export/index.ts",
     "home/index": "src/home/index.ts",

@@ -9,6 +9,24 @@ export type ChatAttachmentStatus =
   | "sent";
 export type ChatAttachmentDraftState = "active" | "restored" | "submitting" | "clearing";
 
+export interface ParsedActivityProjection {
+  readonly kind: "parsed-activity";
+  readonly parsedActivityId: string;
+  readonly sourceFormat: "fit" | "tcx" | "gpx";
+  readonly parserVersion: string;
+}
+
+export interface CanonicalActivityProjection {
+  readonly kind: "canonical-activity";
+  readonly importId: string;
+  readonly activityIds: readonly string[];
+}
+
+export interface FailedChatAttachmentProjection {
+  readonly stage: "parsing" | "import";
+  readonly failureCode: string;
+}
+
 export interface ChatAttachmentCapacityLimits {
   readonly attachmentsPerMessage: number;
   readonly messageBytes: number;
@@ -95,6 +113,15 @@ export interface ChatAttachmentRepository {
     readonly attachmentIds: readonly string[];
     readonly createdAtMs: number;
   }): Promise<void>;
+  transitionAttachment(input: {
+    readonly conversationId: string;
+    readonly attachmentId: string;
+    readonly from: readonly ChatAttachmentStatus[];
+    readonly to: ChatAttachmentStatus;
+    readonly stateJson: string | null;
+    readonly messageId: string | null;
+    readonly updatedAtMs: number;
+  }): Promise<ChatAttachmentRow>;
   listMessageAttachments(messageId: string): Promise<readonly ChatAttachmentRow[]>;
   listObjects(): Promise<readonly ChatAttachmentObjectRow[]>;
   markObjectMissing(objectId: string, updatedAtMs: number): Promise<void>;

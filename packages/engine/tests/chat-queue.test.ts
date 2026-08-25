@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createCoachEngine } from "../src/index.js";
 import type { EngineHostPorts, ModelTransportRequest } from "../src/host-ports.js";
+import type { ChatAttachmentTurnPort } from "../src/host-ports.js";
 import type { GenerateResult, Sport } from "../src/sport.js";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 
@@ -29,6 +30,7 @@ function setup(
   root = mkdtempSync(join(tmpdir(), "engine-chat-queue-")),
   generate: (request: ModelTransportRequest) => Promise<GenerateResult> = async () =>
     generated("Done"),
+  chatAttachments?: ChatAttachmentTurnPort,
 ) {
   if (!roots.includes(root)) roots.push(root);
   const base = baseAgentConfig(root);
@@ -38,6 +40,7 @@ function setup(
     transcriptWriter: base.chatStore as unknown as EngineHostPorts["transcriptWriter"],
     randomId: () => `id-${++sequence}`,
     modelTransportDecorator: () => ({ generate }),
+    ...(chatAttachments === undefined ? {} : { chatAttachments }),
   };
   return {
     root,
@@ -68,6 +71,91 @@ describe("engine durable chat queue", () => {
         attachmentIds: ["attachment-2"],
       }),
     ).rejects.toThrow(/text-only/u);
+  });
+
+  it("imports queued attachments before Coach and exposes only normalized canonical activity fields", async () => {
+    const order: string[] = [];
+    const prepareQueuedTurn = vi.fn(async () => {
+      order.push("prepared");
+      return {
+        activities: [
+          {
+            attachmentId: "attachment-1",
+            messageId: "id-2",
+            activityIds: ["activity-1"],
+            sessions: [
+              {
+                activityId: "activity-1",
+                sport: "cycling",
+                startUtc: 1_777_000_000,
+                elapsedSeconds: 3_600,
+                distanceMeters: 40_000,
+              },
+            ],
+          },
+        ],
+      };
+    });
+    const completeQueuedTurn = vi.fn(async () => {
+      order.push("completed");
+    });
+    const requests: ModelTransportRequest[] = [];
+    const { engine } = setup(
+      undefined,
+      async (request) => {
+        order.push("coach");
+        requests.push(request);
+        return generated("Reviewed");
+      },
+      { prepareQueuedTurn, completeQueuedTurn },
+    );
+    await engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "submission-1",
+      text: "Review the ride",
+      attachmentIds: ["attachment-1"],
+    });
+    await expect(engine.resumeChatQueue!({ chatId: "desktop" })).resolves.toMatchObject({
+      response: { text: "Reviewed" },
+      snapshot: { items: [] },
+    });
+    expect(prepareQueuedTurn).toHaveBeenCalledWith({
+      chatId: "desktop",
+      messages: [{ messageId: "id-2", attachmentIds: ["attachment-1"] }],
+    });
+    expect(completeQueuedTurn).toHaveBeenCalledWith({
+      chatId: "desktop",
+      messageIds: ["id-2"],
+    });
+    expect(order).toEqual(["prepared", "coach", "completed"]);
+    const providerMessages = JSON.stringify(requests[0]?.options.messages);
+    expect(providerMessages).toContain("Canonical Training activities imported");
+    expect(providerMessages).toContain("activity-1");
+    expect(providerMessages).not.toContain("raw-fit-private-bytes");
+  });
+
+  it("leaves the stable queue claim retryable when attachment preparation fails before Coach", async () => {
+    const generate = vi.fn(async () => generated("Unexpected"));
+    const { engine } = setup(undefined, generate, {
+      prepareQueuedTurn: async () => {
+        throw new Error("import interrupted");
+      },
+      completeQueuedTurn: async () => {},
+    });
+    await engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "submission-1",
+      text: "Review the ride",
+      attachmentIds: ["attachment-1"],
+    });
+    await expect(engine.resumeChatQueue!({ chatId: "desktop" })).rejects.toThrow(
+      "import interrupted",
+    );
+    expect(generate).not.toHaveBeenCalled();
+    expect(await engine.getChatQueue!({ chatId: "desktop" })).toMatchObject({
+      items: [{ messageId: "id-2", attachmentIds: ["attachment-1"] }],
+      retryRequired: { queuedMessageIds: ["id-1"] },
+    });
   });
 
   it("groups consecutive ordinary messages and stops at a command barrier", async () => {
