@@ -48,17 +48,20 @@ function fakeIntervals(initial = event()): {
   client: IntervalsClient;
   setEvent: (next: Record<string, unknown>) => void;
   gets: ReturnType<typeof vi.fn>;
+  updates: ReturnType<typeof vi.fn>;
   deletes: ReturnType<typeof vi.fn>;
 } {
   let current = initial;
   const gets = vi.fn(async () => ({ ok: true, value: current }));
+  const updates = vi.fn(async () => ({ ok: true, value: current }));
   const deletes = vi.fn(async () => ({ ok: true, value: undefined }));
   return {
-    client: { events: { get: gets, delete: deletes } } as unknown as IntervalsClient,
+    client: { events: { get: gets, update: updates, delete: deletes } } as unknown as IntervalsClient,
     setEvent: (next) => {
       current = next;
     },
     gets,
+    updates,
     deletes,
   };
 }
@@ -283,6 +286,36 @@ describe("proposal summarizers and guard reuse", () => {
     });
   });
 
+  it("host-fetches update truth and summarizes only the requested changes", async () => {
+    const fake = fakeIntervals();
+    const summarize = createProposalSummarizers({
+      intervals: fake.client,
+      tz: "UTC",
+    }).intervals_update_workout!;
+    await expect(
+      summarize({
+        eventId: 42,
+        changes: {
+          date: "2999-01-04",
+          name: "Tempo build",
+          description: "Structured workout",
+          movingTime: 4_500,
+          icuTrainingLoad: 78,
+          workoutDoc: { steps: [] },
+        },
+      }),
+    ).resolves.toEqual({
+      summary:
+        'Update workout "Fetched truth" on 2999-01-02 — date to 2999-01-04, name to "Tempo build", description, duration to 4500 seconds, training load to 78, workout structure',
+    });
+
+    fake.setEvent(event({ tags: [] }));
+    await expect(
+      summarize({ eventId: 42, changes: { name: "Blocked" } }),
+    ).resolves.toMatchObject({ block: { error: "not_coach_created" } });
+    expect(fake.updates).not.toHaveBeenCalled();
+  });
+
   it("passes fetch failures through as typed blocks", async () => {
     const client = {
       events: {
@@ -327,11 +360,41 @@ describe("proposal summarizers and guard reuse", () => {
     expect(fake.deletes).not.toHaveBeenCalled();
   });
 
+  it("re-fetches and re-guards when a confirmed update runs", async () => {
+    const fake = fakeIntervals();
+    const raw = createPureCoreIntervalsTools(
+      fake.client,
+      "UTC",
+      undefined,
+      createPlatformCalendarMutations(fake.client),
+    ).intervals_update_workout!;
+    const gate = new ConfirmationGate();
+    const wrapped = gateMutatingTool(
+      "intervals_update_workout",
+      raw,
+      port(gate, createProposalSummarizers({ intervals: fake.client, tz: "UTC" })),
+    );
+    await wrapped.execute!(
+      { eventId: 42, changes: { name: "Tempo build" } },
+      turnOptions("chat") as never,
+    );
+    const proposal = gate.peek("chat")!;
+    fake.setEvent(event({ category: "NOTE" }));
+    const outcome = await gate.confirm("chat", proposal.nonce);
+    expect(outcome).toMatchObject({
+      status: "executed",
+      result: { error: "not_a_workout" },
+    });
+    expect(fake.gets).toHaveBeenCalledTimes(2);
+    expect(fake.updates).not.toHaveBeenCalled();
+  });
+
   it("keeps gate and read allowlists exact and disjoint", () => {
     expect([...GATED_TOOL_NAMES].sort()).toEqual([
       "intervals_create_strength_workout",
       "intervals_create_workout",
       "intervals_delete_workout",
+      "intervals_update_workout",
       "plan_save",
     ]);
     expect([...READ_ONLY_TOOL_NAMES].filter((name) => GATED_TOOL_NAMES.has(name))).toEqual([]);

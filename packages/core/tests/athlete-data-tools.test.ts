@@ -227,7 +227,7 @@ describe("store athlete reader", () => {
       athlete: { get: network },
       wellness: { list: network },
       activities: { list: network, get: network, getStreams: network },
-      events: { list: network, get: network, create: network, delete: network },
+      events: { list: network, get: network, create: network, update: network, delete: network },
     } as unknown as IntervalsClient;
     const reader = createStoreAthleteDataReader({
       snapshot: () => produced(),
@@ -287,6 +287,7 @@ describe("store athlete reader", () => {
         list: () => ok([]),
         get: () => ok({ id: 1, startDateLocal: "2998-01-01" }),
         create: () => ok({}),
+        update: () => ok({}),
         delete: () => ok({}),
       },
     } as unknown as IntervalsClient;
@@ -304,6 +305,23 @@ describe("store athlete reader", () => {
     expect(signature(createCoreToolsWithSportConfig(client, ["Ride"], athleteData))).toBe(
       signature(createCoreToolsWithSportConfig(null, ["Ride"], athleteData)),
     );
+  });
+
+  it("forwards an exact partial event update through the platform adapter", async () => {
+    const update = vi.fn(async () => ({ ok: true as const, value: { id: 91 } }));
+    const client = { events: { update } } as unknown as IntervalsClient;
+    const mutations = createPlatformCalendarMutations(client);
+    await expect(
+      mutations.updateEvent({
+        eventId: 91,
+        patch: { name: "Tempo", movingTime: 3_600, icuTrainingLoad: 70 },
+      }),
+    ).resolves.toEqual({ id: 91 });
+    expect(update).toHaveBeenCalledWith(91, {
+      name: "Tempo",
+      movingTime: 3_600,
+      icuTrainingLoad: 70,
+    });
   });
 
   it("keeps legacy platform activity results supported without promising canonical grouping fields", async () => {
@@ -376,6 +394,7 @@ describe("store athlete reader", () => {
     const mutations: PlatformCalendarMutations = {
       createEvent: vi.fn(),
       readEventForDelete: read,
+      updateEvent: vi.fn(),
       deleteEvent: remove,
     };
     const tools = createPureCoreIntervalsTools(null, "UTC", undefined, mutations);
@@ -404,6 +423,7 @@ describe("store athlete reader", () => {
           tags: [COACH_EVENT_TAG],
         };
       }),
+      updateEvent: vi.fn(),
       deleteEvent: vi.fn(async () => {
         order.push("delete");
         return {};
@@ -425,6 +445,24 @@ describe("store athlete reader", () => {
     );
     await expect(
       tools.intervals_delete_workout!.execute!({ eventId: 7 }, {} as never),
+    ).resolves.toEqual({
+      error: "platform_credentials_required",
+      message: "Calendar changes need platform credentials.",
+    });
+  });
+
+  it("keeps update registered with no credentials and performs zero platform requests", async () => {
+    const tools = createPureCoreIntervalsTools(
+      null,
+      "UTC",
+      undefined,
+      createMissingPlatformCalendarMutations(),
+    );
+    await expect(
+      tools.intervals_update_workout!.execute!(
+        { eventId: 7, changes: { name: "Tempo" } },
+        {} as never,
+      ),
     ).resolves.toEqual({
       error: "platform_credentials_required",
       message: "Calendar changes need platform credentials.",

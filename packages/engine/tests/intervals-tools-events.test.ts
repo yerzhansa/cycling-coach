@@ -44,6 +44,7 @@ function makeDeleteFake(event: EventKnobs): {
       externalId: event.externalId,
       name: event.name,
     }),
+    updateEvent: async () => ({}),
     deleteEvent: async ({ eventId }) => {
       deleteCalls.push(eventId);
       return { ok: true };
@@ -88,6 +89,59 @@ async function runDelete(event: EventKnobs, tz = "UTC") {
   return { result, deleteCalls };
 }
 
+type UpdateResult = {
+  updated?: true;
+  event?: unknown;
+  error?: string;
+  details?: string;
+  status?: number;
+  message?: string;
+};
+
+function makeUpdateFake(
+  event: EventKnobs,
+  outcome: { event: unknown } | { throws: unknown } = { event: { id: 1 } },
+): {
+  mutations: PlatformCalendarMutationsPort;
+  updateCalls: { eventId: number; patch: Record<string, unknown> }[];
+} {
+  const updateCalls: { eventId: number; patch: Record<string, unknown> }[] = [];
+  const mutations: PlatformCalendarMutationsPort = {
+    createEvent: async () => ({}),
+    readEventForDelete: async ({ eventId }) => ({
+      id: eventId,
+      startDateLocal: event.startDateLocal ?? "2999-01-01T00:00:00",
+      ...(event.omitCategory
+        ? {}
+        : { category: event.category === undefined ? "WORKOUT" : event.category }),
+      tags: event.tags,
+      externalId: event.externalId,
+      name: event.name,
+    }),
+    updateEvent: async ({ eventId, patch }) => {
+      updateCalls.push({ eventId, patch: patch as Record<string, unknown> });
+      if ("throws" in outcome) throw outcome.throws;
+      return outcome.event;
+    },
+    deleteEvent: async () => ({}),
+  };
+  return { mutations, updateCalls };
+}
+
+async function runUpdate(
+  event: EventKnobs,
+  changes: Record<string, unknown>,
+  tz = "UTC",
+) {
+  const { mutations, updateCalls } = makeUpdateFake(event);
+  const tools = createPureCoreIntervalsTools(null, tz, undefined, mutations);
+  const result = (await tools.intervals_update_workout!.execute!(
+    { eventId: event.id ?? 1, changes },
+    {} as never,
+  )) as UpdateResult;
+  return { result, updateCalls };
+}
+
 class FakePlatformApiError extends Error {
   readonly apiError: unknown;
   constructor(apiError: unknown) {
@@ -109,6 +163,7 @@ function makeStrengthCreateFake(outcome: { event: unknown } | { throws: unknown 
       return outcome.event;
     },
     readEventForDelete: async ({ eventId }) => ({ id: eventId, startDateLocal: "2999-01-01" }),
+    updateEvent: async () => ({}),
     deleteEvent: async () => ({}),
   };
   return { mutations, createCalls };
@@ -347,6 +402,104 @@ describe("intervals_delete_workout guards", () => {
     });
     expect(result.error).toBe("not_a_workout");
     expect(deleteCalls).toEqual([]);
+  });
+});
+
+describe("intervals_update_workout guards and partial patch", () => {
+  it("updates only selected fields and maps date to startDateLocal", async () => {
+    const { mutations, updateCalls } = makeUpdateFake(
+      {
+        id: 71,
+        category: "WORKOUT",
+        tags: [COACH_EVENT_TAG],
+        startDateLocal: "2999-01-01T00:00:00",
+      },
+      { event: { id: 71, name: "Updated" } },
+    );
+    const tools = createPureCoreIntervalsTools(null, "UTC", undefined, mutations);
+    await expect(
+      tools.intervals_update_workout!.execute!(
+        {
+          eventId: 71,
+          changes: {
+            date: "2999-01-03",
+            name: "Tempo",
+            movingTime: 3_600,
+            icuTrainingLoad: 72,
+            workoutDoc: { steps: [] },
+          },
+        },
+        {} as never,
+      ),
+    ).resolves.toEqual({ updated: true, event: { id: 71, name: "Updated" } });
+    expect(updateCalls).toEqual([
+      {
+        eventId: 71,
+        patch: {
+          startDateLocal: "2999-01-03T00:00:00",
+          name: "Tempo",
+          movingTime: 3_600,
+          icuTrainingLoad: 72,
+          workoutDoc: { steps: [] },
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    ["non-workout", { category: "RACE_A", tags: [COACH_EVENT_TAG] }, "not_a_workout"],
+    ["unowned", { category: "WORKOUT" }, "not_coach_created"],
+    [
+      "past source",
+      {
+        category: "WORKOUT",
+        tags: [COACH_EVENT_TAG],
+        startDateLocal: "2000-01-01T00:00:00",
+      },
+      "past_workout_protected",
+    ],
+  ])("refuses %s events", async (_label, event, expectedError) => {
+    const { result, updateCalls } = await runUpdate(event, { name: "New name" });
+    expect(result.error).toBe(expectedError);
+    expect(updateCalls).toEqual([]);
+  });
+
+  it("refuses a past destination before updating the event", async () => {
+    const { result, updateCalls } = await runUpdate(
+      {
+        category: "WORKOUT",
+        tags: [COACH_EVENT_TAG],
+        startDateLocal: "2999-01-01T00:00:00",
+      },
+      { date: "2000-01-01" },
+    );
+    expect(result.error).toBe("past_date_refused");
+    expect(result.details).toContain("Cannot move a workout to 2000-01-01");
+    expect(updateCalls).toEqual([]);
+  });
+
+  it("returns typed platform failures from the update call", async () => {
+    const { mutations } = makeUpdateFake(
+      {
+        category: "WORKOUT",
+        tags: [COACH_EVENT_TAG],
+        startDateLocal: "2999-01-01T00:00:00",
+      },
+      {
+        throws: new FakePlatformApiError({
+          kind: "RateLimited",
+          status: 429,
+          message: "slow down",
+        }),
+      },
+    );
+    const tools = createPureCoreIntervalsTools(null, "UTC", undefined, mutations);
+    await expect(
+      tools.intervals_update_workout!.execute!(
+        { eventId: 1, changes: { description: "Easy" } },
+        {} as never,
+      ),
+    ).resolves.toEqual({ error: "RateLimited", status: 429, message: "slow down" });
   });
 });
 

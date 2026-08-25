@@ -13,6 +13,7 @@ export type {
   AthleteReadResult,
   AthleteStateReaderPort,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   CallerRole,
   ChatLineage,
   ChatStorePort,

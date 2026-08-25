@@ -208,9 +208,19 @@ export interface CalendarEventForDelete {
   readonly externalId?: string | null;
 }
 
+export interface CalendarEventUpdate {
+  readonly startDateLocal?: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly movingTime?: number;
+  readonly icuTrainingLoad?: number;
+  readonly workoutDoc?: unknown;
+}
+
 export interface PlatformCalendarMutationsPort {
   createEvent(input: EventInput): Promise<unknown>;
   readEventForDelete(input: { eventId: number }): Promise<CalendarEventForDelete>;
+  updateEvent(input: { eventId: number; patch: CalendarEventUpdate }): Promise<unknown>;
   deleteEvent(input: { eventId: number }): Promise<unknown>;
 }
 
