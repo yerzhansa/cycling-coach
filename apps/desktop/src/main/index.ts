@@ -1,3 +1,4 @@
+import "./keychain-binding-probe-deprecation.js";
 import { bindWindowsUserData } from "./windows-user-data.js";
 import {
   createAcceptanceKeychainTransport,
