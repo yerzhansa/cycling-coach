@@ -128,9 +128,11 @@ function client(
       if (!queued.some((item) => item.submissionId === value.submissionId)) {
         queued.push({
           queuedMessageId: `queued-${value.submissionId}`,
+          messageId: `message-${value.submissionId}`,
           submissionId: value.submissionId,
           text: value.text,
           kind: value.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
+          attachmentIds: [],
           position: queued.length,
           restored: false,
         });

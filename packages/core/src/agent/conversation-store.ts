@@ -34,6 +34,8 @@ export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPo
     submissionId: string,
     text: string,
     queuedMessageId: string,
+    messageId?: string,
+    attachmentIds?: readonly string[],
   ): ChatQueueSnapshot;
   removeQueuedChatMessage(chatId: string, queuedMessageId: string): ChatQueueSnapshot;
   claimChatQueue(
@@ -226,9 +228,18 @@ export class ConversationStore implements ConversationStorePort {
     submissionId: string,
     text: string,
     queuedMessageId: string,
+    messageId = queuedMessageId,
+    attachmentIds: readonly string[] = [],
   ): ChatQueueSnapshot {
     this.recoverBeforeAccess(chatId);
-    return this.queueStore().enqueue(chatId, submissionId, text, queuedMessageId);
+    return this.queueStore().enqueue(
+      chatId,
+      submissionId,
+      text,
+      queuedMessageId,
+      messageId,
+      attachmentIds,
+    );
   }
 
   removeQueuedChatMessage(chatId: string, queuedMessageId: string): ChatQueueSnapshot {

@@ -2014,6 +2014,128 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
 });
 
 describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
+  it("admits native paths only for privileged Desktop-main callers and fails closed before storage", async () => {
+    const token = "x".repeat(43);
+    const admitChatAttachment = vi.fn(async (request) => ({
+      selectionId: request.selectionId,
+      displayName: "activity.fit",
+      status: "storage_failed" as const,
+      failureCode: "admission_unavailable" as const,
+      retryable: false,
+    }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: { ...operations, admitChatAttachment },
+      token,
+      owner: "app-supervised",
+    });
+    const privileged = await openSocket(rpc);
+    privileged.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await privileged.frames.next();
+
+    const request = {
+      chatId: "desktop",
+      selectionId: "selection-1",
+      source: "picker",
+      candidate: { kind: "native-path", sourcePath: "/tmp/activity.fit" },
+    } as const;
+    privileged.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "privileged-admission",
+        method: "admitChatAttachment",
+        params: request,
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await privileged.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "privileged-admission",
+      result: {
+        selectionId: "selection-1",
+        displayName: "activity.fit",
+        status: "storage_failed",
+        failureCode: "admission_unavailable",
+        retryable: false,
+      },
+    });
+    expect(admitChatAttachment).toHaveBeenCalledWith(request);
+
+    privileged.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "foreign-admission",
+        method: "admitChatAttachment",
+        params: { ...request, chatId: "other" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await privileged.frames.next())).toMatchObject({
+      id: "foreign-admission",
+      error: { code: -32602, message: "Invalid params" },
+    });
+
+    const renderer = await openSocket(rpc);
+    renderer.ws.send(
+      JSON.stringify(
+        createClientHandshakeFrame(TEST_RENDERER_CAPABILITY_BYTES.toString("base64url")),
+      ),
+    );
+    await renderer.frames.next();
+    renderer.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "renderer-admission",
+        method: "admitChatAttachment",
+        params: request,
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await renderer.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "renderer-admission",
+      error: { code: -32601, message: "Method not found" },
+    });
+    expect(admitChatAttachment).toHaveBeenCalledOnce();
+
+    await renderer.close();
+    await privileged.close();
+  });
+
+  it("returns a typed unavailable result when durable admission is not installed", async () => {
+    const token = "x".repeat(43);
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations,
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "unavailable",
+        method: "admitChatAttachment",
+        params: {
+          chatId: "desktop",
+          selectionId: "selection-1",
+          source: "drop",
+          candidate: { kind: "native-path", sourcePath: "C:\\rides\\activity.fit" },
+        },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "unavailable",
+      result: {
+        selectionId: "selection-1",
+        displayName: "activity.fit",
+        status: "storage_failed",
+        failureCode: "admission_unavailable",
+        retryable: false,
+      },
+    });
+    await client.close();
+  });
+
   it("binds renderer capabilities to the exact Desktop session namespace", async () => {
     const token = "x".repeat(43);
     const chat = vi.fn(async () => ({ text: "ok" }));

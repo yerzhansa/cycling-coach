@@ -118,7 +118,9 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
   let queueRevision = 0;
   let queueItems: Array<{
     queuedMessageId: string;
+    messageId: string;
     submissionId: string;
+    attachmentIds: string[];
     text: string;
     kind: "ordinary" | "slash-command";
     position: number;
@@ -173,7 +175,9 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
           queueRevision += 1;
           queueItems.push({
             queuedMessageId: `queued-${queueRevision}`,
+            messageId: `message-${queueRevision}`,
             submissionId: params.submissionId,
+            attachmentIds: [],
             text: params.text,
             kind: params.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
             position: queueItems.length,

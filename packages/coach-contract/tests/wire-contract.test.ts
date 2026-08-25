@@ -1083,6 +1083,13 @@ describe("coach request and event projection", () => {
     const fake: CoachRpcService = {
       chat: async () => ({ text: "ok" }),
       stopChat: async () => ({ stopped: true }),
+      admitChatAttachment: async ({ selectionId }) => ({
+        selectionId,
+        displayName: "activity.fit",
+        status: "storage_failed",
+        failureCode: "admission_unavailable",
+        retryable: false,
+      }),
       enqueueChatMessage: async () => ({ schemaVersion: 1, revision: 1, items: [] }),
       getChatQueue: async () => ({ schemaVersion: 1, revision: 1, items: [] }),
       removeQueuedChatMessage: async () => ({ schemaVersion: 1, revision: 2, items: [] }),
@@ -1804,7 +1811,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-23 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-24 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1812,8 +1819,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 23,
-      serverProtocolVersion: 23,
+      clientProtocolVersion: 24,
+      serverProtocolVersion: 24,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1822,7 +1829,7 @@ describe("handshake", () => {
 
   it("refuses a previous-protocol client with a version-mismatch frame instead of a parse error", () => {
     const previous = PROTOCOL_VERSION - 1;
-    expect(previous).toBe(22);
+    expect(previous).toBe(23);
     expect(() =>
       createAcceptedServerHandshakeFrame("service-managed", previous, {
         ...acceptedHandshakeBinding,
@@ -1895,9 +1902,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 23 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 24 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(23);
+    expect(client.clientProtocolVersion).toBe(24);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -2023,7 +2030,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version 23", () => {
-    expect(PROTOCOL_VERSION).toBe(23);
+  it("uses protocol version 24", () => {
+    expect(PROTOCOL_VERSION).toBe(24);
   });
 });

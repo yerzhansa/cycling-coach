@@ -47,6 +47,29 @@ function setup(
 }
 
 describe("engine durable chat queue", () => {
+  it("assigns host-owned Message identities and preserves ordinary attachment references", async () => {
+    const { engine } = setup();
+    const queued = await engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "submission-1",
+      text: "Review this activity",
+      attachmentIds: ["attachment-1"],
+    });
+    expect(queued.items[0]).toMatchObject({
+      queuedMessageId: "id-1",
+      messageId: "id-2",
+      attachmentIds: ["attachment-1"],
+    });
+    await expect(
+      engine.enqueueChatMessage!({
+        chatId: "desktop",
+        submissionId: "submission-2",
+        text: "/review",
+        attachmentIds: ["attachment-2"],
+      }),
+    ).rejects.toThrow(/text-only/u);
+  });
+
   it("groups consecutive ordinary messages and stops at a command barrier", async () => {
     const requests: ModelTransportRequest[] = [];
     const { engine } = setup(undefined, async (request) => {
@@ -192,9 +215,13 @@ describe("engine durable chat queue", () => {
     const { engine } = setup(undefined, generate);
     await engine.enqueueChatMessage!({ chatId: "desktop", submissionId: "s1", text: "First" });
     await engine.enqueueChatMessage!({ chatId: "desktop", submissionId: "s2", text: "/review" });
-    const running = engine.resumeChatQueue!({ chatId: "desktop" }).catch(() => undefined);
+    let activeTurnId: string | undefined;
+    const running = engine.resumeChatQueue!({ chatId: "desktop" }, (event) => {
+      if (event.type === "turn-start") activeTurnId = event.turnId;
+    }).catch(() => undefined);
     await active;
-    await engine.stopChat!({ chatId: "desktop", turnId: "id-4" });
+    if (activeTurnId === undefined) throw new Error("active turn was not announced");
+    await engine.stopChat!({ chatId: "desktop", turnId: activeTurnId });
     await running;
 
     const snapshot = await engine.getChatQueue!({ chatId: "desktop" });

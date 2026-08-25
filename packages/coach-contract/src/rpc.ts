@@ -14,6 +14,12 @@ import {
 import { TurnEventSchema, type TurnEvent } from "./turn-event.js";
 import { PlatformAbsolutePathSchema } from "./platform-path.js";
 import {
+  AdmitChatAttachmentRequestSchema,
+  AttachmentAdmissionReadModelSchema,
+  type AdmitChatAttachmentRequest,
+  type AttachmentAdmissionReadModel,
+} from "./chat-attachment.js";
+import {
   AnswerCoachDecisionRpcParamsSchema,
   AnswerCoachDecisionRpcResultSchema,
   GetCoachDecisionRpcParamsSchema,
@@ -183,6 +189,7 @@ export type JsonRpcNotificationEnvelope = z.infer<typeof JsonRpcNotificationEnve
 export const COACH_RPC_METHOD_NAMES = [
   "chat",
   "stopChat",
+  "admitChatAttachment",
   "enqueueChatMessage",
   "getChatQueue",
   "removeQueuedChatMessage",
@@ -1106,6 +1113,7 @@ export const OperationProgressEventSchema = z
 export type OperationProgressEvent = z.infer<typeof OperationProgressEventSchema>;
 
 export interface CoachOperations {
+  admitChatAttachment?(request: AdmitChatAttachmentRequest): Promise<AttachmentAdmissionReadModel>;
   getActivityAnalysis?(
     request: ActivityAnalysisRequest,
     signal?: AbortSignal,
@@ -1208,6 +1216,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("stopChat"),
       params: StopChatRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("admitChatAttachment"),
+      params: AdmitChatAttachmentRequestSchema,
     })
     .strict(),
   z
@@ -1696,6 +1712,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "stopChat",
     requestSchema: StopChatRequestSchema,
     responseSchema: StopChatResponseSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  admitChatAttachment: {
+    wireName: "admitChatAttachment",
+    requestSchema: AdmitChatAttachmentRequestSchema,
+    responseSchema: AttachmentAdmissionReadModelSchema,
     eventSchema: NoRpcEventSchema,
   },
   enqueueChatMessage: {

@@ -1,16 +1,33 @@
 import { z } from "zod";
 import { ChatResponseSchema } from "./engine.js";
+import { CHAT_ATTACHMENT_LIMITS } from "./chat-attachment.js";
+
+const AttachmentIdsSchema = z
+  .array(z.string().min(1))
+  .max(CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage)
+  .refine((value) => new Set(value).size === value.length, "attachment ids must be unique");
 
 export const QueuedChatMessageSchema = z
   .object({
     queuedMessageId: z.string().min(1),
+    messageId: z.string().min(1),
     submissionId: z.string().min(1),
     text: z.string().refine((value) => /\S/u.test(value)),
     kind: z.enum(["ordinary", "slash-command"]),
+    attachmentIds: AttachmentIdsSchema,
     position: z.number().int().nonnegative(),
     restored: z.boolean(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.kind === "slash-command" && value.attachmentIds.length !== 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["attachmentIds"],
+        message: "slash commands are text-only",
+      });
+    }
+  });
 export type QueuedChatMessage = z.infer<typeof QueuedChatMessageSchema>;
 
 export const ChatQueueRecoveryClaimSchema = z
@@ -33,6 +50,7 @@ export const ChatQueueSnapshotSchema = z
   .strict()
   .superRefine((value, context) => {
     const ids = new Set<string>();
+    const messageIds = new Set<string>();
     const submissions = new Set<string>();
     value.items.forEach((item, index) => {
       if (item.position !== index) {
@@ -56,7 +74,15 @@ export const ChatQueueSnapshotSchema = z
           message: "submission ids must be unique",
         });
       }
+      if (messageIds.has(item.messageId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index, "messageId"],
+          message: "message ids must be unique",
+        });
+      }
       ids.add(item.queuedMessageId);
+      messageIds.add(item.messageId);
       submissions.add(item.submissionId);
     });
     if (value.retryRequired !== undefined) {
@@ -82,8 +108,18 @@ export const EnqueueChatMessageRequestSchema = z
     chatId: z.string().min(1),
     submissionId: z.string().min(1),
     text: z.string().refine((value) => /\S/u.test(value)),
+    attachmentIds: AttachmentIdsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (/^\s*\//u.test(value.text) && (value.attachmentIds?.length ?? 0) !== 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["attachmentIds"],
+        message: "slash commands are text-only",
+      });
+    }
+  });
 export type EnqueueChatMessageRequest = z.infer<typeof EnqueueChatMessageRequestSchema>;
 
 export const GetChatQueueRequestSchema = z.object({ chatId: z.string().min(1) }).strict();
