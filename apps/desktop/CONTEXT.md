@@ -61,7 +61,7 @@ The in-app process by which an athlete replaces an unverified envelope with a ne
 _Avoid_: Keychain recovery, password reset
 
 **Credential reset**:
-The explicit in-app process that removes every Enduragent-managed credential, every credential envelope, and the shared encryption key when recovery is impossible or unwanted. It leaves Electron's old `safeStorage` support item untouched.
+The explicit in-app process that removes every Enduragent-managed credential, every credential envelope, and the shared encryption key when recovery cannot succeed or is unwanted. It leaves Electron's old `safeStorage` support item untouched.
 _Avoid_: Keychain reset, reset to defaults
 
 **Recovery status**:
@@ -83,7 +83,7 @@ The installer `.exe`, its `.blockmap`, and `latest.yml`; produced by `windows-re
 _Avoid_: Windows bundle, release files
 
 **Authenticode pending mode**:
-`WINDOWS_AUTHENTICODE_PENDING` = `pending-w19`, the only accepted `--authenticode` value until W19 lands.
+`WINDOWS_AUTHENTICODE_PENDING` = `pending-w19`, the only accepted `--authenticode` value until the first signed release.
 _Avoid_: Unsigned mode, signing bypass
 
 **Windows package inventory**:

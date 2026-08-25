@@ -136,7 +136,7 @@ Never commit bytes from a real athlete recording. Gate tests use only fabricated
 
 ## Telegram allowlist file
 
-The bot enforces a per-user-ID allowlist via `~/.cycling-coach/allowed-senders.json` (mode `0600`). Schema and validation live in `packages/core/src/channels/allowed-senders.ts`. CLI mutations (`add-sender`, `remove-sender`) acquire a PID lockfile at `~/.cycling-coach/.allowed-senders.lock` so concurrent invocations serialize cleanly. **Do not edit `allowed-senders.json` by hand while the bot is running** — the bot re-reads it on every inbound message, but a hand-edit during a write will lose updates. Use the CLI subcommands instead.
+The bot enforces a per-user-ID allowlist via `~/.cycling-coach/allowed-senders.json` (mode `0600`). Schema and validation live in `packages/core/src/channels/allowed-senders.ts`. CLI mutations (`add-sender`, `remove-sender`) acquire a PID lockfile at `~/.cycling-coach/.allowed-senders.lock` so concurrent invocations serialize cleanly. **Do not edit `allowed-senders.json` by hand while the bot is running** — the bot re-reads it on every inbound message, but a hand-edit during a write loses updates. Use the CLI subcommands instead.
 
 `dmPolicy: "open"` is rejected when read from the file (defense in depth — only settable via the `CYCLING_COACH_DM_POLICY=open` env var, intended for debugging). The setup wizard never offers it.
 
@@ -148,7 +148,7 @@ Calendar-based for npm-published binaries: stable, SemVer-compatible UTC calenda
 
 Changesets-driven and CI-automated. Contributors do **not** create tags or GitHub Releases by hand. npm packages use `<package>@<version>` tags; the independent desktop app uses `enduragent-desktop@<SemVer>`.
 
-1. **Add a changeset to your PR.** Run `pnpm exec changeset`, pick the affected publishable package(s), describe the change in athlete-readable language. Commit the resulting `.changeset/<slug>.md`. A PR with a user-visible change but no changeset will skip release — this is intentional, not a bug. The required patch/minor/major choice is overridden by the CalVer policy for binary packages.
+1. **Add a changeset to your PR.** Run `pnpm exec changeset`, pick the affected publishable package(s), describe the change in athlete-readable language. Commit the resulting `.changeset/<slug>.md`. A PR with a user-visible change but no changeset skips release — this is intentional, not a bug. The required patch/minor/major choice is overridden by the CalVer policy for binary packages.
 
    For user-visible changes, add a `User-facing: <one-sentence description>` line at the top of the changeset body — see `.changeset/README.md` for the convention. The bot's `/whatsnew` command surfaces only those lines to athletes; engineering details, hashes, and infra-only changesets stay in `CHANGELOG.md` for git history but never reach users.
 
@@ -174,7 +174,7 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 - Approve the single signing OTP with one phone tap.
 - Never build, repackage, or re-sign a Windows asset in CI.
 - Require every shipped Windows build to carry a valid Authenticode signature from `<PUBLISHER_NAME>`.
-- Treat `Open Source Developer` only as a possible certificate organisation field.
+- Do not put the certificate organisation field in shipped docs. The publisher line uses the `<PUBLISHER_NAME>` placeholder until the first signed release.
 - Never attach an unsigned installer to a GitHub release or the website.
 - Use unsigned CI builds only as test artifacts.
 - Keep `DESKTOP_UPDATE_PLATFORM_ACTIVATION` at `win32: false` until the first signed release and a signed N→N+1 update proof pass.
@@ -204,9 +204,9 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 - Require exactly `Enduragent-<version>-x64.exe`, `Enduragent-<version>-x64.exe.blockmap`, and `latest.yml` as the Windows envelope among the release assets.
 - Download only those three Windows assets in `verify-windows-envelope`.
 - Run `node apps/desktop/scripts/verify-windows-release.mjs <dir> --version <version> --authenticode pending-w19` against the downloaded envelope.
-- Print the `Authenticode verification pending W19` notice during verification.
-- Append `Windows assets verified: <installer sha256> (Authenticode verification pending W19)` to the release body only when `dry_run=false`.
+- Print the `Authenticode verification pending` notice during verification.
+- Append `Windows assets verified: <installer sha256> (Authenticode verification pending)` to the release body only when `dry_run=false`.
 - Never create, move, or delete a release, tag, or asset in `desktop-windows-release.yml`.
 - Leave uploaded assets in place when verification fails.
 - Remove failed Windows assets by hand before retrying.
-- Treat CI Authenticode verification as planned W19 work: `verify-windows-authenticode.ps1` will check the signature, chain, timestamp, and exact publisher DN.
+- CI does not verify Authenticode yet. The workflow prints a pending notice and appends the marker with the text `(Authenticode verification pending)`.
