@@ -1,0 +1,123 @@
+name: Desktop Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Frozen desktop SemVer already published for macOS
+        required: true
+        type: string
+      dry_run:
+        description: Verify only; never edit the release
+        type: boolean
+        default: true
+
+permissions: { contents: read }
+
+concurrency:
+  group: desktop-windows-release
+  cancel-in-progress: false
+
+jobs:
+  verify-windows-envelope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+      - name: Resolve release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          trap 'echo "::error::Failed to resolve Windows release"' ERR
+          if ! printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo '::error::Desktop version must be stable SemVer'
+            exit 1
+          fi
+          if ! RELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/enduragent-desktop@$VERSION"); then
+            echo '::error::Desktop release does not exist'
+            exit 1
+          fi
+          if [ "$(printf '%s' "$RELEASE" | jq -r '.draft')" != 'false' ] || \
+             [ "$(printf '%s' "$RELEASE" | jq -r '.prerelease')" != 'false' ]; then
+            echo '::error::Desktop release must be published and not prerelease'
+            exit 1
+          fi
+          EXPECTED=$(printf '%s\n' \
+            "Enduragent-$VERSION-x64.exe" \
+            "Enduragent-$VERSION-x64.exe.blockmap" \
+            latest.yml | LC_ALL=C sort)
+          ACTUAL=$(printf '%s' "$RELEASE" | jq -r --arg version "$VERSION" \
+            '.assets[].name | select(. == "Enduragent-\($version)-x64.exe" or . == "Enduragent-\($version)-x64.exe.blockmap" or . == "latest.yml")' | LC_ALL=C sort)
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo '::error::Windows release assets are incomplete'
+            exit 1
+          fi
+          RELEASE_ID=$(printf '%s' "$RELEASE" | jq -er '.id')
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+      - name: Download Windows assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/windows-release"
+          gh release download "enduragent-desktop@$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "$RUNNER_TEMP/windows-release" \
+            --pattern "Enduragent-$VERSION-x64.exe" \
+            --pattern "Enduragent-$VERSION-x64.exe.blockmap" \
+            --pattern latest.yml
+          test "$(ls -1 "$RUNNER_TEMP/windows-release" | LC_ALL=C sort)" = "$(printf '%s\n' "Enduragent-$VERSION-x64.exe" "Enduragent-$VERSION-x64.exe.blockmap" latest.yml | LC_ALL=C sort)"
+      - name: Verify Windows release envelope
+        id: verify
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node apps/desktop/scripts/verify-windows-release.mjs "$RUNNER_TEMP/windows-release" --version "$VERSION" --authenticode pending-w19 | tee "$RUNNER_TEMP/verify.out"
+          INSTALLER_SHA256=$(awk '/^Windows release envelope verified [0-9a-f]{64}$/{sha=$NF} END{if (sha == "") exit 1; print sha}' "$RUNNER_TEMP/verify.out")
+          echo "installer_sha256=$INSTALLER_SHA256" >> "$GITHUB_OUTPUT"
+      - name: Verify Authenticode (pending W19)
+        run: |
+          set -euo pipefail
+          echo "::notice::Authenticode verification pending W19 (apps/desktop/scripts/verify-windows-authenticode.ps1 does not exist yet); the installer signature was NOT verified"
+      - name: Mark Windows assets verified
+        if: ${{ inputs.dry_run == false }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+          INSTALLER_SHA256: ${{ steps.verify.outputs.installer_sha256 }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/release.json"
+          jq -j '.body // ""' "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/release-body.txt"
+          MARKER="Windows assets verified: $INSTALLER_SHA256 (Authenticode verification pending W19)"
+          if grep -Fxq "$MARKER" "$RUNNER_TEMP/release-body.txt"; then
+            exit 0
+          fi
+          printf '\n\n%s' "$MARKER" >> "$RUNNER_TEMP/release-body.txt"
+          jq -n --rawfile body "$RUNNER_TEMP/release-body.txt" '{body: $body}' > "$RUNNER_TEMP/release-patch.json"
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            --input "$RUNNER_TEMP/release-patch.json" >/dev/null
+      - name: Dry run summary
+        if: ${{ inputs.dry_run == true }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          echo "::notice::dry_run=true; release enduragent-desktop@$VERSION was verified but not marked"

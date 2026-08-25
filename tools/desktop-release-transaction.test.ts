@@ -22,12 +22,15 @@ import {
   assertPublishableAssets,
   assertRemoteAsset,
   inspectNpmAttestationClaims,
+  macosOwnedAssets,
   materializeDesktopPublicEnvelope,
   releaseFileNames,
+  resolveDesktopReleaseVersion,
   runDesktopLatestPromotionWithOutput,
   sealDesktopRelease,
   verifyNpmProvenanceBundle,
   verifyDesktopRelease,
+  windowsReleaseFileNames,
 } from "./desktop-release-transaction.js";
 
 const npmVersion = "2026.8.7";
@@ -530,5 +533,84 @@ describe("desktop release publication guards", () => {
       ),
     ).toThrow("changed");
     expect(() => assertLatestCas(desktopVersion, observed, observed, "0.1.8")).toThrow("monotonic");
+  });
+});
+
+describe("windows release assets", () => {
+  function asset(name: string) {
+    return {
+      id: 1,
+      name,
+      size: 1,
+      digest: "sha256:synthetic",
+      state: "uploaded" as const,
+      url: `https://api.example.test/assets/${name}`,
+      browser_download_url: `https://downloads.example.test/${name}`,
+    };
+  }
+
+  function release(assets: readonly ReturnType<typeof asset>[]) {
+    return {
+      id: 123,
+      tag_name: `enduragent-desktop@${desktopVersion}`,
+      draft: false,
+      prerelease: false,
+      assets,
+      upload_url: "https://uploads.example.test/release",
+      body: "synthetic release",
+    };
+  }
+
+  it("returns the exact Windows release triple", () => {
+    expect(windowsReleaseFileNames("0.1.7")).toEqual([
+      "Enduragent-0.1.7-x64.exe",
+      "Enduragent-0.1.7-x64.exe.blockmap",
+      "latest.yml",
+    ]);
+  });
+
+  it("allows the exact same-version Windows triple and still rejects stale assets", async () => {
+    writeEnvelope();
+    const manifest = await sealDesktopRelease(directory, binding);
+    const macos = manifest.files.map((file) => ({ name: file.name }));
+    const windows = windowsReleaseFileNames(desktopVersion).map((name) => ({ name }));
+    expect(() => assertPublishableAssets([...macos, ...windows], manifest)).not.toThrow();
+    expect(() => assertPublishableAssets([...macos, { name: "old.zip" }], manifest)).toThrow(
+      "stale",
+    );
+    expect(() =>
+      assertPublishableAssets(
+        [...macos, ...windowsReleaseFileNames("0.1.6").map((name) => ({ name }))],
+        manifest,
+      ),
+    ).toThrow("stale");
+  });
+
+  it("strips exactly the same-version Windows triple from macOS-owned assets", () => {
+    const macos = releaseFileNames(desktopVersion).map(asset);
+    const windows = windowsReleaseFileNames(desktopVersion).map(asset);
+    const otherWindows = windowsReleaseFileNames("0.1.6").map(asset);
+    expect(macosOwnedAssets([...macos, ...windows, ...otherWindows], desktopVersion)).toEqual([
+      ...macos,
+      ...otherWindows.slice(0, 2),
+    ]);
+  });
+
+  it.each([
+    ["no", 0],
+    ["a partial set of", 1],
+    ["a complete set of", 3],
+  ] as const)("resolves a complete macOS release with %s Windows assets", (_label, count) => {
+    const macos = releaseFileNames(desktopVersion).map(asset);
+    const windows = windowsReleaseFileNames(desktopVersion).map(asset);
+    expect(resolveDesktopReleaseVersion(release([...macos, ...windows.slice(0, count)]))).toBe(
+      desktopVersion,
+    );
+  });
+
+  it("rejects a foreign Windows triple", () => {
+    const macos = releaseFileNames(desktopVersion).map(asset);
+    const otherWindows = windowsReleaseFileNames("0.1.6").map(asset);
+    expect(resolveDesktopReleaseVersion(release([...macos, ...otherWindows]))).toBeNull();
   });
 });
