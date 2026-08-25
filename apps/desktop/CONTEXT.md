@@ -68,6 +68,32 @@ _Avoid_: Keychain reset, reset to defaults
 The current cross-vault account of encryption availability and slots that require credential recovery. It describes live credential state, not a startup snapshot.
 _Avoid_: Recovery snapshot, startup status
 
+## Windows release and updater
+
+**Release marker**:
+`enduragentDesktopRelease: true` in the packaged `package.json`; required by `isDesktopUpdateReleaseEligible`.
+_Avoid_: Release flag, Windows marker
+
+**Platform activation**:
+`DESKTOP_UPDATE_PLATFORM_ACTIVATION` (`darwin: true`, `win32: false`); the only switch that turns Windows update checks on. `DESKTOP_UPDATE_SUPPORTED_PLATFORMS` lists the platforms the updater knows.
+_Avoid_: Platform support, supported-platform switch
+
+**Windows release envelope**:
+The installer `.exe`, its `.blockmap`, and `latest.yml`; produced by `windows-release-plan.mjs`, verified by `verify-windows-release.mjs`, uploaded by `upload-windows-release.mjs`, and round-trip-checked by `verify-windows-updater-round-trip.mjs`.
+_Avoid_: Windows bundle, release files
+
+**Authenticode pending mode**:
+`WINDOWS_AUTHENTICODE_PENDING` = `pending-w19`, the only accepted `--authenticode` value until W19 lands.
+_Avoid_: Unsigned mode, signing bypass
+
+**Windows package inventory**:
+The exact application, resource, and asar inventories checked by `verify-windows-package.mjs`.
+_Avoid_: Package contents, file list
+
+**Windows user data directory**:
+`WINDOWS_USER_DATA_DIRECTORY_NAME` under `%LOCALAPPDATA%`; it resolves to `%LOCALAPPDATA%\Enduragent` and survives uninstall.
+_Avoid_: Install directory, application directory
+
 ## Relationships
 
 - A **Vault** holds **Slot**s; each configured slot has exactly one **Envelope**.
@@ -83,6 +109,11 @@ _Avoid_: Recovery snapshot, startup status
 - When the encryption key is missing and only unverified envelopes survive, **Credential recovery** may replace one slot while preserving every other artifact.
 - An **Orphan encryption key** may be removed without losing a credential.
 - **Recovery status** is derived from both vaults whenever it is requested.
+- The **Release marker** admits a packaged build to `isDesktopUpdateReleaseEligible`; **Platform activation** independently decides whether update checks run on the current platform.
+- A **Windows release envelope** is produced, verified, uploaded, and round-trip-checked by its named scripts.
+- **Authenticode pending mode** does not authorise an unsigned installer for a GitHub release or the website.
+- The **Windows package inventory** fixes the application, resource, and asar contents accepted by package verification.
+- The athlete removes the **Windows user data directory** by hand when retained data must be erased after uninstall.
 
 ## Example dialogue
 

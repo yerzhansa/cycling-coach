@@ -74,12 +74,28 @@ the rewritten session lands on the same calendar before you have changed into ki
 ### macOS app
 
 [**Download for macOS**](https://enduragent.icu/download/mac) — Apple Silicon, signed and
-notarized. Download, chat, connect. No Windows or Linux desktop build yet.
+notarized. Download, chat, connect. Linux has no desktop build; see the Windows subsection below.
 
 In **Settings → Telegram** you can pair the app with a bot of your own: ask BotFather for a token,
 paste it once, and the same coach answers in Telegram with your athlete memory, training data and
 plans shared. It replies while the app is running and your Mac is awake — for a bot that answers
 around the clock, see below.
+
+### Windows app
+
+[**Download for Windows**](https://enduragent.icu/download/windows) — available with the first
+signed release, for Windows 11 x64 only. Windows builds ship only with an Authenticode signature
+from `<PUBLISHER_NAME>`. A valid signature under a new publisher identity can still trigger a
+SmartScreen prompt while its reputation builds.
+
+The per-user one-click installer adds a Start Menu shortcut without asking for administrator
+access; it does not add a desktop shortcut. Closing the main window hides it while Enduragent keeps
+running in the tray; quit it explicitly from the tray menu.
+
+Uninstalling keeps your data in `%LOCALAPPDATA%\Enduragent`; remove that folder by hand to erase
+it. Windows update checks use the same generic GitHub release feed as macOS and switch on with the
+first signed release. Windows assets can arrive later than macOS, and Windows may lag or skip a
+version; release notes say which platforms shipped.
 
 ### Terminal
 

@@ -161,3 +161,52 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 **If a release fails partway**, re-run the matching workflow with its existing tag: `release.yml` for npm, or `desktop-release.yml` for desktop (the version-pr run's failed step prints the exact dispatch command). A rerun never creates or moves a tag.
 
 `tools/bump-binaries-to-calver.ts` runs after `changeset version`. It reads the committed pre-Changesets version and all occupied npm versions, then overrides binary versions with the next stable release number for the current UTC month. It rewrites only the new matching changelog header; historical entries are immutable.
+
+## Windows release (operator)
+
+- Keep `desktop-release.yml` macOS-only and fully automatic.
+- Never make `desktop-release.yml` wait for Windows.
+- Use one GitHub release per desktop version.
+- Append Windows assets after the macOS release.
+- Allow Windows to lag or skip a desktop version.
+- State which platforms shipped in the release notes.
+- Build and sign in one `electron-builder` run on the operator's Windows VM inside an open SimplySign session.
+- Approve the single signing OTP with one phone tap.
+- Never build, repackage, or re-sign a Windows asset in CI.
+- Require every shipped Windows build to carry a valid Authenticode signature from `<PUBLISHER_NAME>`.
+- Treat `Open Source Developer` only as a possible certificate organisation field.
+- Never attach an unsigned installer to a GitHub release or the website.
+- Use unsigned CI builds only as test artifacts.
+- Keep `DESKTOP_UPDATE_PLATFORM_ACTIVATION` at `win32: false` until the first signed release and a signed N→N+1 update proof pass.
+- Upload only `Enduragent-<x.y.z>-x64.exe`, `Enduragent-<x.y.z>-x64.exe.blockmap`, and `latest.yml` from the repository root on the signing host, using absolute paths:
+
+  ```bash
+  node apps/desktop/scripts/upload-windows-release.mjs --version <x.y.z> --directory <absolute-artifact-dir> --commit <release-commit-sha> --authenticode pending-w19 --record <absolute-path>/windows-release-<x.y.z>.json
+  ```
+
+- Omit `--record` only when no local JSON record is required.
+- Leave `--repo` unset to use `yerzhansa/enduragent`.
+- Let `upload-windows-release.mjs` run `verify-windows-release.mjs` locally.
+- Stop the upload when `enduragent-desktop@<x.y.z>` is missing or still a draft.
+- Refuse the upload when any Windows envelope asset already exists on the release.
+- Upload the verified envelope through `gh-personal release upload`.
+- Re-read the release after upload and fail unless all three assets are present.
+- Trigger the separate verification workflow from the repository root:
+
+  ```bash
+  gh-personal workflow run desktop-windows-release.yml -f version=<x.y.z> -f dry_run=false
+  ```
+
+- Leave `dry_run` at its `true` default to verify without editing the release.
+- Pass `dry_run=false` only when the release body must record the completed verification.
+- Keep `desktop-windows-release.yml` to its single `verify-windows-envelope` job on `ubuntu-latest`.
+- Reject a non-stable SemVer or a missing, draft, or prerelease `enduragent-desktop@<version>` release in `verify-windows-envelope`.
+- Require exactly `Enduragent-<version>-x64.exe`, `Enduragent-<version>-x64.exe.blockmap`, and `latest.yml` as the Windows envelope among the release assets.
+- Download only those three Windows assets in `verify-windows-envelope`.
+- Run `node apps/desktop/scripts/verify-windows-release.mjs <dir> --version <version> --authenticode pending-w19` against the downloaded envelope.
+- Print the `Authenticode verification pending W19` notice during verification.
+- Append `Windows assets verified: <installer sha256> (Authenticode verification pending W19)` to the release body only when `dry_run=false`.
+- Never create, move, or delete a release, tag, or asset in `desktop-windows-release.yml`.
+- Leave uploaded assets in place when verification fails.
+- Remove failed Windows assets by hand before retrying.
+- Treat CI Authenticode verification as planned W19 work: `verify-windows-authenticode.ps1` will check the signature, chain, timestamp, and exact publisher DN.
