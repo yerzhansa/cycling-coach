@@ -163,6 +163,108 @@ describe("Plan view adapter", () => {
     expect(subject.surface.hydration.status).toBe("ready");
   });
 
+  it("saves manual FTP and automatically returns to the Plan coach", async () => {
+    const required = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S003",
+      projection: "coach",
+      data: planCoachData({
+        ftp: {
+          status: "required",
+          manual: null,
+          intervalsFtp: null,
+          intervalsEftp: null,
+          usedSource: null,
+          usedWatts: null,
+          conflict: false,
+          error: null,
+        },
+      }),
+    });
+    const accepted = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S062",
+      projection: "coach",
+      data: planCoachData({
+        ftp: {
+          status: "accepted",
+          manual: { watts: 282, refreshedAtMs: 1 },
+          intervalsFtp: null,
+          intervalsEftp: null,
+          usedSource: "manual",
+          usedWatts: 282,
+          conflict: false,
+          error: null,
+        },
+      }),
+    });
+    const resumed = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S016",
+      projection: "coach",
+      data: planCoachData({ ready: true }),
+    });
+    const getPlanState = vi
+      .fn<() => Promise<GetPlanStateRpcResult>>()
+      .mockResolvedValueOnce({ status: "ready", state: required })
+      .mockResolvedValueOnce({ status: "ready", state: resumed });
+    const subject = harness({
+      ids: ["ftp-command"],
+      getPlanState,
+      executePlanTransition: async () => ({ status: "completed", state: accepted }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.saveFtp(282);
+    await settle();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T04",
+      commandId: "ftp-command",
+      conversationId: "00000000000000000000000001",
+      source: "manual",
+      watts: 282,
+    });
+    expect(getPlanState).toHaveBeenCalledTimes(2);
+    expect(subject.surface.hydration).toEqual({ status: "ready", state: resumed });
+  });
+
+  it("refreshes all Intervals FTP sources through the generic PL-T04 command", async () => {
+    const initial = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S003",
+      projection: "coach",
+      data: planCoachData({
+        ftp: {
+          status: "required",
+          manual: null,
+          intervalsFtp: null,
+          intervalsEftp: null,
+          usedSource: null,
+          usedWatts: null,
+          conflict: false,
+          error: null,
+        },
+      }),
+    });
+    const subject = harness({
+      ids: ["refresh-command"],
+      getPlanState: async () => ({ status: "ready", state: initial }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.refreshFtp();
+    await settle();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T04",
+      commandId: "refresh-command",
+      conversationId: "00000000000000000000000001",
+      source: "intervals",
+      watts: null,
+    });
+  });
+
   it("keeps a rejected transition inside Plan and retries it with a new command", async () => {
     const subject = harness({
       ids: ["rejected-command", "retry-command"],

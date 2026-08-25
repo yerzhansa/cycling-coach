@@ -76,6 +76,7 @@ describe("engine scaffold", () => {
       "demoteSummaryHeadings",
       "ensureClaudeCliReady",
       "ensureCodexAgentReady",
+      "executePlanFtpTransition",
       "extractAccountId",
       "failRaceCourseRecalculation",
       "formatCompactionNote",

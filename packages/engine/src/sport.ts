@@ -248,3 +248,9 @@ export {
   createPureCoreIntervalsTools,
 } from "./sport/platform-tools.js";
 export { resolveUserTimezone, todayInTZ } from "./sport/user-time.js";
+export type {
+  PlanFtpAdapter,
+  PlanFtpSnapshot,
+  PlanFtpSource,
+  PlanFtpSourceValue,
+} from "./planning/ftp.js";

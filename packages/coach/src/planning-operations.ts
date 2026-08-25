@@ -4,6 +4,7 @@ import {
   GetPlanStateRpcParamsSchema,
   GetPlanStateRpcResultSchema,
   PlanDraftProjectionSchema,
+  PlanFtpProjectionSchema,
   PlanProgressEventSchema,
   type ChatQueueRunResult,
   type ChatQueueSnapshot,
@@ -12,11 +13,17 @@ import {
   type ExecutePlanTransitionRpcResult,
   type PlanDraftProjection,
   type PlanError,
+  type PlanFtpProjection,
   type PlanProgressEvent,
   type PlanReadModel,
   type PlanningOperations,
   type TurnEvent,
 } from "@enduragent/coach-contract";
+import {
+  executePlanFtpTransition,
+  type PlanFtpAdapter,
+  type PlanFtpSnapshot,
+} from "@enduragent/engine";
 import { buildPlanLifecycleReadModel } from "./planning-lifecycle.js";
 import {
   createPlanConversationRepository,
@@ -56,6 +63,18 @@ const PERSISTENCE_FAILED: PlanError = Object.freeze({
   retryable: true,
 });
 
+const FTP_REFRESH_FAILED: PlanError = Object.freeze({
+  code: "provider-failed",
+  message: "Couldn’t refresh Intervals. Try again.",
+  retryable: true,
+});
+
+const FTP_SAVE_FAILED: PlanError = Object.freeze({
+  code: "persistence-failed",
+  message: "FTP couldn’t be saved. Try again.",
+  retryable: true,
+});
+
 export interface PlanDraftBuild {
   readonly plan: PlanRecord;
   readonly workouts: readonly PlanWorkoutRecord[];
@@ -86,6 +105,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly plans?: PlanRepository;
   readonly draftBuilder?: PlanDraftBuilder;
   readonly isReady?: (input: PlanReadinessInput) => boolean | Promise<boolean>;
+  readonly ftp?: PlanFtpAdapter;
 }
 
 function createSerializedLane(): <T>(operation: () => Promise<T>) => Promise<T> {
@@ -112,6 +132,37 @@ function draftProjection(value: PlanDraftRevisionRecord | undefined): PlanDraftP
     revision: value.revision,
     status: value.status,
     snapshot: snapshot(value.snapshotJson),
+  });
+}
+
+type FtpScenario = "PL-S057" | "PL-S058" | "PL-S059" | "PL-S060" | "PL-S061" | "PL-S062";
+
+function ftpProjection(
+  value: PlanFtpSnapshot,
+  scenario: FtpScenario | undefined,
+  error: PlanError | null,
+): PlanFtpProjection {
+  const status =
+    scenario === "PL-S058"
+      ? "no-source"
+      : scenario === "PL-S059"
+        ? "refresh-failed"
+        : scenario === "PL-S060"
+          ? "conflict"
+          : value.usedSource === null
+            ? "required"
+            : value.conflict
+              ? "conflict"
+              : "accepted";
+  return PlanFtpProjectionSchema.parse({
+    status,
+    manual: value.manual,
+    intervalsFtp: value.intervalsFtp,
+    intervalsEftp: value.intervalsEftp,
+    usedSource: value.usedSource,
+    usedWatts: value.usedWatts,
+    conflict: value.conflict,
+    error: status === "refresh-failed" ? error : null,
   });
 }
 
@@ -146,7 +197,10 @@ export function createPlanningOperations(
   const plans = dependencies.plans ?? createPlanRepository(input.context.store);
   const enqueue = createSerializedLane();
 
-  const read = async (): Promise<PlanReadModel> => {
+  const read = async (
+    ftpScenario?: FtpScenario,
+    ftpError: PlanError | null = null,
+  ): Promise<PlanReadModel> => {
     const conversation = await conversations.readLatestOpenConversation();
     if (conversation === undefined) {
       return buildPlanLifecycleReadModel({
@@ -159,7 +213,7 @@ export function createPlanningOperations(
       });
     }
     const chatId = `plan:${conversation.id}`;
-    const [turns, draft, queue, decision] = await Promise.all([
+    const [turns, draft, queue, decision, ftp] = await Promise.all([
       conversations.readTurns(conversation.id),
       conversations.readLatestDraftRevision(conversation.id),
       input.engine.getChatQueue?.({ chatId }).catch(() => EMPTY_QUEUE) ?? EMPTY_QUEUE,
@@ -167,6 +221,7 @@ export function createPlanningOperations(
         .getCoachDecision({ chatId })
         .then((result) => result.decision)
         .catch(() => null),
+      dependencies.ftp?.read(),
     ]);
     const ready = await (dependencies.isReady?.({ conversation, turns, draft }) ??
       Promise.resolve(false));
@@ -182,6 +237,8 @@ export function createPlanningOperations(
       queue,
       decision,
       draft: draftProjection(draft),
+      ...(ftp === undefined ? {} : { ftp: ftpProjection(ftp, ftpScenario, ftpError) }),
+      ...(ftpScenario === undefined ? {} : { ftpScenario }),
     });
   };
 
@@ -361,8 +418,15 @@ export function createPlanningOperations(
     });
   };
 
-  const reject = async (error: PlanError): Promise<ExecutePlanTransitionRpcResult> =>
-    ExecutePlanTransitionRpcResultSchema.parse({ status: "rejected", error, state: await read() });
+  const reject = async (
+    error: PlanError,
+    ftpScenario?: FtpScenario,
+  ): Promise<ExecutePlanTransitionRpcResult> =>
+    ExecutePlanTransitionRpcResultSchema.parse({
+      status: "rejected",
+      error,
+      state: await read(ftpScenario, error),
+    });
 
   return {
     async getPlanState(request) {
@@ -430,6 +494,53 @@ export function createPlanningOperations(
               total: 1,
             });
             return reject(error === UNAVAILABLE ? UNAVAILABLE : PROVIDER_FAILED);
+          }
+        }
+        if (command.transitionId === "PL-T04") {
+          if (dependencies.ftp === undefined) return reject(UNAVAILABLE);
+          const conversation = await conversations.readConversation(command.conversationId);
+          if (conversation === undefined || conversation.status !== "open")
+            return reject(UNAVAILABLE);
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total: 1,
+          });
+          try {
+            const ftp = await executePlanFtpTransition(dependencies.ftp, {
+              source: command.source,
+              watts: command.watts,
+            });
+            const scenario: FtpScenario =
+              ftp.usedSource === null ? "PL-S058" : ftp.conflict ? "PL-S060" : "PL-S062";
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: 1,
+              total: 1,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read(scenario),
+            });
+          } catch {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total: 1,
+            });
+            return command.source === "manual"
+              ? reject(FTP_SAVE_FAILED, "PL-S061")
+              : reject(FTP_REFRESH_FAILED, "PL-S059");
           }
         }
         if (command.transitionId === "PL-T06" || command.transitionId === "PL-T07") {

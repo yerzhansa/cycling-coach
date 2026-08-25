@@ -266,6 +266,78 @@ export const PlanDraftProjectionSchema = z
   .strict();
 export type PlanDraftProjection = z.infer<typeof PlanDraftProjectionSchema>;
 
+export const PlanFtpSourceValueSchema = z
+  .object({
+    watts: z.number().int().min(1).max(9_999),
+    refreshedAtMs: z.number().int().nonnegative(),
+  })
+  .strict();
+export type PlanFtpSourceValue = z.infer<typeof PlanFtpSourceValueSchema>;
+
+export const PlanFtpProjectionSchema = z
+  .object({
+    status: z.enum(["required", "no-source", "refresh-failed", "conflict", "accepted"]),
+    manual: PlanFtpSourceValueSchema.nullable(),
+    intervalsFtp: PlanFtpSourceValueSchema.nullable(),
+    intervalsEftp: PlanFtpSourceValueSchema.nullable(),
+    usedSource: z.enum(["manual", "intervals-ftp", "intervals-eftp"]).nullable(),
+    usedWatts: z.number().int().min(1).max(9_999).nullable(),
+    conflict: z.boolean(),
+    error: PlanErrorSchema.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if ((value.usedSource === null) !== (value.usedWatts === null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["usedWatts"],
+        message: "used FTP source and watts must appear together",
+      });
+    }
+    const selected =
+      value.usedSource === "manual"
+        ? value.manual
+        : value.usedSource === "intervals-ftp"
+          ? value.intervalsFtp
+          : value.usedSource === "intervals-eftp"
+            ? value.intervalsEftp
+            : null;
+    if (value.usedSource !== null && selected === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["usedSource"],
+        message: "used FTP source must be available",
+      });
+    }
+    if (selected !== null && selected.watts !== value.usedWatts) {
+      context.addIssue({
+        code: "custom",
+        path: ["usedWatts"],
+        message: "used FTP watts must match the selected source",
+      });
+    }
+    if ((value.status === "refresh-failed") !== (value.error !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["error"],
+        message: "only a failed FTP refresh carries an error",
+      });
+    }
+    if (
+      ((value.status === "required" || value.status === "no-source") &&
+        value.usedSource !== null) ||
+      (value.status === "accepted" && (value.usedSource === null || value.conflict)) ||
+      (value.status === "conflict" && (value.usedSource === null || !value.conflict))
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "FTP status must match source availability and conflict state",
+      });
+    }
+  });
+export type PlanFtpProjection = z.infer<typeof PlanFtpProjectionSchema>;
+
 export const PlanCoachProjectionDataSchema = z
   .object({
     conversationId: z.string().min(1),
@@ -277,6 +349,7 @@ export const PlanCoachProjectionDataSchema = z
     queue: ChatQueueSnapshotSchema,
     decision: CoachDecisionReadModelSchema.nullable(),
     draft: PlanDraftProjectionSchema.nullable(),
+    ftp: PlanFtpProjectionSchema.nullable().optional(),
   })
   .strict();
 export type PlanCoachProjectionData = z.infer<typeof PlanCoachProjectionDataSchema>;
@@ -361,7 +434,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       transitionId: z.literal("PL-T04"),
       commandId: CommandIdSchema,
       conversationId: EntityIdSchema,
-      source: z.enum(["manual", "intervals-ftp", "intervals-eftp"]),
+      source: z.enum(["manual", "intervals", "intervals-ftp", "intervals-eftp"]),
       watts: z.number().int().min(1).max(9_999).nullable(),
     })
     .strict()

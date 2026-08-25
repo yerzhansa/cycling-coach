@@ -49,6 +49,8 @@ function stubPlanActions(): PlanActions {
     retryQueuedCoachTurn: vi.fn(),
     answerCoachDecision: vi.fn(),
     skipCoachDecision: vi.fn(),
+    saveFtp: vi.fn(),
+    refreshFtp: vi.fn(),
     createDraft: vi.fn(),
     updateDraft: vi.fn(),
     openDiscardConfirmation: vi.fn(),

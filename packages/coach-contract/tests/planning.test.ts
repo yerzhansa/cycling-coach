@@ -4,6 +4,7 @@ import {
   GetPlanStateRpcResultSchema,
   PLAN_TRANSITION_IDS,
   PlanAttentionSchema,
+  PlanFtpProjectionSchema,
   PlanHydrationStateSchema,
   PlanProgressEventSchema,
   PlanScenarioIdSchema,
@@ -166,6 +167,48 @@ describe("planning contract", () => {
         source: "intervals-ftp",
         watts: 282,
       }).success,
+    ).toBe(false);
+    expect(
+      PlanTransitionCommandSchema.safeParse({
+        transitionId: "PL-T04",
+        commandId,
+        conversationId,
+        source: "intervals",
+        watts: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("keeps selected FTP source, value, conflicts, and refresh failures coherent", () => {
+    const accepted = {
+      status: "accepted" as const,
+      manual: { watts: 282, refreshedAtMs: 1 },
+      intervalsFtp: { watts: 282, refreshedAtMs: 2 },
+      intervalsEftp: null,
+      usedSource: "manual" as const,
+      usedWatts: 282,
+      conflict: false,
+      error: null,
+    };
+    expect(PlanFtpProjectionSchema.parse(accepted)).toEqual(accepted);
+    expect(PlanFtpProjectionSchema.safeParse({ ...accepted, usedWatts: 278 }).success).toBe(false);
+    expect(
+      PlanFtpProjectionSchema.safeParse({
+        ...accepted,
+        status: "conflict",
+        intervalsFtp: { watts: 278, refreshedAtMs: 2 },
+        conflict: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      PlanFtpProjectionSchema.safeParse({
+        ...accepted,
+        status: "refresh-failed",
+        error: { code: "provider-failed", message: "Refresh failed", retryable: true },
+      }).success,
+    ).toBe(true);
+    expect(
+      PlanFtpProjectionSchema.safeParse({ ...accepted, status: "accepted", error: {} }).success,
     ).toBe(false);
   });
 

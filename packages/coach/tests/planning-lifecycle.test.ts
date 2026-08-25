@@ -22,6 +22,68 @@ function build(input: Partial<Parameters<typeof buildPlanLifecycleReadModel>[0]>
 }
 
 describe("Plan lifecycle projection", () => {
+  it("blocks Draft creation until an FTP source is available", () => {
+    const ftp = {
+      status: "required" as const,
+      manual: null,
+      intervalsFtp: null,
+      intervalsEftp: null,
+      usedSource: null,
+      usedWatts: null,
+      conflict: false,
+      error: null,
+    };
+    const blocked = build({ readyToCreateDraft: true, ftp });
+    expect(blocked).toMatchObject({ scenarioId: "PL-S003", projection: "coach" });
+    expect(blocked.transitions.map((transition) => transition.transitionId)).not.toContain(
+      "PL-T06",
+    );
+    expect(
+      build({
+        readyToCreateDraft: true,
+        ftp: {
+          ...ftp,
+          status: "accepted",
+          manual: { watts: 282, refreshedAtMs: 1 },
+          usedSource: "manual",
+          usedWatts: 282,
+        },
+      }),
+    ).toMatchObject({ scenarioId: "PL-S016" });
+  });
+
+  it("projects FTP refresh, conflict, failure, and accepted return states", () => {
+    const ftp = {
+      status: "accepted" as const,
+      manual: { watts: 282, refreshedAtMs: 1 },
+      intervalsFtp: { watts: 282, refreshedAtMs: 2 },
+      intervalsEftp: null,
+      usedSource: "manual" as const,
+      usedWatts: 282,
+      conflict: false,
+      error: null,
+    };
+    expect(build({ ftp, ftpScenario: "PL-S057" })).toMatchObject({
+      scenarioId: "PL-S057",
+      title: "Refreshing Intervals",
+    });
+    expect(
+      build({
+        ftp: {
+          ...ftp,
+          status: "conflict",
+          intervalsFtp: { watts: 278, refreshedAtMs: 2 },
+          conflict: true,
+        },
+        ftpScenario: "PL-S060",
+      }),
+    ).toMatchObject({ scenarioId: "PL-S060", title: "FTP source selected" });
+    expect(build({ ftp, ftpScenario: "PL-S062" })).toMatchObject({
+      scenarioId: "PL-S062",
+      title: "FTP accepted",
+    });
+  });
+
   it("keeps the dedicated conversation available from intake through readiness", () => {
     expect(build()).toMatchObject({
       scenarioId: "PL-S017",

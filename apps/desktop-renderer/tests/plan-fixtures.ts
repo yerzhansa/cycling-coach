@@ -4,6 +4,7 @@ import type {
   PlanAttention,
   PlanDraftProjection,
   PlanError,
+  PlanFtpProjection,
   PlanProjectionKind,
   PlanReadModel,
 } from "@enduragent/coach-contract";
@@ -79,6 +80,7 @@ export function planCoachData(
       readonly role: "athlete" | "coach";
       readonly text: string;
     }[];
+    readonly ftp?: PlanFtpProjection | null;
   } = {},
 ): PlanReadModel["data"] {
   return {
@@ -98,5 +100,6 @@ export function planCoachData(
     queue: input.queue ?? { schemaVersion: 1, revision: 0, items: [] },
     decision: input.decision ?? null,
     draft: input.draft ?? null,
+    ...(input.ftp === undefined ? {} : { ftp: input.ftp }),
   };
 }

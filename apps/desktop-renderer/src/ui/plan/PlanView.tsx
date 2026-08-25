@@ -1,6 +1,10 @@
-import { CheckCircle2, LoaderCircle, TriangleAlert } from "lucide-react";
+import { CheckCircle2, LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
 import { useRef, useState, type FormEvent, type ReactElement } from "react";
-import { PlanCoachProjectionDataSchema } from "@enduragent/coach-contract";
+import {
+  PlanCoachProjectionDataSchema,
+  type PlanFtpProjection,
+  type PlanFtpSourceValue,
+} from "@enduragent/coach-contract";
 import { Button } from "../../components/ui/button.js";
 import {
   Dialog,
@@ -163,6 +167,184 @@ function PlanQueue(): ReactElement | null {
   );
 }
 
+const FTP_SCENARIOS = new Set([
+  "PL-S003",
+  "PL-S057",
+  "PL-S058",
+  "PL-S059",
+  "PL-S060",
+  "PL-S061",
+  "PL-S062",
+]);
+
+function ftpSourceCopy(value: PlanFtpSourceValue | null, empty: string): string {
+  if (value === null) return empty;
+  const refreshed = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(value.refreshedAtMs);
+  return `${value.watts} W · ${refreshed}`;
+}
+
+function FtpSourceRow(props: {
+  readonly label: string;
+  readonly value: PlanFtpSourceValue | null;
+  readonly empty: string;
+  readonly selected: boolean;
+}): ReactElement {
+  return (
+    <div className="grid gap-1 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-inset">
+      <span className="text-sm font-medium">{props.label}</span>
+      <span className={props.selected ? "text-sm text-primary" : "text-sm text-ink-2"}>
+        {ftpSourceCopy(props.value, props.empty)}
+        {props.selected ? " · Used for this Draft" : ""}
+      </span>
+    </div>
+  );
+}
+
+function FtpResolution(props: { readonly ftp: PlanFtpProjection }): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const model = useEnduragentStore((state) => planReadModel(state.plan));
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const [watts, setWatts] = useState(
+    props.ftp.manual === null ? "" : String(props.ftp.manual.watts),
+  );
+  const [validation, setValidation] = useState<string | null>(null);
+  const [pending, setPending] = useState<"save" | "refresh" | null>(null);
+  const busy =
+    (transition.status === "submitting" || transition.status === "running") &&
+    transition.transitionId === "PL-T04";
+  const failure =
+    transition.status === "failed" && transition.transitionId === "PL-T04"
+      ? transition.error.message
+      : null;
+  const submit = (event: FormEvent): void => {
+    event.preventDefault();
+    const value = Number(watts);
+    if (!/^\d{1,4}$/u.test(watts) || !Number.isSafeInteger(value) || value < 1) {
+      setValidation("Enter 1–9999 whole watts.");
+      return;
+    }
+    setValidation(null);
+    setPending("save");
+    actions?.saveFtp(value);
+  };
+  const notice =
+    failure ??
+    validation ??
+    (model?.scenarioId === "PL-S058"
+      ? "No FTP was found in Intervals. Enter watts or refresh again."
+      : model?.scenarioId === "PL-S060"
+        ? "Sources differ. The highest-precedence value is selected for this Draft."
+        : model?.scenarioId === "PL-S062"
+          ? "FTP saved. Returning to your Plan coach…"
+          : null);
+  const scenario = busy && pending === "refresh" ? "PL-S057" : model?.scenarioId;
+  const accepted = model?.scenarioId === "PL-S062";
+
+  return (
+    <section
+      className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1"
+      data-plan-scenario={scenario}
+    >
+      <div className="flex items-start gap-row">
+        {accepted ? (
+          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ok" aria-hidden="true" />
+        ) : (
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden="true" />
+        )}
+        <div className={SUPPORT_PAIR}>
+          <h2 className="m-0 text-base font-semibold">
+            FTP needed before we build your cycling block
+          </h2>
+          <p className="m-0 text-ink-2">Power targets require an FTP value.</p>
+        </div>
+      </div>
+      <form className="flex flex-wrap items-start gap-inset" onSubmit={submit}>
+        <div className={SUPPORT_PAIR}>
+          <label className="sr-only" htmlFor="plan-ftp-watts">
+            FTP in whole watts
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id="plan-ftp-watts"
+              className="h-ctl w-28 rounded-ctl border border-line-2 bg-sunk px-3 text-sm outline-none focus:border-ring focus:ring-3 focus:ring-ring/20"
+              inputMode="numeric"
+              maxLength={4}
+              placeholder="e.g. 282"
+              value={watts}
+              disabled={busy}
+              aria-invalid={validation === null ? undefined : "true"}
+              aria-describedby={notice === null ? undefined : "plan-ftp-notice"}
+              onChange={(event) => setWatts(event.currentTarget.value.replace(/\D/gu, ""))}
+            />
+            <span className="text-sm text-ink-2">W</span>
+          </div>
+        </div>
+        <Button type="submit" disabled={actions === null || busy || watts.length === 0}>
+          {busy && pending === "save" ? "Saving…" : "Save"}
+        </Button>
+      </form>
+      {notice === null ? null : (
+        <div
+          id="plan-ftp-notice"
+          className={`rounded-ctl p-3 text-sm ${model?.scenarioId === "PL-S062" ? "bg-[color-mix(in_srgb,var(--ok)_10%,var(--surface))] text-ok" : "bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] text-ink"}`}
+          role="status"
+        >
+          {notice}
+        </div>
+      )}
+      <section aria-labelledby="plan-ftp-source-status">
+        <h3 id="plan-ftp-source-status" className="m-0 text-sm font-medium">
+          Source status
+        </h3>
+        <div className="mt-inset divide-y divide-line">
+          <FtpSourceRow
+            label="Athlete-entered FTP"
+            value={props.ftp.manual}
+            empty="Not entered"
+            selected={props.ftp.usedSource === "manual"}
+          />
+          <FtpSourceRow
+            label="Intervals FTP"
+            value={props.ftp.intervalsFtp}
+            empty="Not found"
+            selected={props.ftp.usedSource === "intervals-ftp"}
+          />
+          <FtpSourceRow
+            label="Intervals eFTP"
+            value={props.ftp.intervalsEftp}
+            empty="Not found"
+            selected={props.ftp.usedSource === "intervals-eftp"}
+          />
+        </div>
+      </section>
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={actions === null || busy}
+          onClick={() => {
+            setPending("refresh");
+            actions?.refreshFtp();
+          }}
+        >
+          <RefreshCw
+            className={busy && pending === "refresh" ? "animate-spin" : ""}
+            aria-hidden="true"
+          />
+          {busy && pending === "refresh"
+            ? "Refreshing…"
+            : model?.scenarioId === "PL-S059"
+              ? "Retry"
+              : "Refresh Intervals"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function PlanCoach(): ReactElement {
   const composer = useRef<ComposerHandle>(null);
   const actions = useEnduragentStore((state) => state.planActions);
@@ -187,6 +369,10 @@ function PlanCoach(): ReactElement {
         })) ?? []);
   const decision = coach.decision ?? data?.decision ?? null;
 
+  if (data?.ftp !== undefined && data.ftp !== null && FTP_SCENARIOS.has(model?.scenarioId ?? "")) {
+    return <FtpResolution ftp={data.ftp} />;
+  }
+
   return (
     <section
       className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1"
@@ -199,6 +385,14 @@ function PlanCoach(): ReactElement {
             <h2 className="m-0 text-base font-medium text-ink">Draft discarded</h2>
             <p className="m-0 text-ink-2">Your Plan conversation is still here.</p>
           </div>
+        </div>
+      ) : null}
+      {data?.ftp?.conflict === true && data.ftp.usedWatts !== null ? (
+        <div
+          className="rounded-ctl bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] p-3 text-sm"
+          role="status"
+        >
+          Using {data.ftp.usedWatts} W from the selected FTP source. Other FTP sources differ.
         </div>
       ) : null}
       <ConversationTranscript
