@@ -2092,49 +2092,52 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       acceptedOperationId: "operation-2",
       validEvents: 1,
     },
-  ])("rejects Planning $name correlation mismatches", async ({ events, acceptedOperationId, validEvents }) => {
-    const token = "x".repeat(43);
-    const rpc = createCoachRpcServer({
-      engine: engine(),
-      operations: {
-        ...operations,
-        executePlanTransition: async (_request, onEvent) => {
-          for (const event of events) onEvent?.(event);
-          return acceptedOperationId === null
-            ? { status: "completed", state: planState }
-            : { status: "accepted", operationId: acceptedOperationId, state: planState };
+  ])(
+    "rejects Planning $name correlation mismatches",
+    async ({ events, acceptedOperationId, validEvents }) => {
+      const token = "x".repeat(43);
+      const rpc = createCoachRpcServer({
+        engine: engine(),
+        operations: {
+          ...operations,
+          executePlanTransition: async (_request, onEvent) => {
+            for (const event of events) onEvent?.(event);
+            return acceptedOperationId === null
+              ? { status: "completed", state: planState }
+              : { status: "accepted", operationId: acceptedOperationId, state: planState };
+          },
         },
-      },
-      token,
-      owner: "app-supervised",
-    });
-    const client = await openSocket(rpc);
-    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
-    await client.frames.next();
-    client.ws.send(
-      JSON.stringify({
+        token,
+        owner: "app-supervised",
+      });
+      const client = await openSocket(rpc);
+      client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+      await client.frames.next();
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "plan-write",
+          method: "executePlanTransition",
+          params: {
+            transitionId: "PL-T01",
+            commandId: "command-1",
+            sourceConversationId: null,
+          },
+        }),
+      );
+      for (let index = 0; index < validEvents; index += 1) {
+        expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+          method: "coach.planProgress",
+        });
+      }
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
         jsonrpc: "2.0",
         id: "plan-write",
-        method: "executePlanTransition",
-        params: {
-          transitionId: "PL-T01",
-          commandId: "command-1",
-          sourceConversationId: null,
-        },
-      }),
-    );
-    for (let index = 0; index < validEvents; index += 1) {
-      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
-        method: "coach.planProgress",
+        error: { code: -32603, message: "Internal error" },
       });
-    }
-    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
-      jsonrpc: "2.0",
-      id: "plan-write",
-      error: { code: -32603, message: "Internal error" },
-    });
-    await client.close();
-  });
+      await client.close();
+    },
+  );
 
   it("ignores Planning progress emitted after the transition result", async () => {
     const token = "x".repeat(43);
@@ -2309,7 +2312,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
 });
 
 describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
-  it("binds renderer capabilities to the exact Desktop session namespace", async () => {
+  it("binds renderer capabilities to the ordinary Chat and dedicated Plan namespaces", async () => {
     const token = "x".repeat(43);
     const chat = vi.fn(async () => ({ text: "ok" }));
     const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
@@ -2323,6 +2326,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       decision: completedDecision,
       resumed: true,
     }));
+    const getChatQueue = vi.fn(async () => ({ schemaVersion: 1 as const, revision: 0, items: [] }));
     const getActivityAnalysis = vi.fn(operations.getActivityAnalysis!);
     const rpc = createCoachRpcServer({
       engine: engine({
@@ -2333,6 +2337,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
         answerCoachDecision,
         skipCoachDecision,
         resumeCoachDecision,
+        getChatQueue,
       }),
       operations: { ...operations, getActivityAnalysis },
       token,
@@ -2425,6 +2430,36 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     expect(resumeCoachDecision).toHaveBeenCalledOnce();
     expect(resetSession).toHaveBeenCalledOnce();
     expect(hasSession).toHaveBeenCalledOnce();
+
+    const planChatId = `plan:${"0".repeat(25)}1`;
+    id += 1;
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "getChatQueue",
+        params: { chatId: planChatId },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id,
+      result: { schemaVersion: 1, revision: 0, items: [] },
+    });
+    expect(getChatQueue).toHaveBeenCalledWith({ chatId: planChatId });
+    id += 1;
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "chat",
+        params: { chatId: planChatId, message: "bypass" },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id,
+      error: { code: -32602, message: "Invalid params" },
+    });
+    expect(chat).toHaveBeenCalledOnce();
 
     id += 1;
     client.ws.send(

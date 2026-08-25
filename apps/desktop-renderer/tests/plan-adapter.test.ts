@@ -4,17 +4,15 @@ import type {
   PlanHydrationState,
   PlanProgressEvent,
 } from "@enduragent/coach-contract";
+import type { DesktopCoachClientProvider } from "../src/coach-client.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createPlanViewAdapter,
-  type PlanBridge,
-} from "../src/state/adapters/plan.js";
+import { createPlanViewAdapter, type PlanBridge } from "../src/state/adapters/plan.js";
 import {
   EMPTY_PLAN_SURFACE,
   type PlanSurfaceState,
   type PlanTransitionState,
 } from "../src/state/plan-slice.js";
-import { PLAN_ERROR, planReadModel } from "./plan-fixtures.js";
+import { PLAN_ERROR, planCoachData, planReadModel } from "./plan-fixtures.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -31,11 +29,15 @@ async function settle(): Promise<void> {
   await Promise.resolve();
 }
 
-function harness(input: {
-  readonly getPlanState?: () => Promise<GetPlanStateRpcResult>;
-  readonly executePlanTransition?: PlanBridge["executePlanTransition"];
-  readonly ids?: readonly string[];
-} = {}) {
+function harness(
+  input: {
+    readonly getPlanState?: () => Promise<GetPlanStateRpcResult>;
+    readonly executePlanTransition?: PlanBridge["executePlanTransition"];
+    readonly ids?: readonly string[];
+    readonly clients?: DesktopCoachClientProvider;
+    readonly messageIds?: readonly string[];
+  } = {},
+) {
   let surface: PlanSurfaceState = EMPTY_PLAN_SURFACE;
   let progressListener: ((progress: PlanProgressEvent) => void) | null = null;
   const disposeProgress = vi.fn();
@@ -47,13 +49,12 @@ function harness(input: {
     status: "completed",
     state: planReadModel(),
   });
-  const getPlanState = vi.fn<PlanBridge["getPlanState"]>(
-    input.getPlanState ?? defaultGetPlanState,
-  );
+  const getPlanState = vi.fn<PlanBridge["getPlanState"]>(input.getPlanState ?? defaultGetPlanState);
   const executePlanTransition = vi.fn<PlanBridge["executePlanTransition"]>(
     input.executePlanTransition ?? defaultExecute,
   );
   const ids = [...(input.ids ?? ["command-1", "command-2", "command-3"])];
+  const messageIds = [...(input.messageIds ?? ["message-1", "message-2", "message-3"])];
   const adapter = createPlanViewAdapter({
     bridge: {
       getPlanState,
@@ -63,6 +64,7 @@ function harness(input: {
         return disposeProgress;
       },
     },
+    clients: input.clients,
     read: () => surface,
     publishHydration(next: PlanHydrationState) {
       const lastReady =
@@ -72,7 +74,17 @@ function harness(input: {
     publishTransition(next: PlanTransitionState) {
       surface = { ...surface, transition: next };
     },
+    publishCoach(next) {
+      surface = { ...surface, coach: next };
+    },
+    publishDiscardConfirmation(open) {
+      surface = { ...surface, discardConfirmation: open };
+    },
+    publishRevisionComposer(open) {
+      surface = { ...surface, revisionComposer: open };
+    },
     createCommandId: () => ids.shift() ?? "unexpected-command",
+    createMessageId: () => messageIds.shift() ?? "unexpected-message",
   });
   return {
     adapter,
@@ -142,7 +154,10 @@ describe("Plan view adapter", () => {
       commandId: "create-draft-command",
     });
 
-    execute.resolve({ status: "completed", state: planReadModel({ lifecycle: "intake", projection: "coach" }) });
+    execute.resolve({
+      status: "completed",
+      state: planReadModel({ lifecycle: "intake", projection: "coach" }),
+    });
     await settle();
     expect(subject.surface.transition).toEqual({ status: "idle" });
     expect(subject.surface.hydration.status).toBe("ready");
@@ -173,6 +188,299 @@ describe("Plan view adapter", () => {
       transitionId: "PL-T01",
       commandId: "retry-command",
       sourceConversationId: null,
+    });
+  });
+
+  it("streams PL-T05 inside the dedicated Plan conversation before the RPC completes", async () => {
+    const initial = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData(),
+    });
+    const completed = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S016",
+      projection: "coach",
+      data: planCoachData({
+        ready: true,
+        messages: [
+          { id: "intro", turnId: null, role: "coach", text: "What is your event?" },
+          { id: "athlete", turnId: "turn-1", role: "athlete", text: "Gran Fondo Almaty." },
+          { id: "coach", turnId: "turn-1", role: "coach", text: "I found your training." },
+        ],
+      }),
+    });
+    const transition = deferred<ExecutePlanTransitionRpcResult>();
+    const subject = harness({
+      ids: ["coach-command"],
+      getPlanState: async () => ({ status: "ready", state: initial }),
+      executePlanTransition: () => transition.promise,
+    });
+    subject.adapter.start();
+    await settle();
+
+    await expect(subject.adapter.submitCoach("Gran Fondo Almaty.")).resolves.toBe(true);
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T05",
+      commandId: "coach-command",
+      conversationId: "00000000000000000000000001",
+      text: "Gran Fondo Almaty.",
+    });
+    subject.progress({
+      commandId: "coach-command",
+      transitionId: "PL-T05",
+      operationId: "operation-1",
+      phase: "running",
+      completed: 0,
+      total: 1,
+      turnEvent: {
+        type: "turn-start",
+        turnId: "turn-1",
+        chatId: "plan:00000000000000000000000001",
+      },
+    });
+    subject.progress({
+      commandId: "coach-command",
+      transitionId: "PL-T05",
+      operationId: "operation-1",
+      phase: "running",
+      completed: 0,
+      total: 1,
+      turnEvent: { type: "final-text", turnId: "turn-1", text: "I found your training." },
+    });
+    expect(subject.surface.coach.messages.at(-1)).toMatchObject({
+      role: "coach",
+      text: "I found your training.",
+      delivery: "streaming",
+    });
+    transition.resolve({ status: "completed", state: completed });
+    await settle();
+    expect(subject.surface.coach.status).toBe("idle");
+    expect(subject.surface.coach.messages.at(-1)).toMatchObject({
+      role: "coach",
+      text: "I found your training.",
+      delivery: "complete",
+    });
+  });
+
+  it("queues a second Plan coach message and stops only its active Plan turn", async () => {
+    const initial = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData(),
+    });
+    const transition = deferred<ExecutePlanTransitionRpcResult>();
+    const queue = {
+      schemaVersion: 1 as const,
+      revision: 1,
+      items: [
+        {
+          queuedMessageId: "queued-1",
+          submissionId: "message-3",
+          text: "Sunday must stay free.",
+          kind: "ordinary" as const,
+          position: 0,
+          restored: false,
+        },
+      ],
+    };
+    const call = vi.fn(async (method: string) => {
+      if (method === "enqueueChatMessage") return queue;
+      return { stopped: true };
+    });
+    const clients = {
+      getClient: async () => ({ call }),
+      reconnect: async () => ({ call }),
+      close: async () => undefined,
+    } as unknown as DesktopCoachClientProvider;
+    const subject = harness({
+      clients,
+      ids: ["coach-command"],
+      messageIds: ["message-1", "message-2", "message-3"],
+      getPlanState: async () => ({ status: "ready", state: initial }),
+      executePlanTransition: () => transition.promise,
+    });
+    subject.adapter.start();
+    await settle();
+    await subject.adapter.submitCoach("Gran Fondo Almaty.");
+    subject.progress({
+      commandId: "coach-command",
+      transitionId: "PL-T05",
+      operationId: "operation-1",
+      phase: "running",
+      completed: 0,
+      total: 1,
+      turnEvent: {
+        type: "turn-start",
+        turnId: "turn-1",
+        chatId: "plan:00000000000000000000000001",
+      },
+    });
+
+    await expect(subject.adapter.submitCoach("Sunday must stay free.")).resolves.toBe(true);
+    expect(call).toHaveBeenCalledWith("enqueueChatMessage", {
+      chatId: "plan:00000000000000000000000001",
+      submissionId: "message-3",
+      text: "Sunday must stay free.",
+    });
+    expect(subject.surface.coach.queued).toMatchObject([
+      { id: "queued-1", text: "Sunday must stay free." },
+    ]);
+
+    subject.adapter.stopCoach();
+    await settle();
+    expect(call).toHaveBeenCalledWith("stopChat", {
+      chatId: "plan:00000000000000000000000001",
+      turnId: "turn-1",
+    });
+  });
+
+  it("answers a host-owned Coach decision through the persisted Plan transition", async () => {
+    const decision = {
+      decisionId: "decision-1",
+      chatId: "plan:00000000000000000000000001",
+      messageId: "message-1",
+      question: "Which day must stay free?",
+      options: [
+        {
+          id: "option-1",
+          label: "Sunday",
+          description: "Keep Sunday free.",
+          recommended: true,
+          consequence: "Training moves earlier in the week.",
+        },
+        {
+          id: "option-2",
+          label: "Monday",
+          description: "Keep Monday free.",
+          recommended: false,
+          consequence: "Recovery moves to Monday.",
+        },
+      ],
+      status: "unanswered" as const,
+    };
+    const initial = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData({ decision }),
+    });
+    const subject = harness({
+      ids: ["decision-command"],
+      getPlanState: async () => ({ status: "ready", state: initial }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.answerCoachDecision("decision-1", { kind: "option", optionId: "option-1" });
+    await settle();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T05",
+      commandId: "decision-command",
+      conversationId: "00000000000000000000000001",
+      text: "Sunday",
+      decision: {
+        action: "answer",
+        decisionId: "decision-1",
+        answer: { kind: "option", optionId: "option-1" },
+      },
+    });
+  });
+
+  it("resumes a saved Coach choice whose continuation was pending at relaunch", async () => {
+    const decision = {
+      decisionId: "decision-1",
+      chatId: "plan:00000000000000000000000001",
+      messageId: "message-1",
+      question: "Which day must stay free?",
+      options: [
+        {
+          id: "option-1",
+          label: "Sunday",
+          description: "Keep Sunday free.",
+          recommended: true,
+          consequence: "Training moves earlier in the week.",
+        },
+        {
+          id: "option-2",
+          label: "Monday",
+          description: "Keep Monday free.",
+          recommended: false,
+          consequence: "Recovery moves to Monday.",
+        },
+      ],
+      status: "answered" as const,
+      answer: { kind: "option" as const, optionId: "option-1" },
+      consequence: "Training moves earlier in the week.",
+      continuation: { continuationId: "continuation-1", status: "pending" as const },
+    };
+    const initial = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData({ decision }),
+    });
+    const subject = harness({
+      ids: ["resume-command"],
+      getPlanState: async () => ({ status: "ready", state: initial }),
+    });
+
+    subject.adapter.start();
+    await settle();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T05",
+      commandId: "resume-command",
+      conversationId: "00000000000000000000000001",
+      text: "Sunday",
+      decision: { action: "resume", decisionId: "decision-1" },
+    });
+    expect(subject.surface.coach.decisionPhase).toBe("recovering");
+    expect(subject.surface.coach.decisionAnswerLabel).toBe("Sunday");
+  });
+
+  it("retries an interrupted queued Plan message through PL-T05", async () => {
+    const queue = {
+      schemaVersion: 1 as const,
+      revision: 2,
+      items: [
+        {
+          queuedMessageId: "queued-1",
+          submissionId: "submission-1",
+          text: "Keep Sunday free.",
+          kind: "ordinary" as const,
+          position: 0,
+          restored: true,
+        },
+      ],
+      retryRequired: {
+        claimId: "claim-1",
+        queuedMessageIds: ["queued-1"],
+        turnId: "turn-1",
+        status: "retry-required" as const,
+      },
+    };
+    const initial = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData({ queue }),
+    });
+    const subject = harness({
+      ids: ["retry-command"],
+      getPlanState: async () => ({ status: "ready", state: initial }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.retryQueuedCoachTurn("claim-1");
+    await settle();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T05",
+      commandId: "retry-command",
+      conversationId: "00000000000000000000000001",
+      text: "Keep Sunday free.",
     });
   });
 
@@ -227,7 +535,11 @@ describe("Plan view adapter", () => {
     const state = planReadModel({ lifecycle: "intake", projection: "coach" });
     const subject = harness({
       ids: ["command-1"],
-      executePlanTransition: async () => ({ status: "accepted", operationId: "operation-1", state }),
+      executePlanTransition: async () => ({
+        status: "accepted",
+        operationId: "operation-1",
+        state,
+      }),
     });
     subject.adapter.start();
     await settle();

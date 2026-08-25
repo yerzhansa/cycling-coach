@@ -167,6 +167,7 @@ export function createChatViewAdapter(input: {
   readonly publish: (next: ChatSurfaceState) => void;
   readonly buffer?: ChatStreamBuffer;
   readonly anchor?: ChatScrollAnchor;
+  readonly bufferStreaming?: boolean;
 }): ChatViewAdapter {
   const buffer = input.buffer ?? chatStreamBuffer;
   const anchor = input.anchor ?? chatScrollAnchor;
@@ -183,7 +184,7 @@ export function createChatViewAdapter(input: {
       role: message.role,
       delivery: message.delivery,
       historical: message.historical === true,
-      text: isStreamingCoach(message) ? "" : message.text,
+      text: input.bufferStreaming !== false && isStreamingCoach(message) ? "" : message.text,
     }));
     const workBlocked =
       controls?.workBlocked ??
@@ -280,6 +281,7 @@ export function createChatViewAdapter(input: {
     state: ChatState,
     controls: ChatViewControls | undefined,
   ): { readonly action: StreamAction | null; readonly streaming: ReadonlySet<string> } => {
+    if (input.bufferStreaming === false) return { action: null, streaming: new Set() };
     const streaming = new Set<string>();
     let action: StreamAction | null = null;
     for (const message of state.messages) {

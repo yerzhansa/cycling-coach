@@ -174,13 +174,31 @@ export function bootRenderer(): Disposer {
 
   const planAdapter = createPlanViewAdapter({
     bridge: window.enduragentAuth,
+    clients,
     read: () => store.getState().plan,
     publishHydration: (next) => store.getState().setPlanHydration(next),
     publishTransition: (next) => store.getState().setPlanTransition(next),
+    publishCoach: (next) => store.getState().setPlanCoach(next),
+    publishDiscardConfirmation: (open) => store.getState().setPlanDiscardConfirmation(open),
+    publishRevisionComposer: (open) => store.getState().setPlanRevisionComposer(open),
   });
   store.getState().bindPlanActions({
     open: () => planAdapter.open(),
     startPlan: () => planAdapter.startPlan(),
+    submitCoach: (message) => planAdapter.submitCoach(message),
+    stopCoach: () => planAdapter.stopCoach(),
+    removeQueuedCoachMessage: (id) => planAdapter.removeQueuedCoachMessage(id),
+    retryQueuedCoachTurn: (claimId) => planAdapter.retryQueuedCoachTurn(claimId),
+    answerCoachDecision: (decisionId, answer) =>
+      planAdapter.answerCoachDecision(decisionId, answer),
+    skipCoachDecision: (decisionId) => planAdapter.skipCoachDecision(decisionId),
+    createDraft: () => planAdapter.createDraft(),
+    updateDraft: (message) => planAdapter.updateDraft(message),
+    openDiscardConfirmation: () => planAdapter.openDiscardConfirmation(),
+    closeDiscardConfirmation: () => planAdapter.closeDiscardConfirmation(),
+    discardDraft: () => planAdapter.discardDraft(),
+    openRevisionComposer: () => planAdapter.openRevisionComposer(),
+    closeRevisionComposer: () => planAdapter.closeRevisionComposer(),
     retry: () => planAdapter.retry(),
   });
   planAdapter.start();
