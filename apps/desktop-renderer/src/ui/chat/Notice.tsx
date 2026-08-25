@@ -33,6 +33,7 @@ export function CoachProgress(): ReactElement | null {
 
 export function RetryBar(): ReactElement {
   const interrupted = useEnduragentStore((state) => state.chat.interrupted);
+  const retryRequired = useEnduragentStore((state) => state.chat.retryRequired);
   const workBlocked = useEnduragentStore((state) => state.chat.workBlocked);
   const actions = useEnduragentStore((state) => state.chatActions);
 
@@ -42,10 +43,10 @@ export function RetryBar(): ReactElement {
       className="chat-retry justify-self-start"
       variant="outline"
       size="sm"
-      hidden={!interrupted}
+      hidden={!interrupted || retryRequired !== null}
       disabled={workBlocked}
       onClick={() => {
-        if (!interrupted || workBlocked) return;
+        if (!interrupted || retryRequired !== null || workBlocked) return;
         actions?.retry();
       }}
     >

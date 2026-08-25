@@ -69,11 +69,17 @@ describe("createCoachEngine", () => {
     expect(Object.keys(engine).sort()).toEqual([
       "answerCoachDecision",
       "chat",
+      "enqueueChatMessage",
       "getAthleteState",
+      "getChatQueue",
       "getCoachDecision",
       "hasSession",
+      "removeQueuedChatMessage",
       "resetSession",
+      "resumeChatQueue",
       "resumeCoachDecision",
+      "retryQueuedTurn",
+      "runQueuedCommand",
       "skipCoachDecision",
       "stopChat",
     ]);

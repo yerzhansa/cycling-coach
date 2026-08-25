@@ -44,7 +44,13 @@ const telegramControlSnapshot = {
 
 const rpcDeadlineCases = [
   ["chat", { chatId: "chat-1", message: "deadline" }, 660_000],
-  ["stopChat", { chatId: "chat-1" }, 10_000],
+  ["stopChat", { chatId: "chat-1", turnId: "turn-1" }, 10_000],
+  ["enqueueChatMessage", { chatId: "chat-1", submissionId: "submission-1", text: "Hello" }, 30_000],
+  ["getChatQueue", { chatId: "chat-1" }, 30_000],
+  ["removeQueuedChatMessage", { chatId: "chat-1", queuedMessageId: "queued-1" }, 30_000],
+  ["resumeChatQueue", { chatId: "chat-1" }, 660_000],
+  ["runQueuedCommand", { chatId: "chat-1", queuedMessageId: "queued-1" }, 660_000],
+  ["retryQueuedTurn", { chatId: "chat-1", claimId: "claim-1" }, 660_000],
   ["getCoachDecision", { chatId: "chat-1" }, 30_000],
   [
     "answerCoachDecision",
@@ -805,6 +811,12 @@ describe("RPC receive and observers", () => {
       const results = {
         chat: { text: "answer" },
         stopChat: { stopped: true },
+        enqueueChatMessage: { schemaVersion: 1, revision: 1, items: [] },
+        getChatQueue: { schemaVersion: 1, revision: 1, items: [] },
+        removeQueuedChatMessage: { schemaVersion: 1, revision: 2, items: [] },
+        resumeChatQueue: { snapshot: { schemaVersion: 1, revision: 2, items: [] } },
+        runQueuedCommand: { snapshot: { schemaVersion: 1, revision: 2, items: [] } },
+        retryQueuedTurn: { snapshot: { schemaVersion: 1, revision: 2, items: [] } },
         getCoachDecision: { decision: { ...decision, status: "unanswered" } },
         answerCoachDecision: { decision: completedDecision },
         skipCoachDecision: { decision: { ...decision, status: "skipped" } },
@@ -1018,7 +1030,9 @@ describe("RPC receive and observers", () => {
     await expect(client.call("chat", { chatId: "chat-1", message: "hello" })).resolves.toEqual({
       text: "answer",
     });
-    await expect(client.call("stopChat", { chatId: "chat-1" })).resolves.toEqual({
+    await expect(
+      client.call("stopChat", { chatId: "chat-1", turnId: "turn-1" }),
+    ).resolves.toEqual({
       stopped: true,
     });
     await expect(client.call("resetSession", { chatId: "chat-1" })).resolves.toEqual({

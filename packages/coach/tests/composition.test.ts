@@ -629,6 +629,7 @@ describe("local coach composition", () => {
     expect(Object.keys(received!.ports).sort()).toEqual([
       "chatStore",
       "classifyFailure",
+      "coachDecisions",
       "config",
       "extractRetryAfterMs",
       "getAccessToken",
@@ -2823,10 +2824,12 @@ describe("local coach composition", () => {
       createResolver: () => missingResolver(),
     });
 
-    await expect(lifecycle.engine.stopChat?.({ chatId: "desktop" })).resolves.toEqual({
+    await expect(
+      lifecycle.engine.stopChat?.({ chatId: "desktop", turnId: "turn-1" }),
+    ).resolves.toEqual({
       stopped: true,
     });
-    expect(stopChat).toHaveBeenCalledWith({ chatId: "desktop" });
+    expect(stopChat).toHaveBeenCalledWith({ chatId: "desktop", turnId: "turn-1" });
     await lifecycle.close();
   });
 

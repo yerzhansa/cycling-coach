@@ -556,6 +556,16 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
       chat: (request, onEvent) => run((bundle) => bundle.engine.chat(request, onEvent)),
       stopChat: (request) =>
         run(async (bundle) => bundle.engine.stopChat?.(request) ?? { stopped: false }),
+      enqueueChatMessage: (request) => run((bundle) => bundle.engine.enqueueChatMessage!(request)),
+      getChatQueue: (request) => run((bundle) => bundle.engine.getChatQueue!(request)),
+      removeQueuedChatMessage: (request) =>
+        run((bundle) => bundle.engine.removeQueuedChatMessage!(request)),
+      resumeChatQueue: (request, onEvent) =>
+        run((bundle) => bundle.engine.resumeChatQueue!(request, onEvent)),
+      runQueuedCommand: (request, onEvent) =>
+        run((bundle) => bundle.engine.runQueuedCommand!(request, onEvent)),
+      retryQueuedTurn: (request, onEvent) =>
+        run((bundle) => bundle.engine.retryQueuedTurn!(request, onEvent)),
       getCoachDecision: (request) => run((bundle) => bundle.engine.getCoachDecision(request)),
       answerCoachDecision: (request, onEvent) =>
         run((bundle) => bundle.engine.answerCoachDecision(request, onEvent)),
@@ -985,6 +995,7 @@ export async function createLocalCoachComposition(
         memory,
         chatStore: conversationStore,
         transcriptWriter: conversationStore,
+        coachDecisions: conversationStore,
         secrets: { resolve: resolveSecretRef },
         platform: {
           legacyClient,

@@ -12,6 +12,7 @@ import {
 import type {
   CoachDecisionAnswer,
   CoachDecisionReadModel,
+  ChatQueueSnapshot,
   CoachTurnEventNotificationEnvelope,
   TranscriptPageEntry,
   TurnEvent,
@@ -47,6 +48,9 @@ export const CHAT_DECISION_FAILURE_COPY =
 export const CHAT_DECISION_SKIP_FAILURE_COPY = "We couldn’t skip this question. Please try again.";
 export const CHAT_DECISION_LOAD_FAILURE_COPY =
   "We couldn’t check for a saved Coach question. Reconnect and try again.";
+export const CHAT_QUEUE_LOAD_FAILURE_COPY =
+  "We couldn’t check your saved messages. Reconnect and try again.";
+export const CHAT_QUEUE_REMOVE_FAILURE_COPY = "We couldn’t remove that saved message. Try again.";
 export const NEW_CONVERSATION_SUCCESS_COPY = "New conversation started.";
 export const NEW_CONVERSATION_MEMORY_WARNING_COPY =
   "New conversation started. Some recent details may not have been saved to coach memory.";
@@ -65,6 +69,8 @@ export interface ChatViewControls {
   readonly workBlocked: boolean;
   readonly decisionLoading?: boolean;
   readonly decisionLoadError?: string | null;
+  readonly queueLoadError?: string | null;
+  readonly queueMutationError?: string | null;
   readonly appendDelta?: ChatAppendDelta;
   readonly hydration?: {
     readonly status: TranscriptHydrationStatus;
@@ -88,9 +94,11 @@ export interface ChatView {
 export interface ChatController {
   start(): Promise<void>;
   resume(): Promise<void>;
-  submit(message: string): Promise<void>;
+  submit(message: string): Promise<boolean>;
   stop(): void;
   removeQueued(id: string): void;
+  runQueuedCommand(id: string): Promise<void>;
+  retryQueuedTurn(claimId: string): Promise<void>;
   retryInterrupted(): Promise<void>;
   loadEarlier(): Promise<void>;
   retryHydration(): Promise<void>;
@@ -129,8 +137,15 @@ export function createChatController(input: {
     readonly limit: number;
   }) => Promise<TranscriptPage>;
   readonly canChat?: () => boolean;
+  readonly initialQueueSnapshot?: ChatQueueSnapshot;
 }): ChatController {
-  let state = EMPTY_CHAT_STATE;
+  let state =
+    input.initialQueueSnapshot === undefined
+      ? EMPTY_CHAT_STATE
+      : reduceChatState(EMPTY_CHAT_STATE, {
+          type: "queue-snapshot",
+          snapshot: input.initialQueueSnapshot,
+        });
   let hydration = emptyTranscriptHydration();
   let sequence = 0;
   let disposed = false;
@@ -150,11 +165,14 @@ export function createChatController(input: {
   let decisionLoaded = true;
   let decisionLoadError: string | null = null;
   let decisionLoadTask: Promise<void> | undefined;
+  let queueLoaded = input.initialQueueSnapshot !== undefined;
+  let queueLoadError: string | null = null;
+  let queueMutationError: string | null = null;
   let decisionContinuationTask: Promise<void> | undefined;
   let epoch = 0;
   const canChat = input.canChat ?? (() => true);
 
-  const nextId = (prefix: "request" | "message" | "queued"): string => `${prefix}-${++sequence}`;
+  const nextId = (prefix: "request" | "message"): string => `${prefix}-${++sequence}`;
   const resetBlocksWork = (): boolean =>
     state.session.resetPhase === "confirming" || state.session.resetPhase === "resetting";
   const decisionBlocksWork = (): boolean =>
@@ -163,6 +181,7 @@ export function createChatController(input: {
     (decision?.status === "answered" && decision.continuation.status === "pending");
   const canOpenNewConversation = (): boolean =>
     canChat() &&
+    queueLoaded &&
     !disposed &&
     (hasClearableConversation(state) ||
       hydration.turns.length > 0 ||
@@ -187,9 +206,11 @@ export function createChatController(input: {
             },
         {
           newConversationDisabled: !canOpenNewConversation(),
-          workBlocked: resetBlocksWork(),
+          workBlocked: resetBlocksWork() || !queueLoaded,
           decisionLoading: !decisionLoaded,
           decisionLoadError,
+          queueLoadError,
+          queueMutationError,
           ...(appendDelta === undefined ? {} : { appendDelta }),
           hydration: {
             status: hydration.status,
@@ -214,6 +235,9 @@ export function createChatController(input: {
   ): void => {
     state = reduceChatState(state, action);
     render(appendDelta);
+  };
+  const applyQueueSnapshot = (snapshot: ChatQueueSnapshot): void => {
+    reduce({ type: "queue-snapshot", snapshot });
   };
   const hydrator = createTranscriptHydrator({
     readPage:
@@ -243,7 +267,23 @@ export function createChatController(input: {
     render();
   };
 
-  const run = (userMessage: string, includeUser: boolean, reconnect: boolean): ChatRun => {
+  const run = (
+    userMessage: string,
+    includeUser: boolean,
+    reconnect: boolean,
+    queueCall?:
+      | {
+          readonly method: "runQueuedCommand";
+          readonly queuedMessageId: string;
+          readonly queuedMessageIds: readonly string[];
+        }
+      | {
+          readonly method: "retryQueuedTurn";
+          readonly claimId: string;
+          readonly queuedMessageIds: readonly string[];
+        }
+      | { readonly method: "resumeChatQueue"; readonly queuedMessageIds: readonly string[] },
+  ): ChatRun => {
     epoch += 1;
     const requestKey = Number(nextId("request").slice("request-".length));
     const userMessageId = nextId("message");
@@ -284,7 +324,7 @@ export function createChatController(input: {
         stopRequested = true;
         if (client === undefined || boundTurnId === undefined || stopTask !== undefined) return;
         stopTask = client
-          .call("stopChat", { chatId: DESKTOP_CHAT_ID })
+          .call("stopChat", { chatId: DESKTOP_CHAT_ID, turnId: boundTurnId })
           .then(() => undefined)
           .catch(() => undefined);
       };
@@ -305,120 +345,152 @@ export function createChatController(input: {
         }
         if (!current()) return;
         callStarted = true;
-        const result = await client.call(
-          "chat",
-          { chatId: DESKTOP_CHAT_ID, message: userMessage },
-          {
-            signal: callAbortController.signal,
-            onNotificationEnvelope(envelope) {
-              if (!current() || protocolFault) return;
-              if (
-                envelope.method !== "coach.turnEvent" ||
-                envelope.params.requestMethod !== "chat" ||
-                envelope.params.turnId.length === 0
-              ) {
-                failProtocol();
-                return;
-              }
-              if (boundRequestId === undefined) {
-                boundRequestId = envelope.params.requestId;
-                boundTurnId = envelope.params.turnId;
-                reduce({ type: "bind-turn", requestKey, turnId: boundTurnId });
-                if (stopRequested) requestStop();
-              } else if (
-                envelope.params.requestId !== boundRequestId ||
-                envelope.params.turnId !== boundTurnId
-              ) {
-                failProtocol();
-                return;
-              }
-              pendingEnvelope = envelope;
-            },
-            onEvent(event: TurnEvent) {
-              if (!current() || protocolFault) return;
-              const envelope = pendingEnvelope;
-              pendingEnvelope = undefined;
-              if (
-                envelope === undefined ||
-                boundTurnId === undefined ||
-                event.turnId !== boundTurnId ||
-                envelope.params.event.turnId !== boundTurnId
-              ) {
-                failProtocol();
-                return;
-              }
-              if (eventCount >= COACH_TURN_EVENT_LIMIT) {
-                failProtocol();
-                return;
-              }
-              eventCount += 1;
-              if (requestedDecision !== undefined) {
-                failProtocol();
-                return;
-              }
-              if (event.type === "turn-start") {
-                if (eventCount !== 1 || startSeen || event.chatId !== DESKTOP_CHAT_ID) {
-                  failProtocol();
-                  return;
-                }
-                startSeen = true;
-              }
-              let appendDelta: ChatAppendDelta | undefined;
-              if (event.type === "text_delta") {
-                const activeTurn = state.activeTurn;
-                if (activeTurn === null || activeTurn.requestKey !== requestKey) return;
-                const previousTextLength = activeTurn.draft.length;
-                if (event.delta.length > COACH_RESPONSE_CODE_UNIT_LIMIT - previousTextLength) {
-                  failProtocol();
-                  return;
-                }
-                appendDelta = {
-                  messageId: activeTurn.assistantMessageId,
-                  previousTextLength,
-                  nextTextLength: previousTextLength + event.delta.length,
-                  delta: event.delta,
-                };
-              } else if (
-                (event.type === "final-text" || event.type === "interrupted") &&
-                event.text.length > COACH_RESPONSE_CODE_UNIT_LIMIT
-              ) {
-                failProtocol();
-                return;
-              }
-              if (event.type === "final-text") finalText = event.text;
-              if (event.type === "interrupted") interruptedText = event.text;
-              if (event.type === "decision-requested") {
-                if (
-                  !startSeen ||
-                  event.chatId !== DESKTOP_CHAT_ID ||
-                  event.decision.status !== "unanswered"
-                ) {
-                  failProtocol();
-                  return;
-                }
-                requestedDecision = event.decision;
-                reduce({
-                  type: "bind-decision",
-                  requestKey,
-                  decisionId: event.decision.decisionId,
-                });
-                decision = event.decision;
-                decisionPhase = "idle";
-                decisionAnswerLabel = null;
-                decisionError = null;
-                render();
-                return;
-              }
-              reduce({ type: "event", requestKey, event }, appendDelta);
-            },
-            onTerminalEnvelope(envelope) {
-              if (!current()) return;
-              terminal = envelope;
-              terminalHadFinal = finalText !== undefined;
-            },
+        const callOptions = {
+          signal: callAbortController.signal,
+          onNotificationEnvelope(envelope) {
+            if (!current() || protocolFault) return;
+            if (
+              envelope.method !== "coach.turnEvent" ||
+              envelope.params.requestMethod !== (queueCall?.method ?? "chat") ||
+              envelope.params.turnId.length === 0
+            ) {
+              failProtocol();
+              return;
+            }
+            if (boundRequestId === undefined) {
+              boundRequestId = envelope.params.requestId;
+              boundTurnId = envelope.params.turnId;
+              reduce({ type: "bind-turn", requestKey, turnId: boundTurnId });
+              if (stopRequested) requestStop();
+            } else if (
+              envelope.params.requestId !== boundRequestId ||
+              envelope.params.turnId !== boundTurnId
+            ) {
+              failProtocol();
+              return;
+            }
+            pendingEnvelope = envelope;
           },
-        );
+          onEvent(event: TurnEvent) {
+            if (!current() || protocolFault) return;
+            const envelope = pendingEnvelope;
+            pendingEnvelope = undefined;
+            if (
+              envelope === undefined ||
+              boundTurnId === undefined ||
+              event.turnId !== boundTurnId ||
+              envelope.params.event.turnId !== boundTurnId
+            ) {
+              failProtocol();
+              return;
+            }
+            if (eventCount >= COACH_TURN_EVENT_LIMIT) {
+              failProtocol();
+              return;
+            }
+            eventCount += 1;
+            if (requestedDecision !== undefined) {
+              failProtocol();
+              return;
+            }
+            if (event.type === "turn-start") {
+              if (eventCount !== 1 || startSeen || event.chatId !== DESKTOP_CHAT_ID) {
+                failProtocol();
+                return;
+              }
+              startSeen = true;
+              if (queueCall !== undefined) {
+                reduce({ type: "queue-claimed", ids: queueCall.queuedMessageIds });
+              }
+            }
+            let appendDelta: ChatAppendDelta | undefined;
+            if (event.type === "text_delta") {
+              const activeTurn = state.activeTurn;
+              if (activeTurn === null || activeTurn.requestKey !== requestKey) return;
+              const previousTextLength = activeTurn.draft.length;
+              if (event.delta.length > COACH_RESPONSE_CODE_UNIT_LIMIT - previousTextLength) {
+                failProtocol();
+                return;
+              }
+              appendDelta = {
+                messageId: activeTurn.assistantMessageId,
+                previousTextLength,
+                nextTextLength: previousTextLength + event.delta.length,
+                delta: event.delta,
+              };
+            } else if (
+              (event.type === "final-text" || event.type === "interrupted") &&
+              event.text.length > COACH_RESPONSE_CODE_UNIT_LIMIT
+            ) {
+              failProtocol();
+              return;
+            }
+            if (event.type === "final-text") finalText = event.text;
+            if (event.type === "interrupted") interruptedText = event.text;
+            if (event.type === "decision-requested") {
+              if (
+                !startSeen ||
+                event.chatId !== DESKTOP_CHAT_ID ||
+                event.decision.status !== "unanswered"
+              ) {
+                failProtocol();
+                return;
+              }
+              requestedDecision = event.decision;
+              reduce({
+                type: "bind-decision",
+                requestKey,
+                decisionId: event.decision.decisionId,
+              });
+              decision = event.decision;
+              decisionPhase = "idle";
+              decisionAnswerLabel = null;
+              decisionError = null;
+              render();
+              return;
+            }
+            reduce({ type: "event", requestKey, event }, appendDelta);
+          },
+          onTerminalEnvelope(envelope) {
+            if (!current()) return;
+            terminal = envelope;
+            terminalHadFinal = finalText !== undefined;
+          },
+        } satisfies CoachClientCallOptions<"chat">;
+        const queuedResult =
+          queueCall?.method === "resumeChatQueue"
+            ? await client.call("resumeChatQueue", { chatId: DESKTOP_CHAT_ID }, callOptions)
+            : queueCall?.method === "runQueuedCommand"
+              ? await client.call(
+                  "runQueuedCommand",
+                  { chatId: DESKTOP_CHAT_ID, queuedMessageId: queueCall.queuedMessageId },
+                  callOptions,
+                )
+              : queueCall?.method === "retryQueuedTurn"
+                ? await client.call(
+                    "retryQueuedTurn",
+                    { chatId: DESKTOP_CHAT_ID, claimId: queueCall.claimId },
+                    callOptions,
+                  )
+                : undefined;
+        const result =
+          queuedResult === undefined
+            ? await client.call(
+                "chat",
+                { chatId: DESKTOP_CHAT_ID, message: userMessage },
+                callOptions,
+              )
+            : (queuedResult.response ?? { text: "" });
         if (!current()) return;
+        if (queuedResult !== undefined) applyQueueSnapshot(queuedResult.snapshot);
+        if (
+          queuedResult !== undefined &&
+          queuedResult.response === undefined &&
+          boundTurnId === undefined
+        ) {
+          reduce({ type: "discard-submission", requestKey });
+          return;
+        }
         if (interruptedText !== undefined) {
           if (
             protocolFault ||
@@ -477,6 +549,11 @@ export function createChatController(input: {
         completed = state.status === "idle" && state.activeTurn?.requestKey === requestKey;
       } catch (error) {
         if (!current()) return;
+        if (queueCall !== undefined && client !== undefined) {
+          try {
+            applyQueueSnapshot(await client.call("getChatQueue", { chatId: DESKTOP_CHAT_ID }));
+          } catch {}
+        }
         if (protocolFault || error instanceof CoachClientProtocolError) {
           retryClient = client;
           retryReconnect = true;
@@ -526,6 +603,26 @@ export function createChatController(input: {
     return chatRun.task.then(() => (chatRun.completed() ? drain() : undefined));
   };
 
+  const dispatchQueue = (
+    userMessage: string,
+    queueCall:
+      | {
+          readonly method: "runQueuedCommand";
+          readonly queuedMessageId: string;
+          readonly queuedMessageIds: readonly string[];
+        }
+      | {
+          readonly method: "retryQueuedTurn";
+          readonly claimId: string;
+          readonly queuedMessageIds: readonly string[];
+        }
+      | { readonly method: "resumeChatQueue"; readonly queuedMessageIds: readonly string[] },
+    includeUser = true,
+  ): Promise<void> => {
+    const chatRun = run(userMessage, includeUser, false, queueCall);
+    return chatRun.task.then(() => (chatRun.completed() ? drain() : undefined));
+  };
+
   const answerLabel = (
     currentDecision: CoachDecisionReadModel,
     answer: CoachDecisionAnswer,
@@ -552,6 +649,16 @@ export function createChatController(input: {
     decisionLoadError = null;
     render();
     return decision;
+  };
+
+  const refreshQueue = async (client?: CoachClient): Promise<void> => {
+    const activeClient = client ?? (await input.clients.getClient());
+    const snapshot = await activeClient.call("getChatQueue", { chatId: DESKTOP_CHAT_ID });
+    if (disposed) return;
+    applyQueueSnapshot(snapshot);
+    queueLoaded = true;
+    queueLoadError = null;
+    render();
   };
 
   const continueDecision = (
@@ -645,7 +752,7 @@ export function createChatController(input: {
         stopRequested = true;
         if (client === undefined || boundTurnId === undefined || stopTask !== undefined) return;
         stopTask = client
-          .call("stopChat", { chatId: DESKTOP_CHAT_ID })
+          .call("stopChat", { chatId: DESKTOP_CHAT_ID, turnId: boundTurnId })
           .then(() => undefined)
           .catch(() => undefined);
       };
@@ -836,6 +943,7 @@ export function createChatController(input: {
   const drain = (): Promise<void> => {
     if (
       !canChat() ||
+      !queueLoaded ||
       disposed ||
       resetBlocksWork() ||
       decisionBlocksWork() ||
@@ -845,14 +953,21 @@ export function createChatController(input: {
     }
     const group = nextDrainGroup(state);
     if (group === null) return Promise.resolve();
-    reduce({ type: "dequeue-group" });
-    return dispatch(group.text, true, false);
+    if (
+      state.retryRequired != null ||
+      (state.queued[0]?.command === true && state.queued[0]?.restored === true)
+    )
+      return Promise.resolve();
+    return dispatchQueue(group.text, {
+      method: "resumeChatQueue",
+      queuedMessageIds: state.queued.slice(0, group.size).map((item) => item.id),
+    });
   };
 
   const start = (): Promise<void> => {
     if (!canChat() || disposed) return Promise.resolve();
-    void hydrator.start();
     if (probeTask !== undefined) return probeTask;
+    const transcriptLoadTask = hydrator.start();
     decisionLoaded = false;
     decisionLoadError = null;
     render();
@@ -890,7 +1005,20 @@ export function createChatController(input: {
         reduce({ type: "session-probe", hasSession: result.hasSession });
       } catch {}
     })();
-    const task = Promise.all([sessionProbeTask, loadTask]).then(() => {});
+    const queueLoadTask = (async () => {
+      try {
+        await refreshQueue();
+      } catch {
+        queueLoaded = false;
+        queueLoadError = CHAT_QUEUE_LOAD_FAILURE_COPY;
+        render();
+      }
+    })();
+    const task = Promise.all([transcriptLoadTask, sessionProbeTask, loadTask, queueLoadTask]).then(
+      async () => {
+        if (!decisionBlocksWork()) await drain();
+      },
+    );
     probeTask = task;
     return task;
   };
@@ -906,22 +1034,26 @@ export function createChatController(input: {
     submit(message) {
       if (
         !canChat() ||
+        !queueLoaded ||
         !/\S/u.test(message) ||
         disposed ||
         resetBlocksWork() ||
         decisionBlocksWork()
       ) {
-        return activeTask ?? Promise.resolve();
+        return Promise.resolve(false);
       }
-      if (state.status === "streaming") {
-        reduce({ type: "enqueue", id: nextId("queued"), text: message });
-        return Promise.resolve();
-      }
-      if (state.queued.length > 0) {
-        reduce({ type: "enqueue", id: nextId("queued"), text: message });
-        return drain();
-      }
-      return dispatch(message, true, false);
+      const submissionId = globalThis.crypto.randomUUID();
+      return input.clients.getClient().then(async (client) => {
+        const acknowledged = await client.call("enqueueChatMessage", {
+          chatId: DESKTOP_CHAT_ID,
+          submissionId,
+          text: message,
+        });
+        if (disposed) return false;
+        applyQueueSnapshot(acknowledged);
+        void drain();
+        return true;
+      });
     },
     stop() {
       if (disposed || state.status !== "streaming" || state.activeTurn === null) return;
@@ -929,13 +1061,81 @@ export function createChatController(input: {
     },
     removeQueued(id) {
       if (disposed || resetBlocksWork()) return;
-      reduce({ type: "remove-queued", id });
+      queueMutationError = null;
+      render();
+      void input.clients.getClient().then(
+        async (client) => {
+          try {
+            const acknowledged = await client.call("removeQueuedChatMessage", {
+              chatId: DESKTOP_CHAT_ID,
+              queuedMessageId: id,
+            });
+            if (!disposed) {
+              queueMutationError = null;
+              applyQueueSnapshot(acknowledged);
+            }
+          } catch {
+            if (!disposed) {
+              queueMutationError = CHAT_QUEUE_REMOVE_FAILURE_COPY;
+              render();
+            }
+          }
+        },
+        () => {
+          if (!disposed) {
+            queueMutationError = CHAT_QUEUE_REMOVE_FAILURE_COPY;
+            render();
+          }
+        },
+      );
+    },
+    runQueuedCommand(id) {
+      if (
+        disposed ||
+        !queueLoaded ||
+        resetBlocksWork() ||
+        decisionBlocksWork() ||
+        state.status !== "idle"
+      ) {
+        return activeTask ?? Promise.resolve();
+      }
+      const head = state.queued[0];
+      if (head?.id !== id || !head.command) return Promise.resolve();
+      return dispatchQueue(head.text, {
+        method: "runQueuedCommand",
+        queuedMessageId: id,
+        queuedMessageIds: [id],
+      });
+    },
+    retryQueuedTurn(claimId) {
+      if (
+        disposed ||
+        !queueLoaded ||
+        resetBlocksWork() ||
+        decisionBlocksWork() ||
+        (state.status !== "idle" && state.status !== "interrupted")
+      ) {
+        return activeTask ?? Promise.resolve();
+      }
+      if (state.retryRequired?.claimId !== claimId) return Promise.resolve();
+      const ids = new Set(state.retryRequired.queuedMessageIds);
+      const text = state.queued
+        .filter((item) => ids.has(item.id))
+        .map((item) => item.text)
+        .join("\n\n");
+      return dispatchQueue(
+        text,
+        { method: "retryQueuedTurn", claimId, queuedMessageIds: [...ids] },
+        false,
+      );
     },
     retryInterrupted() {
       if (
         !canChat() ||
+        !queueLoaded ||
         disposed ||
         state.status !== "interrupted" ||
+        state.retryRequired != null ||
         state.activeTurn === null ||
         resetBlocksWork()
       ) {
@@ -978,11 +1178,12 @@ export function createChatController(input: {
       if (disposed || decisionLoadTask !== undefined) return decisionLoadTask;
       decisionLoaded = false;
       decisionLoadError = null;
+      queueLoadError = null;
       render();
       const task = (async () => {
         try {
           const client = await input.clients.reconnect();
-          const loaded = await refreshDecision(client);
+          const [loaded] = await Promise.all([refreshDecision(client), refreshQueue(client)]);
           if (
             loaded?.status === "answered" &&
             loaded.continuation.status === "pending" &&
@@ -992,7 +1193,8 @@ export function createChatController(input: {
           }
         } catch {
           decisionLoaded = false;
-          decisionLoadError = CHAT_DECISION_LOAD_FAILURE_COPY;
+          if (!queueLoaded) queueLoadError = CHAT_QUEUE_LOAD_FAILURE_COPY;
+          else decisionLoadError = CHAT_DECISION_LOAD_FAILURE_COPY;
           decisionPhase = "idle";
           render();
         }

@@ -100,6 +100,7 @@ describe("coach decision lifecycle", () => {
     const { engine, generate, store } = setup();
     const events: TurnEvent[] = [];
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: makeDecision("chat-1"),
       toolCallId: "tool-1",
       athleteText: "What should I do tomorrow?",
@@ -150,6 +151,7 @@ describe("coach decision lifecycle", () => {
   it("skips without calling the model", async () => {
     const { engine, generate, store } = setup();
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: makeDecision("chat-2"),
       toolCallId: "tool-2",
       athleteText: "What should I do tomorrow?",
@@ -168,6 +170,7 @@ describe("coach decision lifecycle", () => {
   it("returns durable Skip when structured session repair fails", async () => {
     const { engine, generate, store, chatStore } = setup();
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: makeDecision("chat-skip-failure"),
       toolCallId: "tool-skip-failure",
       athleteText: "What should I do tomorrow?",
@@ -189,6 +192,7 @@ describe("coach decision lifecycle", () => {
   it("repairs structured session context on resume without another provider call", async () => {
     const { engine, generate, store, chatStore } = setup();
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: makeDecision("chat-3"),
       toolCallId: "tool-3",
       athleteText: "What should I do tomorrow?",
@@ -220,6 +224,7 @@ describe("coach decision lifecycle", () => {
   it("emits turn-start before stored final text when resuming a completed continuation", async () => {
     const { engine, generate, store } = setup();
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: makeDecision("chat-5"),
       toolCallId: "tool-5",
       athleteText: "What should I do tomorrow?",
@@ -250,6 +255,7 @@ describe("coach decision lifecycle", () => {
   it("rejects ordinary chat while a decision is unanswered", async () => {
     const { engine, generate, store } = setup();
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: makeDecision("chat-4"),
       toolCallId: "tool-4",
       athleteText: "What should I do tomorrow?",
@@ -267,12 +273,14 @@ describe("coach decision lifecycle", () => {
     let firstStarted = false;
     generate
       .mockImplementationOnce(async (request: unknown) => {
-        const options = (request as {
-          options: {
-            signal?: AbortSignal;
-            onTextDelta?: (delta: string) => void;
-          };
-        }).options;
+        const options = (
+          request as {
+            options: {
+              signal?: AbortSignal;
+              onTextDelta?: (delta: string) => void;
+            };
+          }
+        ).options;
         firstStarted = true;
         options.onTextDelta?.("Partial decision response");
         await new Promise<void>((_resolve, reject) => {
@@ -309,6 +317,7 @@ describe("coach decision lifecycle", () => {
         },
       });
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: makeDecision("chat-stop-decision"),
       toolCallId: "tool-stop-decision",
       athleteText: "What should I do tomorrow?",
@@ -327,8 +336,10 @@ describe("coach decision lifecycle", () => {
     await vi.waitFor(() => expect(firstStarted).toBe(true));
     expect(engine.stopChat).toBeDefined();
     const stopChat = engine.stopChat!;
-    await expect(stopChat({ chatId: "another-chat" })).resolves.toEqual({ stopped: false });
-    await expect(stopChat({ chatId: "chat-stop-decision" })).resolves.toEqual({
+    await expect(stopChat({ chatId: "another-chat", turnId: "turn-1" })).resolves.toEqual({
+      stopped: false,
+    });
+    await expect(stopChat({ chatId: "chat-stop-decision", turnId: "turn-1" })).resolves.toEqual({
       stopped: true,
     });
     await expect(answer).resolves.toMatchObject({
@@ -346,7 +357,7 @@ describe("coach decision lifecycle", () => {
         coachText: "Partial decision response",
       }),
     );
-    await expect(stopChat({ chatId: "chat-stop-decision" })).resolves.toEqual({
+    await expect(stopChat({ chatId: "chat-stop-decision", turnId: "turn-1" })).resolves.toEqual({
       stopped: false,
     });
 
@@ -366,6 +377,7 @@ describe("coach decision lifecycle", () => {
   it("rejects a Conversation reset while an answer continuation is pending", async () => {
     const { engine, store } = setup();
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: makeDecision("chat-reset"),
       toolCallId: "tool-reset",
       athleteText: "What should I do tomorrow?",

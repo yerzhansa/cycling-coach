@@ -19,6 +19,7 @@ import {
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
   ChatRequestSchema,
   ChatResponseSchema,
+  StopChatRequestSchema,
   ResetSessionResponseSchema,
   HasSessionResponseSchema,
   type CoachEngine,
@@ -113,8 +114,19 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 19", () => {
-    expect(PROTOCOL_VERSION).toBe(21);
+  it("is 23", () => {
+    expect(PROTOCOL_VERSION).toBe(23);
+  });
+
+  it("requires Stop to name the exact active turn", () => {
+    expect(StopChatRequestSchema.parse({ chatId: "desktop", turnId: TURN_ID })).toEqual({
+      chatId: "desktop",
+      turnId: TURN_ID,
+    });
+    expect(() => StopChatRequestSchema.parse({ chatId: "desktop" })).toThrow();
+    expect(() =>
+      StopChatRequestSchema.parse({ chatId: "desktop", turnId: TURN_ID, extra: true }),
+    ).toThrow();
   });
 });
 

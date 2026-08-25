@@ -100,6 +100,7 @@ describe("Windows parity scenario manifests", () => {
         scenario.automation === "deterministic" && "tests" in scenario ? [scenario.id] : [],
       ),
     ).toEqual([
+      "chat.queue.hold-and-remove",
       "settings.providers.chatgpt-sign-in",
       "settings.providers.chatgpt-refusals",
       "settings.providers.claude-readiness",

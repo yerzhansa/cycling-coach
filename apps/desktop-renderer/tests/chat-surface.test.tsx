@@ -21,9 +21,11 @@ import { ChatView } from "../src/ui/chat/ChatView.js";
 
 function stubActions(): ChatActions {
   return {
-    submit: vi.fn(),
+    submit: vi.fn(async () => true),
     stop: vi.fn(),
     removeQueued: vi.fn(),
+    runQueuedCommand: vi.fn(),
+    retryQueuedTurn: vi.fn(),
     retry: vi.fn(),
     loadEarlier: vi.fn(),
     retryHydration: vi.fn(),
@@ -104,6 +106,26 @@ describe("chat surface", () => {
       onboarding: CLOSED_ONBOARDING,
     });
     resetChatStream();
+  });
+
+  it("preserves and focuses the draft after enqueue failure and clears only after acknowledgment", async () => {
+    const user = userEvent.setup();
+    let reject!: (error: Error) => void;
+    const failed = new Promise<boolean>((_resolve, fail) => {
+      reject = fail;
+    });
+    vi.mocked(actions.submit).mockReturnValueOnce(failed).mockResolvedValueOnce(true);
+    render(<Harness />);
+    const input = composer();
+    await user.type(input, "Keep this draft");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(input).toHaveValue("Keep this draft");
+    reject(new Error("durable enqueue failed"));
+    await waitFor(() => expect(input).toHaveFocus());
+    expect(input).toHaveValue("Keep this draft");
+
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(input).toHaveValue(""));
   });
 
   describe("Coach decision", () => {
@@ -554,7 +576,7 @@ describe("chat surface", () => {
 
       expect(committed.defaultPrevented).toBe(true);
       expect(actions.submit).toHaveBeenCalledWith(draft);
-      expect(textarea).toHaveValue("");
+      await waitFor(() => expect(textarea).toHaveValue(""));
     });
 
     it("keeps Shift+Enter as a newline and ignores blank drafts", async () => {
@@ -630,7 +652,7 @@ describe("chat surface", () => {
       expect(strip()).toBeNull();
 
       setChat({
-        queued: [{ id: "queued-1", text: "And my long ride?", command: false }],
+        queued: [{ id: "queued-1", text: "And my long ride?", command: false, restored: false }],
       });
 
       expect(strip()).not.toBeNull();
@@ -643,8 +665,8 @@ describe("chat surface", () => {
       render(<Harness />);
       setChat({
         queued: [
-          { id: "queued-1", text: "And my long ride?", command: false },
-          { id: "queued-2", text: "/status", command: true },
+          { id: "queued-1", text: "And my long ride?", command: false, restored: false },
+          { id: "queued-2", text: "/status", command: true, restored: false },
         ],
       });
 
@@ -656,12 +678,80 @@ describe("chat surface", () => {
       expect(actions.removeQueued).toHaveBeenNthCalledWith(2, "queued-1");
     });
 
+    it("runs only restored commands and offers durable recovery without a second retry", async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+      setChat({
+        interrupted: true,
+        queued: [
+          { id: "queued-1", text: "Try this again", command: false, restored: true },
+          { id: "queued-2", text: "/status", command: true, restored: true },
+        ],
+        retryRequired: {
+          claimId: "claim-1",
+          queuedMessageIds: ["queued-1"],
+          turnId: "turn-1",
+          status: "retry-required",
+        },
+      });
+
+      expect(screen.getByRole("button", { name: "Retry interrupted message" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Remove queued message 1" })).toBeDisabled();
+      const ordinaryRetry = document.querySelector(".chat-retry");
+      expect(ordinaryRetry).toBeInstanceOf(HTMLButtonElement);
+      expect((ordinaryRetry as HTMLButtonElement).hidden).toBe(true);
+      await user.click(screen.getByRole("button", { name: "Retry interrupted message" }));
+      expect(actions.retryQueuedTurn).toHaveBeenCalledWith("claim-1");
+
+      setChat({ interrupted: false, retryRequired: null });
+      await user.click(screen.getByRole("button", { name: "Run command" }));
+      expect(actions.runQueuedCommand).toHaveBeenCalledWith("queued-2");
+    });
+
+    it("wraps long rows, announces queue changes, and shows removal feedback", () => {
+      render(<Harness />);
+      setChat({
+        queued: [
+          {
+            id: "queued-1",
+            text: "This is a very long queued question that must wrap on compact and wide layouts without hiding its actions",
+            command: false,
+            restored: false,
+          },
+          { id: "queued-2", text: "/status", command: true, restored: true },
+        ],
+        queueMutationError: "We couldn’t remove that saved message. Try again.",
+      });
+
+      expect(
+        screen.getByRole("region", { name: "Queued messages, 2 queued messages" }),
+      ).toBeVisible();
+      const live = strip()?.querySelector('[role="status"][aria-live="polite"]');
+      expect(live).toHaveTextContent("2 queued messages");
+      expect(document.querySelector(".chat-queue__text")).toHaveClass(
+        "whitespace-pre-wrap",
+        "break-words",
+      );
+      expect(document.querySelector(".chat-queue__text")).not.toHaveClass("truncate");
+      expect(strip()).toHaveClass("rounded-card", "shadow-elev-2");
+      expect(screen.getByRole("heading", { name: "Queued messages" })).toHaveClass(
+        "text-xs",
+        "font-semibold",
+      );
+      expect(document.querySelector(".chat-queue__item")).toHaveClass("flex-wrap", "items-center");
+      expect(screen.getByRole("button", { name: "Run command" })).toHaveClass("text-xs");
+      expect(screen.getByRole("button", { name: "Remove queued message 1" })).toHaveClass(
+        "text-xs",
+      );
+      expect(screen.getByText("We couldn’t remove that saved message. Try again.")).toBeVisible();
+    });
+
     it("marks queued commands without restoring the legacy monospace face", () => {
       render(<Harness />);
       setChat({
         queued: [
-          { id: "queued-1", text: "And my long ride?", command: false },
-          { id: "queued-2", text: "/status", command: true },
+          { id: "queued-1", text: "And my long ride?", command: false, restored: false },
+          { id: "queued-2", text: "/status", command: true, restored: false },
         ],
       });
 
@@ -677,7 +767,7 @@ describe("chat surface", () => {
       const user = userEvent.setup();
       render(<Harness />);
       setChat({
-        queued: [{ id: "queued-1", text: "And my long ride?", command: false }],
+        queued: [{ id: "queued-1", text: "And my long ride?", command: false, restored: false }],
         workBlocked: true,
       });
 
@@ -692,7 +782,9 @@ describe("chat surface", () => {
         useEnduragentStore.setState({ chatActions: null });
       });
       render(<Harness />);
-      setChat({ queued: [{ id: "queued-1", text: "And my long ride?", command: false }] });
+      setChat({
+        queued: [{ id: "queued-1", text: "And my long ride?", command: false, restored: false }],
+      });
 
       const remove = screen.getByRole("button", { name: "Remove queued message 1" });
       expect(remove).toBeDisabled();

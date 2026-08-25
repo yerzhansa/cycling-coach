@@ -131,6 +131,7 @@ export interface TranscriptDecisionRequestedRecord {
   readonly version: typeof TRANSCRIPT_SCHEMA_VERSION;
   readonly kind: "decision-requested";
   readonly chatId: string;
+  readonly turnId?: string;
   readonly decisionId: string;
   readonly toolCallId: string;
   readonly messageId: string;
@@ -202,6 +203,7 @@ export type TranscriptRecord =
 
 export interface TranscriptDecisionRequestedInput {
   readonly decision: CoachDecisionReadModel;
+  readonly turnId: string;
   readonly toolCallId: string;
   readonly athleteText: string;
   readonly requestedAt: string;
@@ -379,9 +381,7 @@ function isIsoTimestamp(value: string): boolean {
   }
 }
 
-function isDecisionContinuationLineage(
-  value: unknown,
-): value is CoachDecisionContinuationLineage {
+function isDecisionContinuationLineage(value: unknown): value is CoachDecisionContinuationLineage {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
@@ -490,7 +490,7 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
 
   if (value.kind === "decision-requested") {
     if (
-      !hasExactKeys(value, [
+      (!hasExactKeys(value, [
         "version",
         "kind",
         "chatId",
@@ -501,8 +501,23 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
         "question",
         "options",
         "requestedAt",
-      ]) ||
+      ]) &&
+        !hasExactKeys(value, [
+          "version",
+          "kind",
+          "chatId",
+          "turnId",
+          "decisionId",
+          "toolCallId",
+          "messageId",
+          "athleteText",
+          "question",
+          "options",
+          "requestedAt",
+        ])) ||
       typeof value.chatId !== "string" ||
+      (value.turnId !== undefined &&
+        (typeof value.turnId !== "string" || value.turnId.length === 0)) ||
       typeof value.decisionId !== "string" ||
       value.decisionId.length === 0 ||
       typeof value.toolCallId !== "string" ||
@@ -604,8 +619,7 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
       typeof value.turnId !== "string" ||
       value.turnId.length === 0 ||
       typeof value.coachText !== "string" ||
-      (Object.hasOwn(value, "lineage") &&
-        !isDecisionContinuationLineage(value.lineage)) ||
+      (Object.hasOwn(value, "lineage") && !isDecisionContinuationLineage(value.lineage)) ||
       typeof value.completedAt !== "string" ||
       !isIsoTimestamp(value.completedAt)
     )
@@ -1231,6 +1245,7 @@ export class TranscriptStore implements TranscriptWriterPort {
     const parsed = CoachDecisionReadModelSchema.parse(input.decision);
     if (
       parsed.status !== "unanswered" ||
+      input.turnId.length === 0 ||
       input.toolCallId.length === 0 ||
       typeof input.athleteText !== "string" ||
       !isIsoTimestamp(input.requestedAt)
@@ -1246,6 +1261,7 @@ export class TranscriptStore implements TranscriptWriterPort {
       const requestedOptions = parsed.options.map(({ id: _id, ...option }) => option);
       const sameRequest =
         matchingToolCall.athleteText === input.athleteText &&
+        (matchingToolCall.turnId === undefined || matchingToolCall.turnId === input.turnId) &&
         matchingToolCall.question === parsed.question &&
         JSON.stringify(matchingOptions) === JSON.stringify(requestedOptions);
       if (sameRequest && existing !== null) return existing;
@@ -1264,6 +1280,7 @@ export class TranscriptStore implements TranscriptWriterPort {
       version: TRANSCRIPT_SCHEMA_VERSION,
       kind: "decision-requested",
       chatId: parsed.chatId,
+      turnId: input.turnId,
       decisionId: parsed.decisionId,
       toolCallId: input.toolCallId,
       messageId: parsed.messageId,
@@ -1409,6 +1426,18 @@ export class TranscriptStore implements TranscriptWriterPort {
       (record) => record.kind === "decision-requested" && record.decisionId === decisionId,
     );
     return request?.kind === "decision-requested" ? request.athleteText : null;
+  }
+
+  getTerminalTurnIds(chatId: string): ReadonlySet<string> {
+    return new Set(
+      this.readCurrentRecords(chatId).flatMap<string>((record) => {
+        if (record.kind === "turn-completed") return [record.turnId];
+        if (record.kind === "decision-requested" && record.turnId !== undefined) {
+          return [record.turnId];
+        }
+        return [];
+      }),
+    );
   }
 
   private readCurrentRecords(

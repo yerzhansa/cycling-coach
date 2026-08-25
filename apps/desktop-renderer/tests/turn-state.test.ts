@@ -30,6 +30,75 @@ function queued(state: ChatState, ...texts: readonly string[]): ChatState {
 }
 
 describe("desktop turn state", () => {
+  it("keeps an active durable claim hidden across newer queue snapshots", () => {
+    const item = (id: string, position: number) => ({
+      queuedMessageId: id,
+      submissionId: `submission-${id}`,
+      text: id,
+      kind: "ordinary" as const,
+      position,
+      restored: false,
+    });
+    let state = reduceChatState(EMPTY_CHAT_STATE, {
+      type: "queue-snapshot",
+      snapshot: { schemaVersion: 1, revision: 1, items: [item("head", 0)] },
+    });
+    state = reduceChatState(state, { type: "queue-claimed", ids: ["head"] });
+    state = reduceChatState(state, {
+      type: "queue-snapshot",
+      snapshot: { schemaVersion: 1, revision: 2, items: [item("head", 0), item("later", 1)] },
+    });
+    expect(state.queued.map(({ id }) => id)).toEqual(["later"]);
+    expect(state.activeQueueClaimIds).toEqual(["head"]);
+
+    state = reduceChatState(state, {
+      type: "queue-snapshot",
+      snapshot: {
+        schemaVersion: 1,
+        revision: 3,
+        items: [item("head", 0), item("later", 1)],
+        retryRequired: {
+          claimId: "claim-1",
+          queuedMessageIds: ["head"],
+          turnId: "turn-1",
+          status: "retry-required",
+        },
+      },
+    });
+    expect(state.queued.map(({ id }) => id)).toEqual(["head", "later"]);
+    expect(state.activeQueueClaimIds).toEqual([]);
+  });
+
+  it("ignores an equal queue revision after successful reset", () => {
+    const snapshot = {
+      schemaVersion: 1 as const,
+      revision: 2,
+      items: [
+        {
+          queuedMessageId: "queued-1",
+          submissionId: "submission-1",
+          text: "Later",
+          kind: "ordinary" as const,
+          position: 0,
+          restored: false,
+        },
+      ],
+    };
+    const queuedState = reduceChatState(EMPTY_CHAT_STATE, { type: "queue-snapshot", snapshot });
+    const resetting = {
+      ...queuedState,
+      session: {
+        ...queuedState.session,
+        presence: "present" as const,
+        resetPhase: "resetting" as const,
+      },
+    };
+    const reset = reduceChatState(resetting, {
+      type: "reset-succeeded",
+      announcement: "Done",
+    });
+    expect(reduceChatState(reset, { type: "queue-snapshot", snapshot }).queued).toEqual([]);
+  });
   it("owns the one desktop conversation identity", () => {
     expect(DESKTOP_CHAT_ID).toBe("desktop");
   });

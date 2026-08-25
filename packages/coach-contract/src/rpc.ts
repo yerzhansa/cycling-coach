@@ -79,6 +79,16 @@ import {
   type TelegramControlSnapshot,
   type TelegramCredentialInspection,
 } from "./telegram-control.js";
+import {
+  ChatQueueRunResultSchema,
+  ChatQueueSnapshotSchema,
+  EnqueueChatMessageRequestSchema,
+  GetChatQueueRequestSchema,
+  RemoveQueuedChatMessageRequestSchema,
+  ResumeChatQueueRequestSchema,
+  RetryQueuedTurnRequestSchema,
+  RunQueuedCommandRequestSchema,
+} from "./chat-queue.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -173,6 +183,12 @@ export type JsonRpcNotificationEnvelope = z.infer<typeof JsonRpcNotificationEnve
 export const COACH_RPC_METHOD_NAMES = [
   "chat",
   "stopChat",
+  "enqueueChatMessage",
+  "getChatQueue",
+  "removeQueuedChatMessage",
+  "resumeChatQueue",
+  "runQueuedCommand",
+  "retryQueuedTurn",
   "resetSession",
   "hasSession",
   "getCoachDecision",
@@ -1198,6 +1214,54 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
     .object({
       jsonrpc: z.literal("2.0"),
       id: JsonRpcIdSchema,
+      method: z.literal("enqueueChatMessage"),
+      params: EnqueueChatMessageRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getChatQueue"),
+      params: GetChatQueueRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("removeQueuedChatMessage"),
+      params: RemoveQueuedChatMessageRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("resumeChatQueue"),
+      params: ResumeChatQueueRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("runQueuedCommand"),
+      params: RunQueuedCommandRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("retryQueuedTurn"),
+      params: RetryQueuedTurnRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
       method: z.literal("resetSession"),
       params: ResetSessionRequestSchema,
     })
@@ -1540,7 +1604,14 @@ export const CoachTurnEventNotificationEnvelopeSchema = z
     params: z
       .object({
         requestId: JsonRpcIdSchema,
-        requestMethod: z.enum(["chat", "answerCoachDecision", "resumeCoachDecision"]),
+        requestMethod: z.enum([
+          "chat",
+          "resumeChatQueue",
+          "runQueuedCommand",
+          "retryQueuedTurn",
+          "answerCoachDecision",
+          "resumeCoachDecision",
+        ]),
         turnId: z.string().min(1),
         event: TurnEventSchema,
       })
@@ -1626,6 +1697,42 @@ export const COACH_RPC_METHOD_REGISTRY = {
     requestSchema: StopChatRequestSchema,
     responseSchema: StopChatResponseSchema,
     eventSchema: NoRpcEventSchema,
+  },
+  enqueueChatMessage: {
+    wireName: "enqueueChatMessage",
+    requestSchema: EnqueueChatMessageRequestSchema,
+    responseSchema: ChatQueueSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getChatQueue: {
+    wireName: "getChatQueue",
+    requestSchema: GetChatQueueRequestSchema,
+    responseSchema: ChatQueueSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  removeQueuedChatMessage: {
+    wireName: "removeQueuedChatMessage",
+    requestSchema: RemoveQueuedChatMessageRequestSchema,
+    responseSchema: ChatQueueSnapshotSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  resumeChatQueue: {
+    wireName: "resumeChatQueue",
+    requestSchema: ResumeChatQueueRequestSchema,
+    responseSchema: ChatQueueRunResultSchema,
+    eventSchema: TurnEventSchema,
+  },
+  runQueuedCommand: {
+    wireName: "runQueuedCommand",
+    requestSchema: RunQueuedCommandRequestSchema,
+    responseSchema: ChatQueueRunResultSchema,
+    eventSchema: TurnEventSchema,
+  },
+  retryQueuedTurn: {
+    wireName: "retryQueuedTurn",
+    requestSchema: RetryQueuedTurnRequestSchema,
+    responseSchema: ChatQueueRunResultSchema,
+    eventSchema: TurnEventSchema,
   },
   resetSession: {
     wireName: "resetSession",

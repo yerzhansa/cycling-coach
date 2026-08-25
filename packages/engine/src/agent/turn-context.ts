@@ -30,6 +30,7 @@ export interface TurnContext {
   readonly resolvedCs: ResolvedCs | null;
   /** Chat this turn belongs to; the key a host confirmation surface resolves a proposal against. */
   readonly chatId: string;
+  readonly turnId: string;
   readonly athleteText: string;
   /** Per-turn read-tool memoizer cache. */
   readonly readToolCache: Map<string, unknown>;
@@ -53,11 +54,13 @@ export function createTurnContext(
   chatId: string = "",
   referenceProvenance: SourceProvenance = EMPTY_PROVENANCE,
   athleteText: string = "",
+  turnId: string = "",
 ): TurnContext {
   const ctx: BrandedTurnContext = {
     [TURN_CONTEXT_BRAND]: true,
     resolvedCs,
     chatId,
+    turnId,
     athleteText,
     readToolCache: new Map<string, unknown>(),
     turnWrites: { writesCommitted: 0 },

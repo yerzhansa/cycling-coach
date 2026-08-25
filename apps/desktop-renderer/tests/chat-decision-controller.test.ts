@@ -52,7 +52,7 @@ function completed(): Extract<CoachDecisionReadModel, { status: "answered" }> {
 
 function emit(
   options: TestCallOptions | undefined,
-  requestMethod: "chat" | "answerCoachDecision" | "resumeCoachDecision",
+  requestMethod: "chat" | "resumeChatQueue" | "answerCoachDecision" | "resumeCoachDecision",
   event: TurnEvent,
   requestId: number,
 ): void {
@@ -90,12 +90,44 @@ function subject(
 ) {
   const states: ChatState[] = [];
   const controls: ChatViewControls[] = [];
-  const call = vi.fn(async (method: string, _request: unknown, options?: TestCallOptions) => {
-    if (method === "chat") {
-      emit(options, "chat", { type: "turn-start", turnId: "turn-1", chatId: "desktop" }, 1);
+  let queueRevision = 0;
+  let queued:
+    | {
+        queuedMessageId: string;
+        submissionId: string;
+        text: string;
+        kind: "ordinary";
+        position: number;
+        restored: boolean;
+      }
+    | undefined;
+  const call = vi.fn(async (method: string, request: unknown, options?: TestCallOptions) => {
+    if (method === "enqueueChatMessage") {
+      const input = request as { submissionId: string; text: string };
+      queueRevision += 1;
+      queued = {
+        queuedMessageId: `queued-${queueRevision}`,
+        submissionId: input.submissionId,
+        text: input.text,
+        kind: "ordinary",
+        position: 0,
+        restored: false,
+      };
+      return { schemaVersion: 1, revision: queueRevision, items: [queued] };
+    }
+    if (method === "getChatQueue") {
+      return {
+        schemaVersion: 1,
+        revision: queueRevision,
+        items: queued === undefined ? [] : [queued],
+      };
+    }
+    if (method === "chat" || method === "resumeChatQueue") {
+      const requestMethod = method;
+      emit(options, requestMethod, { type: "turn-start", turnId: "turn-1", chatId: "desktop" }, 1);
       emit(
         options,
-        "chat",
+        requestMethod,
         { type: "decision-requested", turnId: "turn-1", chatId: "desktop", decision: unanswered() },
         1,
       );
@@ -104,7 +136,14 @@ function subject(
         id: 1,
         result: { status: "decision-required", decision: unanswered() },
       });
-      return { status: "decision-required", decision: unanswered() };
+      const response = { status: "decision-required" as const, decision: unanswered() };
+      if (method === "chat") return response;
+      queueRevision += 1;
+      queued = undefined;
+      return {
+        snapshot: { schemaVersion: 1, revision: queueRevision, items: [] },
+        response,
+      };
     }
     if (method === "answerCoachDecision" || method === "resumeCoachDecision") {
       if (continuationOverride !== undefined) return continuationOverride(method, options);
@@ -154,8 +193,19 @@ function subject(
     },
     refreshTrainingContext: async () => {},
     refreshSpend: async () => {},
+    initialQueueSnapshot: { schemaVersion: 1, revision: 0, items: [] },
   });
-  return { controller, call, states, controls };
+  const submittedController = {
+    ...controller,
+    async submit(message: string): Promise<boolean> {
+      const acknowledged = await controller.submit(message);
+      if (acknowledged) {
+        await vi.waitFor(() => expect(states.at(-1)?.status).not.toBe("streaming"));
+      }
+      return acknowledged;
+    },
+  };
+  return { controller: submittedController, call, states, controls };
 }
 
 describe("Coach decision controller", () => {
@@ -244,12 +294,7 @@ describe("Coach decision controller", () => {
         10 + attempt,
       );
       if (attempt === 1) {
-        emit(
-          options,
-          method,
-          { type: "text_delta", turnId: "turn-2", delta: "Partial" },
-          11,
-        );
+        emit(options, method, { type: "text_delta", turnId: "turn-2", delta: "Partial" }, 11);
         await stopped.promise;
         emit(
           options,
@@ -272,8 +317,7 @@ describe("Coach decision controller", () => {
         {
           type: "final-text",
           turnId: "turn-3",
-          text:
-            resumed.continuation.status === "completed" ? resumed.continuation.coachText : "",
+          text: resumed.continuation.status === "completed" ? resumed.continuation.coachText : "",
         },
         12,
       );
@@ -281,12 +325,19 @@ describe("Coach decision controller", () => {
       return { decision: resumed };
     });
     await controller.submit("What should I do tomorrow?");
-    const answer = controller.answerDecision("decision-1", { kind: "option", optionId: "recovery" });
+    const answer = controller.answerDecision("decision-1", {
+      kind: "option",
+      optionId: "recovery",
+    });
     await vi.waitFor(() => expect(states.at(-1)?.status).toBe("streaming"));
     controller.stop();
     await vi.waitFor(() =>
       expect(call.mock.calls.some(([method]) => method === "stopChat")).toBe(true),
     );
+    expect(call.mock.calls.find(([method]) => method === "stopChat")?.[1]).toEqual({
+      chatId: "desktop",
+      turnId: "turn-2",
+    });
     stopped.resolve();
     await answer;
 
@@ -297,20 +348,21 @@ describe("Coach decision controller", () => {
   });
 
   it("keeps Chat blocked after decision hydration fails and recovers through reconnect", async () => {
-    const decisionRead = vi.fn<() => Promise<CoachDecisionReadModel | null>>()
+    const decisionRead = vi
+      .fn<() => Promise<CoachDecisionReadModel | null>>()
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce(null);
     const { controller, call, controls } = subject(null, undefined, decisionRead);
     await controller.start();
     expect(controls.at(-1)?.decisionLoadError).toContain("saved Coach question");
     await controller.submit("Blocked while unknown");
-    expect(call.mock.calls.filter(([method]) => method === "chat")).toHaveLength(0);
+    expect(call.mock.calls.filter(([method]) => method === "resumeChatQueue")).toHaveLength(0);
 
     await controller.retryDecision();
     expect(controls.at(-1)?.decisionLoading).toBe(false);
     expect(controls.at(-1)?.decisionLoadError).toBeNull();
     await controller.submit("Now available");
-    expect(call.mock.calls.filter(([method]) => method === "chat")).toHaveLength(1);
+    expect(call.mock.calls.filter(([method]) => method === "resumeChatQueue")).toHaveLength(1);
   });
 
   it("restores a committed continuation after the transport fails before its terminal result", async () => {
@@ -351,11 +403,11 @@ describe("Coach decision controller", () => {
     void controller.start();
     await vi.waitFor(() => expect(controls.at(-1)?.decisionLoading).toBe(true));
     await controller.submit("Send too early");
-    expect(call.mock.calls.filter(([method]) => method === "chat")).toHaveLength(0);
+    expect(call.mock.calls.filter(([method]) => method === "resumeChatQueue")).toHaveLength(0);
 
     decisionRead.resolve(null);
     await vi.waitFor(() => expect(controls.at(-1)?.decisionLoading).toBe(false));
     await controller.submit("Send after recovery check");
-    expect(call.mock.calls.filter(([method]) => method === "chat")).toHaveLength(1);
+    expect(call.mock.calls.filter(([method]) => method === "resumeChatQueue")).toHaveLength(1);
   });
 });

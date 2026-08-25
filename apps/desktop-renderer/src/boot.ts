@@ -195,9 +195,11 @@ export function bootRenderer(): Disposer {
     }).render,
   });
   store.getState().bindChatActions({
-    submit: (message) => void chatController.submit(message),
+    submit: (message) => chatController.submit(message),
     stop: () => chatController.stop(),
     removeQueued: (id) => chatController.removeQueued(id),
+    runQueuedCommand: (id) => void chatController.runQueuedCommand(id),
+    retryQueuedTurn: (claimId) => void chatController.retryQueuedTurn(claimId),
     retry: () => void chatController.retryInterrupted(),
     loadEarlier: () => void chatController.loadEarlier(),
     retryHydration: () => void chatController.retryHydration(),
