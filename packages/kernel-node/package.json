@@ -17,7 +17,8 @@
     "./ingest": "./dist/ingest/index.js",
     "./capture-manifest": "./dist/capture-manifest/index.js",
     "./service": "./dist/service/index.js",
-    "./coach-dev": "./dist/coach-dev.js"
+    "./coach-dev": "./dist/coach-dev.js",
+    "./planning": "./dist/planning/index.js"
   },
   "engines": {
     "node": ">=24"
@@ -25,7 +26,7 @@
   "scripts": {
     "build": "tsup",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "pnpm --dir ../.. exec vitest run --project workspace packages/kernel-node/tests"
   },
   "dependencies": {
     "@enduragent/kernel": "workspace:*",

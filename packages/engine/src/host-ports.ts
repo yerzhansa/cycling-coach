@@ -83,7 +83,11 @@ export interface MemoryStorePort {
   readDailyNotesInRange(from: string, to: string): Array<{ date: string; text: string }>;
   readEventsRaw(): string;
   appendEvent(event: LedgerEventInput, provenance?: SourceProvenance): void;
-  savePlan(plan: unknown, source?: MemoryWriteSource, provenance?: SourceProvenance): void;
+  savePlan(
+    plan: unknown,
+    source?: MemoryWriteSource,
+    provenance?: SourceProvenance,
+  ): void | Promise<void>;
   loadPlan(): unknown | null;
   /** Source labels bound to the exact visible result of a synchronous tool read. */
   provenanceForToolRead?(
