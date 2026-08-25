@@ -36,6 +36,7 @@ export interface ActiveTurn {
 export interface ChatTranscriptMessage {
   readonly id: string;
   readonly turnId?: string;
+  readonly decisionId?: string;
   readonly role: "athlete" | "coach";
   readonly text: string;
   readonly delivery: "complete" | "streaming" | "interrupted";
@@ -86,8 +87,10 @@ export type ChatAction =
       readonly includeUser: boolean;
     }
   | { readonly type: "bind-turn"; readonly requestKey: number; readonly turnId: string }
+  | { readonly type: "bind-decision"; readonly requestKey: number; readonly decisionId: string }
   | { readonly type: "event"; readonly requestKey: number; readonly event: TurnEvent }
   | { readonly type: "complete"; readonly requestKey: number }
+  | { readonly type: "discard"; readonly requestKey: number }
   | { readonly type: "interrupt"; readonly requestKey: number; readonly copy: string }
   | { readonly type: "retry-pending"; readonly requestKey: number }
   | { readonly type: "fail"; readonly requestKey: number; readonly copy: string }
@@ -205,6 +208,19 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
             activeTurn: { ...active, turnId: action.turnId },
           };
     }
+    case "bind-decision": {
+      const active = current(state, action.requestKey);
+      return active === null || active.userMessageId === null
+        ? state
+        : {
+            ...state,
+            messages: state.messages.map((message) =>
+              message.id === active.userMessageId
+                ? { ...message, decisionId: action.decisionId }
+                : message,
+            ),
+          };
+    }
     case "event": {
       const active = current(state, action.requestKey);
       if (active === null || state.status !== "streaming") return state;
@@ -261,6 +277,8 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         case "tool-end":
         case "step-text":
           return { ...state, progress: "Checking your training data…" };
+        case "decision-requested":
+          return state;
         default:
           return assertNever(action.event);
       }
@@ -275,6 +293,17 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
         progress: null,
         session: { ...state.session, presence: "present" },
         messages: updateAssistant(state, active, active.finalText, "complete"),
+      };
+    }
+    case "discard": {
+      const active = current(state, action.requestKey);
+      if (active === null) return state;
+      return {
+        ...state,
+        status: "idle",
+        progress: null,
+        activeTurn: null,
+        messages: state.messages.filter((message) => message.id !== active.assistantMessageId),
       };
     }
     case "interrupt": {

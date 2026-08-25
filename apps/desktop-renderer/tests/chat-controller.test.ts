@@ -13,6 +13,7 @@ import {
   CHAT_EMPTY_RESPONSE_COPY,
   CHAT_FAILURE_COPY,
   CHAT_PROTOCOL_FAILURE_COPY,
+  CHAT_RESPONSE_STOPPED_COPY,
   NEW_CONVERSATION_MEMORY_WARNING_COPY,
   NEW_CONVERSATION_SUCCESS_COPY,
   NEW_CONVERSATION_UNCERTAIN_COPY,
@@ -21,12 +22,7 @@ import {
 } from "../src/chat/controller.js";
 import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/chat/limits.js";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
-import {
-  CHAT_RESPONSE_STOPPED_COPY,
-  CHAT_WORKING_COPY,
-  EMPTY_CHAT_STATE,
-  type ChatState,
-} from "../src/turn-state.js";
+import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state.js";
 
 function envelope(event: TurnEvent, requestId = 1): CoachTurnEventNotificationEnvelope {
   return {
@@ -104,6 +100,7 @@ function client(
           request as { chatId: string },
         ) as never;
       }
+      if (method === "getCoachDecision") return Promise.resolve({ decision: null }) as never;
       if (method !== "chat") throw new TypeError();
       return implementation(
         request as { chatId: string; message: string },
@@ -324,47 +321,6 @@ describe("chat controller", () => {
     await submission;
   });
 
-  it("clears only generic working feedback on the first substantive delta", async () => {
-    const fake = client(async (_request, options) => {
-      deliver(options, { type: "text_delta", turnId: "turn-1", delta: " \n" });
-      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Ride easy." });
-      deliver(options, { type: "final-text", turnId: "turn-1", text: "Ride easy." });
-      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Ride easy." } });
-      return { text: "Ride easy." };
-    });
-    const { controller, states } = subject(fake);
-
-    await controller.submit("Continue");
-
-    const whitespace = states.find((state) => state.activeTurn?.draft === " \n");
-    expect(whitespace?.progress).toBe(CHAT_WORKING_COPY);
-    expect(whitespace?.messages.at(-1)?.text).toBe("");
-    const firstText = states.find((state) => state.activeTurn?.draft === " \nRide easy.");
-    expect(firstText?.progress).toBeNull();
-    expect(firstText?.messages.at(-1)?.text).toBe(" \nRide easy.");
-  });
-
-  it("renders ordered deltas immediately and canonical final text once without turn-start", async () => {
-    const fake = client(async (_request, options) => {
-      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Hel" });
-      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "lo" });
-      deliver(options, { type: "final-text", turnId: "turn-1", text: "Hello." });
-      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Hello." } });
-      return { text: "Hello." };
-    });
-    const { controller, states, refresh, refreshSpend } = subject(fake);
-    await controller.submit("Original message ");
-    expect(states.some((state) => state.messages.at(-1)?.text === "Hel")).toBe(true);
-    expect(states.at(-1)?.messages.filter((message) => message.text === "Hello.")).toHaveLength(1);
-    expect(states.at(-1)?.session.presence).toBe("present");
-    expect(vi.mocked(fake.call).mock.calls[0]?.slice(0, 2)).toEqual([
-      "chat",
-      { chatId: "desktop", message: "Original message " },
-    ]);
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(refreshSpend).toHaveBeenCalledTimes(1);
-  });
-
   it("stops only the active response and retries on the same connected client", async () => {
     let firstOptions: CoachClientCallOptions<"chat"> | undefined;
     let finishFirst!: (value: { text: string }) => void;
@@ -432,6 +388,61 @@ describe("chat controller", () => {
       text: "Recovered",
       delivery: "complete",
     });
+  });
+
+  it("ignores Stop after a response has completed", async () => {
+    const fake = client(replies());
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Continue");
+    controller.stop();
+
+    expect(states.at(-1)?.status).toBe("idle");
+    expect(states.at(-1)?.messages.at(-1)).toMatchObject({
+      text: "Reply 1",
+      delivery: "complete",
+    });
+  });
+
+  it("clears only generic working feedback on the first substantive delta", async () => {
+    const fake = client(async (_request, options) => {
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: " \n" });
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Ride easy." });
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Ride easy." });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Ride easy." } });
+      return { text: "Ride easy." };
+    });
+    const { controller, states } = subject(fake);
+
+    await controller.submit("Continue");
+
+    const whitespace = states.find((state) => state.activeTurn?.draft === " \n");
+    expect(whitespace?.progress).toBe(CHAT_WORKING_COPY);
+    expect(whitespace?.messages.at(-1)?.text).toBe("");
+    const firstText = states.find((state) => state.activeTurn?.draft === " \nRide easy.");
+    expect(firstText?.progress).toBeNull();
+    expect(firstText?.messages.at(-1)?.text).toBe(" \nRide easy.");
+  });
+
+  it("renders ordered deltas immediately and canonical final text once without turn-start", async () => {
+    const fake = client(async (_request, options) => {
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Hel" });
+      deliver(options, { type: "text_delta", turnId: "turn-1", delta: "lo" });
+      deliver(options, { type: "final-text", turnId: "turn-1", text: "Hello." });
+      options?.onTerminalEnvelope?.({ jsonrpc: "2.0", id: 1, result: { text: "Hello." } });
+      return { text: "Hello." };
+    });
+    const { controller, states, refresh, refreshSpend } = subject(fake);
+    await controller.submit("Original message ");
+    expect(states.some((state) => state.messages.at(-1)?.text === "Hel")).toBe(true);
+    expect(states.at(-1)?.messages.filter((message) => message.text === "Hello.")).toHaveLength(1);
+    expect(states.at(-1)?.session.presence).toBe("present");
+    expect(vi.mocked(fake.call).mock.calls[0]?.slice(0, 2)).toEqual([
+      "chat",
+      { chatId: "desktop", message: "Original message " },
+    ]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refreshSpend).toHaveBeenCalledTimes(1);
   });
 
   it("admits cumulative text deltas at the exact response boundary", async () => {
@@ -974,7 +985,10 @@ describe("chat controller", () => {
 
     expect(duplicate).toBe(first);
     await first;
-    expect(vi.mocked(fake.call).mock.calls).toEqual([["hasSession", { chatId: "desktop" }]]);
+    expect(vi.mocked(fake.call).mock.calls).toEqual([
+      ["getCoachDecision", { chatId: "desktop" }],
+      ["hasSession", { chatId: "desktop" }],
+    ]);
     expect(states.at(-1)?.session.presence).toBe("present");
   });
 
@@ -994,9 +1008,11 @@ describe("chat controller", () => {
     await second.controller.start();
     expect(second.states.at(-1)?.session).toEqual(EMPTY_CHAT_STATE.session);
     expect(second.provider.reconnect).not.toHaveBeenCalled();
-    expect(vi.mocked(failed.call).mock.calls.filter(([method]) => method !== "hasSession")).toEqual(
-      [],
-    );
+    expect(
+      vi
+        .mocked(failed.call)
+        .mock.calls.filter(([method]) => method !== "hasSession" && method !== "getCoachDecision"),
+    ).toEqual([]);
   });
 
   it("uses visible local content without promoting an absent session after pre-client failure", async () => {
@@ -1061,9 +1077,10 @@ describe("chat controller", () => {
       },
       { hasSession: async () => probe },
     );
-    const { controller, states } = subject(fake);
+    const { controller, states, controls } = subject(fake);
 
     const starting = controller.start();
+    await vi.waitFor(() => expect(controls.at(-1)?.decisionLoading).toBe(false));
     await controller.submit("Continue");
     resolveProbe({ hasSession: false });
     await starting;
@@ -1088,9 +1105,10 @@ describe("chat controller", () => {
         resetSession: async () => ({ memoryFlushed: true }),
       },
     );
-    const { controller, states } = subject(fake);
+    const { controller, states, controls } = subject(fake);
 
     const starting = controller.start();
+    await vi.waitFor(() => expect(controls.at(-1)?.decisionLoading).toBe(false));
     await controller.submit("Continue");
     expect(controller.openNewConversation()).toBe(true);
     await controller.confirmNewConversation();
@@ -1373,6 +1391,64 @@ describe("chat controller", () => {
     ]);
   });
 
+  it("drains queued messages after the athlete stops the active response", async () => {
+    let turn = 0;
+    let firstOptions: CoachClientCallOptions<"chat"> | undefined;
+    let finishFirst!: (value: { text: string }) => void;
+    const firstResult = new Promise<{ text: string }>((resolve) => {
+      finishFirst = resolve;
+    });
+    const fake = client(
+      async (_request, options) => {
+        turn += 1;
+        if (turn === 1) {
+          firstOptions = options;
+          deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial" });
+          return firstResult;
+        }
+        deliver(options, { type: "final-text", turnId: "turn-2", text: "Queued reply" });
+        options?.onTerminalEnvelope?.({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { text: "Queued reply" },
+        });
+        return { text: "Queued reply" };
+      },
+      {
+        stopChat: async () => {
+          deliver(firstOptions, {
+            type: "interrupted",
+            turnId: "turn-1",
+            chatId: "desktop",
+            text: "Partial",
+          });
+          firstOptions?.onTerminalEnvelope?.({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { text: "Partial" },
+          });
+          finishFirst({ text: "Partial" });
+          return { stopped: true };
+        },
+      },
+    );
+    const { controller, states } = subject(fake);
+
+    const submission = controller.submit("Opening question");
+    await controller.submit("Queued question");
+    controller.stop();
+    await submission;
+
+    expect(chatMessages(fake)).toEqual(["Opening question", "Queued question"]);
+    expect(states.at(-1)?.queued).toEqual([]);
+    expect(states.at(-1)?.messages.map((message) => message.text)).toEqual([
+      "Opening question",
+      "Partial",
+      "Queued question",
+      "Queued reply",
+    ]);
+  });
+
   it("coalesces queued free text into one turn and keeps each command on its own turn", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -1617,8 +1693,9 @@ describe("chat controller", () => {
         resetSession: async () => resetGate,
       },
     );
-    const { controller, states, refreshSpend } = subject(fake);
+    const { controller, states, controls, refreshSpend } = subject(fake);
     const starting = controller.start();
+    await vi.waitFor(() => expect(controls.at(-1)?.decisionLoading).toBe(false));
     await controller.submit("Original");
     expect(controller.openNewConversation()).toBe(true);
     refreshSpend.mockClear();

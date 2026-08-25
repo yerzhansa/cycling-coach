@@ -1,3 +1,4 @@
+import type { TranscriptPageEntry } from "@enduragent/coach-contract";
 import type { ChatTranscriptMessage } from "../turn-state.js";
 
 export const TRANSCRIPT_HYDRATION_PAGE_LIMIT = 25;
@@ -8,7 +9,6 @@ export interface TranscriptTurn {
   readonly completedAt: string;
   readonly athleteText: string;
   readonly coachText: string;
-  readonly delivery?: "interrupted";
 }
 
 export type TranscriptPage =
@@ -23,6 +23,13 @@ export type TranscriptPage =
       readonly status: "restart-required";
       readonly turns: readonly [];
       readonly nextCursor: null;
+    }
+  | {
+      readonly schemaVersion: 2;
+      readonly status: "page";
+      readonly turns: readonly TranscriptTurn[];
+      readonly entries: readonly TranscriptPageEntry[];
+      readonly nextCursor: string | null;
     };
 
 export type TranscriptHydrationStatus = "idle" | "loading" | "ready" | "failed";
@@ -30,6 +37,7 @@ export type TranscriptHydrationChange = "none" | "initial" | "prepend" | "clear"
 
 export interface TranscriptHydrationSnapshot {
   readonly turns: readonly TranscriptTurn[];
+  readonly entries: readonly TranscriptPageEntry[];
   readonly nextCursor: string | null;
   readonly status: TranscriptHydrationStatus;
   readonly revision: number;
@@ -53,6 +61,7 @@ interface FailedRequest {
 
 const EMPTY_HYDRATION: TranscriptHydrationSnapshot = Object.freeze({
   turns: Object.freeze([]),
+  entries: Object.freeze([]),
   nextCursor: null,
   status: "idle",
   revision: 0,
@@ -75,33 +84,90 @@ function uniqueTurns(
   });
 }
 
+function uniqueEntries(
+  incoming: readonly TranscriptPageEntry[],
+  existing: readonly TranscriptPageEntry[] = [],
+): readonly TranscriptPageEntry[] {
+  const seen = new Set(existing.map((entry) => JSON.stringify(entry)));
+  return incoming.filter((entry) => {
+    const key = JSON.stringify(entry);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function mergeHydratedMessages(
   turns: readonly TranscriptTurn[],
   liveMessages: readonly ChatTranscriptMessage[],
+  entries: readonly TranscriptPageEntry[] = [],
 ): readonly ChatTranscriptMessage[] {
   const liveTurnIds = new Set(
     liveMessages.flatMap((message) => (message.turnId === undefined ? [] : [message.turnId])),
   );
-  const history = turns
-    .filter((turn) => !liveTurnIds.has(turn.turnId))
-    .flatMap((turn): readonly ChatTranscriptMessage[] => [
+  const liveDecisionIds = new Set(
+    liveMessages.flatMap((message) =>
+      message.decisionId === undefined ? [] : [message.decisionId],
+    ),
+  );
+  const projectedEntries: readonly TranscriptPageEntry[] =
+    entries.length > 0 ? entries : turns.map((turn) => ({ kind: "turn", ...turn }));
+  const history = projectedEntries.flatMap((entry): readonly ChatTranscriptMessage[] => {
+    if (entry.kind === "turn") {
+      if (liveTurnIds.has(entry.turnId)) return [];
+      return [
+        {
+          id: `history:athlete:${entry.turnId}`,
+          turnId: entry.turnId,
+          role: "athlete",
+          text: entry.athleteText,
+          delivery: "complete",
+          historical: true,
+        },
+        {
+          id: `history:coach:${entry.turnId}`,
+          turnId: entry.turnId,
+          role: "coach",
+          text: entry.coachText,
+          delivery: entry.delivery ?? "complete",
+          historical: true,
+        },
+      ];
+    }
+    if (
+      entry.kind === "decision-requested" &&
+      !liveDecisionIds.has(entry.decision.decisionId) &&
+      /\S/u.test(entry.athleteText)
+    ) {
+      return [
+        {
+          id: `history:decision-athlete:${entry.decision.decisionId}`,
+          role: "athlete",
+          text: entry.athleteText,
+          delivery: "complete",
+          historical: true,
+        },
+      ];
+    }
+    if (
+      entry.kind !== "decision-continuation-completed" ||
+      liveDecisionIds.has(entry.decisionId) ||
+      liveTurnIds.has(entry.turnId) ||
+      !/\S/u.test(entry.coachText)
+    ) {
+      return [];
+    }
+    return [
       {
-        id: `history:athlete:${turn.turnId}`,
-        turnId: turn.turnId,
-        role: "athlete",
-        text: turn.athleteText,
+        id: `history:decision-coach:${entry.continuationId}`,
+        turnId: entry.turnId,
+        role: "coach",
+        text: entry.coachText,
         delivery: "complete",
         historical: true,
       },
-      {
-        id: `history:coach:${turn.turnId}`,
-        turnId: turn.turnId,
-        role: "coach",
-        text: turn.coachText,
-        delivery: turn.delivery ?? "complete",
-        historical: true,
-      },
-    ]);
+    ];
+  });
   return [...history, ...liveMessages];
 }
 
@@ -136,9 +202,15 @@ export function createTranscriptHydrator(input: {
       mode === "initial"
         ? uniqueTurns(page.turns)
         : [...uniqueTurns(page.turns, snapshot.turns), ...snapshot.turns];
+    const pageEntries = page.schemaVersion === 2 ? page.entries : [];
+    const entries =
+      mode === "initial"
+        ? uniqueEntries(pageEntries)
+        : [...uniqueEntries(pageEntries, snapshot.entries), ...snapshot.entries];
     failedRequest = undefined;
     publish({
       turns,
+      entries,
       nextCursor: page.nextCursor,
       status: "ready",
       revision: snapshot.revision + 1,
@@ -165,6 +237,7 @@ export function createTranscriptHydrator(input: {
         }
         publish({
           turns: [],
+          entries: [],
           nextCursor: null,
           status: "loading",
           revision: snapshot.revision + 1,
@@ -239,6 +312,7 @@ export function createTranscriptHydrator(input: {
       task = undefined;
       publish({
         turns: [],
+        entries: [],
         nextCursor: null,
         status: "ready",
         revision: snapshot.revision + 1,

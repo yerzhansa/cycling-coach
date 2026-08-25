@@ -1,5 +1,6 @@
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import { EMPTY_PROVENANCE, type SourceProvenance } from "../provenance.js";
+import type { CoachDecisionReadModel } from "@enduragent/coach-contract";
 
 export interface TurnWriteRecord {
   writesCommitted: number;
@@ -8,6 +9,11 @@ export interface TurnWriteRecord {
 
 export interface TurnProvenanceRecord {
   value: SourceProvenance;
+}
+
+export interface TurnDecisionRecord {
+  requested: CoachDecisionReadModel | null;
+  fallbackText: string | null;
 }
 
 // Explicit per-turn state, threaded to tool execution through the
@@ -24,6 +30,7 @@ export interface TurnContext {
   readonly resolvedCs: ResolvedCs | null;
   /** Chat this turn belongs to; the key a host confirmation surface resolves a proposal against. */
   readonly chatId: string;
+  readonly athleteText: string;
   /** Per-turn read-tool memoizer cache. */
   readonly readToolCache: Map<string, unknown>;
   /** Committed-write record; a committed write makes the turn non-replayable. */
@@ -32,6 +39,7 @@ export interface TurnContext {
   readonly provenance: TurnProvenanceRecord;
   /** Source labels of the reference snapshot the channel resolved this turn's anchor from. */
   readonly referenceProvenance: SourceProvenance;
+  readonly decision: TurnDecisionRecord;
 }
 
 const TURN_CONTEXT_BRAND = Symbol("turn-context");
@@ -44,15 +52,18 @@ export function createTurnContext(
   resolvedCs: ResolvedCs | null,
   chatId: string = "",
   referenceProvenance: SourceProvenance = EMPTY_PROVENANCE,
+  athleteText: string = "",
 ): TurnContext {
   const ctx: BrandedTurnContext = {
     [TURN_CONTEXT_BRAND]: true,
     resolvedCs,
     chatId,
+    athleteText,
     readToolCache: new Map<string, unknown>(),
     turnWrites: { writesCommitted: 0 },
     provenance: { value: EMPTY_PROVENANCE },
     referenceProvenance,
+    decision: { requested: null, fallbackText: null },
   };
   return ctx;
 }

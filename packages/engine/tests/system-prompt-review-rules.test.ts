@@ -65,10 +65,11 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
     expect(sections[5]).toMatch(/^# Voice & Register/);
     expect(sections[6]).toMatch(/^# Workout Review/);
     expect(sections[7]).toMatch(/^# Tool-Call Budget/);
-    expect(sections[8]).toContain("cache boundary:");
-    expect(sections[8]).toContain("# Athlete Context");
-    expect(sections[9]).toMatch(/^# Current Date & Time/);
-    expect(sections.length).toBe(10);
+    expect(sections[8]).toMatch(/^# Material Coach Decisions/);
+    expect(sections[9]).toContain("cache boundary:");
+    expect(sections[9]).toContain("# Athlete Context");
+    expect(sections[10]).toMatch(/^# Current Date & Time/);
+    expect(sections.length).toBe(11);
     expect(prompt).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
   });
 
@@ -79,6 +80,19 @@ describe("buildSystemPrompt — review + data-grounding placement", () => {
       .find((section) => section.startsWith("# Data Source Attribution"));
     expect(rule).toContain("host handles any required data-source attribution");
     expect(rule).toContain("Do not add or infer attribution yourself.");
+  });
+
+  it("limits the host-owned decision panel to material non-mutating choices", () => {
+    const prompt = buildSystemPrompt(persona, makeFakeMemory("ctx"));
+    const rule = prompt
+      .split("\n\n---\n\n")
+      .find((section) => section.startsWith("# Material Coach Decisions"));
+    expect(rule).toContain("material choice between coaching or Plan directions");
+    expect(rule).toContain("2–5 options");
+    expect(rule).toContain("Recommend at most one");
+    expect(rule).toContain("Call the tool alone");
+    expect(rule).toContain("Never use it for medical red flags");
+    expect(rule).toContain("mutate Plan, Calendar, or Training");
   });
 
   it("carries the cross-sport register-mirroring + name-your-basis voice block", () => {

@@ -16,6 +16,7 @@ export type {
   CallerRole,
   ChatLineage,
   ChatStorePort,
+  CoachDecisionStorePort,
   ConversationResetInput,
   EngineConfig,
   EngineDataSource,
@@ -40,8 +41,8 @@ export type {
   StoredDataFreshness,
   ToolConfirmationPort,
   TranscriptCompletedTurnInput,
-  TranscriptInterruptedTurnInput,
   TranscriptConversationBoundaryReason,
+  TranscriptInterruptedTurnInput,
   TranscriptWriterPort,
   UsageCost,
   UsageCostBasis,
@@ -57,17 +58,26 @@ export interface CreateCoachEngineInput {
 export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
   const agent = new CoachAgent(input.sport, input.ports);
   return {
-    chat: async (request, onEvent) => ({
-      text: await agent.chat(
+    chat: async (request, onEvent) => {
+      let decision;
+      const text = await agent.chat(
         request.chatId,
         request.message,
         request.turn as
           | { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance }
           | undefined,
         onEvent,
-      ),
-    }),
+        (requested) => {
+          decision = requested;
+        },
+      );
+      return decision === undefined ? { text } : { text, decision };
+    },
     stopChat: async (request) => ({ stopped: agent.stopChat(request.chatId) }),
+    getCoachDecision: (request) => agent.getCoachDecision(request),
+    answerCoachDecision: (request, onEvent) => agent.answerCoachDecision(request, onEvent),
+    skipCoachDecision: (request) => agent.skipCoachDecision(request),
+    resumeCoachDecision: (request, onEvent) => agent.resumeCoachDecision(request, onEvent),
     resetSession: (request) => agent.resetSession(request.chatId),
     hasSession: async (request) => ({ hasSession: agent.hasSession(request.chatId) }),
     getAthleteState: () => agent.getAthleteState(),

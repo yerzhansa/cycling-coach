@@ -201,10 +201,13 @@ export function bootRenderer(): Disposer {
     retry: () => void chatController.retryInterrupted(),
     loadEarlier: () => void chatController.loadEarlier(),
     retryHydration: () => void chatController.retryHydration(),
+    retryDecision: () => void chatController.retryDecision(),
     openNewConversation: () => void chatController.openNewConversation(),
     cancelNewConversation: () => chatController.cancelNewConversation(),
     confirmNewConversation: () => void chatController.confirmNewConversation(),
     retryFirstSync: () => void firstSyncController.retry(),
+    answerDecision: (decisionId, answer) => void chatController.answerDecision(decisionId, answer),
+    skipDecision: (decisionId) => void chatController.skipDecision(decisionId),
   });
 
   let onboardingNeedsReconnect = false;

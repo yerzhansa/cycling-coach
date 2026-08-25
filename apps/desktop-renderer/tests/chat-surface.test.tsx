@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { CoachDecisionReadModel } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Shell } from "../src/app/Shell.js";
@@ -13,6 +14,7 @@ import {
 } from "../src/state/chat-slice.js";
 import { resetChatStream } from "../src/state/chat-stream.js";
 import { CLOSED_ONBOARDING, READY_ONBOARDING } from "../src/state/onboarding-slice.js";
+import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { SLASH_COMMANDS } from "../src/chat/commands.js";
 import { ChatView } from "../src/ui/chat/ChatView.js";
@@ -25,10 +27,13 @@ function stubActions(): ChatActions {
     retry: vi.fn(),
     loadEarlier: vi.fn(),
     retryHydration: vi.fn(),
+    retryDecision: vi.fn(),
     openNewConversation: vi.fn(),
     cancelNewConversation: vi.fn(),
     confirmNewConversation: vi.fn(),
     retryFirstSync: vi.fn(),
+    answerDecision: vi.fn(),
+    skipDecision: vi.fn(),
   };
 }
 
@@ -48,6 +53,32 @@ function composer(): HTMLTextAreaElement {
   return element;
 }
 
+function unansweredDecision(): Extract<CoachDecisionReadModel, { status: "unanswered" }> {
+  return {
+    decisionId: "decision-1",
+    chatId: "desktop",
+    messageId: "message-1",
+    question: "Choose tomorrow’s priority.",
+    status: "unanswered",
+    options: [
+      {
+        id: "recovery",
+        label: "Prioritize recovery",
+        description: "Choose an easy day to protect the weekend session.",
+        recommended: true,
+        consequence: "Tomorrow becomes a recovery day.",
+      },
+      {
+        id: "tempo",
+        label: "Keep the tempo session",
+        description: "Keep the planned workout if your legs feel normal.",
+        recommended: false,
+        consequence: "Tomorrow keeps the planned tempo session.",
+      },
+    ],
+  };
+}
+
 let actions: ChatActions;
 
 describe("chat surface", () => {
@@ -58,6 +89,7 @@ describe("chat surface", () => {
       runtimeReady: true,
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
+      training: EMPTY_TRAINING_SURFACE,
       chatActions: actions,
       onboarding: READY_ONBOARDING,
     });
@@ -67,10 +99,177 @@ describe("chat surface", () => {
     useEnduragentStore.setState({
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
+      training: EMPTY_TRAINING_SURFACE,
       chatActions: null,
       onboarding: CLOSED_ONBOARDING,
     });
     resetChatStream();
+  });
+
+  describe("Coach decision", () => {
+    it("blocks normal Send and submits a numbered option through the decision action", async () => {
+      const user = userEvent.setup();
+      setChat({
+        decision: unansweredDecision(),
+        sendDisabled: true,
+        inputDisabled: false,
+      });
+      render(<Harness />);
+
+      expect(screen.getByText("Coach needs your answer")).toBeVisible();
+      expect(screen.getByRole("heading", { name: "Choose tomorrow’s priority." })).toBeVisible();
+      expect(screen.getByText("Recommended")).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+
+      await user.click(screen.getByRole("button", { name: /Keep the tempo session/u }));
+      expect(actions.answerDecision).toHaveBeenCalledWith("decision-1", {
+        kind: "option",
+        optionId: "tempo",
+      });
+      await user.keyboard("{Escape}");
+      expect(actions.skipDecision).toHaveBeenCalledWith("decision-1");
+    });
+
+    it("replaces all options with one custom editor and preserves the normal draft", async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+      const normalComposer = composer();
+      await user.type(normalComposer, "Keep this draft");
+      setChat({ decision: unansweredDecision(), sendDisabled: true, inputDisabled: false });
+
+      await user.click(screen.getByRole("button", { name: /Something else/u }));
+      expect(screen.queryByRole("button", { name: /Prioritize recovery/u })).toBeNull();
+      expect(normalComposer).not.toBeVisible();
+      const custom = screen.getByLabelText("What would work better?");
+      await user.type(custom, "Move tempo to Thursday");
+      const back = screen.getByRole("button", { name: "Back" });
+      const continueButton = screen.getByRole("button", { name: "Continue" });
+      expect(
+        back.compareDocumentPosition(continueButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      await user.click(continueButton);
+      expect(actions.answerDecision).toHaveBeenCalledWith("decision-1", {
+        kind: "custom",
+        text: "Move tempo to Thursday",
+      });
+      await user.click(back);
+      expect(composer()).toHaveValue("Keep this draft");
+      expect(screen.getByRole("button", { name: /Something else/u })).toHaveFocus();
+    });
+
+    it("shows continuing and relaunch recovery states", () => {
+      const pending: CoachDecisionReadModel = {
+        ...unansweredDecision(),
+        status: "answered",
+        answer: { kind: "option", optionId: "recovery" },
+        consequence: "Tomorrow becomes a recovery day.",
+        continuation: { continuationId: "continuation-1", status: "pending" },
+      };
+      setChat({
+        decision: pending,
+        decisionPhase: "continuing",
+        decisionAnswerLabel: "Prioritize recovery",
+        sendDisabled: true,
+        inputDisabled: false,
+      });
+      const { rerender } = render(<Harness />);
+      expect(screen.getByText("Continuing with your choice…")).toBeVisible();
+
+      setChat({ decisionPhase: "recovering" });
+      rerender(<Harness />);
+      expect(screen.getByText("Finishing your saved choice…")).toBeVisible();
+      expect(screen.getByText(/was saved before Enduragent reopened/u)).toBeVisible();
+    });
+
+    it("surfaces a decision hydration failure with a reconnect action", async () => {
+      const user = userEvent.setup();
+      setChat({
+        decisionLoadError: "We couldn’t check for a saved Coach question.",
+        sendDisabled: true,
+        inputDisabled: false,
+      });
+      render(<Harness />);
+
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      expect(screen.getByRole("alert")).toHaveTextContent("saved Coach question");
+      await user.click(screen.getByRole("button", { name: "Reconnect" }));
+      expect(actions.retryDecision).toHaveBeenCalledOnce();
+    });
+
+    it("renders recorded and skipped consequences as compact transcript items", () => {
+      setChat({
+        timeline: [
+          {
+            kind: "choice",
+            choice: {
+              id: "decision-1",
+              label: "Prioritize recovery",
+              consequence: "Tomorrow becomes a recovery day.",
+              skipped: false,
+              historical: false,
+            },
+          },
+          {
+            kind: "choice",
+            choice: {
+              id: "decision-2",
+              label: "Question skipped",
+              consequence: "No coaching choice was applied.",
+              skipped: true,
+              historical: true,
+            },
+          },
+          {
+            kind: "choice",
+            choice: {
+              id: "decision-3",
+              label: "Move tempo to Thursday",
+              consequence: null,
+              skipped: false,
+              historical: true,
+            },
+          },
+        ],
+      });
+      render(<Harness />);
+
+      expect(screen.getAllByLabelText("Choice consequence")).toHaveLength(3);
+      expect(screen.getByText("Prioritize recovery")).toBeVisible();
+      expect(screen.getByText("Question skipped")).toBeVisible();
+      expect(screen.getAllByText("Move tempo to Thursday")).toHaveLength(1);
+    });
+
+    it("leaves provider text fallback as an ordinary Coach response", () => {
+      setChat({
+        messages: [
+          {
+            id: "fallback",
+            role: "coach",
+            delivery: "complete",
+            historical: false,
+            text: "1. Prioritize recovery\n2. Keep the tempo session\nYou can answer in your own words or say skip.",
+          },
+        ],
+        timeline: [
+          {
+            kind: "message",
+            message: {
+              id: "fallback",
+              role: "coach",
+              delivery: "complete",
+              historical: false,
+              text: "1. Prioritize recovery\n2. Keep the tempo session\nYou can answer in your own words or say skip.",
+            },
+          },
+        ],
+      });
+      render(<Harness />);
+
+      expect(screen.queryByText("Coach needs your answer")).toBeNull();
+      expect(screen.getByText(/Prioritize recovery/u)).toBeVisible();
+    });
   });
 
   describe("Reading room shell", () => {
@@ -83,6 +282,95 @@ describe("chat surface", () => {
       await user.click(screen.getByRole("button", { name: "Hide training context" }));
       expect(screen.queryByRole("complementary", { name: "Training context" })).toBeNull();
       expect(screen.getByRole("button", { name: "Show training context" })).toBeInTheDocument();
+    });
+
+    it("projects only available workout, Load, and cycling-anchor facts", () => {
+      act(() => {
+        useEnduragentStore.setState({
+          training: {
+            ...EMPTY_TRAINING_SURFACE,
+            status: "ready",
+            trainingContext: {
+              ...EMPTY_TRAINING_SURFACE.trainingContext,
+              plan: {
+                kind: "computed",
+                asOf: "1998-08-24",
+                items: [
+                  {
+                    id: "workout-1",
+                    date: "1998-08-25",
+                    name: "Tempo builder",
+                    category: "cycling",
+                    workoutType: "Tempo",
+                  },
+                  {
+                    id: "workout-2",
+                    date: "1998-08-27",
+                    name: "Recovery spin",
+                    category: "cycling",
+                    workoutType: "Recovery",
+                  },
+                ],
+              },
+              cyclingLoad: {
+                kind: "computed",
+                asOf: "1998-08-24",
+                source: "intervals.icu",
+                windowDays: 7,
+                value: 42,
+                activityCount: 4,
+                missingLoadCount: 0,
+              },
+              anchorZones: {
+                kind: "computed",
+                asOf: "1998-08-24",
+                anchor: {
+                  watts: 182,
+                  validFrom: "1998-08-01",
+                  source: "manual",
+                  confidence: "manual",
+                  ageDays: 23,
+                  stalenessBand: "fresh",
+                  stale: false,
+                },
+                zones: Array.from({ length: 6 }, (_, index) => ({
+                  name: `Zone ${index + 1}`,
+                  range: `${index + 1} W`,
+                  overlaps: false,
+                })),
+              },
+            },
+          },
+        });
+      });
+
+      render(<Harness />);
+      const context = screen.getByRole("complementary", { name: "Training context" });
+      expect(context).toHaveTextContent("Tempo builder");
+      expect(context).toHaveTextContent("1998-08-25 · Tempo");
+      expect(context).toHaveTextContent("2 scheduled workouts");
+      expect(context).toHaveTextContent("4 cycling activities · 7 days");
+      expect(context).toHaveTextContent("182 W");
+      expect(context).not.toHaveTextContent(/Fitness|Fatigue|Form|Memory|Updated|Fresh 2m/u);
+    });
+
+    it("keeps unavailable and saved-context states explicit", () => {
+      render(<Harness />);
+      expect(screen.getByText("Loading training context…")).toBeVisible();
+
+      act(() => {
+        useEnduragentStore.setState({
+          training: { ...EMPTY_TRAINING_SURFACE, status: "unavailable" },
+        });
+      });
+      expect(screen.getByText("Training context is temporarily unavailable.")).toBeVisible();
+
+      act(() => {
+        useEnduragentStore.setState({
+          training: { ...EMPTY_TRAINING_SURFACE, status: "refresh-unavailable" },
+        });
+      });
+      expect(screen.getByText("Showing saved context; refresh is unavailable.")).toBeVisible();
     });
   });
 
@@ -211,6 +499,7 @@ describe("chat surface", () => {
       expect(form?.nextElementSibling).toBe(disclaimer);
       expect(disclaimer.parentElement).toHaveClass("composer-wrap");
       expect(disclaimer.parentElement).toHaveClass("bg-bg");
+      expect(disclaimer).toHaveClass("mt-inset", "text-xs");
     });
 
     it("focuses the enabled composer when Chat mounts after required setup", () => {
@@ -295,18 +584,18 @@ describe("chat surface", () => {
 
       expect(textarea).toBeEnabled();
       expect(textarea).toHaveFocus();
-      expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
       const stop = screen.getByRole("button", { name: "Stop responding" });
       expect(stop).toBeEnabled();
-      await user.click(stop);
-      expect(actions.stop).toHaveBeenCalledOnce();
+      expect(stop.querySelector("svg")).toHaveClass("size-2.5", "fill-current", "stroke-none");
+      expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
 
-      await user.click(textarea);
       await user.keyboard("{Enter}");
 
       expect(actions.submit).toHaveBeenCalledWith("Plan tomorrow");
       expect(textarea).toHaveValue("");
       expect(textarea).toHaveFocus();
+      await user.click(stop);
+      expect(actions.stop).toHaveBeenCalledTimes(1);
     });
 
     it("locks the composer while work is blocked", () => {
@@ -319,6 +608,7 @@ describe("chat surface", () => {
 
     it("does not render a fixed shortcut row", () => {
       render(<Harness />);
+      expect(screen.queryByRole("group", { name: "Coaching shortcuts" })).toBeNull();
       expect(screen.queryByRole("button", { name: /command$/u })).toBeNull();
     });
   });
@@ -440,6 +730,17 @@ describe("chat surface", () => {
 
       setChat({ notice: null });
       expect(notice().hidden).toBe(true);
+    });
+
+    it("renders Coach progress after the transcript instead of above the composer", () => {
+      setChat({ status: "streaming", coachProgress: "Checking your training data…" });
+      render(<Harness />);
+
+      const progress = document.querySelector(".coach-progress");
+      if (!(progress instanceof HTMLElement)) throw new TypeError("progress missing");
+      expect(progress).toHaveTextContent("Checking your training data…");
+      expect(progress.closest(".thread")).not.toBeNull();
+      expect(progress.closest(".composer-wrap")).toBeNull();
     });
 
     it("offers the retry bar only on an interrupted turn and hands the click to the controller", async () => {
@@ -744,6 +1045,9 @@ describe("chat surface", () => {
       const athlete = document.querySelector('[data-message-id="a1"]');
       expect(athlete).not.toHaveClass("text-base");
       expect(athlete?.classList.contains("chat-message--athlete")).toBe(true);
+      expect(athlete).toHaveClass("max-w-[76%]");
+      expect(screen.queryByText("Coach")).toBeNull();
+      expect(screen.queryByText("You")).toBeNull();
     });
 
     it("keeps the prose face on the row so streaming text never reflows when the turn settles", () => {
@@ -807,8 +1111,8 @@ describe("chat surface", () => {
           "FirstSyncCard.tsx",
           "NewConversationDialog.tsx",
           "QueuedMessages.tsx",
-          "TrainingContextPanel.tsx",
           "SpendNotice.tsx",
+          "TrainingContextPanel.tsx",
         ].map((name) => readFile(resolve(sourceRoot, name), "utf8")),
       );
       const source = sources.join("\n");

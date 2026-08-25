@@ -1,11 +1,19 @@
 import {
+  AnswerCoachDecisionRpcParamsSchema,
+  AnswerCoachDecisionRpcResultSchema,
   AthleteStateSchema,
   ChatRequestSchema,
   ChatResponseSchema,
+  GetCoachDecisionRpcParamsSchema,
+  GetCoachDecisionRpcResultSchema,
   HasSessionRequestSchema,
   HasSessionResponseSchema,
   ResetSessionRequestSchema,
   ResetSessionResponseSchema,
+  ResumeCoachDecisionRpcParamsSchema,
+  ResumeCoachDecisionRpcResultSchema,
+  SkipCoachDecisionRpcParamsSchema,
+  SkipCoachDecisionRpcResultSchema,
   StopChatRequestSchema,
   StopChatResponseSchema,
   TurnEventSchema,
@@ -55,9 +63,7 @@ export function createCoachEngineAdapter(input: CoachEngineAdapterInput): CoachE
     async stopChat(request) {
       const parsed = StopChatRequestSchema.parse(request);
       return StopChatResponseSchema.parse(
-        input.backend.stopChat === undefined
-          ? { stopped: false }
-          : await input.backend.stopChat(parsed),
+        await input.backend.stopChat?.(parsed).then((value) => value ?? { stopped: false }),
       );
     },
     async resetSession(request) {
@@ -70,6 +76,48 @@ export function createCoachEngineAdapter(input: CoachEngineAdapterInput): CoachE
     },
     async getAthleteState() {
       return AthleteStateSchema.parse(await input.getAthleteState());
+    },
+    async getCoachDecision(request) {
+      const parsed = GetCoachDecisionRpcParamsSchema.parse(request);
+      return GetCoachDecisionRpcResultSchema.parse(await input.backend.getCoachDecision(parsed));
+    },
+    async answerCoachDecision(request, onEvent) {
+      const parsed = AnswerCoachDecisionRpcParamsSchema.parse(request);
+      let firstEventValidationError: unknown | undefined;
+      const response = await input.backend.answerCoachDecision(parsed, (event) => {
+        if (firstEventValidationError !== undefined) return;
+        const result = TurnEventSchema.safeParse(event);
+        if (!result.success) {
+          firstEventValidationError = result.error;
+          return;
+        }
+        try {
+          onEvent?.(result.data);
+        } catch {}
+      });
+      if (firstEventValidationError !== undefined) throw firstEventValidationError;
+      return AnswerCoachDecisionRpcResultSchema.parse(response);
+    },
+    async skipCoachDecision(request) {
+      const parsed = SkipCoachDecisionRpcParamsSchema.parse(request);
+      return SkipCoachDecisionRpcResultSchema.parse(await input.backend.skipCoachDecision(parsed));
+    },
+    async resumeCoachDecision(request, onEvent) {
+      const parsed = ResumeCoachDecisionRpcParamsSchema.parse(request);
+      let firstEventValidationError: unknown | undefined;
+      const response = await input.backend.resumeCoachDecision(parsed, (event) => {
+        if (firstEventValidationError !== undefined) return;
+        const result = TurnEventSchema.safeParse(event);
+        if (!result.success) {
+          firstEventValidationError = result.error;
+          return;
+        }
+        try {
+          onEvent?.(result.data);
+        } catch {}
+      });
+      if (firstEventValidationError !== undefined) throw firstEventValidationError;
+      return ResumeCoachDecisionRpcResultSchema.parse(response);
     },
   };
 }

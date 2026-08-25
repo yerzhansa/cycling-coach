@@ -1,6 +1,17 @@
 import { z } from "zod";
 import type { TurnEvent } from "./turn-event.js";
-import { AthleteStateSchema, type AthleteState } from "./athlete-state.js";
+import type { AthleteState } from "./athlete-state.js";
+import {
+  CoachDecisionReadModelSchema,
+  type AnswerCoachDecisionRpcParams,
+  type AnswerCoachDecisionRpcResult,
+  type GetCoachDecisionRpcParams,
+  type GetCoachDecisionRpcResult,
+  type ResumeCoachDecisionRpcParams,
+  type ResumeCoachDecisionRpcResult,
+  type SkipCoachDecisionRpcParams,
+  type SkipCoachDecisionRpcResult,
+} from "./coach-decision.js";
 
 export const ChatRequestSchema = z
   .object({
@@ -19,7 +30,25 @@ export const ChatRequestSchema = z
   .strict();
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
-export const ChatResponseSchema = z.object({ text: z.string() }).strict();
+export const ChatResponseSchema = z
+  .object({ text: z.string(), decision: CoachDecisionReadModelSchema.optional() })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.decision !== undefined && value.decision.status !== "unanswered") {
+      context.addIssue({
+        code: "custom",
+        path: ["decision", "status"],
+        message: "chat response decision must be unanswered",
+      });
+    }
+    if (value.decision !== undefined && value.text !== "") {
+      context.addIssue({
+        code: "custom",
+        path: ["text"],
+        message: "decision response must not include final text",
+      });
+    }
+  });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 
 export const StopChatRequestSchema = z.object({ chatId: z.string() }).strict();
@@ -55,6 +84,16 @@ export type HasSessionResponse = z.infer<typeof HasSessionResponseSchema>;
 export interface CoachEngine {
   chat(request: ChatRequest, onEvent?: (event: TurnEvent) => void): Promise<ChatResponse>;
   stopChat?(request: StopChatRequest): Promise<StopChatResponse>;
+  getCoachDecision(request: GetCoachDecisionRpcParams): Promise<GetCoachDecisionRpcResult>;
+  answerCoachDecision(
+    request: AnswerCoachDecisionRpcParams,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<AnswerCoachDecisionRpcResult>;
+  skipCoachDecision(request: SkipCoachDecisionRpcParams): Promise<SkipCoachDecisionRpcResult>;
+  resumeCoachDecision(
+    request: ResumeCoachDecisionRpcParams,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<ResumeCoachDecisionRpcResult>;
   resetSession(request: ResetSessionRequest): Promise<ResetSessionResponse>;
   hasSession(request: HasSessionRequest): Promise<HasSessionResponse>;
   getAthleteState(): Promise<AthleteState>;

@@ -23,6 +23,10 @@ import { join } from "node:path";
 import { TextDecoder } from "node:util";
 import type { ModelMessage } from "ai";
 import type { ChatLineage } from "@enduragent/engine";
+import type {
+  RequestUserDecisionInput,
+  RequestUserDecisionResult,
+} from "@enduragent/coach-contract";
 import { messageText } from "@enduragent/engine/sport";
 import {
   UNKNOWN_PROVENANCE,
@@ -124,9 +128,10 @@ function parseArchiveTimestampMs(suffix: string): number | null {
 }
 
 interface JsonlLine {
-  role: "user" | "assistant" | "system";
-  content: string;
+  role: "user" | "assistant" | "system" | "tool";
+  content: unknown;
   ts: string;
+  decisionKey?: string;
   templateHash?: string;
   assembledHash?: string;
   provider?: string;
@@ -135,7 +140,22 @@ interface JsonlLine {
   provenance?: SourceProvenance;
 }
 
-const VALID_ROLES = new Set(["user", "assistant", "system"]);
+const VALID_ROLES = new Set(["user", "assistant", "system", "tool"]);
+
+function isSessionContent(role: JsonlLine["role"], content: unknown): boolean {
+  if (typeof content === "string") return role !== "tool";
+  if (role !== "assistant" && role !== "tool") return false;
+  return (
+    Array.isArray(content) &&
+    content.every(
+      (part) =>
+        part !== null &&
+        typeof part === "object" &&
+        !Array.isArray(part) &&
+        typeof (part as { type?: unknown }).type === "string",
+    )
+  );
+}
 
 function parseSessionLine(line: string): JsonlLine | null {
   let value: unknown;
@@ -147,7 +167,10 @@ function parseSessionLine(line: string): JsonlLine | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const v = value as Record<string, unknown>;
   if (typeof v.role !== "string" || !VALID_ROLES.has(v.role)) return null;
-  if (typeof v.content !== "string" || typeof v.ts !== "string") return null;
+  if (!isSessionContent(v.role as JsonlLine["role"], v.content) || typeof v.ts !== "string") {
+    return null;
+  }
+  if ("decisionKey" in v && typeof v.decisionKey !== "string") return null;
   for (const k of [
     "templateHash",
     "assembledHash",
@@ -807,6 +830,101 @@ export class ChatStore {
     this.appendSessionContent(path, buffer);
   }
 
+  persistDecisionContext(input: {
+    readonly chatId: string;
+    readonly decisionId: string;
+    readonly athleteText: string;
+    readonly request: RequestUserDecisionInput;
+    readonly result?: RequestUserDecisionResult;
+    readonly coachText?: string;
+    readonly continuationId?: string;
+    readonly lineage?: ChatLineage & { provenance?: SourceProvenance };
+  }): void {
+    const path = this.filePath(input.chatId);
+    const toolCallId = `decision-${input.decisionId}`;
+    const ts = new Date().toISOString();
+    const desired: JsonlLine[] = [
+      ...(input.athleteText === ""
+        ? []
+        : [
+            {
+              role: "user" as const,
+              content: input.athleteText,
+              ts,
+              decisionKey: `${input.decisionId}:athlete`,
+            },
+          ]),
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId,
+            toolName: "request_user_decision",
+            input: input.request,
+          },
+        ],
+        ts,
+        decisionKey: `${input.decisionId}:request`,
+      },
+    ];
+    if (input.result !== undefined) {
+      desired.push({
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId,
+            toolName: "request_user_decision",
+            output: { type: "json", value: input.result },
+          },
+        ],
+        ts,
+        decisionKey: `${input.decisionId}:result`,
+      });
+    }
+    if (input.coachText !== undefined) {
+      if (input.continuationId === undefined || input.lineage === undefined) {
+        throw new TypeError("Decision continuation context is incomplete.");
+      }
+      desired.push({
+        role: "assistant",
+        content: input.coachText,
+        ts,
+        decisionKey: `${input.decisionId}:continuation:${input.continuationId}`,
+        ...input.lineage,
+      });
+    }
+    const existing = new Map<string, JsonlLine>();
+    if (this.sessionExists(path)) {
+      for (const line of this.readSessionText(path).split("\n")) {
+        if (line.trim() === "") continue;
+        const parsed = parseSessionLine(line);
+        if (parsed?.decisionKey !== undefined) existing.set(parsed.decisionKey, parsed);
+      }
+    }
+    const missing: JsonlLine[] = [];
+    for (const line of desired) {
+      const prior = existing.get(line.decisionKey!);
+      if (prior === undefined) {
+        missing.push(line);
+        continue;
+      }
+      if (
+        prior.role !== line.role ||
+        JSON.stringify(prior.content) !== JSON.stringify(line.content)
+      ) {
+        throw new Error("Decision session context is immutable.");
+      }
+    }
+    if (missing.length > 0) {
+      this.appendSessionContent(
+        path,
+        missing.map((line) => JSON.stringify(line)).join("\n") + "\n",
+      );
+    }
+  }
+
   overwriteHistory(chatId: string, messages: ModelMessage[]): void {
     const path = this.filePath(chatId);
     const now = new Date().toISOString();
@@ -817,7 +935,10 @@ export class ChatStore {
     // freshly-generated artifact and always gets `now`. Build a per-key queue so
     // duplicate lines keep the stamp whose source label matches the surviving
     // message, falling back to occurrence order when the labels are identical.
-    const preservedByKey = new Map<string, Array<{ ts: string; provenance?: SourceProvenance }>>();
+    const preservedByKey = new Map<
+      string,
+      Array<{ ts: string; provenance?: SourceProvenance; decisionKey?: string }>
+    >();
     if (this.sessionExists(path)) {
       const contents = this.readSessionText(path);
       if (this.platform === "win32") this.assertWindowsSessionContent(contents);
@@ -825,9 +946,13 @@ export class ChatStore {
         if (line.trim() === "") continue;
         const entry = parseSessionLine(line);
         if (entry === null || entry.role === "system") continue;
-        const key = `${entry.role}\n${entry.content}`;
+        const key = `${entry.role}\n${JSON.stringify(entry.content)}`;
         const queue = preservedByKey.get(key);
-        const preserved = { ts: entry.ts, provenance: entry.provenance };
+        const preserved = {
+          ts: entry.ts,
+          provenance: entry.provenance,
+          decisionKey: entry.decisionKey,
+        };
         if (queue) queue.push(preserved);
         else preservedByKey.set(key, [preserved]);
       }
@@ -838,10 +963,12 @@ export class ChatStore {
         .map((m) => {
           const role = m.role as JsonlLine["role"];
           const text = messageText(m);
+          const storedContent = typeof m.content === "string" ? text : m.content;
           let ts = now;
+          let decisionKey: string | undefined;
           const provenance = getMessageProvenance(m);
           if (role !== "system") {
-            const queue = preservedByKey.get(`${role}\n${text}`);
+            const queue = preservedByKey.get(`${role}\n${JSON.stringify(storedContent)}`);
             const matchingIndex = queue?.findIndex((candidate) =>
               sameProvenance(candidate.provenance ?? UNKNOWN_PROVENANCE, provenance),
             );
@@ -851,12 +978,14 @@ export class ChatStore {
                 : queue?.shift();
             if (preserved !== undefined) {
               ts = preserved.ts;
+              decisionKey = preserved.decisionKey;
             }
           }
           const line: JsonlLine = {
             role,
-            content: text,
+            content: storedContent,
             ts,
+            ...(decisionKey === undefined ? {} : { decisionKey }),
             ...(role === "user" ? {} : { provenance }),
           };
           return JSON.stringify(line);

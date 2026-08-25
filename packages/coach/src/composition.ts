@@ -554,6 +554,14 @@ function createReconfigurableRuntimeBundle(initial: RuntimeBundle): {
   return {
     engine: {
       chat: (request, onEvent) => run((bundle) => bundle.engine.chat(request, onEvent)),
+      stopChat: (request) =>
+        run(async (bundle) => bundle.engine.stopChat?.(request) ?? { stopped: false }),
+      getCoachDecision: (request) => run((bundle) => bundle.engine.getCoachDecision(request)),
+      answerCoachDecision: (request, onEvent) =>
+        run((bundle) => bundle.engine.answerCoachDecision(request, onEvent)),
+      skipCoachDecision: (request) => run((bundle) => bundle.engine.skipCoachDecision(request)),
+      resumeCoachDecision: (request, onEvent) =>
+        run((bundle) => bundle.engine.resumeCoachDecision(request, onEvent)),
       resetSession: (request) => run((bundle) => bundle.engine.resetSession(request)),
       hasSession: (request) => run((bundle) => bundle.engine.hasSession(request)),
       getAthleteState: () => run((bundle) => bundle.engine.getAthleteState()),

@@ -165,10 +165,14 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
           published: false,
           referenceSucceeded: true,
           requests: { store: 0, reference: 0, total: 0 },
-          droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+          droppedActivities: {
+            overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+            recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+          },
         });
       }
       if (request.method === "hasSession") return response({ hasSession: false });
+      if (request.method === "getCoachDecision") return response({ decision: null });
       if (request.method === "resetSession") return response({ memoryFlushed: true });
       if (request.method === "importFiles") {
         return response({

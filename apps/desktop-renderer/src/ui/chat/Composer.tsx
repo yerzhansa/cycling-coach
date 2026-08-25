@@ -22,6 +22,7 @@ export interface ComposerHandle {
 
 export function Composer(props: {
   readonly handle: RefObject<ComposerHandle | null>;
+  readonly hidden?: boolean;
 }): ReactElement {
   const form = useRef<HTMLFormElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -114,6 +115,7 @@ export function Composer(props: {
     <form
       ref={form}
       className="composer relative"
+      hidden={props.hidden}
       onSubmit={(event) => {
         event.preventDefault();
         submit();
