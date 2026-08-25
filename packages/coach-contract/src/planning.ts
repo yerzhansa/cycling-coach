@@ -1,6 +1,9 @@
 import { z } from "zod";
+import { ChatQueueSnapshotSchema } from "./chat-queue.js";
+import { CoachDecisionAnswerSchema, CoachDecisionReadModelSchema } from "./coach-decision.js";
 import { PlatformAbsolutePathSchema } from "./platform-path.js";
 import { TrainingExportCivilDateSchema } from "./training-export.js";
+import { TurnEventSchema } from "./turn-event.js";
 
 export const PLAN_TRANSITION_IDS = [
   "PL-T01",
@@ -47,9 +50,7 @@ export const PLAN_TRANSITION_IDS = [
 export const PlanTransitionIdSchema = z.enum(PLAN_TRANSITION_IDS);
 export type PlanTransitionId = z.infer<typeof PlanTransitionIdSchema>;
 
-export const PlanScenarioIdSchema = z
-  .string()
-  .regex(/^PL-S(?:00[1-9]|0[1-9][0-9]|10[0-5])$/);
+export const PlanScenarioIdSchema = z.string().regex(/^PL-S(?:00[1-9]|0[1-9][0-9]|10[0-5])$/);
 export type PlanScenarioId = z.infer<typeof PlanScenarioIdSchema>;
 
 export const PlanLifecycleSchema = z.enum([
@@ -181,10 +182,7 @@ export const PlanReconciliationSchema = z
         message: "failed reconciliation requires an error and other states forbid one",
       });
     }
-    if (
-      value.status === "not-applicable" &&
-      (value.total !== 0 || value.currentThrough !== null)
-    ) {
+    if (value.status === "not-applicable" && (value.total !== 0 || value.currentThrough !== null)) {
       context.addIssue({
         code: "custom",
         path: ["status"],
@@ -212,6 +210,7 @@ export const PlanProgressEventSchema = z
     phase: z.enum(["queued", "running", "completed", "failed"]),
     completed: z.number().int().nonnegative(),
     total: z.number().int().positive(),
+    turnEvent: TurnEventSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -236,8 +235,51 @@ export const PlanProgressEventSchema = z
         message: "completed progress reaches total",
       });
     }
+    if (value.turnEvent !== undefined && value.phase !== "running") {
+      context.addIssue({
+        code: "custom",
+        path: ["turnEvent"],
+        message: "coach turn events require running progress",
+      });
+    }
   });
 export type PlanProgressEvent = z.infer<typeof PlanProgressEventSchema>;
+
+export const PlanCoachMessageSchema = z
+  .object({
+    id: z.string().min(1),
+    turnId: z.string().min(1).nullable(),
+    role: z.enum(["athlete", "coach"]),
+    text: z.string(),
+  })
+  .strict();
+export type PlanCoachMessage = z.infer<typeof PlanCoachMessageSchema>;
+
+export const PlanDraftProjectionSchema = z
+  .object({
+    id: z.string().min(1),
+    planId: z.string().min(1),
+    revision: z.number().int().positive(),
+    status: z.enum(["forming", "ready", "failed", "discarded", "approved"]),
+    snapshot: z.json(),
+  })
+  .strict();
+export type PlanDraftProjection = z.infer<typeof PlanDraftProjectionSchema>;
+
+export const PlanCoachProjectionDataSchema = z
+  .object({
+    conversationId: z.string().min(1),
+    chatId: z.string().min(1),
+    sourceConversationId: z.string().min(1).nullable(),
+    replacement: z.boolean(),
+    readyToCreateDraft: z.boolean(),
+    messages: z.array(PlanCoachMessageSchema),
+    queue: ChatQueueSnapshotSchema,
+    decision: CoachDecisionReadModelSchema.nullable(),
+    draft: PlanDraftProjectionSchema.nullable(),
+  })
+  .strict();
+export type PlanCoachProjectionData = z.infer<typeof PlanCoachProjectionDataSchema>;
 
 export const PlanReadModelSchema = z
   .object({
@@ -338,6 +380,19 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       commandId: CommandIdSchema,
       conversationId: EntityIdSchema,
       text: z.string().trim().min(1),
+      decision: z
+        .discriminatedUnion("action", [
+          z
+            .object({
+              action: z.literal("answer"),
+              decisionId: EntityIdSchema,
+              answer: CoachDecisionAnswerSchema,
+            })
+            .strict(),
+          z.object({ action: z.literal("skip"), decisionId: EntityIdSchema }).strict(),
+          z.object({ action: z.literal("resume"), decisionId: EntityIdSchema }).strict(),
+        ])
+        .optional(),
     })
     .strict(),
   z
@@ -375,7 +430,11 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
     })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T10"), commandId: CommandIdSchema, draftId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T10"),
+      commandId: CommandIdSchema,
+      draftId: EntityIdSchema,
+    })
     .strict(),
   z
     .object({
@@ -386,7 +445,11 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
     })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T12"), commandId: CommandIdSchema, planId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T12"),
+      commandId: CommandIdSchema,
+      planId: EntityIdSchema,
+    })
     .strict(),
   z
     .object({
@@ -448,7 +511,11 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
     })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T20"), commandId: CommandIdSchema, proposalId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T20"),
+      commandId: CommandIdSchema,
+      proposalId: EntityIdSchema,
+    })
     .strict(),
   z
     .object({
@@ -468,13 +535,25 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
     })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T23"), commandId: CommandIdSchema, planId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T23"),
+      commandId: CommandIdSchema,
+      planId: EntityIdSchema,
+    })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T24"), commandId: CommandIdSchema, planId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T24"),
+      commandId: CommandIdSchema,
+      planId: EntityIdSchema,
+    })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T25"), commandId: CommandIdSchema, planId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T25"),
+      commandId: CommandIdSchema,
+      planId: EntityIdSchema,
+    })
     .strict(),
   z
     .object({
@@ -494,7 +573,11 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
     })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T28"), commandId: CommandIdSchema, planId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T28"),
+      commandId: CommandIdSchema,
+      planId: EntityIdSchema,
+    })
     .strict(),
   z
     .object({
@@ -513,16 +596,32 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
     })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T31"), commandId: CommandIdSchema, planId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T31"),
+      commandId: CommandIdSchema,
+      planId: EntityIdSchema,
+    })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T32"), commandId: CommandIdSchema, planId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T32"),
+      commandId: CommandIdSchema,
+      planId: EntityIdSchema,
+    })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T33"), commandId: CommandIdSchema, planId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T33"),
+      commandId: CommandIdSchema,
+      planId: EntityIdSchema,
+    })
     .strict(),
   z
-    .object({ transitionId: z.literal("PL-T34"), commandId: CommandIdSchema, attentionId: EntityIdSchema })
+    .object({
+      transitionId: z.literal("PL-T34"),
+      commandId: CommandIdSchema,
+      attentionId: EntityIdSchema,
+    })
     .strict(),
   z
     .object({
@@ -591,9 +690,7 @@ export const GetPlanStateRpcResultSchema = z.discriminatedUnion("status", [
 export type GetPlanStateRpcResult = z.infer<typeof GetPlanStateRpcResultSchema>;
 
 export const ExecutePlanTransitionRpcParamsSchema = PlanTransitionCommandSchema;
-export type ExecutePlanTransitionRpcParams = z.infer<
-  typeof ExecutePlanTransitionRpcParamsSchema
->;
+export type ExecutePlanTransitionRpcParams = z.infer<typeof ExecutePlanTransitionRpcParamsSchema>;
 
 export const ExecutePlanTransitionRpcResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("completed"), state: PlanReadModelSchema }).strict(),
@@ -613,9 +710,7 @@ export const ExecutePlanTransitionRpcResultSchema = z.discriminatedUnion("status
     .strict(),
   UnsupportedPlanningCapabilitySchema,
 ]);
-export type ExecutePlanTransitionRpcResult = z.infer<
-  typeof ExecutePlanTransitionRpcResultSchema
->;
+export type ExecutePlanTransitionRpcResult = z.infer<typeof ExecutePlanTransitionRpcResultSchema>;
 
 export interface PlanningOperations {
   getPlanState?(request: GetPlanStateRpcParams): Promise<GetPlanStateRpcResult>;

@@ -527,6 +527,21 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "executePlanTransition",
 ]);
 
+const PLAN_CHAT_RENDERER_METHODS = new Set<CoachRpcMethodName>([
+  "stopChat",
+  "enqueueChatMessage",
+  "getChatQueue",
+  "removeQueuedChatMessage",
+  "resumeChatQueue",
+  "runQueuedCommand",
+  "retryQueuedTurn",
+]);
+
+function rendererChatIdAllowed(method: CoachRpcMethodName, chatId: string): boolean {
+  if (chatId === "desktop") return true;
+  return PLAN_CHAT_RENDERER_METHODS.has(method) && /^plan:[0-9A-HJKMNP-TV-Z]{26}$/u.test(chatId);
+}
+
 function generateRendererCapability(
   privilegedToken: string,
   generateBytes: (size: number) => Buffer,
@@ -886,7 +901,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
       const chatId = (params.data as { readonly chatId: string }).chatId;
       if (
         chatId.startsWith("telegram:") ||
-        (state.authority === "renderer" && chatId !== "desktop")
+        (state.authority === "renderer" && !rendererChatIdAllowed(generic.data.method, chatId))
       ) {
         void enqueueSerialized(state, ordinaryError(generic.data.id, -32602, "Invalid params"));
         return;
@@ -1571,39 +1586,43 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               if (input.operations.executePlanTransition) {
                 let operationResult: unknown;
                 try {
-                  operationResult = await input.operations.executePlanTransition(request, (event) => {
-                    if (!progressOpen || eventFailure !== undefined) return;
-                    try {
-                      const parsedEvent =
-                        COACH_RPC_METHOD_REGISTRY.executePlanTransition.eventSchema.parse(event);
-                      if (
-                        parsedEvent.commandId !== request.commandId ||
-                        parsedEvent.transitionId !== request.transitionId ||
-                        (operationId !== undefined && parsedEvent.operationId !== operationId)
-                      ) {
-                        throw new Error("Planning progress correlation mismatch");
+                  operationResult = await input.operations.executePlanTransition(
+                    request,
+                    (event) => {
+                      if (!progressOpen || eventFailure !== undefined) return;
+                      try {
+                        const parsedEvent =
+                          COACH_RPC_METHOD_REGISTRY.executePlanTransition.eventSchema.parse(event);
+                        if (
+                          parsedEvent.commandId !== request.commandId ||
+                          parsedEvent.transitionId !== request.transitionId ||
+                          (operationId !== undefined && parsedEvent.operationId !== operationId)
+                        ) {
+                          throw new Error("Planning progress correlation mismatch");
+                        }
+                        operationId = parsedEvent.operationId;
+                        const notification = CoachPlanProgressNotificationEnvelopeSchema.parse({
+                          jsonrpc: "2.0",
+                          method: "coach.planProgress",
+                          params: {
+                            requestId: generic.data.id,
+                            requestMethod: "executePlanTransition",
+                            event: parsedEvent,
+                          },
+                        });
+                        void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                      } catch (error) {
+                        eventFailure = { error };
                       }
-                      operationId = parsedEvent.operationId;
-                      const notification = CoachPlanProgressNotificationEnvelopeSchema.parse({
-                        jsonrpc: "2.0",
-                        method: "coach.planProgress",
-                        params: {
-                          requestId: generic.data.id,
-                          requestMethod: "executePlanTransition",
-                          event: parsedEvent,
-                        },
-                      });
-                      void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
-                    } catch (error) {
-                      eventFailure = { error };
-                    }
-                  });
+                    },
+                  );
                 } finally {
                   progressOpen = false;
                 }
-                const parsedResult = COACH_RPC_METHOD_REGISTRY.executePlanTransition.responseSchema.parse(
-                  operationResult,
-                );
+                const parsedResult =
+                  COACH_RPC_METHOD_REGISTRY.executePlanTransition.responseSchema.parse(
+                    operationResult,
+                  );
                 if (
                   parsedResult.status === "accepted" &&
                   operationId !== undefined &&

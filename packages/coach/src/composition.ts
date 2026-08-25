@@ -149,6 +149,7 @@ import {
   createProviderActivityPowerHeartRateReader,
 } from "./activity-power-heart-rate.js";
 import { createTrainingExportService } from "./training-export.js";
+import { createPlanningOperations } from "./planning-operations.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
 
 interface OAuthCredential extends StoredProfile {
@@ -1454,6 +1455,11 @@ export async function createLocalCoachComposition(
       credentials: options.liveIntervals,
       sources: trustedActivitySources,
     });
+    const planningOperations = createPlanningOperations({
+      context: input.context,
+      engine: reconfigurable.engine,
+      identity: planningIdentity,
+    });
     const operations = {
       ...createCoachOperations(
         {
@@ -1483,6 +1489,7 @@ export async function createLocalCoachComposition(
       getActivityAnalysis: (request, signal) =>
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
+      ...planningOperations,
     } satisfies CoachOperations;
     return {
       engine: reconfigurable.engine,

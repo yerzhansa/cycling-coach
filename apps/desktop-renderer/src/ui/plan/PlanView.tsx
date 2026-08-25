@@ -1,8 +1,21 @@
-import { TriangleAlert } from "lucide-react";
-import type { ReactElement } from "react";
+import { CheckCircle2, LoaderCircle, TriangleAlert } from "lucide-react";
+import { useRef, useState, type FormEvent, type ReactElement } from "react";
+import { PlanCoachProjectionDataSchema } from "@enduragent/coach-contract";
 import { Button } from "../../components/ui/button.js";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
 import { planReadModel } from "../../state/plan-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
+import { CoachDecisionPanel } from "../chat/CoachDecisionPanel.js";
+import { Composer, type ComposerHandle } from "../chat/Composer.js";
+import { ConversationTranscript } from "../chat/Transcript.js";
 import { Page } from "../shared/Page.js";
 
 const SUPPORT_PAIR = "grid gap-[calc(var(--inset)/2)]";
@@ -28,7 +41,11 @@ function StatusCard(props: {
         <h2 className="m-0 text-base font-medium">{props.title}</h2>
         <p className="m-0 text-ink-2">{props.support}</p>
       </div>
-      {props.retry === true ? <div className="pt-row"><RetryButton /></div> : null}
+      {props.retry === true ? (
+        <div className="pt-row">
+          <RetryButton />
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -73,26 +90,20 @@ function NoPlan(): ReactElement {
           <div className="h-px bg-line" />
           <div className={`${SUPPORT_PAIR} py-3.5`}>
             <h3 className="m-0 text-sm font-medium">Current training</h3>
-            <p className="m-0 text-ink-2">
-              Recent workouts, recovery, and weekly availability
-            </p>
+            <p className="m-0 text-ink-2">Recent workouts, recovery, and weekly availability</p>
           </div>
           <div className="h-px bg-line" />
           <div className={`${SUPPORT_PAIR} py-3.5`}>
             <h3 className="m-0 text-sm font-medium">FTP</h3>
-            <p className="m-0 text-ink-2">
-              Athlete-entered FTP, Intervals FTP, or Intervals eFTP
-            </p>
+            <p className="m-0 text-ink-2">Athlete-entered FTP, Intervals FTP, or Intervals eFTP</p>
           </div>
         </div>
       </section>
-      {failed ? (
-        <StaleNotice message={transition.error.message} />
-      ) : null}
+      {failed ? <StaleNotice message={transition.error.message} /> : null}
       {startBlocked && startGuard.reason !== null ? (
         <StaleNotice message={startGuard.reason} />
       ) : null}
-      <div>
+      <div className="flex flex-wrap gap-inset">
         <Button
           type="button"
           disabled={actions === null || busy || startBlocked}
@@ -101,12 +112,291 @@ function NoPlan(): ReactElement {
         >
           {busy ? "Opening coach…" : "Build a plan with coach"}
         </Button>
-        {failed ? (
-          <Button type="button" variant="outline" className="ml-inset" onClick={() => actions?.retry()}>
-            Retry
-          </Button>
-        ) : null}
+        {failed ? <RetryButton /> : null}
       </div>
+    </div>
+  );
+}
+
+function PlanQueue(): ReactElement | null {
+  const queue = useEnduragentStore((state) => state.plan.coach.queued);
+  const retry = useEnduragentStore((state) => state.plan.coach.retryRequired);
+  const actions = useEnduragentStore((state) => state.planActions);
+  if (queue.length === 0) return null;
+  return (
+    <section className="overflow-hidden rounded-card bg-sunk" aria-label="Queued coach messages">
+      <div className="flex min-h-ctl items-center justify-between px-ctl-px">
+        <h3 className="m-0 text-xs font-semibold">Queued messages</h3>
+        <span className="rounded-chip bg-surface px-inset text-xs text-ink-2">{queue.length}</span>
+      </div>
+      {retry === null ? null : (
+        <div className="border-t border-line px-ctl-px py-inset">
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            disabled={actions === null}
+            onClick={() => actions?.retryQueuedCoachTurn(retry.claimId)}
+          >
+            Retry interrupted message
+          </Button>
+        </div>
+      )}
+      <ul className="m-0 list-none divide-y divide-line border-t border-line p-0">
+        {queue.map((message, index) => (
+          <li key={message.id} className="flex min-h-ctl items-center gap-inset px-ctl-px py-inset">
+            <span className="min-w-0 flex-1 break-words text-sm text-ink-2">{message.text}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              aria-label={`Remove queued message ${index + 1}`}
+              disabled={actions === null || retry?.queuedMessageIds.includes(message.id) === true}
+              onClick={() => actions?.removeQueuedCoachMessage(message.id)}
+            >
+              Remove
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function PlanCoach(): ReactElement {
+  const composer = useRef<ComposerHandle>(null);
+  const actions = useEnduragentStore((state) => state.planActions);
+  const coach = useEnduragentStore((state) => state.plan.coach);
+  const model = useEnduragentStore((state) => planReadModel(state.plan));
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const [customDecisionOpen, setCustomDecisionOpen] = useState(false);
+  const parsed = model === null ? null : PlanCoachProjectionDataSchema.safeParse(model.data);
+  const data = parsed?.success === true ? parsed.data : null;
+  const busy = transition.status === "submitting" || transition.status === "running";
+  const ready = data?.readyToCreateDraft === true;
+  const messages =
+    coach.messages.length > 0
+      ? coach.messages
+      : (data?.messages.map((message) => ({
+          id: message.id,
+          ...(message.turnId === null ? {} : { turnId: message.turnId }),
+          role: message.role,
+          text: message.text,
+          delivery: "complete" as const,
+          historical: false,
+        })) ?? []);
+  const decision = coach.decision ?? data?.decision ?? null;
+
+  return (
+    <section
+      className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1"
+      data-plan-scenario={model?.scenarioId}
+    >
+      {model?.scenarioId === "PL-S020" ? (
+        <div className="flex items-start gap-row text-ok" role="status">
+          <CheckCircle2 className="mt-0.5 size-4" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-base font-medium text-ink">Draft discarded</h2>
+            <p className="m-0 text-ink-2">Your Plan conversation is still here.</p>
+          </div>
+        </div>
+      ) : null}
+      <ConversationTranscript
+        messages={messages}
+        timeline={coach.timeline}
+        historyControls={false}
+      />
+      <CoachDecisionPanel
+        onCustomOpenChange={setCustomDecisionOpen}
+        surface={{
+          decision,
+          phase: coach.decisionPhase,
+          answerLabel: coach.decisionAnswerLabel,
+          error: coach.decisionError,
+          loadError: coach.decisionLoadError,
+          answer: (decisionId, answer) => actions?.answerCoachDecision(decisionId, answer),
+          skip: (decisionId) => actions?.skipCoachDecision(decisionId),
+          retry: () => actions?.retry(),
+        }}
+      />
+      <PlanQueue />
+      {ready ? (
+        <section className="grid gap-row rounded-card bg-sunk p-4">
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-sm font-medium">Ready to create Draft</h2>
+            <p className="m-0 text-ink-2">
+              Goal event, availability, FTP, and course choice are ready.
+            </p>
+          </div>
+          <div className="flex flex-wrap justify-end gap-inset pt-inset">
+            <Button type="button" variant="outline" onClick={() => composer.current?.focus()}>
+              Back to coach
+            </Button>
+            <Button
+              type="button"
+              disabled={actions === null || busy}
+              onClick={() => actions?.createDraft()}
+            >
+              {data?.replacement ? "Create replacement draft" : "Create draft"}
+            </Button>
+          </div>
+        </section>
+      ) : null}
+      <Composer
+        handle={composer}
+        hidden={customDecisionOpen}
+        surface={{
+          status: coach.status,
+          sendDisabled: coach.sendDisabled,
+          inputDisabled: coach.inputDisabled || decision?.status === "unanswered",
+          placeholder: "Reply to your coach…",
+          label: "Reply to your Plan coach",
+          allowSlashCommands: false,
+          submit: (message) => actions?.submitCoach(message) ?? Promise.resolve(false),
+          stop: () => actions?.stopCoach(),
+        }}
+      />
+    </section>
+  );
+}
+
+function DraftFormation(): ReactElement {
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const revision = transition.status === "running" && transition.transitionId === "PL-T07";
+  return (
+    <section
+      className="grid place-items-center gap-row rounded-card bg-surface p-8 text-center shadow-elev-1"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <LoaderCircle
+        className="size-6 animate-spin text-primary motion-reduce:animate-none"
+        aria-hidden="true"
+      />
+      <div className={SUPPORT_PAIR}>
+        <h2 className="m-0 text-lg font-semibold">
+          {revision ? "Updating your Draft" : "Building your Draft"}
+        </h2>
+        <p className="m-0 text-ink-2">
+          {revision
+            ? "Your previous Draft stays available until this update is complete."
+            : "Your Draft opens automatically when it is ready."}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function DiscardDraftDialog(): ReactElement {
+  const open = useEnduragentStore((state) => state.plan.discardConfirmation);
+  const actions = useEnduragentStore((state) => state.planActions);
+  const cancel = useRef<HTMLButtonElement>(null);
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) actions?.closeDiscardConfirmation();
+      }}
+    >
+      <DialogContent
+        className="w-[min(460px,calc(100vw-32px))] max-w-none gap-0 p-6 shadow-elev-4 sm:max-w-none"
+        showCloseButton={false}
+        initialFocus={cancel}
+      >
+        <DialogHeader className="gap-2.5">
+          <DialogTitle className="m-0 text-xl">Discard this Draft?</DialogTitle>
+          <DialogDescription className="m-0 leading-[1.5]">
+            Only this Draft is removed. Your Plan conversation and active Plan stay.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="mx-0 mt-[22px] mb-0 flex-row justify-end border-0 bg-transparent p-0">
+          <DialogClose render={<Button ref={cancel} variant="outline" size="lg" />}>
+            Cancel
+          </DialogClose>
+          <Button
+            type="button"
+            variant="destructive-solid"
+            size="lg"
+            onClick={() => actions?.discardDraft()}
+          >
+            Discard Draft
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DraftProjection(): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const model = useEnduragentStore((state) => planReadModel(state.plan));
+  const revisionComposer = useEnduragentStore((state) => state.plan.revisionComposer);
+  const [instruction, setInstruction] = useState("");
+  const parsed = model === null ? null : PlanCoachProjectionDataSchema.safeParse(model.data);
+  const draft = parsed?.success === true ? parsed.data.draft : null;
+  const submit = (event: FormEvent): void => {
+    event.preventDefault();
+    if (/\S/u.test(instruction)) actions?.updateDraft(instruction);
+  };
+  return (
+    <div className="grid gap-6" data-plan-scenario={model?.scenarioId}>
+      <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
+        <div className={SUPPORT_PAIR}>
+          <h2 className="m-0 text-lg font-semibold">{model?.title ?? "Draft Plan"}</h2>
+          <p className="m-0 text-ink-2">{model?.summary}</p>
+        </div>
+        <div className="grid grid-cols-2 gap-inset rounded-card bg-sunk p-4">
+          <div className={SUPPORT_PAIR}>
+            <span className="text-xs text-ink-2">Revision</span>
+            <strong>{draft?.revision ?? model?.revision ?? 1}</strong>
+          </div>
+          <div className={SUPPORT_PAIR}>
+            <span className="text-xs text-ink-2">Status</span>
+            <strong>Ready for review</strong>
+          </div>
+        </div>
+        {revisionComposer ? (
+          <form className="grid gap-inset pt-row" onSubmit={submit}>
+            <label className="text-sm font-medium" htmlFor="plan-draft-revision">
+              What should the coach change?
+            </label>
+            <textarea
+              id="plan-draft-revision"
+              autoFocus
+              rows={4}
+              className="resize-y rounded-ctl border border-line-2 bg-sunk px-3 py-2 text-sm outline-none focus:border-ring focus:ring-3 focus:ring-ring/20"
+              value={instruction}
+              onChange={(event) => setInstruction(event.currentTarget.value)}
+            />
+            <div className="flex justify-end gap-inset">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => actions?.closeRevisionComposer()}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!/\S/u.test(instruction)}>
+                Update draft
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <div className="flex flex-wrap justify-end gap-inset pt-row">
+            <Button type="button" variant="outline" onClick={() => actions?.openRevisionComposer()}>
+              Back to coach
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => actions?.openDiscardConfirmation()}
+            >
+              Discard draft
+            </Button>
+          </div>
+        )}
+      </section>
+      <DiscardDraftDialog />
     </div>
   );
 }
@@ -136,8 +426,17 @@ function AttentionProjection(): ReactElement {
 
 function ReadyProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  if (
+    transition.status === "running" &&
+    (transition.transitionId === "PL-T06" || transition.transitionId === "PL-T07")
+  ) {
+    return <DraftFormation />;
+  }
   if (model === null) return <StatusCard title="Plan" support="Refreshing your Plan…" />;
   if (model.lifecycle === "none" || model.projection === "no-plan") return <NoPlan />;
+  if (model.projection === "coach") return <PlanCoach />;
+  if (model.projection === "draft") return <DraftProjection />;
   if (model.projection === "attention") return <AttentionProjection />;
   return (
     <StatusCard
@@ -151,14 +450,11 @@ export function PlanView(): ReactElement {
   const plan = useEnduragentStore((state) => state.plan);
   const model = planReadModel(plan);
   const loading = plan.hydration.status === "loading";
-  const subtitle =
-    loading
-      ? "Loading…"
-      : model?.lifecycle === "none"
-        ? "No active plan"
-        : plan.transition.status === "running" || plan.transition.status === "submitting"
-          ? "Working…"
-          : undefined;
+  const subtitle = loading
+    ? "Loading…"
+    : model?.lifecycle === "none"
+      ? "No active plan"
+      : undefined;
 
   return (
     <Page title="Plan" subtitle={subtitle} busy={loading} className="plan-view">

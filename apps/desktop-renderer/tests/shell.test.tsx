@@ -75,7 +75,24 @@ function stubActions(): ChatActions {
 }
 
 function stubPlanActions(): PlanActions {
-  return { open: vi.fn(), startPlan: vi.fn(), retry: vi.fn() };
+  return {
+    open: vi.fn(),
+    startPlan: vi.fn(),
+    submitCoach: vi.fn(async () => true),
+    stopCoach: vi.fn(),
+    removeQueuedCoachMessage: vi.fn(),
+    retryQueuedCoachTurn: vi.fn(),
+    answerCoachDecision: vi.fn(),
+    skipCoachDecision: vi.fn(),
+    createDraft: vi.fn(),
+    updateDraft: vi.fn(),
+    openDiscardConfirmation: vi.fn(),
+    closeDiscardConfirmation: vi.fn(),
+    discardDraft: vi.fn(),
+    openRevisionComposer: vi.fn(),
+    closeRevisionComposer: vi.fn(),
+    retry: vi.fn(),
+  };
 }
 
 function stravaDroppedActivities() {
@@ -212,7 +229,9 @@ describe("shell", () => {
     });
     await user.click(screen.getByRole("button", { name: "Plan" }));
     expect(await screen.findByRole("region", { name: "Plan" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Train toward one clear goal" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Train toward one clear goal" }),
+    ).toBeInTheDocument();
     expect(document.querySelector("div.thread")).not.toBeNull();
     const conversation = screen.getByLabelText("Coaching conversation");
     expect(conversation.closest(".hidden")).not.toBeNull();

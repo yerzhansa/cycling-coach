@@ -124,15 +124,19 @@ describe("planning contract", () => {
   });
 
   it("accepts one strict command for every lifecycle transition", () => {
-    expect(commands.map((command) => PlanTransitionCommandSchema.parse(command).transitionId)).toEqual(
-      PLAN_TRANSITION_IDS,
-    );
+    expect(
+      commands.map((command) => PlanTransitionCommandSchema.parse(command).transitionId),
+    ).toEqual(PLAN_TRANSITION_IDS);
   });
 
   it("rejects missing, extra, and transition-specific command fields", () => {
     expect(
-      PlanTransitionCommandSchema.safeParse({ transitionId: "PL-T12", commandId, planId, extra: true })
-        .success,
+      PlanTransitionCommandSchema.safeParse({
+        transitionId: "PL-T12",
+        commandId,
+        planId,
+        extra: true,
+      }).success,
     ).toBe(false);
     expect(
       PlanTransitionCommandSchema.safeParse({ transitionId: "PL-T08", commandId, draftId }).success,
@@ -178,12 +182,12 @@ describe("planning contract", () => {
       priority: "dated",
       affectedDate: "1998-08-23",
     };
-    expect(PlanAttentionSchema.safeParse({ count: 1, destination: "direct", items: [item] }).success).toBe(
-      true,
-    );
-    expect(PlanAttentionSchema.safeParse({ count: 1, destination: "list", items: [item] }).success).toBe(
-      false,
-    );
+    expect(
+      PlanAttentionSchema.safeParse({ count: 1, destination: "direct", items: [item] }).success,
+    ).toBe(true);
+    expect(
+      PlanAttentionSchema.safeParse({ count: 1, destination: "list", items: [item] }).success,
+    ).toBe(false);
   });
 
   it("keeps loading, stale, failed, and unsupported hydration explicit", () => {
@@ -194,12 +198,11 @@ describe("planning contract", () => {
         capability: "planning",
       }),
     ).toEqual({ status: "unsupported-capability", capability: "planning" });
-    expect(
-      GetPlanStateRpcResultSchema.parse({ status: "ready", state }),
-    ).toEqual({ status: "ready", state });
-    expect(
-      GetPlanStateRpcResultSchema.safeParse({ status: "failed" }).success,
-    ).toBe(false);
+    expect(GetPlanStateRpcResultSchema.parse({ status: "ready", state })).toEqual({
+      status: "ready",
+      state,
+    });
+    expect(GetPlanStateRpcResultSchema.safeParse({ status: "failed" }).success).toBe(false);
   });
 
   it("validates transition progress and terminal results", () => {
@@ -213,8 +216,45 @@ describe("planning contract", () => {
     };
     expect(PlanProgressEventSchema.parse(progress)).toEqual(progress);
     expect(PlanProgressEventSchema.safeParse({ ...progress, completed: 6 }).success).toBe(false);
+    const running = {
+      ...progress,
+      transitionId: "PL-T05" as const,
+      phase: "running" as const,
+      completed: 0,
+      turnEvent: {
+        type: "turn-start" as const,
+        turnId: "turn-1",
+        chatId: "plan:00000000000000000000000001",
+      },
+    };
+    expect(PlanProgressEventSchema.parse(running)).toEqual(running);
     expect(
-      ExecutePlanTransitionRpcResultSchema.parse({ status: "completed", state }),
-    ).toEqual({ status: "completed", state });
+      PlanProgressEventSchema.safeParse({ ...running, phase: "completed", completed: 1 }).success,
+    ).toBe(false);
+    expect(ExecutePlanTransitionRpcResultSchema.parse({ status: "completed", state })).toEqual({
+      status: "completed",
+      state,
+    });
+  });
+
+  it("keeps Plan coach decisions inside PL-T05", () => {
+    const decision = {
+      transitionId: "PL-T05" as const,
+      commandId,
+      conversationId,
+      text: "Keep Saturday available",
+      decision: {
+        action: "answer" as const,
+        decisionId: "decision-1",
+        answer: { kind: "option" as const, optionId: "option-1" },
+      },
+    };
+    expect(PlanTransitionCommandSchema.parse(decision)).toEqual(decision);
+    expect(
+      PlanTransitionCommandSchema.safeParse({
+        ...decision,
+        decision: { action: "answer", decisionId: "decision-1" },
+      }).success,
+    ).toBe(false);
   });
 });

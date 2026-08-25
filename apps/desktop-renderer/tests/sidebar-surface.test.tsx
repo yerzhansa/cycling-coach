@@ -40,7 +40,24 @@ function stubActions(): ChatActions {
 }
 
 function stubPlanActions(): PlanActions {
-  return { open: vi.fn(), startPlan: vi.fn(), retry: vi.fn() };
+  return {
+    open: vi.fn(),
+    startPlan: vi.fn(),
+    submitCoach: vi.fn(async () => true),
+    stopCoach: vi.fn(),
+    removeQueuedCoachMessage: vi.fn(),
+    retryQueuedCoachTurn: vi.fn(),
+    answerCoachDecision: vi.fn(),
+    skipCoachDecision: vi.fn(),
+    createDraft: vi.fn(),
+    updateDraft: vi.fn(),
+    openDiscardConfirmation: vi.fn(),
+    closeDiscardConfirmation: vi.fn(),
+    discardDraft: vi.fn(),
+    openRevisionComposer: vi.fn(),
+    closeRevisionComposer: vi.fn(),
+    retry: vi.fn(),
+  };
 }
 
 function update(patch: Partial<Parameters<typeof useEnduragentStore.setState>[0]>): void {
@@ -125,7 +142,11 @@ describe("Plan navigation attention", () => {
     { count: 1, name: "Plan, 1 item needs attention" },
     { count: 3, name: "Plan, 3 items need attention" },
   ])("shows the exact count for $count unresolved item(s)", ({ count, name }) => {
-    const readModel = planReadModel({ attentionCount: count, lifecycle: "active", planId: "plan-1" });
+    const readModel = planReadModel({
+      attentionCount: count,
+      lifecycle: "active",
+      planId: "plan-1",
+    });
     update({
       plan: {
         ...EMPTY_PLAN_SURFACE,
