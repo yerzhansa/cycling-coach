@@ -901,12 +901,20 @@ describe("settings lifecycle", () => {
   it("unlocks fresh credential setup after a successful reset unmounts Settings", async () => {
     const user = userEvent.setup();
     const resetContinuation = deferred<void>();
+    const refreshedStatuses = deferred<readonly CredentialSlotStatus[]>();
     const configuredStatuses = [
       { slot: "anthropic", state: "configured", runtimeState: "active" },
       { slot: "intervals-icu", state: "configured", runtimeState: "active" },
     ] as const;
+    const reconfiguredStatuses = [
+      { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+    ] as const;
     let resetCompleted = false;
-    const loadCredentialStatuses = vi.fn(async () => (resetCompleted ? [] : configuredStatuses));
+    let setupCompleted = false;
+    const loadCredentialStatuses = vi.fn(() => {
+      if (!resetCompleted) return Promise.resolve(configuredStatuses);
+      return setupCompleted ? refreshedStatuses.promise : Promise.resolve([]);
+    });
     const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
     bridge.credentialStatuses.mockImplementation(loadCredentialStatuses);
     bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
@@ -997,15 +1005,50 @@ describe("settings lifecycle", () => {
         expect(
           credentialChangesBlocked(useEnduragentStore.getState().settings.credentials, false),
         ).toBe(false);
-        expect(harness?.credentialController.state()).toMatchObject({ status: "deleted" });
-        expect(harness?.credentialController.state().resetUncertain).toBeUndefined();
+        expect(harness?.credentialController.state()).toEqual({ status: "closed" });
+        expect(useEnduragentStore.getState().settings.credentials).toEqual({ status: "closed" });
         expect(aiSetup).toBeEnabled();
       });
       expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
       await user.click(aiSetup!);
       await waitFor(() => expect(document.querySelector('[data-setup-menu="ai"]')).not.toBeNull());
+
+      const loadsBeforeSettingsReopens = loadCredentialStatuses.mock.calls.length;
+      act(() => {
+        setupCompleted = true;
+        useEnduragentStore.setState((state) => ({
+          onboarding: { ...state.onboarding, completionRequired: false },
+        }));
+      });
+
+      await waitFor(() => {
+        expect(loadCredentialStatuses).toHaveBeenCalledTimes(loadsBeforeSettingsReopens + 1);
+        expect(harness?.credentialController.state()).toMatchObject({
+          status: "loading",
+          announcement: "",
+        });
+        expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+          status: "loading",
+          announcement: "",
+        });
+      });
+      expect(screen.queryByText(/All credentials were removed/u)).not.toBeInTheDocument();
+
+      act(() => refreshedStatuses.resolve(reconfiguredStatuses));
+      await waitFor(() => {
+        expect(harness?.credentialController.state()).toMatchObject({
+          status: "ready",
+          entries: [expect.objectContaining({ credential: "openrouter" })],
+        });
+        expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+          status: "ready",
+          entries: [expect.objectContaining({ credential: "openrouter" })],
+        });
+      });
+      expect(screen.queryByText(/All credentials were removed/u)).not.toBeInTheDocument();
     } finally {
       resetContinuation.resolve(undefined);
+      refreshedStatuses.resolve(reconfiguredStatuses);
       onboarding.dispose();
       onboardingView.dispose();
       useEnduragentStore.getState().bindOnboardingActions(null);

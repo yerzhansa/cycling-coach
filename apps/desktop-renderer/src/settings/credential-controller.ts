@@ -150,7 +150,7 @@ export interface CredentialSettingsView {
     readonly onSetupOpened: () => void;
     readonly onOpenSetup: () => void;
   }): void;
-  render(state: Exclude<CredentialSettingsState, { readonly status: "closed" }>): void;
+  render(state: CredentialSettingsState): void;
   dispose(): void;
 }
 
@@ -344,7 +344,7 @@ export function createCredentialSettingsController(input: {
   let reconnectRequired = false;
   let failedClient: CoachClient | undefined;
 
-  const render = (state: Exclude<CredentialSettingsState, { readonly status: "closed" }>): void => {
+  const render = (state: CredentialSettingsState): void => {
     currentState = state;
     input.view.render(state);
   };
@@ -644,6 +644,10 @@ export function createCredentialSettingsController(input: {
           recoveryAvailable: false,
           focus: { target: "feedback" },
         });
+        return;
+      }
+      if (generation !== operationGeneration) {
+        render({ status: "closed" });
         return;
       }
       render({
