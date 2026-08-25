@@ -1,9 +1,13 @@
-import { readFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDesktopViteConfig } from "../electron.vite.config.js";
 
+const desktopRoot = resolve(import.meta.dirname, "..");
 const probeFlag = "--desktop-keychain-binding-probe";
 const originalArgv = process.argv;
 const originalNoDeprecation = process.noDeprecation;
+const builtMainEntry = resolve(desktopRoot, "out/main/index.js");
 
 async function loadProbeDeprecationPolicy(commandLine: readonly string[]): Promise<boolean> {
   process.argv = [...commandLine];
@@ -36,11 +40,38 @@ describe("keychain binding probe deprecation policy", () => {
     },
   );
 
-  it("loads the policy before every other main-process import", async () => {
-    const source = await readFile(new URL("../src/main/index.ts", import.meta.url), "utf8");
+  it("configures the policy as a dedicated main-process chunk", () => {
+    const config = createDesktopViteConfig();
+    const output = config.main?.build?.rollupOptions?.output;
 
-    expect(source.split("\n", 1)).toEqual([
-      'import "./keychain-binding-probe-deprecation.js";',
-    ]);
+    expect(config.main?.build?.rollupOptions?.input).toMatchObject({
+      index: resolve(desktopRoot, "src/main/index.ts"),
+    });
+    expect(output).not.toBeInstanceOf(Array);
+    expect(output).toMatchObject({
+      manualChunks: {
+        "keychain-binding-probe-deprecation": [
+          resolve(desktopRoot, "src/main/keychain-binding-probe-deprecation.ts"),
+        ],
+      },
+    });
   });
+
+  it.skipIf(!existsSync(builtMainEntry))(
+    "evaluates the policy chunk before the built main-process imports",
+    () => {
+      const firstLine = readFileSync(builtMainEntry, "utf8").split("\n", 1)[0];
+      const guardImport = firstLine.match(
+        /^import "(\.\/chunks\/keychain-binding-probe-deprecation-[^"]+\.js)";$/u,
+      );
+
+      expect(guardImport).not.toBeNull();
+      if (guardImport === null) return;
+
+      const guardChunk = readFileSync(resolve(desktopRoot, "out/main", guardImport[1]), "utf8");
+      expect(guardChunk).toContain(`process.argv.includes("${probeFlag}")`);
+      expect(guardChunk).toContain("process.noDeprecation = true;");
+      expect(guardChunk).not.toMatch(/^\s*import\b/mu);
+    },
+  );
 });
