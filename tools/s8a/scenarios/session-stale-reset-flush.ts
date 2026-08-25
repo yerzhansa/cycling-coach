@@ -22,6 +22,7 @@ export const scenario: S8aScenario = {
   },
   intervals: {
     athlete: { ...STANDARD_ATHLETE },
+    activities: [],
     wellness: [
       { id: "1998-07-03", restingHR: 47, hrv: 70, sleepSecs: 27000, sportInfo: EMPTY_SPORT_INFO },
       { id: "1998-07-04", restingHR: 48, hrv: 72, sleepSecs: 27000, sportInfo: EMPTY_SPORT_INFO },

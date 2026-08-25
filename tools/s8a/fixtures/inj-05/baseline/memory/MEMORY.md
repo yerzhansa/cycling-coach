@@ -5,8 +5,8 @@
 
 ## cycling-profile
 _updated: 1998-07-06
-- FTP 250 W (prior memory, date unknown) (re-confirm)
+- FTP 250 W (coach, 1998-07-06)
 
 ## goals
 _updated: 1998-07-06
-- Weekly training Load target: 400 (prior memory, date unknown) (re-confirm)
+- Weekly training load target: 400 (coach, 1998-07-06)

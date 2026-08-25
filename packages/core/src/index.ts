@@ -318,6 +318,7 @@ export type {
   AthleteDataReader,
   AthleteReadResult,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   PlatformCalendarMutations,
   StoredDataFreshness,
 } from "./athlete-data.js";

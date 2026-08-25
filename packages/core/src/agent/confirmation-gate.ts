@@ -3,6 +3,7 @@ import type { ToolConfirmationPort } from "@enduragent/engine";
 import type { IntervalsClient } from "../intervals.js";
 import {
   guardDeletableEvent,
+  guardUpdatableEvent,
   toTypedError,
   type IntervalsEventRuntime,
 } from "./event-guards.js";
@@ -11,6 +12,7 @@ export const GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "intervals_create_strength_workout",
   "intervals_create_workout",
   "intervals_delete_workout",
+  "intervals_update_workout",
   "plan_save",
 ]);
 
@@ -141,6 +143,36 @@ export function createProposalSummarizers(opts: {
       if (refusal !== undefined) return { block: refusal };
       const date = event.startDateLocal.slice(0, 10);
       return { summary: `Delete workout "${event.name ?? "Unnamed workout"}" on ${date}` };
+    },
+    intervals_update_workout: async (input) => {
+      if (opts.intervals === null) return { block: { error: "intervals_not_configured" } };
+      const eventId = objectField(input, "eventId");
+      if (typeof eventId !== "number") return { block: { error: "invalid_event_id" } };
+      const changes = objectField(input, "changes");
+      if (changes === null || typeof changes !== "object") {
+        return { block: { error: "invalid_changes" } };
+      }
+      const date = stringField(changes, "date");
+      const fetched = await opts.intervals.events.get(eventId);
+      if (!fetched.ok) return { block: toTypedError(fetched.error) };
+      const event = fetched.value as unknown as IntervalsEventRuntime;
+      const refusal = guardUpdatableEvent(event, opts.tz, eventId, date);
+      if (refusal !== undefined) return { block: refusal };
+      const fields: string[] = [];
+      if (date !== undefined) fields.push(`date to ${date}`);
+      const name = stringField(changes, "name");
+      if (name !== undefined) fields.push(`name to "${name}"`);
+      if (objectField(changes, "description") !== undefined) fields.push("description");
+      const movingTime = objectField(changes, "movingTime");
+      if (typeof movingTime === "number") fields.push(`duration to ${movingTime} seconds`);
+      const trainingLoad = objectField(changes, "icuTrainingLoad");
+      if (typeof trainingLoad === "number") fields.push(`training load to ${trainingLoad}`);
+      if (objectField(changes, "workoutDoc") !== undefined) fields.push("workout structure");
+      const eventDate = event.startDateLocal.slice(0, 10);
+      const detail = fields.length === 0 ? "selected fields" : fields.join(", ");
+      return {
+        summary: `Update workout "${event.name ?? "Unnamed workout"}" on ${eventDate} — ${detail}`,
+      };
     },
     plan_save: async (input) => {
       const plan = objectField(input, "plan");

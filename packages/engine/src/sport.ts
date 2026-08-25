@@ -15,6 +15,7 @@ import type {
   AthleteReadResult,
   CallerRole,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   EnvSecretRef,
   ExecSecretRef,
   MemorySnapshot,
@@ -33,6 +34,7 @@ export type {
   AthleteReadResult,
   CallerRole,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   EnvSecretRef,
   ExecSecretRef,
   MemorySnapshot,
@@ -238,7 +240,7 @@ export {
   buildCoachExternalId,
   isCoachOwnedEvent,
 } from "./sport/event-provenance.js";
-export { guardDeletableEvent, toTypedError } from "./sport/event-guards.js";
+export { guardDeletableEvent, guardUpdatableEvent, toTypedError } from "./sport/event-guards.js";
 export type { IntervalsEventRuntime } from "./sport/event-guards.js";
 export type { SourceProvenance } from "./provenance.js";
 export {

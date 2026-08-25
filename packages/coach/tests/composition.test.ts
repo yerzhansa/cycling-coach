@@ -501,6 +501,18 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it("composes guarded workout updates with the confirmation policy", async () => {
+    const home = await freshHome();
+    const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
+
+    expect(engineInput.ports.platform.calendarMutations.updateEvent).toBeTypeOf("function");
+    expect(engineInput.ports.toolConfirmations!.gatedToolNames.has("intervals_update_workout")).toBe(
+      true,
+    );
+
+    await lifecycle.close();
+  });
+
   it("invalidates executable confirmation closures when the runtime bundle is replaced", async () => {
     const home = await freshHome();
     const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
