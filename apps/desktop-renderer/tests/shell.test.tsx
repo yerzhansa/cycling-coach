@@ -13,6 +13,7 @@ import {
   setupRequired,
   setupSurfaceOnScreen,
 } from "../src/state/onboarding-slice.js";
+import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
@@ -21,6 +22,7 @@ import {
   clearTrainingRestrictionFocusRequest,
   takeTrainingRestrictionFocusRequest,
 } from "../src/ui/training/restriction-focus.js";
+import { planReadModel } from "./plan-fixtures.js";
 
 const REPAIR_REQUIRED_CREDENTIALS: CredentialSettingsState = {
   status: "ready",
@@ -72,6 +74,10 @@ function stubActions(): ChatActions {
   };
 }
 
+function stubPlanActions(): PlanActions {
+  return { open: vi.fn(), startPlan: vi.fn(), retry: vi.fn() };
+}
+
 function stravaDroppedActivities() {
   return {
     overall: {
@@ -93,6 +99,7 @@ async function preloadLazyViews(): Promise<void> {
   await Promise.all([
     import("../src/ui/archive/ArchiveView.js"),
     import("../src/ui/training/TrainingView.js"),
+    import("../src/ui/plan/PlanView.js"),
     import("../src/ui/settings/SettingsView.js"),
   ]);
 }
@@ -113,6 +120,8 @@ describe("shell", () => {
       onboarding: READY_ONBOARDING,
       onboardingActions: null,
       onboardingStartupSettled: true,
+      plan: EMPTY_PLAN_SURFACE,
+      planActions: stubPlanActions(),
       settings: {
         ...useEnduragentStore.getState().settings,
         savingOwners: [],
@@ -131,6 +140,8 @@ describe("shell", () => {
       onboarding: CLOSED_ONBOARDING,
       onboardingActions: null,
       onboardingStartupSettled: false,
+      plan: EMPTY_PLAN_SURFACE,
+      planActions: null,
       settings: {
         ...useEnduragentStore.getState().settings,
         credentials: { status: "closed" },
@@ -188,6 +199,24 @@ describe("shell", () => {
 
     await user.click(screen.getByRole("button", { name: "Training" }));
     expect(await screen.findByRole("region", { name: "Training" })).toBeInTheDocument();
+
+    const planState = planReadModel();
+    act(() => {
+      useEnduragentStore.setState({
+        plan: {
+          ...EMPTY_PLAN_SURFACE,
+          hydration: { status: "ready", state: planState },
+          lastReady: planState,
+        },
+      });
+    });
+    await user.click(screen.getByRole("button", { name: "Plan" }));
+    expect(await screen.findByRole("region", { name: "Plan" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Train toward one clear goal" })).toBeInTheDocument();
+    expect(document.querySelector("div.thread")).not.toBeNull();
+    const conversation = screen.getByLabelText("Coaching conversation");
+    expect(conversation.closest(".hidden")).not.toBeNull();
+    expect(screen.getByRole("region", { name: "Plan" }).querySelector("div.thread")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("region", { name: "Settings" })).toBeInTheDocument();
