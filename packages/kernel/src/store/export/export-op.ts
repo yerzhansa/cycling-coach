@@ -60,6 +60,22 @@ export interface ImportResult {
 
 const ALL_AUTHORED_TABLES = [...PURE_AUTHORED_TABLES, ...MIXED_AUTHORED_TABLES] as const;
 
+function orderAuthoredRows(table: string, rows: readonly AuthoredRow[]): readonly AuthoredRow[] {
+  if (table !== "plan_draft_revision") return rows;
+  return [...rows].sort((left, right) => {
+    const leftRevision = typeof left.revision === "number" ? left.revision : null;
+    const rightRevision = typeof right.revision === "number" ? right.revision : null;
+    if (leftRevision === null && rightRevision !== null) return 1;
+    if (leftRevision !== null && rightRevision === null) return -1;
+    if (leftRevision !== null && rightRevision !== null && leftRevision !== rightRevision) {
+      return leftRevision - rightRevision;
+    }
+    const leftId = typeof left.id === "string" ? left.id : "";
+    const rightId = typeof right.id === "string" ? right.id : "";
+    return leftId.localeCompare(rightId);
+  });
+}
+
 export async function buildExport(
   deps: BuildExportDeps,
   opts: { passphrase?: string },
@@ -67,10 +83,16 @@ export async function buildExport(
   const userVersion = await deps.source.readUserVersion();
   const authored: Record<string, readonly AuthoredRow[]> = {};
   for (const t of PURE_AUTHORED_TABLES) {
-    authored[t] = await deps.source.readAuthoredTable(t, { manualOnly: false });
+    authored[t] = orderAuthoredRows(
+      t,
+      await deps.source.readAuthoredTable(t, { manualOnly: false }),
+    );
   }
   for (const t of MIXED_AUTHORED_TABLES) {
-    authored[t] = await deps.source.readAuthoredTable(t, { manualOnly: true });
+    authored[t] = orderAuthoredRows(
+      t,
+      await deps.source.readAuthoredTable(t, { manualOnly: true }),
+    );
   }
   const artifacts = [...(await deps.manifest.listArtifacts())].sort((a, b) =>
     a.address < b.address ? -1 : a.address > b.address ? 1 : 0,

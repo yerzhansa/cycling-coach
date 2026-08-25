@@ -242,6 +242,25 @@ describe("store export op", () => {
     expect(imported.manifest.total).toBe(data.artifacts.length);
   });
 
+  it("orders Draft revisions parent-first before restore", async () => {
+    const data = populated();
+    data.rows.plan_draft_revision = [
+      { id: "child", revision: 2, parent_revision_id: "parent" },
+      { id: "parent", revision: 1, parent_revision_id: null },
+    ];
+    const { source } = makeSource(data);
+    const crypto = new FakeCrypto();
+    const built = await buildExport({ source, manifest: makeManifest(data), crypto, codec }, {});
+    const sink = makeSink();
+    await importExport(
+      { sink, presence: makePresence(), crypto, codec, targetUserVersion: 5 },
+      { container: built.container },
+    );
+    const restored = [...(sink.stored.get("plan_draft_revision") ?? [])]
+      .map((row) => JSON.parse(row) as { readonly revision: number });
+    expect(restored.map(({ revision }) => revision)).toEqual([1, 2]);
+  });
+
   it("(roundtrip-pass) passphrase container header + round-trip", async () => {
     const data = populated();
     const { source } = makeSource(data);
