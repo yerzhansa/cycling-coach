@@ -1,0 +1,91 @@
+export type WindowsReleaseMode = "genesis" | "steady";
+
+export interface WindowsReleaseArtifactNames {
+  readonly installer: string;
+  readonly blockmap: string;
+  readonly metadata: "latest.yml";
+}
+
+export interface WindowsReleaseUpdaterMetadata {
+  readonly provider: "generic";
+  readonly url: string;
+  readonly channel: "latest";
+  readonly updaterCacheDirName: "@enduragentdesktop-updater";
+  readonly publisherName?: string;
+}
+
+export interface WindowsReleaseInput {
+  readonly version: string;
+  readonly commit: string;
+  readonly feedUrl: string;
+  readonly mode: WindowsReleaseMode;
+  readonly baselineVersion?: string;
+  readonly repositoryRoot?: string;
+  readonly desktopRoot?: string;
+}
+
+export interface WindowsReleaseBuilderOptions {
+  readonly projectDir: string;
+  readonly publish: "never";
+  readonly win: readonly ["nsis:x64"];
+  readonly config: {
+    readonly extends: string;
+    readonly artifactName: string;
+    readonly forceCodeSigning: true;
+    readonly extraMetadata: {
+      readonly version: string;
+      readonly enduragentDesktopRelease: true;
+    };
+    readonly publish: readonly [
+      { readonly provider: "generic"; readonly url: string; readonly channel: "latest" },
+    ];
+    readonly win: {
+      readonly verifyUpdateCodeSignature: true;
+      readonly target: readonly [{ readonly target: "nsis"; readonly arch: readonly ["x64"] }];
+    };
+    readonly nsis: {
+      readonly artifactName: string;
+      readonly differentialPackage: true;
+    };
+  };
+}
+
+export interface WindowsReleasePlan {
+  readonly version: string;
+  readonly commit: string;
+  readonly tag: string;
+  readonly platform: "win32";
+  readonly arch: "x64";
+  readonly mode: WindowsReleaseMode;
+  readonly baselineVersion: string | null;
+  readonly feedUrl: string;
+  readonly artifactNames: WindowsReleaseArtifactNames;
+  readonly assetNames: readonly string[];
+  readonly updaterMetadata: WindowsReleaseUpdaterMetadata;
+  readonly authenticode: "pending-w19";
+  readonly builderOptions: WindowsReleaseBuilderOptions;
+}
+
+export const WINDOWS_RELEASE_ARCH: "x64";
+export const WINDOWS_RELEASE_PLATFORM: "win32";
+export const WINDOWS_RELEASE_METADATA_NAME: "latest.yml";
+export const WINDOWS_AUTHENTICODE_PENDING: "pending-w19";
+export function safeWindowsReleasePlanMessage(error: unknown): string | undefined;
+export function requireReleaseCommit(value: unknown): string;
+export function windowsReleaseArtifactNames(version: string): WindowsReleaseArtifactNames;
+export function windowsReleaseAssetNames(version: string): readonly string[];
+export function assertKnownWindowsReleaseAssets(
+  names: readonly string[],
+  version: string,
+): readonly string[];
+export function parseWindowsReleaseUpdaterMetadata(
+  bytes: string | Uint8Array,
+  options?: { readonly expectedPublisherName?: string },
+): WindowsReleaseUpdaterMetadata;
+export function readWindowsReleaseVersion(
+  options?: { readonly repositoryRoot?: string; readonly desktopRoot?: string },
+  dependencies?: {
+    readonly readFile?: (path: string, encoding: "utf8") => Promise<string>;
+  },
+): Promise<string>;
+export function createWindowsReleasePlan(input: WindowsReleaseInput): WindowsReleasePlan;
