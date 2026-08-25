@@ -19,6 +19,7 @@ import {
   COACH_RPC_METHOD_REGISTRY,
   AthleteHomeIdentitySchema,
   CoachOperationProgressNotificationEnvelopeSchema,
+  CoachPlanProgressNotificationEnvelopeSchema,
   CoachRpcRequestEnvelopeSchema,
   CoachTurnEventNotificationEnvelopeSchema,
   JsonRpcErrorResponseEnvelopeSchema,
@@ -39,6 +40,7 @@ import {
   type DaemonOwner,
   type GetSpendSummaryRpcParams,
   type JsonRpcId,
+  type PlanningOperations,
   type SetDailySpendCapRpcParams,
   type SpendSummary,
 } from "@enduragent/coach-contract";
@@ -292,7 +294,7 @@ export async function ensureDaemonToken(
 
 export interface CoachRpcServerInput {
   readonly engine: CoachEngine;
-  readonly operations: CoachOperations;
+  readonly operations: CoachOperations & PlanningOperations;
   readonly spend: SpendRpcHandlers;
   readonly selfTestOperations: CoachSelfTestOperations;
   readonly telegram: DesktopTelegramController;
@@ -510,6 +512,8 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "getSpendSummary",
   "setDailySpendCap",
   "selfTest",
+  "getPlanState",
+  "executePlanTransition",
 ]);
 
 function generateRendererCapability(
@@ -1367,6 +1371,77 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                   eventFailure = { error };
                 }
               });
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getPlanState":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.getPlanState.requestSchema.parse(
+                generic.data.params,
+              );
+              result = input.operations.getPlanState
+                ? await input.operations.getPlanState(request)
+                : { status: "unsupported-capability", capability: "planning" };
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "executePlanTransition":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.executePlanTransition.requestSchema.parse(
+                generic.data.params,
+              );
+              let operationId: string | undefined;
+              let progressOpen = true;
+              if (input.operations.executePlanTransition) {
+                let operationResult: unknown;
+                try {
+                  operationResult = await input.operations.executePlanTransition(request, (event) => {
+                    if (!progressOpen || eventFailure !== undefined) return;
+                    try {
+                      const parsedEvent =
+                        COACH_RPC_METHOD_REGISTRY.executePlanTransition.eventSchema.parse(event);
+                      if (
+                        parsedEvent.commandId !== request.commandId ||
+                        parsedEvent.transitionId !== request.transitionId ||
+                        (operationId !== undefined && parsedEvent.operationId !== operationId)
+                      ) {
+                        throw new Error("Planning progress correlation mismatch");
+                      }
+                      operationId = parsedEvent.operationId;
+                      const notification = CoachPlanProgressNotificationEnvelopeSchema.parse({
+                        jsonrpc: "2.0",
+                        method: "coach.planProgress",
+                        params: {
+                          requestId: generic.data.id,
+                          requestMethod: "executePlanTransition",
+                          event: parsedEvent,
+                        },
+                      });
+                      void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                    } catch (error) {
+                      eventFailure = { error };
+                    }
+                  });
+                } finally {
+                  progressOpen = false;
+                }
+                const parsedResult = COACH_RPC_METHOD_REGISTRY.executePlanTransition.responseSchema.parse(
+                  operationResult,
+                );
+                if (
+                  parsedResult.status === "accepted" &&
+                  operationId !== undefined &&
+                  parsedResult.operationId !== operationId
+                ) {
+                  throw new Error("Planning result correlation mismatch");
+                }
+                result = parsedResult;
+              } else {
+                progressOpen = false;
+                result = { status: "unsupported-capability", capability: "planning" };
+              }
             } catch (error) {
               invocationFailure = { error };
             }

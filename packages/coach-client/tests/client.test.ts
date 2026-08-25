@@ -41,6 +41,29 @@ const telegramControlSnapshot = {
   bot: { state: "unconfigured" },
   pairing: { state: "unpaired" },
 } as const;
+const planReadModel = {
+  schemaVersion: 1,
+  scenarioId: "PL-S001",
+  lifecycle: "none",
+  planId: null,
+  revision: 0,
+  title: "Plan",
+  summary: "No active Plan",
+  projection: "no-plan",
+  transitions: [{ transitionId: "PL-T01", status: "available", reason: null }],
+  reconciliation: {
+    status: "not-applicable",
+    created: 0,
+    pending: 0,
+    failed: 0,
+    total: 0,
+    currentThrough: null,
+    error: null,
+  },
+  attention: { count: 0, destination: "none", items: [] },
+  activeOperation: null,
+  data: {},
+} as const;
 
 const rpcDeadlineCases = [
   ["chat", { chatId: "chat-1", message: "deadline" }, 660_000],
@@ -106,6 +129,12 @@ const rpcDeadlineCases = [
   ["getSpendSummary", {}, 30_000],
   ["setDailySpendCap", { dailyCapUsd: 25 }, 30_000],
   ["selfTest", {}, 120_000],
+  ["getPlanState", {}, 30_000],
+  [
+    "executePlanTransition",
+    { transitionId: "PL-T01", commandId: "command-1", sourceConversationId: null },
+    660_000,
+  ],
 ] as const satisfies ReadonlyArray<readonly [CoachRpcMethodName, unknown, number]>;
 
 class ControllableSocket extends EventTarget {
@@ -949,6 +978,11 @@ describe("RPC receive and observers", () => {
           ok: false,
           error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
         },
+        getPlanState: { status: "unsupported-capability", capability: "planning" },
+        executePlanTransition: {
+          status: "unsupported-capability",
+          capability: "planning",
+        },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
@@ -1416,6 +1450,170 @@ describe("RPC receive and observers", () => {
     ]);
     socket.closeSynchronously = true;
     await client.close();
+  });
+
+  it("calls Planning through the generic registry with validated progress and result", async () => {
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.sendHook = () => {};
+    const events: unknown[] = [];
+    const command = {
+      transitionId: "PL-T01" as const,
+      commandId: "command-1",
+      sourceConversationId: null,
+    };
+    const operation = client.call("executePlanTransition", command, {
+      onEvent: (event) => events.push(event),
+    });
+    expect(JSON.parse(socket.sent.at(-1)!)).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "executePlanTransition",
+      params: command,
+    });
+    const event = {
+      commandId: "command-1",
+      transitionId: "PL-T01" as const,
+      operationId: "operation-1",
+      phase: "completed" as const,
+      completed: 1,
+      total: 1,
+    };
+    socket.emitMessage(
+      serializeCoachRpcEnvelope({
+        jsonrpc: "2.0",
+        method: "coach.planProgress",
+        params: { requestId: 1, requestMethod: "executePlanTransition", event },
+      }),
+    );
+    const result = { status: "completed" as const, state: planReadModel };
+    socket.emitMessage(serializeCoachRpcEnvelope({ jsonrpc: "2.0", id: 1, result }));
+    await expect(operation).resolves.toEqual(result);
+    expect(events).toEqual([event]);
+    socket.closeSynchronously = true;
+    await client.close();
+  });
+
+  it.each([
+    {
+      name: "command id",
+      frames: [
+        {
+          kind: "progress" as const,
+          event: {
+            commandId: "command-2",
+            transitionId: "PL-T01" as const,
+            operationId: "operation-1",
+            phase: "completed" as const,
+            completed: 1,
+            total: 1,
+          },
+        },
+      ],
+      observedEvents: 0,
+    },
+    {
+      name: "transition id",
+      frames: [
+        {
+          kind: "progress" as const,
+          event: {
+            commandId: "command-1",
+            transitionId: "PL-T02" as const,
+            operationId: "operation-1",
+            phase: "completed" as const,
+            completed: 1,
+            total: 1,
+          },
+        },
+      ],
+      observedEvents: 0,
+    },
+    {
+      name: "progress operation id",
+      frames: [
+        {
+          kind: "progress" as const,
+          event: {
+            commandId: "command-1",
+            transitionId: "PL-T01" as const,
+            operationId: "operation-1",
+            phase: "queued" as const,
+            completed: 0,
+            total: 1,
+          },
+        },
+        {
+          kind: "progress" as const,
+          event: {
+            commandId: "command-1",
+            transitionId: "PL-T01" as const,
+            operationId: "operation-2",
+            phase: "completed" as const,
+            completed: 1,
+            total: 1,
+          },
+        },
+      ],
+      observedEvents: 1,
+    },
+    {
+      name: "accepted operation id",
+      frames: [
+        {
+          kind: "progress" as const,
+          event: {
+            commandId: "command-1",
+            transitionId: "PL-T01" as const,
+            operationId: "operation-1",
+            phase: "completed" as const,
+            completed: 1,
+            total: 1,
+          },
+        },
+        { kind: "accepted" as const, operationId: "operation-2" },
+      ],
+      observedEvents: 1,
+    },
+  ])("fails closed on Planning $name correlation mismatches", async ({ frames, observedEvents }) => {
+    const { socket, connecting } = acceptedSocket();
+    const client = await connecting;
+    socket.sendHook = () => {};
+    const events: unknown[] = [];
+    const operation = client.call(
+      "executePlanTransition",
+      { transitionId: "PL-T01", commandId: "command-1", sourceConversationId: null },
+      { onEvent: (event) => events.push(event) },
+    );
+    for (const frame of frames) {
+      socket.emitMessage(
+        frame.kind === "progress"
+          ? serializeCoachRpcEnvelope({
+              jsonrpc: "2.0",
+              method: "coach.planProgress",
+              params: {
+                requestId: 1,
+                requestMethod: "executePlanTransition",
+                event: frame.event,
+              },
+            })
+          : serializeCoachRpcEnvelope({
+              jsonrpc: "2.0",
+              id: 1,
+              result: {
+                status: "accepted",
+                operationId: frame.operationId,
+                state: planReadModel,
+              },
+            }),
+      );
+    }
+    await expect(operation).rejects.toBeInstanceOf(CoachClientProtocolError);
+    expect(events).toHaveLength(observedEvents);
+    expect(socket.closeCalls).toHaveLength(1);
+    const closing = client.close();
+    socket.emitClose(1002, "protocol");
+    await closing;
   });
 
   it.each([-32700, -32600] as const)(

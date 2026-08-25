@@ -10,9 +10,12 @@ import {
   type CoachRpcNotificationEnvelope,
   type CoachRpcRequest,
   type CoachRpcResponse,
+  type ExecutePlanTransitionRpcParams,
+  type ExecutePlanTransitionRpcResult,
   type JsonRpcId,
   type JsonRpcErrorResponseEnvelope,
   type JsonRpcSuccessResponseEnvelope,
+  type PlanProgressEvent,
 } from "@enduragent/coach-contract";
 import {
   CoachClientBackpressureError,
@@ -94,6 +97,7 @@ interface ValidatedOptions {
 
 interface PendingCall {
   readonly method: CoachRpcMethodName;
+  readonly request: unknown;
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
   readonly onEvent: ((event: unknown) => void) | undefined;
@@ -102,6 +106,7 @@ interface PendingCall {
   timer: ReturnType<typeof setTimeout> | undefined;
   readonly signal: AbortSignal | undefined;
   readonly onAbort: (() => void) | undefined;
+  planOperationId: string | undefined;
 }
 
 interface OutboundFrame {
@@ -149,6 +154,8 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   getSpendSummary: 30_000,
   setDailySpendCap: 30_000,
   selfTest: 2 * 60_000,
+  getPlanState: 30_000,
+  executePlanTransition: 11 * 60_000,
 };
 
 function positiveSafeInteger(value: unknown): value is number {
@@ -410,6 +417,7 @@ class CoachClientRuntime {
           : () => this.latchTerminal(new CoachClientCallAbortedError(method));
       const pending: PendingCall = {
         method,
+        request: params,
         resolve: resolve as (value: unknown) => void,
         reject,
         onEvent: options?.onEvent as ((event: unknown) => void) | undefined,
@@ -420,6 +428,7 @@ class CoachClientRuntime {
         timer: undefined,
         signal,
         onAbort,
+        planOperationId: undefined,
       };
       this.pending.set(id, pending);
       signal?.addEventListener("abort", onAbort!, { once: true });
@@ -503,6 +512,20 @@ class CoachClientRuntime {
       this.failProtocol();
       return;
     }
+    if (pending.method === "executePlanTransition") {
+      const request = pending.request as ExecutePlanTransitionRpcParams;
+      const progress = event as PlanProgressEvent;
+      if (
+        progress.commandId !== request.commandId ||
+        progress.transitionId !== request.transitionId ||
+        (pending.planOperationId !== undefined &&
+          progress.operationId !== pending.planOperationId)
+      ) {
+        this.failProtocol();
+        return;
+      }
+      pending.planOperationId = progress.operationId;
+    }
 
     const onNotificationEnvelope = pending.onNotificationEnvelope;
     const onEvent = pending.onEvent;
@@ -528,6 +551,16 @@ class CoachClientRuntime {
       try {
         result = COACH_RPC_METHOD_REGISTRY[pending.method].responseSchema.parse(envelope.result);
       } catch {
+        this.failProtocol();
+        return;
+      }
+      if (
+        pending.method === "executePlanTransition" &&
+        (result as ExecutePlanTransitionRpcResult).status === "accepted" &&
+        pending.planOperationId !== undefined &&
+        (result as ExecutePlanTransitionRpcResult & { readonly status: "accepted" }).operationId !==
+          pending.planOperationId
+      ) {
         this.failProtocol();
         return;
       }

@@ -16,6 +16,11 @@ interface EnduragentAuth {
     readonly cursor: string | null;
     readonly limit: number;
   }): Promise<DesktopTranscriptPage>;
+  getPlanState(): Promise<DesktopPlanStateResult>;
+  executePlanTransition(
+    input: DesktopPlanTransitionCommand,
+  ): Promise<DesktopPlanTransitionResult>;
+  onPlanProgress(listener: (progress: DesktopPlanProgressEvent) => void): () => void;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: {
@@ -63,6 +68,12 @@ interface EnduragentAuth {
 }
 
 type DesktopPlatformProjection = import("./platform-copy").DesktopPlatformProjection;
+type DesktopPlanStateResult = import("@enduragent/coach-contract").GetPlanStateRpcResult;
+type DesktopPlanTransitionCommand =
+  import("@enduragent/coach-contract").ExecutePlanTransitionRpcParams;
+type DesktopPlanTransitionResult =
+  import("@enduragent/coach-contract").ExecutePlanTransitionRpcResult;
+type DesktopPlanProgressEvent = import("@enduragent/coach-contract").PlanProgressEvent;
 
 type DesktopTrainingExportRequest =
   | {

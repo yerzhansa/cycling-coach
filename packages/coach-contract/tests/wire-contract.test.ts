@@ -1214,6 +1214,14 @@ describe("coach request and event projection", () => {
         ok: false,
         error: { code: "RUNNER_ERROR", message: "packaged self-test failed" },
       }),
+      getPlanState: async () => ({
+        status: "unsupported-capability",
+        capability: "planning",
+      }),
+      executePlanTransition: async () => ({
+        status: "unsupported-capability",
+        capability: "planning",
+      }),
     };
     expect(Object.keys(COACH_RPC_METHOD_REGISTRY)).toEqual(Object.keys(fake));
     expect(COACH_RPC_METHOD_NAMES).toEqual(Object.keys(fake));

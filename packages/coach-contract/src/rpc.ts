@@ -56,6 +56,14 @@ import {
   type TelegramControlSnapshot,
   type TelegramCredentialInspection,
 } from "./telegram-control.js";
+import {
+  ExecutePlanTransitionRpcParamsSchema,
+  ExecutePlanTransitionRpcResultSchema,
+  GetPlanStateRpcParamsSchema,
+  GetPlanStateRpcResultSchema,
+  PlanProgressEventSchema,
+  type PlanningOperations,
+} from "./planning.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -187,6 +195,8 @@ export const COACH_RPC_METHOD_NAMES = [
   "getSpendSummary",
   "setDailySpendCap",
   "selfTest",
+  "getPlanState",
+  "executePlanTransition",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -1035,7 +1045,8 @@ export type CoachRpcService = CoachEngine &
   CoachOperations &
   SpendOperations &
   CoachSelfTestOperations &
-  TelegramControlOperations;
+  TelegramControlOperations &
+  PlanningOperations;
 
 export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
   z
@@ -1350,6 +1361,22 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       params: SelfTestRpcParamsSchema,
     })
     .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getPlanState"),
+      params: GetPlanStateRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("executePlanTransition"),
+      params: ExecutePlanTransitionRpcParamsSchema,
+    })
+    .strict(),
 ]);
 export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
 
@@ -1399,9 +1426,29 @@ export type CoachOperationProgressNotificationEnvelope = z.infer<
   typeof CoachOperationProgressNotificationEnvelopeSchema
 >;
 
+export const COACH_PLAN_PROGRESS_NOTIFICATION_METHOD = "coach.planProgress" as const;
+
+export const CoachPlanProgressNotificationEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal("2.0"),
+    method: z.literal(COACH_PLAN_PROGRESS_NOTIFICATION_METHOD),
+    params: z
+      .object({
+        requestId: JsonRpcIdSchema,
+        requestMethod: z.literal("executePlanTransition"),
+        event: PlanProgressEventSchema,
+      })
+      .strict(),
+  })
+  .strict();
+export type CoachPlanProgressNotificationEnvelope = z.infer<
+  typeof CoachPlanProgressNotificationEnvelopeSchema
+>;
+
 export const CoachRpcNotificationEnvelopeSchema = z.union([
   CoachTurnEventNotificationEnvelopeSchema,
   CoachOperationProgressNotificationEnvelopeSchema,
+  CoachPlanProgressNotificationEnvelopeSchema,
 ]);
 export type CoachRpcNotificationEnvelope = z.infer<typeof CoachRpcNotificationEnvelopeSchema>;
 
@@ -1669,6 +1716,18 @@ export const COACH_RPC_METHOD_REGISTRY = {
     responseSchema: SelfTestRpcResultSchema,
     eventSchema: OperationProgressEventSchema,
   },
+  getPlanState: {
+    wireName: "getPlanState",
+    requestSchema: GetPlanStateRpcParamsSchema,
+    responseSchema: GetPlanStateRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  executePlanTransition: {
+    wireName: "executePlanTransition",
+    requestSchema: ExecutePlanTransitionRpcParamsSchema,
+    responseSchema: ExecutePlanTransitionRpcResultSchema,
+    eventSchema: PlanProgressEventSchema,
+  },
 } as const satisfies CoachRpcMethodRegistryShape;
 
 export type CoachRpcRequest<K extends CoachRpcMethodName> = z.input<
@@ -1685,4 +1744,6 @@ export type CoachRpcNotification<K extends CoachRpcMethodName> = K extends "chat
   ? CoachTurnEventNotificationEnvelope
   : K extends "importFiles" | "sync" | "selfTest"
     ? CoachOperationProgressNotificationEnvelope
-    : never;
+    : K extends "executePlanTransition"
+      ? CoachPlanProgressNotificationEnvelope
+      : never;

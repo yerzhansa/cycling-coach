@@ -145,6 +145,11 @@ import {
   type DesktopTranscriptReader,
 } from "./transcript-ipc.js";
 import {
+  createConnectionPlanningClient,
+  installDesktopPlanningIpc,
+  type DesktopPlanningClient,
+} from "./planning-ipc.js";
+import {
   createConnectionTrainingExporter,
   installDesktopTrainingExportIpc,
   type DesktopTrainingExporter,
@@ -267,6 +272,7 @@ async function runDesktop(): Promise<void> {
   let protocolInstalled = false;
   let connectionIpc: DesktopConnectionIpcController | undefined;
   let disposeTranscriptIpc: (() => void) | undefined;
+  let disposePlanningIpc: (() => void) | undefined;
   let disposeTrainingExportIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeAppearanceIpc: (() => void) | undefined;
@@ -332,6 +338,8 @@ async function runDesktop(): Promise<void> {
       connectionIpc = undefined;
       disposeTranscriptIpc?.();
       disposeTranscriptIpc = undefined;
+      disposePlanningIpc?.();
+      disposePlanningIpc = undefined;
       disposeTrainingExportIpc?.();
       disposeTrainingExportIpc = undefined;
       disposeExternalLinkIpc?.();
@@ -465,6 +473,7 @@ async function runDesktop(): Promise<void> {
       readonly authority: RuntimeConfigurationAuthority;
       readonly credentials: CredentialRuntimeApplication;
       readonly transcript: DesktopTranscriptReader;
+      readonly planning: DesktopPlanningClient;
       readonly trainingExporter: DesktopTrainingExporter;
     };
     let activeRuntimeBinding: RuntimeBinding | undefined;
@@ -617,6 +626,7 @@ async function runDesktop(): Promise<void> {
       return {
         authority,
         transcript: createConnectionTranscriptReader(boundConnection),
+        planning: createConnectionPlanningClient(boundConnection),
         trainingExporter: createConnectionTrainingExporter(boundConnection),
         credentials: createCredentialRuntimeApplication({
           configureRuntime: authority.configureRuntime,
@@ -669,6 +679,27 @@ async function runDesktop(): Promise<void> {
         throw new TypeError();
       }
       return page;
+    };
+    const useActivePlanning = async <T>(
+      use: (
+        planning: DesktopPlanningClient,
+        isCurrent: () => boolean,
+      ) => Promise<T>,
+    ): Promise<T> => {
+      const binding = activeRuntimeBinding;
+      const lifecycleState = daemonLifecycle?.snapshot();
+      if (binding === undefined || lifecycleState?.status !== "ready") throw new TypeError();
+      const isCurrent = (): boolean => {
+        const currentLifecycleState = daemonLifecycle?.snapshot();
+        return (
+          activeRuntimeBinding === binding &&
+          currentLifecycleState?.status === "ready" &&
+          currentLifecycleState.generation === lifecycleState.generation
+        );
+      };
+      const result = await use(binding.planning, isCurrent);
+      if (!isCurrent()) throw new TypeError();
+      return result;
     };
     const credentialRoot = join(app.getPath("userData"), CREDENTIAL_DIRECTORY_NAME);
     const vault = createCredentialVault({
@@ -1057,6 +1088,18 @@ async function runDesktop(): Promise<void> {
         readActiveTranscript((reader) => reader.listArchivedConversations(request)),
       readArchivedPage: (request) =>
         readActiveTranscript((reader) => reader.getArchivedTranscriptPage(request)),
+    });
+    disposePlanningIpc = installDesktopPlanningIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      getPlanState: (request) =>
+        useActivePlanning((planning) => planning.getPlanState(request)),
+      executePlanTransition: (request, onEvent) =>
+        useActivePlanning((planning, isCurrent) =>
+          planning.executePlanTransition(request, (event) => {
+            if (isCurrent()) onEvent(event);
+          }),
+        ),
     });
     disposeTrainingExportIpc = installDesktopTrainingExportIpc({
       ipcMain,
