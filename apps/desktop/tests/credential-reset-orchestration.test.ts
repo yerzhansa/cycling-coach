@@ -101,7 +101,9 @@ function harness(
   );
   const credentialRuntimeState = new Map<DesktopCredentialSlot, CredentialRuntimeState>([
     ["anthropic", "active"],
+    ["intervals-icu", "active"],
   ]);
+  const onRuntimeStateChange = vi.fn<(slot: DesktopCredentialSlot) => void>();
   const reset = createDesktopCredentialReset({
     serializeCredentialMutation:
       options.serializeCredentialMutation ?? ((operation) => operation()),
@@ -116,6 +118,7 @@ function harness(
     serializeEnvelopeMutation,
     deleteKeyForCredentialReset,
     credentialRuntimeState,
+    onRuntimeStateChange,
     resetEncryptedCredentialStorage,
   });
   return {
@@ -130,6 +133,7 @@ function harness(
     serializeEnvelopeMutation,
     resetEncryptedCredentialStorage,
     credentialRuntimeState,
+    onRuntimeStateChange,
     reset,
     setBinding(next: DesktopCredentialResetRuntimeBinding | undefined) {
       binding = next;
@@ -211,7 +215,12 @@ describe("desktop credential reset orchestration", () => {
       expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
       expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
       expect(subject.deleteKeyForCredentialReset).not.toHaveBeenCalled();
-      expect(subject.credentialRuntimeState.get("anthropic")).toBe("active");
+      expect(subject.credentialRuntimeState.get("anthropic")).toBe("failed");
+      expect(subject.credentialRuntimeState.get("intervals-icu")).toBe("failed");
+      expect(subject.onRuntimeStateChange.mock.calls).toEqual([
+        ["anthropic"],
+        ["intervals-icu"],
+      ]);
     },
   );
 
@@ -237,9 +246,36 @@ describe("desktop credential reset orchestration", () => {
       expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
       expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
       expect(subject.deleteKeyForCredentialReset).not.toHaveBeenCalled();
-      expect(subject.credentialRuntimeState.get("anthropic")).toBe("active");
+      expect(subject.credentialRuntimeState.get("anthropic")).toBe("failed");
+      expect(subject.credentialRuntimeState.get("intervals-icu")).toBe("failed");
     },
   );
+
+  it("updates only credentials cleared before a later daemon clear fails", async () => {
+    const subject = harness();
+    subject.clearCredential
+      .mockImplementationOnce(async (credential) => {
+        subject.events.push(`clear:${credential}`);
+        return "cleared" as const;
+      })
+      .mockImplementationOnce(async (credential) => {
+        subject.events.push(`clear:${credential}`);
+        throw new Error("synthetic credential clear failure");
+      });
+
+    await expect(subject.reset()).resolves.toEqual({
+      status: "refused",
+      reason: "runtime-unavailable",
+    });
+
+    expect(subject.credentialRuntimeState.get("anthropic")).toBe("failed");
+    expect(subject.credentialRuntimeState.get("intervals-icu")).toBe("active");
+    expect(subject.onRuntimeStateChange).toHaveBeenCalledOnce();
+    expect(subject.onRuntimeStateChange).toHaveBeenCalledWith("anthropic");
+    expect(subject.resetTelegramRuntime).not.toHaveBeenCalled();
+    expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
+    expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
+  });
 
   it("maps durable storage reset failure to storage-failed", async () => {
     const subject = harness();
@@ -251,7 +287,8 @@ describe("desktop credential reset orchestration", () => {
     });
 
     expect(subject.deleteChatGptProfile).toHaveBeenCalledOnce();
-    expect(subject.credentialRuntimeState.get("anthropic")).toBe("active");
+    expect(subject.credentialRuntimeState.get("anthropic")).toBe("failed");
+    expect(subject.credentialRuntimeState.get("intervals-icu")).toBe("failed");
   });
 
   it("returns reset with pending cleanup when Keychain deletion fails", async () => {
@@ -276,7 +313,7 @@ describe("desktop credential reset orchestration", () => {
     expect(subject.deleteKeyForCredentialReset).toHaveBeenCalledWith(subject.proof);
   });
 
-  it("clears runtime state only after durable storage reset succeeds", async () => {
+  it("marks cleared runtime slots failed until durable storage reset succeeds", async () => {
     const subject = harness();
     let resolveStorage!: (result: { status: "reset"; keyCleanupPending: false }) => void;
     let markStorageStarted!: () => void;
@@ -296,7 +333,8 @@ describe("desktop credential reset orchestration", () => {
 
     const reset = subject.reset();
     await storageStarted;
-    expect(subject.credentialRuntimeState.get("anthropic")).toBe("active");
+    expect(subject.credentialRuntimeState.get("anthropic")).toBe("failed");
+    expect(subject.credentialRuntimeState.get("intervals-icu")).toBe("failed");
 
     resolveStorage({ status: "reset", keyCleanupPending: false });
     await expect(reset).resolves.toEqual({ status: "reset", keyCleanupPending: false });
@@ -318,5 +356,6 @@ describe("desktop credential reset orchestration", () => {
     expect(composition).toMatch(
       /deleteKeyForCredentialReset: \(proof\) =>\s+credentialEncryption\.deleteKeyForCredentialReset\(proof\)/u,
     );
+    expect(composition).toContain("onRuntimeStateChange: markCredentialRuntimeChange,");
   });
 });

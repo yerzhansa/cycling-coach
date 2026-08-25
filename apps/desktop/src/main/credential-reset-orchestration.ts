@@ -10,7 +10,11 @@ import type {
   SerializeCredentialMutation,
 } from "./credential-envelope-lock.js";
 import type { DesktopManagedCredential } from "./credential-runtime.js";
-import type { CredentialRuntimeState, DesktopCredentialSlot } from "./credential-vault.js";
+import {
+  DESKTOP_CREDENTIAL_SLOTS,
+  type CredentialRuntimeState,
+  type DesktopCredentialSlot,
+} from "./credential-vault.js";
 import type { KeychainKeyDeletion } from "./keychain-credential-encryption.js";
 import type { DesktopCredentialResetResult } from "./onboarding-ipc.js";
 
@@ -47,6 +51,7 @@ export interface CreateDesktopCredentialResetOptions {
     proof: CredentialEnvelopeLockProof,
   ) => Promise<KeychainKeyDeletion>;
   readonly credentialRuntimeState: Map<DesktopCredentialSlot, CredentialRuntimeState>;
+  readonly onRuntimeStateChange: (slot: DesktopCredentialSlot) => void;
   readonly resetEncryptedCredentialStorage?: ResetEncryptedCredentialStorage;
 }
 
@@ -73,6 +78,11 @@ export function createDesktopCredentialReset(
         if (snapshot.intervals.credential_configured) activeCredentials.push("intervals-icu");
         for (const credential of activeCredentials) {
           await binding.credentials.clearCredential(credential);
+          const slot = DESKTOP_CREDENTIAL_SLOTS.find((candidate) => candidate === credential);
+          if (slot !== undefined) {
+            options.credentialRuntimeState.set(slot, "failed");
+            options.onRuntimeStateChange(slot);
+          }
         }
         if (!(await options.resetTelegramRuntime())) {
           return { status: "refused", reason: "runtime-unavailable" };

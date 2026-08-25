@@ -992,6 +992,7 @@ async function runDesktop(): Promise<void> {
         deleteKeyForCredentialReset: (proof) =>
           credentialEncryption.deleteKeyForCredentialReset(proof),
         credentialRuntimeState,
+        onRuntimeStateChange: markCredentialRuntimeChange,
       });
     const claudeCli = createClaudeCliStatus({
       settings: () => readClaudeCliSettings({ configPath: join(configDir, "config.yaml") }),
