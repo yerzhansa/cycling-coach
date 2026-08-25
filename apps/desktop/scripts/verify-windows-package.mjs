@@ -17,6 +17,7 @@ import {
   safeReadFile,
   validateBuilderInventoryAuthority,
   validateRequiredAsarFiles,
+  validateUnpackedTree,
 } from "./package-inventory.mjs";
 import {
   WINDOWS_PACKAGE_APP_ID,
@@ -277,7 +278,7 @@ function deepestRuntimePackageRoot(path) {
 }
 
 function parseRuntimeManifest(entry, path) {
-  if (entry === undefined || entry.type !== "file" || entry.unpacked === true) {
+  if (entry === undefined || entry.type !== "file" || !Buffer.isBuffer(entry.bytes)) {
     failWindows("asar-inventory", "runtime package manifest is invalid", [path]);
   }
   let manifest;
@@ -535,9 +536,19 @@ async function verifyResources(resourcesRoot, authority, desktopRoot) {
       inspectPath(path, `resources/${path}`);
       if (entry.type === "file") inspectContents(entry.bytes, `resources/${path}`);
     }
+    const packagedEnvelope = new Map(
+      [...resources].filter(
+        ([path]) => path !== "app.asar.unpacked" && !path.startsWith("app.asar.unpacked/"),
+      ),
+    );
     const expectedResources = new Map(externalSource);
     expectedResources.set("app.asar", { type: "file", bytes: resources.get("app.asar")?.bytes });
-    compareExactTrees(expectedResources, resources, "resource-inventory", "package resource");
+    compareExactTrees(
+      expectedResources,
+      packagedEnvelope,
+      "resource-inventory",
+      "package resource",
+    );
   } catch (error) {
     if (error instanceof WindowsPackageVerificationError) throw error;
     if (error instanceof PackageLayoutError) {
@@ -551,6 +562,22 @@ async function verifyResources(resourcesRoot, authority, desktopRoot) {
       archiveLabel: "resources/app.asar",
       entryLabelRoot: "app.asar",
     });
+    await validateUnpackedTree(
+      join(resourcesRoot, "app.asar.unpacked"),
+      asar,
+      resources.has("app.asar.unpacked"),
+      { root: "resources/app.asar.unpacked", entries: "app.asar.unpacked" },
+    );
+    const runtimeAsar = new Map(
+      [...asar].map(([path, entry]) => {
+        if (entry.type !== "file" || entry.unpacked !== true) return [path, entry];
+        const unpacked = resources.get(`app.asar.unpacked/${path}`);
+        return [
+          path,
+          unpacked?.type === "file" ? { ...entry, bytes: unpacked.bytes } : entry,
+        ];
+      }),
+    );
     validateRequiredAsarFiles(asar, sourceManifest);
     compareAsarStaging(asarStaging, asar);
     for (const [path, entry] of applicationSource) {
@@ -581,12 +608,12 @@ async function verifyResources(resourcesRoot, authority, desktopRoot) {
         failWindows("asar-inventory", "runtime resource differs from source", [`app.asar/${path}`]);
       }
     }
-    const nativeEntries = asarNativeEntries(asar);
+    const nativeEntries = asarNativeEntries(runtimeAsar);
     if (nativeEntries.length > 0) {
       failWindows("binary-platform", "unexpected native package", nativeEntries);
     }
-    const packageRoots = validateRuntimePackageClosure(asar);
-    validateAsarDeclaration(asar, packageRoots, applicationSource, asarStaging);
+    const packageRoots = validateRuntimePackageClosure(runtimeAsar);
+    validateAsarDeclaration(runtimeAsar, packageRoots, applicationSource, asarStaging);
   } catch (error) {
     if (error instanceof WindowsPackageVerificationError) throw error;
     if (error instanceof PackageLayoutError) {
