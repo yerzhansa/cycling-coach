@@ -60,9 +60,11 @@ function harness(
   const events: string[] = [];
   const proof = {} as CredentialEnvelopeLockProof;
   const getRuntimeConfig = vi.fn(async () => runtimeSnapshot());
-  const clearCredential = vi.fn(async (credential: DesktopManagedCredential) => {
+  const clearCredential = vi.fn<
+    DesktopCredentialResetRuntimeBinding["credentials"]["clearCredential"]
+  >(async (credential: DesktopManagedCredential) => {
     events.push(`clear:${credential}`);
-    return "cleared" as const;
+    return "cleared";
   });
   const initialBinding: DesktopCredentialResetRuntimeBinding = {
     authority: { getRuntimeConfig },
@@ -273,6 +275,63 @@ describe("desktop credential reset orchestration", () => {
     expect(subject.onRuntimeStateChange).toHaveBeenCalledOnce();
     expect(subject.onRuntimeStateChange).toHaveBeenCalledWith("anthropic");
     expect(subject.resetTelegramRuntime).not.toHaveBeenCalled();
+    expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
+    expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
+  });
+
+  it("keeps environment-managed runtime state through a later reset refusal", async () => {
+    const subject = harness();
+    subject.clearCredential
+      .mockImplementationOnce(async (credential) => {
+        subject.events.push(`clear:${credential}`);
+        return "managed-by-environment";
+      })
+      .mockImplementationOnce(async (credential) => {
+        subject.events.push(`clear:${credential}`);
+        return "cleared";
+      });
+    subject.resetTelegramRuntime.mockImplementationOnce(async () => {
+      subject.events.push("telegram-reset");
+      return false;
+    });
+
+    await expect(subject.reset()).resolves.toEqual({
+      status: "refused",
+      reason: "runtime-unavailable",
+    });
+
+    expect(subject.credentialRuntimeState.get("anthropic")).toBe("active");
+    expect(subject.credentialRuntimeState.get("intervals-icu")).toBe("failed");
+    expect(subject.onRuntimeStateChange.mock.calls).toEqual([["intervals-icu"]]);
+    expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
+    expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
+  });
+
+  it("keeps runtime state unchanged when the daemon credential is not active", async () => {
+    const subject = harness();
+    const snapshot = runtimeSnapshot();
+    subject.getRuntimeConfig.mockResolvedValueOnce({
+      ...snapshot,
+      intervals: { ...snapshot.intervals, credential_configured: false },
+    });
+    subject.clearCredential.mockImplementationOnce(async (credential) => {
+      subject.events.push(`clear:${credential}`);
+      return "not-active";
+    });
+    subject.resetTelegramRuntime.mockImplementationOnce(async () => {
+      subject.events.push("telegram-reset");
+      return false;
+    });
+
+    await expect(subject.reset()).resolves.toEqual({
+      status: "refused",
+      reason: "runtime-unavailable",
+    });
+
+    expect(subject.credentialRuntimeState.get("anthropic")).toBe("active");
+    expect(subject.clearCredential).toHaveBeenCalledOnce();
+    expect(subject.clearCredential).toHaveBeenCalledWith("anthropic");
+    expect(subject.onRuntimeStateChange).not.toHaveBeenCalled();
     expect(subject.deleteChatGptProfile).not.toHaveBeenCalled();
     expect(subject.resetEncryptedCredentialStorage).not.toHaveBeenCalled();
   });

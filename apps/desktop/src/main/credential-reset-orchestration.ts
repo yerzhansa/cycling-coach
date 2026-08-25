@@ -9,7 +9,10 @@ import type {
   SerializeCredentialEnvelopeMutation,
   SerializeCredentialMutation,
 } from "./credential-envelope-lock.js";
-import type { DesktopManagedCredential } from "./credential-runtime.js";
+import type {
+  CredentialRuntimeApplication,
+  DesktopManagedCredential,
+} from "./credential-runtime.js";
 import {
   DESKTOP_CREDENTIAL_SLOTS,
   type CredentialRuntimeState,
@@ -22,9 +25,7 @@ export interface DesktopCredentialResetRuntimeBinding {
   readonly authority: {
     getRuntimeConfig(): Promise<RuntimeConfigSnapshot>;
   };
-  readonly credentials: {
-    clearCredential(credential: DesktopManagedCredential): Promise<unknown>;
-  };
+  readonly credentials: Pick<CredentialRuntimeApplication, "clearCredential">;
 }
 
 export interface DesktopCredentialResetLifecycleSnapshot {
@@ -77,7 +78,8 @@ export function createDesktopCredentialReset(
         }
         if (snapshot.intervals.credential_configured) activeCredentials.push("intervals-icu");
         for (const credential of activeCredentials) {
-          await binding.credentials.clearCredential(credential);
+          const cleared = await binding.credentials.clearCredential(credential);
+          if (cleared !== "cleared") continue;
           const slot = DESKTOP_CREDENTIAL_SLOTS.find((candidate) => candidate === credential);
           if (slot !== undefined) {
             options.credentialRuntimeState.set(slot, "failed");
