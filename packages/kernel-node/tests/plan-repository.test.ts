@@ -70,7 +70,9 @@ describe("Plan repositories over node:sqlite", () => {
   it("atomically stores and reads a Plan aggregate", async () => {
     await createPlanAggregateRepository(store).save(plan(), [workout()]);
     await expect(createPlanRepository(store).read(PLAN_ID)).resolves.toEqual(plan());
-    await expect(createPlanWorkoutRepository(store).listForPlan(PLAN_ID)).resolves.toEqual([workout()]);
+    await expect(createPlanWorkoutRepository(store).listForPlan(PLAN_ID)).resolves.toEqual([
+      workout(),
+    ]);
   });
 
   it("enforces the Workout foreign key and delete cascade", async () => {
@@ -92,7 +94,9 @@ describe("Plan repositories over node:sqlite", () => {
     ["inconsistent_kind", { kind: "full_plan" }],
     ["target_not_covered", { target_date_key: 20261231 }],
   ])("rejects %s with a typed invariant error", async (code, overrides) => {
-    await expect(createPlanRepository(store).upsert(plan(overrides as Partial<PlanRow>))).rejects.toMatchObject({ code });
+    await expect(
+      createPlanRepository(store).upsert(plan(overrides as Partial<PlanRow>)),
+    ).rejects.toMatchObject({ code });
   });
 
   it("migrates a version-11 store without changing existing rows", async () => {
@@ -101,8 +105,10 @@ describe("Plan repositories over node:sqlite", () => {
       await runMigrations(prior, MIGRATIONS.slice(0, 11));
       await prior.run("INSERT INTO raw_file(sha256) VALUES(?)", ["a".repeat(64)]);
       await runMigrations(prior, MIGRATIONS);
-      await expect(prior.get("PRAGMA user_version")).resolves.toEqual({ user_version: 12 });
-      await expect(prior.get("SELECT sha256 FROM raw_file")).resolves.toEqual({ sha256: "a".repeat(64) });
+      await expect(prior.get("PRAGMA user_version")).resolves.toEqual({ user_version: 13 });
+      await expect(prior.get("SELECT sha256 FROM raw_file")).resolves.toEqual({
+        sha256: "a".repeat(64),
+      });
     } finally {
       await prior.close();
     }

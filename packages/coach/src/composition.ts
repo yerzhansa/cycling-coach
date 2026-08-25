@@ -58,6 +58,7 @@ import {
 } from "@enduragent/kernel/anchors";
 import {
   createAnchorRepository,
+  createChatAttachmentRepository,
   createCanonicalActivityReader,
   createIntervalsSourceRepository,
   createTrustedActivitySourceResolver,
@@ -66,9 +67,11 @@ import {
 } from "@enduragent/kernel/store";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import { createAuthoredIdentity, type AthleteHome } from "@enduragent/kernel-node/home";
+import { createManagedChatAttachmentStore } from "@enduragent/kernel-node/chat-attachments";
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import type { CoachStoreWriterContext } from "./runtime.js";
 import {
+  CHAT_ATTACHMENT_LIMITS,
   type CoachEngine,
   type CoachOperations,
   type ConfigureRuntimeRpcParams,
@@ -146,6 +149,7 @@ import {
 import { createTrainingExportService } from "./training-export.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
 import { createPlanStorageService } from "./plan-storage.js";
+import { createManagedChatAttachmentOperations } from "./attachment-operations.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -946,6 +950,23 @@ export async function createLocalCoachComposition(
       }
     }
     const logger = createSubsystemLogger("agent", input.home.root);
+    const attachmentOperations = createManagedChatAttachmentOperations({
+      repository: createChatAttachmentRepository(input.context.store),
+      objects: createManagedChatAttachmentStore({
+        archiveDir: input.home.archiveDir,
+        kindByteLimits: {
+          document: CHAT_ATTACHMENT_LIMITS.documentBytes,
+          activity: CHAT_ATTACHMENT_LIMITS.activityBytes,
+          workout: CHAT_ATTACHMENT_LIMITS.workoutBytes,
+          image: CHAT_ATTACHMENT_LIMITS.imageBytes,
+        },
+        ...(dependencies.platform === undefined ? {} : { platform: dependencies.platform }),
+        now,
+      }),
+      runExclusive: (work) => runtime!.runExclusive(work),
+      now,
+    });
+    await attachmentOperations.reconcile();
     const planIdentity = createAuthoredIdentity(input.home.configDir, { now });
     const createPlanPersistence = (timezone: string) =>
       createPlanStorageService({
@@ -955,9 +976,9 @@ export async function createLocalCoachComposition(
         now,
         logger,
       });
-    await createPlanPersistence(resolveUserTimezone(approvedConfig().session.timezone)).importLegacyPlan(
-      join(input.home.root, "plans", "current-plan.json"),
-    );
+    await createPlanPersistence(
+      resolveUserTimezone(approvedConfig().session.timezone),
+    ).importLegacyPlan(join(input.home.root, "plans", "current-plan.json"));
     const getAccessToken = createAccessTokenReader(input.home.configDir);
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
       input.context.store,
@@ -1468,6 +1489,7 @@ export async function createLocalCoachComposition(
         },
         dependencies.operationsDependencies,
       ),
+      admitChatAttachment: (request) => attachmentOperations.admit(request),
       getActivityAnalysis: (request, signal) =>
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),

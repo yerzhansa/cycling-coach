@@ -31,9 +31,9 @@ describe("migrator end-to-end over node:sqlite", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("applies the full migration list and advances user_version to 12", async () => {
+  it("applies the full migration list and advances user_version to 13", async () => {
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 12 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 13 });
 
     const tables = await store.all("SELECT name FROM sqlite_master WHERE type='table'");
     const names = new Set(tables.map((r) => r.name as string));
@@ -53,7 +53,7 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(await store.get("PRAGMA journal_mode")).toEqual({ journal_mode: "wal" });
     expect(await store.get("PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 12 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 13 });
   });
 
   it("produces a deterministic INV-2 dump of a fixed state", async () => {
@@ -82,11 +82,11 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(await dumpStore(store)).toBe(dump);
   });
 
-  it("upgrades a version-1-on-disk store to version 12", async () => {
+  it("upgrades a version-1-on-disk store to version 13", async () => {
     await runMigrations(store, [MIGRATIONS[0]!]);
     expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 1 });
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 12 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 13 });
     expect(await store.get("SELECT singleton,ingest_version FROM ingest_metadata")).toEqual({
       singleton: 1,
       ingest_version: 0,
@@ -106,8 +106,12 @@ describe("migrator end-to-end over node:sqlite", () => {
     );
 
     const result = await runMigrations(store, MIGRATIONS);
-    expect(result).toEqual({ fromVersion: 4, toVersion: 12, applied: [5, 6, 7, 8, 9, 10, 11, 12] });
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 12 });
+    expect(result).toEqual({
+      fromVersion: 4,
+      toVersion: 13,
+      applied: [5, 6, 7, 8, 9, 10, 11, 12, 13],
+    });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 13 });
     expect(
       await store.get("SELECT revision_id,source_record_id FROM source_record_revision"),
     ).toEqual({
@@ -158,29 +162,31 @@ describe("migrator end-to-end over node:sqlite", () => {
     await runMigrations(store, MIGRATIONS.slice(0, 6));
     expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 6 });
     const result = await runMigrations(store, MIGRATIONS);
-    expect(result).toEqual({ fromVersion: 6, toVersion: 12, applied: [7, 8, 9, 10, 11, 12] });
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 12 });
+    expect(result).toEqual({ fromVersion: 6, toVersion: 13, applied: [7, 8, 9, 10, 11, 12, 13] });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 13 });
     expect(
       await store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_failure'"),
     ).toEqual({ name: "sync_failure" });
     await expect(runMigrations(store, MIGRATIONS)).resolves.toEqual({
-      fromVersion: 12,
-      toVersion: 12,
+      fromVersion: 13,
+      toVersion: 13,
       applied: [],
     });
   });
 
   it("preserves an existing cursor and leaves its store owner unset", async () => {
     await runMigrations(store, MIGRATIONS.slice(0, 7));
-    await store.run(
-      "INSERT INTO source_watermark(source,lane,watermark) VALUES(?,?,?)",
-      ["intervals-icu", "bulk-fit", "legacy-cursor"],
-    );
+    await store.run("INSERT INTO source_watermark(source,lane,watermark) VALUES(?,?,?)", [
+      "intervals-icu",
+      "bulk-fit",
+      "legacy-cursor",
+    ]);
 
     await runMigrations(store, MIGRATIONS);
 
-    expect(await store.get("SELECT watermark FROM source_watermark"))
-      .toEqual({ watermark: "legacy-cursor" });
+    expect(await store.get("SELECT watermark FROM source_watermark")).toEqual({
+      watermark: "legacy-cursor",
+    });
     expect(await store.get("SELECT count(*) AS count FROM store_owner")).toEqual({ count: 0 });
   });
 
@@ -208,7 +214,9 @@ describe("migrator end-to-end over node:sqlite", () => {
     await seed.setUserVersion(maximum + 1);
     await seed.close();
     const beforeNames = (await readdir(dir)).sort();
-    const beforeHash = createHash("sha256").update(await readFile(path)).digest("hex");
+    const beforeHash = createHash("sha256")
+      .update(await readFile(path))
+      .digest("hex");
 
     const refused = openSqliteStorage(path);
     const error = await runMigrations(refused, MIGRATIONS).catch((failure: unknown) => failure);
@@ -221,7 +229,11 @@ describe("migrator end-to-end over node:sqlite", () => {
     await refused.close();
 
     expect((await readdir(dir)).sort()).toEqual(beforeNames);
-    expect(createHash("sha256").update(await readFile(path)).digest("hex")).toBe(beforeHash);
+    expect(
+      createHash("sha256")
+        .update(await readFile(path))
+        .digest("hex"),
+    ).toBe(beforeHash);
     expect(beforeNames).not.toContain("newer.db-wal");
     expect(beforeNames).not.toContain("newer.db-shm");
   });
