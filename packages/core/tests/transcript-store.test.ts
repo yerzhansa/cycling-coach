@@ -410,6 +410,30 @@ describe("TranscriptStore append and corruption handling", () => {
     ]);
   });
 
+  it("round-trips an interrupted turn and projects its delivery on transcript pages", () => {
+    const dataDir = makeDataDir();
+    const store = new TranscriptStore(dataDir);
+    const input = turn("chat-interrupted", "turn-1", "stop this", "Partial response");
+
+    store.appendInterruptedTurn(input);
+
+    expect(store.readCurrentConversation(input.chatId)).toEqual([
+      { version: 1, kind: "turn-interrupted", ...input },
+    ]);
+    const { chatId: _chatId, ...projected } = input;
+    expect(store.readCurrentConversationPage(input.chatId, { cursor: null, limit: 10 })).toEqual({
+      schemaVersion: 1,
+      status: "page",
+      turns: [{ ...projected, delivery: "interrupted" }],
+      nextCursor: null,
+    });
+
+    const reopened = new TranscriptStore(dataDir);
+    expect(
+      reopened.readCurrentConversationPage(input.chatId, { cursor: null, limit: 10 }).turns,
+    ).toEqual([{ ...projected, delivery: "interrupted" }]);
+  });
+
   it("preserves append order across a fresh store instance", () => {
     const dataDir = makeDataDir();
     const first = new TranscriptStore(dataDir);

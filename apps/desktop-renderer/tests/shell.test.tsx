@@ -55,7 +55,10 @@ const SELECTED_RIDE = Object.freeze({
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(),
+    stop: vi.fn(),
     removeQueued: vi.fn(),
+    runQueuedCommand: vi.fn(),
+    retryQueuedTurn: vi.fn(),
     retry: vi.fn(),
     loadEarlier: vi.fn(),
     retryHydration: vi.fn(),
@@ -63,6 +66,9 @@ function stubActions(): ChatActions {
     cancelNewConversation: vi.fn(),
     confirmNewConversation: vi.fn(),
     retryFirstSync: vi.fn(),
+    answerDecision: vi.fn(),
+    skipDecision: vi.fn(),
+    retryDecision: vi.fn(),
   };
 }
 
@@ -146,9 +152,9 @@ describe("shell", () => {
     expect(document.querySelector("div.composer-wrap")).not.toBeNull();
     expect(document.querySelector("textarea#message")).not.toBeNull();
     expect(document.querySelector("button.sync-chip")).not.toBeNull();
-    expect(document.querySelector('[data-sidebar-setup-readiness="ready"]')).toHaveTextContent(
-      "Ready",
-    );
+    expect(document.querySelector("[data-sidebar-setup-readiness]")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Chat" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide training context" })).toBeInTheDocument();
     expect(document.querySelector('[data-view="chat"]')).not.toBeNull();
     expect(document.querySelector('[data-onboarding="settled"]')).not.toBeNull();
     expect(document.querySelector("[data-setup-host]")).toBeNull();

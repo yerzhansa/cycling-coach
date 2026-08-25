@@ -128,9 +128,7 @@ it("opens upgrade control against an exact protocol-11 accepted frame", async ()
       }
 
       const method = request.method;
-      expect(method).toMatch(
-        /^daemon\.(reserveUpgrade|shutdownForUpgrade|startInitialRefresh)$/,
-      );
+      expect(method).toMatch(/^daemon\.(reserveUpgrade|shutdownForUpgrade|startInitialRefresh)$/);
       controlRequests.push({ method: String(method), params: request.params });
       const status = method === "daemon.reserveUpgrade" ? "reserved" : "accepted";
       queueMicrotask(() =>
@@ -293,7 +291,10 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
           published: false,
           referenceSucceeded: true,
           requests: { store: 0, reference: 0, total: 0 },
-          droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+          droppedActivities: {
+            overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+            recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+          },
         }),
         saveIntake: async () => ({ schemaVersion: 1, saved: true }),
         getTranscriptPage: async () => ({
@@ -356,6 +357,16 @@ describe.skipIf(!hasLoopback)("production peer observations", () => {
       },
       engine: {
         chat: async () => ({ text: "ok" }),
+        getCoachDecision: async () => ({ decision: null }),
+        answerCoachDecision: async () => {
+          throw new Error("Coach decisions are not used in this test.");
+        },
+        skipCoachDecision: async () => {
+          throw new Error("Coach decisions are not used in this test.");
+        },
+        resumeCoachDecision: async () => {
+          throw new Error("Coach decisions are not used in this test.");
+        },
         resetSession: async () => ({ memoryFlushed: true }),
         hasSession: async () => ({ hasSession: false }),
         getAthleteState: async () => ({

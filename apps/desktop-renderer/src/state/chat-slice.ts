@@ -1,3 +1,8 @@
+import type {
+  ChatQueueRecoveryClaim,
+  CoachDecisionAnswer,
+  CoachDecisionReadModel,
+} from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
 import type { TranscriptHydrationChange, TranscriptHydrationStatus } from "../chat/hydration.js";
 import type { FirstSyncState } from "../first-sync.js";
@@ -6,6 +11,8 @@ import type { EnduragentState } from "./store.js";
 
 export interface ChatMessageView {
   readonly id: string;
+  readonly turnId?: string;
+  readonly decisionId?: string;
   readonly role: ChatTranscriptMessage["role"];
   readonly delivery: ChatTranscriptMessage["delivery"];
   readonly historical: boolean;
@@ -16,13 +23,37 @@ export interface ChatQueuedView {
   readonly id: string;
   readonly text: string;
   readonly command: boolean;
+  readonly restored: boolean;
 }
+
+export interface ChatChoiceView {
+  readonly id: string;
+  readonly label: string;
+  readonly consequence: string | null;
+  readonly skipped: boolean;
+  readonly historical: boolean;
+}
+
+export type ChatTranscriptItemView =
+  | { readonly kind: "message"; readonly message: ChatMessageView }
+  | { readonly kind: "choice"; readonly choice: ChatChoiceView };
+
+export type ChatDecisionPhase = "idle" | "continuing" | "recovering";
 
 export interface ChatSurfaceState {
   readonly messages: readonly ChatMessageView[];
   readonly queued: readonly ChatQueuedView[];
+  readonly retryRequired: ChatQueueRecoveryClaim | null;
+  readonly decision: CoachDecisionReadModel | null;
+  readonly decisionPhase: ChatDecisionPhase;
+  readonly decisionAnswerLabel: string | null;
+  readonly decisionError: string | null;
+  readonly decisionLoadError: string | null;
+  readonly queueMutationError?: string | null;
+  readonly timeline: readonly ChatTranscriptItemView[];
   readonly status: ChatStatus;
   readonly notice: string | null;
+  readonly coachProgress: string | null;
   readonly interrupted: boolean;
   readonly workBlocked: boolean;
   readonly sendDisabled: boolean;
@@ -39,22 +70,37 @@ export interface ChatSurfaceState {
 }
 
 export interface ChatActions {
-  submit(message: string): void;
+  submit(message: string): Promise<boolean>;
+  stop(): void;
   removeQueued(id: string): void;
+  runQueuedCommand(id: string): void;
+  retryQueuedTurn(claimId: string): void;
   retry(): void;
   loadEarlier(): void;
   retryHydration(): void;
+  retryDecision(): void;
   openNewConversation(): void;
   cancelNewConversation(): void;
   confirmNewConversation(): void;
   retryFirstSync(): void;
+  answerDecision(decisionId: string, answer: CoachDecisionAnswer): void;
+  skipDecision(decisionId: string): void;
 }
 
 export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   messages: Object.freeze([]),
   queued: Object.freeze([]),
+  retryRequired: null,
+  decision: null,
+  decisionPhase: "idle",
+  decisionAnswerLabel: null,
+  decisionError: null,
+  decisionLoadError: null,
+  queueMutationError: null,
+  timeline: Object.freeze([]),
   status: "idle",
   notice: null,
+  coachProgress: null,
   interrupted: false,
   workBlocked: false,
   sendDisabled: false,
@@ -92,6 +138,8 @@ export function sameChatMessages(
     return (
       other !== undefined &&
       message.id === other.id &&
+      message.turnId === other.turnId &&
+      message.decisionId === other.decisionId &&
       message.role === other.role &&
       message.delivery === other.delivery &&
       message.historical === other.historical &&
@@ -112,8 +160,34 @@ export function sameChatQueued(
       other !== undefined &&
       message.id === other.id &&
       message.text === other.text &&
-      message.command === other.command
+      message.command === other.command &&
+      message.restored === other.restored
     );
+  });
+}
+
+export function sameChatTimeline(
+  left: readonly ChatTranscriptItemView[],
+  right: readonly ChatTranscriptItemView[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => {
+    const other = right[index];
+    if (other === undefined || item.kind !== other.kind) return false;
+    if (item.kind === "message" && other.kind === "message") {
+      return sameChatMessages([item.message], [other.message]);
+    }
+    if (item.kind === "choice" && other.kind === "choice") {
+      return (
+        item.choice.id === other.choice.id &&
+        item.choice.label === other.choice.label &&
+        item.choice.consequence === other.choice.consequence &&
+        item.choice.skipped === other.choice.skipped &&
+        item.choice.historical === other.choice.historical
+      );
+    }
+    return false;
   });
 }
 
@@ -121,7 +195,15 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
   return (
     left.status === right.status &&
     left.notice === right.notice &&
+    left.coachProgress === right.coachProgress &&
     left.interrupted === right.interrupted &&
+    left.retryRequired === right.retryRequired &&
+    left.decision === right.decision &&
+    left.decisionPhase === right.decisionPhase &&
+    left.decisionAnswerLabel === right.decisionAnswerLabel &&
+    left.decisionError === right.decisionError &&
+    left.decisionLoadError === right.decisionLoadError &&
+    left.queueMutationError === right.queueMutationError &&
     left.workBlocked === right.workBlocked &&
     left.sendDisabled === right.sendDisabled &&
     left.inputDisabled === right.inputDisabled &&
@@ -135,6 +217,7 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
     left.hydrationRevision === right.hydrationRevision &&
     left.hydrationChange === right.hydrationChange &&
     sameChatQueued(left.queued, right.queued) &&
+    sameChatTimeline(left.timeline, right.timeline) &&
     sameChatMessages(left.messages, right.messages)
   );
 }

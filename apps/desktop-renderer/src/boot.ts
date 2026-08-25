@@ -195,15 +195,21 @@ export function bootRenderer(): Disposer {
     }).render,
   });
   store.getState().bindChatActions({
-    submit: (message) => void chatController.submit(message),
+    submit: (message) => chatController.submit(message),
+    stop: () => chatController.stop(),
     removeQueued: (id) => chatController.removeQueued(id),
+    runQueuedCommand: (id) => void chatController.runQueuedCommand(id),
+    retryQueuedTurn: (claimId) => void chatController.retryQueuedTurn(claimId),
     retry: () => void chatController.retryInterrupted(),
     loadEarlier: () => void chatController.loadEarlier(),
     retryHydration: () => void chatController.retryHydration(),
+    retryDecision: () => void chatController.retryDecision(),
     openNewConversation: () => void chatController.openNewConversation(),
     cancelNewConversation: () => chatController.cancelNewConversation(),
     confirmNewConversation: () => void chatController.confirmNewConversation(),
     retryFirstSync: () => void firstSyncController.retry(),
+    answerDecision: (decisionId, answer) => void chatController.answerDecision(decisionId, answer),
+    skipDecision: (decisionId) => void chatController.skipDecision(decisionId),
   });
 
   let onboardingNeedsReconnect = false;
@@ -419,8 +425,7 @@ export function bootRenderer(): Disposer {
       window.enduragentAuth.getDaemonConnection().then((connection) => connection.generation),
     open: () => onboarding.open(),
     markSettled: () => store.getState().setOnboardingStartupSettled(true),
-    reportSettled: (generation) =>
-      window.enduragentAuth.initialSetupStatusSettled({ generation }),
+    reportSettled: (generation) => window.enduragentAuth.initialSetupStatusSettled({ generation }),
     reportFailure: () => console.error("desktop-initial-setup-settled-report-failure"),
   });
   void clients.getClient().then(

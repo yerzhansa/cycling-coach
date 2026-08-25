@@ -494,6 +494,17 @@ function sameToken(received: string, expected: string): boolean {
 
 const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "chat",
+  "stopChat",
+  "enqueueChatMessage",
+  "getChatQueue",
+  "removeQueuedChatMessage",
+  "resumeChatQueue",
+  "runQueuedCommand",
+  "retryQueuedTurn",
+  "getCoachDecision",
+  "answerCoachDecision",
+  "skipCoachDecision",
+  "resumeCoachDecision",
   "resetSession",
   "hasSession",
   "getTranscriptPage",
@@ -858,6 +869,17 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     }
     if (
       generic.data.method === "chat" ||
+      generic.data.method === "stopChat" ||
+      generic.data.method === "enqueueChatMessage" ||
+      generic.data.method === "getChatQueue" ||
+      generic.data.method === "removeQueuedChatMessage" ||
+      generic.data.method === "resumeChatQueue" ||
+      generic.data.method === "runQueuedCommand" ||
+      generic.data.method === "retryQueuedTurn" ||
+      generic.data.method === "getCoachDecision" ||
+      generic.data.method === "answerCoachDecision" ||
+      generic.data.method === "skipCoachDecision" ||
+      generic.data.method === "resumeCoachDecision" ||
       generic.data.method === "resetSession" ||
       generic.data.method === "hasSession"
     ) {
@@ -920,6 +942,81 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               else invocationFailure = { error };
             }
             break;
+          case "stopChat":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.stopChat.requestSchema.parse(
+                generic.data.params,
+              );
+              result =
+                input.engine.stopChat === undefined
+                  ? { stopped: false }
+                  : await input.engine.stopChat(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "enqueueChatMessage":
+            try {
+              result = await input.engine.enqueueChatMessage!(
+                COACH_RPC_METHOD_REGISTRY.enqueueChatMessage.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getChatQueue":
+            try {
+              result = await input.engine.getChatQueue!(
+                COACH_RPC_METHOD_REGISTRY.getChatQueue.requestSchema.parse(generic.data.params),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "removeQueuedChatMessage":
+            try {
+              result = await input.engine.removeQueuedChatMessage!(
+                COACH_RPC_METHOD_REGISTRY.removeQueuedChatMessage.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "resumeChatQueue":
+          case "runQueuedCommand":
+          case "retryQueuedTurn":
+            try {
+              const method = registry.wireName;
+              const request = COACH_RPC_METHOD_REGISTRY[method].requestSchema.parse(
+                generic.data.params,
+              ) as never;
+              result = await input.engine[method]!(request, (event) => {
+                if (eventFailure !== undefined) return;
+                try {
+                  const parsedEvent = COACH_RPC_METHOD_REGISTRY[method].eventSchema.parse(event);
+                  const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
+                    jsonrpc: "2.0",
+                    method: "coach.turnEvent",
+                    params: {
+                      requestId: generic.data.id,
+                      requestMethod: method,
+                      turnId: parsedEvent.turnId,
+                      event: parsedEvent,
+                    },
+                  });
+                  void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                } catch (error) {
+                  eventFailure = { error };
+                }
+              });
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
           case "resetSession":
             try {
               const request = COACH_RPC_METHOD_REGISTRY.resetSession.requestSchema.parse(
@@ -936,6 +1033,84 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                 generic.data.params,
               );
               result = await input.engine.hasSession(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getCoachDecision":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.getCoachDecision.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.engine.getCoachDecision(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "answerCoachDecision":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.answerCoachDecision.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.engine.answerCoachDecision(request, (event) => {
+                if (eventFailure !== undefined) return;
+                try {
+                  const parsedEvent =
+                    COACH_RPC_METHOD_REGISTRY.answerCoachDecision.eventSchema.parse(event);
+                  const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
+                    jsonrpc: "2.0",
+                    method: "coach.turnEvent",
+                    params: {
+                      requestId: generic.data.id,
+                      requestMethod: "answerCoachDecision",
+                      turnId: parsedEvent.turnId,
+                      event: parsedEvent,
+                    },
+                  });
+                  void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                } catch (error) {
+                  eventFailure = { error };
+                }
+              });
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "skipCoachDecision":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.skipCoachDecision.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.engine.skipCoachDecision(request);
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "resumeCoachDecision":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.resumeCoachDecision.requestSchema.parse(
+                generic.data.params,
+              );
+              result = await input.engine.resumeCoachDecision(request, (event) => {
+                if (eventFailure !== undefined) return;
+                try {
+                  const parsedEvent =
+                    COACH_RPC_METHOD_REGISTRY.resumeCoachDecision.eventSchema.parse(event);
+                  const notification = CoachTurnEventNotificationEnvelopeSchema.parse({
+                    jsonrpc: "2.0",
+                    method: "coach.turnEvent",
+                    params: {
+                      requestId: generic.data.id,
+                      requestMethod: "resumeCoachDecision",
+                      turnId: parsedEvent.turnId,
+                      event: parsedEvent,
+                    },
+                  });
+                  void enqueueSerialized(state, serializeCoachRpcEnvelope(notification));
+                } catch (error) {
+                  eventFailure = { error };
+                }
+              });
             } catch (error) {
               invocationFailure = { error };
             }
@@ -982,10 +1157,9 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             break;
           case "getActivityAnalysis":
             try {
-              const request =
-                COACH_RPC_METHOD_REGISTRY.getActivityAnalysis.requestSchema.parse(
-                  generic.data.params,
-                );
+              const request = COACH_RPC_METHOD_REGISTRY.getActivityAnalysis.requestSchema.parse(
+                generic.data.params,
+              );
               if (input.operations.getActivityAnalysis === undefined) {
                 throw new TypeError("Activity analysis operation is unavailable.");
               }
@@ -1477,6 +1651,10 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     };
     const invocationKey =
       registry.wireName === "chat" ||
+      registry.wireName === "getCoachDecision" ||
+      registry.wireName === "answerCoachDecision" ||
+      registry.wireName === "skipCoachDecision" ||
+      registry.wireName === "resumeCoachDecision" ||
       registry.wireName === "resetSession" ||
       registry.wireName === "hasSession"
         ? (params.data as { readonly chatId: string }).chatId

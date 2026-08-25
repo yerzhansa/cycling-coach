@@ -122,6 +122,7 @@ export function createEngineHostAdapter(input: {
       memory,
       chatStore: conversationStore,
       transcriptWriter: conversationStore,
+      coachDecisions: conversationStore,
       secrets: { resolve: resolveSecretRef },
       platform: { legacyClient, athleteData, calendarMutations },
       logger: createSubsystemLogger("agent", config.dataDir),

@@ -446,6 +446,16 @@ async function createFixture(): Promise<ReleaseChainFixture> {
   };
   const engine = {
     chat: async () => ({ text: "synthetic reply" }),
+    getCoachDecision: async () => ({ decision: null }),
+    answerCoachDecision: async () => {
+      throw new Error("Coach decisions are not used in this test.");
+    },
+    skipCoachDecision: async () => {
+      throw new Error("Coach decisions are not used in this test.");
+    },
+    resumeCoachDecision: async () => {
+      throw new Error("Coach decisions are not used in this test.");
+    },
     resetSession: async () => ({ memoryFlushed: true }),
     hasSession: async () => ({ hasSession: false }),
     getAthleteState: async () => ({}) as never,
@@ -456,7 +466,10 @@ async function createFixture(): Promise<ReleaseChainFixture> {
       published: false,
       referenceSucceeded: true,
       requests: { store: 0, reference: 0, total: 0 },
-      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
     }),
   } as unknown as CoachOperations;
   const confirmations = {

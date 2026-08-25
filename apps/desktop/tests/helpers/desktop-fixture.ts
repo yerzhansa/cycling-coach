@@ -237,6 +237,66 @@ export async function launchDesktopFixture(input: {
       }
       return finalFrame(frames) as Awaited<ReturnType<CoachEngine["chat"]>>;
     },
+    async stopChat(request) {
+      return finalFrame(await invoke("stopChat", request)) as Awaited<
+        ReturnType<NonNullable<CoachEngine["stopChat"]>>
+      >;
+    },
+    async enqueueChatMessage(request) {
+      return finalFrame(await invoke("enqueueChatMessage", request)) as Awaited<
+        ReturnType<NonNullable<CoachEngine["enqueueChatMessage"]>>
+      >;
+    },
+    async getChatQueue(request) {
+      return finalFrame(await invoke("getChatQueue", request)) as Awaited<
+        ReturnType<NonNullable<CoachEngine["getChatQueue"]>>
+      >;
+    },
+    async removeQueuedChatMessage(request) {
+      return finalFrame(await invoke("removeQueuedChatMessage", request)) as Awaited<
+        ReturnType<NonNullable<CoachEngine["removeQueuedChatMessage"]>>
+      >;
+    },
+    async resumeChatQueue(request, onEvent) {
+      const frames = await invoke("resumeChatQueue", request);
+      for (const event of eventFrames(frames)) {
+        onEvent?.(event as TurnEvent);
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 40));
+      }
+      return finalFrame(frames) as Awaited<ReturnType<NonNullable<CoachEngine["resumeChatQueue"]>>>;
+    },
+    async runQueuedCommand(request, onEvent) {
+      const frames = await invoke("runQueuedCommand", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<
+        ReturnType<NonNullable<CoachEngine["runQueuedCommand"]>>
+      >;
+    },
+    async retryQueuedTurn(request, onEvent) {
+      const frames = await invoke("retryQueuedTurn", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<ReturnType<NonNullable<CoachEngine["retryQueuedTurn"]>>>;
+    },
+    async getCoachDecision(request) {
+      return finalFrame(await invoke("getCoachDecision", request)) as Awaited<
+        ReturnType<CoachEngine["getCoachDecision"]>
+      >;
+    },
+    async answerCoachDecision(request, onEvent) {
+      const frames = await invoke("answerCoachDecision", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<ReturnType<CoachEngine["answerCoachDecision"]>>;
+    },
+    async skipCoachDecision(request) {
+      return finalFrame(await invoke("skipCoachDecision", request)) as Awaited<
+        ReturnType<CoachEngine["skipCoachDecision"]>
+      >;
+    },
+    async resumeCoachDecision(request, onEvent) {
+      const frames = await invoke("resumeCoachDecision", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<ReturnType<CoachEngine["resumeCoachDecision"]>>;
+    },
     async resetSession(request) {
       return finalFrame(await invoke("resetSession", request)) as Awaited<
         ReturnType<CoachEngine["resetSession"]>

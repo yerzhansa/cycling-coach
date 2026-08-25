@@ -142,6 +142,16 @@ function engine(readFailure: () => unknown): CoachEngine {
     chat: async () => {
       throw readFailure();
     },
+    getCoachDecision: async () => ({ decision: null }),
+    answerCoachDecision: async () => {
+      throw readFailure();
+    },
+    skipCoachDecision: async () => {
+      throw readFailure();
+    },
+    resumeCoachDecision: async () => {
+      throw readFailure();
+    },
     resetSession: async () => ({ memoryFlushed: true }),
     hasSession: async () => ({ hasSession: false }),
     getAthleteState: async () => state,
@@ -198,7 +208,10 @@ async function startRpc(coachEngine: CoachEngine): Promise<RunningRpc> {
         published: false,
         referenceSucceeded: true,
         requests: { store: 0, reference: 0, total: 0 },
-        droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+        droppedActivities: {
+          overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+          recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+        },
       }),
       saveIntake: async () => ({ schemaVersion: 1, saved: true }),
       getTranscriptPage: async () => ({

@@ -5,6 +5,7 @@ import type {
   ChatStorePort,
   ConversationResetInput,
   TranscriptCompletedTurnInput,
+  TranscriptInterruptedTurnInput,
   TranscriptWriterPort,
 } from "@enduragent/engine";
 import { archiveAndResetDurably, ChatStore } from "./chat-store.js";
@@ -13,13 +14,47 @@ import {
   TranscriptStore,
   type ArchivedConversationList,
   type ResetIntentRecord,
-  type TranscriptCompletedTurnRecord,
+  type TranscriptTurnRecord,
+  type TranscriptDecisionAnsweredInput,
+  type TranscriptDecisionContinuationCompletedInput,
+  type TranscriptDecisionRequestedInput,
+  type TranscriptDecisionSkippedInput,
   type TranscriptPageRequest,
   type TranscriptPageResult,
 } from "./transcript-store.js";
+import type { CoachDecisionReadModel } from "@enduragent/coach-contract";
+import type { ChatQueueSnapshot } from "@enduragent/coach-contract";
+import { WindowsPrivatePathPolicyError } from "../io/windows-private-path-policy.js";
+import { ChatQueueStore, type ChatQueueStoreHooks } from "./chat-queue-store.js";
 
 export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPort {
-  readCurrentConversation(chatId: string): TranscriptCompletedTurnRecord[];
+  getChatQueue(chatId: string): ChatQueueSnapshot;
+  enqueueChatMessage(
+    chatId: string,
+    submissionId: string,
+    text: string,
+    queuedMessageId: string,
+  ): ChatQueueSnapshot;
+  removeQueuedChatMessage(chatId: string, queuedMessageId: string): ChatQueueSnapshot;
+  claimChatQueue(
+    chatId: string,
+    claimId: string,
+    turnId: string,
+    queuedMessageIds: readonly string[],
+  ): ChatQueueSnapshot;
+  completeChatQueueClaim(chatId: string, claimId: string): ChatQueueSnapshot;
+  requireChatQueueRetry(chatId: string, claimId: string): ChatQueueSnapshot;
+  retryChatQueueClaim(chatId: string, claimId: string, turnId: string): ChatQueueSnapshot;
+  clearChatQueue(chatId: string): ChatQueueSnapshot;
+  appendDecisionRequested(input: TranscriptDecisionRequestedInput): CoachDecisionReadModel;
+  answerDecision(input: TranscriptDecisionAnsweredInput): CoachDecisionReadModel;
+  skipDecision(input: TranscriptDecisionSkippedInput): CoachDecisionReadModel;
+  completeDecisionContinuation(
+    input: TranscriptDecisionContinuationCompletedInput,
+  ): CoachDecisionReadModel;
+  getDecision(chatId: string, decisionId?: string): CoachDecisionReadModel | null;
+  getDecisionAthleteText(chatId: string, decisionId: string): string | null;
+  readCurrentConversation(chatId: string): TranscriptTurnRecord[];
   readCurrentConversationPage(chatId: string, request: TranscriptPageRequest): TranscriptPageResult;
   listArchivedConversations(chatId: string): ArchivedConversationList;
   readArchivedConversationPage(
@@ -27,10 +62,12 @@ export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPo
     boundaryRef: string,
     request: TranscriptPageRequest,
   ): TranscriptPageResult;
+  reconcileChatQueue(chatId: string): ChatQueueSnapshot;
 }
 
 export interface ConversationStoreOptions {
   readonly platform?: NodeJS.Platform;
+  readonly chatQueueHooks?: ChatQueueStoreHooks;
 }
 
 export function createConversationStore(
@@ -61,6 +98,8 @@ export class ConversationStore implements ConversationStorePort {
     return new ConversationStore(
       new ChatStore(dataDir, resetArchiveRetentionDays, options),
       new TranscriptStore(dataDir, { platform: options.platform }),
+      undefined,
+      new ChatQueueStore(dataDir, options.platform, options.chatQueueHooks),
     );
   }
 
@@ -68,6 +107,7 @@ export class ConversationStore implements ConversationStorePort {
     private readonly chatStore: ChatStore,
     private readonly transcriptStore: TranscriptStore,
     private readonly createResetId: () => string = () => randomBytes(32).toString("hex"),
+    private readonly chatQueueStore?: ChatQueueStore,
   ) {
     for (const intent of this.transcriptStore.listResetIntents()) {
       try {
@@ -113,6 +153,48 @@ export class ConversationStore implements ConversationStorePort {
     this.transcriptStore.appendCompletedTurn(input);
   }
 
+  appendInterruptedTurn(input: TranscriptInterruptedTurnInput): void {
+    this.recoverBeforeAccess(input.chatId);
+    this.transcriptStore.appendInterruptedTurn(input);
+  }
+
+  persistDecisionContext(input: Parameters<ChatStorePort["persistDecisionContext"]>[0]): void {
+    this.recoverBeforeAccess(input.chatId);
+    this.chatStore.persistDecisionContext(input);
+  }
+
+  appendDecisionRequested(input: TranscriptDecisionRequestedInput): CoachDecisionReadModel {
+    this.recoverBeforeAccess(input.decision.chatId);
+    return this.transcriptStore.appendDecisionRequested(input);
+  }
+
+  answerDecision(input: TranscriptDecisionAnsweredInput): CoachDecisionReadModel {
+    this.recoverBeforeAccess(input.chatId);
+    return this.transcriptStore.answerDecision(input);
+  }
+
+  skipDecision(input: TranscriptDecisionSkippedInput): CoachDecisionReadModel {
+    this.recoverBeforeAccess(input.chatId);
+    return this.transcriptStore.skipDecision(input);
+  }
+
+  completeDecisionContinuation(
+    input: TranscriptDecisionContinuationCompletedInput,
+  ): CoachDecisionReadModel {
+    this.recoverBeforeAccess(input.chatId);
+    return this.transcriptStore.completeDecisionContinuation(input);
+  }
+
+  getDecision(chatId: string, decisionId?: string): CoachDecisionReadModel | null {
+    this.recoverBeforeAccess(chatId);
+    return this.transcriptStore.getDecision(chatId, decisionId);
+  }
+
+  getDecisionAthleteText(chatId: string, decisionId: string): string | null {
+    this.recoverBeforeAccess(chatId);
+    return this.transcriptStore.getDecisionAthleteText(chatId, decisionId);
+  }
+
   readCurrentConversation(chatId: string) {
     this.recoverBeforeAccess(chatId);
     return this.transcriptStore.readCurrentConversation(chatId);
@@ -134,6 +216,69 @@ export class ConversationStore implements ConversationStorePort {
     return this.transcriptStore.readArchivedConversationPage(chatId, boundaryRef, request);
   }
 
+  getChatQueue(chatId: string): ChatQueueSnapshot {
+    this.recoverBeforeAccess(chatId);
+    return this.reconcileChatQueue(chatId);
+  }
+
+  enqueueChatMessage(
+    chatId: string,
+    submissionId: string,
+    text: string,
+    queuedMessageId: string,
+  ): ChatQueueSnapshot {
+    this.recoverBeforeAccess(chatId);
+    return this.queueStore().enqueue(chatId, submissionId, text, queuedMessageId);
+  }
+
+  removeQueuedChatMessage(chatId: string, queuedMessageId: string): ChatQueueSnapshot {
+    this.recoverBeforeAccess(chatId);
+    return this.queueStore().remove(chatId, queuedMessageId);
+  }
+
+  claimChatQueue(
+    chatId: string,
+    claimId: string,
+    turnId: string,
+    queuedMessageIds: readonly string[],
+  ): ChatQueueSnapshot {
+    this.recoverBeforeAccess(chatId);
+    return this.queueStore().claim(chatId, {
+      claimId,
+      turnId,
+      queuedMessageIds: [...queuedMessageIds],
+    });
+  }
+
+  completeChatQueueClaim(chatId: string, claimId: string): ChatQueueSnapshot {
+    this.recoverBeforeAccess(chatId);
+    return this.queueStore().complete(chatId, claimId);
+  }
+
+  requireChatQueueRetry(chatId: string, claimId: string): ChatQueueSnapshot {
+    this.recoverBeforeAccess(chatId);
+    return this.queueStore().requireRetry(chatId, claimId);
+  }
+
+  retryChatQueueClaim(chatId: string, claimId: string, turnId: string): ChatQueueSnapshot {
+    this.recoverBeforeAccess(chatId);
+    return this.queueStore().retry(chatId, claimId, turnId);
+  }
+
+  clearChatQueue(chatId: string): ChatQueueSnapshot {
+    this.recoverBeforeAccess(chatId);
+    return this.queueStore().clear(chatId);
+  }
+
+  reconcileChatQueue(chatId: string): ChatQueueSnapshot {
+    return this.queueStore().reconcile(chatId, this.transcriptStore.getTerminalTurnIds(chatId));
+  }
+
+  private queueStore(): ChatQueueStore {
+    if (this.chatQueueStore === undefined) throw new Error("Chat queue storage is unavailable.");
+    return this.chatQueueStore;
+  }
+
   resetConversation(input: ConversationResetInput): void {
     this.recoverBeforeAccess(input.chatId);
     const intent: ResetIntentRecord = {
@@ -151,10 +296,21 @@ export class ConversationStore implements ConversationStorePort {
       this.cleanupBeforeBoundary(intent, error);
     }
 
+    let abandonedDecisions = 0;
+    try {
+      abandonedDecisions = this.transcriptStore.abandonUnansweredDecisions(
+        intent.chatId,
+        intent.boundaryAt,
+      ).length;
+    } catch (error) {
+      this.blockedChats.set(intent.chatId, error);
+      throw error;
+    }
+
     try {
       this.transcriptStore.ensureConversationBoundary(intent);
     } catch (error) {
-      if (error instanceof TranscriptBoundaryTargetUnchangedError) {
+      if (error instanceof TranscriptBoundaryTargetUnchangedError && abandonedDecisions === 0) {
         this.cleanupBeforeBoundary(intent, error.originalError);
       }
       this.blockedChats.set(intent.chatId, error);
@@ -166,6 +322,7 @@ export class ConversationStore implements ConversationStorePort {
         resetId: intent.resetId,
         boundaryAt: intent.boundaryAt,
       });
+      this.chatQueueStore?.clear(intent.chatId);
       this.transcriptStore.removeResetIntent(intent);
       this.blockedChats.delete(intent.chatId);
     } catch (error) {
@@ -203,11 +360,25 @@ export class ConversationStore implements ConversationStorePort {
   }
 
   private recoverIntent(intent: ResetIntentRecord): void {
+    try {
+      this.transcriptStore.abandonUnansweredDecisions(intent.chatId, intent.boundaryAt);
+    } catch (error) {
+      if (!(error instanceof WindowsPrivatePathPolicyError)) throw error;
+      this.transcriptStore.ensureConversationBoundary(intent);
+      archiveAndResetDurably(this.chatStore, intent.chatId, {
+        resetId: intent.resetId,
+        boundaryAt: intent.boundaryAt,
+      });
+      this.chatQueueStore?.clear(intent.chatId);
+      this.transcriptStore.removeResetIntent(intent);
+      return;
+    }
     this.transcriptStore.ensureConversationBoundary(intent);
     archiveAndResetDurably(this.chatStore, intent.chatId, {
       resetId: intent.resetId,
       boundaryAt: intent.boundaryAt,
     });
+    this.chatQueueStore?.clear(intent.chatId);
     this.transcriptStore.removeResetIntent(intent);
   }
 }

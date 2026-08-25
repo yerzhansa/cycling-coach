@@ -67,6 +67,25 @@ const planReadModel = {
 
 const rpcDeadlineCases = [
   ["chat", { chatId: "chat-1", message: "deadline" }, 660_000],
+  ["stopChat", { chatId: "chat-1", turnId: "turn-1" }, 10_000],
+  ["enqueueChatMessage", { chatId: "chat-1", submissionId: "submission-1", text: "Hello" }, 30_000],
+  ["getChatQueue", { chatId: "chat-1" }, 30_000],
+  ["removeQueuedChatMessage", { chatId: "chat-1", queuedMessageId: "queued-1" }, 30_000],
+  ["resumeChatQueue", { chatId: "chat-1" }, 660_000],
+  ["runQueuedCommand", { chatId: "chat-1", queuedMessageId: "queued-1" }, 660_000],
+  ["retryQueuedTurn", { chatId: "chat-1", claimId: "claim-1" }, 660_000],
+  ["getCoachDecision", { chatId: "chat-1" }, 30_000],
+  [
+    "answerCoachDecision",
+    {
+      chatId: "chat-1",
+      decisionId: "decision-1",
+      answer: { kind: "option", optionId: "option-1" },
+    },
+    660_000,
+  ],
+  ["skipCoachDecision", { chatId: "chat-1", decisionId: "decision-1" }, 30_000],
+  ["resumeCoachDecision", { chatId: "chat-1", decisionId: "decision-1" }, 660_000],
   ["resetSession", { chatId: "chat-1" }, 660_000],
   ["hasSession", { chatId: "chat-1" }, 30_000],
   ["getTranscriptPage", { cursor: null, limit: 25 }, 30_000],
@@ -765,10 +784,12 @@ describe("RPC receive and observers", () => {
       );
     };
 
-    await expect(client.call("getActivityAnalysis", {
-      canonicalActivityId: "a".repeat(64),
-      sections: ["intervals"],
-    })).resolves.toMatchObject({
+    await expect(
+      client.call("getActivityAnalysis", {
+        canonicalActivityId: "a".repeat(64),
+        sections: ["intervals"],
+      }),
+    ).resolves.toMatchObject({
       schemaVersion: 1,
       sections: { intervals: { kind: "unavailable", reason: "not-provider-backed" } },
     });
@@ -778,12 +799,57 @@ describe("RPC receive and observers", () => {
     const received: unknown[] = [];
     const { socket, connecting } = acceptedSocket();
     const client = await connecting;
+    const decision = {
+      decisionId: "decision-1",
+      chatId: "chat-1",
+      messageId: "message-1",
+      question: "Choose tomorrow's priority.",
+      options: [
+        {
+          id: "option-1",
+          label: "Recover",
+          description: "Protect the weekend session.",
+          recommended: true,
+          consequence: "Tomorrow stays easy.",
+        },
+        {
+          id: "option-2",
+          label: "Train",
+          description: "Keep the planned session.",
+          recommended: false,
+          consequence: "Tomorrow keeps its workout.",
+        },
+      ],
+    };
+    const completedDecision = {
+      ...decision,
+      status: "answered",
+      answer: { kind: "option", optionId: "option-1" },
+      consequence: "Tomorrow stays easy.",
+      continuation: {
+        continuationId: "continuation-1",
+        status: "completed",
+        turnId: "turn-1",
+        coachText: "Keep tomorrow easy.",
+      },
+    };
     socket.sendHook = (text) => {
       const request = parseCoachRpcEnvelope(text);
       received.push(request);
       if (!("id" in request) || !("method" in request)) return;
       const results = {
         chat: { text: "answer" },
+        stopChat: { stopped: true },
+        enqueueChatMessage: { schemaVersion: 1, revision: 1, items: [] },
+        getChatQueue: { schemaVersion: 1, revision: 1, items: [] },
+        removeQueuedChatMessage: { schemaVersion: 1, revision: 2, items: [] },
+        resumeChatQueue: { snapshot: { schemaVersion: 1, revision: 2, items: [] } },
+        runQueuedCommand: { snapshot: { schemaVersion: 1, revision: 2, items: [] } },
+        retryQueuedTurn: { snapshot: { schemaVersion: 1, revision: 2, items: [] } },
+        getCoachDecision: { decision: { ...decision, status: "unanswered" } },
+        answerCoachDecision: { decision: completedDecision },
+        skipCoachDecision: { decision: { ...decision, status: "skipped" } },
+        resumeCoachDecision: { decision: completedDecision, resumed: true },
         resetSession: { memoryFlushed: true },
         hasSession: { hasSession: true },
         getTranscriptPage: {
@@ -859,7 +925,10 @@ describe("RPC receive and observers", () => {
           published: true,
           referenceSucceeded: true,
           requests: { store: 1, reference: 1, total: 2 },
-          droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+          droppedActivities: {
+            overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+            recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+          },
         },
         getSetupStatus: {
           schemaVersion: 1,
@@ -995,12 +1064,33 @@ describe("RPC receive and observers", () => {
     await expect(client.call("chat", { chatId: "chat-1", message: "hello" })).resolves.toEqual({
       text: "answer",
     });
+    await expect(
+      client.call("stopChat", { chatId: "chat-1", turnId: "turn-1" }),
+    ).resolves.toEqual({
+      stopped: true,
+    });
     await expect(client.call("resetSession", { chatId: "chat-1" })).resolves.toEqual({
       memoryFlushed: true,
     });
     await expect(client.call("hasSession", { chatId: "chat-1" })).resolves.toEqual({
       hasSession: true,
     });
+    await expect(client.call("getCoachDecision", { chatId: "chat-1" })).resolves.toMatchObject({
+      decision: { decisionId: "decision-1", status: "unanswered" },
+    });
+    await expect(
+      client.call("answerCoachDecision", {
+        chatId: "chat-1",
+        decisionId: "decision-1",
+        answer: { kind: "option", optionId: "option-1" },
+      }),
+    ).resolves.toMatchObject({ decision: { status: "answered" } });
+    await expect(
+      client.call("skipCoachDecision", { chatId: "chat-1", decisionId: "decision-1" }),
+    ).resolves.toMatchObject({ decision: { status: "skipped" } });
+    await expect(
+      client.call("resumeCoachDecision", { chatId: "chat-1", decisionId: "decision-1" }),
+    ).resolves.toMatchObject({ decision: { status: "answered" }, resumed: true });
     await expect(client.call("getTranscriptPage", { cursor: null, limit: 25 })).resolves.toEqual({
       schemaVersion: 1,
       status: "page",
@@ -1064,12 +1154,17 @@ describe("RPC receive and observers", () => {
       llm: { provider: "anthropic", model: "synthetic-model" },
     });
     expect(received.map((value) => (value as { id: number }).id)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
     ]);
     expect(received.map((value) => (value as { method: string }).method)).toEqual([
       "chat",
+      "stopChat",
       "resetSession",
       "hasSession",
+      "getCoachDecision",
+      "answerCoachDecision",
+      "skipCoachDecision",
+      "resumeCoachDecision",
       "getTranscriptPage",
       "listArchivedConversations",
       "getArchivedTranscriptPage",
@@ -1089,7 +1184,7 @@ describe("RPC receive and observers", () => {
       value: "imperial",
       source: "cycling",
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([14, 15]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([19, 20]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getUnitsPreference",
       "setUnitsPreference",
@@ -1163,7 +1258,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([34, 35]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([39, 40]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",
@@ -1172,7 +1267,7 @@ describe("RPC receive and observers", () => {
       client.call("verify_intervals_credential", { api_key: "placeholder" }),
     ).resolves.toEqual({ approval: "a".repeat(64) });
     expect(received.at(-1)).toMatchObject({
-      id: 36,
+      id: 41,
       method: "verify_intervals_credential",
       params: { api_key: "placeholder" },
     });
@@ -1378,7 +1473,10 @@ describe("RPC receive and observers", () => {
           published: false,
           referenceSucceeded: true,
           requests: { store: 0, reference: 0, total: 0 },
-          droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+          droppedActivities: {
+            overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+            recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+          },
         },
       }),
     );

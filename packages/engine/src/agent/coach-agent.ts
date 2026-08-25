@@ -2,7 +2,21 @@ import { stepCountIs } from "ai";
 import type { FinishReason, ModelMessage, Tool, ToolSet } from "ai";
 import { retryWithBackoff } from "@enduragent/kernel/concurrency";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
-import type { TurnEvent, TurnEventHandler } from "@enduragent/coach-contract";
+import type {
+  AnswerCoachDecisionRpcParams,
+  AnswerCoachDecisionRpcResult,
+  CoachDecisionContinuationLineage,
+  CoachDecisionReadModel,
+  GetCoachDecisionRpcParams,
+  GetCoachDecisionRpcResult,
+  ResumeCoachDecisionRpcParams,
+  ResumeCoachDecisionRpcResult,
+  SkipCoachDecisionRpcParams,
+  SkipCoachDecisionRpcResult,
+  TurnEvent,
+  TurnEventHandler,
+} from "@enduragent/coach-contract";
+import { RequestUserDecisionResultSchema } from "@enduragent/coach-contract";
 import type {
   ChatStorePort,
   EngineConfig,
@@ -11,14 +25,12 @@ import type {
   MemoryStorePort,
   ToolConfirmationPort,
   TranscriptCompletedTurnInput,
+  TranscriptInterruptedTurnInput,
 } from "../host-ports.js";
 import type { Sport, SportRuntimePorts } from "../sport.js";
+import { messageText } from "../sport/model-message.js";
 import { getEffectiveSections } from "../sport/effective-sections.js";
-import {
-  ATHLETE_CONTEXT_MAX_CHARS,
-  buildSystemPrompt,
-  staticRuleBlocks,
-} from "./system-prompt.js";
+import { ATHLETE_CONTEXT_MAX_CHARS, buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
 import {
   computeAssembledHash,
   computeTemplateHash,
@@ -64,6 +76,13 @@ import { createMemorySnapshot } from "../sport/memory-snapshot.js";
 import { resolveUserTimezone, appendCurrentTimeLine } from "../sport/user-time.js";
 import { createTurnBudget, TurnBudgetExceededError, type TurnBudget } from "./turn-budget.js";
 import { TAINTED_BY_WRITES_MESSAGE, STEP_LIMIT_TRUNCATION_MESSAGE } from "./coach-agent-copy.js";
+import {
+  COACH_DECISION_TOOL_NAME,
+  createCoachDecisionTool,
+  decisionConsequence,
+  decisionContinuationMessage,
+  decisionRequestInput,
+} from "./coach-decision-tool.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -282,8 +301,7 @@ export function gateMutatingTool(
       const ctx = getTurnContext(options);
       const chatId = ctx?.chatId;
       if (chatId === undefined || chatId === "") return { error: "confirmation_unavailable" };
-      const run = () =>
-        (inner as (i: unknown, o: unknown) => Promise<unknown>)(input, {} as never);
+      const run = () => (inner as (i: unknown, o: unknown) => Promise<unknown>)(input, {} as never);
       if (!confirmations.requiresConfirmation({ chatId, toolName: name })) {
         return (prepareRun === undefined ? run : prepareRun(name, ctx, run))();
       }
@@ -313,6 +331,7 @@ export class CoachAgent {
   private chatStore: ChatStorePort;
   private log: LoggerPort;
   private tools: ToolSet;
+  private readonly decisionTool: Tool | undefined;
   private systemPrompt: string;
   private tz: string;
   // Derived once from getEffectiveSections(sport): the spec'd sections with
@@ -326,6 +345,10 @@ export class CoachAgent {
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
   private templateHash?: string;
+  private readonly activeChatTurns = new Map<
+    string,
+    { readonly turnId: string; readonly controller: AbortController }
+  >();
 
   constructor(sport: Sport, ports: EngineHostPorts) {
     const config = ports.config;
@@ -386,7 +409,7 @@ export class CoachAgent {
       const provenance = ctx?.provenance.value ?? UNKNOWN_PROVENANCE;
       return () => this.runWithWriteProvenance(provenance, run);
     };
-    this.tools = Object.fromEntries(
+    const sportTools = Object.fromEntries(
       registrations.map((r) => [
         r.name,
         this.observeToolProvenance(
@@ -407,6 +430,21 @@ export class CoachAgent {
         ),
       ]),
     ) as ToolSet;
+    const decisionToolEnabled =
+      config.llm.provider === "openai-codex" &&
+      ports.modelTransportDecorator === undefined &&
+      ports.coachDecisions !== undefined;
+    this.decisionTool = decisionToolEnabled
+      ? createCoachDecisionTool({
+          store: ports.coachDecisions!,
+          randomId: ports.randomId,
+          now: ports.now,
+        })
+      : undefined;
+    this.tools =
+      this.decisionTool === undefined
+        ? sportTools
+        : { ...sportTools, [COACH_DECISION_TOOL_NAME]: this.decisionTool };
     ports.onToolsAssembled?.(Object.freeze(Object.keys(this.tools)));
     // systemPrompt is rebuilt at the top of every chat() call; no need to bake one here.
     this.systemPrompt = "";
@@ -561,6 +599,7 @@ export class CoachAgent {
     cacheKey: string,
     turnBudget: TurnBudget,
     onTextDelta: (delta: string) => void,
+    signal: AbortSignal,
   ): Promise<RecoveredText> {
     if (!isStepExhaustedEmpty(text, finishReason)) {
       return { text, attributionBasis: "attempt" };
@@ -578,11 +617,13 @@ export class CoachAgent {
         cacheKey,
         deadlineMs: turnBudget.remainingMs(),
         onTextDelta,
+        signal,
       });
       return recovery.text.trim() !== ""
         ? { text: recovery.text, attributionBasis: "prompt" }
         : { text: STEP_LIMIT_TRUNCATION_MESSAGE, attributionBasis: "none" };
     } catch (recoveryErr) {
+      if (signal.aborted) throw recoveryErr;
       console.warn("Step-limit recovery completion failed; using truncation floor", recoveryErr);
       return { text: STEP_LIMIT_TRUNCATION_MESSAGE, attributionBasis: "none" };
     }
@@ -634,500 +675,561 @@ export class CoachAgent {
     }
   }
 
+  private recordInterruptedTurn(input: TranscriptInterruptedTurnInput): void {
+    try {
+      this.ports.transcriptWriter.appendInterruptedTurn?.(input);
+    } catch (error) {
+      try {
+        this.log.warn("transcript_record_failed", undefined, {
+          operation: "turn-interrupted",
+          reason: transcriptWriteFailureReason(error),
+        });
+      } catch {
+        return;
+      }
+    }
+  }
+
   async chat(
     chatId: string,
     userMessage: string,
     turn?: { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance },
     onEvent?: TurnEventHandler,
+    onDecision?: (decision: CoachDecisionReadModel) => void,
+    requestedTurnId?: string,
   ): Promise<string> {
     // One explicit context per turn, created synchronously before the session
     // lock is queued so rapid same-chat sends can never share turn state. Tool
     // wrappers and sport tools reach it through the tool-execution options, so
     // the tool set and cached template hash never rebuild. resolvedCs is null
     // when the channel supplies nothing (CLI path, no sync data).
+    const turnId = requestedTurnId ?? this.ports.randomId();
     const ctx = createTurnContext(
       turn?.resolvedCs ?? null,
       chatId,
       turn?.referenceProvenance ?? EMPTY_PROVENANCE,
+      userMessage,
+      turnId,
     );
     return withSessionLock(chatId, async () => {
-      const turnStart = this.ports.now();
-      const turnId = this.ports.randomId();
-      const emitEvent = (event: TurnEvent): void => {
-        try {
-          onEvent?.(event);
-        } catch {
-          return;
-        }
-      };
-      let compactions = 0;
-      const turnBudget = createTurnBudget(this.ports.now);
-      // One flush per turn: the latch flips on entry (before the await
-      // resolves) so a thrown flush still consumes the turn's single flush.
-      let flushedThisTurn = false;
-      // Single file read: load history + last message time together
-      let { messages: history, lastMessageTime } = this.chatStore.load(chatId);
-
-      const { fresh, reason } = evaluateSessionFreshness({
-        lastMessageTime,
-        dailyResetHour: this.config.session.dailyResetHour,
-        idleMinutes: this.config.session.idleMinutes,
-        tz: this.tz,
-      });
-
-      // Defer a daily reset for one turn when the last exchange is still recent,
-      // so an athlete mid-conversation across the daily boundary isn't archived
-      // out from under them. Malformed timestamps (reason "daily", unparseable)
-      // and idle resets are never deferred.
-      const deferDaily = !fresh && reason === "daily" && shouldDeferDailyReset(lastMessageTime);
-
-      // Set only when an automatic archive actually runs this turn — drives the
-      // one-turn model marker and the one-time post-reset athlete notice.
-      let archivedAt: string | undefined;
-
-      if (!fresh && !deferDaily) {
-        // Flush memory before reset, then archive
-        let outcome: MemoryFlushOutcome | null = null;
-        if (history.length > 0 && !flushedThisTurn) {
-          flushedThisTurn = true;
-          try {
-            outcome = await this.flushMemory(history, "stale-reset", turnBudget);
-          } catch (err) {
-            this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
-          }
-        }
-        const zeroWrite =
-          outcome !== null &&
-          outcome.writes === 0 &&
-          outcome.ledgerAppends === 0 &&
-          history.length >= FLUSH_ZERO_WRITE_MIN_MESSAGES;
-        if (zeroWrite && !this.archiveDeferred.has(chatId)) {
-          this.archiveDeferred.add(chatId);
-          console.warn(
-            JSON.stringify({
-              event: "memory_flush_archive_deferred",
-              messageCount: history.length,
-            }),
+      const abortController = new AbortController();
+      const activeTurn = { turnId, controller: abortController };
+      this.activeChatTurns.set(chatId, activeTurn);
+      try {
+        const existingDecision = this.ports.coachDecisions?.getDecision(chatId);
+        if (existingDecision?.status === "unanswered") {
+          throw new Error(
+            "Answer or skip the active Coach decision before sending another message.",
           );
-        } else {
-          const boundaryAt = new Date(this.ports.now()).toISOString();
-          this.chatStore.resetConversation({
-            chatId,
-            boundaryAt,
-            reason: "stale-reset",
-          });
-          this.archiveDeferred.delete(chatId);
-          this.lastFlushMessageCount.delete(chatId);
-          history = [];
-          archivedAt = boundaryAt;
         }
-      }
-
-      this.systemPrompt = buildSystemPrompt(
-        this.sport,
-        this.memory,
-        this.tz,
-        this.buildDegradeBlock(),
-        {
-          excludeSections: this.excludedSectionNames,
-          confirmationGate: this.confirmationGate,
-        },
-      );
-      const contextProvenance =
-        this.memory.getContextWithProvenance?.({
-          excludeSections: this.excludedSectionNames,
-          maxChars: ATHLETE_CONTEXT_MAX_CHARS,
-        }).provenance ?? EMPTY_PROVENANCE;
-
-      const budget = computeHistoryTokenBudget({
-        contextWindowTokens: this.config.contextWindowTokens,
-        systemPrompt: this.systemPrompt,
-        budgetRatio: this.config.session.historyTokenBudgetRatio,
-      });
-      const { kept, dropped, previousSummary, previousSummaryProvenance } = splitHistoryByBudget({
-        messages: history,
-        tokenBudget: budget,
-      });
-
-      let summaryMsg: ModelMessage | undefined;
-      let requeued: ModelMessage[] = [];
-      if (dropped.length > 0) {
-        this.lastFlushMessageCount.set(chatId, history.length);
-        let flushed = true;
-        if (!flushedThisTurn) {
-          flushedThisTurn = true;
+        if (
+          existingDecision?.status === "answered" &&
+          existingDecision.continuation.status === "pending"
+        ) {
+          throw new Error("Resume the active Coach decision before sending another message.");
+        }
+        if (
+          existingDecision?.status === "skipped" ||
+          (existingDecision?.status === "answered" &&
+            existingDecision.continuation.status === "completed")
+        ) {
+          this.repairCoachDecisionSession(existingDecision);
+        }
+        const turnStart = this.ports.now();
+        const emitEvent = (event: TurnEvent): void => {
           try {
-            await this.flushMemory(history, "trim", turnBudget);
-          } catch (err) {
-            flushed = false;
-            this.log.warn(
-              "Pre-compaction memory flush failed; keeping session file unchanged",
-              err,
+            onEvent?.(event);
+          } catch {
+            return;
+          }
+        };
+        emitEvent({ type: "turn-start", turnId, chatId });
+        let compactions = 0;
+        const turnBudget = createTurnBudget(this.ports.now);
+        // One flush per turn: the latch flips on entry (before the await
+        // resolves) so a thrown flush still consumes the turn's single flush.
+        let flushedThisTurn = false;
+        // Single file read: load history + last message time together
+        let { messages: history, lastMessageTime } = this.chatStore.load(chatId);
+
+        const { fresh, reason } = evaluateSessionFreshness({
+          lastMessageTime,
+          dailyResetHour: this.config.session.dailyResetHour,
+          idleMinutes: this.config.session.idleMinutes,
+          tz: this.tz,
+        });
+
+        // Defer a daily reset for one turn when the last exchange is still recent,
+        // so an athlete mid-conversation across the daily boundary isn't archived
+        // out from under them. Malformed timestamps (reason "daily", unparseable)
+        // and idle resets are never deferred.
+        const deferDaily = !fresh && reason === "daily" && shouldDeferDailyReset(lastMessageTime);
+
+        // Set only when an automatic archive actually runs this turn — drives the
+        // one-turn model marker and the one-time post-reset athlete notice.
+        let archivedAt: string | undefined;
+
+        if (!fresh && !deferDaily) {
+          // Flush memory before reset, then archive
+          let outcome: MemoryFlushOutcome | null = null;
+          if (history.length > 0 && !flushedThisTurn) {
+            flushedThisTurn = true;
+            try {
+              outcome = await this.flushMemory(history, "stale-reset", turnBudget);
+            } catch (err) {
+              this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
+            }
+          }
+          const zeroWrite =
+            outcome !== null &&
+            outcome.writes === 0 &&
+            outcome.ledgerAppends === 0 &&
+            history.length >= FLUSH_ZERO_WRITE_MIN_MESSAGES;
+          if (zeroWrite && !this.archiveDeferred.has(chatId)) {
+            this.archiveDeferred.add(chatId);
+            console.warn(
+              JSON.stringify({
+                event: "memory_flush_archive_deferred",
+                messageCount: history.length,
+              }),
             );
+          } else {
+            const boundaryAt = new Date(this.ports.now()).toISOString();
+            this.chatStore.resetConversation({
+              chatId,
+              boundaryAt,
+              reason: "stale-reset",
+            });
+            this.archiveDeferred.delete(chatId);
+            this.lastFlushMessageCount.delete(chatId);
+            history = [];
+            archivedAt = boundaryAt;
           }
         }
-        try {
-          const { summary, unsummarized, provenance } = await summarizeDroppedMessages({
-            dropped,
+
+        this.systemPrompt = buildSystemPrompt(
+          this.sport,
+          this.memory,
+          this.tz,
+          this.buildDegradeBlock(),
+          {
+            excludeSections: this.excludedSectionNames,
+            confirmationGate: this.confirmationGate,
+          },
+        );
+        const contextProvenance =
+          this.memory.getContextWithProvenance?.({
+            excludeSections: this.excludedSectionNames,
+            maxChars: ATHLETE_CONTEXT_MAX_CHARS,
+          }).provenance ?? EMPTY_PROVENANCE;
+
+        const budget = computeHistoryTokenBudget({
+          contextWindowTokens: this.config.contextWindowTokens,
+          systemPrompt: this.systemPrompt,
+          budgetRatio: this.config.session.historyTokenBudgetRatio,
+        });
+        const { kept, dropped, previousSummary, previousSummaryProvenance } = splitHistoryByBudget({
+          messages: history,
+          tokenBudget: budget,
+        });
+
+        let summaryMsg: ModelMessage | undefined;
+        let requeued: ModelMessage[] = [];
+        if (dropped.length > 0) {
+          this.lastFlushMessageCount.set(chatId, history.length);
+          let flushed = true;
+          if (!flushedThisTurn) {
+            flushedThisTurn = true;
+            try {
+              await this.flushMemory(history, "trim", turnBudget);
+            } catch (err) {
+              flushed = false;
+              this.log.warn(
+                "Pre-compaction memory flush failed; keeping session file unchanged",
+                err,
+              );
+            }
+          }
+          try {
+            const { summary, unsummarized, provenance } = await summarizeDroppedMessages({
+              dropped,
+              previousSummary,
+              previousSummaryProvenance,
+              ...this.compactionParams(turnBudget),
+            });
+            compactions++;
+            const summaryProvenance =
+              provenance ??
+              unionProvenance(previousSummaryProvenance, provenanceOfMessages(dropped));
+            this.persistSummaryToDailyNote(summary, summaryProvenance);
+            summaryMsg = makeSummaryMessage(summary, summaryProvenance);
+            requeued = unsummarized;
+            if (flushed) {
+              this.chatStore.archivePreCompact(chatId);
+              this.chatStore.overwriteHistory(chatId, [summaryMsg, ...requeued, ...kept]);
+            }
+          } catch (err) {
+            this.log.warn("Dropped message summarization failed, continuing without summary", err);
+            if (previousSummary) {
+              summaryMsg = makeSummaryMessage(
+                previousSummary,
+                previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
+              );
+            }
+          }
+        } else if (previousSummary) {
+          summaryMsg = makeSummaryMessage(
             previousSummary,
-            previousSummaryProvenance,
+            previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
+          );
+        }
+
+        if (
+          dropped.length === 0 &&
+          shouldRunMemoryFlush({
+            estimatedTokens: estimateMessagesTokens(history),
+            tokenBudget: budget,
+            lastFlushMessageCount: this.lastFlushMessageCount.get(chatId) ?? 0,
+            currentMessageCount: history.length,
+          })
+        ) {
+          this.lastFlushMessageCount.set(chatId, history.length);
+          if (!flushedThisTurn) {
+            flushedThisTurn = true;
+            try {
+              await this.flushMemory(history, "soft-threshold", turnBudget);
+            } catch (err) {
+              this.log.warn("Soft-threshold memory flush failed; continuing turn", err);
+            }
+          }
+        }
+
+        // Append a fresh "Current time:" line to the user message so the LLM
+        // always sees the athlete's local time on this turn — the cached system
+        // prefix carries only the TZ name, not the date. Idempotent: safe
+        // across the retry/compaction loop below.
+        const userMessageWithTime = appendCurrentTimeLine(userMessage, this.tz);
+
+        // One-turn model-visible archive marker: after an automatic reset, tell
+        // the model to disclose the fresh session. Not persisted (it is rebuilt
+        // per turn and only emitted on the reset turn).
+        const archiveMarkerMsg: ModelMessage | undefined =
+          archivedAt !== undefined
+            ? { role: "system", content: archiveMarker(archivedAt) }
+            : undefined;
+
+        // Build messages array with new user message
+        const userTurnMessage = setMessageProvenance(
+          { role: "user", content: userMessageWithTime },
+          UNKNOWN_PROVENANCE,
+        );
+        let messages: ModelMessage[] = [
+          ...(summaryMsg ? [summaryMsg] : []),
+          ...(archiveMarkerMsg ? [archiveMarkerMsg] : []),
+          ...requeued,
+          ...kept,
+          userTurnMessage,
+        ];
+
+        ctx.provenance.value = contextProvenance;
+
+        let overflowAttempts = 0;
+        let timeoutAttempts = 0;
+        let plainTimeoutAttempts = 0;
+        let rateLimitAttempts = 0;
+        let serverErrorAttempts = 0;
+        let classifiedTerminalFailure: ClassifiedTurnFailure | undefined;
+        let streamedText = "";
+
+        const compactInTurn = async () => {
+          const compacted = await summarizeInStages({
+            messages,
             ...this.compactionParams(turnBudget),
           });
+          messages = compacted.messages;
+          if (compacted.summary && compacted.summaryProvenance) {
+            this.persistSummaryToDailyNote(compacted.summary, compacted.summaryProvenance);
+          }
           compactions++;
-          const summaryProvenance =
-            provenance ?? unionProvenance(previousSummaryProvenance, provenanceOfMessages(dropped));
-          this.persistSummaryToDailyNote(summary, summaryProvenance);
-          summaryMsg = makeSummaryMessage(summary, summaryProvenance);
-          requeued = unsummarized;
-          if (flushed) {
-            this.chatStore.archivePreCompact(chatId);
-            this.chatStore.overwriteHistory(chatId, [summaryMsg, ...requeued, ...kept]);
-          }
-        } catch (err) {
-          this.log.warn("Dropped message summarization failed, continuing without summary", err);
-          if (previousSummary) {
-            summaryMsg = makeSummaryMessage(
-              previousSummary,
-              previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
-            );
-          }
-        }
-      } else if (previousSummary) {
-        summaryMsg = makeSummaryMessage(
-          previousSummary,
-          previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
-        );
-      }
+          this.memory.reload();
+        };
 
-      if (
-        dropped.length === 0 &&
-        shouldRunMemoryFlush({
-          estimatedTokens: estimateMessagesTokens(history),
-          tokenBudget: budget,
-          lastFlushMessageCount: this.lastFlushMessageCount.get(chatId) ?? 0,
-          currentMessageCount: history.length,
-        })
-      ) {
-        this.lastFlushMessageCount.set(chatId, history.length);
-        if (!flushedThisTurn) {
-          flushedThisTurn = true;
-          try {
-            await this.flushMemory(history, "soft-threshold", turnBudget);
-          } catch (err) {
-            this.log.warn("Soft-threshold memory flush failed; continuing turn", err);
-          }
-        }
-      }
+        // Loop-invariant: the prompt cache key derives only from the chat id.
+        const cacheKey = sha256_16(chatId);
 
-      // Append a fresh "Current time:" line to the user message so the LLM
-      // always sees the athlete's local time on this turn — the cached system
-      // prefix carries only the TZ name, not the date. Idempotent: safe
-      // across the retry/compaction loop below.
-      const userMessageWithTime = appendCurrentTimeLine(userMessage, this.tz);
+        try {
+          while (true) {
+            abortController.signal.throwIfAborted();
+            // Between-attempt budget gates: the attempt charge and the wall-clock
+            // check run at the loop top so the deadline stops the NEXT attempt and
+            // never aborts a generate/compaction already in flight.
+            turnBudget.chargeAttempt();
+            turnBudget.checkDeadline();
 
-      // One-turn model-visible archive marker: after an automatic reset, tell
-      // the model to disclose the fresh session. Not persisted (it is rebuilt
-      // per turn and only emitted on the reset turn).
-      const archiveMarkerMsg: ModelMessage | undefined =
-        archivedAt !== undefined
-          ? { role: "system", content: archiveMarker(archivedAt) }
-          : undefined;
-
-      // Build messages array with new user message
-      const userTurnMessage = setMessageProvenance(
-        { role: "user", content: userMessageWithTime },
-        UNKNOWN_PROVENANCE,
-      );
-      let messages: ModelMessage[] = [
-        ...(summaryMsg ? [summaryMsg] : []),
-        ...(archiveMarkerMsg ? [archiveMarkerMsg] : []),
-        ...requeued,
-        ...kept,
-        userTurnMessage,
-      ];
-
-      ctx.provenance.value = contextProvenance;
-
-      let overflowAttempts = 0;
-      let timeoutAttempts = 0;
-      let plainTimeoutAttempts = 0;
-      let rateLimitAttempts = 0;
-      let serverErrorAttempts = 0;
-      let classifiedTerminalFailure: ClassifiedTurnFailure | undefined;
-
-      const compactInTurn = async () => {
-        const compacted = await summarizeInStages({
-          messages,
-          ...this.compactionParams(turnBudget),
-        });
-        messages = compacted.messages;
-        if (compacted.summary && compacted.summaryProvenance) {
-          this.persistSummaryToDailyNote(compacted.summary, compacted.summaryProvenance);
-        }
-        compactions++;
-        this.memory.reload();
-      };
-
-      // Loop-invariant: the prompt cache key derives only from the chat id.
-      const cacheKey = sha256_16(chatId);
-
-      try {
-        while (true) {
-          // Between-attempt budget gates: the attempt charge and the wall-clock
-          // check run at the loop top so the deadline stops the NEXT attempt and
-          // never aborts a generate/compaction already in flight.
-          turnBudget.chargeAttempt();
-          turnBudget.checkDeadline();
-
-          // Preemptive: compact before sending if over budget
-          if (
-            shouldCompact({
-              messages,
-              systemPrompt: this.systemPrompt,
-              contextWindowTokens: this.config.contextWindowTokens,
-            })
-          ) {
-            if (!flushedThisTurn) {
-              flushedThisTurn = true;
-              try {
-                await this.flushMemory(messages, "pre-compaction", turnBudget);
-              } catch (err) {
-                this.log.warn("In-turn memory flush failed; compacting without flush", err);
-              }
-            }
-            await compactInTurn();
-          }
-
-          let attemptObservedText = false;
-          classifiedTerminalFailure = undefined;
-          const onAttemptTextDelta = (delta: string): void => {
-            attemptObservedText = true;
-            emitEvent({ type: "text_delta", turnId, delta });
-          };
-
-          try {
-            turnBudget.chargeModelCall();
-            ctx.provenance.value = unionProvenance(
-              contextProvenance,
-              provenanceOfMessages(messages),
-            );
-            const result = await this.llm.generate({
-              system: this.systemPrompt,
-              messages,
-              tools: this.tools,
-              stopWhen: stepCountIs(10),
-              maxSteps: 10,
-              caller: "chat",
-              context: ctx,
-              cacheKey,
-              // Cap this call by the turn's remaining wall-clock budget so a retry
-              // after an early timeout inherits only the time the turn has left.
-              deadlineMs: turnBudget.remainingMs(),
-              onTextDelta: onAttemptTextDelta,
-            });
-            const { text, finishReason } = result;
-
-            // A successful "length" finish whose prompt already filled the real
-            // provider window is a context overflow, not a long answer. Route it
-            // through the existing reactive overflow rescue (compact + retry) and
-            // never persist the truncated text — throw a normalized overflow so
-            // the catch block below handles it exactly like a thrown overflow.
-            // Plain output-length truncation (input below the window) falls
-            // through to recoverStepExhaustedText's existing empty-reply handling.
+            // Preemptive: compact before sending if over budget
             if (
-              isWindowExceededFinish({
-                finishReason,
-                usage: result.usage,
+              shouldCompact({
+                messages,
+                systemPrompt: this.systemPrompt,
                 contextWindowTokens: this.config.contextWindowTokens,
               })
             ) {
-              const overflow = new Error(WINDOW_EXCEEDED_FINISH_MESSAGE);
-              overflow.name = "ContextOverflowError";
-              throw overflow;
+              if (!flushedThisTurn) {
+                flushedThisTurn = true;
+                try {
+                  await this.flushMemory(messages, "pre-compaction", turnBudget);
+                } catch (err) {
+                  this.log.warn("In-turn memory flush failed; compacting without flush", err);
+                }
+              }
+              await compactInTurn();
             }
 
-            // Recovery runs only on this success path (before the catch below).
-            const recovered = await this.recoverStepExhaustedText(
-              text,
-              finishReason,
-              messages,
-              cacheKey,
-              turnBudget,
-              onAttemptTextDelta,
-            );
-            if (recovered.attributionBasis === "prompt") {
+            let attemptObservedText = false;
+            classifiedTerminalFailure = undefined;
+            const onAttemptTextDelta = (delta: string): void => {
+              attemptObservedText = true;
+              streamedText += delta;
+              emitEvent({ type: "text_delta", turnId, delta });
+            };
+
+            try {
+              turnBudget.chargeModelCall();
               ctx.provenance.value = unionProvenance(
                 contextProvenance,
                 provenanceOfMessages(messages),
               );
-            } else if (recovered.attributionBasis === "none") {
-              ctx.provenance.value = EMPTY_PROVENANCE;
-            }
-            let effectiveText = renderGarminAttribution(recovered.text, ctx.provenance.value);
-            if (effectiveText.trim() === "") {
-              effectiveText = STEP_LIMIT_TRUNCATION_MESSAGE;
-              ctx.provenance.value = EMPTY_PROVENANCE;
-            }
+              const result = await this.llm.generate({
+                system: this.systemPrompt,
+                messages,
+                tools: this.tools,
+                stopWhen: stepCountIs(10),
+                maxSteps: 10,
+                caller: "chat",
+                context: ctx,
+                cacheKey,
+                // Cap this call by the turn's remaining wall-clock budget so a retry
+                // after an early timeout inherits only the time the turn has left.
+                deadlineMs: turnBudget.remainingMs(),
+                onTextDelta: onAttemptTextDelta,
+                signal: abortController.signal,
+              });
+              let { text, finishReason } = result;
 
-            const templateHash = (this.templateHash ??= computeTemplateHash({
-              soul: this.sport.soul,
-              skills: this.sport.skills,
-              ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
-                confirmationGate: this.confirmationGate,
-              }),
-              toolSchemas: this.tools,
-              model: this.config.llm.model,
-            }));
-            const assembledHash = computeAssembledHash(this.systemPrompt, messages);
+              if (ctx.decision.fallbackText !== null) {
+                text = ctx.decision.fallbackText;
+                finishReason = "stop";
+              }
 
-            // Append BOTH after success as one atomic write — JSONL unchanged
-            // on failure, no dangling user line on a partial write.
-            let persistenceNote = "";
-            try {
-              this.chatStore.appendTurn(chatId, userMessage, effectiveText, {
-                templateHash,
-                assembledHash,
+              if (ctx.decision.requested !== null) {
+                const decision = ctx.decision.requested;
+                try {
+                  this.chatStore.persistDecisionContext({
+                    chatId,
+                    decisionId: decision.decisionId,
+                    athleteText: userMessage,
+                    request: decisionRequestInput(decision),
+                  });
+                } catch (error) {
+                  this.log.warn("decision_session_context_write_failed", error);
+                }
+                onDecision?.(decision);
+                emitEvent({ type: "decision-requested", turnId, chatId, decision });
+                this.emitTurnOutcome({
+                  turnId,
+                  chatId,
+                  ok: true,
+                  overflowAttempts,
+                  timeoutAttempts,
+                  rateLimitAttempts,
+                  duration_ms: this.ports.now() - turnStart,
+                  compactions,
+                });
+                return "";
+              }
+
+              // A successful "length" finish whose prompt already filled the real
+              // provider window is a context overflow, not a long answer. Route it
+              // through the existing reactive overflow rescue (compact + retry) and
+              // never persist the truncated text — throw a normalized overflow so
+              // the catch block below handles it exactly like a thrown overflow.
+              // Plain output-length truncation (input below the window) falls
+              // through to recoverStepExhaustedText's existing empty-reply handling.
+              if (
+                isWindowExceededFinish({
+                  finishReason,
+                  usage: result.usage,
+                  contextWindowTokens: this.config.contextWindowTokens,
+                })
+              ) {
+                const overflow = new Error(WINDOW_EXCEEDED_FINISH_MESSAGE);
+                overflow.name = "ContextOverflowError";
+                throw overflow;
+              }
+
+              // Recovery runs only on this success path (before the catch below).
+              const recovered = await this.recoverStepExhaustedText(
+                text,
+                finishReason,
+                messages,
+                cacheKey,
+                turnBudget,
+                onAttemptTextDelta,
+                abortController.signal,
+              );
+              if (recovered.attributionBasis === "prompt") {
+                ctx.provenance.value = unionProvenance(
+                  contextProvenance,
+                  provenanceOfMessages(messages),
+                );
+              } else if (recovered.attributionBasis === "none") {
+                ctx.provenance.value = EMPTY_PROVENANCE;
+              }
+              let effectiveText = renderGarminAttribution(recovered.text, ctx.provenance.value);
+              if (effectiveText.trim() === "") {
+                effectiveText = STEP_LIMIT_TRUNCATION_MESSAGE;
+                ctx.provenance.value = EMPTY_PROVENANCE;
+              }
+
+              const templateHash = (this.templateHash ??= computeTemplateHash({
+                soul: this.sport.soul,
+                skills: this.sport.skills,
+                ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
+                  confirmationGate: this.confirmationGate,
+                }),
+                toolSchemas: this.tools,
+                model: this.config.llm.model,
+              }));
+              const assembledHash = computeAssembledHash(this.systemPrompt, messages);
+
+              // Append BOTH after success as one atomic write — JSONL unchanged
+              // on failure, no dangling user line on a partial write.
+              let persistenceNote = "";
+              try {
+                this.chatStore.appendTurn(chatId, userMessage, effectiveText, {
+                  templateHash,
+                  assembledHash,
+                  provider: this.config.llm.provider,
+                  model: this.config.llm.model,
+                  lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                  provenance: ctx.provenance.value,
+                });
+              } catch (persistErr) {
+                // Deliver-first: a full disk or permission error must never
+                // discard a reply the athlete already paid for. Swallow the
+                // persistence throw, warn once, and still return the reply.
+                console.warn("Session persistence failed; delivering reply unsaved", persistErr);
+                persistenceNote = noteForPersistenceFailure(persistErr);
+              }
+
+              // A turn can run several generations (retry/compaction/overflow
+              // recovery); these usage/cost figures are the FINAL successful
+              // generation's only — not a turn-wide sum across attempts. A true
+              // accumulator over all attempts is deferred.
+              this.ports.usage.append({
+                ts: this.ports.now(),
+                kind: "turn",
+                caller: "chat",
                 provider: this.config.llm.provider,
                 model: this.config.llm.model,
-                lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
-                provenance: ctx.provenance.value,
+                durationMs: this.ports.now() - turnStart,
+                templateHash,
+                ...usageFieldsFromResult(result),
               });
-            } catch (persistErr) {
-              // Deliver-first: a full disk or permission error must never
-              // discard a reply the athlete already paid for. Swallow the
-              // persistence throw, warn once, and still return the reply.
-              console.warn("Session persistence failed; delivering reply unsaved", persistErr);
-              persistenceNote = noteForPersistenceFailure(persistErr);
-            }
 
-            // A turn can run several generations (retry/compaction/overflow
-            // recovery); these usage/cost figures are the FINAL successful
-            // generation's only — not a turn-wide sum across attempts. A true
-            // accumulator over all attempts is deferred.
-            this.ports.usage.append({
-              ts: this.ports.now(),
-              kind: "turn",
-              caller: "chat",
-              provider: this.config.llm.provider,
-              model: this.config.llm.model,
-              durationMs: this.ports.now() - turnStart,
-              templateHash,
-              ...usageFieldsFromResult(result),
-            });
-
-            this.emitTurnOutcome({
-              turnId,
-              chatId,
-              ok: true,
-              overflowAttempts,
-              timeoutAttempts,
-              rateLimitAttempts,
-              duration_ms: this.ports.now() - turnStart,
-              compactions,
-            });
-
-            // Prefix the one-time post-reset notice onto the first reply after
-            // an automatic archive. Not persisted to history — it is a channel
-            // disclosure, not conversation content.
-            const resetPrefix = archivedAt !== undefined ? `${POST_RESET_NOTICE}\n\n` : "";
-            const responseText = resetPrefix + effectiveText + persistenceNote;
-            this.recordCompletedTurn({
-              chatId,
-              turnId,
-              completedAt: new Date(this.ports.now()).toISOString(),
-              athleteText: userMessage,
-              coachText: responseText,
-            });
-            emitEvent({ type: "final-text", turnId, text: responseText });
-            return responseText;
-          } catch (err) {
-            // The classified budget error is terminal: re-throw it before any
-            // retry branch so a future reordering can never mistake it for one of
-            // the retryable classes and swallow it.
-            if (err instanceof TurnBudgetExceededError) throw err;
-            // A committed tool write makes this turn non-replayable: retrying
-            // would re-send the pre-turn messages and could re-run the write.
-            const committedWrites = ctx.turnWrites;
-            if (committedWrites.writesCommitted > 0) {
-              const failure = classifyError(err, this.ports.classifyFailure);
-              console.warn(
-                JSON.stringify({
-                  event: "turn_failed_after_write",
-                  writesCommitted: committedWrites.writesCommitted,
-                  lastWriteSummary: committedWrites.lastWriteSummary,
-                  error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
-                }),
-              );
               this.emitTurnOutcome({
                 turnId,
                 chatId,
-                ok: false,
-                error_class: failure,
+                ok: true,
                 overflowAttempts,
                 timeoutAttempts,
                 rateLimitAttempts,
                 duration_ms: this.ports.now() - turnStart,
                 compactions,
               });
-              emitEvent(
-                this.createErrorEvent({
-                  failure,
-                  turnId,
-                  chatId,
-                  overflowAttempts,
-                  timeoutAttempts,
-                  rateLimitAttempts,
-                  durationMs: this.ports.now() - turnStart,
-                  compactions,
-                }),
-              );
+
+              // Prefix the one-time post-reset notice onto the first reply after
+              // an automatic archive. Not persisted to history — it is a channel
+              // disclosure, not conversation content.
+              const resetPrefix = archivedAt !== undefined ? `${POST_RESET_NOTICE}\n\n` : "";
+              const responseText = resetPrefix + effectiveText + persistenceNote;
               this.recordCompletedTurn({
                 chatId,
                 turnId,
                 completedAt: new Date(this.ports.now()).toISOString(),
                 athleteText: userMessage,
-                coachText: TAINTED_BY_WRITES_MESSAGE,
+                coachText: responseText,
               });
-              emitEvent({ type: "final-text", turnId, text: TAINTED_BY_WRITES_MESSAGE });
-              return TAINTED_BY_WRITES_MESSAGE;
-            }
-            if (attemptObservedText && !isWindowExceededFinishOverflow(err)) throw err;
-            const failure = this.ports.classifyFailure(err);
-            // Reactive: context overflow → flush + compact + retry
-            if (failure === "overflow" && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
-              overflowAttempts++;
-              try {
-                if (!flushedThisTurn) {
-                  flushedThisTurn = true;
-                  try {
-                    await this.flushMemory(messages, "overflow-recovery", turnBudget);
-                  } catch (flushErr) {
-                    this.log.warn(
-                      "In-turn memory flush failed; compacting without flush",
-                      flushErr,
-                    );
-                  }
-                }
-                await compactInTurn();
-              } catch (rescueErr) {
-                this.log.warn(
-                  "Compaction rescue failed; rethrowing the original turn error",
-                  rescueErr,
+              emitEvent({ type: "final-text", turnId, text: responseText });
+              return responseText;
+            } catch (err) {
+              // The classified budget error is terminal: re-throw it before any
+              // retry branch so a future reordering can never mistake it for one of
+              // the retryable classes and swallow it.
+              if (err instanceof TurnBudgetExceededError) throw err;
+              // A committed tool write makes this turn non-replayable: retrying
+              // would re-send the pre-turn messages and could re-run the write.
+              const committedWrites = ctx.turnWrites;
+              if (committedWrites.writesCommitted > 0) {
+                const failure = classifyError(err, this.ports.classifyFailure);
+                console.warn(
+                  JSON.stringify({
+                    event: "turn_failed_after_write",
+                    writesCommitted: committedWrites.writesCommitted,
+                    lastWriteSummary: committedWrites.lastWriteSummary,
+                    error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+                  }),
                 );
-                if (err instanceof Error && err.cause === undefined) {
-                  (err as Error & { cause?: unknown }).cause = rescueErr;
-                }
-                classifiedTerminalFailure = failure;
-                throw err;
+                this.emitTurnOutcome({
+                  turnId,
+                  chatId,
+                  ok: false,
+                  error_class: failure,
+                  overflowAttempts,
+                  timeoutAttempts,
+                  rateLimitAttempts,
+                  duration_ms: this.ports.now() - turnStart,
+                  compactions,
+                });
+                emitEvent(
+                  this.createErrorEvent({
+                    failure,
+                    turnId,
+                    chatId,
+                    overflowAttempts,
+                    timeoutAttempts,
+                    rateLimitAttempts,
+                    durationMs: this.ports.now() - turnStart,
+                    compactions,
+                  }),
+                );
+                this.recordCompletedTurn({
+                  chatId,
+                  turnId,
+                  completedAt: new Date(this.ports.now()).toISOString(),
+                  athleteText: userMessage,
+                  coachText: TAINTED_BY_WRITES_MESSAGE,
+                });
+                emitEvent({ type: "final-text", turnId, text: TAINTED_BY_WRITES_MESSAGE });
+                return TAINTED_BY_WRITES_MESSAGE;
               }
-              continue;
-            }
-            // Timeout with high context usage → compact + retry (no flush)
-            if (failure === "timeout" && timeoutAttempts < MAX_TIMEOUT_ATTEMPTS) {
-              const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
-              if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
-                timeoutAttempts++;
+              if (attemptObservedText && !isWindowExceededFinishOverflow(err)) throw err;
+              const failure = this.ports.classifyFailure(err);
+              // Reactive: context overflow → flush + compact + retry
+              if (failure === "overflow" && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
+                overflowAttempts++;
                 try {
+                  if (!flushedThisTurn) {
+                    flushedThisTurn = true;
+                    try {
+                      await this.flushMemory(messages, "overflow-recovery", turnBudget);
+                    } catch (flushErr) {
+                      this.log.warn(
+                        "In-turn memory flush failed; compacting without flush",
+                        flushErr,
+                      );
+                    }
+                  }
                   await compactInTurn();
                 } catch (rescueErr) {
                   this.log.warn(
@@ -1142,114 +1244,196 @@ export class CoachAgent {
                 }
                 continue;
               }
-              if (plainTimeoutAttempts < MAX_PLAIN_TIMEOUT_ATTEMPTS) {
-                plainTimeoutAttempts++;
-                timeoutAttempts++;
+              // Timeout with high context usage → compact + retry (no flush)
+              if (failure === "timeout" && timeoutAttempts < MAX_TIMEOUT_ATTEMPTS) {
+                const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
+                if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
+                  timeoutAttempts++;
+                  try {
+                    await compactInTurn();
+                  } catch (rescueErr) {
+                    this.log.warn(
+                      "Compaction rescue failed; rethrowing the original turn error",
+                      rescueErr,
+                    );
+                    if (err instanceof Error && err.cause === undefined) {
+                      (err as Error & { cause?: unknown }).cause = rescueErr;
+                    }
+                    classifiedTerminalFailure = failure;
+                    throw err;
+                  }
+                  continue;
+                }
+                if (plainTimeoutAttempts < MAX_PLAIN_TIMEOUT_ATTEMPTS) {
+                  plainTimeoutAttempts++;
+                  timeoutAttempts++;
+                  continue;
+                }
+              }
+              // Rate limit → backoff (respect retry-after) + retry
+              if (failure === "rate_limit" && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
+                rateLimitAttempts++;
+                const attemptNo = rateLimitAttempts;
+                // The server hint (if any) is a lower bound; absent one, fall back to a
+                // capped exponential. Either feeds the primitive as the Retry-After
+                // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
+                const requestedMs =
+                  retryAfterFloorMs(err, this.ports.extractRetryAfterMs) ??
+                  Math.min(
+                    RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
+                    RATE_LIMIT_FALLBACK_MAX_MS,
+                  );
+                const clampNote =
+                  requestedMs > RATE_LIMIT_MAX_WAIT_MS
+                    ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
+                    : "";
+                await backoffWithSentinelError(err, {
+                  attempts: 2,
+                  baseMs: requestedMs,
+                  capMs: RATE_LIMIT_MAX_WAIT_MS,
+                  shouldRetry: () => true,
+                  retryAfterMs: () => requestedMs,
+                  signal: abortController.signal,
+                  random: () => 0,
+                  onRetry: ({ delayMs }) => {
+                    console.warn(
+                      `Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`,
+                    );
+                  },
+                });
+                // The backoff sleep is the one place a turn can silently burn
+                // minutes; converting a long Retry-After wait into a clean budget
+                // stop here means the deadline never wedges the session lock.
+                turnBudget.checkDeadline();
                 continue;
               }
+              // Transient server (5xx) or network failure → brief jittered retry.
+              // The residual class: only fires when overflow/timeout/rate_limit did
+              // not match, so a single 502 or connection blip no longer kills the
+              // turn on attempt 1 and discards paid multi-step tool work.
+              // A codex network throw is surfaced as a single attempt and tagged
+              // NetworkError by the bridge's normalizeError. We deliberately cap the
+              // codex network class at zero outer retries to keep it at exactly one
+              // layer; the outer network retry below is for the AI-SDK path, whose
+              // errors are plain TypeErrors (not name="NetworkError") and whose SDK
+              // does zero retries. (Unifying codex network retry with the AI-SDK
+              // path is tracked as a follow-up.)
+              const alreadyRetriedNetwork =
+                failure === "network" && err instanceof Error && err.name === "NetworkError";
+              if (
+                (failure === "server_error" || failure === "network") &&
+                !alreadyRetriedNetwork &&
+                serverErrorAttempts < MAX_SERVER_ERROR_ATTEMPTS
+              ) {
+                serverErrorAttempts++;
+                const retryAfterFloor = retryAfterFloorMs(err, this.ports.extractRetryAfterMs);
+                await backoffWithSentinelError(err, {
+                  attempts: 2,
+                  baseMs: retryAfterFloor ?? SERVER_ERROR_BACKOFF_BASE_MS,
+                  capMs: SERVER_ERROR_BACKOFF_MAX_MS,
+                  shouldRetry: () => true,
+                  retryAfterMs: () => retryAfterFloor,
+                  signal: abortController.signal,
+                });
+                turnBudget.checkDeadline();
+                continue;
+              }
+              // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
+              classifiedTerminalFailure = failure;
+              throw err;
             }
-            // Rate limit → backoff (respect retry-after) + retry
-            if (failure === "rate_limit" && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
-              rateLimitAttempts++;
-              const attemptNo = rateLimitAttempts;
-              // The server hint (if any) is a lower bound; absent one, fall back to a
-              // capped exponential. Either feeds the primitive as the Retry-After
-              // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
-              const requestedMs =
-                retryAfterFloorMs(err, this.ports.extractRetryAfterMs) ??
-                Math.min(
-                  RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
-                  RATE_LIMIT_FALLBACK_MAX_MS,
-                );
-              const clampNote =
-                requestedMs > RATE_LIMIT_MAX_WAIT_MS
-                  ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
-                  : "";
-              await backoffWithSentinelError(err, {
-                attempts: 2,
-                baseMs: requestedMs,
-                capMs: RATE_LIMIT_MAX_WAIT_MS,
-                shouldRetry: () => true,
-                retryAfterMs: () => requestedMs,
-                random: () => 0,
-                onRetry: ({ delayMs }) => {
-                  console.warn(
-                    `Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`,
-                  );
-                },
-              });
-              // The backoff sleep is the one place a turn can silently burn
-              // minutes; converting a long Retry-After wait into a clean budget
-              // stop here means the deadline never wedges the session lock.
-              turnBudget.checkDeadline();
-              continue;
-            }
-            // Transient server (5xx) or network failure → brief jittered retry.
-            // The residual class: only fires when overflow/timeout/rate_limit did
-            // not match, so a single 502 or connection blip no longer kills the
-            // turn on attempt 1 and discards paid multi-step tool work.
-            // A codex network throw is surfaced as a single attempt and tagged
-            // NetworkError by the bridge's normalizeError. We deliberately cap the
-            // codex network class at zero outer retries to keep it at exactly one
-            // layer; the outer network retry below is for the AI-SDK path, whose
-            // errors are plain TypeErrors (not name="NetworkError") and whose SDK
-            // does zero retries. (Unifying codex network retry with the AI-SDK
-            // path is tracked as a follow-up.)
-            const alreadyRetriedNetwork =
-              failure === "network" && err instanceof Error && err.name === "NetworkError";
-            if (
-              (failure === "server_error" || failure === "network") &&
-              !alreadyRetriedNetwork &&
-              serverErrorAttempts < MAX_SERVER_ERROR_ATTEMPTS
-            ) {
-              serverErrorAttempts++;
-              const retryAfterFloor = retryAfterFloorMs(err, this.ports.extractRetryAfterMs);
-              await backoffWithSentinelError(err, {
-                attempts: 2,
-                baseMs: retryAfterFloor ?? SERVER_ERROR_BACKOFF_BASE_MS,
-                capMs: SERVER_ERROR_BACKOFF_MAX_MS,
-                shouldRetry: () => true,
-                retryAfterMs: () => retryAfterFloor,
-              });
-              turnBudget.checkDeadline();
-              continue;
-            }
-            // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
-            classifiedTerminalFailure = failure;
-            throw err;
           }
-        }
-      } catch (terminalErr) {
-        const failure =
-          classifiedTerminalFailure ?? classifyError(terminalErr, this.ports.classifyFailure);
-        // Single failure-emit point: every terminal throw out of the loop is one
-        // failed turn, so the outcome line fires exactly once before the rethrow.
-        this.emitTurnOutcome({
-          turnId,
-          chatId,
-          ok: false,
-          error_class: failure,
-          overflowAttempts,
-          timeoutAttempts,
-          rateLimitAttempts,
-          duration_ms: this.ports.now() - turnStart,
-          compactions,
-        });
-        emitEvent(
-          this.createErrorEvent({
-            failure,
+        } catch (terminalErr) {
+          if (abortController.signal.aborted) {
+            const templateHash = (this.templateHash ??= computeTemplateHash({
+              soul: this.sport.soul,
+              skills: this.sport.skills,
+              ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
+                confirmationGate: this.confirmationGate,
+              }),
+              toolSchemas: this.tools,
+              model: this.config.llm.model,
+            }));
+            try {
+              this.chatStore.appendTurn(chatId, userMessage, streamedText, {
+                templateHash,
+                assembledHash: computeAssembledHash(this.systemPrompt, messages),
+                provider: this.config.llm.provider,
+                model: this.config.llm.model,
+                lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                provenance: ctx.provenance.value,
+              });
+            } catch (persistErr) {
+              console.warn("Interrupted session persistence failed", persistErr);
+            }
+            this.recordInterruptedTurn({
+              chatId,
+              turnId,
+              completedAt: new Date(this.ports.now()).toISOString(),
+              athleteText: userMessage,
+              coachText: streamedText,
+            });
+            this.emitTurnOutcome({
+              turnId,
+              chatId,
+              ok: false,
+              error_class: "interrupted",
+              overflowAttempts,
+              timeoutAttempts,
+              rateLimitAttempts,
+              duration_ms: this.ports.now() - turnStart,
+              compactions,
+            });
+            emitEvent({ type: "interrupted", turnId, chatId, text: streamedText });
+            return streamedText;
+          }
+          const failure =
+            classifiedTerminalFailure ?? classifyError(terminalErr, this.ports.classifyFailure);
+          // Single failure-emit point: every terminal throw out of the loop is one
+          // failed turn, so the outcome line fires exactly once before the rethrow.
+          this.emitTurnOutcome({
             turnId,
             chatId,
+            ok: false,
+            error_class: failure,
             overflowAttempts,
             timeoutAttempts,
             rateLimitAttempts,
-            durationMs: this.ports.now() - turnStart,
+            duration_ms: this.ports.now() - turnStart,
             compactions,
-          }),
-        );
-        throw terminalErr;
+          });
+          emitEvent(
+            this.createErrorEvent({
+              failure,
+              turnId,
+              chatId,
+              overflowAttempts,
+              timeoutAttempts,
+              rateLimitAttempts,
+              durationMs: this.ports.now() - turnStart,
+              compactions,
+            }),
+          );
+          throw terminalErr;
+        }
+      } finally {
+        if (this.activeChatTurns.get(chatId) === activeTurn) {
+          this.activeChatTurns.delete(chatId);
+        }
       }
     });
+  }
+
+  stopChat(chatId: string, turnId: string): boolean {
+    const activeTurn = this.activeChatTurns.get(chatId);
+    if (
+      activeTurn === undefined ||
+      activeTurn.turnId !== turnId ||
+      activeTurn.controller.signal.aborted
+    )
+      return false;
+    activeTurn.controller.abort();
+    return true;
   }
 
   private createErrorEvent(input: {
@@ -1312,6 +1496,346 @@ export class CoachAgent {
     };
   }
 
+  async getCoachDecision(request: GetCoachDecisionRpcParams): Promise<GetCoachDecisionRpcResult> {
+    const store = this.requireCoachDecisionStore();
+    return { decision: store.getDecision(request.chatId, request.decisionId) };
+  }
+
+  async answerCoachDecision(
+    request: AnswerCoachDecisionRpcParams,
+    onEvent?: TurnEventHandler,
+  ): Promise<AnswerCoachDecisionRpcResult> {
+    return withSessionLock(request.chatId, async () => {
+      const store = this.requireCoachDecisionStore();
+      const current = store.getDecision(request.chatId, request.decisionId);
+      if (current === null) throw new Error("Decision was not found.");
+      let answered: CoachDecisionReadModel;
+      if (current.status === "answered") {
+        if (JSON.stringify(current.answer) !== JSON.stringify(request.answer)) {
+          throw new Error("Decision is immutable after it is answered.");
+        }
+        answered = current;
+      } else {
+        if (current.status !== "unanswered") throw new Error("Decision is already terminal.");
+        const consequence = decisionConsequence(current, request.answer);
+        answered = store.answerDecision({
+          chatId: request.chatId,
+          decisionId: request.decisionId,
+          answer: request.answer,
+          consequence,
+          continuationId: this.ports.randomId(),
+          answeredAt: new Date(this.ports.now()).toISOString(),
+        });
+      }
+      const decision = await this.continueCoachDecision(answered, onEvent);
+      return { decision };
+    });
+  }
+
+  async skipCoachDecision(
+    request: SkipCoachDecisionRpcParams,
+  ): Promise<SkipCoachDecisionRpcResult> {
+    return withSessionLock(request.chatId, async () => {
+      const store = this.requireCoachDecisionStore();
+      const current = store.getDecision(request.chatId, request.decisionId);
+      if (current === null) throw new Error("Decision was not found.");
+      const decision = store.skipDecision({
+        chatId: request.chatId,
+        decisionId: request.decisionId,
+        skippedAt: new Date(this.ports.now()).toISOString(),
+      });
+      const athleteText = store.getDecisionAthleteText(request.chatId, request.decisionId);
+      if (athleteText === null) throw new Error("Decision athlete context was not found.");
+      try {
+        this.chatStore.persistDecisionContext({
+          chatId: request.chatId,
+          decisionId: request.decisionId,
+          athleteText,
+          request: decisionRequestInput(current),
+          result: RequestUserDecisionResultSchema.parse({
+            status: "skipped",
+            decisionId: request.decisionId,
+          }),
+        });
+      } catch (error) {
+        this.log.warn("decision_session_skip_write_failed", error);
+      }
+      return { decision };
+    });
+  }
+
+  async resumeCoachDecision(
+    request: ResumeCoachDecisionRpcParams,
+    onEvent?: TurnEventHandler,
+  ): Promise<ResumeCoachDecisionRpcResult> {
+    return withSessionLock(request.chatId, async () => {
+      const current = this.requireCoachDecisionStore().getDecision(
+        request.chatId,
+        request.decisionId,
+      );
+      if (current === null) throw new Error("Decision was not found.");
+      if (current.status !== "answered") throw new Error("Decision has no continuation.");
+      const alreadyCompleted = current.continuation.status === "completed";
+      const decision = await this.continueCoachDecision(current, onEvent);
+      return { decision, resumed: !alreadyCompleted };
+    });
+  }
+
+  private requireCoachDecisionStore() {
+    if (this.ports.coachDecisions === undefined) {
+      throw new Error("Coach decisions are unavailable for this engine.");
+    }
+    return this.ports.coachDecisions;
+  }
+
+  private repairCoachDecisionSession(decision: CoachDecisionReadModel): void {
+    if (decision.status !== "skipped" && decision.status !== "answered") return;
+    if (decision.status === "answered" && decision.continuation.status !== "completed") return;
+    const store = this.requireCoachDecisionStore();
+    const athleteText = store.getDecisionAthleteText(decision.chatId, decision.decisionId);
+    if (athleteText === null) throw new Error("Decision athlete context was not found.");
+    const result =
+      decision.status === "skipped"
+        ? RequestUserDecisionResultSchema.parse({
+            status: "skipped",
+            decisionId: decision.decisionId,
+          })
+        : RequestUserDecisionResultSchema.parse({
+            status: "answered",
+            decisionId: decision.decisionId,
+            answer: decision.answer,
+            consequence: decision.consequence,
+          });
+    const completed =
+      decision.status === "answered" && decision.continuation.status === "completed"
+        ? decision.continuation
+        : undefined;
+    this.chatStore.persistDecisionContext({
+      chatId: decision.chatId,
+      decisionId: decision.decisionId,
+      athleteText,
+      request: decisionRequestInput(decision),
+      result,
+      ...(completed === undefined || completed.lineage === undefined
+        ? {}
+        : {
+            coachText: completed.coachText,
+            continuationId: completed.continuationId,
+            lineage: completed.lineage,
+          }),
+    });
+  }
+
+  private async continueCoachDecision(
+    decision: CoachDecisionReadModel,
+    onEvent?: TurnEventHandler,
+  ): Promise<CoachDecisionReadModel> {
+    if (decision.status !== "answered") throw new Error("Decision has no continuation.");
+    if (decision.continuation.status === "completed") {
+      if (!("turnId" in decision.continuation) || !("coachText" in decision.continuation)) {
+        throw new Error("Completed decision continuation is incomplete.");
+      }
+      try {
+        onEvent?.({
+          type: "turn-start",
+          turnId: decision.continuation.turnId,
+          chatId: decision.chatId,
+        });
+      } catch {}
+      this.repairCoachDecisionSession(decision);
+      try {
+        onEvent?.({
+          type: "final-text",
+          turnId: decision.continuation.turnId,
+          text: decision.continuation.coachText,
+        });
+      } catch {}
+      return decision;
+    }
+    const store = this.requireCoachDecisionStore();
+    const active = store.getDecision(decision.chatId);
+    if (active?.status === "unanswered" && active.decisionId !== decision.decisionId) {
+      throw new Error("Another Coach decision is active.");
+    }
+    const turnId = this.ports.randomId();
+    try {
+      onEvent?.({ type: "turn-start", turnId, chatId: decision.chatId });
+    } catch {}
+    const context = createTurnContext(null, decision.chatId, EMPTY_PROVENANCE, "", turnId);
+    const system =
+      buildSystemPrompt(this.sport, this.memory, this.tz, this.buildDegradeBlock(), {
+        excludeSections: this.excludedSectionNames,
+        confirmationGate: this.confirmationGate,
+      }) + `\n\n# Decision Continuation\n\n${decisionContinuationMessage(decision)}`;
+    const { messages: history } = this.chatStore.load(decision.chatId);
+    const athleteText = store.getDecisionAthleteText(decision.chatId, decision.decisionId);
+    if (athleteText === null) throw new Error("Decision athlete context was not found.");
+    const historyWithAthlete =
+      athleteText === "" ||
+      history.some((message) => message.role === "user" && messageText(message) === athleteText)
+        ? history
+        : [...history, { role: "user", content: athleteText } as ModelMessage];
+    const toolCallId = `decision-${decision.decisionId}`;
+    const toolInput = decisionRequestInput(decision);
+    const toolResult = RequestUserDecisionResultSchema.parse({
+      status: "answered",
+      decisionId: decision.decisionId,
+      answer: decision.answer,
+      consequence: decision.consequence,
+    });
+    const hasDecisionCall = historyWithAthlete.some(
+      (message) =>
+        message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some(
+          (part) =>
+            part.type === "tool-call" &&
+            part.toolCallId === toolCallId &&
+            part.toolName === COACH_DECISION_TOOL_NAME,
+        ),
+    );
+    const messages = [
+      ...historyWithAthlete,
+      ...(hasDecisionCall
+        ? []
+        : [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool-call",
+                  toolCallId,
+                  toolName: COACH_DECISION_TOOL_NAME,
+                  input: toolInput,
+                },
+              ],
+            },
+          ]),
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId,
+            toolName: COACH_DECISION_TOOL_NAME,
+            output: { type: "json", value: toolResult },
+          },
+        ],
+      },
+    ] as ModelMessage[];
+    const abortController = new AbortController();
+    let streamedText = "";
+    const activeTurn = { turnId, controller: abortController };
+    this.activeChatTurns.set(decision.chatId, activeTurn);
+    try {
+      const result = await this.llm.generate({
+        system,
+        messages,
+        tools: undefined,
+        stopWhen: stepCountIs(10),
+        maxSteps: 10,
+        caller: "chat",
+        context,
+        cacheKey: sha256_16(decision.chatId),
+        signal: abortController.signal,
+        onTextDelta: (delta) => {
+          streamedText += delta;
+          try {
+            onEvent?.({ type: "text_delta", turnId, delta });
+          } catch {}
+        },
+      });
+      const coachText = result.text.trim();
+      if (coachText === "") throw new Error("Decision continuation returned no Coach text.");
+      return this.completeCoachDecisionContinuation(
+        decision,
+        coachText,
+        turnId,
+        { system, messages },
+        onEvent,
+      );
+    } catch (error) {
+      if (!abortController.signal.aborted) throw error;
+      this.recordInterruptedTurn({
+        chatId: decision.chatId,
+        turnId,
+        completedAt: new Date(this.ports.now()).toISOString(),
+        athleteText: "",
+        coachText: streamedText,
+      });
+      try {
+        onEvent?.({ type: "interrupted", turnId, chatId: decision.chatId, text: streamedText });
+      } catch {}
+      return this.requireCoachDecisionStore().getDecision(decision.chatId, decision.decisionId)!;
+    } finally {
+      if (this.activeChatTurns.get(decision.chatId) === activeTurn) {
+        this.activeChatTurns.delete(decision.chatId);
+      }
+    }
+  }
+
+  private completeCoachDecisionContinuation(
+    decision: Extract<CoachDecisionReadModel, { status: "answered" }>,
+    coachText: string,
+    turnId: string,
+    lineageInput: { readonly system: string; readonly messages: ModelMessage[] },
+    onEvent?: TurnEventHandler,
+  ): CoachDecisionReadModel {
+    const store = this.requireCoachDecisionStore();
+    const lineage: CoachDecisionContinuationLineage = {
+      templateHash: computeTemplateHash({
+        soul: this.sport.soul,
+        skills: this.sport.skills,
+        ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
+          confirmationGate: this.confirmationGate,
+        }),
+        toolSchemas:
+          this.decisionTool === undefined
+            ? undefined
+            : { [COACH_DECISION_TOOL_NAME]: this.decisionTool },
+        model: this.config.llm.model,
+      }),
+      assembledHash: computeAssembledHash(lineageInput.system, lineageInput.messages),
+      provider: this.config.llm.provider,
+      model: this.config.llm.model,
+      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+    };
+    const completed = store.completeDecisionContinuation({
+      chatId: decision.chatId,
+      decisionId: decision.decisionId,
+      continuationId: decision.continuation.continuationId,
+      turnId,
+      coachText,
+      lineage,
+      completedAt: new Date(this.ports.now()).toISOString(),
+    });
+    const athleteText = store.getDecisionAthleteText(decision.chatId, decision.decisionId);
+    if (athleteText === null) throw new Error("Decision athlete context was not found.");
+    try {
+      this.chatStore.persistDecisionContext({
+        chatId: decision.chatId,
+        decisionId: decision.decisionId,
+        athleteText,
+        request: decisionRequestInput(decision),
+        result: RequestUserDecisionResultSchema.parse({
+          status: "answered",
+          decisionId: decision.decisionId,
+          answer: decision.answer,
+          consequence: decision.consequence,
+        }),
+        coachText,
+        continuationId: decision.continuation.continuationId,
+        lineage,
+      });
+    } catch (error) {
+      this.log.warn("decision_session_continuation_write_failed", error);
+    }
+    try {
+      onEvent?.({ type: "final-text", turnId, text: coachText });
+    } catch {}
+    return completed;
+  }
+
   hasSession(chatId: string): boolean {
     return this.chatStore.hasSession(chatId);
   }
@@ -1321,6 +1845,10 @@ export class CoachAgent {
     // with an in-flight turn for the same chat (which would archive history the
     // turn is mid-write on).
     return withSessionLock(chatId, async () => {
+      const decision = this.ports.coachDecisions?.getDecision(chatId);
+      if (decision?.status === "answered" && decision.continuation.status === "pending") {
+        throw new Error("Resume the active Coach decision before starting a new conversation.");
+      }
       // Flush before reset to avoid losing un-persisted context
       let memoryFlushed = true;
       let history: ModelMessage[] = [];

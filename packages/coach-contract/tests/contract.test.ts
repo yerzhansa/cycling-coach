@@ -19,6 +19,7 @@ import {
   UNKNOWN_CYCLING_TRAINING_CONTEXT,
   ChatRequestSchema,
   ChatResponseSchema,
+  StopChatRequestSchema,
   ResetSessionResponseSchema,
   HasSessionResponseSchema,
   type CoachEngine,
@@ -113,8 +114,19 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 19", () => {
-    expect(PROTOCOL_VERSION).toBe(19);
+  it("is 23", () => {
+    expect(PROTOCOL_VERSION).toBe(23);
+  });
+
+  it("requires Stop to name the exact active turn", () => {
+    expect(StopChatRequestSchema.parse({ chatId: "desktop", turnId: TURN_ID })).toEqual({
+      chatId: "desktop",
+      turnId: TURN_ID,
+    });
+    expect(() => StopChatRequestSchema.parse({ chatId: "desktop" })).toThrow();
+    expect(() =>
+      StopChatRequestSchema.parse({ chatId: "desktop", turnId: TURN_ID, extra: true }),
+    ).toThrow();
   });
 });
 
@@ -565,6 +577,16 @@ describe("CoachEngine", () => {
   it("is implementable", async () => {
     const fake: CoachEngine = {
       chat: async () => ({ text: "" }),
+      getCoachDecision: async () => ({ decision: null }),
+      answerCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      skipCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      resumeCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
       resetSession: async () => ({ memoryFlushed: true }),
       hasSession: async () => ({ hasSession: false }),
       getAthleteState: async () => AthleteStateSchema.parse(validState),

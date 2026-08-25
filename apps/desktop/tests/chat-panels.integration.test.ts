@@ -162,6 +162,20 @@ function makeScript(
   let units: "metric" | "imperial" = "metric";
   let hasSession = false;
   let lastSynced: string = athleteState.lastSynced;
+  let queueRevision = 0;
+  let queueItems: Array<{
+    queuedMessageId: string;
+    submissionId: string;
+    text: string;
+    kind: "ordinary" | "slash-command";
+    position: number;
+    restored: boolean;
+  }> = [];
+  const queueSnapshot = () => ({
+    schemaVersion: 1 as const,
+    revision: queueRevision,
+    items: queueItems,
+  });
   return {
     onRequest(value) {
       const request = value as ScriptRequest;
@@ -359,7 +373,31 @@ function makeScript(
         units = (request.params as { readonly value: "metric" | "imperial" }).value;
         return response({ value: units, source: "cycling" });
       }
-      if (request.method === "chat") {
+      if (request.method === "getChatQueue") return response(queueSnapshot());
+      if (request.method === "enqueueChatMessage") {
+        const params = request.params as { readonly submissionId: string; readonly text: string };
+        if (!queueItems.some((item) => item.submissionId === params.submissionId)) {
+          queueRevision += 1;
+          queueItems.push({
+            queuedMessageId: `queued-${queueRevision}`,
+            submissionId: params.submissionId,
+            text: params.text,
+            kind: params.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
+            position: queueItems.length,
+            restored: false,
+          });
+        }
+        return response(queueSnapshot());
+      }
+      if (request.method === "removeQueuedChatMessage") {
+        const id = (request.params as { readonly queuedMessageId: string }).queuedMessageId;
+        queueItems = queueItems
+          .filter((item) => item.queuedMessageId !== id)
+          .map((item, position) => ({ ...item, position }));
+        queueRevision += 1;
+        return response(queueSnapshot());
+      }
+      if (request.method === "resumeChatQueue") {
         hasSession = true;
         const firstDelta = "## Today’s ride\n\nHold   **ste";
         const finalText = `${firstDelta}ady**.
@@ -376,6 +414,7 @@ ${"nonwrapping".repeat(36)}
 
 [Guide](https://example.test/guide)`;
         return [
+          JSON.stringify({ type: "turn-start", turnId: "turn-fixture", chatId: "desktop" }),
           JSON.stringify({
             type: "text_delta",
             turnId: "turn-fixture",
@@ -387,10 +426,17 @@ ${"nonwrapping".repeat(36)}
             delta: finalText.slice(firstDelta.length),
           }),
           JSON.stringify({ type: "final-text", turnId: "turn-fixture", text: finalText }),
-          JSON.stringify({ text: finalText }),
+          JSON.stringify(
+            (() => {
+              queueItems = [];
+              queueRevision += 1;
+              return { snapshot: queueSnapshot(), response: { text: finalText } };
+            })(),
+          ),
         ];
       }
       if (request.method === "hasSession") return response({ hasSession });
+      if (request.method === "getCoachDecision") return response({ decision: null });
       if (request.method === "getTranscriptPage") {
         if (!transcriptHistory) {
           return response({
@@ -439,6 +485,8 @@ ${"nonwrapping".repeat(36)}
       }
       if (request.method === "resetSession") {
         hasSession = false;
+        queueItems = [];
+        queueRevision += 1;
         return response({ memoryFlushed: true });
       }
       if (request.method === "sync") {
@@ -744,7 +792,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       athleteRows: 0,
       quickActionClicks: 0,
     });
-    expect(calls.filter((call) => call.method === "chat")).toHaveLength(0);
+    expect(calls.filter((call) => call.method === "enqueueChatMessage")).toHaveLength(0);
 
     const committedMessage = "回復走を30分します。";
     const committedEnter = await fixture.evaluate<{
@@ -764,7 +812,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         quickAction.addEventListener("click", recordQuickActionClick);
       }
       textarea.value = ${JSON.stringify(committedMessage)};
-      const conversation = document.querySelector(".conversation");
       const event = new KeyboardEvent("keydown", {
         key: "Enter",
         bubbles: true,
@@ -772,7 +819,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       });
       const dispatchResult = textarea.dispatchEvent(event);
       const deadline = Date.now() + 5000;
-      while (conversation.dataset.chatStatus === "streaming" && Date.now() < deadline) {
+      while (
+        document.querySelectorAll(".chat-message--athlete").length === 0 &&
+        Date.now() < deadline
+      ) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       for (const quickAction of quickActions) {
@@ -795,12 +845,19 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       athleteMessages: [committedMessage],
       quickActionClicks: 0,
     });
-    expect(calls.filter((call) => call.method === "chat")).toEqual([
+    expect(calls.filter((call) => call.method === "enqueueChatMessage")).toEqual([
       {
         jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: committedMessage },
+        method: "enqueueChatMessage",
+        params: {
+          chatId: "desktop",
+          submissionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+          text: committedMessage,
+        },
       },
+    ]);
+    expect(calls.filter((call) => call.method === "resumeChatQueue")).toEqual([
+      { jsonrpc: "2.0", method: "resumeChatQueue", params: { chatId: "desktop" } },
     ]);
   }, 90_000);
 
@@ -819,8 +876,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly partialWhiteSpace: string | null;
       readonly partialSourcePreserved: boolean;
       readonly streamingInputEnabled: boolean;
-      readonly streamingSendEnabled: boolean;
-      readonly streamingQuickActionsEnabled: boolean;
+      readonly streamingStopEnabled: boolean;
+      readonly quickActionsAbsent: boolean;
       readonly streamingEnterHandled: boolean;
       readonly streamingDraftCleared: boolean;
       readonly streamingQueued: readonly string[];
@@ -900,8 +957,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       });
       textarea.value = "What should I ride?";
       textarea.closest("form").requestSubmit();
-      const submit = textarea.closest("form").querySelector('button[type="submit"]');
-      const quickActions = [...document.querySelectorAll(".coaching-shortcut")];
       const streamingDeadline = Date.now() + 5000;
       while (
         document.querySelector(".conversation").dataset.chatStatus !== "streaming" &&
@@ -913,8 +968,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
       textarea.focus();
       const streamingInputEnabled = !textarea.disabled;
-      const streamingSendEnabled = !submit.disabled;
-      const streamingQuickActionsEnabled = quickActions.every((button) => !button.disabled);
+      const stop = document.querySelector('[aria-label="Stop responding"]');
+      const streamingStopEnabled = stop !== null && !stop.disabled;
+      const quickActionsAbsent = document.querySelector(".coaching-shortcuts") === null;
       const streamingEnter = new KeyboardEvent("keydown", {
         key: "Enter",
         bubbles: true,
@@ -922,14 +978,24 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       });
       textarea.dispatchEvent(streamingEnter);
       const streamingEnterHandled = streamingEnter.defaultPrevented;
-      const streamingDraftCleared = textarea.value === "";
       const streamingFocusPreserved = document.activeElement === textarea;
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const queueDeadline = Date.now() + 5000;
+      while (
+        (textarea.value !== "" ||
+          document.querySelector(".chat-queue__text")?.textContent !== "How should I recover?") &&
+        Date.now() < queueDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const streamingDraftCleared = textarea.value === "";
       const streamingQueued = [...document.querySelectorAll(".chat-queue__text")].map(
         (node) => node.textContent,
       );
       document.querySelector(".chat-queue__remove")?.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const removalDeadline = Date.now() + 5000;
+      while (document.querySelector(".chat-queue") && Date.now() < removalDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
       const streamingQueueCleared = document.querySelector(".chat-queue") === null;
       textarea.value = "How should I recover?";
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
@@ -949,7 +1015,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       }
       await new Promise((resolve) => setTimeout(resolve, 0));
       observer.disconnect();
-      const settledSendEnabled = !submit.disabled;
+      const settledSend = textarea.closest("form").querySelector('button[type="submit"]');
+      const settledSendEnabled = settledSend !== null && !settledSend.disabled;
       const settledDraftPreserved = textarea.value === "How should I recover?";
       const settledFocusPreserved = document.activeElement === textarea;
       const partial = observed.find(
@@ -994,8 +1061,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         partialWhiteSpace,
         partialSourcePreserved,
         streamingInputEnabled,
-        streamingSendEnabled,
-        streamingQuickActionsEnabled,
+        streamingStopEnabled,
+        quickActionsAbsent,
         streamingEnterHandled,
         streamingDraftCleared,
         streamingQueued,
@@ -1081,8 +1148,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       partialWhiteSpace: "pre-wrap",
       partialSourcePreserved: true,
       streamingInputEnabled: true,
-      streamingSendEnabled: true,
-      streamingQuickActionsEnabled: true,
+      streamingStopEnabled: true,
+      quickActionsAbsent: true,
       streamingEnterHandled: true,
       streamingDraftCleared: true,
       streamingQueued: ["How should I recover?"],
@@ -1116,58 +1183,24 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         params: { chatId: "desktop" },
       },
     ]);
-    const quickActions = await fixture.evaluate<{
-      readonly groupLabel: string | null;
-      readonly labels: readonly string[];
-      readonly commands: readonly string[];
-      readonly terminalResponses: number;
-      readonly keyboardActivationDetail: number | null;
-      readonly keyboardShortcutResidentAfterTerminal: boolean;
-      readonly keyboardShortcutFocusedAfterTerminal: boolean;
+    const readingRoom = await fixture.evaluate<{
+      readonly heading: string | null;
+      readonly quickActionsAbsent: boolean;
+      readonly contextVisibleBefore: boolean;
+      readonly contextVisibleAfter: boolean;
       readonly draft: string;
       readonly documentOverflow: boolean;
       readonly composerHeight: number;
       readonly composerOpaque: boolean;
-      readonly composerClearanceTracksHeight: boolean;
       readonly finalTranscriptClearsComposer: boolean;
     }>(`
-      const group = document.querySelector(".coaching-shortcuts");
-      const buttons = [...group.querySelectorAll(".coaching-shortcut")];
-      const keyboardShortcut = buttons.at(-1);
       const textarea = document.querySelector("#message");
       textarea.value = "  keep draft\\n";
-      let terminalResponses = 0;
-      let keyboardActivationDetail = null;
-      let keyboardShortcutResidentAfterTerminal = false;
-      let keyboardShortcutFocusedAfterTerminal = false;
-      keyboardShortcut.addEventListener("click", (event) => {
-        keyboardActivationDetail = event.detail;
-      }, { once: true });
-      for (const button of buttons) {
-        const readyDeadline = Date.now() + 5000;
-        while (button.disabled && Date.now() < readyDeadline) {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-        }
-        const coachCount = document.querySelectorAll(".chat-message--coach").length;
-        if (button === keyboardShortcut) button.focus();
-        button.click();
-        const terminalDeadline = Date.now() + 5000;
-        while (Date.now() < terminalDeadline) {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          const coaches = [...document.querySelectorAll(".chat-message--coach")];
-          const latest = coaches.at(-1);
-          if (coaches.length === coachCount + 1 && latest && !latest.hasAttribute("aria-busy")) {
-            terminalResponses += 1;
-            if (button === keyboardShortcut) {
-              keyboardShortcutResidentAfterTerminal =
-                [...group.querySelectorAll(".coaching-shortcut")].at(-1) === keyboardShortcut;
-              keyboardShortcutFocusedAfterTerminal = document.activeElement === keyboardShortcut;
-            }
-            break;
-          }
-        }
-      }
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const contextVisibleBefore = document.querySelector(".training-context") !== null;
+      document.querySelector('[aria-label="Hide training context"]')?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const contextVisibleAfter = document.querySelector(".training-context") !== null;
       const conversation = document.querySelector(".conversation");
       const composer = document.querySelector(".composer-wrap");
       conversation.scrollTop = conversation.scrollHeight;
@@ -1175,49 +1208,39 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const finalTranscriptItem = [...document.querySelectorAll(".chat-message, .chat-notice, .chat-retry")]
         .filter((node) => !node.hidden)
         .at(-1);
-      const reservedBottom = Number.parseFloat(getComputedStyle(conversation).paddingBottom);
       return {
-        groupLabel: group.getAttribute("aria-label"),
-        labels: buttons.map((button) => button.querySelector(".coaching-shortcut__label")?.textContent ?? ""),
-        commands: buttons.map((button) => button.querySelector(".coaching-shortcut__command")?.textContent ?? ""),
-        terminalResponses,
-        keyboardActivationDetail,
-        keyboardShortcutResidentAfterTerminal,
-        keyboardShortcutFocusedAfterTerminal,
+        heading: document.querySelector(".chat-surface h1")?.textContent ?? null,
+        quickActionsAbsent: document.querySelector(".coaching-shortcuts") === null,
+        contextVisibleBefore,
+        contextVisibleAfter,
         draft: textarea.value,
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         composerHeight: composerRect.height,
         composerOpaque: getComputedStyle(composer).backgroundColor !== "rgba(0, 0, 0, 0)",
-        composerClearanceTracksHeight: Math.abs(reservedBottom - composerRect.height) < 1,
         finalTranscriptClearsComposer:
           finalTranscriptItem.getBoundingClientRect().bottom <= composerRect.top + 1,
       };
     `);
-    expect(quickActions).toEqual({
-      groupLabel: "Coaching shortcuts",
-      labels: ["Build a plan", "Today’s workout", "Training status", "Review last session"],
-      commands: ["/plan", "/workout", "/status", "/review"],
-      terminalResponses: 4,
-      keyboardActivationDetail: 0,
-      keyboardShortcutResidentAfterTerminal: true,
-      keyboardShortcutFocusedAfterTerminal: true,
+    expect(readingRoom).toEqual({
+      heading: "Chat",
+      quickActionsAbsent: true,
+      contextVisibleBefore: true,
+      contextVisibleAfter: false,
       draft: "  keep draft\n",
       documentOverflow: false,
       composerHeight: expect.any(Number),
       composerOpaque: true,
-      composerClearanceTracksHeight: true,
       finalTranscriptClearsComposer: true,
     });
-    expect(quickActions.composerHeight).toBeGreaterThan(0);
+    expect(readingRoom.composerHeight).toBeGreaterThan(0);
     await fixture.setViewport(720, 800);
     const compact = await fixture.evaluate<{
       readonly documentOverflow: boolean;
       readonly tableScrollsLocally: boolean;
       readonly codeScrollsLocally: boolean;
-      readonly shortcutsWrapped: boolean;
+      readonly contextDrawerOpened: boolean;
       readonly composerOpaque: boolean;
       readonly composerHeight: number;
-      readonly composerClearanceTracksHeight: boolean;
       readonly finalTranscriptClearsComposer: boolean;
     }>(`
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -1225,22 +1248,23 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         const codeBlock = document.querySelector(".chat-message--coach pre");
         const conversation = document.querySelector(".conversation");
         const composer = document.querySelector(".composer-wrap");
-        const shortcutGroup = document.querySelector(".coaching-shortcuts");
-        const firstShortcut = shortcutGroup.querySelector(".coaching-shortcut");
+        document.querySelector('[aria-label="Show training context"]')?.click();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const contextDrawerOpened = document.querySelector('[data-slot="dialog-content"] .training-context') !== null;
+        document.querySelector('[data-slot="dialog-close"]')?.click();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
         conversation.scrollTop = conversation.scrollHeight;
         const composerRect = composer.getBoundingClientRect();
         const finalTranscriptItem = [...document.querySelectorAll(".chat-message, .chat-notice, .chat-retry")]
           .filter((node) => !node.hidden)
           .at(-1);
-        const reservedBottom = Number.parseFloat(getComputedStyle(conversation).paddingBottom);
         return {
           documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
           tableScrollsLocally: tableScroll.scrollWidth > tableScroll.clientWidth && getComputedStyle(tableScroll).overflowX === "auto",
           codeScrollsLocally: codeBlock.scrollWidth > codeBlock.clientWidth && getComputedStyle(codeBlock).overflowX === "auto",
-          shortcutsWrapped: shortcutGroup.getBoundingClientRect().height > firstShortcut.getBoundingClientRect().height,
+          contextDrawerOpened,
           composerOpaque: getComputedStyle(composer).backgroundColor !== "rgba(0, 0, 0, 0)",
           composerHeight: composerRect.height,
-          composerClearanceTracksHeight: Math.abs(reservedBottom - composerRect.height) < 1,
           finalTranscriptClearsComposer:
             finalTranscriptItem.getBoundingClientRect().bottom <= composerRect.top + 1,
         };
@@ -1249,13 +1273,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       documentOverflow: false,
       tableScrollsLocally: true,
       codeScrollsLocally: true,
-      shortcutsWrapped: true,
+      contextDrawerOpened: true,
       composerOpaque: true,
       composerHeight: expect.any(Number),
-      composerClearanceTracksHeight: true,
       finalTranscriptClearsComposer: true,
     });
-    expect(compact.composerHeight).toBeGreaterThan(quickActions.composerHeight);
+    expect(compact.composerHeight).toBeGreaterThan(0);
     const reset = await fixture.evaluate<{
       readonly enabledBefore: boolean;
       readonly dialogOpen: boolean;
@@ -1629,32 +1652,28 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(
       calls.slice(syncCallIndex + 1).filter((call) => call.method === "getAthleteState"),
     ).toHaveLength(1);
-    expect(calls.filter((call) => call.method === "chat")).toEqual([
+    expect(calls.filter((call) => call.method === "enqueueChatMessage")).toEqual([
       {
         jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "What should I ride?" },
+        method: "enqueueChatMessage",
+        params: {
+          chatId: "desktop",
+          submissionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+          text: "What should I ride?",
+        },
       },
       {
         jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "/plan" },
+        method: "enqueueChatMessage",
+        params: {
+          chatId: "desktop",
+          submissionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+          text: "How should I recover?",
+        },
       },
-      {
-        jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "/workout" },
-      },
-      {
-        jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "/status" },
-      },
-      {
-        jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "/review" },
-      },
+    ]);
+    expect(calls.filter((call) => call.method === "resumeChatQueue")).toEqual([
+      { jsonrpc: "2.0", method: "resumeChatQueue", params: { chatId: "desktop" } },
     ]);
     expect(calls.filter((call) => call.method === "setUnitsPreference")).toEqual([
       { jsonrpc: "2.0", method: "setUnitsPreference", params: { value: "imperial" } },

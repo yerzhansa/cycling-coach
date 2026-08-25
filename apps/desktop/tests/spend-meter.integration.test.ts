@@ -115,6 +115,20 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
   let cap = 0.5;
   let complete = initial === "complete";
   let spendAvailable = true;
+  let queueRevision = 0;
+  let queueItems: Array<{
+    queuedMessageId: string;
+    submissionId: string;
+    text: string;
+    kind: "ordinary" | "slash-command";
+    position: number;
+    restored: boolean;
+  }> = [];
+  const queueSnapshot = () => ({
+    schemaVersion: 1 as const,
+    revision: queueRevision,
+    items: queueItems,
+  });
   const fixture: DesktopFixtureScript = {
     onRequest(value) {
       const request = value as ScriptRequest;
@@ -152,11 +166,38 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
       if (request.method === "setUnitsPreference") {
         return response({ value: "metric", source: "cycling" });
       }
-      if (request.method === "chat") {
+      if (request.method === "getChatQueue") return response(queueSnapshot());
+      if (request.method === "enqueueChatMessage") {
+        const params = request.params as { readonly submissionId: string; readonly text: string };
+        if (!queueItems.some((item) => item.submissionId === params.submissionId)) {
+          queueRevision += 1;
+          queueItems.push({
+            queuedMessageId: `queued-${queueRevision}`,
+            submissionId: params.submissionId,
+            text: params.text,
+            kind: params.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
+            position: queueItems.length,
+            restored: false,
+          });
+        }
+        return response(queueSnapshot());
+      }
+      if (request.method === "removeQueuedChatMessage") {
+        const id = (request.params as { readonly queuedMessageId: string }).queuedMessageId;
+        queueItems = queueItems
+          .filter((item) => item.queuedMessageId !== id)
+          .map((item, position) => ({ ...item, position }));
+        queueRevision += 1;
+        return response(queueSnapshot());
+      }
+      if (request.method === "resumeChatQueue") {
+        queueItems = [];
+        queueRevision += 1;
         return [
+          JSON.stringify({ type: "turn-start", turnId: "turn-spend", chatId: "desktop" }),
           JSON.stringify({ type: "text_delta", turnId: "turn-spend", delta: "Keep " }),
           JSON.stringify({ type: "final-text", turnId: "turn-spend", text: "Keep riding." }),
-          JSON.stringify({ text: "Keep riding." }),
+          JSON.stringify({ snapshot: queueSnapshot(), response: { text: "Keep riding." } }),
         ];
       }
       if (request.method === "sync") {
@@ -165,10 +206,14 @@ function script(calls: ScriptRequest[], initial: "reached" | "complete") {
           published: false,
           referenceSucceeded: true,
           requests: { store: 0, reference: 0, total: 0 },
-          droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+          droppedActivities: {
+            overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+            recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+          },
         });
       }
       if (request.method === "hasSession") return response({ hasSession: false });
+      if (request.method === "getCoachDecision") return response({ decision: null });
       if (request.method === "resetSession") return response({ memoryFlushed: true });
       if (request.method === "importFiles") {
         return response({
@@ -351,7 +396,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
     expect(desktop.composerInputDisabled).toBe(false);
     expect(desktop.submitDisabled).toBe(false);
     expect(desktop.final).toBe("Keep riding.");
-    expect(calls.filter((call) => call.method === "chat")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "enqueueChatMessage")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "resumeChatQueue")).toHaveLength(1);
     await vi.waitFor(() =>
       expect(calls.filter((call) => call.method === "getSpendSummary").length).toBeGreaterThan(1),
     );
@@ -528,6 +574,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       return document.querySelector("[data-spend-meter]").textContent;
     `);
     expect(stale).toContain("Spend data may be out of date.");
-    expect(calls.filter((call) => call.method === "chat")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "enqueueChatMessage")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "resumeChatQueue")).toHaveLength(1);
   }, 60_000);
 });

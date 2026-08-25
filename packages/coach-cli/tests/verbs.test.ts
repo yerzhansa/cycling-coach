@@ -329,7 +329,10 @@ describe("verb rendering", () => {
               published,
               referenceSucceeded: true,
               requests: { store: 0, reference: 0, total: 0 },
-              droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+              droppedActivities: {
+                overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+                recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+              },
             }),
           }),
         }),
@@ -429,6 +432,16 @@ describe("local projection and auto-start", () => {
     const getAthleteState = vi.fn<CoachEngine["getAthleteState"]>(async () => state);
     const engine: CoachEngine = {
       chat,
+      getCoachDecision: async () => ({ decision: null }),
+      answerCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      skipCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      resumeCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
       getAthleteState,
       resetSession: vi.fn(async () => ({ memoryFlushed: true })),
       hasSession: vi.fn(async () => ({ hasSession: false })),
@@ -468,6 +481,16 @@ describe("local projection and auto-start", () => {
     });
     const engine: CoachEngine = {
       chat: vi.fn(async () => turn),
+      getCoachDecision: async () => ({ decision: null }),
+      answerCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      skipCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
+      resumeCoachDecision: async () => {
+        throw new Error("Coach decisions are not used in this test.");
+      },
       getAthleteState: async () => state,
       resetSession: async () => ({ memoryFlushed: true }),
       hasSession: async () => ({ hasSession: false }),
