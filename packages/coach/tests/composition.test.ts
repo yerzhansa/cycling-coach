@@ -627,6 +627,7 @@ describe("local coach composition", () => {
     });
     expect(received?.sport.id).toBe("cycling");
     expect(Object.keys(received!.ports).sort()).toEqual([
+      "chatAttachments",
       "chatStore",
       "classifyFailure",
       "coachDecisions",

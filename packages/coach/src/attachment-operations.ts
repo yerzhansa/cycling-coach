@@ -6,6 +6,7 @@ import {
   type AttachmentAdmissionReadModel,
 } from "@enduragent/coach-contract";
 import type { ChatAttachmentRepository } from "@enduragent/kernel/store";
+import type { ChatAttachmentObjectRow, ChatAttachmentRow } from "@enduragent/kernel/store";
 import {
   ManagedAttachmentSourceError,
   chatAttachmentRelativePath,
@@ -42,6 +43,10 @@ export interface ManagedChatAttachmentOperationsInput {
   readonly runExclusive: <T>(work: () => Promise<T>) => Promise<T>;
   readonly now?: () => number;
   readonly randomId?: () => string;
+  readonly onAdmitted?: (input: {
+    readonly attachment: ChatAttachmentRow;
+    readonly object: ChatAttachmentObjectRow;
+  }) => Promise<void>;
 }
 
 const CAPACITY_LIMITS = {
@@ -159,26 +164,27 @@ export function createManagedChatAttachmentOperations(
           }
         }
 
+        const attachment: ChatAttachmentRow = {
+          id: attachmentId,
+          schema_version: 1,
+          conversation_id: request.chatId,
+          object_id: object.id,
+          kind: source.kind,
+          display_name: source.displayName,
+          media_type: source.mediaType,
+          extension: source.extension,
+          byte_size: source.byteSize,
+          sha256: source.sha256,
+          status: "preprocessing",
+          state_json: null,
+          message_id: null,
+          created_at_ms: createdAtMs,
+          updated_at_ms: now(),
+        };
         try {
           await input.repository.commitAdmission({
             objectId: object.id,
-            attachment: {
-              id: attachmentId,
-              schema_version: 1,
-              conversation_id: request.chatId,
-              object_id: object.id,
-              kind: source.kind,
-              display_name: source.displayName,
-              media_type: source.mediaType,
-              extension: source.extension,
-              byte_size: source.byteSize,
-              sha256: source.sha256,
-              status: "preprocessing",
-              state_json: null,
-              message_id: null,
-              created_at_ms: createdAtMs,
-              updated_at_ms: now(),
-            },
+            attachment,
             draftUpdatedAtMs: now(),
           });
         } catch {
@@ -195,6 +201,10 @@ export function createManagedChatAttachmentOperations(
             failureCode: "storage_failed",
             retryable: true,
           });
+        }
+        const durableObject = await input.repository.readObject(object.id);
+        if (durableObject !== undefined) {
+          await input.onAdmitted?.({ attachment, object: durableObject }).catch(() => {});
         }
         return AttachmentAdmissionReadModelSchema.parse({
           selectionId: request.selectionId,

@@ -67,7 +67,10 @@ import {
 } from "@enduragent/kernel/store";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
 import { createAuthoredIdentity, type AthleteHome } from "@enduragent/kernel-node/home";
-import { createManagedChatAttachmentStore } from "@enduragent/kernel-node/chat-attachments";
+import {
+  createManagedActivityReader,
+  createManagedChatAttachmentStore,
+} from "@enduragent/kernel-node/chat-attachments";
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import type { CoachStoreWriterContext } from "./runtime.js";
 import {
@@ -150,6 +153,7 @@ import { createTrainingExportService } from "./training-export.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
 import { createPlanStorageService } from "./plan-storage.js";
 import { createManagedChatAttachmentOperations } from "./attachment-operations.js";
+import { createActivityAttachmentOperations } from "./activity-attachment-operations.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -950,21 +954,43 @@ export async function createLocalCoachComposition(
       }
     }
     const logger = createSubsystemLogger("agent", input.home.root);
-    const attachmentOperations = createManagedChatAttachmentOperations({
-      repository: createChatAttachmentRepository(input.context.store),
-      objects: createManagedChatAttachmentStore({
-        archiveDir: input.home.archiveDir,
-        kindByteLimits: {
-          document: CHAT_ATTACHMENT_LIMITS.documentBytes,
-          activity: CHAT_ATTACHMENT_LIMITS.activityBytes,
-          workout: CHAT_ATTACHMENT_LIMITS.workoutBytes,
-          image: CHAT_ATTACHMENT_LIMITS.imageBytes,
+    const attachmentRepository = createChatAttachmentRepository(input.context.store);
+    const attachmentObjects = createManagedChatAttachmentStore({
+      archiveDir: input.home.archiveDir,
+      kindByteLimits: {
+        document: CHAT_ATTACHMENT_LIMITS.documentBytes,
+        activity: CHAT_ATTACHMENT_LIMITS.activityBytes,
+        workout: CHAT_ATTACHMENT_LIMITS.workoutBytes,
+        image: CHAT_ATTACHMENT_LIMITS.imageBytes,
+      },
+      ...(dependencies.platform === undefined ? {} : { platform: dependencies.platform }),
+      now,
+    });
+    const activityAttachmentOperations = createActivityAttachmentOperations({
+      repository: attachmentRepository,
+      reader: createManagedActivityReader({
+        objects: attachmentObjects,
+        limits: {
+          activityBytes: CHAT_ATTACHMENT_LIMITS.activityBytes,
+          parserMs: CHAT_ATTACHMENT_LIMITS.parserMs,
+          parserOldGenerationMiB: CHAT_ATTACHMENT_LIMITS.parserOldGenerationMiB,
+          sessions: 256,
         },
-        ...(dependencies.platform === undefined ? {} : { platform: dependencies.platform }),
-        now,
       }),
+      importer: createNodeImportRuntime({
+        archiveDir: input.home.archiveDir,
+        store: input.context.store,
+      }),
+      store: input.context.store,
       runExclusive: (work) => runtime!.runExclusive(work),
       now,
+    });
+    const attachmentOperations = createManagedChatAttachmentOperations({
+      repository: attachmentRepository,
+      objects: attachmentObjects,
+      runExclusive: (work) => runtime!.runExclusive(work),
+      now,
+      onAdmitted: activityAttachmentOperations.preprocessAdmitted,
     });
     await attachmentOperations.reconcile();
     const planIdentity = createAuthoredIdentity(input.home.configDir, { now });
@@ -1029,6 +1055,7 @@ export async function createLocalCoachComposition(
         memory,
         planPersistence: createPlanPersistence(timezone),
         chatStore: conversationStore,
+        chatAttachments: activityAttachmentOperations.turnPort,
         transcriptWriter: conversationStore,
         coachDecisions: conversationStore,
         secrets: { resolve: resolveSecretRef },

@@ -1414,6 +1414,9 @@ describe("coach-dev import --report", () => {
               await Promise.all(paths.map((path) => rm(path)));
               return runtime.importBatchWithReport(batch);
             },
+            importBatchWithPreparation(batch, prepareFile, hooks) {
+              return runtime.importBatchWithPreparation(batch, prepareFile, hooks);
+            },
           };
         },
       };
