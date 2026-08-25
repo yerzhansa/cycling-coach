@@ -51,7 +51,7 @@ import {
   type ModelTransportDecorator,
   type ReferenceStateSnapshot,
 } from "@enduragent/engine";
-import { resolveUserTimezone } from "@enduragent/engine/sport";
+import { resolveUserTimezone, todayInTZ } from "@enduragent/engine/sport";
 import {
   createCyclingFtpAnchorResolver,
   type CyclingFtpAnchorResolver,
@@ -65,8 +65,13 @@ import {
   type AnchorRepository,
 } from "@enduragent/kernel/store";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
-import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { createAuthoredIdentity, type AthleteHome } from "@enduragent/kernel-node/home";
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
+import {
+  createLegacyPlanRepository,
+  createLegacyPlanRowWriter,
+  importLegacyCurrentPlan,
+} from "@enduragent/kernel-node/planning";
 import type { CoachStoreWriterContext } from "./runtime.js";
 import {
   type CoachEngine,
@@ -765,6 +770,25 @@ export async function createLocalCoachComposition(
     throw new TypeError("Ready engine configuration does not match the selected athlete home.");
   }
   const now = dependencies.now ?? Date.now;
+  const logger = createSubsystemLogger("agent", input.home.root);
+  const planningIdentity = createAuthoredIdentity(input.home.configDir, { now });
+  const planningRepository = createLegacyPlanRepository(input.context.store);
+  const planningTimezone = resolveUserTimezone(input.config.session.timezone);
+  const planningDateKey = (): number => Number(todayInTZ(planningTimezone).replaceAll("-", ""));
+  await importLegacyCurrentPlan({
+    home: input.home,
+    store: input.context.store,
+    identity: planningIdentity,
+    importDateKey: planningDateKey(),
+    importTimestampMs: now(),
+    logger: { warn: () => logger.warn("legacy_plan_import_skipped") },
+  });
+  const persistPlan = await createLegacyPlanRowWriter({
+    repository: planningRepository,
+    identity: planningIdentity,
+    fallbackDateKey: planningDateKey,
+    now,
+  });
   const ownerClock = { now, monotonicNow: () => performance.now() };
   const intervalsCredentialApprovals = createIntervalsCredentialApprovalStore({ now });
   let intervalsConfigRevision = 0;
@@ -926,7 +950,6 @@ export async function createLocalCoachComposition(
         schedulerStarted = true;
       }
     }
-    const logger = createSubsystemLogger("agent", input.home.root);
     const getAccessToken = createAccessTokenReader(input.home.configDir);
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
       input.context.store,
@@ -957,7 +980,10 @@ export async function createLocalCoachComposition(
               ...config,
               session: { ...config.session, timezone },
             };
-      const memory = new Memory(input.home.root, timezone, { platform: dependencies.platform });
+      const memory = new Memory(input.home.root, timezone, {
+        platform: dependencies.platform,
+        persistPlan,
+      });
       const conversationStore = createConversationStore(
         input.home.root,
         config.session.resetArchiveRetentionDays,
