@@ -819,8 +819,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly partialWhiteSpace: string | null;
       readonly partialSourcePreserved: boolean;
       readonly streamingInputEnabled: boolean;
-      readonly streamingSendEnabled: boolean;
-      readonly streamingQuickActionsEnabled: boolean;
+      readonly streamingStopEnabled: boolean;
+      readonly quickActionsAbsent: boolean;
       readonly streamingEnterHandled: boolean;
       readonly streamingDraftCleared: boolean;
       readonly streamingQueued: readonly string[];
@@ -900,8 +900,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       });
       textarea.value = "What should I ride?";
       textarea.closest("form").requestSubmit();
-      const submit = textarea.closest("form").querySelector('button[type="submit"]');
-      const quickActions = [...document.querySelectorAll(".coaching-shortcut")];
       const streamingDeadline = Date.now() + 5000;
       while (
         document.querySelector(".conversation").dataset.chatStatus !== "streaming" &&
@@ -913,8 +911,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
       textarea.focus();
       const streamingInputEnabled = !textarea.disabled;
-      const streamingSendEnabled = !submit.disabled;
-      const streamingQuickActionsEnabled = quickActions.every((button) => !button.disabled);
+      const stop = document.querySelector('[aria-label="Stop responding"]');
+      const streamingStopEnabled = stop !== null && !stop.disabled;
+      const quickActionsAbsent = document.querySelector(".coaching-shortcuts") === null;
       const streamingEnter = new KeyboardEvent("keydown", {
         key: "Enter",
         bubbles: true,
@@ -949,7 +948,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       }
       await new Promise((resolve) => setTimeout(resolve, 0));
       observer.disconnect();
-      const settledSendEnabled = !submit.disabled;
+      const settledSend = textarea.closest("form").querySelector('button[type="submit"]');
+      const settledSendEnabled = settledSend !== null && !settledSend.disabled;
       const settledDraftPreserved = textarea.value === "How should I recover?";
       const settledFocusPreserved = document.activeElement === textarea;
       const partial = observed.find(
@@ -994,8 +994,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         partialWhiteSpace,
         partialSourcePreserved,
         streamingInputEnabled,
-        streamingSendEnabled,
-        streamingQuickActionsEnabled,
+        streamingStopEnabled,
+        quickActionsAbsent,
         streamingEnterHandled,
         streamingDraftCleared,
         streamingQueued,
@@ -1078,8 +1078,8 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       partialWhiteSpace: "pre-wrap",
       partialSourcePreserved: true,
       streamingInputEnabled: true,
-      streamingSendEnabled: true,
-      streamingQuickActionsEnabled: true,
+      streamingStopEnabled: true,
+      quickActionsAbsent: true,
       streamingEnterHandled: true,
       streamingDraftCleared: true,
       streamingQueued: ["How should I recover?"],
@@ -1113,58 +1113,24 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         params: { chatId: "desktop" },
       },
     ]);
-    const quickActions = await fixture.evaluate<{
-      readonly groupLabel: string | null;
-      readonly labels: readonly string[];
-      readonly commands: readonly string[];
-      readonly terminalResponses: number;
-      readonly keyboardActivationDetail: number | null;
-      readonly keyboardShortcutResidentAfterTerminal: boolean;
-      readonly keyboardShortcutFocusedAfterTerminal: boolean;
+    const readingRoom = await fixture.evaluate<{
+      readonly heading: string | null;
+      readonly quickActionsAbsent: boolean;
+      readonly contextVisibleBefore: boolean;
+      readonly contextVisibleAfter: boolean;
       readonly draft: string;
       readonly documentOverflow: boolean;
       readonly composerHeight: number;
       readonly composerOpaque: boolean;
-      readonly composerClearanceTracksHeight: boolean;
       readonly finalTranscriptClearsComposer: boolean;
     }>(`
-      const group = document.querySelector(".coaching-shortcuts");
-      const buttons = [...group.querySelectorAll(".coaching-shortcut")];
-      const keyboardShortcut = buttons.at(-1);
       const textarea = document.querySelector("#message");
       textarea.value = "  keep draft\\n";
-      let terminalResponses = 0;
-      let keyboardActivationDetail = null;
-      let keyboardShortcutResidentAfterTerminal = false;
-      let keyboardShortcutFocusedAfterTerminal = false;
-      keyboardShortcut.addEventListener("click", (event) => {
-        keyboardActivationDetail = event.detail;
-      }, { once: true });
-      for (const button of buttons) {
-        const readyDeadline = Date.now() + 5000;
-        while (button.disabled && Date.now() < readyDeadline) {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-        }
-        const coachCount = document.querySelectorAll(".chat-message--coach").length;
-        if (button === keyboardShortcut) button.focus();
-        button.click();
-        const terminalDeadline = Date.now() + 5000;
-        while (Date.now() < terminalDeadline) {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          const coaches = [...document.querySelectorAll(".chat-message--coach")];
-          const latest = coaches.at(-1);
-          if (coaches.length === coachCount + 1 && latest && !latest.hasAttribute("aria-busy")) {
-            terminalResponses += 1;
-            if (button === keyboardShortcut) {
-              keyboardShortcutResidentAfterTerminal =
-                [...group.querySelectorAll(".coaching-shortcut")].at(-1) === keyboardShortcut;
-              keyboardShortcutFocusedAfterTerminal = document.activeElement === keyboardShortcut;
-            }
-            break;
-          }
-        }
-      }
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const contextVisibleBefore = document.querySelector(".training-context") !== null;
+      document.querySelector('[aria-label="Hide training context"]')?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const contextVisibleAfter = document.querySelector(".training-context") !== null;
       const conversation = document.querySelector(".conversation");
       const composer = document.querySelector(".composer-wrap");
       conversation.scrollTop = conversation.scrollHeight;
@@ -1172,49 +1138,39 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       const finalTranscriptItem = [...document.querySelectorAll(".chat-message, .chat-notice, .chat-retry")]
         .filter((node) => !node.hidden)
         .at(-1);
-      const reservedBottom = Number.parseFloat(getComputedStyle(conversation).paddingBottom);
       return {
-        groupLabel: group.getAttribute("aria-label"),
-        labels: buttons.map((button) => button.querySelector(".coaching-shortcut__label")?.textContent ?? ""),
-        commands: buttons.map((button) => button.querySelector(".coaching-shortcut__command")?.textContent ?? ""),
-        terminalResponses,
-        keyboardActivationDetail,
-        keyboardShortcutResidentAfterTerminal,
-        keyboardShortcutFocusedAfterTerminal,
+        heading: document.querySelector(".chat-surface h1")?.textContent ?? null,
+        quickActionsAbsent: document.querySelector(".coaching-shortcuts") === null,
+        contextVisibleBefore,
+        contextVisibleAfter,
         draft: textarea.value,
         documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         composerHeight: composerRect.height,
         composerOpaque: getComputedStyle(composer).backgroundColor !== "rgba(0, 0, 0, 0)",
-        composerClearanceTracksHeight: Math.abs(reservedBottom - composerRect.height) < 1,
         finalTranscriptClearsComposer:
           finalTranscriptItem.getBoundingClientRect().bottom <= composerRect.top + 1,
       };
     `);
-    expect(quickActions).toEqual({
-      groupLabel: "Coaching shortcuts",
-      labels: ["Build a plan", "Today’s workout", "Training status", "Review last session"],
-      commands: ["/plan", "/workout", "/status", "/review"],
-      terminalResponses: 4,
-      keyboardActivationDetail: 0,
-      keyboardShortcutResidentAfterTerminal: true,
-      keyboardShortcutFocusedAfterTerminal: true,
+    expect(readingRoom).toEqual({
+      heading: "Chat",
+      quickActionsAbsent: true,
+      contextVisibleBefore: true,
+      contextVisibleAfter: false,
       draft: "  keep draft\n",
       documentOverflow: false,
       composerHeight: expect.any(Number),
       composerOpaque: true,
-      composerClearanceTracksHeight: true,
       finalTranscriptClearsComposer: true,
     });
-    expect(quickActions.composerHeight).toBeGreaterThan(0);
+    expect(readingRoom.composerHeight).toBeGreaterThan(0);
     await fixture.setViewport(720, 800);
     const compact = await fixture.evaluate<{
       readonly documentOverflow: boolean;
       readonly tableScrollsLocally: boolean;
       readonly codeScrollsLocally: boolean;
-      readonly shortcutsWrapped: boolean;
+      readonly contextDrawerOpened: boolean;
       readonly composerOpaque: boolean;
       readonly composerHeight: number;
-      readonly composerClearanceTracksHeight: boolean;
       readonly finalTranscriptClearsComposer: boolean;
     }>(`
         await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -1222,22 +1178,23 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         const codeBlock = document.querySelector(".chat-message--coach pre");
         const conversation = document.querySelector(".conversation");
         const composer = document.querySelector(".composer-wrap");
-        const shortcutGroup = document.querySelector(".coaching-shortcuts");
-        const firstShortcut = shortcutGroup.querySelector(".coaching-shortcut");
+        document.querySelector('[aria-label="Show training context"]')?.click();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const contextDrawerOpened = document.querySelector('[data-slot="dialog-content"] .training-context') !== null;
+        document.querySelector('[data-slot="dialog-close"]')?.click();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
         conversation.scrollTop = conversation.scrollHeight;
         const composerRect = composer.getBoundingClientRect();
         const finalTranscriptItem = [...document.querySelectorAll(".chat-message, .chat-notice, .chat-retry")]
           .filter((node) => !node.hidden)
           .at(-1);
-        const reservedBottom = Number.parseFloat(getComputedStyle(conversation).paddingBottom);
         return {
           documentOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
           tableScrollsLocally: tableScroll.scrollWidth > tableScroll.clientWidth && getComputedStyle(tableScroll).overflowX === "auto",
           codeScrollsLocally: codeBlock.scrollWidth > codeBlock.clientWidth && getComputedStyle(codeBlock).overflowX === "auto",
-          shortcutsWrapped: shortcutGroup.getBoundingClientRect().height > firstShortcut.getBoundingClientRect().height,
+          contextDrawerOpened,
           composerOpaque: getComputedStyle(composer).backgroundColor !== "rgba(0, 0, 0, 0)",
           composerHeight: composerRect.height,
-          composerClearanceTracksHeight: Math.abs(reservedBottom - composerRect.height) < 1,
           finalTranscriptClearsComposer:
             finalTranscriptItem.getBoundingClientRect().bottom <= composerRect.top + 1,
         };
@@ -1246,13 +1203,12 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       documentOverflow: false,
       tableScrollsLocally: true,
       codeScrollsLocally: true,
-      shortcutsWrapped: true,
+      contextDrawerOpened: true,
       composerOpaque: true,
       composerHeight: expect.any(Number),
-      composerClearanceTracksHeight: true,
       finalTranscriptClearsComposer: true,
     });
-    expect(compact.composerHeight).toBeGreaterThan(quickActions.composerHeight);
+    expect(compact.composerHeight).toBeGreaterThan(0);
     const reset = await fixture.evaluate<{
       readonly enabledBefore: boolean;
       readonly dialogOpen: boolean;
@@ -1631,26 +1587,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         jsonrpc: "2.0",
         method: "chat",
         params: { chatId: "desktop", message: "What should I ride?" },
-      },
-      {
-        jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "/plan" },
-      },
-      {
-        jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "/workout" },
-      },
-      {
-        jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "/status" },
-      },
-      {
-        jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "/review" },
       },
     ]);
     expect(calls.filter((call) => call.method === "setUnitsPreference")).toEqual([
