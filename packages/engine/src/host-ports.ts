@@ -316,6 +316,11 @@ export interface LoggerPort {
   error(event: string, error?: unknown, fields?: LoggerFields): void;
 }
 
+/** Host-owned durable projection written after the legacy Plan file succeeds. */
+export interface PlanPersistencePort {
+  save(plan: Readonly<Record<string, unknown>>): Promise<void>;
+}
+
 export type CallerRole = "chat" | "flush" | "compact" | "sync-triage" | "dream";
 
 export interface UsageCost {
@@ -397,6 +402,7 @@ export interface ReferenceStateSnapshot {
 export interface EngineHostPorts {
   readonly config: EngineConfig;
   readonly memory: MemoryStorePort;
+  readonly planPersistence?: PlanPersistencePort;
   readonly chatStore: ChatStorePort;
   readonly transcriptWriter: TranscriptWriterPort;
   readonly coachDecisions?: CoachDecisionStorePort;

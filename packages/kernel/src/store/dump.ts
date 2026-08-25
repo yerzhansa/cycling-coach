@@ -40,6 +40,8 @@ export const DUMP_TABLES = [
   { table: "lap", orderBy: "lap_key" },
   { table: "mean_max_cache", orderBy: "mmax_key" },
   { table: "metric_snapshot", orderBy: "snapshot_key" },
+  { table: "plan", orderBy: "id" },
+  { table: "plan_workout", orderBy: "id" },
   { table: "planned_workout", orderBy: "id" },
   { table: "pool_size_correction_overlay", orderBy: "id" },
   { table: "race_goal", orderBy: "id" },

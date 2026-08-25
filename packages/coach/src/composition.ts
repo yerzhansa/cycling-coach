@@ -65,7 +65,7 @@ import {
   type AnchorRepository,
 } from "@enduragent/kernel/store";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
-import type { AthleteHome } from "@enduragent/kernel-node/home";
+import { createAuthoredIdentity, type AthleteHome } from "@enduragent/kernel-node/home";
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import type { CoachStoreWriterContext } from "./runtime.js";
 import {
@@ -145,6 +145,7 @@ import {
 } from "./activity-power-heart-rate.js";
 import { createTrainingExportService } from "./training-export.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
+import { createPlanStorageService } from "./plan-storage.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -945,6 +946,18 @@ export async function createLocalCoachComposition(
       }
     }
     const logger = createSubsystemLogger("agent", input.home.root);
+    const planIdentity = createAuthoredIdentity(input.home.configDir, { now });
+    const createPlanPersistence = (timezone: string) =>
+      createPlanStorageService({
+        store: input.context.store,
+        identity: planIdentity,
+        timezone,
+        now,
+        logger,
+      });
+    await createPlanPersistence(resolveUserTimezone(approvedConfig().session.timezone)).importLegacyPlan(
+      join(input.home.root, "plans", "current-plan.json"),
+    );
     const getAccessToken = createAccessTokenReader(input.home.configDir);
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
       input.context.store,
@@ -993,6 +1006,7 @@ export async function createLocalCoachComposition(
       const ports: EngineHostPorts = {
         config: projectedConfig,
         memory,
+        planPersistence: createPlanPersistence(timezone),
         chatStore: conversationStore,
         transcriptWriter: conversationStore,
         coachDecisions: conversationStore,
