@@ -340,6 +340,7 @@ export function createCredentialSettingsController(input: {
   let generation = 0;
   let disposed = false;
   let operation: Promise<void> | undefined;
+  let activeResetOperation: symbol | undefined;
   let reconnectRequired = false;
   let failedClient: CoachClient | undefined;
 
@@ -574,6 +575,8 @@ export function createCredentialSettingsController(input: {
     if (content === null || content.confirmation !== "all") return Promise.resolve();
     const releaseMutation = input.beginMutation();
     if (releaseMutation === null) return Promise.resolve();
+    const resetOperation = Symbol();
+    activeResetOperation = resetOperation;
     const operationGeneration = ++generation;
     render({
       status: "deleting",
@@ -624,7 +627,7 @@ export function createCredentialSettingsController(input: {
         });
         return;
       }
-      if (disposed || generation !== operationGeneration) return;
+      if (disposed || activeResetOperation !== resetOperation) return;
       releaseMutation();
       if (result.status === "refused") {
         render({
@@ -658,6 +661,7 @@ export function createCredentialSettingsController(input: {
       });
     })().finally(() => {
       releaseMutation();
+      if (activeResetOperation === resetOperation) activeResetOperation = undefined;
       if (operation === pending) operation = undefined;
     });
     operation = pending;
@@ -891,6 +895,7 @@ export function createCredentialSettingsController(input: {
       disposed = true;
       ++generation;
       operation = undefined;
+      activeResetOperation = undefined;
       currentState = { status: "closed" };
       input.view.dispose();
     },

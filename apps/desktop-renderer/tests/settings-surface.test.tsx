@@ -3,6 +3,7 @@ import type { RuntimeConfigSnapshot, SpendSummary } from "@enduragent/coach-cont
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Shell } from "../src/app/Shell.js";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
 import type {
   CredentialDeleteResult,
@@ -24,7 +25,10 @@ import {
   type OnboardingController,
 } from "../src/onboarding/controller.js";
 import { createAthleteSettingsController } from "../src/settings/athlete-controller.js";
-import { createCredentialSettingsController } from "../src/settings/credential-controller.js";
+import {
+  credentialChangesBlocked,
+  createCredentialSettingsController,
+} from "../src/settings/credential-controller.js";
 import { createProviderModelSettingsController } from "../src/settings/provider-model-controller.js";
 import { createSessionSettingsController } from "../src/settings/session-controller.js";
 import {
@@ -429,6 +433,7 @@ function createHarness(options: HarnessOptions = {}) {
     loadTelegramStatus,
     scheduleTelegramPoll,
     cancelTelegramPoll,
+    credentialController,
     telegramController,
     spendController,
     startUpdate: () => updateController.start(),
@@ -893,6 +898,120 @@ describe("conversation settings", () => {
 });
 
 describe("settings lifecycle", () => {
+  it("unlocks fresh credential setup after a successful reset unmounts Settings", async () => {
+    const user = userEvent.setup();
+    const resetContinuation = deferred<void>();
+    const configuredStatuses = [
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ] as const;
+    let resetCompleted = false;
+    const loadCredentialStatuses = vi.fn(async () => (resetCompleted ? [] : configuredStatuses));
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.credentialStatuses.mockImplementation(loadCredentialStatuses);
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    bridge.llmConfiguration.mockImplementation(async () => llmConfiguration());
+    bridge.getSetupStatus = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      intake: {
+        swim_skill_floor: null,
+        continuous_distance_capable: null,
+        open_water_comfort: null,
+        prior_bsi: false,
+        clinician_cleared: null,
+        injury_status: "none" as const,
+      },
+      durableTrainingData: true,
+    }));
+    const onboardingView = createOnboardingViewAdapter({
+      publish: (next) => useEnduragentStore.getState().setOnboarding(next),
+    });
+    const onboarding = createOnboardingController({
+      bridge,
+      credentials: credentialDrafts,
+      view: onboardingView.view,
+      focusOpener: vi.fn(),
+      onComplete: vi.fn(),
+      credentialMutationsBlocked: () =>
+        credentialChangesBlocked(useEnduragentStore.getState().settings.credentials, false),
+    });
+    useEnduragentStore.getState().bindOnboardingActions(onboarding);
+
+    try {
+      await act(async () => onboarding.open());
+      expect(setupReady(useEnduragentStore.getState())).toBe(true);
+      harness = createHarness({
+        runtime: () =>
+          snapshot({
+            llm: {
+              provider: "anthropic",
+              model: "synthetic-model",
+              credential_configured: !resetCompleted,
+            },
+            intervals: {
+              athlete_id: "i1",
+              credential_configured: !resetCompleted,
+              managedByEnvironment: { athleteId: false },
+            },
+          }),
+        loadCredentialStatuses,
+        credentialRecoveryStatus: async () => ({
+          state: "ready",
+          unverifiedEnvelopes: resetCompleted ? 0 : 1,
+        }),
+        resetAllCredentials: async () => {
+          resetCompleted = true;
+          return { status: "reset", keyCleanupPending: false };
+        },
+        onDeleted: async () => {
+          await onboarding.refresh();
+          await resetContinuation.promise;
+        },
+      });
+      render(<Shell onReady={() => {}} />);
+      await screen.findByRole("button", { name: "Save coach route" });
+
+      await user.click(screen.getByRole("button", { name: "Remove all credentials" }));
+      const confirmation = screen.getByRole("group", { name: "Remove all credentials?" });
+      await user.click(
+        within(confirmation).getByRole("button", { name: "Remove all credentials" }),
+      );
+
+      await waitFor(() => {
+        expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
+        expect(useEnduragentStore.getState().onboarding.completionRequired).toBe(true);
+        expect(harness?.credentialController.state()).toEqual({
+          status: "closed",
+          resetUncertain: true,
+        });
+      });
+      expect(
+        credentialChangesBlocked(useEnduragentStore.getState().settings.credentials, false),
+      ).toBe(true);
+      const aiSetup = document.querySelector<HTMLButtonElement>('[data-setup-trigger="ai"]');
+      expect(aiSetup).toBeDisabled();
+
+      act(() => resetContinuation.resolve(undefined));
+
+      await waitFor(() => {
+        expect(
+          credentialChangesBlocked(useEnduragentStore.getState().settings.credentials, false),
+        ).toBe(false);
+        expect(harness?.credentialController.state()).toMatchObject({ status: "deleted" });
+        expect(harness?.credentialController.state().resetUncertain).toBeUndefined();
+        expect(aiSetup).toBeEnabled();
+      });
+      expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
+      await user.click(aiSetup!);
+      await waitFor(() => expect(document.querySelector('[data-setup-menu="ai"]')).not.toBeNull());
+    } finally {
+      resetContinuation.resolve(undefined);
+      onboarding.dispose();
+      onboardingView.dispose();
+      useEnduragentStore.getState().bindOnboardingActions(null);
+    }
+  });
+
   it("keeps the resident Telegram controller active when Settings unmounts and remounts", async () => {
     harness = createHarness();
     const view = render(<SettingsView />);
