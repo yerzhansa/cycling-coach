@@ -1040,10 +1040,11 @@ describe("RPC receive and observers", () => {
       llm: { provider: "anthropic", model: "synthetic-model" },
     });
     expect(received.map((value) => (value as { id: number }).id)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
     ]);
     expect(received.map((value) => (value as { method: string }).method)).toEqual([
       "chat",
+      "stopChat",
       "resetSession",
       "hasSession",
       "getTranscriptPage",
@@ -1065,7 +1066,7 @@ describe("RPC receive and observers", () => {
       value: "imperial",
       source: "cycling",
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([14, 15]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([15, 16]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getUnitsPreference",
       "setUnitsPreference",
@@ -1139,7 +1140,7 @@ describe("RPC receive and observers", () => {
     await expect(client.call("setDailySpendCap", { dailyCapUsd: 0.75 })).resolves.toMatchObject({
       dailyCapUsd: 0.75,
     });
-    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([34, 35]);
+    expect(received.slice(-2).map((value) => (value as { id: number }).id)).toEqual([35, 36]);
     expect(received.slice(-2).map((value) => (value as { method: string }).method)).toEqual([
       "getSpendSummary",
       "setDailySpendCap",
@@ -1148,7 +1149,7 @@ describe("RPC receive and observers", () => {
       client.call("verify_intervals_credential", { api_key: "placeholder" }),
     ).resolves.toEqual({ approval: "a".repeat(64) });
     expect(received.at(-1)).toMatchObject({
-      id: 36,
+      id: 37,
       method: "verify_intervals_credential",
       params: { api_key: "placeholder" },
     });

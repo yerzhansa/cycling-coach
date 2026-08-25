@@ -39,7 +39,7 @@ describe("createCoachEngine", () => {
 
   afterEach(() => rmSync(dataDir, { recursive: true, force: true }));
 
-  it("returns the four-method contract and delegates state and chat behavior", async () => {
+  it("returns the canonical contract and delegates state and chat behavior", async () => {
     dataDir = mkdtempSync(join(tmpdir(), "engine-contract-"));
     const decorator: ModelTransportDecorator = () => ({
       generate: async () => ({
@@ -71,6 +71,7 @@ describe("createCoachEngine", () => {
       "getAthleteState",
       "hasSession",
       "resetSession",
+      "stopChat",
     ]);
     await expect(engine.hasSession({ chatId: "c1" })).resolves.toEqual({ hasSession: false });
     await expect(engine.chat({ chatId: "c1", message: "hello" })).resolves.toEqual({
