@@ -30,6 +30,7 @@ export interface CoachSettingsPort {
 export interface CredentialSettingsPort {
   retry(): void;
   requestDelete(credential: DesktopCredentialId): void;
+  requestReset?(): void;
   cancelDelete(): void;
   confirmDelete(): void;
   setupOpened(): void;
@@ -206,14 +207,22 @@ export const createSettingsSlice: StateCreator<EnduragentState, [], [], Settings
   },
   closeSettingsPanes() {
     get().settingsPorts?.panes.close();
-    const repairCredential = repairRequiredCredential(get().settings.credentials);
+    const credentials = get().settings.credentials;
+    const repairCredential = repairRequiredCredential(credentials);
+    const resetUncertain = credentials.resetUncertain === true;
     if (repairCredential !== null) get().onboardingActions?.requireCompletion();
     set({
       settings: {
         ...get().settings,
         coach: CLOSED_PANE,
         credentials:
-          repairCredential === null ? CLOSED_PANE : { status: "closed", repairCredential },
+          repairCredential === null && !resetUncertain
+            ? CLOSED_PANE
+            : {
+                status: "closed",
+                ...(repairCredential === null ? {} : { repairCredential }),
+                ...(resetUncertain ? { resetUncertain: true } : {}),
+              },
         athlete: CLOSED_PANE,
         conversation: CLOSED_PANE,
       },

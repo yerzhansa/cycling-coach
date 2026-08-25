@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buttonVariants } from "../src/components/ui/button.js";
@@ -8,6 +8,7 @@ import type {
   TelegramControlStatus,
   TelegramSettingsState,
 } from "../src/settings/telegram-controller.js";
+import type { CredentialSettingsState } from "../src/settings/credential-controller.js";
 import { EMPTY_SETTINGS_SURFACE, type TelegramSettingsPort } from "../src/state/settings-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { TelegramSection } from "../src/ui/settings/TelegramSection.js";
@@ -38,7 +39,10 @@ function readyState(
   };
 }
 
-function setup(next: TelegramSettingsState) {
+function setup(
+  next: TelegramSettingsState,
+  credentials: CredentialSettingsState = EMPTY_SETTINGS_SURFACE.credentials,
+) {
   const port = {
     retry: vi.fn(),
     pasteToken: vi.fn(),
@@ -54,7 +58,7 @@ function setup(next: TelegramSettingsState) {
     removeSender: vi.fn(),
   } satisfies TelegramSettingsPort;
   useEnduragentStore.setState({
-    settings: { ...EMPTY_SETTINGS_SURFACE, telegram: next },
+    settings: { ...EMPTY_SETTINGS_SURFACE, credentials, telegram: next },
     settingsPorts: { telegram: port } as never,
   });
   render(<TelegramSection />);
@@ -76,6 +80,85 @@ afterEach(() => {
 });
 
 describe("Telegram settings surface", () => {
+  it("disables token storage and connection deletion during credential recovery", async () => {
+    const user = userEvent.setup();
+    const recovery = {
+      status: "ready",
+      entries: [],
+      providerStatuses: [],
+      confirmation: null,
+      announcement: "Unlock your login Keychain outside Enduragent, then Retry.",
+      recovery: { state: "locked" },
+      repairCredential: null,
+      recoveryAvailable: false,
+      focus: null,
+    } as const satisfies CredentialSettingsState;
+    const port = setup(readyState(status()), recovery);
+
+    const paste = screen.getByRole("button", { name: "Paste token from clipboard" });
+    expect(paste).toBeDisabled();
+    await user.click(paste);
+    expect(port.pasteToken).not.toHaveBeenCalled();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          telegram: readyState(
+            status({
+              bot: { state: "ready", username: "desktop_coach_bot" },
+              credentialConfigured: true,
+            }),
+          ),
+        },
+      });
+    });
+
+    const remove = screen.getByRole("button", { name: "Delete" });
+    expect(remove).toBeDisabled();
+    await user.click(remove);
+    expect(port.remove).not.toHaveBeenCalled();
+  });
+
+  it("disables an open Telegram deletion confirmation when recovery becomes blocked", async () => {
+    const user = userEvent.setup();
+    const port = setup(
+      readyState(
+        status({
+          bot: { state: "ready", username: "desktop_coach_bot" },
+          credentialConfigured: true,
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    const confirm = screen.getByRole("button", { name: "Delete connection" });
+    expect(confirm).toBeEnabled();
+
+    act(() => {
+      useEnduragentStore.setState({
+        settings: {
+          ...useEnduragentStore.getState().settings,
+          credentials: {
+            status: "ready",
+            entries: [],
+            providerStatuses: [],
+            confirmation: null,
+            announcement: "Secure credential storage is unavailable.",
+            recovery: { state: "unavailable" },
+            repairCredential: null,
+            recoveryAvailable: false,
+            focus: null,
+          },
+        },
+      });
+    });
+
+    expect(confirm).toBeDisabled();
+    await user.click(confirm);
+    expect(port.remove).not.toHaveBeenCalled();
+  });
+
   it("explains the dedicated-bot boundary and accepts a token only from the clipboard", async () => {
     const user = userEvent.setup();
     const port = setup(readyState(status()));
@@ -333,6 +416,58 @@ describe("Telegram settings surface", () => {
     expect(port.addSender).toHaveBeenCalledWith(303);
   });
 
+  it("blocks allowed-user changes while credential reset is uncertain", async () => {
+    const user = userEvent.setup();
+    const connected = status({
+      channel: { desiredState: "enabled", state: "online" },
+      bot: { state: "ready", username: "desktop_coach_bot" },
+      pairing: { state: "paired" },
+      credentialConfigured: true,
+    });
+    const port = setup(
+      readyState(connected, {
+        senders: [
+          { senderId: 101, role: "primary" },
+          { senderId: 202, role: "additional" },
+        ],
+      }),
+    );
+
+    await user.click(screen.getByText("Advanced · allowed users"));
+    const senderId = screen.getByLabelText("Add a Telegram user ID");
+    await user.type(senderId, "303");
+    const removeSender = screen.getByRole("button", { name: "Remove Telegram user 202" });
+    await user.click(removeSender);
+    const confirmation = screen.getByRole("group", { name: "Remove Telegram user 202?" });
+
+    act(() => {
+      useEnduragentStore.setState((current) => ({
+        settings: {
+          ...current.settings,
+          credentials: {
+            status: "error",
+            kind: "load",
+            announcement: "Credential removal could not be verified.",
+            repairCredential: null,
+            resetUncertain: true,
+            recoveryAvailable: true,
+            focus: { target: "feedback" },
+          },
+        },
+      }));
+    });
+
+    expect(senderId).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add user" })).toBeDisabled();
+    expect(removeSender).toBeDisabled();
+    const confirm = within(confirmation).getByRole("button", { name: "Remove user" });
+    expect(confirm).toBeDisabled();
+    fireEvent.submit(senderId.closest("form")!);
+    await user.click(confirm);
+    expect(port.addSender).not.toHaveBeenCalled();
+    expect(port.removeSender).not.toHaveBeenCalled();
+  });
+
   it("truthfully explains automatic recovery when paired-user loading fails", async () => {
     const user = userEvent.setup();
     setup({
@@ -377,7 +512,7 @@ describe("Telegram settings surface", () => {
   it.each([
     [
       "telegram-credential-encryption-unavailable" as const,
-      /quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again/iu,
+      /quit and reopen Enduragent, unlock your login keychain, then choose Check again/iu,
       /without encryption/iu,
     ],
     [
@@ -509,7 +644,7 @@ describe("Telegram settings surface", () => {
   it.each([
     [
       "telegram-credential-encryption-unavailable" as const,
-      /quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again/iu,
+      /quit and reopen Enduragent, unlock your login keychain, then choose Check again/iu,
     ],
     [
       "telegram-credential-unsafe-backend" as const,

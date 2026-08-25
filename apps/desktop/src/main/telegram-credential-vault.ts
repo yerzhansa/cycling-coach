@@ -19,6 +19,11 @@ import {
   type WindowsPrivateDirectoryBinding,
 } from "@enduragent/core";
 import type { CredentialEncryptionPort } from "./credential-vault.js";
+import type {
+  CredentialEnvelopeLockProof,
+  SerializeCredentialEnvelopeMutation,
+} from "./credential-envelope-lock.js";
+import { classifyCredentialEnvelopeRemoval } from "./credential-envelope-inspection.js";
 import {
   durablyReplaceReversible,
   type ReversibleDurableReplaceOutcome,
@@ -112,6 +117,19 @@ export type TelegramProfileDeleteResult =
     }>
   | Readonly<{ outcome: "uncertain"; reason: "storage-uncertain" }>;
 
+export type TelegramProfileRemovalAuthorizationResult =
+  | Readonly<{ outcome: "authorized" }>
+  | Readonly<{
+      outcome: "refused";
+      reason:
+        | "not-found"
+        | "wrong-home"
+        | "encryption-unavailable"
+        | "unsafe-backend"
+        | "storage-failed";
+    }>
+  | Readonly<{ outcome: "uncertain"; reason: "storage-uncertain" }>;
+
 export type TelegramDesiredState =
   | Readonly<{ state: "configured"; enabled: boolean }>
   | Readonly<{ state: "missing" | "re-prompt" | "wrong-home" | "uncertain"; enabled: false }>;
@@ -132,6 +150,7 @@ export interface TelegramCredentialVault {
     authenticatedAthleteHome: AthleteHomeIdentity,
     applyProfile: (profile: TelegramProfileRecord) => Promise<void>,
   ): Promise<TelegramProfileApplyResult>;
+  preauthorizeProfileRemoval(): Promise<TelegramProfileRemovalAuthorizationResult>;
   deleteProfile(): Promise<TelegramProfileDeleteResult>;
   desiredState(): Promise<TelegramDesiredState>;
   setDesiredState(enabled: boolean): Promise<TelegramDesiredStateWriteResult>;
@@ -148,6 +167,10 @@ export interface TelegramCredentialVaultOptions {
   readonly syncDirectory?: (root: string) => Promise<void>;
   readonly syncParentDirectory?: (root: string) => Promise<void>;
   readonly observeSecureStorageFailure?: TelegramSecureStorageObserver;
+  readonly serializeEnvelopeMutation?: SerializeCredentialEnvelopeMutation;
+  readonly prepareEnvelopeWrite?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
+  readonly revalidateEnvelopeRemoval?: (proof: CredentialEnvelopeLockProof) => Promise<boolean>;
+  readonly observeEnvelopeRemoved?: (proof: CredentialEnvelopeLockProof) => Promise<void>;
   readonly platform?: NodeJS.Platform;
   readonly openFile?: typeof open;
 }
@@ -371,6 +394,14 @@ async function syncDirectory(root: string): Promise<void> {
 export function createTelegramCredentialVault(
   options: TelegramCredentialVaultOptions,
 ): TelegramCredentialVault {
+  if (
+    options.serializeEnvelopeMutation === undefined &&
+    (options.prepareEnvelopeWrite !== undefined ||
+      options.revalidateEnvelopeRemoval !== undefined ||
+      options.observeEnvelopeRemoved !== undefined)
+  ) {
+    throw new TypeError();
+  }
   if (typeof options.root !== "string" || options.root.length === 0) {
     throw new TypeError("invalid Telegram credential vault root");
   }
@@ -438,6 +469,12 @@ export function createTelegramCredentialVault(
     );
     return result;
   };
+  const envelopeExclusive = <T>(
+    operation: (proof: CredentialEnvelopeLockProof | undefined) => Promise<T>,
+  ): Promise<T> =>
+    options.serializeEnvelopeMutation === undefined
+      ? exclusive(() => operation(undefined))
+      : options.serializeEnvelopeMutation((proof) => exclusive(() => operation(proof)));
 
   const reconcileOwnedTransients = async (forceSync: boolean): Promise<boolean> => {
     const directory = await secureDirectoryState(options.root, platform, bindCredentialDirectory);
@@ -677,8 +714,10 @@ export function createTelegramCredentialVault(
     }
   };
 
-  const removeStoredProfile = async (): Promise<
-    "deleted" | "cleanup-pending" | "retained" | "uncertain"
+  const removeStoredProfile = async (
+    authorizeRename?: () => Promise<boolean>,
+  ): Promise<
+    "deleted" | "cleanup-pending" | "authorization-refused" | "retained" | "uncertain"
   > => {
     if (
       (await secureDirectoryState(options.root, platform, bindCredentialDirectory)) !== "secure"
@@ -695,6 +734,9 @@ export function createTelegramCredentialVault(
     }
     if (!/^[A-Za-z0-9-]{1,128}$/.test(id)) return "retained";
     const tombstone = join(options.root, `.${TELEGRAM_PROFILE_FILE_NAME}.${id}.deleted`);
+    if (authorizeRename !== undefined && !(await authorizeRename())) {
+      return "authorization-refused";
+    }
     try {
       await renameFile(target, tombstone);
       transientArtifactsMayExist = true;
@@ -719,6 +761,66 @@ export function createTelegramCredentialVault(
     } catch {
       return "cleanup-pending";
     }
+  };
+
+  const authorizeProfileRemoval = async (
+    proof: CredentialEnvelopeLockProof | undefined,
+    validateImmediately: boolean,
+  ): Promise<
+    | Readonly<{ outcome: "authorized"; keychainDependent: boolean }>
+    | Exclude<TelegramProfileRemovalAuthorizationResult, { outcome: "authorized" }>
+  > => {
+    if (!(await prepareNamespace())) {
+      return { outcome: "uncertain", reason: "storage-uncertain" };
+    }
+    if (profileUncertain) return { outcome: "uncertain", reason: "storage-uncertain" };
+    const removalState = await classifyCredentialEnvelopeRemoval(
+      {
+        vault: "telegram",
+        root: options.root,
+        fileName: TELEGRAM_PROFILE_FILE_NAME,
+        mode: TELEGRAM_CREDENTIAL_FILE_MODE,
+      },
+      {
+        platform,
+        windowsDirectory,
+        openFile: options.openFile,
+      },
+    );
+    if (removalState === "missing") return { outcome: "refused", reason: "not-found" };
+    if (removalState === "blocked") {
+      return { outcome: "refused", reason: "storage-failed" };
+    }
+    if (removalState === "unverified" && platform === "darwin") {
+      return { outcome: "authorized", keychainDependent: false };
+    }
+    const profile = await readProfile();
+    if (profile.state === "missing") return { outcome: "refused", reason: "not-found" };
+    if (profile.state === "wrong-home") {
+      return { outcome: "refused", reason: "wrong-home" };
+    }
+    if (profile.state === "re-prompt") {
+      if (profile.reason === "encryption-unavailable" || profile.reason === "unsafe-backend") {
+        return { outcome: "refused", reason: profile.reason };
+      }
+      return { outcome: "refused", reason: "storage-failed" };
+    }
+    if (removalState === "unverified") {
+      return { outcome: "authorized", keychainDependent: false };
+    }
+    if (proof === undefined || options.revalidateEnvelopeRemoval === undefined) {
+      return { outcome: "refused", reason: "encryption-unavailable" };
+    }
+    if (validateImmediately) {
+      let removalReady = false;
+      try {
+        removalReady = await options.revalidateEnvelopeRemoval(proof);
+      } catch {}
+      if (!removalReady) {
+        return { outcome: "refused", reason: "encryption-unavailable" };
+      }
+    }
+    return { outcome: "authorized", keychainDependent: true };
   };
 
   return {
@@ -748,7 +850,7 @@ export function createTelegramCredentialVault(
     },
 
     replaceProfile(input): Promise<TelegramProfileReplaceResult> {
-      return exclusive(async () => {
+      return envelopeExclusive(async (proof) => {
         const authenticatedAthleteHome = parseAthleteHome(input?.authenticatedAthleteHome);
         if (authenticatedAthleteHome === undefined || authenticatedAthleteHome !== athleteHome) {
           return { outcome: "refused", reason: "wrong-home" };
@@ -759,9 +861,19 @@ export function createTelegramCredentialVault(
         if (token === undefined || id === undefined || username === undefined) {
           return { outcome: "refused", reason: "invalid-input" };
         }
-        const encryptionFailure = observedEncryptionRefusal();
-        if (encryptionFailure !== undefined) {
-          return { outcome: "refused", reason: encryptionFailure };
+        let initialEncryptionFailure = observedEncryptionRefusal();
+        if (
+          initialEncryptionFailure === "encryption-unavailable" &&
+          proof !== undefined &&
+          options.prepareEnvelopeWrite !== undefined
+        ) {
+          try {
+            await options.prepareEnvelopeWrite(proof);
+          } catch {}
+          initialEncryptionFailure = observedEncryptionRefusal();
+        }
+        if (initialEncryptionFailure !== undefined) {
+          return { outcome: "refused", reason: initialEncryptionFailure };
         }
         if (!(await prepareNamespace())) {
           profileUncertain = true;
@@ -786,6 +898,11 @@ export function createTelegramCredentialVault(
         let plaintext: Buffer | undefined;
         let tokenPlaintext: Buffer | undefined;
         try {
+          if (proof !== undefined) await options.prepareEnvelopeWrite?.(proof);
+          const encryptionFailure = observedEncryptionRefusal();
+          if (encryptionFailure !== undefined) {
+            return { outcome: "refused", reason: encryptionFailure };
+          }
           const serialized = JSON.stringify(profile);
           encrypted = options.encryption.encryptString(serialized);
           if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new TypeError();
@@ -873,26 +990,38 @@ export function createTelegramCredentialVault(
       });
     },
 
+    preauthorizeProfileRemoval(): Promise<TelegramProfileRemovalAuthorizationResult> {
+      return envelopeExclusive(async (proof) => {
+        const authorization = await authorizeProfileRemoval(proof, true);
+        return authorization.outcome === "authorized" ? { outcome: "authorized" } : authorization;
+      });
+    },
+
     deleteProfile(): Promise<TelegramProfileDeleteResult> {
-      return exclusive(async () => {
-        if (!(await prepareNamespace())) {
-          return { outcome: "uncertain", reason: "storage-uncertain" };
-        }
-        if (profileUncertain) return { outcome: "uncertain", reason: "storage-uncertain" };
-        const profile = await readProfile();
-        if (profile.state === "missing") return { outcome: "refused", reason: "not-found" };
-        if (profile.state === "wrong-home") {
-          return { outcome: "refused", reason: "wrong-home" };
-        }
-        if (profile.state === "re-prompt") {
-          if (profile.reason === "encryption-unavailable" || profile.reason === "unsafe-backend") {
-            return { outcome: "refused", reason: profile.reason };
-          }
-          return { outcome: "refused", reason: "storage-failed" };
-        }
-        const removed = await removeStoredProfile();
+      return envelopeExclusive(async (proof) => {
+        const authorization = await authorizeProfileRemoval(proof, false);
+        if (authorization.outcome !== "authorized") return authorization;
+        const removed = await removeStoredProfile(
+          authorization.keychainDependent
+            ? async () => {
+                try {
+                  return await options.revalidateEnvelopeRemoval!(proof!);
+                } catch {
+                  return false;
+                }
+              }
+            : undefined,
+        );
         if (removed === "deleted" || removed === "cleanup-pending") {
+          if (proof !== undefined) {
+            try {
+              await options.observeEnvelopeRemoved?.(proof);
+            } catch {}
+          }
           return { outcome: "applied", cleanupPending: removed === "cleanup-pending" };
+        }
+        if (removed === "authorization-refused") {
+          return { outcome: "refused", reason: "encryption-unavailable" };
         }
         if (removed === "uncertain") profileUncertain = true;
         observeFailure(
