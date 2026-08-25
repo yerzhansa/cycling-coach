@@ -140,6 +140,8 @@ export type {
   TranscriptPageRequest,
   TranscriptPageResult,
   TranscriptPageTurn,
+  TranscriptInterruptedTurnRecord,
+  TranscriptTurnRecord,
 } from "./agent/transcript-store.js";
 export {
   WindowsPrivatePathPolicyError,

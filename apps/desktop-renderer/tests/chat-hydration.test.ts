@@ -121,6 +121,29 @@ describe("chat transcript hydration", () => {
     expect(merged.slice(2)).toEqual(live);
   });
 
+  it("restores an interrupted coach response after relaunch", () => {
+    const interrupted = { ...turn("turn-stopped"), delivery: "interrupted" as const };
+
+    expect(mergeHydratedMessages([interrupted], [])).toEqual([
+      {
+        id: "history:athlete:turn-stopped",
+        turnId: "turn-stopped",
+        role: "athlete",
+        text: "Athlete turn-stopped",
+        delivery: "complete",
+        historical: true,
+      },
+      {
+        id: "history:coach:turn-stopped",
+        turnId: "turn-stopped",
+        role: "coach",
+        text: "Coach turn-stopped",
+        delivery: "interrupted",
+        historical: true,
+      },
+    ]);
+  });
+
   it("clears stale history and restarts from newest once after a reset signal", async () => {
     const recovery = deferred<TranscriptPage>();
     const readPage = vi

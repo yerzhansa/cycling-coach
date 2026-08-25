@@ -66,7 +66,11 @@ export function createChatViewAdapter(input: {
       messages: sameChatMessages(published.messages, messages) ? published.messages : messages,
       queued: sameChatQueued(published.queued, queued) ? published.queued : queued,
       status: state.status,
-      notice: state.activeTurn?.error?.athleteMessage ?? state.progress,
+      notice:
+        state.activeTurn?.error?.athleteMessage ??
+        (state.status === "streaming" ? null : state.progress),
+      coachProgress:
+        state.status === "streaming" && state.activeTurn?.error === null ? state.progress : null,
       interrupted: state.status === "interrupted",
       workBlocked,
       sendDisabled: workBlocked,

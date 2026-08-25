@@ -5,6 +5,7 @@ import type {
   ChatStorePort,
   ConversationResetInput,
   TranscriptCompletedTurnInput,
+  TranscriptInterruptedTurnInput,
   TranscriptWriterPort,
 } from "@enduragent/engine";
 import { archiveAndResetDurably, ChatStore } from "./chat-store.js";
@@ -13,13 +14,13 @@ import {
   TranscriptStore,
   type ArchivedConversationList,
   type ResetIntentRecord,
-  type TranscriptCompletedTurnRecord,
+  type TranscriptTurnRecord,
   type TranscriptPageRequest,
   type TranscriptPageResult,
 } from "./transcript-store.js";
 
 export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPort {
-  readCurrentConversation(chatId: string): TranscriptCompletedTurnRecord[];
+  readCurrentConversation(chatId: string): TranscriptTurnRecord[];
   readCurrentConversationPage(chatId: string, request: TranscriptPageRequest): TranscriptPageResult;
   listArchivedConversations(chatId: string): ArchivedConversationList;
   readArchivedConversationPage(
@@ -111,6 +112,11 @@ export class ConversationStore implements ConversationStorePort {
   appendCompletedTurn(input: TranscriptCompletedTurnInput): void {
     this.recoverBeforeAccess(input.chatId);
     this.transcriptStore.appendCompletedTurn(input);
+  }
+
+  appendInterruptedTurn(input: TranscriptInterruptedTurnInput): void {
+    this.recoverBeforeAccess(input.chatId);
+    this.transcriptStore.appendInterruptedTurn(input);
   }
 
   readCurrentConversation(chatId: string) {

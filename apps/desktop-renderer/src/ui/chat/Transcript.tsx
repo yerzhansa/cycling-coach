@@ -4,7 +4,6 @@ import { cn } from "../../lib/utils.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AthleteMessage } from "./AthleteMessage.js";
 import { CoachMessage } from "./CoachMessage.js";
-import { Notice, RetryBar } from "./Notice.js";
 import { HistoryControls } from "./HistoryControls.js";
 import { StreamingMessage } from "./StreamingMessage.js";
 
@@ -13,10 +12,10 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
   const streaming = message.role === "coach" && message.delivery === "streaming";
   const silent = message.historical || message.role === "athlete";
   const rowClassName = cn(
-    "chat-message grid min-w-0 max-w-[78%] gap-[7px] data-[delivery=interrupted]:text-ink-2",
+    "chat-message grid min-w-0 data-[delivery=interrupted]:text-ink-2",
     message.role === "coach"
-      ? "chat-message--coach justify-self-start text-base leading-[1.6] tracking-[0.002em]"
-      : "chat-message--athlete justify-self-end rounded-card rounded-br-ctl border border-line bg-surface px-4 py-3",
+      ? "chat-message--coach max-w-full justify-self-start text-base leading-6"
+      : "chat-message--athlete max-w-[76%] justify-self-end rounded-card rounded-br-ctl border border-line bg-surface px-4 py-3",
   );
 
   return (
@@ -28,9 +27,9 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
       aria-atomic={message.role === "coach" ? "true" : "false"}
       aria-busy={streaming ? "true" : undefined}
     >
-      <p className="chat-message__role m-0 text-xs leading-[1.2] tracking-[0.04em] text-ink-3 uppercase">
-        {message.role === "athlete" ? "You" : "Coach"}
-      </p>
+      <span className="sr-only">
+        {message.role === "athlete" ? "Your message" : "Coach response"}
+      </span>
       {message.role === "athlete" ? (
         <AthleteMessage text={message.text} />
       ) : streaming ? (
@@ -64,8 +63,6 @@ export function Transcript(): ReactElement {
           </div>
         )}
       </div>
-      <Notice />
-      <RetryBar />
     </section>
   );
 }

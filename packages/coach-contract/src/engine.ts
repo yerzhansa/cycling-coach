@@ -22,20 +22,22 @@ export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 export const ChatResponseSchema = z.object({ text: z.string() }).strict();
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 
+export const StopChatRequestSchema = z.object({ chatId: z.string() }).strict();
+export type StopChatRequest = z.infer<typeof StopChatRequestSchema>;
+
+export const StopChatResponseSchema = z.object({ stopped: z.boolean() }).strict();
+export type StopChatResponse = z.infer<typeof StopChatResponseSchema>;
+
 export const ResetSessionRequestSchema = z.object({ chatId: z.string() }).strict();
 export type ResetSessionRequest = z.infer<typeof ResetSessionRequestSchema>;
 
-export const ResetSessionResponseSchema = z
-  .object({ memoryFlushed: z.boolean() })
-  .strict();
+export const ResetSessionResponseSchema = z.object({ memoryFlushed: z.boolean() }).strict();
 export type ResetSessionResponse = z.infer<typeof ResetSessionResponseSchema>;
 
 export const HasSessionRequestSchema = z.object({ chatId: z.string() }).strict();
 export type HasSessionRequest = z.infer<typeof HasSessionRequestSchema>;
 
-export const HasSessionResponseSchema = z
-  .object({ hasSession: z.boolean() })
-  .strict();
+export const HasSessionResponseSchema = z.object({ hasSession: z.boolean() }).strict();
 export type HasSessionResponse = z.infer<typeof HasSessionResponseSchema>;
 
 /**
@@ -52,6 +54,7 @@ export type HasSessionResponse = z.infer<typeof HasSessionResponseSchema>;
  */
 export interface CoachEngine {
   chat(request: ChatRequest, onEvent?: (event: TurnEvent) => void): Promise<ChatResponse>;
+  stopChat?(request: StopChatRequest): Promise<StopChatResponse>;
   resetSession(request: ResetSessionRequest): Promise<ResetSessionResponse>;
   hasSession(request: HasSessionRequest): Promise<HasSessionResponse>;
   getAthleteState(): Promise<AthleteState>;

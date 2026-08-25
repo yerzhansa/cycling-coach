@@ -196,6 +196,7 @@ export function bootRenderer(): Disposer {
   });
   store.getState().bindChatActions({
     submit: (message) => void chatController.submit(message),
+    stop: () => chatController.stop(),
     removeQueued: (id) => chatController.removeQueued(id),
     retry: () => void chatController.retryInterrupted(),
     loadEarlier: () => void chatController.loadEarlier(),
@@ -419,8 +420,7 @@ export function bootRenderer(): Disposer {
       window.enduragentAuth.getDaemonConnection().then((connection) => connection.generation),
     open: () => onboarding.open(),
     markSettled: () => store.getState().setOnboardingStartupSettled(true),
-    reportSettled: (generation) =>
-      window.enduragentAuth.initialSetupStatusSettled({ generation }),
+    reportSettled: (generation) => window.enduragentAuth.initialSetupStatusSettled({ generation }),
     reportFailure: () => console.error("desktop-initial-setup-settled-report-failure"),
   });
   void clients.getClient().then(

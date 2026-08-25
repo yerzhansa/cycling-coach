@@ -21,7 +21,12 @@ import {
 } from "../src/chat/controller.js";
 import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "../src/chat/limits.js";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
-import { CHAT_WORKING_COPY, EMPTY_CHAT_STATE, type ChatState } from "../src/turn-state.js";
+import {
+  CHAT_RESPONSE_STOPPED_COPY,
+  CHAT_WORKING_COPY,
+  EMPTY_CHAT_STATE,
+  type ChatState,
+} from "../src/turn-state.js";
 
 function envelope(event: TurnEvent, requestId = 1): CoachTurnEventNotificationEnvelope {
   return {
@@ -78,6 +83,7 @@ function client(
   sessions: {
     readonly hasSession?: (request: { chatId: string }) => Promise<{ hasSession: boolean }>;
     readonly resetSession?: (request: { chatId: string }) => Promise<{ memoryFlushed: boolean }>;
+    readonly stopChat?: (request: { chatId: string }) => Promise<{ stopped: boolean }>;
   } = {},
 ): CoachClient {
   return {
@@ -90,6 +96,11 @@ function client(
       }
       if (method === "resetSession") {
         return (sessions.resetSession ?? (async () => ({ memoryFlushed: true })))(
+          request as { chatId: string },
+        ) as never;
+      }
+      if (method === "stopChat") {
+        return (sessions.stopChat ?? (async () => ({ stopped: false })))(
           request as { chatId: string },
         ) as never;
       }
@@ -352,6 +363,75 @@ describe("chat controller", () => {
     ]);
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(refreshSpend).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops only the active response and retries on the same connected client", async () => {
+    let firstOptions: CoachClientCallOptions<"chat"> | undefined;
+    let finishFirst!: (value: { text: string }) => void;
+    let callCount = 0;
+    const firstResult = new Promise<{ text: string }>((resolve) => {
+      finishFirst = resolve;
+    });
+    const fake = client(
+      async (_request, options) => {
+        callCount += 1;
+        if (callCount === 1) {
+          firstOptions = options;
+          deliver(options, { type: "turn-start", turnId: "turn-1", chatId: "desktop" });
+          deliver(options, { type: "text_delta", turnId: "turn-1", delta: "Partial response" });
+          return firstResult;
+        }
+        deliver(options, { type: "final-text", turnId: "turn-2", text: "Recovered" });
+        options?.onTerminalEnvelope?.({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { text: "Recovered" },
+        });
+        return { text: "Recovered" };
+      },
+      {
+        stopChat: async () => {
+          deliver(firstOptions, {
+            type: "interrupted",
+            turnId: "turn-1",
+            chatId: "desktop",
+            text: "Partial response",
+          });
+          firstOptions?.onTerminalEnvelope?.({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { text: "Partial response" },
+          });
+          finishFirst({ text: "Partial response" });
+          return { stopped: true };
+        },
+      },
+    );
+    const { controller, provider, states } = subject(fake);
+
+    const submission = controller.submit("Stop this");
+    await vi.waitFor(() => expect(states.at(-1)?.messages.at(-1)?.text).toBe("Partial response"));
+    controller.stop();
+    await submission;
+
+    expect(vi.mocked(fake.call).mock.calls.map(([method]) => method)).toEqual(["chat", "stopChat"]);
+    expect(states.at(-1)).toMatchObject({
+      status: "interrupted",
+      progress: CHAT_RESPONSE_STOPPED_COPY,
+    });
+    expect(states.at(-1)?.messages.at(-1)).toMatchObject({
+      text: "Partial response",
+      delivery: "interrupted",
+    });
+    expect(firstOptions?.signal?.aborted).toBe(false);
+
+    await controller.retryInterrupted();
+
+    expect(provider.reconnect).not.toHaveBeenCalled();
+    expect(states.at(-1)?.messages.at(-1)).toMatchObject({
+      text: "Recovered",
+      delivery: "complete",
+    });
   });
 
   it("admits cumulative text deltas at the exact response boundary", async () => {

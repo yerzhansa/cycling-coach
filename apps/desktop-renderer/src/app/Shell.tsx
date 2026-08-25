@@ -46,13 +46,7 @@ export function Shell(props: { readonly onReady: () => void }): ReactElement {
           <Sidebar />
           <div className="flex min-h-0 min-w-0 flex-col">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <div
-                className={
-                  activeView === "chat"
-                    ? "grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[0_minmax(0,1fr)] [&>.conversation]:row-start-2"
-                    : "hidden"
-                }
-              >
+              <div className={activeView === "chat" ? "flex min-h-0 min-w-0 flex-1" : "hidden"}>
                 <ChatView />
               </div>
               {VIEWS.filter(

@@ -6,6 +6,8 @@ import {
   HasSessionResponseSchema,
   ResetSessionRequestSchema,
   ResetSessionResponseSchema,
+  StopChatRequestSchema,
+  StopChatResponseSchema,
   TurnEventSchema,
   type AthleteState,
   type CoachEngine,
@@ -19,9 +21,7 @@ export interface CoachEngineAdapterInput {
   readonly now: () => number;
 }
 
-export function createCoachEngineAdapter(
-  input: CoachEngineAdapterInput,
-): CoachEngine {
+export function createCoachEngineAdapter(input: CoachEngineAdapterInput): CoachEngine {
   return {
     async chat(request, onEvent) {
       const parsed = ChatRequestSchema.parse(request);
@@ -51,6 +51,14 @@ export function createCoachEngineAdapter(
       });
       if (firstEventValidationError !== undefined) throw firstEventValidationError;
       return ChatResponseSchema.parse(response);
+    },
+    async stopChat(request) {
+      const parsed = StopChatRequestSchema.parse(request);
+      return StopChatResponseSchema.parse(
+        input.backend.stopChat === undefined
+          ? { stopped: false }
+          : await input.backend.stopChat(parsed),
+      );
     },
     async resetSession(request) {
       const parsed = ResetSessionRequestSchema.parse(request);

@@ -8,6 +8,7 @@ import {
   type ReactElement,
   type RefObject,
 } from "react";
+import { ArrowUp, Square } from "lucide-react";
 import { filterSlashCommands } from "../../chat/commands.js";
 import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
@@ -30,6 +31,7 @@ export function Composer(props: {
   const listboxId = useId();
   const sendDisabled = useEnduragentStore((state) => state.chat.sendDisabled);
   const inputDisabled = useEnduragentStore((state) => state.chat.inputDisabled);
+  const status = useEnduragentStore((state) => state.chat.status);
   const actions = useEnduragentStore((state) => state.chatActions);
   const canChat = useEnduragentStore(setupReady);
 
@@ -129,18 +131,16 @@ export function Composer(props: {
           setDismissed(true);
         }}
       />
-      <label
-        className="chat-composer__label mb-[7px] ml-[calc(var(--inset)*2)] block text-xs leading-[1.4] font-medium text-ink-2"
-        htmlFor="message"
-      >
+      <label className="sr-only" htmlFor="message">
         Message your coach
       </label>
-      <div className="chat-composer__controls grid grid-cols-[minmax(0,1fr)_var(--ctl-h-lg)] items-center gap-2 rounded-card border border-line-2 bg-surface py-inset pr-inset pl-[calc(var(--inset)*2)] transition-[border-color,box-shadow] duration-120 motion-reduce:transition-none focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
+      <div className="chat-composer__controls grid grid-rows-[minmax(var(--ctl-h-lg),auto)_var(--ctl-h-lg)] gap-[calc(var(--inset)/2)] rounded-card border border-line-2 bg-surface pt-row pr-ctl-px pb-row pl-[calc(var(--inset)*2)] shadow-elev-2 transition-[border-color,box-shadow] duration-120 motion-reduce:transition-none focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
         <textarea
           id="message"
           ref={textarea}
-          className="min-h-10 max-h-[140px] resize-none border-0 bg-transparent py-2 text-ink outline-0 placeholder:text-[color-mix(in_srgb,var(--ink-2)_72%,transparent)] focus-visible:outline-0"
+          className="min-h-10 max-h-[140px] w-full resize-none border-0 bg-transparent py-[3px] text-sm text-ink outline-0 placeholder:text-ink-3 focus-visible:outline-0"
           rows={2}
+          placeholder={status === "streaming" ? "Coach is responding…" : "Message your coach"}
           disabled={inputDisabled || !canChat}
           role="combobox"
           aria-autocomplete="list"
@@ -157,15 +157,32 @@ export function Composer(props: {
             setDismissed(true);
           }}
         />
-        <Button
-          type="submit"
-          variant="default"
-          size="icon-lg"
-          aria-label="Send message"
-          disabled={sendDisabled || !canChat}
-        >
-          ↑
-        </Button>
+        <div className="chat-composer__toolbar flex items-center justify-end">
+          {status === "streaming" ? (
+            <Button
+              type="button"
+              variant="default"
+              size="icon-lg"
+              aria-label="Stop responding"
+              disabled={actions === null}
+              onClick={() => {
+                actions?.stop();
+              }}
+            >
+              <Square className="size-2.5 fill-current stroke-none" aria-hidden="true" />
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              variant="default"
+              size="icon-lg"
+              aria-label="Send message"
+              disabled={sendDisabled || !canChat}
+            >
+              <ArrowUp aria-hidden="true" />
+            </Button>
+          )}
+        </div>
       </div>
     </form>
   );

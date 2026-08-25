@@ -11,14 +11,11 @@ import type {
   MemoryStorePort,
   ToolConfirmationPort,
   TranscriptCompletedTurnInput,
+  TranscriptInterruptedTurnInput,
 } from "../host-ports.js";
 import type { Sport, SportRuntimePorts } from "../sport.js";
 import { getEffectiveSections } from "../sport/effective-sections.js";
-import {
-  ATHLETE_CONTEXT_MAX_CHARS,
-  buildSystemPrompt,
-  staticRuleBlocks,
-} from "./system-prompt.js";
+import { ATHLETE_CONTEXT_MAX_CHARS, buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
 import {
   computeAssembledHash,
   computeTemplateHash,
@@ -273,8 +270,7 @@ export function gateMutatingTool(
       const ctx = getTurnContext(options);
       const chatId = ctx?.chatId;
       if (chatId === undefined || chatId === "") return { error: "confirmation_unavailable" };
-      const run = () =>
-        (inner as (i: unknown, o: unknown) => Promise<unknown>)(input, {} as never);
+      const run = () => (inner as (i: unknown, o: unknown) => Promise<unknown>)(input, {} as never);
       if (!confirmations.requiresConfirmation({ chatId, toolName: name })) {
         return (prepareRun === undefined ? run : prepareRun(name, ctx, run))();
       }
@@ -317,6 +313,7 @@ export class CoachAgent {
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
   private templateHash?: string;
+  private readonly activeChatTurns = new Map<string, AbortController>();
 
   constructor(sport: Sport, ports: EngineHostPorts) {
     const config = ports.config;
@@ -552,6 +549,7 @@ export class CoachAgent {
     cacheKey: string,
     turnBudget: TurnBudget,
     onTextDelta: (delta: string) => void,
+    signal: AbortSignal,
   ): Promise<RecoveredText> {
     if (!isStepExhaustedEmpty(text, finishReason)) {
       return { text, attributionBasis: "attempt" };
@@ -569,11 +567,13 @@ export class CoachAgent {
         cacheKey,
         deadlineMs: turnBudget.remainingMs(),
         onTextDelta,
+        signal,
       });
       return recovery.text.trim() !== ""
         ? { text: recovery.text, attributionBasis: "prompt" }
         : { text: STEP_LIMIT_TRUNCATION_MESSAGE, attributionBasis: "none" };
     } catch (recoveryErr) {
+      if (signal.aborted) throw recoveryErr;
       console.warn("Step-limit recovery completion failed; using truncation floor", recoveryErr);
       return { text: STEP_LIMIT_TRUNCATION_MESSAGE, attributionBasis: "none" };
     }
@@ -625,6 +625,21 @@ export class CoachAgent {
     }
   }
 
+  private recordInterruptedTurn(input: TranscriptInterruptedTurnInput): void {
+    try {
+      this.ports.transcriptWriter.appendInterruptedTurn?.(input);
+    } catch (error) {
+      try {
+        this.log.warn("transcript_record_failed", undefined, {
+          operation: "turn-interrupted",
+          reason: transcriptWriteFailureReason(error),
+        });
+      } catch {
+        return;
+      }
+    }
+  }
+
   async chat(
     chatId: string,
     userMessage: string,
@@ -642,483 +657,473 @@ export class CoachAgent {
       turn?.referenceProvenance ?? EMPTY_PROVENANCE,
     );
     return withSessionLock(chatId, async () => {
-      const turnStart = this.ports.now();
-      const turnId = this.ports.randomId();
-      const emitEvent = (event: TurnEvent): void => {
-        try {
-          onEvent?.(event);
-        } catch {
-          return;
-        }
-      };
-      let compactions = 0;
-      const turnBudget = createTurnBudget(this.ports.now);
-      // One flush per turn: the latch flips on entry (before the await
-      // resolves) so a thrown flush still consumes the turn's single flush.
-      let flushedThisTurn = false;
-      // Single file read: load history + last message time together
-      let { messages: history, lastMessageTime } = this.chatStore.load(chatId);
-
-      const { fresh, reason } = evaluateSessionFreshness({
-        lastMessageTime,
-        dailyResetHour: this.config.session.dailyResetHour,
-        idleMinutes: this.config.session.idleMinutes,
-        tz: this.tz,
-      });
-
-      // Defer a daily reset for one turn when the last exchange is still recent,
-      // so an athlete mid-conversation across the daily boundary isn't archived
-      // out from under them. Malformed timestamps (reason "daily", unparseable)
-      // and idle resets are never deferred.
-      const deferDaily = !fresh && reason === "daily" && shouldDeferDailyReset(lastMessageTime);
-
-      // Set only when an automatic archive actually runs this turn — drives the
-      // one-turn model marker and the one-time post-reset athlete notice.
-      let archivedAt: string | undefined;
-
-      if (!fresh && !deferDaily) {
-        // Flush memory before reset, then archive
-        let outcome: MemoryFlushOutcome | null = null;
-        if (history.length > 0 && !flushedThisTurn) {
-          flushedThisTurn = true;
+      const abortController = new AbortController();
+      this.activeChatTurns.set(chatId, abortController);
+      try {
+        const turnStart = this.ports.now();
+        const turnId = this.ports.randomId();
+        const emitEvent = (event: TurnEvent): void => {
           try {
-            outcome = await this.flushMemory(history, "stale-reset", turnBudget);
-          } catch (err) {
-            this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
+            onEvent?.(event);
+          } catch {
+            return;
           }
-        }
-        const zeroWrite =
-          outcome !== null &&
-          outcome.writes === 0 &&
-          outcome.ledgerAppends === 0 &&
-          history.length >= FLUSH_ZERO_WRITE_MIN_MESSAGES;
-        if (zeroWrite && !this.archiveDeferred.has(chatId)) {
-          this.archiveDeferred.add(chatId);
-          console.warn(
-            JSON.stringify({
-              event: "memory_flush_archive_deferred",
-              messageCount: history.length,
-            }),
-          );
-        } else {
-          const boundaryAt = new Date(this.ports.now()).toISOString();
-          this.chatStore.resetConversation({
-            chatId,
-            boundaryAt,
-            reason: "stale-reset",
-          });
-          this.archiveDeferred.delete(chatId);
-          this.lastFlushMessageCount.delete(chatId);
-          history = [];
-          archivedAt = boundaryAt;
-        }
-      }
+        };
+        emitEvent({ type: "turn-start", turnId, chatId });
+        let compactions = 0;
+        const turnBudget = createTurnBudget(this.ports.now);
+        // One flush per turn: the latch flips on entry (before the await
+        // resolves) so a thrown flush still consumes the turn's single flush.
+        let flushedThisTurn = false;
+        // Single file read: load history + last message time together
+        let { messages: history, lastMessageTime } = this.chatStore.load(chatId);
 
-      this.systemPrompt = buildSystemPrompt(
-        this.sport,
-        this.memory,
-        this.tz,
-        this.buildDegradeBlock(),
-        {
-          excludeSections: this.excludedSectionNames,
-          confirmationGate: this.confirmationGate,
-        },
-      );
-      const contextProvenance =
-        this.memory.getContextWithProvenance?.({
-          excludeSections: this.excludedSectionNames,
-          maxChars: ATHLETE_CONTEXT_MAX_CHARS,
-        }).provenance ?? EMPTY_PROVENANCE;
+        const { fresh, reason } = evaluateSessionFreshness({
+          lastMessageTime,
+          dailyResetHour: this.config.session.dailyResetHour,
+          idleMinutes: this.config.session.idleMinutes,
+          tz: this.tz,
+        });
 
-      const budget = computeHistoryTokenBudget({
-        contextWindowTokens: this.config.contextWindowTokens,
-        systemPrompt: this.systemPrompt,
-        budgetRatio: this.config.session.historyTokenBudgetRatio,
-      });
-      const { kept, dropped, previousSummary, previousSummaryProvenance } = splitHistoryByBudget({
-        messages: history,
-        tokenBudget: budget,
-      });
+        // Defer a daily reset for one turn when the last exchange is still recent,
+        // so an athlete mid-conversation across the daily boundary isn't archived
+        // out from under them. Malformed timestamps (reason "daily", unparseable)
+        // and idle resets are never deferred.
+        const deferDaily = !fresh && reason === "daily" && shouldDeferDailyReset(lastMessageTime);
 
-      let summaryMsg: ModelMessage | undefined;
-      let requeued: ModelMessage[] = [];
-      if (dropped.length > 0) {
-        this.lastFlushMessageCount.set(chatId, history.length);
-        let flushed = true;
-        if (!flushedThisTurn) {
-          flushedThisTurn = true;
-          try {
-            await this.flushMemory(history, "trim", turnBudget);
-          } catch (err) {
-            flushed = false;
-            this.log.warn(
-              "Pre-compaction memory flush failed; keeping session file unchanged",
-              err,
+        // Set only when an automatic archive actually runs this turn — drives the
+        // one-turn model marker and the one-time post-reset athlete notice.
+        let archivedAt: string | undefined;
+
+        if (!fresh && !deferDaily) {
+          // Flush memory before reset, then archive
+          let outcome: MemoryFlushOutcome | null = null;
+          if (history.length > 0 && !flushedThisTurn) {
+            flushedThisTurn = true;
+            try {
+              outcome = await this.flushMemory(history, "stale-reset", turnBudget);
+            } catch (err) {
+              this.log.warn("Pre-reset memory flush failed; archiving session anyway", err);
+            }
+          }
+          const zeroWrite =
+            outcome !== null &&
+            outcome.writes === 0 &&
+            outcome.ledgerAppends === 0 &&
+            history.length >= FLUSH_ZERO_WRITE_MIN_MESSAGES;
+          if (zeroWrite && !this.archiveDeferred.has(chatId)) {
+            this.archiveDeferred.add(chatId);
+            console.warn(
+              JSON.stringify({
+                event: "memory_flush_archive_deferred",
+                messageCount: history.length,
+              }),
             );
+          } else {
+            const boundaryAt = new Date(this.ports.now()).toISOString();
+            this.chatStore.resetConversation({
+              chatId,
+              boundaryAt,
+              reason: "stale-reset",
+            });
+            this.archiveDeferred.delete(chatId);
+            this.lastFlushMessageCount.delete(chatId);
+            history = [];
+            archivedAt = boundaryAt;
           }
         }
-        try {
-          const { summary, unsummarized, provenance } = await summarizeDroppedMessages({
-            dropped,
+
+        this.systemPrompt = buildSystemPrompt(
+          this.sport,
+          this.memory,
+          this.tz,
+          this.buildDegradeBlock(),
+          {
+            excludeSections: this.excludedSectionNames,
+            confirmationGate: this.confirmationGate,
+          },
+        );
+        const contextProvenance =
+          this.memory.getContextWithProvenance?.({
+            excludeSections: this.excludedSectionNames,
+            maxChars: ATHLETE_CONTEXT_MAX_CHARS,
+          }).provenance ?? EMPTY_PROVENANCE;
+
+        const budget = computeHistoryTokenBudget({
+          contextWindowTokens: this.config.contextWindowTokens,
+          systemPrompt: this.systemPrompt,
+          budgetRatio: this.config.session.historyTokenBudgetRatio,
+        });
+        const { kept, dropped, previousSummary, previousSummaryProvenance } = splitHistoryByBudget({
+          messages: history,
+          tokenBudget: budget,
+        });
+
+        let summaryMsg: ModelMessage | undefined;
+        let requeued: ModelMessage[] = [];
+        if (dropped.length > 0) {
+          this.lastFlushMessageCount.set(chatId, history.length);
+          let flushed = true;
+          if (!flushedThisTurn) {
+            flushedThisTurn = true;
+            try {
+              await this.flushMemory(history, "trim", turnBudget);
+            } catch (err) {
+              flushed = false;
+              this.log.warn(
+                "Pre-compaction memory flush failed; keeping session file unchanged",
+                err,
+              );
+            }
+          }
+          try {
+            const { summary, unsummarized, provenance } = await summarizeDroppedMessages({
+              dropped,
+              previousSummary,
+              previousSummaryProvenance,
+              ...this.compactionParams(turnBudget),
+            });
+            compactions++;
+            const summaryProvenance =
+              provenance ??
+              unionProvenance(previousSummaryProvenance, provenanceOfMessages(dropped));
+            this.persistSummaryToDailyNote(summary, summaryProvenance);
+            summaryMsg = makeSummaryMessage(summary, summaryProvenance);
+            requeued = unsummarized;
+            if (flushed) {
+              this.chatStore.archivePreCompact(chatId);
+              this.chatStore.overwriteHistory(chatId, [summaryMsg, ...requeued, ...kept]);
+            }
+          } catch (err) {
+            this.log.warn("Dropped message summarization failed, continuing without summary", err);
+            if (previousSummary) {
+              summaryMsg = makeSummaryMessage(
+                previousSummary,
+                previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
+              );
+            }
+          }
+        } else if (previousSummary) {
+          summaryMsg = makeSummaryMessage(
             previousSummary,
-            previousSummaryProvenance,
+            previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
+          );
+        }
+
+        if (
+          dropped.length === 0 &&
+          shouldRunMemoryFlush({
+            estimatedTokens: estimateMessagesTokens(history),
+            tokenBudget: budget,
+            lastFlushMessageCount: this.lastFlushMessageCount.get(chatId) ?? 0,
+            currentMessageCount: history.length,
+          })
+        ) {
+          this.lastFlushMessageCount.set(chatId, history.length);
+          if (!flushedThisTurn) {
+            flushedThisTurn = true;
+            try {
+              await this.flushMemory(history, "soft-threshold", turnBudget);
+            } catch (err) {
+              this.log.warn("Soft-threshold memory flush failed; continuing turn", err);
+            }
+          }
+        }
+
+        // Append a fresh "Current time:" line to the user message so the LLM
+        // always sees the athlete's local time on this turn — the cached system
+        // prefix carries only the TZ name, not the date. Idempotent: safe
+        // across the retry/compaction loop below.
+        const userMessageWithTime = appendCurrentTimeLine(userMessage, this.tz);
+
+        // One-turn model-visible archive marker: after an automatic reset, tell
+        // the model to disclose the fresh session. Not persisted (it is rebuilt
+        // per turn and only emitted on the reset turn).
+        const archiveMarkerMsg: ModelMessage | undefined =
+          archivedAt !== undefined
+            ? { role: "system", content: archiveMarker(archivedAt) }
+            : undefined;
+
+        // Build messages array with new user message
+        const userTurnMessage = setMessageProvenance(
+          { role: "user", content: userMessageWithTime },
+          UNKNOWN_PROVENANCE,
+        );
+        let messages: ModelMessage[] = [
+          ...(summaryMsg ? [summaryMsg] : []),
+          ...(archiveMarkerMsg ? [archiveMarkerMsg] : []),
+          ...requeued,
+          ...kept,
+          userTurnMessage,
+        ];
+
+        ctx.provenance.value = contextProvenance;
+
+        let overflowAttempts = 0;
+        let timeoutAttempts = 0;
+        let plainTimeoutAttempts = 0;
+        let rateLimitAttempts = 0;
+        let serverErrorAttempts = 0;
+        let classifiedTerminalFailure: ClassifiedTurnFailure | undefined;
+        let streamedText = "";
+
+        const compactInTurn = async () => {
+          const compacted = await summarizeInStages({
+            messages,
             ...this.compactionParams(turnBudget),
           });
+          messages = compacted.messages;
+          if (compacted.summary && compacted.summaryProvenance) {
+            this.persistSummaryToDailyNote(compacted.summary, compacted.summaryProvenance);
+          }
           compactions++;
-          const summaryProvenance =
-            provenance ?? unionProvenance(previousSummaryProvenance, provenanceOfMessages(dropped));
-          this.persistSummaryToDailyNote(summary, summaryProvenance);
-          summaryMsg = makeSummaryMessage(summary, summaryProvenance);
-          requeued = unsummarized;
-          if (flushed) {
-            this.chatStore.archivePreCompact(chatId);
-            this.chatStore.overwriteHistory(chatId, [summaryMsg, ...requeued, ...kept]);
-          }
-        } catch (err) {
-          this.log.warn("Dropped message summarization failed, continuing without summary", err);
-          if (previousSummary) {
-            summaryMsg = makeSummaryMessage(
-              previousSummary,
-              previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
-            );
-          }
-        }
-      } else if (previousSummary) {
-        summaryMsg = makeSummaryMessage(
-          previousSummary,
-          previousSummaryProvenance ?? UNKNOWN_PROVENANCE,
-        );
-      }
+          this.memory.reload();
+        };
 
-      if (
-        dropped.length === 0 &&
-        shouldRunMemoryFlush({
-          estimatedTokens: estimateMessagesTokens(history),
-          tokenBudget: budget,
-          lastFlushMessageCount: this.lastFlushMessageCount.get(chatId) ?? 0,
-          currentMessageCount: history.length,
-        })
-      ) {
-        this.lastFlushMessageCount.set(chatId, history.length);
-        if (!flushedThisTurn) {
-          flushedThisTurn = true;
-          try {
-            await this.flushMemory(history, "soft-threshold", turnBudget);
-          } catch (err) {
-            this.log.warn("Soft-threshold memory flush failed; continuing turn", err);
-          }
-        }
-      }
+        // Loop-invariant: the prompt cache key derives only from the chat id.
+        const cacheKey = sha256_16(chatId);
 
-      // Append a fresh "Current time:" line to the user message so the LLM
-      // always sees the athlete's local time on this turn — the cached system
-      // prefix carries only the TZ name, not the date. Idempotent: safe
-      // across the retry/compaction loop below.
-      const userMessageWithTime = appendCurrentTimeLine(userMessage, this.tz);
+        try {
+          while (true) {
+            abortController.signal.throwIfAborted();
+            // Between-attempt budget gates: the attempt charge and the wall-clock
+            // check run at the loop top so the deadline stops the NEXT attempt and
+            // never aborts a generate/compaction already in flight.
+            turnBudget.chargeAttempt();
+            turnBudget.checkDeadline();
 
-      // One-turn model-visible archive marker: after an automatic reset, tell
-      // the model to disclose the fresh session. Not persisted (it is rebuilt
-      // per turn and only emitted on the reset turn).
-      const archiveMarkerMsg: ModelMessage | undefined =
-        archivedAt !== undefined
-          ? { role: "system", content: archiveMarker(archivedAt) }
-          : undefined;
-
-      // Build messages array with new user message
-      const userTurnMessage = setMessageProvenance(
-        { role: "user", content: userMessageWithTime },
-        UNKNOWN_PROVENANCE,
-      );
-      let messages: ModelMessage[] = [
-        ...(summaryMsg ? [summaryMsg] : []),
-        ...(archiveMarkerMsg ? [archiveMarkerMsg] : []),
-        ...requeued,
-        ...kept,
-        userTurnMessage,
-      ];
-
-      ctx.provenance.value = contextProvenance;
-
-      let overflowAttempts = 0;
-      let timeoutAttempts = 0;
-      let plainTimeoutAttempts = 0;
-      let rateLimitAttempts = 0;
-      let serverErrorAttempts = 0;
-      let classifiedTerminalFailure: ClassifiedTurnFailure | undefined;
-
-      const compactInTurn = async () => {
-        const compacted = await summarizeInStages({
-          messages,
-          ...this.compactionParams(turnBudget),
-        });
-        messages = compacted.messages;
-        if (compacted.summary && compacted.summaryProvenance) {
-          this.persistSummaryToDailyNote(compacted.summary, compacted.summaryProvenance);
-        }
-        compactions++;
-        this.memory.reload();
-      };
-
-      // Loop-invariant: the prompt cache key derives only from the chat id.
-      const cacheKey = sha256_16(chatId);
-
-      try {
-        while (true) {
-          // Between-attempt budget gates: the attempt charge and the wall-clock
-          // check run at the loop top so the deadline stops the NEXT attempt and
-          // never aborts a generate/compaction already in flight.
-          turnBudget.chargeAttempt();
-          turnBudget.checkDeadline();
-
-          // Preemptive: compact before sending if over budget
-          if (
-            shouldCompact({
-              messages,
-              systemPrompt: this.systemPrompt,
-              contextWindowTokens: this.config.contextWindowTokens,
-            })
-          ) {
-            if (!flushedThisTurn) {
-              flushedThisTurn = true;
-              try {
-                await this.flushMemory(messages, "pre-compaction", turnBudget);
-              } catch (err) {
-                this.log.warn("In-turn memory flush failed; compacting without flush", err);
-              }
-            }
-            await compactInTurn();
-          }
-
-          let attemptObservedText = false;
-          classifiedTerminalFailure = undefined;
-          const onAttemptTextDelta = (delta: string): void => {
-            attemptObservedText = true;
-            emitEvent({ type: "text_delta", turnId, delta });
-          };
-
-          try {
-            turnBudget.chargeModelCall();
-            ctx.provenance.value = unionProvenance(
-              contextProvenance,
-              provenanceOfMessages(messages),
-            );
-            const result = await this.llm.generate({
-              system: this.systemPrompt,
-              messages,
-              tools: this.tools,
-              stopWhen: stepCountIs(10),
-              maxSteps: 10,
-              caller: "chat",
-              context: ctx,
-              cacheKey,
-              // Cap this call by the turn's remaining wall-clock budget so a retry
-              // after an early timeout inherits only the time the turn has left.
-              deadlineMs: turnBudget.remainingMs(),
-              onTextDelta: onAttemptTextDelta,
-            });
-            const { text, finishReason } = result;
-
-            // A successful "length" finish whose prompt already filled the real
-            // provider window is a context overflow, not a long answer. Route it
-            // through the existing reactive overflow rescue (compact + retry) and
-            // never persist the truncated text — throw a normalized overflow so
-            // the catch block below handles it exactly like a thrown overflow.
-            // Plain output-length truncation (input below the window) falls
-            // through to recoverStepExhaustedText's existing empty-reply handling.
+            // Preemptive: compact before sending if over budget
             if (
-              isWindowExceededFinish({
-                finishReason,
-                usage: result.usage,
+              shouldCompact({
+                messages,
+                systemPrompt: this.systemPrompt,
                 contextWindowTokens: this.config.contextWindowTokens,
               })
             ) {
-              const overflow = new Error(WINDOW_EXCEEDED_FINISH_MESSAGE);
-              overflow.name = "ContextOverflowError";
-              throw overflow;
+              if (!flushedThisTurn) {
+                flushedThisTurn = true;
+                try {
+                  await this.flushMemory(messages, "pre-compaction", turnBudget);
+                } catch (err) {
+                  this.log.warn("In-turn memory flush failed; compacting without flush", err);
+                }
+              }
+              await compactInTurn();
             }
 
-            // Recovery runs only on this success path (before the catch below).
-            const recovered = await this.recoverStepExhaustedText(
-              text,
-              finishReason,
-              messages,
-              cacheKey,
-              turnBudget,
-              onAttemptTextDelta,
-            );
-            if (recovered.attributionBasis === "prompt") {
+            let attemptObservedText = false;
+            classifiedTerminalFailure = undefined;
+            const onAttemptTextDelta = (delta: string): void => {
+              attemptObservedText = true;
+              streamedText += delta;
+              emitEvent({ type: "text_delta", turnId, delta });
+            };
+
+            try {
+              turnBudget.chargeModelCall();
               ctx.provenance.value = unionProvenance(
                 contextProvenance,
                 provenanceOfMessages(messages),
               );
-            } else if (recovered.attributionBasis === "none") {
-              ctx.provenance.value = EMPTY_PROVENANCE;
-            }
-            let effectiveText = renderGarminAttribution(recovered.text, ctx.provenance.value);
-            if (effectiveText.trim() === "") {
-              effectiveText = STEP_LIMIT_TRUNCATION_MESSAGE;
-              ctx.provenance.value = EMPTY_PROVENANCE;
-            }
+              const result = await this.llm.generate({
+                system: this.systemPrompt,
+                messages,
+                tools: this.tools,
+                stopWhen: stepCountIs(10),
+                maxSteps: 10,
+                caller: "chat",
+                context: ctx,
+                cacheKey,
+                // Cap this call by the turn's remaining wall-clock budget so a retry
+                // after an early timeout inherits only the time the turn has left.
+                deadlineMs: turnBudget.remainingMs(),
+                onTextDelta: onAttemptTextDelta,
+                signal: abortController.signal,
+              });
+              const { text, finishReason } = result;
 
-            const templateHash = (this.templateHash ??= computeTemplateHash({
-              soul: this.sport.soul,
-              skills: this.sport.skills,
-              ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
-                confirmationGate: this.confirmationGate,
-              }),
-              toolSchemas: this.tools,
-              model: this.config.llm.model,
-            }));
-            const assembledHash = computeAssembledHash(this.systemPrompt, messages);
+              // A successful "length" finish whose prompt already filled the real
+              // provider window is a context overflow, not a long answer. Route it
+              // through the existing reactive overflow rescue (compact + retry) and
+              // never persist the truncated text — throw a normalized overflow so
+              // the catch block below handles it exactly like a thrown overflow.
+              // Plain output-length truncation (input below the window) falls
+              // through to recoverStepExhaustedText's existing empty-reply handling.
+              if (
+                isWindowExceededFinish({
+                  finishReason,
+                  usage: result.usage,
+                  contextWindowTokens: this.config.contextWindowTokens,
+                })
+              ) {
+                const overflow = new Error(WINDOW_EXCEEDED_FINISH_MESSAGE);
+                overflow.name = "ContextOverflowError";
+                throw overflow;
+              }
 
-            // Append BOTH after success as one atomic write — JSONL unchanged
-            // on failure, no dangling user line on a partial write.
-            let persistenceNote = "";
-            try {
-              this.chatStore.appendTurn(chatId, userMessage, effectiveText, {
-                templateHash,
-                assembledHash,
+              // Recovery runs only on this success path (before the catch below).
+              const recovered = await this.recoverStepExhaustedText(
+                text,
+                finishReason,
+                messages,
+                cacheKey,
+                turnBudget,
+                onAttemptTextDelta,
+                abortController.signal,
+              );
+              if (recovered.attributionBasis === "prompt") {
+                ctx.provenance.value = unionProvenance(
+                  contextProvenance,
+                  provenanceOfMessages(messages),
+                );
+              } else if (recovered.attributionBasis === "none") {
+                ctx.provenance.value = EMPTY_PROVENANCE;
+              }
+              let effectiveText = renderGarminAttribution(recovered.text, ctx.provenance.value);
+              if (effectiveText.trim() === "") {
+                effectiveText = STEP_LIMIT_TRUNCATION_MESSAGE;
+                ctx.provenance.value = EMPTY_PROVENANCE;
+              }
+
+              const templateHash = (this.templateHash ??= computeTemplateHash({
+                soul: this.sport.soul,
+                skills: this.sport.skills,
+                ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
+                  confirmationGate: this.confirmationGate,
+                }),
+                toolSchemas: this.tools,
+                model: this.config.llm.model,
+              }));
+              const assembledHash = computeAssembledHash(this.systemPrompt, messages);
+
+              // Append BOTH after success as one atomic write — JSONL unchanged
+              // on failure, no dangling user line on a partial write.
+              let persistenceNote = "";
+              try {
+                this.chatStore.appendTurn(chatId, userMessage, effectiveText, {
+                  templateHash,
+                  assembledHash,
+                  provider: this.config.llm.provider,
+                  model: this.config.llm.model,
+                  lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                  provenance: ctx.provenance.value,
+                });
+              } catch (persistErr) {
+                // Deliver-first: a full disk or permission error must never
+                // discard a reply the athlete already paid for. Swallow the
+                // persistence throw, warn once, and still return the reply.
+                console.warn("Session persistence failed; delivering reply unsaved", persistErr);
+                persistenceNote = noteForPersistenceFailure(persistErr);
+              }
+
+              // A turn can run several generations (retry/compaction/overflow
+              // recovery); these usage/cost figures are the FINAL successful
+              // generation's only — not a turn-wide sum across attempts. A true
+              // accumulator over all attempts is deferred.
+              this.ports.usage.append({
+                ts: this.ports.now(),
+                kind: "turn",
+                caller: "chat",
                 provider: this.config.llm.provider,
                 model: this.config.llm.model,
-                lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
-                provenance: ctx.provenance.value,
+                durationMs: this.ports.now() - turnStart,
+                templateHash,
+                ...usageFieldsFromResult(result),
               });
-            } catch (persistErr) {
-              // Deliver-first: a full disk or permission error must never
-              // discard a reply the athlete already paid for. Swallow the
-              // persistence throw, warn once, and still return the reply.
-              console.warn("Session persistence failed; delivering reply unsaved", persistErr);
-              persistenceNote = noteForPersistenceFailure(persistErr);
-            }
 
-            // A turn can run several generations (retry/compaction/overflow
-            // recovery); these usage/cost figures are the FINAL successful
-            // generation's only — not a turn-wide sum across attempts. A true
-            // accumulator over all attempts is deferred.
-            this.ports.usage.append({
-              ts: this.ports.now(),
-              kind: "turn",
-              caller: "chat",
-              provider: this.config.llm.provider,
-              model: this.config.llm.model,
-              durationMs: this.ports.now() - turnStart,
-              templateHash,
-              ...usageFieldsFromResult(result),
-            });
-
-            this.emitTurnOutcome({
-              turnId,
-              chatId,
-              ok: true,
-              overflowAttempts,
-              timeoutAttempts,
-              rateLimitAttempts,
-              duration_ms: this.ports.now() - turnStart,
-              compactions,
-            });
-
-            // Prefix the one-time post-reset notice onto the first reply after
-            // an automatic archive. Not persisted to history — it is a channel
-            // disclosure, not conversation content.
-            const resetPrefix = archivedAt !== undefined ? `${POST_RESET_NOTICE}\n\n` : "";
-            const responseText = resetPrefix + effectiveText + persistenceNote;
-            this.recordCompletedTurn({
-              chatId,
-              turnId,
-              completedAt: new Date(this.ports.now()).toISOString(),
-              athleteText: userMessage,
-              coachText: responseText,
-            });
-            emitEvent({ type: "final-text", turnId, text: responseText });
-            return responseText;
-          } catch (err) {
-            // The classified budget error is terminal: re-throw it before any
-            // retry branch so a future reordering can never mistake it for one of
-            // the retryable classes and swallow it.
-            if (err instanceof TurnBudgetExceededError) throw err;
-            // A committed tool write makes this turn non-replayable: retrying
-            // would re-send the pre-turn messages and could re-run the write.
-            const committedWrites = ctx.turnWrites;
-            if (committedWrites.writesCommitted > 0) {
-              const failure = classifyError(err, this.ports.classifyFailure);
-              console.warn(
-                JSON.stringify({
-                  event: "turn_failed_after_write",
-                  writesCommitted: committedWrites.writesCommitted,
-                  lastWriteSummary: committedWrites.lastWriteSummary,
-                  error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
-                }),
-              );
               this.emitTurnOutcome({
                 turnId,
                 chatId,
-                ok: false,
-                error_class: failure,
+                ok: true,
                 overflowAttempts,
                 timeoutAttempts,
                 rateLimitAttempts,
                 duration_ms: this.ports.now() - turnStart,
                 compactions,
               });
-              emitEvent(
-                this.createErrorEvent({
-                  failure,
-                  turnId,
-                  chatId,
-                  overflowAttempts,
-                  timeoutAttempts,
-                  rateLimitAttempts,
-                  durationMs: this.ports.now() - turnStart,
-                  compactions,
-                }),
-              );
+
+              // Prefix the one-time post-reset notice onto the first reply after
+              // an automatic archive. Not persisted to history — it is a channel
+              // disclosure, not conversation content.
+              const resetPrefix = archivedAt !== undefined ? `${POST_RESET_NOTICE}\n\n` : "";
+              const responseText = resetPrefix + effectiveText + persistenceNote;
               this.recordCompletedTurn({
                 chatId,
                 turnId,
                 completedAt: new Date(this.ports.now()).toISOString(),
                 athleteText: userMessage,
-                coachText: TAINTED_BY_WRITES_MESSAGE,
+                coachText: responseText,
               });
-              emitEvent({ type: "final-text", turnId, text: TAINTED_BY_WRITES_MESSAGE });
-              return TAINTED_BY_WRITES_MESSAGE;
-            }
-            if (attemptObservedText && !isWindowExceededFinishOverflow(err)) throw err;
-            const failure = this.ports.classifyFailure(err);
-            // Reactive: context overflow → flush + compact + retry
-            if (failure === "overflow" && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
-              overflowAttempts++;
-              try {
-                if (!flushedThisTurn) {
-                  flushedThisTurn = true;
-                  try {
-                    await this.flushMemory(messages, "overflow-recovery", turnBudget);
-                  } catch (flushErr) {
-                    this.log.warn(
-                      "In-turn memory flush failed; compacting without flush",
-                      flushErr,
-                    );
-                  }
-                }
-                await compactInTurn();
-              } catch (rescueErr) {
-                this.log.warn(
-                  "Compaction rescue failed; rethrowing the original turn error",
-                  rescueErr,
+              emitEvent({ type: "final-text", turnId, text: responseText });
+              return responseText;
+            } catch (err) {
+              // The classified budget error is terminal: re-throw it before any
+              // retry branch so a future reordering can never mistake it for one of
+              // the retryable classes and swallow it.
+              if (err instanceof TurnBudgetExceededError) throw err;
+              // A committed tool write makes this turn non-replayable: retrying
+              // would re-send the pre-turn messages and could re-run the write.
+              const committedWrites = ctx.turnWrites;
+              if (committedWrites.writesCommitted > 0) {
+                const failure = classifyError(err, this.ports.classifyFailure);
+                console.warn(
+                  JSON.stringify({
+                    event: "turn_failed_after_write",
+                    writesCommitted: committedWrites.writesCommitted,
+                    lastWriteSummary: committedWrites.lastWriteSummary,
+                    error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
+                  }),
                 );
-                if (err instanceof Error && err.cause === undefined) {
-                  (err as Error & { cause?: unknown }).cause = rescueErr;
-                }
-                classifiedTerminalFailure = failure;
-                throw err;
+                this.emitTurnOutcome({
+                  turnId,
+                  chatId,
+                  ok: false,
+                  error_class: failure,
+                  overflowAttempts,
+                  timeoutAttempts,
+                  rateLimitAttempts,
+                  duration_ms: this.ports.now() - turnStart,
+                  compactions,
+                });
+                emitEvent(
+                  this.createErrorEvent({
+                    failure,
+                    turnId,
+                    chatId,
+                    overflowAttempts,
+                    timeoutAttempts,
+                    rateLimitAttempts,
+                    durationMs: this.ports.now() - turnStart,
+                    compactions,
+                  }),
+                );
+                this.recordCompletedTurn({
+                  chatId,
+                  turnId,
+                  completedAt: new Date(this.ports.now()).toISOString(),
+                  athleteText: userMessage,
+                  coachText: TAINTED_BY_WRITES_MESSAGE,
+                });
+                emitEvent({ type: "final-text", turnId, text: TAINTED_BY_WRITES_MESSAGE });
+                return TAINTED_BY_WRITES_MESSAGE;
               }
-              continue;
-            }
-            // Timeout with high context usage → compact + retry (no flush)
-            if (failure === "timeout" && timeoutAttempts < MAX_TIMEOUT_ATTEMPTS) {
-              const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
-              if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
-                timeoutAttempts++;
+              if (attemptObservedText && !isWindowExceededFinishOverflow(err)) throw err;
+              const failure = this.ports.classifyFailure(err);
+              // Reactive: context overflow → flush + compact + retry
+              if (failure === "overflow" && overflowAttempts < MAX_OVERFLOW_ATTEMPTS) {
+                overflowAttempts++;
                 try {
+                  if (!flushedThisTurn) {
+                    flushedThisTurn = true;
+                    try {
+                      await this.flushMemory(messages, "overflow-recovery", turnBudget);
+                    } catch (flushErr) {
+                      this.log.warn(
+                        "In-turn memory flush failed; compacting without flush",
+                        flushErr,
+                      );
+                    }
+                  }
                   await compactInTurn();
                 } catch (rescueErr) {
                   this.log.warn(
@@ -1133,114 +1138,191 @@ export class CoachAgent {
                 }
                 continue;
               }
-              if (plainTimeoutAttempts < MAX_PLAIN_TIMEOUT_ATTEMPTS) {
-                plainTimeoutAttempts++;
-                timeoutAttempts++;
+              // Timeout with high context usage → compact + retry (no flush)
+              if (failure === "timeout" && timeoutAttempts < MAX_TIMEOUT_ATTEMPTS) {
+                const ratio = estimateMessagesTokens(messages) / this.config.contextWindowTokens;
+                if (ratio > TIMEOUT_COMPACTION_THRESHOLD) {
+                  timeoutAttempts++;
+                  try {
+                    await compactInTurn();
+                  } catch (rescueErr) {
+                    this.log.warn(
+                      "Compaction rescue failed; rethrowing the original turn error",
+                      rescueErr,
+                    );
+                    if (err instanceof Error && err.cause === undefined) {
+                      (err as Error & { cause?: unknown }).cause = rescueErr;
+                    }
+                    classifiedTerminalFailure = failure;
+                    throw err;
+                  }
+                  continue;
+                }
+                if (plainTimeoutAttempts < MAX_PLAIN_TIMEOUT_ATTEMPTS) {
+                  plainTimeoutAttempts++;
+                  timeoutAttempts++;
+                  continue;
+                }
+              }
+              // Rate limit → backoff (respect retry-after) + retry
+              if (failure === "rate_limit" && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
+                rateLimitAttempts++;
+                const attemptNo = rateLimitAttempts;
+                // The server hint (if any) is a lower bound; absent one, fall back to a
+                // capped exponential. Either feeds the primitive as the Retry-After
+                // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
+                const requestedMs =
+                  retryAfterFloorMs(err, this.ports.extractRetryAfterMs) ??
+                  Math.min(
+                    RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
+                    RATE_LIMIT_FALLBACK_MAX_MS,
+                  );
+                const clampNote =
+                  requestedMs > RATE_LIMIT_MAX_WAIT_MS
+                    ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
+                    : "";
+                await backoffWithSentinelError(err, {
+                  attempts: 2,
+                  baseMs: requestedMs,
+                  capMs: RATE_LIMIT_MAX_WAIT_MS,
+                  shouldRetry: () => true,
+                  retryAfterMs: () => requestedMs,
+                  signal: abortController.signal,
+                  random: () => 0,
+                  onRetry: ({ delayMs }) => {
+                    console.warn(
+                      `Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`,
+                    );
+                  },
+                });
+                // The backoff sleep is the one place a turn can silently burn
+                // minutes; converting a long Retry-After wait into a clean budget
+                // stop here means the deadline never wedges the session lock.
+                turnBudget.checkDeadline();
                 continue;
               }
+              // Transient server (5xx) or network failure → brief jittered retry.
+              // The residual class: only fires when overflow/timeout/rate_limit did
+              // not match, so a single 502 or connection blip no longer kills the
+              // turn on attempt 1 and discards paid multi-step tool work.
+              // A codex network throw is surfaced as a single attempt and tagged
+              // NetworkError by the bridge's normalizeError. We deliberately cap the
+              // codex network class at zero outer retries to keep it at exactly one
+              // layer; the outer network retry below is for the AI-SDK path, whose
+              // errors are plain TypeErrors (not name="NetworkError") and whose SDK
+              // does zero retries. (Unifying codex network retry with the AI-SDK
+              // path is tracked as a follow-up.)
+              const alreadyRetriedNetwork =
+                failure === "network" && err instanceof Error && err.name === "NetworkError";
+              if (
+                (failure === "server_error" || failure === "network") &&
+                !alreadyRetriedNetwork &&
+                serverErrorAttempts < MAX_SERVER_ERROR_ATTEMPTS
+              ) {
+                serverErrorAttempts++;
+                const retryAfterFloor = retryAfterFloorMs(err, this.ports.extractRetryAfterMs);
+                await backoffWithSentinelError(err, {
+                  attempts: 2,
+                  baseMs: retryAfterFloor ?? SERVER_ERROR_BACKOFF_BASE_MS,
+                  capMs: SERVER_ERROR_BACKOFF_MAX_MS,
+                  shouldRetry: () => true,
+                  retryAfterMs: () => retryAfterFloor,
+                  signal: abortController.signal,
+                });
+                turnBudget.checkDeadline();
+                continue;
+              }
+              // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
+              classifiedTerminalFailure = failure;
+              throw err;
             }
-            // Rate limit → backoff (respect retry-after) + retry
-            if (failure === "rate_limit" && rateLimitAttempts < MAX_RATE_LIMIT_ATTEMPTS) {
-              rateLimitAttempts++;
-              const attemptNo = rateLimitAttempts;
-              // The server hint (if any) is a lower bound; absent one, fall back to a
-              // capped exponential. Either feeds the primitive as the Retry-After
-              // floor so the 120s ceiling and the clamp note are honored bit-for-bit.
-              const requestedMs =
-                retryAfterFloorMs(err, this.ports.extractRetryAfterMs) ??
-                Math.min(
-                  RATE_LIMIT_FALLBACK_BASE_MS * RATE_LIMIT_FALLBACK_MULTIPLIER ** (attemptNo - 1),
-                  RATE_LIMIT_FALLBACK_MAX_MS,
-                );
-              const clampNote =
-                requestedMs > RATE_LIMIT_MAX_WAIT_MS
-                  ? ` (provider requested ${requestedMs}ms, clamped to ${RATE_LIMIT_MAX_WAIT_MS}ms)`
-                  : "";
-              await backoffWithSentinelError(err, {
-                attempts: 2,
-                baseMs: requestedMs,
-                capMs: RATE_LIMIT_MAX_WAIT_MS,
-                shouldRetry: () => true,
-                retryAfterMs: () => requestedMs,
-                random: () => 0,
-                onRetry: ({ delayMs }) => {
-                  console.warn(
-                    `Rate limited (attempt ${attemptNo}/${MAX_RATE_LIMIT_ATTEMPTS}), waiting ${delayMs}ms${clampNote}`,
-                  );
-                },
-              });
-              // The backoff sleep is the one place a turn can silently burn
-              // minutes; converting a long Retry-After wait into a clean budget
-              // stop here means the deadline never wedges the session lock.
-              turnBudget.checkDeadline();
-              continue;
-            }
-            // Transient server (5xx) or network failure → brief jittered retry.
-            // The residual class: only fires when overflow/timeout/rate_limit did
-            // not match, so a single 502 or connection blip no longer kills the
-            // turn on attempt 1 and discards paid multi-step tool work.
-            // A codex network throw is surfaced as a single attempt and tagged
-            // NetworkError by the bridge's normalizeError. We deliberately cap the
-            // codex network class at zero outer retries to keep it at exactly one
-            // layer; the outer network retry below is for the AI-SDK path, whose
-            // errors are plain TypeErrors (not name="NetworkError") and whose SDK
-            // does zero retries. (Unifying codex network retry with the AI-SDK
-            // path is tracked as a follow-up.)
-            const alreadyRetriedNetwork =
-              failure === "network" && err instanceof Error && err.name === "NetworkError";
-            if (
-              (failure === "server_error" || failure === "network") &&
-              !alreadyRetriedNetwork &&
-              serverErrorAttempts < MAX_SERVER_ERROR_ATTEMPTS
-            ) {
-              serverErrorAttempts++;
-              const retryAfterFloor = retryAfterFloorMs(err, this.ports.extractRetryAfterMs);
-              await backoffWithSentinelError(err, {
-                attempts: 2,
-                baseMs: retryAfterFloor ?? SERVER_ERROR_BACKOFF_BASE_MS,
-                capMs: SERVER_ERROR_BACKOFF_MAX_MS,
-                shouldRetry: () => true,
-                retryAfterMs: () => retryAfterFloor,
-              });
-              turnBudget.checkDeadline();
-              continue;
-            }
-            // Rate limit retries exhausted → throw to caller (skip compaction — API is rate limited)
-            classifiedTerminalFailure = failure;
-            throw err;
           }
-        }
-      } catch (terminalErr) {
-        const failure =
-          classifiedTerminalFailure ?? classifyError(terminalErr, this.ports.classifyFailure);
-        // Single failure-emit point: every terminal throw out of the loop is one
-        // failed turn, so the outcome line fires exactly once before the rethrow.
-        this.emitTurnOutcome({
-          turnId,
-          chatId,
-          ok: false,
-          error_class: failure,
-          overflowAttempts,
-          timeoutAttempts,
-          rateLimitAttempts,
-          duration_ms: this.ports.now() - turnStart,
-          compactions,
-        });
-        emitEvent(
-          this.createErrorEvent({
-            failure,
+        } catch (terminalErr) {
+          if (abortController.signal.aborted) {
+            const templateHash = (this.templateHash ??= computeTemplateHash({
+              soul: this.sport.soul,
+              skills: this.sport.skills,
+              ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
+                confirmationGate: this.confirmationGate,
+              }),
+              toolSchemas: this.tools,
+              model: this.config.llm.model,
+            }));
+            try {
+              this.chatStore.appendTurn(chatId, userMessage, streamedText, {
+                templateHash,
+                assembledHash: computeAssembledHash(this.systemPrompt, messages),
+                provider: this.config.llm.provider,
+                model: this.config.llm.model,
+                lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                provenance: ctx.provenance.value,
+              });
+            } catch (persistErr) {
+              console.warn("Interrupted session persistence failed", persistErr);
+            }
+            this.recordInterruptedTurn({
+              chatId,
+              turnId,
+              completedAt: new Date(this.ports.now()).toISOString(),
+              athleteText: userMessage,
+              coachText: streamedText,
+            });
+            this.emitTurnOutcome({
+              turnId,
+              chatId,
+              ok: false,
+              error_class: "interrupted",
+              overflowAttempts,
+              timeoutAttempts,
+              rateLimitAttempts,
+              duration_ms: this.ports.now() - turnStart,
+              compactions,
+            });
+            emitEvent({ type: "interrupted", turnId, chatId, text: streamedText });
+            return streamedText;
+          }
+          const failure =
+            classifiedTerminalFailure ?? classifyError(terminalErr, this.ports.classifyFailure);
+          // Single failure-emit point: every terminal throw out of the loop is one
+          // failed turn, so the outcome line fires exactly once before the rethrow.
+          this.emitTurnOutcome({
             turnId,
             chatId,
+            ok: false,
+            error_class: failure,
             overflowAttempts,
             timeoutAttempts,
             rateLimitAttempts,
-            durationMs: this.ports.now() - turnStart,
+            duration_ms: this.ports.now() - turnStart,
             compactions,
-          }),
-        );
-        throw terminalErr;
+          });
+          emitEvent(
+            this.createErrorEvent({
+              failure,
+              turnId,
+              chatId,
+              overflowAttempts,
+              timeoutAttempts,
+              rateLimitAttempts,
+              durationMs: this.ports.now() - turnStart,
+              compactions,
+            }),
+          );
+          throw terminalErr;
+        }
+      } finally {
+        if (this.activeChatTurns.get(chatId) === abortController) {
+          this.activeChatTurns.delete(chatId);
+        }
       }
     });
+  }
+
+  stopChat(chatId: string): boolean {
+    const controller = this.activeChatTurns.get(chatId);
+    if (controller === undefined || controller.signal.aborted) return false;
+    controller.abort();
+    return true;
   }
 
   private createErrorEvent(input: {

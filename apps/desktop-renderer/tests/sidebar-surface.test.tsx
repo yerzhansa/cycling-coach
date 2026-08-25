@@ -20,6 +20,7 @@ import { clearTrainingRestrictionFocusRequest } from "../src/ui/training/restric
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(),
+    stop: vi.fn(),
     removeQueued: vi.fn(),
     retry: vi.fn(),
     loadEarlier: vi.fn(),
@@ -64,12 +65,6 @@ function stravaDroppedActivities() {
       other: 0,
     },
   };
-}
-
-function setupReadiness(): HTMLElement {
-  const element = document.querySelector<HTMLElement>("[data-sidebar-setup-readiness]");
-  if (element === null) throw new TypeError("sidebar setup readiness missing");
-  return element;
 }
 
 beforeEach(() => {
@@ -446,56 +441,13 @@ describe("sidebar sync chip", () => {
 });
 
 describe("sidebar setup gating", () => {
-  it("shows whether required setup is ready", () => {
+  it("does not repeat setup readiness in the resident sidebar", () => {
     render(<Sidebar />);
-
-    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "ready");
-    expect(setupReadiness()).toHaveTextContent("Ready");
-    expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveAttribute(
-      "data-sidebar-setup-dot",
-      "ready",
-    );
-    expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveClass("bg-ok");
-
-    update({ onboarding: { ...CLOSED_ONBOARDING, initialized: true, loading: false } });
-
-    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "waiting");
-    expect(setupReadiness()).toHaveTextContent("Waiting for setup");
-    expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveAttribute(
-      "data-sidebar-setup-dot",
-      "waiting",
-    );
-    expect(setupReadiness().querySelector("[data-sidebar-setup-dot]")).toHaveClass("bg-warn");
-  });
-
-  it("says setup is being checked only while initial status is unknown", () => {
-    render(<Sidebar />);
-
-    update({ onboarding: CLOSED_ONBOARDING });
-
-    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "checking");
-    expect(setupReadiness()).toHaveTextContent("Checking setup…");
-    expect(setupReadiness()).not.toHaveTextContent("Waiting for setup");
-
-    update({ onboarding: { ...READY_ONBOARDING, loadUnavailable: true } });
-
-    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "ready");
-    expect(setupReadiness()).toHaveTextContent("Ready");
-  });
-
-  it("waits when initialized setup is partially ready and still requires completion", () => {
-    render(<Sidebar />);
-
-    update({
-      onboarding: {
-        ...READY_ONBOARDING,
-        completionRequired: true,
-        readiness: { provider: true, trainingData: true, intake: false },
-      },
-    });
-
-    expect(setupReadiness()).toHaveAttribute("data-sidebar-setup-readiness", "waiting");
-    expect(setupReadiness()).toHaveTextContent("Waiting for setup");
+    expect(document.querySelector("[data-sidebar-setup-readiness]")).toBeNull();
+    expect(document.querySelector("[data-sidebar-setup-dot]")).toBeNull();
+    expect(screen.queryByText("Ready")).toBeNull();
+    expect(screen.queryByText("Waiting for setup")).toBeNull();
+    expect(screen.queryByText("Checking setup…")).toBeNull();
   });
 
   it("has no Setup destination and keeps non-chat destinations usable", async () => {

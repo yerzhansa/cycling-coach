@@ -21,6 +21,7 @@ import { TextDecoder } from "node:util";
 import type {
   ConversationResetInput,
   TranscriptCompletedTurnInput,
+  TranscriptInterruptedTurnInput,
   TranscriptConversationBoundaryReason,
   TranscriptWriterPort,
 } from "@enduragent/engine";
@@ -107,6 +108,11 @@ export interface TranscriptCompletedTurnRecord extends TranscriptCompletedTurnIn
   readonly kind: "turn-completed";
 }
 
+export interface TranscriptInterruptedTurnRecord extends TranscriptInterruptedTurnInput {
+  readonly version: typeof TRANSCRIPT_SCHEMA_VERSION;
+  readonly kind: "turn-interrupted";
+}
+
 export interface TranscriptConversationBoundaryRecord extends ConversationResetInput {
   readonly version: typeof TRANSCRIPT_SCHEMA_VERSION;
   readonly kind: "conversation-boundary";
@@ -119,13 +125,15 @@ export interface ResetIntentRecord extends ConversationResetInput {
   readonly resetId: string;
 }
 
-export type TranscriptRecord = TranscriptCompletedTurnRecord | TranscriptConversationBoundaryRecord;
+export type TranscriptTurnRecord = TranscriptCompletedTurnRecord | TranscriptInterruptedTurnRecord;
+export type TranscriptRecord = TranscriptTurnRecord | TranscriptConversationBoundaryRecord;
 
 export interface TranscriptPageTurn {
   readonly turnId: string;
   readonly completedAt: string;
   readonly athleteText: string;
   readonly coachText: string;
+  readonly delivery?: "interrupted";
 }
 
 export interface TranscriptPageRequest {
@@ -161,7 +169,7 @@ export interface ArchivedConversationList {
 }
 
 interface IndexedTranscriptTurn {
-  readonly record: TranscriptCompletedTurnRecord;
+  readonly record: TranscriptTurnRecord;
   readonly start: number;
   readonly end: number;
 }
@@ -266,7 +274,7 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
   const value = parseJsonObject(bytes);
   if (value === null || value.version !== TRANSCRIPT_SCHEMA_VERSION) return null;
 
-  if (value.kind === "turn-completed") {
+  if (value.kind === "turn-completed" || value.kind === "turn-interrupted") {
     if (
       !hasExactKeys(value, [
         "version",
@@ -287,7 +295,7 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
     ) {
       return null;
     }
-    return value as unknown as TranscriptCompletedTurnRecord;
+    return value as unknown as TranscriptTurnRecord;
   }
 
   if (value.kind === "conversation-boundary") {
@@ -329,6 +337,13 @@ function completedTurnRecord(input: TranscriptCompletedTurnInput): TranscriptCom
     athleteText: input.athleteText,
     coachText: input.coachText,
   };
+}
+
+function interruptedTurnRecord(
+  input: TranscriptInterruptedTurnInput,
+): TranscriptInterruptedTurnRecord {
+  const completed = completedTurnRecord(input);
+  return { ...completed, kind: "turn-interrupted" };
 }
 
 function validateResetFields(input: {
@@ -571,12 +586,13 @@ function encodeArchivedTranscriptCursor(input: DecodedTranscriptCursor): string 
   return encodeCursorVersion(input, ARCHIVED_TRANSCRIPT_CURSOR_VERSION);
 }
 
-function transcriptPageTurn(record: TranscriptCompletedTurnRecord): TranscriptPageTurn {
+function transcriptPageTurn(record: TranscriptTurnRecord): TranscriptPageTurn {
   return {
     turnId: record.turnId,
     completedAt: record.completedAt,
     athleteText: record.athleteText,
     coachText: record.coachText,
+    ...(record.kind === "turn-interrupted" ? { delivery: "interrupted" as const } : {}),
   };
 }
 
@@ -759,7 +775,12 @@ export class TranscriptStore implements TranscriptWriterPort {
     this.appendRecord(input.chatId, bytes);
   }
 
-  readCurrentConversation(chatId: string): TranscriptCompletedTurnRecord[] {
+  appendInterruptedTurn(input: TranscriptInterruptedTurnInput): void {
+    const bytes = serializeTranscriptRecord(interruptedTurnRecord(input));
+    this.appendRecord(input.chatId, bytes);
+  }
+
+  readCurrentConversation(chatId: string): TranscriptTurnRecord[] {
     return this.withDirectory((directoryDescriptor) => {
       const path = this.transcriptPath(chatId);
       const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);

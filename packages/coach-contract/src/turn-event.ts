@@ -66,6 +66,15 @@ export const FinalTextEventSchema = z
   })
   .strict();
 
+export const InterruptedEventSchema = z
+  .object({
+    type: z.literal("interrupted"),
+    turnId: z.string(),
+    chatId: z.string(),
+    text: z.string(),
+  })
+  .strict();
+
 export const ErrorEventSchema = z
   .object({
     type: z.literal("error"),
@@ -107,6 +116,7 @@ export const TurnEventSchema = z.discriminatedUnion("type", [
   ToolEndEventSchema,
   StepTextEventSchema,
   FinalTextEventSchema,
+  InterruptedEventSchema,
   ErrorEventSchema,
   TextDeltaEventSchema,
 ]);

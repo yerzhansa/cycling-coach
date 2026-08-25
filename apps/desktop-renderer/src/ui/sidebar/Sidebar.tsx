@@ -5,8 +5,6 @@ import { cn } from "../../lib/utils.js";
 import { VIEWS } from "../../app/views.js";
 import { registerNewConversationOpener } from "../../state/new-conversation-opener.js";
 import { settingsMutationActive } from "../../state/settings-slice.js";
-import { setupStatusKnown } from "../../onboarding/controller.js";
-import { SETUP_STATUS_CHECKING_COPY } from "../onboarding/copy.js";
 import { setupReady } from "../../state/onboarding-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { SyncChip } from "./SyncChip.js";
@@ -19,8 +17,6 @@ export function Sidebar(): ReactElement {
   const resetPhase = useEnduragentStore((state) => state.chat.resetPhase);
   const actions = useEnduragentStore((state) => state.chatActions);
   const canChat = useEnduragentStore(setupReady);
-  const statusKnown = useEnduragentStore((state) => setupStatusKnown(state.onboarding));
-  const setupState = canChat ? "ready" : statusKnown ? "waiting" : "checking";
   const settingsBusy = useEnduragentStore((state) => settingsMutationActive(state.settings));
   const opener = useRef<HTMLButtonElement>(null);
   const navigationLocked = activeView === "settings" && settingsBusy;
@@ -90,23 +86,6 @@ export function Sidebar(): ReactElement {
       <div className="mt-auto grid gap-0.5 border-t border-line p-inset">
         <UpdateAvailableButton locked={navigationLocked} />
         <SyncChip />
-        <div
-          className="flex min-h-ctl items-center gap-2 px-row text-xs text-ink-2"
-          data-sidebar-setup-readiness={setupState}
-        >
-          <span
-            className={`size-2 rounded-full ${setupState === "ready" ? "bg-ok" : setupState === "waiting" ? "bg-warn" : "bg-line-2"}`}
-            data-sidebar-setup-dot={setupState}
-            aria-hidden="true"
-          />
-          <span>
-            {setupState === "ready"
-              ? "Ready"
-              : setupState === "waiting"
-                ? "Waiting for setup"
-                : SETUP_STATUS_CHECKING_COPY}
-          </span>
-        </div>
       </div>
     </aside>
   );

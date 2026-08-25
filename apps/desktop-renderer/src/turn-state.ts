@@ -3,6 +3,7 @@ import { isSlashCommandText } from "./chat/commands.js";
 
 export const DESKTOP_CHAT_ID = "desktop" as const;
 export const CHAT_WORKING_COPY = "Coach is working…";
+export const CHAT_RESPONSE_STOPPED_COPY = "Response stopped. Your partial response is preserved.";
 export const QUEUED_MESSAGE_SEPARATOR = "\n\n";
 
 export type ChatStatus = "idle" | "streaming" | "interrupted";
@@ -246,6 +247,16 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
               error: { kind: action.event.kind, athleteMessage: action.event.athleteMessage },
             },
           };
+        case "interrupted": {
+          const next = { ...active, draft: action.event.text };
+          return {
+            ...state,
+            status: "interrupted",
+            progress: CHAT_RESPONSE_STOPPED_COPY,
+            activeTurn: next,
+            messages: updateAssistant(state, next, action.event.text, "interrupted"),
+          };
+        }
         case "tool-start":
         case "tool-end":
         case "step-text":
