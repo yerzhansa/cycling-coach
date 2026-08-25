@@ -775,6 +775,30 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
           calls.push(`resumeCoachDecision:${chatId}`);
           return { decision: { ...completedDecision, chatId }, resumed: true };
         },
+        enqueueChatMessage: async ({ chatId }) => {
+          calls.push(`enqueueChatMessage:${chatId}`);
+          return { schemaVersion: 1, revision: 1, items: [] };
+        },
+        getChatQueue: async ({ chatId }) => {
+          calls.push(`getChatQueue:${chatId}`);
+          return { schemaVersion: 1, revision: 1, items: [] };
+        },
+        removeQueuedChatMessage: async ({ chatId }) => {
+          calls.push(`removeQueuedChatMessage:${chatId}`);
+          return { schemaVersion: 1, revision: 2, items: [] };
+        },
+        resumeChatQueue: async ({ chatId }) => {
+          calls.push(`resumeChatQueue:${chatId}`);
+          return { snapshot: { schemaVersion: 1, revision: 2, items: [] } };
+        },
+        runQueuedCommand: async ({ chatId }) => {
+          calls.push(`runQueuedCommand:${chatId}`);
+          return { snapshot: { schemaVersion: 1, revision: 2, items: [] } };
+        },
+        retryQueuedTurn: async ({ chatId }) => {
+          calls.push(`retryQueuedTurn:${chatId}`);
+          return { snapshot: { schemaVersion: 1, revision: 2, items: [] } };
+        },
         getAthleteState: async () => {
           calls.push("getAthleteState");
           return state;
@@ -848,6 +872,24 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         method: "resumeCoachDecision",
         params: { chatId: "chat", decisionId: "decision-1" },
       },
+      {
+        id: 35,
+        method: "enqueueChatMessage",
+        params: { chatId: "chat", submissionId: "submission-1", text: "Hello" },
+      },
+      { id: 36, method: "getChatQueue", params: { chatId: "chat" } },
+      {
+        id: 37,
+        method: "removeQueuedChatMessage",
+        params: { chatId: "chat", queuedMessageId: "queued-1" },
+      },
+      { id: 38, method: "resumeChatQueue", params: { chatId: "chat" } },
+      {
+        id: 39,
+        method: "runQueuedCommand",
+        params: { chatId: "chat", queuedMessageId: "queued-1" },
+      },
+      { id: 40, method: "retryQueuedTurn", params: { chatId: "chat", claimId: "claim-1" } },
       { id: 4, method: "getAthleteState", params: {} },
       {
         id: 5,
@@ -878,6 +920,12 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       "answerCoachDecision:chat",
       "skipCoachDecision:chat",
       "resumeCoachDecision:chat",
+      "enqueueChatMessage:chat",
+      "getChatQueue:chat",
+      "removeQueuedChatMessage:chat",
+      "resumeChatQueue:chat",
+      "runQueuedCommand:chat",
+      "retryQueuedTurn:chat",
       "getAthleteState",
       "getActivityAnalysis",
       "exportTrainingFile",
@@ -1013,7 +1061,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         jsonrpc: "2.0",
         id: "stop",
         method: "stopChat",
-        params: { chatId: "desktop" },
+        params: { chatId: "desktop", turnId: "turn-1" },
       }),
     );
 
@@ -1022,7 +1070,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       id: "stop",
       result: { stopped: true },
     });
-    expect(stopChat).toHaveBeenCalledWith({ chatId: "desktop" });
+    expect(stopChat).toHaveBeenCalledWith({ chatId: "desktop", turnId: "turn-1" });
 
     chatResult.resolve({ text: "partial" });
     expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
@@ -1064,7 +1112,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
         jsonrpc: "2.0",
         id: "stop-decision",
         method: "stopChat",
-        params: { chatId: "desktop" },
+        params: { chatId: "desktop", turnId: "turn-2" },
       }),
     );
 
@@ -1073,7 +1121,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       id: "stop-decision",
       result: { stopped: true },
     });
-    expect(stopChat).toHaveBeenCalledWith({ chatId: "desktop" });
+    expect(stopChat).toHaveBeenCalledWith({ chatId: "desktop", turnId: "turn-2" });
 
     answerResult.resolve({ decision: completedDecision });
     expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({

@@ -199,6 +199,7 @@ export function createChatViewAdapter(input: {
       id: message.id,
       text: message.text,
       command: message.command,
+      restored: message.restored === true,
     }));
     const liveDecisionIds = new Set(
       messages.flatMap((message) => (message.decisionId === undefined ? [] : [message.decisionId])),
@@ -240,16 +241,18 @@ export function createChatViewAdapter(input: {
       decision?.value?.status === "unanswered" ||
       (decision?.value?.status === "answered" && decision.value.continuation.status === "pending");
     const decisionLoading = controls?.decisionLoading === true;
-    const decisionLoadError = controls?.decisionLoadError ?? null;
+    const decisionLoadError = controls?.queueLoadError ?? controls?.decisionLoadError ?? null;
     const decisionUnavailable = decisionLoading || decisionLoadError !== null;
     return {
       messages: sameChatMessages(published.messages, messages) ? published.messages : messages,
       queued: sameChatQueued(published.queued, queued) ? published.queued : queued,
+      retryRequired: state.retryRequired ?? null,
       decision: decision?.value ?? null,
       decisionPhase: decision?.phase ?? "idle",
       decisionAnswerLabel: decision?.answerLabel ?? null,
       decisionError: decision?.error ?? null,
       decisionLoadError,
+      queueMutationError: controls?.queueMutationError ?? null,
       timeline: sameChatTimeline(published.timeline, timeline) ? published.timeline : timeline,
       status: state.status,
       notice:

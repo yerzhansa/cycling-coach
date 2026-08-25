@@ -336,7 +336,10 @@ export class CoachAgent {
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
   private templateHash?: string;
-  private readonly activeChatTurns = new Map<string, AbortController>();
+  private readonly activeChatTurns = new Map<
+    string,
+    { readonly turnId: string; readonly controller: AbortController }
+  >();
 
   constructor(sport: Sport, ports: EngineHostPorts) {
     const config = ports.config;
@@ -684,21 +687,25 @@ export class CoachAgent {
     turn?: { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance },
     onEvent?: TurnEventHandler,
     onDecision?: (decision: CoachDecisionReadModel) => void,
+    requestedTurnId?: string,
   ): Promise<string> {
     // One explicit context per turn, created synchronously before the session
     // lock is queued so rapid same-chat sends can never share turn state. Tool
     // wrappers and sport tools reach it through the tool-execution options, so
     // the tool set and cached template hash never rebuild. resolvedCs is null
     // when the channel supplies nothing (CLI path, no sync data).
+    const turnId = requestedTurnId ?? this.ports.randomId();
     const ctx = createTurnContext(
       turn?.resolvedCs ?? null,
       chatId,
       turn?.referenceProvenance ?? EMPTY_PROVENANCE,
       userMessage,
+      turnId,
     );
     return withSessionLock(chatId, async () => {
       const abortController = new AbortController();
-      this.activeChatTurns.set(chatId, abortController);
+      const activeTurn = { turnId, controller: abortController };
+      this.activeChatTurns.set(chatId, activeTurn);
       try {
         const existingDecision = this.ports.coachDecisions?.getDecision(chatId);
         if (existingDecision?.status === "unanswered") {
@@ -720,7 +727,6 @@ export class CoachAgent {
           this.repairCoachDecisionSession(existingDecision);
         }
         const turnStart = this.ports.now();
-        const turnId = this.ports.randomId();
         const emitEvent = (event: TurnEvent): void => {
           try {
             onEvent?.(event);
@@ -1402,17 +1408,22 @@ export class CoachAgent {
           throw terminalErr;
         }
       } finally {
-        if (this.activeChatTurns.get(chatId) === abortController) {
+        if (this.activeChatTurns.get(chatId) === activeTurn) {
           this.activeChatTurns.delete(chatId);
         }
       }
     });
   }
 
-  stopChat(chatId: string): boolean {
-    const controller = this.activeChatTurns.get(chatId);
-    if (controller === undefined || controller.signal.aborted) return false;
-    controller.abort();
+  stopChat(chatId: string, turnId: string): boolean {
+    const activeTurn = this.activeChatTurns.get(chatId);
+    if (
+      activeTurn === undefined ||
+      activeTurn.turnId !== turnId ||
+      activeTurn.controller.signal.aborted
+    )
+      return false;
+    activeTurn.controller.abort();
     return true;
   }
 
@@ -1641,7 +1652,7 @@ export class CoachAgent {
     try {
       onEvent?.({ type: "turn-start", turnId, chatId: decision.chatId });
     } catch {}
-    const context = createTurnContext(null, decision.chatId, EMPTY_PROVENANCE, "");
+    const context = createTurnContext(null, decision.chatId, EMPTY_PROVENANCE, "", turnId);
     const system =
       buildSystemPrompt(this.sport, this.memory, this.tz, this.buildDegradeBlock(), {
         excludeSections: this.excludedSectionNames,
@@ -1705,7 +1716,8 @@ export class CoachAgent {
     ] as ModelMessage[];
     const abortController = new AbortController();
     let streamedText = "";
-    this.activeChatTurns.set(decision.chatId, abortController);
+    const activeTurn = { turnId, controller: abortController };
+    this.activeChatTurns.set(decision.chatId, activeTurn);
     try {
       const result = await this.llm.generate({
         system,
@@ -1745,12 +1757,9 @@ export class CoachAgent {
       try {
         onEvent?.({ type: "interrupted", turnId, chatId: decision.chatId, text: streamedText });
       } catch {}
-      return this.requireCoachDecisionStore().getDecision(
-        decision.chatId,
-        decision.decisionId,
-      )!;
+      return this.requireCoachDecisionStore().getDecision(decision.chatId, decision.decisionId)!;
     } finally {
-      if (this.activeChatTurns.get(decision.chatId) === abortController) {
+      if (this.activeChatTurns.get(decision.chatId) === activeTurn) {
         this.activeChatTurns.delete(decision.chatId);
       }
     }

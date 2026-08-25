@@ -41,21 +41,24 @@
       "surface": "chat",
       "expected": "A message sent during streaming is shown as queued and dispatches exactly once after the active turn succeeds.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/chat-controller.test.ts > queues a message sent while the coach streams and dispatches it once the turn settles"
+      "test": "apps/desktop-renderer/tests/chat-queue-recovery.test.ts > shows a message queued during streaming and dispatches it exactly once after success"
     },
     {
       "id": "chat.queue.coalescing",
       "surface": "chat",
       "expected": "Queued free text coalesces into one next turn while each queued slash command remains its own turn.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/chat-controller.test.ts > coalesces queued free text into one turn and keeps each command on its own turn"
+      "test": "packages/engine/tests/chat-queue.test.ts > groups consecutive ordinary messages and stops at a command barrier"
     },
     {
       "id": "chat.queue.hold-and-remove",
       "surface": "chat",
       "expected": "Queued messages remain held after a failed or interrupted turn and each queued item can be removed before dispatch.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/chat-controller.test.ts > keeps a queued message un-drained after a failed turn and removes it on request"
+      "tests": [
+        "packages/engine/tests/chat-queue.test.ts > Stop marks only the active claim retry-required and never drains the command behind it",
+        "packages/core/tests/chat-queue-store.test.ts > removes every unclaimed item by stable identity before dispatch"
+      ]
     },
     {
       "id": "chat.commands.slash-picker",

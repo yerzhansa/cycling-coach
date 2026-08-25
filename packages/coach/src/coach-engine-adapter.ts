@@ -3,6 +3,10 @@ import {
   AnswerCoachDecisionRpcResultSchema,
   AthleteStateSchema,
   ChatRequestSchema,
+  ChatQueueRunResultSchema,
+  ChatQueueSnapshotSchema,
+  EnqueueChatMessageRequestSchema,
+  GetChatQueueRequestSchema,
   ChatResponseSchema,
   GetCoachDecisionRpcParamsSchema,
   GetCoachDecisionRpcResultSchema,
@@ -12,13 +16,19 @@ import {
   ResetSessionResponseSchema,
   ResumeCoachDecisionRpcParamsSchema,
   ResumeCoachDecisionRpcResultSchema,
+  RemoveQueuedChatMessageRequestSchema,
+  ResumeChatQueueRequestSchema,
+  RetryQueuedTurnRequestSchema,
+  RunQueuedCommandRequestSchema,
   SkipCoachDecisionRpcParamsSchema,
   SkipCoachDecisionRpcResultSchema,
   StopChatRequestSchema,
   StopChatResponseSchema,
   TurnEventSchema,
   type AthleteState,
+  type ChatQueueRunResult,
   type CoachEngine,
+  type TurnEvent,
 } from "@enduragent/coach-contract";
 import type { CyclingFtpAnchorResolver } from "@enduragent/kernel/anchors";
 
@@ -30,6 +40,25 @@ export interface CoachEngineAdapterInput {
 }
 
 export function createCoachEngineAdapter(input: CoachEngineAdapterInput): CoachEngine {
+  const queueStream = async (
+    operation: (onEvent: (event: TurnEvent) => void) => Promise<ChatQueueRunResult>,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<ChatQueueRunResult> => {
+    let firstEventValidationError: unknown | undefined;
+    const response = await operation((event) => {
+      if (firstEventValidationError !== undefined) return;
+      const result = TurnEventSchema.safeParse(event);
+      if (!result.success) {
+        firstEventValidationError = result.error;
+        return;
+      }
+      try {
+        onEvent?.(result.data);
+      } catch {}
+    });
+    if (firstEventValidationError !== undefined) throw firstEventValidationError;
+    return ChatQueueRunResultSchema.parse(response);
+  };
   return {
     async chat(request, onEvent) {
       const parsed = ChatRequestSchema.parse(request);
@@ -65,6 +94,42 @@ export function createCoachEngineAdapter(input: CoachEngineAdapterInput): CoachE
       return StopChatResponseSchema.parse(
         await input.backend.stopChat?.(parsed).then((value) => value ?? { stopped: false }),
       );
+    },
+    async enqueueChatMessage(request) {
+      const parsed = EnqueueChatMessageRequestSchema.parse(request);
+      if (input.backend.enqueueChatMessage === undefined)
+        throw new Error("Durable chat queue is unavailable.");
+      return ChatQueueSnapshotSchema.parse(await input.backend.enqueueChatMessage(parsed));
+    },
+    async getChatQueue(request) {
+      const parsed = GetChatQueueRequestSchema.parse(request);
+      if (input.backend.getChatQueue === undefined)
+        throw new Error("Durable chat queue is unavailable.");
+      return ChatQueueSnapshotSchema.parse(await input.backend.getChatQueue(parsed));
+    },
+    async removeQueuedChatMessage(request) {
+      const parsed = RemoveQueuedChatMessageRequestSchema.parse(request);
+      if (input.backend.removeQueuedChatMessage === undefined)
+        throw new Error("Durable chat queue is unavailable.");
+      return ChatQueueSnapshotSchema.parse(await input.backend.removeQueuedChatMessage(parsed));
+    },
+    async resumeChatQueue(request, onEvent) {
+      const parsed = ResumeChatQueueRequestSchema.parse(request);
+      if (input.backend.resumeChatQueue === undefined)
+        throw new Error("Durable chat queue is unavailable.");
+      return queueStream((emit) => input.backend.resumeChatQueue!(parsed, emit), onEvent);
+    },
+    async runQueuedCommand(request, onEvent) {
+      const parsed = RunQueuedCommandRequestSchema.parse(request);
+      if (input.backend.runQueuedCommand === undefined)
+        throw new Error("Durable chat queue is unavailable.");
+      return queueStream((emit) => input.backend.runQueuedCommand!(parsed, emit), onEvent);
+    },
+    async retryQueuedTurn(request, onEvent) {
+      const parsed = RetryQueuedTurnRequestSchema.parse(request);
+      if (input.backend.retryQueuedTurn === undefined)
+        throw new Error("Durable chat queue is unavailable.");
+      return queueStream((emit) => input.backend.retryQueuedTurn!(parsed, emit), onEvent);
     },
     async resetSession(request) {
       const parsed = ResetSessionRequestSchema.parse(request);

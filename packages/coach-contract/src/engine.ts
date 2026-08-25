@@ -12,6 +12,16 @@ import {
   type SkipCoachDecisionRpcParams,
   type SkipCoachDecisionRpcResult,
 } from "./coach-decision.js";
+import type {
+  ChatQueueRunResult,
+  ChatQueueSnapshot,
+  EnqueueChatMessageRequest,
+  GetChatQueueRequest,
+  RemoveQueuedChatMessageRequest,
+  ResumeChatQueueRequest,
+  RetryQueuedTurnRequest,
+  RunQueuedCommandRequest,
+} from "./chat-queue.js";
 
 export const ChatRequestSchema = z
   .object({
@@ -51,7 +61,9 @@ export const ChatResponseSchema = z
   });
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
 
-export const StopChatRequestSchema = z.object({ chatId: z.string() }).strict();
+export const StopChatRequestSchema = z
+  .object({ chatId: z.string(), turnId: z.string().min(1) })
+  .strict();
 export type StopChatRequest = z.infer<typeof StopChatRequestSchema>;
 
 export const StopChatResponseSchema = z.object({ stopped: z.boolean() }).strict();
@@ -84,6 +96,21 @@ export type HasSessionResponse = z.infer<typeof HasSessionResponseSchema>;
 export interface CoachEngine {
   chat(request: ChatRequest, onEvent?: (event: TurnEvent) => void): Promise<ChatResponse>;
   stopChat?(request: StopChatRequest): Promise<StopChatResponse>;
+  enqueueChatMessage?(request: EnqueueChatMessageRequest): Promise<ChatQueueSnapshot>;
+  getChatQueue?(request: GetChatQueueRequest): Promise<ChatQueueSnapshot>;
+  removeQueuedChatMessage?(request: RemoveQueuedChatMessageRequest): Promise<ChatQueueSnapshot>;
+  resumeChatQueue?(
+    request: ResumeChatQueueRequest,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<ChatQueueRunResult>;
+  runQueuedCommand?(
+    request: RunQueuedCommandRequest,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<ChatQueueRunResult>;
+  retryQueuedTurn?(
+    request: RetryQueuedTurnRequest,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<ChatQueueRunResult>;
   getCoachDecision(request: GetCoachDecisionRpcParams): Promise<GetCoachDecisionRpcResult>;
   answerCoachDecision(
     request: AnswerCoachDecisionRpcParams,

@@ -22,6 +22,8 @@ function stubActions(): ChatActions {
     submit: vi.fn(),
     stop: vi.fn(),
     removeQueued: vi.fn(),
+    runQueuedCommand: vi.fn(),
+    retryQueuedTurn: vi.fn(),
     retry: vi.fn(),
     loadEarlier: vi.fn(),
     retryHydration: vi.fn(),

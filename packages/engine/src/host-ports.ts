@@ -1,5 +1,6 @@
 import type {
   AthleteState,
+  ChatQueueSnapshot,
   CoachDecisionAnswer,
   CoachDecisionContinuationLineage,
   CoachDecisionReadModel,
@@ -149,6 +150,24 @@ export interface ChatStorePort {
   overwriteHistory(chatId: string, messages: ModelMessage[]): void;
   resetConversation(input: ConversationResetInput): void;
   archivePreCompact(chatId: string): void;
+  getChatQueue?(chatId: string): ChatQueueSnapshot;
+  enqueueChatMessage?(
+    chatId: string,
+    submissionId: string,
+    text: string,
+    queuedMessageId: string,
+  ): ChatQueueSnapshot;
+  removeQueuedChatMessage?(chatId: string, queuedMessageId: string): ChatQueueSnapshot;
+  claimChatQueue?(
+    chatId: string,
+    claimId: string,
+    turnId: string,
+    queuedMessageIds: readonly string[],
+  ): ChatQueueSnapshot;
+  completeChatQueueClaim?(chatId: string, claimId: string): ChatQueueSnapshot;
+  requireChatQueueRetry?(chatId: string, claimId: string): ChatQueueSnapshot;
+  retryChatQueueClaim?(chatId: string, claimId: string, turnId: string): ChatQueueSnapshot;
+  clearChatQueue?(chatId: string): ChatQueueSnapshot;
 }
 
 export type TranscriptConversationBoundaryReason = "explicit-reset" | "stale-reset";
@@ -177,6 +196,7 @@ export interface TranscriptWriterPort {
 export interface CoachDecisionStorePort {
   appendDecisionRequested(input: {
     readonly decision: CoachDecisionReadModel;
+    readonly turnId: string;
     readonly toolCallId: string;
     readonly athleteText: string;
     readonly requestedAt: string;

@@ -57,6 +57,7 @@ export function createCoachDecisionTool(input: {
       try {
         persisted = input.store.appendDecisionRequested({
           decision,
+          turnId: context.turnId,
           toolCallId: execution.toolCallId,
           athleteText: context.athleteText,
           requestedAt: new Date(input.now()).toISOString(),

@@ -1,4 +1,10 @@
-import type { CoachEngine } from "@enduragent/coach-contract";
+import type {
+  ChatQueueRunResult,
+  ChatQueueSnapshot,
+  CoachEngine,
+  QueuedChatMessage,
+  TurnEvent,
+} from "@enduragent/coach-contract";
 import { CoachAgent } from "./agent/coach-agent.js";
 import { extractAccountId } from "./agent/codex/jwt.js";
 import type { EngineHostPorts } from "./host-ports.js";
@@ -57,6 +63,137 @@ export interface CreateCoachEngineInput {
 
 export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
   const agent = new CoachAgent(input.sport, input.ports);
+  const queueRuns = new Map<string, Promise<ChatQueueRunResult>>();
+  const queueAuthorities = new Map<string, Promise<void>>();
+  const withQueueAuthority = async <T>(chatId: string, work: () => Promise<T>): Promise<T> => {
+    const previous = queueAuthorities.get(chatId) ?? Promise.resolve();
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.catch(() => {}).then(() => gate);
+    queueAuthorities.set(chatId, tail);
+    await previous.catch(() => {});
+    try {
+      return await work();
+    } finally {
+      release();
+      if (queueAuthorities.get(chatId) === tail) queueAuthorities.delete(chatId);
+    }
+  };
+  const queuePort = <K extends keyof EngineHostPorts["chatStore"]>(
+    name: K,
+  ): NonNullable<EngineHostPorts["chatStore"][K]> => {
+    const operation = input.ports.chatStore[name];
+    if (typeof operation !== "function")
+      throw new Error("Durable chat queue storage is unavailable.");
+    return operation as NonNullable<EngineHostPorts["chatStore"][K]>;
+  };
+  const snapshot = (chatId: string): ChatQueueSnapshot =>
+    queuePort("getChatQueue").call(input.ports.chatStore, chatId);
+  const queueText = (items: readonly QueuedChatMessage[]): string =>
+    items.map((item) => item.text).join("\n\n");
+  const runQueue = (
+    chatId: string,
+    mode: "resume" | "command" | "retry",
+    exactId: string | undefined,
+    onEvent: ((event: TurnEvent) => void) | undefined,
+  ): Promise<ChatQueueRunResult> => {
+    const active = queueRuns.get(chatId);
+    if (active !== undefined) return active;
+    const task = withQueueAuthority(chatId, async (): Promise<ChatQueueRunResult> => {
+      const before = snapshot(chatId);
+      const pendingDecision = input.ports.coachDecisions?.getDecision(chatId);
+      if (
+        pendingDecision?.status === "unanswered" ||
+        (pendingDecision?.status === "answered" &&
+          pendingDecision.continuation.status === "pending")
+      ) {
+        return { snapshot: before };
+      }
+      let claimId: string;
+      let turnId: string;
+      let selected: readonly QueuedChatMessage[];
+      if (mode === "retry") {
+        const recovery = before.retryRequired;
+        if (recovery === undefined || recovery.claimId !== exactId) return { snapshot: before };
+        claimId = recovery.claimId;
+        turnId = input.ports.randomId();
+        selected = before.items.slice(0, recovery.queuedMessageIds.length);
+        queuePort("retryChatQueueClaim").call(input.ports.chatStore, chatId, claimId, turnId);
+      } else {
+        const head = before.items[0];
+        if (head === undefined || before.retryRequired !== undefined) return { snapshot: before };
+        if (mode === "command") {
+          if (head.kind !== "slash-command" || head.queuedMessageId !== exactId)
+            return { snapshot: before };
+          selected = [head];
+        } else {
+          if (head.kind === "slash-command") {
+            if (head.restored) return { snapshot: before };
+            selected = [head];
+          } else {
+            let size = 1;
+            while (before.items[size]?.kind === "ordinary") size += 1;
+            selected = before.items.slice(0, size);
+          }
+        }
+        claimId = input.ports.randomId();
+        turnId = input.ports.randomId();
+        queuePort("claimChatQueue").call(
+          input.ports.chatStore,
+          chatId,
+          claimId,
+          turnId,
+          selected.map((item) => item.queuedMessageId),
+        );
+      }
+      let interrupted = false;
+      try {
+        let decision;
+        const text = await agent.chat(
+          chatId,
+          queueText(selected),
+          undefined,
+          (event) => {
+            if (event.type === "interrupted") interrupted = true;
+            onEvent?.(event);
+          },
+          (requested) => {
+            decision = requested;
+          },
+          turnId,
+        );
+        if (interrupted) {
+          return {
+            snapshot: queuePort("requireChatQueueRetry").call(
+              input.ports.chatStore,
+              chatId,
+              claimId,
+            ),
+            response: decision === undefined ? { text } : { text, decision },
+          };
+        }
+        return {
+          snapshot: queuePort("completeChatQueueClaim").call(
+            input.ports.chatStore,
+            chatId,
+            claimId,
+          ),
+          response: decision === undefined ? { text } : { text, decision },
+        };
+      } catch (error) {
+        queuePort("requireChatQueueRetry").call(input.ports.chatStore, chatId, claimId);
+        throw error;
+      }
+    });
+    queueRuns.set(chatId, task);
+    const release = (): void => {
+      if (queueRuns.get(chatId) === task) queueRuns.delete(chatId);
+    };
+    void task.then(release, release);
+    return task;
+  };
   return {
     chat: async (request, onEvent) => {
       let decision;
@@ -73,12 +210,33 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       );
       return decision === undefined ? { text } : { text, decision };
     },
-    stopChat: async (request) => ({ stopped: agent.stopChat(request.chatId) }),
+    stopChat: async (request) => ({ stopped: agent.stopChat(request.chatId, request.turnId) }),
+    enqueueChatMessage: async (request) =>
+      queuePort("enqueueChatMessage").call(
+        input.ports.chatStore,
+        request.chatId,
+        request.submissionId,
+        request.text,
+        input.ports.randomId(),
+      ),
+    getChatQueue: async (request) => snapshot(request.chatId),
+    removeQueuedChatMessage: async (request) =>
+      queuePort("removeQueuedChatMessage").call(
+        input.ports.chatStore,
+        request.chatId,
+        request.queuedMessageId,
+      ),
+    resumeChatQueue: (request, onEvent) => runQueue(request.chatId, "resume", undefined, onEvent),
+    runQueuedCommand: (request, onEvent) =>
+      runQueue(request.chatId, "command", request.queuedMessageId, onEvent),
+    retryQueuedTurn: (request, onEvent) =>
+      runQueue(request.chatId, "retry", request.claimId, onEvent),
     getCoachDecision: (request) => agent.getCoachDecision(request),
     answerCoachDecision: (request, onEvent) => agent.answerCoachDecision(request, onEvent),
     skipCoachDecision: (request) => agent.skipCoachDecision(request),
     resumeCoachDecision: (request, onEvent) => agent.resumeCoachDecision(request, onEvent),
-    resetSession: (request) => agent.resetSession(request.chatId),
+    resetSession: (request) =>
+      withQueueAuthority(request.chatId, () => agent.resetSession(request.chatId)),
     hasSession: async (request) => ({ hasSession: agent.hasSession(request.chatId) }),
     getAthleteState: () => agent.getAthleteState(),
   };

@@ -52,6 +52,7 @@ function harness(input: {
   appendCompletedTurn?: (turn: TranscriptCompletedTurnInput) => void;
   appendInterruptedTurn?: (turn: TranscriptInterruptedTurnInput) => void;
   config?: Partial<EngineHostPorts["config"]["session"]>;
+  randomId?: () => string;
 }) {
   const dataDir = makeDataDir();
   const base = baseAgentConfig(dataDir);
@@ -69,7 +70,7 @@ function harness(input: {
       session: { ...base.config.session, timezone: "UTC", ...input.config },
     },
     now: () => Date.parse("2026-07-22T12:34:56.789Z"),
-    randomId: () => "turn-transcript-1",
+    randomId: input.randomId ?? (() => "turn-transcript-1"),
     classifyFailure: input.classifyFailure ?? base.classifyFailure,
     logger: {
       ...base.logger,
@@ -279,9 +280,9 @@ describe("CoachAgent transcript recording", () => {
     );
 
     await vi.waitFor(() => expect(releaseFirst).toBeTypeOf("function"));
-    expect(setup.agent.stopChat("chat-stop")).toBe(true);
+    expect(setup.agent.stopChat("chat-stop", "turn-transcript-1")).toBe(true);
     await expect(first).resolves.toBe("Partial response");
-    expect(setup.agent.stopChat("chat-stop")).toBe(false);
+    expect(setup.agent.stopChat("chat-stop", "turn-transcript-1")).toBe(false);
     expect(setup.completed).toEqual([]);
     expect(setup.interrupted).toEqual([
       {
@@ -306,6 +307,39 @@ describe("CoachAgent transcript recording", () => {
 
     await expect(setup.agent.chat("chat-stop", "continue")).resolves.toBe("next response");
     releaseFirst?.();
+  });
+
+  it("ignores a delayed Stop for a completed turn after its successor starts", async () => {
+    const ids = ["turn-a", "turn-b"];
+    let secondStarted!: () => void;
+    const activeSecond = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    let secondSignal: AbortSignal | undefined;
+    let attempt = 0;
+    const setup = harness({
+      randomId: () => ids.shift() ?? "unexpected-turn",
+      generate: async (request) => {
+        attempt += 1;
+        if (attempt === 1) return result("First response");
+        secondSignal = request.options.signal;
+        secondStarted();
+        await new Promise<void>((_resolve, reject) => {
+          request.options.signal?.addEventListener("abort", () => reject(new Error("stopped")), {
+            once: true,
+          });
+        });
+        return result("unreachable");
+      },
+    });
+
+    await setup.agent.chat("chat-stop-scope", "first");
+    const second = setup.agent.chat("chat-stop-scope", "second");
+    await activeSecond;
+    expect(setup.agent.stopChat("chat-stop-scope", "turn-a")).toBe(false);
+    expect(secondSignal?.aborted).toBe(false);
+    expect(setup.agent.stopChat("chat-stop-scope", "turn-b")).toBe(true);
+    await expect(second).resolves.toBe("");
   });
 
   it.each([

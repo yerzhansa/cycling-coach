@@ -51,6 +51,7 @@ describe("TranscriptStore coach decisions", () => {
     const store = new TranscriptStore(makeDataDir());
     const requested = {
       decision: unanswered(),
+      turnId: "turn-decision",
       toolCallId: "tool-1",
       athleteText: "Should I keep tomorrow's tempo session?",
       requestedAt: "2026-08-24T00:00:00.000Z",
@@ -92,6 +93,7 @@ describe("TranscriptStore coach decisions", () => {
     expect(answered).toMatchObject({ status: "answered", continuation: { status: "pending" } });
     expect(() =>
       store.appendDecisionRequested({
+        turnId: "turn-decision",
         decision: unanswered("decision-2"),
         toolCallId: "tool-2",
         athleteText: "One more question.",
@@ -207,6 +209,7 @@ describe("TranscriptStore coach decisions", () => {
       () => RESET_ID,
     );
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: unanswered(),
       toolCallId: "tool-1",
       athleteText: "Should I keep tomorrow's tempo session?",
@@ -250,6 +253,7 @@ describe("TranscriptStore coach decisions", () => {
     });
     const store = new ConversationStore(new ChatStore(dataDir), transcript, () => RESET_ID);
     store.appendDecisionRequested({
+      turnId: "turn-decision",
       decision: unanswered(),
       toolCallId: "tool-1",
       athleteText: "Should I keep tomorrow's tempo session?",

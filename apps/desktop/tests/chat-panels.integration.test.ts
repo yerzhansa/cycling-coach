@@ -162,6 +162,20 @@ function makeScript(
   let units: "metric" | "imperial" = "metric";
   let hasSession = false;
   let lastSynced: string = athleteState.lastSynced;
+  let queueRevision = 0;
+  let queueItems: Array<{
+    queuedMessageId: string;
+    submissionId: string;
+    text: string;
+    kind: "ordinary" | "slash-command";
+    position: number;
+    restored: boolean;
+  }> = [];
+  const queueSnapshot = () => ({
+    schemaVersion: 1 as const,
+    revision: queueRevision,
+    items: queueItems,
+  });
   return {
     onRequest(value) {
       const request = value as ScriptRequest;
@@ -359,7 +373,31 @@ function makeScript(
         units = (request.params as { readonly value: "metric" | "imperial" }).value;
         return response({ value: units, source: "cycling" });
       }
-      if (request.method === "chat") {
+      if (request.method === "getChatQueue") return response(queueSnapshot());
+      if (request.method === "enqueueChatMessage") {
+        const params = request.params as { readonly submissionId: string; readonly text: string };
+        if (!queueItems.some((item) => item.submissionId === params.submissionId)) {
+          queueRevision += 1;
+          queueItems.push({
+            queuedMessageId: `queued-${queueRevision}`,
+            submissionId: params.submissionId,
+            text: params.text,
+            kind: params.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
+            position: queueItems.length,
+            restored: false,
+          });
+        }
+        return response(queueSnapshot());
+      }
+      if (request.method === "removeQueuedChatMessage") {
+        const id = (request.params as { readonly queuedMessageId: string }).queuedMessageId;
+        queueItems = queueItems
+          .filter((item) => item.queuedMessageId !== id)
+          .map((item, position) => ({ ...item, position }));
+        queueRevision += 1;
+        return response(queueSnapshot());
+      }
+      if (request.method === "resumeChatQueue") {
         hasSession = true;
         const firstDelta = "## Today’s ride\n\nHold   **ste";
         const finalText = `${firstDelta}ady**.
@@ -376,6 +414,7 @@ ${"nonwrapping".repeat(36)}
 
 [Guide](https://example.test/guide)`;
         return [
+          JSON.stringify({ type: "turn-start", turnId: "turn-fixture", chatId: "desktop" }),
           JSON.stringify({
             type: "text_delta",
             turnId: "turn-fixture",
@@ -387,7 +426,13 @@ ${"nonwrapping".repeat(36)}
             delta: finalText.slice(firstDelta.length),
           }),
           JSON.stringify({ type: "final-text", turnId: "turn-fixture", text: finalText }),
-          JSON.stringify({ text: finalText }),
+          JSON.stringify(
+            (() => {
+              queueItems = [];
+              queueRevision += 1;
+              return { snapshot: queueSnapshot(), response: { text: finalText } };
+            })(),
+          ),
         ];
       }
       if (request.method === "hasSession") return response({ hasSession });
@@ -440,6 +485,8 @@ ${"nonwrapping".repeat(36)}
       }
       if (request.method === "resetSession") {
         hasSession = false;
+        queueItems = [];
+        queueRevision += 1;
         return response({ memoryFlushed: true });
       }
       if (request.method === "sync") {
@@ -745,7 +792,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       athleteRows: 0,
       quickActionClicks: 0,
     });
-    expect(calls.filter((call) => call.method === "chat")).toHaveLength(0);
+    expect(calls.filter((call) => call.method === "enqueueChatMessage")).toHaveLength(0);
 
     const committedMessage = "回復走を30分します。";
     const committedEnter = await fixture.evaluate<{
@@ -765,7 +812,6 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         quickAction.addEventListener("click", recordQuickActionClick);
       }
       textarea.value = ${JSON.stringify(committedMessage)};
-      const conversation = document.querySelector(".conversation");
       const event = new KeyboardEvent("keydown", {
         key: "Enter",
         bubbles: true,
@@ -773,7 +819,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       });
       const dispatchResult = textarea.dispatchEvent(event);
       const deadline = Date.now() + 5000;
-      while (conversation.dataset.chatStatus === "streaming" && Date.now() < deadline) {
+      while (
+        document.querySelectorAll(".chat-message--athlete").length === 0 &&
+        Date.now() < deadline
+      ) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       for (const quickAction of quickActions) {
@@ -796,12 +845,19 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       athleteMessages: [committedMessage],
       quickActionClicks: 0,
     });
-    expect(calls.filter((call) => call.method === "chat")).toEqual([
+    expect(calls.filter((call) => call.method === "enqueueChatMessage")).toEqual([
       {
         jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: committedMessage },
+        method: "enqueueChatMessage",
+        params: {
+          chatId: "desktop",
+          submissionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+          text: committedMessage,
+        },
       },
+    ]);
+    expect(calls.filter((call) => call.method === "resumeChatQueue")).toEqual([
+      { jsonrpc: "2.0", method: "resumeChatQueue", params: { chatId: "desktop" } },
     ]);
   }, 90_000);
 
@@ -922,14 +978,24 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       });
       textarea.dispatchEvent(streamingEnter);
       const streamingEnterHandled = streamingEnter.defaultPrevented;
-      const streamingDraftCleared = textarea.value === "";
       const streamingFocusPreserved = document.activeElement === textarea;
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const queueDeadline = Date.now() + 5000;
+      while (
+        (textarea.value !== "" ||
+          document.querySelector(".chat-queue__text")?.textContent !== "How should I recover?") &&
+        Date.now() < queueDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const streamingDraftCleared = textarea.value === "";
       const streamingQueued = [...document.querySelectorAll(".chat-queue__text")].map(
         (node) => node.textContent,
       );
       document.querySelector(".chat-queue__remove")?.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      const removalDeadline = Date.now() + 5000;
+      while (document.querySelector(".chat-queue") && Date.now() < removalDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
       const streamingQueueCleared = document.querySelector(".chat-queue") === null;
       textarea.value = "How should I recover?";
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1583,12 +1649,28 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
     expect(
       calls.slice(syncCallIndex + 1).filter((call) => call.method === "getAthleteState"),
     ).toHaveLength(1);
-    expect(calls.filter((call) => call.method === "chat")).toEqual([
+    expect(calls.filter((call) => call.method === "enqueueChatMessage")).toEqual([
       {
         jsonrpc: "2.0",
-        method: "chat",
-        params: { chatId: "desktop", message: "What should I ride?" },
+        method: "enqueueChatMessage",
+        params: {
+          chatId: "desktop",
+          submissionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+          text: "What should I ride?",
+        },
       },
+      {
+        jsonrpc: "2.0",
+        method: "enqueueChatMessage",
+        params: {
+          chatId: "desktop",
+          submissionId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+          text: "How should I recover?",
+        },
+      },
+    ]);
+    expect(calls.filter((call) => call.method === "resumeChatQueue")).toEqual([
+      { jsonrpc: "2.0", method: "resumeChatQueue", params: { chatId: "desktop" } },
     ]);
     expect(calls.filter((call) => call.method === "setUnitsPreference")).toEqual([
       { jsonrpc: "2.0", method: "setUnitsPreference", params: { value: "imperial" } },

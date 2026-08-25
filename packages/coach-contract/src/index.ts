@@ -12,3 +12,4 @@ export * from "./activity-analysis.js";
 export * from "./training-export.js";
 export * from "./platform-path.js";
 export * from "./coach-decision.js";
+export * from "./chat-queue.js";

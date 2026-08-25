@@ -1,4 +1,8 @@
-import type { CoachDecisionAnswer, CoachDecisionReadModel } from "@enduragent/coach-contract";
+import type {
+  ChatQueueRecoveryClaim,
+  CoachDecisionAnswer,
+  CoachDecisionReadModel,
+} from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
 import type { TranscriptHydrationChange, TranscriptHydrationStatus } from "../chat/hydration.js";
 import type { FirstSyncState } from "../first-sync.js";
@@ -19,6 +23,7 @@ export interface ChatQueuedView {
   readonly id: string;
   readonly text: string;
   readonly command: boolean;
+  readonly restored: boolean;
 }
 
 export interface ChatChoiceView {
@@ -38,11 +43,13 @@ export type ChatDecisionPhase = "idle" | "continuing" | "recovering";
 export interface ChatSurfaceState {
   readonly messages: readonly ChatMessageView[];
   readonly queued: readonly ChatQueuedView[];
+  readonly retryRequired: ChatQueueRecoveryClaim | null;
   readonly decision: CoachDecisionReadModel | null;
   readonly decisionPhase: ChatDecisionPhase;
   readonly decisionAnswerLabel: string | null;
   readonly decisionError: string | null;
   readonly decisionLoadError: string | null;
+  readonly queueMutationError?: string | null;
   readonly timeline: readonly ChatTranscriptItemView[];
   readonly status: ChatStatus;
   readonly notice: string | null;
@@ -63,9 +70,11 @@ export interface ChatSurfaceState {
 }
 
 export interface ChatActions {
-  submit(message: string): void;
+  submit(message: string): Promise<boolean>;
   stop(): void;
   removeQueued(id: string): void;
+  runQueuedCommand(id: string): void;
+  retryQueuedTurn(claimId: string): void;
   retry(): void;
   loadEarlier(): void;
   retryHydration(): void;
@@ -81,11 +90,13 @@ export interface ChatActions {
 export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   messages: Object.freeze([]),
   queued: Object.freeze([]),
+  retryRequired: null,
   decision: null,
   decisionPhase: "idle",
   decisionAnswerLabel: null,
   decisionError: null,
   decisionLoadError: null,
+  queueMutationError: null,
   timeline: Object.freeze([]),
   status: "idle",
   notice: null,
@@ -149,7 +160,8 @@ export function sameChatQueued(
       other !== undefined &&
       message.id === other.id &&
       message.text === other.text &&
-      message.command === other.command
+      message.command === other.command &&
+      message.restored === other.restored
     );
   });
 }
@@ -185,11 +197,13 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
     left.notice === right.notice &&
     left.coachProgress === right.coachProgress &&
     left.interrupted === right.interrupted &&
+    left.retryRequired === right.retryRequired &&
     left.decision === right.decision &&
     left.decisionPhase === right.decisionPhase &&
     left.decisionAnswerLabel === right.decisionAnswerLabel &&
     left.decisionError === right.decisionError &&
     left.decisionLoadError === right.decisionLoadError &&
+    left.queueMutationError === right.queueMutationError &&
     left.workBlocked === right.workBlocked &&
     left.sendDisabled === right.sendDisabled &&
     left.inputDisabled === right.inputDisabled &&

@@ -88,11 +88,13 @@ describe("chat view adapter", () => {
         },
       ],
       queued: [],
+      retryRequired: null,
       decision: null,
       decisionPhase: "idle",
       decisionAnswerLabel: null,
       decisionError: null,
       decisionLoadError: null,
+      queueMutationError: null,
       timeline: [
         {
           kind: "message",

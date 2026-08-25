@@ -1083,6 +1083,18 @@ describe("coach request and event projection", () => {
     const fake: CoachRpcService = {
       chat: async () => ({ text: "ok" }),
       stopChat: async () => ({ stopped: true }),
+      enqueueChatMessage: async () => ({ schemaVersion: 1, revision: 1, items: [] }),
+      getChatQueue: async () => ({ schemaVersion: 1, revision: 1, items: [] }),
+      removeQueuedChatMessage: async () => ({ schemaVersion: 1, revision: 2, items: [] }),
+      resumeChatQueue: async () => ({
+        snapshot: { schemaVersion: 1, revision: 2, items: [] },
+      }),
+      runQueuedCommand: async () => ({
+        snapshot: { schemaVersion: 1, revision: 2, items: [] },
+      }),
+      retryQueuedTurn: async () => ({
+        snapshot: { schemaVersion: 1, revision: 2, items: [] },
+      }),
       resetSession: async () => ({ memoryFlushed: true }),
       hasSession: async () => ({ hasSession: false }),
       getCoachDecision: async () => ({ decision: null }),
@@ -1792,7 +1804,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-21 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-23 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1800,8 +1812,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 21,
-      serverProtocolVersion: 21,
+      clientProtocolVersion: 23,
+      serverProtocolVersion: 23,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1810,7 +1822,7 @@ describe("handshake", () => {
 
   it("refuses a previous-protocol client with a version-mismatch frame instead of a parse error", () => {
     const previous = PROTOCOL_VERSION - 1;
-    expect(previous).toBe(20);
+    expect(previous).toBe(22);
     expect(() =>
       createAcceptedServerHandshakeFrame("service-managed", previous, {
         ...acceptedHandshakeBinding,
@@ -1883,9 +1895,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 19 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 23 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(21);
+    expect(client.clientProtocolVersion).toBe(23);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -2011,7 +2023,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version nineteen", () => {
-    expect(PROTOCOL_VERSION).toBe(21);
+  it("uses protocol version 23", () => {
+    expect(PROTOCOL_VERSION).toBe(23);
   });
 });
