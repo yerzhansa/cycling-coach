@@ -20,6 +20,7 @@ import { ChatView } from "../src/ui/chat/ChatView.js";
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(),
+    stop: vi.fn(),
     removeQueued: vi.fn(),
     retry: vi.fn(),
     loadEarlier: vi.fn(),
@@ -70,6 +71,19 @@ describe("chat surface", () => {
       onboarding: CLOSED_ONBOARDING,
     });
     resetChatStream();
+  });
+
+  describe("Reading room shell", () => {
+    it("renders one quiet header and toggles the wide Training context", async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+
+      expect(screen.getByRole("heading", { name: "Chat" })).toBeInTheDocument();
+      expect(screen.getByRole("complementary", { name: "Training context" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Hide training context" }));
+      expect(screen.queryByRole("complementary", { name: "Training context" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Show training context" })).toBeInTheDocument();
+    });
   });
 
   describe("slash popup", () => {
@@ -271,7 +285,7 @@ describe("chat surface", () => {
       expect(actions.submit).toHaveBeenCalledWith("   ride");
     });
 
-    it("keeps sending available while a turn streams so the message can queue", async () => {
+    it("keeps the draft available while streaming and exposes a truthful Stop control", async () => {
       const user = userEvent.setup();
       render(<Harness />);
       const textarea = composer();
@@ -281,11 +295,13 @@ describe("chat surface", () => {
 
       expect(textarea).toBeEnabled();
       expect(textarea).toHaveFocus();
-      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
-      for (const button of screen.getAllByRole("button", { name: /command$/u })) {
-        expect(button).toBeEnabled();
-      }
+      expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
+      const stop = screen.getByRole("button", { name: "Stop responding" });
+      expect(stop).toBeEnabled();
+      await user.click(stop);
+      expect(actions.stop).toHaveBeenCalledOnce();
 
+      await user.click(textarea);
       await user.keyboard("{Enter}");
 
       expect(actions.submit).toHaveBeenCalledWith("Plan tomorrow");
@@ -293,36 +309,17 @@ describe("chat surface", () => {
       expect(textarea).toHaveFocus();
     });
 
-    it("locks the composer and the quick actions while work is blocked", () => {
+    it("locks the composer while work is blocked", () => {
       render(<Harness />);
       setChat({ sendDisabled: true, inputDisabled: true });
 
       expect(composer()).toBeDisabled();
       expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
-      for (const button of screen.getAllByRole("button", { name: /command$/u })) {
-        expect(button).toBeDisabled();
-      }
     });
 
-    it("restores focus to a keyboard-activated quick action once the turn settles", async () => {
+    it("does not render a fixed shortcut row", () => {
       render(<Harness />);
-      const shortcut = screen.getByRole("button", { name: "Training status, /status command" });
-      shortcut.focus();
-
-      act(() => {
-        shortcut.click();
-      });
-      expect(actions.submit).toHaveBeenCalledWith("/status");
-
-      setChat({ sendDisabled: true });
-      act(() => {
-        (document.activeElement as HTMLElement | null)?.blur();
-      });
-      setChat({ sendDisabled: false });
-
-      await waitFor(() => {
-        expect(document.activeElement).toBe(shortcut);
-      });
+      expect(screen.queryByRole("button", { name: /command$/u })).toBeNull();
     });
   });
 
@@ -742,7 +739,7 @@ describe("chat surface", () => {
 
       for (const id of ["c1", "c2", "c3"]) {
         const row = document.querySelector(`[data-message-id="${id}"]`);
-        expect(row).toHaveClass("text-base", "leading-[1.6]");
+        expect(row).toHaveClass("text-base", "leading-6", "max-w-full");
       }
       const athlete = document.querySelector('[data-message-id="a1"]');
       expect(athlete).not.toHaveClass("text-base");
@@ -767,7 +764,7 @@ describe("chat surface", () => {
         readFile(resolve(sourceRoot, "theme/tokens.css"), "utf8"),
         readFile(resolve(sourceRoot, "theme/fonts.css"), "utf8"),
       ]);
-      expect(transcript).toContain("text-base leading-[1.6]");
+      expect(transcript).toContain("text-base leading-6");
       expect(tokens).toMatch(/--f-prose:\s*var\(--f-ui\);/u);
       expect(tokens).toMatch(/--f-ui:\s*\n?\s*"Inter Variable", "Inter",/u);
       expect(tokens).toMatch(/--f-mono:\s*\n?\s*"Geist Mono Variable", "Geist Mono",/u);
@@ -810,7 +807,7 @@ describe("chat surface", () => {
           "FirstSyncCard.tsx",
           "NewConversationDialog.tsx",
           "QueuedMessages.tsx",
-          "QuickActions.tsx",
+          "TrainingContextPanel.tsx",
           "SpendNotice.tsx",
         ].map((name) => readFile(resolve(sourceRoot, name), "utf8")),
       );

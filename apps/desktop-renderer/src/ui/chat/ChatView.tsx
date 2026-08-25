@@ -1,17 +1,26 @@
-import { useEffect, useLayoutEffect, useRef, type ReactElement } from "react";
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import { CHAT_AUTO_LOAD_EARLIER_THRESHOLD, chatScrollAnchor } from "../../state/chat-stream.js";
 import { useEnduragentStore } from "../../state/store.js";
+import { Button } from "../../components/ui/button.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "../../components/ui/dialog.js";
 import { Composer, type ComposerHandle } from "./Composer.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
 import { NewConversationDialog } from "./NewConversationDialog.js";
+import { CoachProgress, Notice, RetryBar } from "./Notice.js";
 import { QueuedMessages } from "./QueuedMessages.js";
-import { QuickActions } from "./QuickActions.js";
 import { SpendNotice } from "./SpendNotice.js";
+import { TrainingContextPanel } from "./TrainingContextPanel.js";
 import { Transcript } from "./Transcript.js";
 
-const COMPOSER_CLEARANCE_PROPERTY = "--chat-composer-clearance";
 const CHAT_DISCLAIMER =
   "Not medical advice, and not a substitute for a doctor or a certified coach.";
+const COMPACT_CHAT_WIDTH = 900;
 
 function FollowLatest(): null {
   const surface = useEnduragentStore((state) => state.chat);
@@ -27,9 +36,12 @@ function FollowLatest(): null {
 }
 
 export function ChatView(): ReactElement {
+  const surface = useRef<HTMLElement>(null);
   const conversation = useRef<HTMLElement>(null);
-  const composerWrap = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
+  const [contextOpen, setContextOpen] = useState(true);
+  const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
+  const [compact, setCompact] = useState(false);
   const activeView = useEnduragentStore((state) => state.activeView);
   const status = useEnduragentStore((state) => state.chat.status);
   const announcement = useEnduragentStore((state) => state.chat.announcement);
@@ -46,23 +58,19 @@ export function ChatView(): ReactElement {
     };
   }, []);
 
-  useLayoutEffect(() => {
-    const host = composerWrap.current;
-    const target = conversation.current;
-    if (host === null || target === null) return;
-    const update = (): void => {
-      const height = host.getBoundingClientRect().height;
-      if (Number.isFinite(height) && height > 0) {
-        target.style.setProperty(COMPOSER_CLEARANCE_PROPERTY, `${height}px`);
-      }
-    };
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(update);
+  useEffect(() => {
+    const host = surface.current;
+    if (host === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width === undefined) return;
+      const nextCompact = width <= COMPACT_CHAT_WIDTH;
+      setCompact(nextCompact);
+      if (!nextCompact) setContextDrawerOpen(false);
+    });
     observer.observe(host);
     return () => {
       observer.disconnect();
-      target.style.removeProperty(COMPOSER_CLEARANCE_PROPERTY);
     };
   }, []);
 
@@ -96,44 +104,85 @@ export function ChatView(): ReactElement {
     };
   }, [actions, hasEarlier, hydrationStatus, workBlocked]);
 
+  const contextExpanded = compact ? contextDrawerOpen : contextOpen;
+  const toggleContext = (): void => {
+    if (compact) setContextDrawerOpen(true);
+    else setContextOpen((open) => !open);
+  };
   return (
-    <>
-      <main
-        className="conversation col-start-1 overflow-auto pt-[34px] pb-[var(--chat-composer-clearance,150px)] [overflow-anchor:none]"
-        aria-label="Coaching conversation"
-        data-chat-status={status}
-        ref={conversation}
-      >
-        <div className="thread mx-auto w-[min(840px,calc(100%-48px))] max-[760px]:w-[calc(100%-32px)]">
-          <Transcript />
-          <FirstSyncCard />
-        </div>
-      </main>
+    <section
+      ref={surface}
+      className="chat-surface grid min-h-0 min-w-0 flex-1 grid-rows-[52px_minmax(0,1fr)] bg-bg"
+    >
+      <header className="flex items-center justify-between border-b border-line px-[calc(var(--inset)*3)] max-[760px]:px-[calc(var(--inset)*2)]">
+        <h1 className="m-0 text-sm font-semibold">Chat</h1>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={contextExpanded ? "Hide training context" : "Show training context"}
+          aria-expanded={contextExpanded}
+          onClick={toggleContext}
+        >
+          {contextExpanded && !compact ? <PanelRightClose /> : <PanelRightOpen />}
+        </Button>
+      </header>
       <div
-        className="composer-wrap sticky bottom-0 z-2 col-start-1 row-start-2 self-end bg-bg bg-[linear-gradient(transparent,var(--bg)_28%)] px-[max(24px,calc((100%-48px-840px)/2))] pt-3 pb-[18px] max-[760px]:px-4"
-        ref={composerWrap}
+        className={`chat-layout row-start-2 grid min-h-0 min-w-0 ${contextOpen && !compact ? "grid-cols-[minmax(0,1fr)_300px]" : "grid-cols-[minmax(0,1fr)]"}`}
       >
-        <div className="chat-notice-host empty:hidden">
-          <p
-            className="new-conversation-status m-0 text-sm leading-[1.4] text-ink-2 not-empty:px-3.5 not-empty:pb-inset"
-            role="status"
-            aria-live="polite"
+        <div className="chat-reading-column grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto]">
+          <main
+            className="conversation overflow-auto pt-[calc(var(--inset)*4)] pb-[calc(var(--inset)*3)] [overflow-anchor:none] max-[760px]:pt-[calc(var(--inset)*3)]"
+            aria-label="Coaching conversation"
+            data-chat-status={status}
+            ref={conversation}
           >
-            {announcement ?? ""}
-          </p>
-          <SpendNotice />
+            <div className="thread mx-auto w-[min(720px,calc(100%-48px))] max-[760px]:w-[calc(100%-32px)]">
+              <Transcript />
+              <CoachProgress />
+              <FirstSyncCard />
+            </div>
+          </main>
+          <div className="composer-wrap z-2 bg-bg bg-[linear-gradient(transparent,var(--bg)_22%)] px-[max(24px,calc((100%-720px)/2))] pt-[calc(var(--inset)*3)] pb-row max-[760px]:px-[calc(var(--inset)*2)]">
+            <div className="chat-notice-host empty:hidden">
+              <p
+                className="new-conversation-status m-0 text-sm text-ink-2 not-empty:px-3.5 not-empty:pb-inset"
+                role="status"
+                aria-live="polite"
+              >
+                {announcement ?? ""}
+              </p>
+              <SpendNotice />
+              <Notice />
+              <RetryBar />
+            </div>
+            <QueuedMessages />
+            <Composer handle={composer} />
+            <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
+          </div>
         </div>
-        <QuickActions />
-        <QueuedMessages />
-        <Composer handle={composer} />
-        <p className="m-0 text-sm leading-[1.4] text-ink-2">{CHAT_DISCLAIMER}</p>
+        {contextOpen && !compact ? <TrainingContextPanel /> : null}
       </div>
+      <Dialog
+        open={compact && contextDrawerOpen}
+        onOpenChange={(open) => {
+          setContextDrawerOpen(open);
+        }}
+      >
+        <DialogContent className="top-0 right-0 left-auto h-full max-h-none w-[min(320px,calc(100%-32px))] max-w-none translate-x-0 translate-y-0 content-start overflow-auto rounded-none rounded-l-card border-y-0 border-r-0 p-0">
+          <DialogTitle className="sr-only">Training context</DialogTitle>
+          <DialogDescription className="sr-only">
+            Training data available to Coach.
+          </DialogDescription>
+          <TrainingContextPanel className="h-full border-l-0 pt-12" />
+        </DialogContent>
+      </Dialog>
       <NewConversationDialog
         onComposerReset={() => {
           composer.current?.reset();
         }}
       />
       <FollowLatest />
-    </>
+    </section>
   );
 }

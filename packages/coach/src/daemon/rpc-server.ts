@@ -492,6 +492,7 @@ function sameToken(received: string, expected: string): boolean {
 
 const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "chat",
+  "stopChat",
   "resetSession",
   "hasSession",
   "getTranscriptPage",
@@ -854,6 +855,7 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
     }
     if (
       generic.data.method === "chat" ||
+      generic.data.method === "stopChat" ||
       generic.data.method === "resetSession" ||
       generic.data.method === "hasSession"
     ) {
@@ -914,6 +916,19 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             } catch (error) {
               if (error instanceof DetachedSessionRequestError) deliveryDetached = true;
               else invocationFailure = { error };
+            }
+            break;
+          case "stopChat":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.stopChat.requestSchema.parse(
+                generic.data.params,
+              );
+              result =
+                input.engine.stopChat === undefined
+                  ? { stopped: false }
+                  : await input.engine.stopChat(request);
+            } catch (error) {
+              invocationFailure = { error };
             }
             break;
           case "resetSession":
@@ -978,10 +993,9 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             break;
           case "getActivityAnalysis":
             try {
-              const request =
-                COACH_RPC_METHOD_REGISTRY.getActivityAnalysis.requestSchema.parse(
-                  generic.data.params,
-                );
+              const request = COACH_RPC_METHOD_REGISTRY.getActivityAnalysis.requestSchema.parse(
+                generic.data.params,
+              );
               if (input.operations.getActivityAnalysis === undefined) {
                 throw new TypeError("Activity analysis operation is unavailable.");
               }

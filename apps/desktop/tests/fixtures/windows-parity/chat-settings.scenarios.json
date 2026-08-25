@@ -27,7 +27,7 @@
       "surface": "chat",
       "expected": "The composer remains enabled while a coach turn streams so the athlete can type and submit the next message.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > composer > keeps sending available while a turn streams so the message can queue"
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > composer > keeps the draft available while streaming and exposes a truthful Stop control"
     },
     {
       "id": "chat.streaming.interruption-retry",
@@ -65,11 +65,11 @@
       "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > slash command picker > moves the selection with the arrow keys and accepts with Enter"
     },
     {
-      "id": "chat.commands.quick-actions",
+      "id": "chat.commands.no-fixed-shortcuts",
       "surface": "chat",
-      "expected": "Quick actions submit the shipped plan, workout, status, and review commands and restore keyboard focus after the turn settles.",
+      "expected": "Chat does not render a fixed shortcut row because slash suggestions remain available in the composer.",
       "automation": "deterministic",
-      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > composer > restores focus to a keyboard-activated quick action once the turn settles"
+      "test": "apps/desktop-renderer/tests/chat-surface.test.tsx > composer > does not render a fixed shortcut row"
     },
     {
       "id": "chat.history.current-conversation",

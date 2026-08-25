@@ -64,6 +64,8 @@ import {
   SelfTestRpcParamsSchema,
   SelfTestRpcResultSchema,
   SpendSummarySchema,
+  StopChatRequestSchema,
+  StopChatResponseSchema,
   TelegramAllowedSenderRpcParamsSchema,
   TelegramAllowedSendersMutationResultSchema,
   TelegramAllowedSendersResultSchema,
@@ -618,7 +620,10 @@ describe("coach request and event projection", () => {
       published: true,
       referenceSucceeded: true,
       requests: { store: 2, reference: 1, total: 3 },
-      droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+      droppedActivities: {
+        overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+        recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+      },
     } as const;
     expect(SyncRpcResultSchema.parse(syncResult)).toEqual(syncResult);
     for (const backfill of [
@@ -655,8 +660,7 @@ describe("coach request and event projection", () => {
       },
     } as const;
     expect(
-      SyncRpcResultSchema.parse({ ...syncResult, droppedActivities: restricted })
-        .droppedActivities,
+      SyncRpcResultSchema.parse({ ...syncResult, droppedActivities: restricted }).droppedActivities,
     ).toEqual(restricted);
     expect(
       SyncRpcResultSchema.safeParse({
@@ -707,9 +711,9 @@ describe("coach request and event projection", () => {
         },
       },
     ]) {
-      expect(
-        SyncRpcResultSchema.safeParse({ ...syncResult, droppedActivities }).success,
-      ).toBe(false);
+      expect(SyncRpcResultSchema.safeParse({ ...syncResult, droppedActivities }).success).toBe(
+        false,
+      );
     }
     expect(
       OperationProgressEventSchema.parse({ phase: "started", completed: 0, total: 1 }),
@@ -1080,6 +1084,7 @@ describe("coach request and event projection", () => {
   it("keeps the method registry exhaustive and schema-identical", async () => {
     const fake: CoachRpcService = {
       chat: async () => ({ text: "ok" }),
+      stopChat: async () => ({ stopped: true }),
       resetSession: async () => ({ memoryFlushed: true }),
       hasSession: async () => ({ hasSession: false }),
       getTranscriptPage: async () => ({
@@ -1136,7 +1141,10 @@ describe("coach request and event projection", () => {
         published: false,
         referenceSucceeded: true,
         requests: { store: 0, reference: 0, total: 0 },
-        droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+        droppedActivities: {
+          overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+          recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+        },
       }),
       getSetupStatus: async () => ({
         schemaVersion: 1,
@@ -1222,6 +1230,12 @@ describe("coach request and event projection", () => {
       requestSchema: ChatRpcParamsSchema,
       responseSchema: ChatResponseSchema,
       eventSchema: TurnEventSchema,
+    });
+    expect(COACH_RPC_METHOD_REGISTRY.stopChat).toEqual({
+      wireName: "stopChat",
+      requestSchema: StopChatRequestSchema,
+      responseSchema: StopChatResponseSchema,
+      eventSchema: NoRpcEventSchema,
     });
     expect(COACH_RPC_METHOD_REGISTRY.resetSession).toEqual({
       wireName: "resetSession",
@@ -1698,7 +1712,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-19 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-20 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1706,8 +1720,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 19,
-      serverProtocolVersion: 19,
+      clientProtocolVersion: 20,
+      serverProtocolVersion: 20,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1716,7 +1730,7 @@ describe("handshake", () => {
 
   it("refuses a previous-protocol client with a version-mismatch frame instead of a parse error", () => {
     const previous = PROTOCOL_VERSION - 1;
-    expect(previous).toBe(18);
+    expect(previous).toBe(19);
     expect(() =>
       createAcceptedServerHandshakeFrame("service-managed", previous, {
         ...acceptedHandshakeBinding,
@@ -1789,9 +1803,9 @@ describe("handshake", () => {
     }
   });
 
-  it("accepts aligned protocol 19 peers and classifies mismatches in both directions", () => {
+  it("accepts aligned protocol 20 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(19);
+    expect(client.clientProtocolVersion).toBe(20);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -1917,7 +1931,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version nineteen", () => {
-    expect(PROTOCOL_VERSION).toBe(19);
+  it("uses protocol version twenty", () => {
+    expect(PROTOCOL_VERSION).toBe(20);
   });
 });

@@ -113,8 +113,8 @@ describe("exit codes", () => {
 });
 
 describe("protocol version", () => {
-  it("is 19", () => {
-    expect(PROTOCOL_VERSION).toBe(19);
+  it("is 20", () => {
+    expect(PROTOCOL_VERSION).toBe(20);
   });
 });
 
@@ -234,6 +234,12 @@ describe("TurnEvent", () => {
       },
       { type: "step-text", turnId: TURN_ID, text: "Looking at your recent rides..." },
       { type: "final-text", turnId: TURN_ID, text: "Here is this week's plan." },
+      {
+        type: "interrupted",
+        turnId: TURN_ID,
+        chatId: "telegram:12345",
+        text: "Here is the partial answer.",
+      },
       errorEvent,
       { type: "text_delta", turnId: TURN_ID, delta: "wor" },
     ];

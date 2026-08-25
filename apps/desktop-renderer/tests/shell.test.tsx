@@ -55,6 +55,7 @@ const SELECTED_RIDE = Object.freeze({
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(),
+    stop: vi.fn(),
     removeQueued: vi.fn(),
     retry: vi.fn(),
     loadEarlier: vi.fn(),
@@ -146,9 +147,7 @@ describe("shell", () => {
     expect(document.querySelector("div.composer-wrap")).not.toBeNull();
     expect(document.querySelector("textarea#message")).not.toBeNull();
     expect(document.querySelector("button.sync-chip")).not.toBeNull();
-    expect(document.querySelector('[data-sidebar-setup-readiness="ready"]')).toHaveTextContent(
-      "Ready",
-    );
+    expect(document.querySelector("[data-sidebar-setup-readiness]")).toBeNull();
     expect(document.querySelector('[data-view="chat"]')).not.toBeNull();
     expect(document.querySelector('[data-onboarding="settled"]')).not.toBeNull();
     expect(document.querySelector("[data-setup-host]")).toBeNull();

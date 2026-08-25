@@ -150,8 +150,11 @@ export interface TranscriptCompletedTurnInput {
   readonly coachText: string;
 }
 
+export type TranscriptInterruptedTurnInput = TranscriptCompletedTurnInput;
+
 export interface TranscriptWriterPort {
   appendCompletedTurn(input: TranscriptCompletedTurnInput): void;
+  appendInterruptedTurn?(input: TranscriptInterruptedTurnInput): void;
 }
 
 export type ExecSecretRef = {

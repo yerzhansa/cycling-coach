@@ -111,7 +111,10 @@ const operations: CoachOperations = {
     published: true,
     referenceSucceeded: true,
     requests: { store: 1, reference: 1, total: 2 },
-    droppedActivities: { overall: { total: 0, visible: 0, restrictions: [], other: 0 }, recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 } },
+    droppedActivities: {
+      overall: { total: 0, visible: 0, restrictions: [], other: 0 },
+      recent7Days: { total: 0, visible: 0, restrictions: [], other: 0 },
+    },
   }),
   saveIntake: async () => ({ schemaVersion: 1, saved: true }),
   getTranscriptPage: async () => ({
@@ -838,6 +841,53 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     await client.close();
   });
 
+  it("lets scoped Stop reach the engine while the same chat request is running", async () => {
+    const token = "x".repeat(43);
+    const chatResult = deferred<{ text: string }>();
+    const chat = vi.fn(() => chatResult.promise);
+    const stopChat = vi.fn(async () => ({ stopped: true }));
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "unmanaged-foreground",
+      engine: engine({ chat, stopChat }),
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "chat",
+        method: "chat",
+        params: { chatId: "desktop", message: "hold" },
+      }),
+    );
+    await vi.waitFor(() => expect(chat).toHaveBeenCalledOnce());
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "stop",
+        method: "stopChat",
+        params: { chatId: "desktop" },
+      }),
+    );
+
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "stop",
+      result: { stopped: true },
+    });
+    expect(stopChat).toHaveBeenCalledWith({ chatId: "desktop" });
+
+    chatResult.resolve({ text: "partial" });
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "chat",
+      result: { text: "partial" },
+    });
+    await client.close();
+  });
+
   it("dispatches authenticated setup, intake, and runtime operations without value echo", async () => {
     const token = "x".repeat(43);
     const saveIntake = vi.fn(async () => ({ schemaVersion: 1 as const, saved: true as const }));
@@ -1045,9 +1095,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     const token = "x".repeat(43);
     let refuse = false;
     const verifyIntervalsCredential = vi.fn(async () =>
-      refuse
-        ? ({ reason: "credential-rejected" as const })
-        : ({ approval: "a".repeat(64) }),
+      refuse ? { reason: "credential-rejected" as const } : { approval: "a".repeat(64) },
     );
     const rpc = createCoachRpcServer({
       engine: engine(),

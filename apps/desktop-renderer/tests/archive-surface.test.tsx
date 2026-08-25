@@ -29,6 +29,7 @@ function archiveActions(): ArchiveActions {
 function chatActions(): ChatActions {
   return {
     submit: vi.fn(),
+    stop: vi.fn(),
     retry: vi.fn(),
     removeQueued: vi.fn(),
     loadEarlier: vi.fn(),

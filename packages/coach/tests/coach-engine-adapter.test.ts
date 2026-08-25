@@ -5,10 +5,7 @@ import {
   type CoachEngine,
   type TurnEvent,
 } from "@enduragent/coach-contract";
-import type {
-  CyclingFtpAnchorResolver,
-  CyclingFtpAnchorResult,
-} from "@enduragent/kernel/anchors";
+import type { CyclingFtpAnchorResolver, CyclingFtpAnchorResult } from "@enduragent/kernel/anchors";
 import { createCoachEngineAdapter } from "../src/coach-engine-adapter.js";
 
 const state: AthleteState = {
@@ -70,9 +67,11 @@ describe("coach engine adapter", () => {
       cyclingFtpAnchorResolver: selected.value,
       now: () => 1_752_796_801_999,
     });
-    await expect(engine.chat({ chatId: "chat-1", message: "status" }, () => {
-      calls.push("event");
-    })).resolves.toEqual({ text: "ready" });
+    await expect(
+      engine.chat({ chatId: "chat-1", message: "status" }, () => {
+        calls.push("event");
+      }),
+    ).resolves.toEqual({ text: "ready" });
     expect(selected.resolve).toHaveBeenCalledOnce();
     expect(selected.resolve).toHaveBeenCalledWith({
       effectiveAtEpochS: 1_752_796_801,
@@ -91,8 +90,9 @@ describe("coach engine adapter", () => {
       cyclingFtpAnchorResolver: selected.value,
       now,
     });
-    await expect(engine.chat({ chatId: "x", message: "x", extra: true } as ChatRequest))
-      .rejects.toThrow();
+    await expect(
+      engine.chat({ chatId: "x", message: "x", extra: true } as ChatRequest),
+    ).rejects.toThrow();
     expect(now).not.toHaveBeenCalled();
     expect(selected.resolve).not.toHaveBeenCalled();
     expect(chat).not.toHaveBeenCalled();
@@ -102,12 +102,14 @@ describe("coach engine adapter", () => {
     const selected = resolver();
     const invalidEvent = { type: "turn-start", turnId: "x" } as unknown as TurnEvent;
     const invalid = createCoachEngineAdapter({
-      backend: backend({ chat: async (_request, onEvent) => {
-        try {
-          onEvent?.(invalidEvent);
-        } catch {}
-        return { text: "ok" };
-      } }),
+      backend: backend({
+        chat: async (_request, onEvent) => {
+          try {
+            onEvent?.(invalidEvent);
+          } catch {}
+          return { text: "ok" };
+        },
+      }),
       getAthleteState: async () => state,
       cyclingFtpAnchorResolver: selected.value,
       now: () => 0,
@@ -115,29 +117,35 @@ describe("coach engine adapter", () => {
     await expect(invalid.chat({ chatId: "x", message: "x" })).rejects.toThrow();
     const backendError = { kind: "backend" };
     const precedence = createCoachEngineAdapter({
-      backend: backend({ chat: async (_request, onEvent) => {
-        onEvent?.(invalidEvent);
-        throw backendError;
-      } }),
+      backend: backend({
+        chat: async (_request, onEvent) => {
+          onEvent?.(invalidEvent);
+          throw backendError;
+        },
+      }),
       getAthleteState: async () => state,
       cyclingFtpAnchorResolver: resolver().value,
       now: () => 0,
     });
     await expect(precedence.chat({ chatId: "x", message: "x" })).rejects.toBe(backendError);
     const advisory = createCoachEngineAdapter({
-      backend: backend({ chat: async (_request, onEvent) => {
-        onEvent?.({ type: "final-text", turnId: "x", text: "ok" });
-        return { text: "ok" };
-      } }),
+      backend: backend({
+        chat: async (_request, onEvent) => {
+          onEvent?.({ type: "final-text", turnId: "x", text: "ok" });
+          return { text: "ok" };
+        },
+      }),
       getAthleteState: async () => state,
       cyclingFtpAnchorResolver: resolver().value,
       now: () => 0,
     });
-    await expect(advisory.chat({ chatId: "x", message: "x" }, () => {
-      throw new Error("consumer");
-    })).resolves.toEqual({ text: "ok" });
+    await expect(
+      advisory.chat({ chatId: "x", message: "x" }, () => {
+        throw new Error("consumer");
+      }),
+    ).resolves.toEqual({ text: "ok" });
     const malformed = createCoachEngineAdapter({
-      backend: backend({ chat: async () => ({ text: 1 } as unknown as { text: string }) }),
+      backend: backend({ chat: async () => ({ text: 1 }) as unknown as { text: string } }),
       getAthleteState: async () => state,
       cyclingFtpAnchorResolver: resolver().value,
       now: () => 0,
@@ -216,6 +224,22 @@ describe("coach engine adapter", () => {
     await expect(engine.resetSession({ chatId: "x" })).rejects.toThrow();
   });
 
+  it("strictly validates scoped Stop requests and responses", async () => {
+    const stopChat = vi.fn(async () => ({ stopped: true }));
+    const engine = createCoachEngineAdapter({
+      backend: backend({ stopChat }),
+      getAthleteState: async () => state,
+      cyclingFtpAnchorResolver: resolver().value,
+      now: () => 0,
+    });
+
+    await expect(engine.stopChat?.({ chatId: "x", extra: 1 } as never)).rejects.toThrow();
+    expect(stopChat).not.toHaveBeenCalled();
+    await expect(engine.stopChat?.({ chatId: "x" })).resolves.toEqual({ stopped: true });
+    stopChat.mockResolvedValueOnce({ stopped: true, extra: 1 } as never);
+    await expect(engine.stopChat?.({ chatId: "x" })).rejects.toThrow();
+  });
+
   it("strictly validates has-session requests and responses asynchronously", async () => {
     const hasSession = vi.fn<CoachEngine["hasSession"]>(async () => ({ hasSession: true }));
     const engine = createCoachEngineAdapter({
@@ -232,7 +256,7 @@ describe("coach engine adapter", () => {
     await expect(engine.hasSession({ chatId: "x" })).rejects.toThrow();
   });
 
-  it("validates injected athlete state and exposes exactly four methods", async () => {
+  it("validates injected athlete state and exposes exactly five methods", async () => {
     const getAthleteState = vi.fn(async (): Promise<AthleteState> => state);
     const engine = createCoachEngineAdapter({
       backend: backend(),
@@ -247,13 +271,16 @@ describe("coach engine adapter", () => {
       "getAthleteState",
       "hasSession",
       "resetSession",
+      "stopChat",
     ]);
-    await expect(createCoachEngineAdapter({
-      backend: backend(),
-      getAthleteState: async () => ({ ...state, extra: true } as AthleteState),
-      cyclingFtpAnchorResolver: resolver().value,
-      now: () => 0,
-    }).getAthleteState()).rejects.toThrow();
+    await expect(
+      createCoachEngineAdapter({
+        backend: backend(),
+        getAthleteState: async () => ({ ...state, extra: true }) as AthleteState,
+        cyclingFtpAnchorResolver: resolver().value,
+        now: () => 0,
+      }).getAthleteState(),
+    ).rejects.toThrow();
   });
 
   it("always replaces a caller FTP value without mutating either caller object", async () => {
@@ -261,10 +288,12 @@ describe("coach engine adapter", () => {
     const turn = request.turn;
     let received: ChatRequest | undefined;
     const engine = createCoachEngineAdapter({
-      backend: backend({ chat: async (value) => {
-        received = value;
-        return { text: "ok" };
-      } }),
+      backend: backend({
+        chat: async (value) => {
+          received = value;
+          return { text: "ok" };
+        },
+      }),
       getAthleteState: async () => state,
       cyclingFtpAnchorResolver: resolver().value,
       now: () => 0,
@@ -280,10 +309,12 @@ describe("coach engine adapter", () => {
     const missing = { kind: "missing" as const, refusal: "missing-cycling-ftp-anchor" as const };
     let received: ChatRequest | undefined;
     const engine = createCoachEngineAdapter({
-      backend: backend({ chat: async (value) => {
-        received = value;
-        return { text: "ok" };
-      } }),
+      backend: backend({
+        chat: async (value) => {
+          received = value;
+          return { text: "ok" };
+        },
+      }),
       getAthleteState: async () => state,
       cyclingFtpAnchorResolver: resolver(missing).value,
       now: () => 0,

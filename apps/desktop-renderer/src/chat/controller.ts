@@ -64,6 +64,7 @@ export interface ChatController {
   start(): Promise<void>;
   resume(): Promise<void>;
   submit(message: string): Promise<void>;
+  stop(): void;
   removeQueued(id: string): void;
   retryInterrupted(): Promise<void>;
   loadEarlier(): Promise<void>;
@@ -83,6 +84,11 @@ interface QueuedRetry {
 interface ChatRun {
   readonly task: Promise<void>;
   completed(): boolean;
+}
+
+interface ActiveStopRequest {
+  readonly requestKey: number;
+  request(): void;
 }
 
 export function createChatController(input: {
@@ -107,6 +113,8 @@ export function createChatController(input: {
   let retryClient: CoachClient | undefined;
   let probeTask: Promise<void> | undefined;
   let resetTask: Promise<void> | undefined;
+  let activeStopRequest: ActiveStopRequest | undefined;
+  let retryReconnect = true;
   let epoch = 0;
   const canChat = input.canChat ?? (() => true);
 
@@ -202,18 +210,30 @@ export function createChatController(input: {
       let eventCount = 0;
       let startSeen = false;
       let finalText: string | undefined;
+      let interruptedText: string | undefined;
       let terminal: CoachClientTerminalEnvelope | undefined;
       let terminalHadFinal = false;
       let protocolFault = false;
       const callAbortController = new AbortController();
+      let client: CoachClient | undefined;
+      let stopRequested = false;
+      let stopTask: Promise<void> | undefined;
       const current = (): boolean => !disposed && state.activeTurn?.requestKey === requestKey;
       const failProtocol = (): void => {
         if (protocolFault) return;
         protocolFault = true;
         callAbortController.abort();
       };
+      const requestStop = (): void => {
+        stopRequested = true;
+        if (client === undefined || boundTurnId === undefined || stopTask !== undefined) return;
+        stopTask = client
+          .call("stopChat", { chatId: DESKTOP_CHAT_ID })
+          .then(() => undefined)
+          .catch(() => undefined);
+      };
+      activeStopRequest = { requestKey, request: requestStop };
 
-      let client: CoachClient | undefined;
       try {
         if (reconnect) {
           if (retryClient === undefined) {
@@ -248,6 +268,7 @@ export function createChatController(input: {
                 boundRequestId = envelope.params.requestId;
                 boundTurnId = envelope.params.turnId;
                 reduce({ type: "bind-turn", requestKey, turnId: boundTurnId });
+                if (stopRequested) requestStop();
               } else if (
                 envelope.params.requestId !== boundRequestId ||
                 envelope.params.turnId !== boundTurnId
@@ -298,13 +319,14 @@ export function createChatController(input: {
                   delta: event.delta,
                 };
               } else if (
-                event.type === "final-text" &&
+                (event.type === "final-text" || event.type === "interrupted") &&
                 event.text.length > COACH_RESPONSE_CODE_UNIT_LIMIT
               ) {
                 failProtocol();
                 return;
               }
               if (event.type === "final-text") finalText = event.text;
+              if (event.type === "interrupted") interruptedText = event.text;
               reduce({ type: "event", requestKey, event }, appendDelta);
             },
             onTerminalEnvelope(envelope) {
@@ -315,6 +337,24 @@ export function createChatController(input: {
           },
         );
         if (!current()) return;
+        if (interruptedText !== undefined) {
+          if (
+            protocolFault ||
+            terminal === undefined ||
+            !("result" in terminal) ||
+            finalText !== undefined ||
+            result.text !== interruptedText
+          ) {
+            retryClient = client;
+            retryReconnect = true;
+            reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
+            return;
+          }
+          retryClient = undefined;
+          retryReconnect = false;
+          completed = true;
+          return;
+        }
         if (
           protocolFault ||
           terminal === undefined ||
@@ -324,11 +364,13 @@ export function createChatController(input: {
           result.text !== finalText
         ) {
           retryClient = client;
+          retryReconnect = true;
           reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
           return;
         }
         if (!/\S/u.test(finalText)) {
           retryClient = client;
+          retryReconnect = true;
           reduce({ type: "interrupt", requestKey, copy: CHAT_EMPTY_RESPONSE_COPY });
           return;
         }
@@ -338,6 +380,7 @@ export function createChatController(input: {
         if (!current()) return;
         if (protocolFault || error instanceof CoachClientProtocolError) {
           retryClient = client;
+          retryReconnect = true;
           reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
         } else if (
           error instanceof CoachClientDisconnectedError ||
@@ -345,11 +388,13 @@ export function createChatController(input: {
           error instanceof CoachClientCallAbortedError
         ) {
           retryClient = client;
+          retryReconnect = true;
           reduce({ type: "interrupt", requestKey, copy: CHAT_CONNECTION_INTERRUPTED_COPY });
         } else {
           reduce({ type: "fail", requestKey, copy: CHAT_FAILURE_COPY });
         }
       } finally {
+        if (activeStopRequest?.requestKey === requestKey) activeStopRequest = undefined;
         if (callStarted) {
           try {
             void input.refreshSpend().catch(() => {});
@@ -432,6 +477,10 @@ export function createChatController(input: {
       }
       return dispatch(message, true, false);
     },
+    stop() {
+      if (disposed || state.status !== "streaming" || state.activeTurn === null) return;
+      activeStopRequest?.request();
+    },
     removeQueued(id) {
       if (disposed || resetBlocksWork()) return;
       reduce({ type: "remove-queued", id });
@@ -448,7 +497,7 @@ export function createChatController(input: {
       }
       const { requestKey, userMessage } = state.activeTurn;
       if (queuedRetry?.requestKey === requestKey) return queuedRetry.promise;
-      if (activeTask === undefined) return dispatch(userMessage, false, true);
+      if (activeTask === undefined) return dispatch(userMessage, false, retryReconnect);
       const currentTask = activeTask;
       const token = {};
       const pending = currentTask
@@ -461,7 +510,7 @@ export function createChatController(input: {
           ) {
             return;
           }
-          return dispatch(userMessage, false, true);
+          return dispatch(userMessage, false, retryReconnect);
         })
         .finally(() => {
           if (queuedRetry?.token === token) {

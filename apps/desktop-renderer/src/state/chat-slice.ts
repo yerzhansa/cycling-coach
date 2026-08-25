@@ -23,6 +23,7 @@ export interface ChatSurfaceState {
   readonly queued: readonly ChatQueuedView[];
   readonly status: ChatStatus;
   readonly notice: string | null;
+  readonly coachProgress: string | null;
   readonly interrupted: boolean;
   readonly workBlocked: boolean;
   readonly sendDisabled: boolean;
@@ -40,6 +41,7 @@ export interface ChatSurfaceState {
 
 export interface ChatActions {
   submit(message: string): void;
+  stop(): void;
   removeQueued(id: string): void;
   retry(): void;
   loadEarlier(): void;
@@ -55,6 +57,7 @@ export const EMPTY_CHAT_SURFACE: ChatSurfaceState = Object.freeze({
   queued: Object.freeze([]),
   status: "idle",
   notice: null,
+  coachProgress: null,
   interrupted: false,
   workBlocked: false,
   sendDisabled: false,
@@ -121,6 +124,7 @@ export function sameChatSurface(left: ChatSurfaceState, right: ChatSurfaceState)
   return (
     left.status === right.status &&
     left.notice === right.notice &&
+    left.coachProgress === right.coachProgress &&
     left.interrupted === right.interrupted &&
     left.workBlocked === right.workBlocked &&
     left.sendDisabled === right.sendDisabled &&

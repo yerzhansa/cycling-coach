@@ -89,7 +89,8 @@ describe("chat view adapter", () => {
       ],
       queued: [],
       status: "streaming",
-      notice: CHAT_WORKING_COPY,
+      notice: null,
+      coachProgress: CHAT_WORKING_COPY,
       interrupted: false,
       workBlocked: true,
       sendDisabled: true,
@@ -585,7 +586,7 @@ describe("follow-latest anchoring", () => {
     send(state, first.controls);
 
     expect(published).toHaveLength(2);
-    expect(changedKeys(published[0], published[1])).toEqual(["messages", "notice"]);
+    expect(changedKeys(published[0], published[1])).toEqual(["messages", "coachProgress"]);
     expect(published[1].status).toBe("streaming");
     expect(document.querySelectorAll(".chat-message")).toHaveLength(2);
     expect(host.scrollTop).toBe(VIEWPORT + 2 * ROW_HEIGHT);

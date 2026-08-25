@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHAT_RESPONSE_STOPPED_COPY,
   CHAT_WORKING_COPY,
   DESKTOP_CHAT_ID,
   EMPTY_CHAT_STATE,
@@ -232,6 +233,28 @@ describe("desktop turn state", () => {
     });
     expect(interrupted.messages.at(-1)).toMatchObject({
       text: "Partial",
+      delivery: "interrupted",
+    });
+  });
+
+  it("marks a scoped Stop as interrupted with the canonical partial text", () => {
+    const state = reduceChatState(started(), {
+      type: "event",
+      requestKey: 1,
+      event: {
+        type: "interrupted",
+        turnId: "turn-1",
+        chatId: DESKTOP_CHAT_ID,
+        text: "Canonical partial",
+      },
+    });
+
+    expect(state).toMatchObject({
+      status: "interrupted",
+      progress: CHAT_RESPONSE_STOPPED_COPY,
+    });
+    expect(state.messages.at(-1)).toMatchObject({
+      text: "Canonical partial",
       delivery: "interrupted",
     });
   });

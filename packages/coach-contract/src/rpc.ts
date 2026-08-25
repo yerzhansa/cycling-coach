@@ -7,6 +7,8 @@ import {
   HasSessionResponseSchema,
   ResetSessionRequestSchema,
   ResetSessionResponseSchema,
+  StopChatRequestSchema,
+  StopChatResponseSchema,
   type CoachEngine,
 } from "./engine.js";
 import { TurnEventSchema } from "./turn-event.js";
@@ -149,6 +151,7 @@ export type JsonRpcNotificationEnvelope = z.infer<typeof JsonRpcNotificationEnve
 
 export const COACH_RPC_METHOD_NAMES = [
   "chat",
+  "stopChat",
   "resetSession",
   "hasSession",
   "getTranscriptPage",
@@ -313,6 +316,7 @@ export const TranscriptPageTurnSchema = z
     completedAt: z.string().refine(canonicalTranscriptTimestamp),
     athleteText: z.string(),
     coachText: z.string(),
+    delivery: z.literal("interrupted").optional(),
   })
   .strict();
 export type TranscriptPageTurn = z.infer<typeof TranscriptPageTurnSchema>;
@@ -710,7 +714,11 @@ const RuntimeIntervalsSchema = z
     api_key: z.string().min(1).max(16_384).optional(),
     clear_credential: z.literal(true).optional(),
     athlete_id: z.string().min(1).max(512).optional(),
-    verification_approval: z.string().length(64).regex(/^[0-9a-f]{64}$/).optional(),
+    verification_approval: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -1044,6 +1052,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("chat"),
       params: ChatRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("stopChat"),
+      params: StopChatRequestSchema,
     })
     .strict(),
   z
@@ -1440,6 +1456,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     requestSchema: ChatRpcParamsSchema,
     responseSchema: ChatResponseSchema,
     eventSchema: TurnEventSchema,
+  },
+  stopChat: {
+    wireName: "stopChat",
+    requestSchema: StopChatRequestSchema,
+    responseSchema: StopChatResponseSchema,
+    eventSchema: NoRpcEventSchema,
   },
   resetSession: {
     wireName: "resetSession",

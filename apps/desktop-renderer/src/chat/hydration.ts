@@ -8,6 +8,7 @@ export interface TranscriptTurn {
   readonly completedAt: string;
   readonly athleteText: string;
   readonly coachText: string;
+  readonly delivery?: "interrupted";
 }
 
 export type TranscriptPage =
@@ -97,7 +98,7 @@ export function mergeHydratedMessages(
         turnId: turn.turnId,
         role: "coach",
         text: turn.coachText,
-        delivery: "complete",
+        delivery: turn.delivery ?? "complete",
         historical: true,
       },
     ]);
