@@ -11,3 +11,4 @@ export * from "./telegram-control.js";
 export * from "./activity-analysis.js";
 export * from "./training-export.js";
 export * from "./platform-path.js";
+export * from "./coach-decision.js";

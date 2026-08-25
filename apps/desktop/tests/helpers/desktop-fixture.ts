@@ -237,6 +237,26 @@ export async function launchDesktopFixture(input: {
       }
       return finalFrame(frames) as Awaited<ReturnType<CoachEngine["chat"]>>;
     },
+    async getCoachDecision(request) {
+      return finalFrame(await invoke("getCoachDecision", request)) as Awaited<
+        ReturnType<CoachEngine["getCoachDecision"]>
+      >;
+    },
+    async answerCoachDecision(request, onEvent) {
+      const frames = await invoke("answerCoachDecision", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<ReturnType<CoachEngine["answerCoachDecision"]>>;
+    },
+    async skipCoachDecision(request) {
+      return finalFrame(await invoke("skipCoachDecision", request)) as Awaited<
+        ReturnType<CoachEngine["skipCoachDecision"]>
+      >;
+    },
+    async resumeCoachDecision(request, onEvent) {
+      const frames = await invoke("resumeCoachDecision", request);
+      for (const event of eventFrames(frames)) onEvent?.(event as TurnEvent);
+      return finalFrame(frames) as Awaited<ReturnType<CoachEngine["resumeCoachDecision"]>>;
+    },
     async resetSession(request) {
       return finalFrame(await invoke("resetSession", request)) as Awaited<
         ReturnType<CoachEngine["resetSession"]>

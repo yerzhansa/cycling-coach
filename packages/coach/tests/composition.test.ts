@@ -227,7 +227,10 @@ function runtime(
     athleteData: athleteData(),
     currentDroppedActivities: () => EMPTY_DROPPED_ACTIVITIES,
     attemptLedgerForRun: () => ledger,
-    runWindow: async () => ({ ...(await runWindow()), droppedActivities: EMPTY_DROPPED_ACTIVITIES }),
+    runWindow: async () => ({
+      ...(await runWindow()),
+      droppedActivities: EMPTY_DROPPED_ACTIVITIES,
+    }),
     async runWindowAfter(work) {
       await work(new AbortController().signal);
       return { ...(await runWindow()), droppedActivities: EMPTY_DROPPED_ACTIVITIES };
@@ -253,6 +256,16 @@ function runtime(
 function backend(overrides: Partial<CoachEngine> = {}): CoachEngine {
   return {
     chat: async () => ({ text: "ok" }),
+    getCoachDecision: async () => ({ decision: null }),
+    answerCoachDecision: async () => {
+      throw new Error("not implemented");
+    },
+    skipCoachDecision: async () => {
+      throw new Error("not implemented");
+    },
+    resumeCoachDecision: async () => {
+      throw new Error("not implemented");
+    },
     resetSession: async () => ({ memoryFlushed: true }),
     hasSession: async () => ({ hasSession: false }),
     getAthleteState: async () => state,
@@ -1413,7 +1426,12 @@ describe("local coach composition", () => {
       const current = runtimeOptions?.readConfig?.();
       if (current === undefined) throw new Error("Expected live runtime configuration.");
       windows.push({ ...current.intervals });
-      return { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
+      return {
+        published: true,
+        counts,
+        legacySucceeded: true,
+        droppedActivities: EMPTY_DROPPED_ACTIVITIES,
+      };
     });
     const lifecycle = await compose(
       home,
@@ -1611,7 +1629,12 @@ describe("local coach composition", () => {
   it("keeps manual sync keyless before deferred owner approval", async () => {
     const home = await freshHome();
     const context = fakeContext(home);
-    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
+    const backfill = vi.fn(async () => ({
+      pages: 1,
+      artifacts: 0,
+      reports: [],
+      droppedActivityRows: { sourceRestricted: 0, other: 0 },
+    }));
     let runtimeOptions: LocalStoreRuntimeOptions | undefined;
     let readReferenceIntervals:
       | (() => { readonly apiKey: string; readonly athleteId?: string })
@@ -1698,7 +1721,12 @@ describe("local coach composition", () => {
         const current = runtimeOptions?.readConfig?.();
         if (current === undefined) throw new Error("Expected live runtime configuration.");
         windows.push({ ...current.intervals });
-        return { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
+        return {
+          published: true,
+          counts,
+          legacySucceeded: true,
+          droppedActivities: EMPTY_DROPPED_ACTIVITIES,
+        };
       }),
     );
     let holdTurn = true;
@@ -1784,7 +1812,12 @@ describe("local coach composition", () => {
       windowController = new AbortController();
       activeWindow = (async () => {
         await work(windowController!.signal);
-        return { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
+        return {
+          published: true,
+          counts,
+          legacySucceeded: true,
+          droppedActivities: EMPTY_DROPPED_ACTIVITIES,
+        };
       })();
       return activeWindow;
     });
@@ -2776,6 +2809,27 @@ describe("local coach composition", () => {
     await lifecycle.close();
   });
 
+  it("forwards scoped chat cancellation through the reconfigurable engine", async () => {
+    const home = await freshHome();
+    const stopChat = vi.fn(async () => ({ stopped: true }));
+    const lifecycle = await compose(home, {
+      bootstrap: async () => reference(),
+      createRuntime: () => runtime(),
+      createBackend: () => backend({ stopChat }),
+      createRepository: () => ({
+        insertIfAbsent: async () => false,
+        readCurrent: async () => undefined,
+      }),
+      createResolver: () => missingResolver(),
+    });
+
+    await expect(lifecycle.engine.stopChat?.({ chatId: "desktop" })).resolves.toEqual({
+      stopped: true,
+    });
+    expect(stopChat).toHaveBeenCalledWith({ chatId: "desktop" });
+    await lifecycle.close();
+  });
+
   it("passes reference bootstrap a live intervals reader updated by runtime configuration", async () => {
     const home = await freshHome();
     let referenceOptions:
@@ -2836,7 +2890,12 @@ describe("local coach composition", () => {
               const current = options.readConfig?.();
               if (current === undefined) throw new Error("Expected live runtime configuration.");
               windows.push({ ...current.intervals });
-              return { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
+              return {
+                published: true,
+                counts,
+                legacySucceeded: true,
+                droppedActivities: EMPTY_DROPPED_ACTIVITIES,
+              };
             },
           });
         },
@@ -3937,7 +3996,12 @@ describe("local coach composition", () => {
       legacyLimit: 15,
       totalLimit: 79,
     }).snapshot();
-    const result = { published: true, counts, legacySucceeded: true, droppedActivities: EMPTY_DROPPED_ACTIVITIES };
+    const result = {
+      published: true,
+      counts,
+      legacySucceeded: true,
+      droppedActivities: EMPTY_DROPPED_ACTIVITIES,
+    };
     let active: ReturnType<LocalStoreRuntime["runWindow"]> | undefined;
     let windowCount = 0;
     const launchWindow = (): ReturnType<LocalStoreRuntime["runWindow"]> => {
@@ -4976,7 +5040,12 @@ describe("local coach composition", () => {
     const home = await freshHome();
     const context = fakeContext(home);
     const selectedRuntime = runtime();
-    const backfill = vi.fn(async () => ({ pages: 1, artifacts: 0, reports: [], droppedActivityRows: { sourceRestricted: 0, other: 0 } }));
+    const backfill = vi.fn(async () => ({
+      pages: 1,
+      artifacts: 0,
+      reports: [],
+      droppedActivityRows: { sourceRestricted: 0, other: 0 },
+    }));
     const lifecycle = await compose(
       home,
       {

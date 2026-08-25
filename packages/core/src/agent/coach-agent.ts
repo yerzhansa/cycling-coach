@@ -3,14 +3,22 @@ import {
   type ModelTransportDecorator,
 } from "@enduragent/engine";
 import type {
+  AnswerCoachDecisionRpcParams,
+  AnswerCoachDecisionRpcResult,
   AthleteState,
   ChatRequest,
   ChatResponse,
   CoachEngine,
+  GetCoachDecisionRpcParams,
+  GetCoachDecisionRpcResult,
   HasSessionRequest,
   HasSessionResponse,
   ResetSessionRequest,
   ResetSessionResponse,
+  ResumeCoachDecisionRpcParams,
+  ResumeCoachDecisionRpcResult,
+  SkipCoachDecisionRpcParams,
+  SkipCoachDecisionRpcResult,
   TurnEvent,
 } from "@enduragent/coach-contract";
 import type { AthleteDataReader, PlatformCalendarMutations } from "../athlete-data.js";
@@ -45,6 +53,28 @@ export class CoachAgent implements CoachEngine {
 
   chat(request: ChatRequest, onEvent?: (event: TurnEvent) => void): Promise<ChatResponse> {
     return this.engine.chat(request, onEvent);
+  }
+
+  getCoachDecision(request: GetCoachDecisionRpcParams): Promise<GetCoachDecisionRpcResult> {
+    return this.engine.getCoachDecision(request);
+  }
+
+  answerCoachDecision(
+    request: AnswerCoachDecisionRpcParams,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<AnswerCoachDecisionRpcResult> {
+    return this.engine.answerCoachDecision(request, onEvent);
+  }
+
+  skipCoachDecision(request: SkipCoachDecisionRpcParams): Promise<SkipCoachDecisionRpcResult> {
+    return this.engine.skipCoachDecision(request);
+  }
+
+  resumeCoachDecision(
+    request: ResumeCoachDecisionRpcParams,
+    onEvent?: (event: TurnEvent) => void,
+  ): Promise<ResumeCoachDecisionRpcResult> {
+    return this.engine.resumeCoachDecision(request, onEvent);
   }
 
   hasSession(request: HasSessionRequest): Promise<HasSessionResponse> {

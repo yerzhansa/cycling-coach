@@ -44,6 +44,71 @@ function subject(
 }
 
 describe("chat transcript hydration", () => {
+  it("hydrates v2 decision entries as the original athlete message and completed Coach response", async () => {
+    const decision = {
+      decisionId: "decision-1",
+      chatId: "desktop",
+      messageId: "message-1",
+      question: "Choose tomorrow’s priority.",
+      status: "unanswered" as const,
+      options: [
+        {
+          id: "recovery",
+          label: "Prioritize recovery",
+          description: "Choose an easy day.",
+          recommended: true,
+          consequence: "Tomorrow becomes a recovery day.",
+        },
+        {
+          id: "tempo",
+          label: "Keep tempo",
+          description: "Keep the planned workout.",
+          recommended: false,
+          consequence: "Tomorrow keeps tempo.",
+        },
+      ],
+    };
+    const { hydrator, snapshots } = subject(async () => ({
+      schemaVersion: 2,
+      status: "page",
+      turns: [],
+      entries: [
+        {
+          kind: "decision-requested",
+          recordedAt: "2001-01-01T00:00:00.000Z",
+          athleteText: "What should I do tomorrow?",
+          decision,
+        },
+        {
+          kind: "decision-answered",
+          recordedAt: "2001-01-01T00:01:00.000Z",
+          decisionId: "decision-1",
+          answer: { kind: "option", optionId: "recovery" },
+          consequence: "Tomorrow becomes a recovery day.",
+          continuationId: "continuation-1",
+        },
+        {
+          kind: "decision-continuation-completed",
+          recordedAt: "2001-01-01T00:02:00.000Z",
+          completedAt: "2001-01-01T00:02:00.000Z",
+          decisionId: "decision-1",
+          continuationId: "continuation-1",
+          turnId: "turn-1",
+          coachText: "We’ll keep tomorrow easy.",
+        },
+      ],
+      nextCursor: null,
+    }));
+
+    await hydrator.start();
+    const snapshot = snapshots.at(-1)!;
+    expect(snapshot.entries).toHaveLength(3);
+    expect(mergeHydratedMessages(snapshot.turns, [], snapshot.entries)).toMatchObject([
+      { role: "athlete", text: "What should I do tomorrow?", historical: true },
+      { role: "coach", text: "We’ll keep tomorrow easy.", historical: true },
+    ]);
+  });
+
   it("loads the newest bounded page and exposes only its backward cursor", async () => {
     const readPage = vi.fn(async () => page([turn("turn-3"), turn("turn-4")], "older"));
     const { hydrator, snapshots } = subject(readPage);

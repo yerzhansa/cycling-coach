@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CoachDecisionReadModelSchema } from "./coach-decision.js";
 
 /** Engine-internal turn failure classification (frozen field vocabulary). */
 export const TurnErrorClassSchema = z.enum([
@@ -103,6 +104,31 @@ export const TextDeltaEventSchema = z
   })
   .strict();
 
+export const DecisionRequestedEventSchema = z
+  .object({
+    type: z.literal("decision-requested"),
+    turnId: z.string().min(1),
+    chatId: z.string().min(1),
+    decision: CoachDecisionReadModelSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.decision.status !== "unanswered") {
+      context.addIssue({
+        code: "custom",
+        path: ["decision", "status"],
+        message: "decision request event requires an unanswered decision",
+      });
+    }
+    if (value.decision.chatId !== value.chatId) {
+      context.addIssue({
+        code: "custom",
+        path: ["decision", "chatId"],
+        message: "decision chatId must match the event",
+      });
+    }
+  });
+
 /**
  * Terminal shapes: a successful turn ends with `final-text` as its last event.
  * A failed turn with no committed writes ends with `error` and delivers no
@@ -119,6 +145,7 @@ export const TurnEventSchema = z.discriminatedUnion("type", [
   InterruptedEventSchema,
   ErrorEventSchema,
   TextDeltaEventSchema,
+  DecisionRequestedEventSchema,
 ]);
 export type TurnEvent = z.infer<typeof TurnEventSchema>;
 

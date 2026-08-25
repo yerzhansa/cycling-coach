@@ -1,5 +1,6 @@
+import { Check, X } from "lucide-react";
 import type { ReactElement } from "react";
-import type { ChatMessageView } from "../../state/chat-slice.js";
+import type { ChatChoiceView, ChatMessageView } from "../../state/chat-slice.js";
 import { cn } from "../../lib/utils.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { AthleteMessage } from "./AthleteMessage.js";
@@ -41,8 +42,44 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
   );
 }
 
+function ChoiceRow(props: { readonly choice: ChatChoiceView }): ReactElement {
+  const choice = props.choice;
+  return (
+    <article
+      className="grid grid-cols-[var(--ctl-h-sm)_minmax(0,1fr)] items-center gap-2.5 rounded-card bg-sunk p-3"
+      aria-label="Choice consequence"
+      aria-live={choice.historical ? "off" : undefined}
+    >
+      <span
+        className={cn(
+          "grid size-8 place-items-center rounded-full",
+          choice.skipped ? "bg-surface-2 text-ink-2" : "bg-ok/16 text-ok",
+        )}
+      >
+        {choice.skipped ? (
+          <X className="size-4" aria-hidden="true" />
+        ) : (
+          <Check className="size-4" aria-hidden="true" />
+        )}
+      </span>
+      <div className="grid gap-[calc(var(--inset)/2)]">
+        <p className="m-0 text-xs font-semibold leading-4 text-ink-2">Choice consequence</p>
+        <strong className="text-sm font-medium leading-5">{choice.label}</strong>
+        {choice.consequence === null ? null : (
+          <p className="m-0 text-xs leading-4 text-ink-2">{choice.consequence}</p>
+        )}
+      </div>
+    </article>
+  );
+}
+
 export function Transcript(): ReactElement {
+  const timeline = useEnduragentStore((state) => state.chat.timeline);
   const messages = useEnduragentStore((state) => state.chat.messages);
+  const items =
+    timeline.length > 0
+      ? timeline
+      : messages.map((message) => ({ kind: "message" as const, message }));
 
   return (
     <section
@@ -55,11 +92,15 @@ export function Transcript(): ReactElement {
     >
       <HistoryControls />
       <div className="chat-messages grid gap-7">
-        {messages.length === 0 ? null : (
+        {items.length === 0 ? null : (
           <div className="contents">
-            {messages.map((message) => (
-              <MessageRow key={message.id} message={message} />
-            ))}
+            {items.map((item) =>
+              item.kind === "message" ? (
+                <MessageRow key={`message:${item.message.id}`} message={item.message} />
+              ) : (
+                <ChoiceRow key={`choice:${item.choice.id}`} choice={item.choice} />
+              ),
+            )}
           </div>
         )}
       </div>

@@ -1,11 +1,21 @@
-import type { CoachClient, CoachClientTerminalEnvelope } from "@enduragent/coach-client";
+import type {
+  CoachClient,
+  CoachClientCallOptions,
+  CoachClientTerminalEnvelope,
+} from "@enduragent/coach-client";
 import {
   CoachClientCallAbortedError,
   CoachClientCallTimeoutError,
   CoachClientDisconnectedError,
   CoachClientProtocolError,
 } from "@enduragent/coach-client";
-import type { CoachTurnEventNotificationEnvelope, TurnEvent } from "@enduragent/coach-contract";
+import type {
+  CoachDecisionAnswer,
+  CoachDecisionReadModel,
+  CoachTurnEventNotificationEnvelope,
+  TranscriptPageEntry,
+  TurnEvent,
+} from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "../coach-client.js";
 import {
   DESKTOP_CHAT_ID,
@@ -27,10 +37,16 @@ import { COACH_RESPONSE_CODE_UNIT_LIMIT, COACH_TURN_EVENT_LIMIT } from "./limits
 
 export const CHAT_CONNECTION_INTERRUPTED_COPY =
   "Connection interrupted. Your partial response is preserved.";
+export const CHAT_RESPONSE_STOPPED_COPY = "Response stopped. Your partial response is preserved.";
 export const CHAT_PROTOCOL_FAILURE_COPY =
   "The coaching response could not be verified. Please try again.";
 export const CHAT_FAILURE_COPY = "The coach couldn't respond. Please try again.";
 export const CHAT_EMPTY_RESPONSE_COPY = "The coach returned an empty response. Please try again.";
+export const CHAT_DECISION_FAILURE_COPY =
+  "We couldn’t continue from your choice. Please try again.";
+export const CHAT_DECISION_SKIP_FAILURE_COPY = "We couldn’t skip this question. Please try again.";
+export const CHAT_DECISION_LOAD_FAILURE_COPY =
+  "We couldn’t check for a saved Coach question. Reconnect and try again.";
 export const NEW_CONVERSATION_SUCCESS_COPY = "New conversation started.";
 export const NEW_CONVERSATION_MEMORY_WARNING_COPY =
   "New conversation started. Some recent details may not have been saved to coach memory.";
@@ -47,12 +63,21 @@ export interface ChatAppendDelta {
 export interface ChatViewControls {
   readonly newConversationDisabled: boolean;
   readonly workBlocked: boolean;
+  readonly decisionLoading?: boolean;
+  readonly decisionLoadError?: string | null;
   readonly appendDelta?: ChatAppendDelta;
   readonly hydration?: {
     readonly status: TranscriptHydrationStatus;
     readonly hasEarlier: boolean;
     readonly revision: number;
     readonly change: TranscriptHydrationChange;
+    readonly entries?: readonly TranscriptPageEntry[];
+  };
+  readonly decision?: {
+    readonly value: CoachDecisionReadModel | null;
+    readonly phase: "idle" | "continuing" | "recovering";
+    readonly answerLabel: string | null;
+    readonly error: string | null;
   };
 }
 
@@ -69,9 +94,12 @@ export interface ChatController {
   retryInterrupted(): Promise<void>;
   loadEarlier(): Promise<void>;
   retryHydration(): Promise<void>;
+  retryDecision(): Promise<void>;
   openNewConversation(): boolean;
   cancelNewConversation(): void;
   confirmNewConversation(): Promise<void>;
+  answerDecision(decisionId: string, answer: CoachDecisionAnswer): Promise<void>;
+  skipDecision(decisionId: string): Promise<void>;
   dispose(): void;
 }
 
@@ -115,19 +143,34 @@ export function createChatController(input: {
   let resetTask: Promise<void> | undefined;
   let activeStopRequest: ActiveStopRequest | undefined;
   let retryReconnect = true;
+  let decision: CoachDecisionReadModel | null = null;
+  let decisionPhase: "idle" | "continuing" | "recovering" = "idle";
+  let decisionAnswerLabel: string | null = null;
+  let decisionError: string | null = null;
+  let decisionLoaded = true;
+  let decisionLoadError: string | null = null;
+  let decisionLoadTask: Promise<void> | undefined;
+  let decisionContinuationTask: Promise<void> | undefined;
   let epoch = 0;
   const canChat = input.canChat ?? (() => true);
 
   const nextId = (prefix: "request" | "message" | "queued"): string => `${prefix}-${++sequence}`;
   const resetBlocksWork = (): boolean =>
     state.session.resetPhase === "confirming" || state.session.resetPhase === "resetting";
+  const decisionBlocksWork = (): boolean =>
+    !decisionLoaded ||
+    decision?.status === "unanswered" ||
+    (decision?.status === "answered" && decision.continuation.status === "pending");
   const canOpenNewConversation = (): boolean =>
     canChat() &&
     !disposed &&
-    (hasClearableConversation(state) || hydration.turns.length > 0) &&
+    (hasClearableConversation(state) ||
+      hydration.turns.length > 0 ||
+      hydration.entries.length > 0) &&
     state.session.resetPhase === "idle" &&
     state.status !== "streaming" &&
     state.queued.length === 0 &&
+    !decisionBlocksWork() &&
     activeTask === undefined &&
     outstandingChatTasks.size === 0 &&
     queuedRetry === undefined &&
@@ -136,18 +179,30 @@ export function createChatController(input: {
     if (disposed) return;
     try {
       input.view.render(
-        hydration.turns.length === 0
+        hydration.turns.length === 0 && hydration.entries.length === 0
           ? state
-          : { ...state, messages: mergeHydratedMessages(hydration.turns, state.messages) },
+          : {
+              ...state,
+              messages: mergeHydratedMessages(hydration.turns, state.messages, hydration.entries),
+            },
         {
           newConversationDisabled: !canOpenNewConversation(),
           workBlocked: resetBlocksWork(),
+          decisionLoading: !decisionLoaded,
+          decisionLoadError,
           ...(appendDelta === undefined ? {} : { appendDelta }),
           hydration: {
             status: hydration.status,
             hasEarlier: hydration.nextCursor !== null,
             revision: hydration.revision,
             change: hydration.change,
+            entries: hydration.entries,
+          },
+          decision: {
+            value: decision,
+            phase: decisionPhase,
+            answerLabel: decisionAnswerLabel,
+            error: decisionError,
           },
         },
       );
@@ -214,6 +269,7 @@ export function createChatController(input: {
       let terminal: CoachClientTerminalEnvelope | undefined;
       let terminalHadFinal = false;
       let protocolFault = false;
+      let requestedDecision: CoachDecisionReadModel | undefined;
       const callAbortController = new AbortController();
       let client: CoachClient | undefined;
       let stopRequested = false;
@@ -296,6 +352,10 @@ export function createChatController(input: {
                 return;
               }
               eventCount += 1;
+              if (requestedDecision !== undefined) {
+                failProtocol();
+                return;
+              }
               if (event.type === "turn-start") {
                 if (eventCount !== 1 || startSeen || event.chatId !== DESKTOP_CHAT_ID) {
                   failProtocol();
@@ -327,6 +387,28 @@ export function createChatController(input: {
               }
               if (event.type === "final-text") finalText = event.text;
               if (event.type === "interrupted") interruptedText = event.text;
+              if (event.type === "decision-requested") {
+                if (
+                  !startSeen ||
+                  event.chatId !== DESKTOP_CHAT_ID ||
+                  event.decision.status !== "unanswered"
+                ) {
+                  failProtocol();
+                  return;
+                }
+                requestedDecision = event.decision;
+                reduce({
+                  type: "bind-decision",
+                  requestKey,
+                  decisionId: event.decision.decisionId,
+                });
+                decision = event.decision;
+                decisionPhase = "idle";
+                decisionAnswerLabel = null;
+                decisionError = null;
+                render();
+                return;
+              }
               reduce({ type: "event", requestKey, event }, appendDelta);
             },
             onTerminalEnvelope(envelope) {
@@ -355,12 +437,29 @@ export function createChatController(input: {
           completed = true;
           return;
         }
+        if (requestedDecision !== undefined) {
+          if (
+            protocolFault ||
+            terminal === undefined ||
+            !("result" in terminal) ||
+            finalText !== undefined
+          ) {
+            retryClient = client;
+            retryReconnect = true;
+            decision = null;
+            reduce({ type: "interrupt", requestKey, copy: CHAT_PROTOCOL_FAILURE_COPY });
+            return;
+          }
+          reduce({ type: "discard", requestKey });
+          return;
+        }
         if (
           protocolFault ||
           terminal === undefined ||
           !("result" in terminal) ||
           !terminalHadFinal ||
           finalText === undefined ||
+          !("text" in result) ||
           result.text !== finalText
         ) {
           retryClient = client;
@@ -427,8 +526,321 @@ export function createChatController(input: {
     return chatRun.task.then(() => (chatRun.completed() ? drain() : undefined));
   };
 
+  const answerLabel = (
+    currentDecision: CoachDecisionReadModel,
+    answer: CoachDecisionAnswer,
+  ): string => {
+    if (answer.kind === "custom") return answer.text;
+    return (
+      currentDecision.options.find((option) => option.id === answer.optionId)?.label ??
+      "Saved choice"
+    );
+  };
+
+  const refreshDecision = async (client?: CoachClient): Promise<CoachDecisionReadModel | null> => {
+    const activeClient = client ?? (await input.clients.getClient());
+    const result = await activeClient.call("getCoachDecision", { chatId: DESKTOP_CHAT_ID });
+    if (disposed) return null;
+    decision = result.decision;
+    decisionPhase =
+      decision?.status === "answered" && decision.continuation.status === "pending"
+        ? "recovering"
+        : "idle";
+    if (decision?.status !== "answered") decisionAnswerLabel = null;
+    decisionError = null;
+    decisionLoaded = true;
+    decisionLoadError = null;
+    render();
+    return decision;
+  };
+
+  const continueDecision = (
+    method: "answerCoachDecision" | "resumeCoachDecision",
+    currentDecision: CoachDecisionReadModel,
+    answer: CoachDecisionAnswer | undefined,
+  ): Promise<void> => {
+    if (decisionContinuationTask !== undefined) return decisionContinuationTask;
+    const requestKey = Number(nextId("request").slice("request-".length));
+    const userMessageId = nextId("message");
+    const assistantMessageId = nextId("message");
+    const restoreCompletedContinuation = (
+      completed: Extract<CoachDecisionReadModel, { status: "answered" }> & {
+        readonly continuation: Extract<
+          Extract<CoachDecisionReadModel, { status: "answered" }>["continuation"],
+          { status: "completed" }
+        >;
+      },
+    ): void => {
+      if (
+        state.messages.some(
+          (message) => message.role === "coach" && message.turnId === completed.continuation.turnId,
+        )
+      ) {
+        return;
+      }
+      reduce({
+        type: "submit",
+        requestKey,
+        userMessage: "",
+        userMessageId,
+        assistantMessageId,
+        includeUser: false,
+      });
+      reduce({
+        type: "bind-turn",
+        requestKey,
+        turnId: completed.continuation.turnId,
+      });
+      reduce({
+        type: "event",
+        requestKey,
+        event: {
+          type: "final-text",
+          turnId: completed.continuation.turnId,
+          text: completed.continuation.coachText,
+        },
+      });
+      reduce({ type: "complete", requestKey });
+    };
+    decisionPhase = method === "resumeCoachDecision" ? "recovering" : "continuing";
+    decisionAnswerLabel =
+      answer === undefined
+        ? currentDecision.status === "answered"
+          ? answerLabel(currentDecision, currentDecision.answer)
+          : "Saved choice"
+        : answerLabel(currentDecision, answer);
+    decisionError = null;
+    reduce({
+      type: "submit",
+      requestKey,
+      userMessage: "",
+      userMessageId,
+      assistantMessageId,
+      includeUser: false,
+    });
+    const task = (async () => {
+      let client: CoachClient | undefined;
+      let boundRequestId: string | number | undefined;
+      let boundTurnId: string | undefined;
+      let pendingEnvelope: CoachTurnEventNotificationEnvelope | undefined;
+      let terminal: CoachClientTerminalEnvelope | undefined;
+      let finalText: string | undefined;
+      let interruptedText: string | undefined;
+      let eventCount = 0;
+      let startSeen = false;
+      let protocolFault = false;
+      const callAbortController = new AbortController();
+      let stopRequested = false;
+      let stopTask: Promise<void> | undefined;
+      const current = (): boolean =>
+        !disposed &&
+        state.activeTurn?.requestKey === requestKey &&
+        decision?.decisionId === currentDecision.decisionId;
+      const failProtocol = (): void => {
+        if (protocolFault) return;
+        protocolFault = true;
+        callAbortController.abort();
+      };
+      const requestStop = (): void => {
+        stopRequested = true;
+        if (client === undefined || boundTurnId === undefined || stopTask !== undefined) return;
+        stopTask = client
+          .call("stopChat", { chatId: DESKTOP_CHAT_ID })
+          .then(() => undefined)
+          .catch(() => undefined);
+      };
+      activeStopRequest = { requestKey, request: requestStop };
+      const callOptions = {
+        signal: callAbortController.signal,
+        onNotificationEnvelope(envelope) {
+          if (!current() || protocolFault) return;
+          if (
+            envelope.method !== "coach.turnEvent" ||
+            envelope.params.requestMethod !== method ||
+            envelope.params.turnId.length === 0
+          ) {
+            failProtocol();
+            return;
+          }
+          if (boundRequestId === undefined) {
+            boundRequestId = envelope.params.requestId;
+            boundTurnId = envelope.params.turnId;
+            reduce({ type: "bind-turn", requestKey, turnId: boundTurnId });
+            if (stopRequested) requestStop();
+          } else if (
+            envelope.params.requestId !== boundRequestId ||
+            envelope.params.turnId !== boundTurnId
+          ) {
+            failProtocol();
+            return;
+          }
+          pendingEnvelope = envelope;
+        },
+        onEvent(event) {
+          if (!current() || protocolFault) return;
+          const envelope = pendingEnvelope;
+          pendingEnvelope = undefined;
+          if (
+            envelope === undefined ||
+            boundTurnId === undefined ||
+            event.turnId !== boundTurnId ||
+            envelope.params.event.turnId !== boundTurnId ||
+            event.type === "decision-requested"
+          ) {
+            failProtocol();
+            return;
+          }
+          if (eventCount >= COACH_TURN_EVENT_LIMIT) {
+            failProtocol();
+            return;
+          }
+          eventCount += 1;
+          if (event.type === "turn-start") {
+            if (eventCount !== 1 || startSeen || event.chatId !== DESKTOP_CHAT_ID) {
+              failProtocol();
+              return;
+            }
+            startSeen = true;
+          } else if (!startSeen) {
+            failProtocol();
+            return;
+          }
+          if (event.type === "text_delta") {
+            const previousTextLength = state.activeTurn?.draft.length ?? 0;
+            if (event.delta.length > COACH_RESPONSE_CODE_UNIT_LIMIT - previousTextLength) {
+              failProtocol();
+              return;
+            }
+          }
+          if (
+            (event.type === "final-text" || event.type === "interrupted") &&
+            event.text.length > COACH_RESPONSE_CODE_UNIT_LIMIT
+          ) {
+            failProtocol();
+            return;
+          }
+          if (event.type === "final-text") finalText = event.text;
+          if (event.type === "interrupted") interruptedText = event.text;
+          reduce({ type: "event", requestKey, event });
+        },
+        onTerminalEnvelope(envelope) {
+          if (current()) terminal = envelope;
+        },
+      } satisfies CoachClientCallOptions<"answerCoachDecision">;
+      try {
+        client = await input.clients.getClient();
+        if (!current()) return;
+        const result =
+          method === "answerCoachDecision"
+            ? await client.call(
+                "answerCoachDecision",
+                {
+                  chatId: DESKTOP_CHAT_ID,
+                  decisionId: currentDecision.decisionId,
+                  answer: answer as CoachDecisionAnswer,
+                },
+                callOptions,
+              )
+            : await client.call(
+                "resumeCoachDecision",
+                { chatId: DESKTOP_CHAT_ID, decisionId: currentDecision.decisionId },
+                callOptions,
+              );
+        if (!current()) return;
+        if (protocolFault || terminal === undefined || !("result" in terminal)) {
+          throw new CoachClientProtocolError();
+        }
+        decision = result.decision;
+        if (interruptedText !== undefined) {
+          if (
+            finalText !== undefined ||
+            result.decision.status !== "answered" ||
+            result.decision.continuation.status !== "pending"
+          ) {
+            throw new CoachClientProtocolError();
+          }
+          decisionPhase = "recovering";
+          decisionError = CHAT_RESPONSE_STOPPED_COPY;
+          return;
+        }
+        if (
+          result.decision.status === "answered" &&
+          result.decision.continuation.status === "completed"
+        ) {
+          if (
+            finalText === undefined ||
+            result.decision.continuation.coachText !== finalText ||
+            result.decision.continuation.turnId !== boundTurnId
+          ) {
+            throw new CoachClientProtocolError();
+          }
+          reduce({ type: "complete", requestKey });
+          decisionPhase = "idle";
+          decisionError = null;
+          return;
+        }
+        reduce({ type: "discard", requestKey });
+        decisionPhase = "recovering";
+        decisionError = CHAT_DECISION_FAILURE_COPY;
+      } catch {
+        if (!current()) return;
+        reduce({ type: "discard", requestKey });
+        decisionPhase = "recovering";
+        decisionError = CHAT_DECISION_FAILURE_COPY;
+        try {
+          const refreshed = await refreshDecision(client);
+          if (refreshed?.status === "answered" && refreshed.continuation.status === "pending") {
+            decisionError = CHAT_DECISION_FAILURE_COPY;
+            render();
+          } else if (
+            refreshed?.status === "answered" &&
+            refreshed.continuation.status === "completed"
+          ) {
+            restoreCompletedContinuation({
+              ...refreshed,
+              continuation: refreshed.continuation,
+            });
+            decisionPhase = "idle";
+            decisionError = null;
+            render();
+          } else if (refreshed?.status === "unanswered") {
+            decisionPhase = "idle";
+            decisionError = CHAT_DECISION_FAILURE_COPY;
+            render();
+          }
+        } catch {
+          render();
+        }
+      } finally {
+        if (activeStopRequest?.requestKey === requestKey) activeStopRequest = undefined;
+        try {
+          void input.refreshSpend().catch(() => {});
+        } catch {}
+        try {
+          await input.refreshTrainingContext();
+        } catch {}
+      }
+    })();
+    decisionContinuationTask = task;
+    activeTask = task;
+    render();
+    void task.finally(() => {
+      if (decisionContinuationTask === task) decisionContinuationTask = undefined;
+      if (activeTask === task) activeTask = undefined;
+      render();
+      if (!decisionBlocksWork()) void drain();
+    });
+    return task;
+  };
+
   const drain = (): Promise<void> => {
-    if (!canChat() || disposed || resetBlocksWork() || state.status === "streaming") {
+    if (
+      !canChat() ||
+      disposed ||
+      resetBlocksWork() ||
+      decisionBlocksWork() ||
+      state.status === "streaming"
+    ) {
       return Promise.resolve();
     }
     const group = nextDrainGroup(state);
@@ -441,8 +853,36 @@ export function createChatController(input: {
     if (!canChat() || disposed) return Promise.resolve();
     void hydrator.start();
     if (probeTask !== undefined) return probeTask;
+    decisionLoaded = false;
+    decisionLoadError = null;
+    render();
+    const loadTask = (async () => {
+      try {
+        const loaded = await refreshDecision();
+        decisionLoaded = true;
+        render();
+        if (
+          loaded?.status === "answered" &&
+          loaded.continuation.status === "pending" &&
+          decisionContinuationTask === undefined
+        ) {
+          await continueDecision("resumeCoachDecision", loaded, undefined);
+        }
+      } catch {
+        decisionLoaded = false;
+        decisionLoadError = CHAT_DECISION_LOAD_FAILURE_COPY;
+        decisionPhase = "idle";
+        render();
+      }
+    })();
+    decisionLoadTask = loadTask;
+    void loadTask.finally(() => {
+      if (decisionLoadTask === loadTask) decisionLoadTask = undefined;
+      render();
+      if (!decisionBlocksWork()) void drain();
+    });
     const probeEpoch = epoch;
-    const task = (async () => {
+    const sessionProbeTask = (async () => {
       try {
         const client = await input.clients.getClient();
         const result = await client.call("hasSession", { chatId: DESKTOP_CHAT_ID });
@@ -450,6 +890,7 @@ export function createChatController(input: {
         reduce({ type: "session-probe", hasSession: result.hasSession });
       } catch {}
     })();
+    const task = Promise.all([sessionProbeTask, loadTask]).then(() => {});
     probeTask = task;
     return task;
   };
@@ -460,11 +901,16 @@ export function createChatController(input: {
       return start();
     },
     resume() {
-      void start();
-      return drain();
+      return start().then(() => drain());
     },
     submit(message) {
-      if (!canChat() || !/\S/u.test(message) || disposed || resetBlocksWork()) {
+      if (
+        !canChat() ||
+        !/\S/u.test(message) ||
+        disposed ||
+        resetBlocksWork() ||
+        decisionBlocksWork()
+      ) {
         return activeTask ?? Promise.resolve();
       }
       if (state.status === "streaming") {
@@ -528,13 +974,43 @@ export function createChatController(input: {
     retryHydration() {
       return hydrator.retry();
     },
+    async retryDecision() {
+      if (disposed || decisionLoadTask !== undefined) return decisionLoadTask;
+      decisionLoaded = false;
+      decisionLoadError = null;
+      render();
+      const task = (async () => {
+        try {
+          const client = await input.clients.reconnect();
+          const loaded = await refreshDecision(client);
+          if (
+            loaded?.status === "answered" &&
+            loaded.continuation.status === "pending" &&
+            decisionContinuationTask === undefined
+          ) {
+            await continueDecision("resumeCoachDecision", loaded, undefined);
+          }
+        } catch {
+          decisionLoaded = false;
+          decisionLoadError = CHAT_DECISION_LOAD_FAILURE_COPY;
+          decisionPhase = "idle";
+          render();
+        }
+      })();
+      decisionLoadTask = task;
+      await task.finally(() => {
+        if (decisionLoadTask === task) decisionLoadTask = undefined;
+        render();
+        if (!decisionBlocksWork()) void drain();
+      });
+    },
     openNewConversation() {
       if (!canChat()) return false;
       if (!canOpenNewConversation()) return false;
       epoch += 1;
       state = reduceChatState(state, {
         type: "open-new-conversation",
-        hasHydratedHistory: hydration.turns.length > 0,
+        hasHydratedHistory: hydration.turns.length > 0 || hydration.entries.length > 0,
       });
       render();
       return true;
@@ -558,6 +1034,12 @@ export function createChatController(input: {
           sequence += 1;
           retryClient = undefined;
           queuedRetry = undefined;
+          decision = null;
+          decisionLoaded = true;
+          decisionLoadError = null;
+          decisionPhase = "idle";
+          decisionAnswerLabel = null;
+          decisionError = null;
           updateReset(() => hydrator.resetSucceeded(), {
             type: "reset-succeeded",
             announcement: result.memoryFlushed
@@ -587,9 +1069,52 @@ export function createChatController(input: {
       });
       return task;
     },
+    answerDecision(decisionId, answer) {
+      if (
+        disposed ||
+        resetBlocksWork() ||
+        decisionContinuationTask !== undefined ||
+        decision?.status !== "unanswered" ||
+        decision.decisionId !== decisionId
+      ) {
+        return decisionContinuationTask ?? Promise.resolve();
+      }
+      return continueDecision("answerCoachDecision", decision, answer);
+    },
+    async skipDecision(decisionId) {
+      if (
+        disposed ||
+        resetBlocksWork() ||
+        decisionContinuationTask !== undefined ||
+        decision?.status !== "unanswered" ||
+        decision.decisionId !== decisionId
+      ) {
+        return;
+      }
+      decisionError = null;
+      render();
+      try {
+        const client = await input.clients.getClient();
+        const result = await client.call("skipCoachDecision", {
+          chatId: DESKTOP_CHAT_ID,
+          decisionId,
+        });
+        if (disposed || decision?.decisionId !== decisionId) return;
+        decision = result.decision;
+        decisionPhase = "idle";
+        decisionAnswerLabel = null;
+      } catch {
+        if (disposed || decision?.decisionId !== decisionId) return;
+        decisionError = CHAT_DECISION_SKIP_FAILURE_COPY;
+      }
+      render();
+      if (!decisionBlocksWork()) void drain();
+    },
     dispose() {
       disposed = true;
+      activeStopRequest = undefined;
       hydrator.dispose();
+      decision = null;
       epoch += 1;
       sequence += 1;
     },

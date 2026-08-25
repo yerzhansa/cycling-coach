@@ -590,8 +590,7 @@ describe("Telegram polling generation release", () => {
         method === "getUpdates" && payload.timeout === 0
           ? Promise.reject(stopFailure)
           : Promise.resolve({ ok: true, result: true }),
-      stop: (callApi) =>
-        callApi("getUpdates", { offset: 8, timeout: 0 }).then(() => undefined),
+      stop: (callApi) => callApi("getUpdates", { offset: 8, timeout: 0 }).then(() => undefined),
       isRunning: () => true,
     });
     vi.doMock("grammy", () => ({
@@ -911,6 +910,10 @@ function makeRuntimeInput(): CreateTelegramChannelInput {
     dataDir,
     engine: {
       chat: vi.fn(),
+      getCoachDecision: vi.fn(async () => ({ decision: null })),
+      answerCoachDecision: vi.fn(),
+      skipCoachDecision: vi.fn(),
+      resumeCoachDecision: vi.fn(),
       hasSession: vi.fn(),
       resetSession: vi.fn(),
       getAthleteState: vi.fn(),

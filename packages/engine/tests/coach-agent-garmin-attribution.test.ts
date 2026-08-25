@@ -185,6 +185,7 @@ async function setupAgentWithStore(
     overwriteHistory(_chatId, next) {
       messages = [...next];
     },
+    persistDecisionContext() {},
     resetConversation() {
       messages = [];
     },

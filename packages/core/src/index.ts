@@ -139,9 +139,15 @@ export type {
   ArchivedConversationSummary,
   TranscriptPageRequest,
   TranscriptPageResult,
+  TranscriptPageEntry,
   TranscriptPageTurn,
   TranscriptInterruptedTurnRecord,
   TranscriptTurnRecord,
+  TranscriptDecisionAnsweredInput,
+  TranscriptDecisionContinuationCompletedInput,
+  TranscriptDecisionRequestedInput,
+  TranscriptDecisionSkippedInput,
+  TranscriptDecisionRecord,
 } from "./agent/transcript-store.js";
 export {
   WindowsPrivatePathPolicyError,

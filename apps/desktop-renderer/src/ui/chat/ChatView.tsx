@@ -1,5 +1,12 @@
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import { CHAT_AUTO_LOAD_EARLIER_THRESHOLD, chatScrollAnchor } from "../../state/chat-stream.js";
 import { useEnduragentStore } from "../../state/store.js";
 import { Button } from "../../components/ui/button.js";
@@ -10,6 +17,7 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog.js";
 import { Composer, type ComposerHandle } from "./Composer.js";
+import { CoachDecisionPanel } from "./CoachDecisionPanel.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
 import { NewConversationDialog } from "./NewConversationDialog.js";
 import { CoachProgress, Notice, RetryBar } from "./Notice.js";
@@ -42,6 +50,7 @@ export function ChatView(): ReactElement {
   const [contextOpen, setContextOpen] = useState(true);
   const [contextDrawerOpen, setContextDrawerOpen] = useState(false);
   const [compact, setCompact] = useState(false);
+  const [decisionCustomOpen, setDecisionCustomOpen] = useState(false);
   const activeView = useEnduragentStore((state) => state.activeView);
   const status = useEnduragentStore((state) => state.chat.status);
   const announcement = useEnduragentStore((state) => state.chat.announcement);
@@ -109,6 +118,10 @@ export function ChatView(): ReactElement {
     if (compact) setContextDrawerOpen(true);
     else setContextOpen((open) => !open);
   };
+  const setCustomDecisionOpen = useCallback((open: boolean): void => {
+    setDecisionCustomOpen(open);
+  }, []);
+
   return (
     <section
       ref={surface}
@@ -156,8 +169,11 @@ export function ChatView(): ReactElement {
               <Notice />
               <RetryBar />
             </div>
+            <div className="mb-2.5 empty:hidden">
+              <CoachDecisionPanel onCustomOpenChange={setCustomDecisionOpen} />
+            </div>
             <QueuedMessages />
-            <Composer handle={composer} />
+            <Composer handle={composer} hidden={decisionCustomOpen} />
             <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
           </div>
         </div>

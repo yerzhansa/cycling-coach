@@ -67,10 +67,14 @@ describe("createCoachEngine", () => {
     });
 
     expect(Object.keys(engine).sort()).toEqual([
+      "answerCoachDecision",
       "chat",
       "getAthleteState",
+      "getCoachDecision",
       "hasSession",
       "resetSession",
+      "resumeCoachDecision",
+      "skipCoachDecision",
       "stopChat",
     ]);
     await expect(engine.hasSession({ chatId: "c1" })).resolves.toEqual({ hasSession: false });

@@ -64,6 +64,9 @@ function stubActions(): ChatActions {
     cancelNewConversation: vi.fn(),
     confirmNewConversation: vi.fn(),
     retryFirstSync: vi.fn(),
+    answerDecision: vi.fn(),
+    skipDecision: vi.fn(),
+    retryDecision: vi.fn(),
   };
 }
 
@@ -148,6 +151,8 @@ describe("shell", () => {
     expect(document.querySelector("textarea#message")).not.toBeNull();
     expect(document.querySelector("button.sync-chip")).not.toBeNull();
     expect(document.querySelector("[data-sidebar-setup-readiness]")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Chat" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide training context" })).toBeInTheDocument();
     expect(document.querySelector('[data-view="chat"]')).not.toBeNull();
     expect(document.querySelector('[data-onboarding="settled"]')).not.toBeNull();
     expect(document.querySelector("[data-setup-host]")).toBeNull();

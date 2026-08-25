@@ -1,4 +1,11 @@
-import type { AthleteState } from "@enduragent/coach-contract";
+import type {
+  AthleteState,
+  CoachDecisionAnswer,
+  CoachDecisionContinuationLineage,
+  CoachDecisionReadModel,
+  RequestUserDecisionInput,
+  RequestUserDecisionResult,
+} from "@enduragent/coach-contract";
 import type { ModelMessage } from "ai";
 import type { EventInput, IntervalsClient } from "intervals-icu-api";
 import type { GenerateOptions, GenerateResult } from "./sport.js";
@@ -129,6 +136,16 @@ export interface ChatStorePort {
     assistantContent: string,
     lineage: ChatLineage,
   ): void;
+  persistDecisionContext(input: {
+    readonly chatId: string;
+    readonly decisionId: string;
+    readonly athleteText: string;
+    readonly request: RequestUserDecisionInput;
+    readonly result?: RequestUserDecisionResult;
+    readonly coachText?: string;
+    readonly continuationId?: string;
+    readonly lineage?: ChatLineage;
+  }): void;
   overwriteHistory(chatId: string, messages: ModelMessage[]): void;
   resetConversation(input: ConversationResetInput): void;
   archivePreCompact(chatId: string): void;
@@ -155,6 +172,39 @@ export type TranscriptInterruptedTurnInput = TranscriptCompletedTurnInput;
 export interface TranscriptWriterPort {
   appendCompletedTurn(input: TranscriptCompletedTurnInput): void;
   appendInterruptedTurn?(input: TranscriptInterruptedTurnInput): void;
+}
+
+export interface CoachDecisionStorePort {
+  appendDecisionRequested(input: {
+    readonly decision: CoachDecisionReadModel;
+    readonly toolCallId: string;
+    readonly athleteText: string;
+    readonly requestedAt: string;
+  }): CoachDecisionReadModel;
+  answerDecision(input: {
+    readonly chatId: string;
+    readonly decisionId: string;
+    readonly answer: CoachDecisionAnswer;
+    readonly consequence: string;
+    readonly continuationId: string;
+    readonly answeredAt: string;
+  }): CoachDecisionReadModel;
+  skipDecision(input: {
+    readonly chatId: string;
+    readonly decisionId: string;
+    readonly skippedAt: string;
+  }): CoachDecisionReadModel;
+  completeDecisionContinuation(input: {
+    readonly chatId: string;
+    readonly decisionId: string;
+    readonly continuationId: string;
+    readonly turnId: string;
+    readonly coachText: string;
+    readonly lineage: CoachDecisionContinuationLineage;
+    readonly completedAt: string;
+  }): CoachDecisionReadModel;
+  getDecision(chatId: string, decisionId?: string): CoachDecisionReadModel | null;
+  getDecisionAthleteText(chatId: string, decisionId: string): string | null;
 }
 
 export type ExecSecretRef = {
@@ -327,6 +377,7 @@ export interface EngineHostPorts {
   readonly memory: MemoryStorePort;
   readonly chatStore: ChatStorePort;
   readonly transcriptWriter: TranscriptWriterPort;
+  readonly coachDecisions?: CoachDecisionStorePort;
   readonly secrets: SecretsPort;
   readonly platform: PlatformClientPort;
   readonly logger: LoggerPort;

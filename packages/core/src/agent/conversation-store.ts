@@ -15,11 +15,25 @@ import {
   type ArchivedConversationList,
   type ResetIntentRecord,
   type TranscriptTurnRecord,
+  type TranscriptDecisionAnsweredInput,
+  type TranscriptDecisionContinuationCompletedInput,
+  type TranscriptDecisionRequestedInput,
+  type TranscriptDecisionSkippedInput,
   type TranscriptPageRequest,
   type TranscriptPageResult,
 } from "./transcript-store.js";
+import type { CoachDecisionReadModel } from "@enduragent/coach-contract";
+import { WindowsPrivatePathPolicyError } from "../io/windows-private-path-policy.js";
 
 export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPort {
+  appendDecisionRequested(input: TranscriptDecisionRequestedInput): CoachDecisionReadModel;
+  answerDecision(input: TranscriptDecisionAnsweredInput): CoachDecisionReadModel;
+  skipDecision(input: TranscriptDecisionSkippedInput): CoachDecisionReadModel;
+  completeDecisionContinuation(
+    input: TranscriptDecisionContinuationCompletedInput,
+  ): CoachDecisionReadModel;
+  getDecision(chatId: string, decisionId?: string): CoachDecisionReadModel | null;
+  getDecisionAthleteText(chatId: string, decisionId: string): string | null;
   readCurrentConversation(chatId: string): TranscriptTurnRecord[];
   readCurrentConversationPage(chatId: string, request: TranscriptPageRequest): TranscriptPageResult;
   listArchivedConversations(chatId: string): ArchivedConversationList;
@@ -119,6 +133,43 @@ export class ConversationStore implements ConversationStorePort {
     this.transcriptStore.appendInterruptedTurn(input);
   }
 
+  persistDecisionContext(input: Parameters<ChatStorePort["persistDecisionContext"]>[0]): void {
+    this.recoverBeforeAccess(input.chatId);
+    this.chatStore.persistDecisionContext(input);
+  }
+
+  appendDecisionRequested(input: TranscriptDecisionRequestedInput): CoachDecisionReadModel {
+    this.recoverBeforeAccess(input.decision.chatId);
+    return this.transcriptStore.appendDecisionRequested(input);
+  }
+
+  answerDecision(input: TranscriptDecisionAnsweredInput): CoachDecisionReadModel {
+    this.recoverBeforeAccess(input.chatId);
+    return this.transcriptStore.answerDecision(input);
+  }
+
+  skipDecision(input: TranscriptDecisionSkippedInput): CoachDecisionReadModel {
+    this.recoverBeforeAccess(input.chatId);
+    return this.transcriptStore.skipDecision(input);
+  }
+
+  completeDecisionContinuation(
+    input: TranscriptDecisionContinuationCompletedInput,
+  ): CoachDecisionReadModel {
+    this.recoverBeforeAccess(input.chatId);
+    return this.transcriptStore.completeDecisionContinuation(input);
+  }
+
+  getDecision(chatId: string, decisionId?: string): CoachDecisionReadModel | null {
+    this.recoverBeforeAccess(chatId);
+    return this.transcriptStore.getDecision(chatId, decisionId);
+  }
+
+  getDecisionAthleteText(chatId: string, decisionId: string): string | null {
+    this.recoverBeforeAccess(chatId);
+    return this.transcriptStore.getDecisionAthleteText(chatId, decisionId);
+  }
+
   readCurrentConversation(chatId: string) {
     this.recoverBeforeAccess(chatId);
     return this.transcriptStore.readCurrentConversation(chatId);
@@ -157,10 +208,21 @@ export class ConversationStore implements ConversationStorePort {
       this.cleanupBeforeBoundary(intent, error);
     }
 
+    let abandonedDecisions = 0;
+    try {
+      abandonedDecisions = this.transcriptStore.abandonUnansweredDecisions(
+        intent.chatId,
+        intent.boundaryAt,
+      ).length;
+    } catch (error) {
+      this.blockedChats.set(intent.chatId, error);
+      throw error;
+    }
+
     try {
       this.transcriptStore.ensureConversationBoundary(intent);
     } catch (error) {
-      if (error instanceof TranscriptBoundaryTargetUnchangedError) {
+      if (error instanceof TranscriptBoundaryTargetUnchangedError && abandonedDecisions === 0) {
         this.cleanupBeforeBoundary(intent, error.originalError);
       }
       this.blockedChats.set(intent.chatId, error);
@@ -209,6 +271,18 @@ export class ConversationStore implements ConversationStorePort {
   }
 
   private recoverIntent(intent: ResetIntentRecord): void {
+    try {
+      this.transcriptStore.abandonUnansweredDecisions(intent.chatId, intent.boundaryAt);
+    } catch (error) {
+      if (!(error instanceof WindowsPrivatePathPolicyError)) throw error;
+      this.transcriptStore.ensureConversationBoundary(intent);
+      archiveAndResetDurably(this.chatStore, intent.chatId, {
+        resetId: intent.resetId,
+        boundaryAt: intent.boundaryAt,
+      });
+      this.transcriptStore.removeResetIntent(intent);
+      return;
+    }
     this.transcriptStore.ensureConversationBoundary(intent);
     archiveAndResetDurably(this.chatStore, intent.chatId, {
       resetId: intent.resetId,

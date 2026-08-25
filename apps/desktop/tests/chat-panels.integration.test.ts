@@ -391,6 +391,7 @@ ${"nonwrapping".repeat(36)}
         ];
       }
       if (request.method === "hasSession") return response({ hasSession });
+      if (request.method === "getCoachDecision") return response({ decision: null });
       if (request.method === "getTranscriptPage") {
         if (!transcriptHistory) {
           return response({

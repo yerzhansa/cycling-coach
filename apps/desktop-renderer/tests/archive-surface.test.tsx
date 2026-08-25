@@ -38,6 +38,9 @@ function chatActions(): ChatActions {
     cancelNewConversation: vi.fn(),
     confirmNewConversation: vi.fn(),
     retryFirstSync: vi.fn(),
+    answerDecision: vi.fn(),
+    skipDecision: vi.fn(),
+    retryDecision: vi.fn(),
   };
 }
 

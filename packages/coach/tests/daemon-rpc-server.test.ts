@@ -29,10 +29,12 @@ import {
   createClientHandshakeFrame,
   parseCoachRpcEnvelope,
   type AthleteState,
+  type CoachDecisionReadModel,
   type CoachEngine,
   type CoachOperations,
   type SpendSummary,
   type TelegramControlSnapshot,
+  type TurnEvent,
 } from "@enduragent/coach-contract";
 import {
   createCoachRpcServer as createCoachRpcServerProduction,
@@ -66,6 +68,43 @@ const state: AthleteState = {
   plannedWorkouts: [],
   wellness: {},
 };
+
+const unansweredDecision = {
+  decisionId: "decision-1",
+  chatId: "desktop",
+  messageId: "message-1",
+  question: "Choose tomorrow's priority.",
+  options: [
+    {
+      id: "option-1",
+      label: "Recover",
+      description: "Protect the weekend session.",
+      recommended: true,
+      consequence: "Tomorrow stays easy.",
+    },
+    {
+      id: "option-2",
+      label: "Train",
+      description: "Keep the planned session.",
+      recommended: false,
+      consequence: "Tomorrow keeps its workout.",
+    },
+  ],
+  status: "unanswered",
+} satisfies CoachDecisionReadModel;
+
+const completedDecision = {
+  ...unansweredDecision,
+  status: "answered" as const,
+  answer: { kind: "option" as const, optionId: "option-1" },
+  consequence: "Tomorrow stays easy.",
+  continuation: {
+    continuationId: "continuation-1",
+    status: "completed" as const,
+    turnId: "turn-1",
+    coachText: "Keep tomorrow easy.",
+  },
+} satisfies CoachDecisionReadModel;
 
 const operations: CoachOperations = {
   exportTrainingFile: async () => ({
@@ -271,6 +310,12 @@ function createCoachRpcServer(
 function engine(overrides: Partial<CoachEngine> = {}): CoachEngine {
   return {
     chat: async () => ({ text: "ok" }),
+    getCoachDecision: async () => ({ decision: null }),
+    answerCoachDecision: async () => ({ decision: completedDecision }),
+    skipCoachDecision: async () => ({
+      decision: { ...unansweredDecision, status: "skipped" },
+    }),
+    resumeCoachDecision: async () => ({ decision: completedDecision, resumed: true }),
     resetSession: async () => ({ memoryFlushed: true }),
     hasSession: async () => ({ hasSession: false }),
     getAthleteState: async () => state,
@@ -714,6 +759,22 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
           calls.push(`hasSession:${chatId}`);
           return { hasSession: true };
         },
+        getCoachDecision: async ({ chatId }) => {
+          calls.push(`getCoachDecision:${chatId}`);
+          return { decision: null };
+        },
+        answerCoachDecision: async ({ chatId }) => {
+          calls.push(`answerCoachDecision:${chatId}`);
+          return { decision: { ...completedDecision, chatId } };
+        },
+        skipCoachDecision: async ({ chatId }) => {
+          calls.push(`skipCoachDecision:${chatId}`);
+          return { decision: { ...unansweredDecision, chatId, status: "skipped" } };
+        },
+        resumeCoachDecision: async ({ chatId }) => {
+          calls.push(`resumeCoachDecision:${chatId}`);
+          return { decision: { ...completedDecision, chatId }, resumed: true };
+        },
         getAthleteState: async () => {
           calls.push("getAthleteState");
           return state;
@@ -767,6 +828,26 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     const requests = [
       { id: 2, method: "resetSession", params: { chatId: "chat" } },
       { id: 3, method: "hasSession", params: { chatId: "chat" } },
+      { id: 31, method: "getCoachDecision", params: { chatId: "chat" } },
+      {
+        id: 32,
+        method: "answerCoachDecision",
+        params: {
+          chatId: "chat",
+          decisionId: "decision-1",
+          answer: { kind: "option", optionId: "option-1" },
+        },
+      },
+      {
+        id: 33,
+        method: "skipCoachDecision",
+        params: { chatId: "chat", decisionId: "decision-1" },
+      },
+      {
+        id: 34,
+        method: "resumeCoachDecision",
+        params: { chatId: "chat", decisionId: "decision-1" },
+      },
       { id: 4, method: "getAthleteState", params: {} },
       {
         id: 5,
@@ -793,10 +874,73 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       "chat:chat",
       "resetSession:chat",
       "hasSession:chat",
+      "getCoachDecision:chat",
+      "answerCoachDecision:chat",
+      "skipCoachDecision:chat",
+      "resumeCoachDecision:chat",
       "getAthleteState",
       "getActivityAnalysis",
       "exportTrainingFile",
     ]);
+    await client.close();
+  });
+
+  it("forwards decision continuation events with their exact request method", async () => {
+    const token = "x".repeat(43);
+    const emit = (chatId: string, onEvent?: (event: TurnEvent) => void): void => {
+      onEvent?.({ type: "turn-start", turnId: "turn-1", chatId });
+      onEvent?.({ type: "final-text", turnId: "turn-1", text: "Keep tomorrow easy." });
+    };
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "unmanaged-foreground",
+      engine: engine({
+        answerCoachDecision: async ({ chatId }, onEvent) => {
+          emit(chatId, onEvent);
+          return { decision: { ...completedDecision, chatId } };
+        },
+        resumeCoachDecision: async ({ chatId }, onEvent) => {
+          emit(chatId, onEvent);
+          return { decision: { ...completedDecision, chatId }, resumed: true };
+        },
+      }),
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    for (const [id, method] of [
+      ["answer", "answerCoachDecision"],
+      ["resume", "resumeCoachDecision"],
+    ] as const) {
+      client.ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method,
+          params:
+            method === "answerCoachDecision"
+              ? {
+                  chatId: "desktop",
+                  decisionId: "decision-1",
+                  answer: { kind: "option", optionId: "option-1" },
+                }
+              : { chatId: "desktop", decisionId: "decision-1" },
+        }),
+      );
+      const start = parseCoachRpcEnvelope(await client.frames.next());
+      const final = parseCoachRpcEnvelope(await client.frames.next());
+      const terminal = parseCoachRpcEnvelope(await client.frames.next());
+      expect(start).toMatchObject({
+        method: "coach.turnEvent",
+        params: { requestId: id, requestMethod: method, event: { type: "turn-start" } },
+      });
+      expect(final).toMatchObject({
+        method: "coach.turnEvent",
+        params: { requestId: id, requestMethod: method, event: { type: "final-text" } },
+      });
+      expect(terminal).toMatchObject({ jsonrpc: "2.0", id, result: { decision: {} } });
+    }
     await client.close();
   });
 
@@ -884,6 +1028,57 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
       id: "chat",
       result: { text: "partial" },
+    });
+    await client.close();
+  });
+
+  it("lets scoped Stop reach an active decision continuation", async () => {
+    const token = "x".repeat(43);
+    const answerResult = deferred<{ decision: CoachDecisionReadModel }>();
+    const answerCoachDecision = vi.fn(() => answerResult.promise);
+    const stopChat = vi.fn(async () => ({ stopped: true }));
+    const rpc = createCoachRpcServer({
+      token,
+      owner: "unmanaged-foreground",
+      engine: engine({ answerCoachDecision, stopChat }),
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "answer",
+        method: "answerCoachDecision",
+        params: {
+          chatId: "desktop",
+          decisionId: "decision-1",
+          answer: { kind: "option", optionId: "option-1" },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(answerCoachDecision).toHaveBeenCalledOnce());
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "stop-decision",
+        method: "stopChat",
+        params: { chatId: "desktop" },
+      }),
+    );
+
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toEqual({
+      jsonrpc: "2.0",
+      id: "stop-decision",
+      result: { stopped: true },
+    });
+    expect(stopChat).toHaveBeenCalledWith({ chatId: "desktop" });
+
+    answerResult.resolve({ decision: completedDecision });
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "answer",
+      result: { decision: completedDecision },
     });
     await client.close();
   });
@@ -1776,9 +1971,26 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     const chat = vi.fn(async () => ({ text: "ok" }));
     const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
     const hasSession = vi.fn(async () => ({ hasSession: true }));
+    const getCoachDecision = vi.fn(async () => ({ decision: null }));
+    const answerCoachDecision = vi.fn(async () => ({ decision: completedDecision }));
+    const skipCoachDecision = vi.fn(async () => ({
+      decision: { ...unansweredDecision, status: "skipped" as const },
+    }));
+    const resumeCoachDecision = vi.fn(async () => ({
+      decision: completedDecision,
+      resumed: true,
+    }));
     const getActivityAnalysis = vi.fn(operations.getActivityAnalysis!);
     const rpc = createCoachRpcServer({
-      engine: engine({ chat, resetSession, hasSession }),
+      engine: engine({
+        chat,
+        resetSession,
+        hasSession,
+        getCoachDecision,
+        answerCoachDecision,
+        skipCoachDecision,
+        resumeCoachDecision,
+      }),
       operations: { ...operations, getActivityAnalysis },
       token,
       owner: "app-supervised",
@@ -1801,8 +2013,32 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       "desktop\0",
       "../desktop",
     ];
+    const scopedMethods = [
+      "chat",
+      "getCoachDecision",
+      "answerCoachDecision",
+      "skipCoachDecision",
+      "resumeCoachDecision",
+      "resetSession",
+      "hasSession",
+    ] as const;
+    const paramsFor = (method: (typeof scopedMethods)[number], chatId: string) => {
+      if (method === "chat") return { chatId, message: "hello" };
+      if (method === "answerCoachDecision") {
+        return {
+          chatId,
+          decisionId: "decision-1",
+          answer: { kind: "option", optionId: "option-1" },
+        };
+      }
+      if (method === "getCoachDecision") return { chatId };
+      if (method === "skipCoachDecision" || method === "resumeCoachDecision") {
+        return { chatId, decisionId: "decision-1" };
+      }
+      return { chatId };
+    };
     let id = 0;
-    for (const method of ["chat", "resetSession", "hasSession"] as const) {
+    for (const method of scopedMethods) {
       for (const chatId of foreignChatIds) {
         id += 1;
         client.ws.send(
@@ -1810,7 +2046,7 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
             jsonrpc: "2.0",
             id,
             method,
-            params: method === "chat" ? { chatId, message: "hello" } : { chatId },
+            params: paramsFor(method, chatId),
           }),
         );
         expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
@@ -1820,23 +2056,30 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       }
     }
     expect(chat).not.toHaveBeenCalled();
+    expect(getCoachDecision).not.toHaveBeenCalled();
+    expect(answerCoachDecision).not.toHaveBeenCalled();
+    expect(skipCoachDecision).not.toHaveBeenCalled();
+    expect(resumeCoachDecision).not.toHaveBeenCalled();
     expect(resetSession).not.toHaveBeenCalled();
     expect(hasSession).not.toHaveBeenCalled();
 
-    for (const method of ["chat", "resetSession", "hasSession"] as const) {
+    for (const method of scopedMethods) {
       id += 1;
       client.ws.send(
         JSON.stringify({
           jsonrpc: "2.0",
           id,
           method,
-          params:
-            method === "chat" ? { chatId: "desktop", message: "hello" } : { chatId: "desktop" },
+          params: paramsFor(method, "desktop"),
         }),
       );
       expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({ id, result: {} });
     }
     expect(chat).toHaveBeenCalledOnce();
+    expect(getCoachDecision).toHaveBeenCalledOnce();
+    expect(answerCoachDecision).toHaveBeenCalledOnce();
+    expect(skipCoachDecision).toHaveBeenCalledOnce();
+    expect(resumeCoachDecision).toHaveBeenCalledOnce();
     expect(resetSession).toHaveBeenCalledOnce();
     expect(hasSession).toHaveBeenCalledOnce();
 
@@ -1862,8 +2105,25 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     const chat = vi.fn(async () => ({ text: "ok" }));
     const resetSession = vi.fn(async () => ({ memoryFlushed: true }));
     const hasSession = vi.fn(async () => ({ hasSession: true }));
+    const getCoachDecision = vi.fn(async () => ({ decision: null }));
+    const answerCoachDecision = vi.fn(async () => ({ decision: completedDecision }));
+    const skipCoachDecision = vi.fn(async () => ({
+      decision: { ...unansweredDecision, status: "skipped" as const },
+    }));
+    const resumeCoachDecision = vi.fn(async () => ({
+      decision: completedDecision,
+      resumed: true,
+    }));
     const rpc = createCoachRpcServer({
-      engine: engine({ chat, resetSession, hasSession }),
+      engine: engine({
+        chat,
+        resetSession,
+        hasSession,
+        getCoachDecision,
+        answerCoachDecision,
+        skipCoachDecision,
+        resumeCoachDecision,
+      }),
       token,
       owner: "unmanaged-foreground",
     });
@@ -1871,7 +2131,16 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
     client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
     await client.frames.next();
 
-    for (const [index, method] of ["chat", "resetSession", "hasSession"].entries()) {
+    const methods = [
+      "chat",
+      "getCoachDecision",
+      "answerCoachDecision",
+      "skipCoachDecision",
+      "resumeCoachDecision",
+      "resetSession",
+      "hasSession",
+    ] as const;
+    for (const [index, method] of methods.entries()) {
       client.ws.send(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1880,7 +2149,15 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
           params:
             method === "chat"
               ? { chatId: "telegram:777", message: "hello" }
-              : { chatId: "telegram:777" },
+              : method === "answerCoachDecision"
+                ? {
+                    chatId: "telegram:777",
+                    decisionId: "decision-1",
+                    answer: { kind: "option", optionId: "option-1" },
+                  }
+                : method === "skipCoachDecision" || method === "resumeCoachDecision"
+                  ? { chatId: "telegram:777", decisionId: "decision-1" }
+                  : { chatId: "telegram:777" },
         }),
       );
       expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
@@ -1889,6 +2166,10 @@ describe.skipIf(!hasLoopback)("RPC authority boundaries", () => {
       });
     }
     expect(chat).not.toHaveBeenCalled();
+    expect(getCoachDecision).not.toHaveBeenCalled();
+    expect(answerCoachDecision).not.toHaveBeenCalled();
+    expect(skipCoachDecision).not.toHaveBeenCalled();
+    expect(resumeCoachDecision).not.toHaveBeenCalled();
     expect(resetSession).not.toHaveBeenCalled();
     expect(hasSession).not.toHaveBeenCalled();
 

@@ -45,6 +45,9 @@ function coachClient(input: {
       if (method === "resetSession") {
         return (input.resetSession?.() ?? Promise.resolve({ memoryFlushed: true })) as never;
       }
+      if (method === "getCoachDecision") {
+        return Promise.resolve({ decision: null }) as never;
+      }
       if (method === "chat" && input.chat !== undefined) {
         return input.chat(options as CoachClientCallOptions<"chat">) as never;
       }
@@ -124,8 +127,9 @@ describe("chat controller transcript hydration", () => {
       expect(readTranscriptPage).toHaveBeenCalledTimes(1);
       expect(states.at(-1)?.messages).toHaveLength(2);
     });
-    expect(client.call).toHaveBeenCalledTimes(1);
+    expect(client.call).toHaveBeenCalledTimes(2);
     expect(client.call).toHaveBeenCalledWith("hasSession", { chatId: "desktop" });
+    expect(client.call).toHaveBeenCalledWith("getCoachDecision", { chatId: "desktop" });
   });
 
   it("renders the first persisted page alongside a still-pending live readiness probe", async () => {
@@ -151,7 +155,7 @@ describe("chat controller transcript hydration", () => {
     await readiness;
   });
 
-  it("does not delay sending and deduplicates the completed live turn after hydration settles", async () => {
+  it("sends after decision recovery without waiting for transcript hydration", async () => {
     const hydration = deferred<TranscriptPage>();
     const client = coachClient({
       chat: async (options) => {
@@ -168,7 +172,7 @@ describe("chat controller transcript hydration", () => {
       client,
       readTranscriptPage: () => hydration.promise,
     });
-    void controller.start();
+    await controller.start();
 
     await expect(controller.submit("Live athlete")).resolves.toBeUndefined();
     expect(states.at(-1)?.messages).toHaveLength(2);

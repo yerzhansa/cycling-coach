@@ -2,7 +2,21 @@ import { stepCountIs } from "ai";
 import type { FinishReason, ModelMessage, Tool, ToolSet } from "ai";
 import { retryWithBackoff } from "@enduragent/kernel/concurrency";
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
-import type { TurnEvent, TurnEventHandler } from "@enduragent/coach-contract";
+import type {
+  AnswerCoachDecisionRpcParams,
+  AnswerCoachDecisionRpcResult,
+  CoachDecisionContinuationLineage,
+  CoachDecisionReadModel,
+  GetCoachDecisionRpcParams,
+  GetCoachDecisionRpcResult,
+  ResumeCoachDecisionRpcParams,
+  ResumeCoachDecisionRpcResult,
+  SkipCoachDecisionRpcParams,
+  SkipCoachDecisionRpcResult,
+  TurnEvent,
+  TurnEventHandler,
+} from "@enduragent/coach-contract";
+import { RequestUserDecisionResultSchema } from "@enduragent/coach-contract";
 import type {
   ChatStorePort,
   EngineConfig,
@@ -14,6 +28,7 @@ import type {
   TranscriptInterruptedTurnInput,
 } from "../host-ports.js";
 import type { Sport, SportRuntimePorts } from "../sport.js";
+import { messageText } from "../sport/model-message.js";
 import { getEffectiveSections } from "../sport/effective-sections.js";
 import { ATHLETE_CONTEXT_MAX_CHARS, buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
 import {
@@ -61,6 +76,13 @@ import { createMemorySnapshot } from "../sport/memory-snapshot.js";
 import { resolveUserTimezone, appendCurrentTimeLine } from "../sport/user-time.js";
 import { createTurnBudget, TurnBudgetExceededError, type TurnBudget } from "./turn-budget.js";
 import { TAINTED_BY_WRITES_MESSAGE, STEP_LIMIT_TRUNCATION_MESSAGE } from "./coach-agent-copy.js";
+import {
+  COACH_DECISION_TOOL_NAME,
+  createCoachDecisionTool,
+  decisionConsequence,
+  decisionContinuationMessage,
+  decisionRequestInput,
+} from "./coach-decision-tool.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -300,6 +322,7 @@ export class CoachAgent {
   private chatStore: ChatStorePort;
   private log: LoggerPort;
   private tools: ToolSet;
+  private readonly decisionTool: Tool | undefined;
   private systemPrompt: string;
   private tz: string;
   // Derived once from getEffectiveSections(sport): the spec'd sections with
@@ -374,7 +397,7 @@ export class CoachAgent {
       const provenance = ctx?.provenance.value ?? UNKNOWN_PROVENANCE;
       return () => this.runWithWriteProvenance(provenance, run);
     };
-    this.tools = Object.fromEntries(
+    const sportTools = Object.fromEntries(
       registrations.map((r) => [
         r.name,
         this.observeToolProvenance(
@@ -395,6 +418,21 @@ export class CoachAgent {
         ),
       ]),
     ) as ToolSet;
+    const decisionToolEnabled =
+      config.llm.provider === "openai-codex" &&
+      ports.modelTransportDecorator === undefined &&
+      ports.coachDecisions !== undefined;
+    this.decisionTool = decisionToolEnabled
+      ? createCoachDecisionTool({
+          store: ports.coachDecisions!,
+          randomId: ports.randomId,
+          now: ports.now,
+        })
+      : undefined;
+    this.tools =
+      this.decisionTool === undefined
+        ? sportTools
+        : { ...sportTools, [COACH_DECISION_TOOL_NAME]: this.decisionTool };
     ports.onToolsAssembled?.(Object.freeze(Object.keys(this.tools)));
     // systemPrompt is rebuilt at the top of every chat() call; no need to bake one here.
     this.systemPrompt = "";
@@ -645,6 +683,7 @@ export class CoachAgent {
     userMessage: string,
     turn?: { resolvedCs?: ResolvedCs | null; referenceProvenance?: SourceProvenance },
     onEvent?: TurnEventHandler,
+    onDecision?: (decision: CoachDecisionReadModel) => void,
   ): Promise<string> {
     // One explicit context per turn, created synchronously before the session
     // lock is queued so rapid same-chat sends can never share turn state. Tool
@@ -655,11 +694,31 @@ export class CoachAgent {
       turn?.resolvedCs ?? null,
       chatId,
       turn?.referenceProvenance ?? EMPTY_PROVENANCE,
+      userMessage,
     );
     return withSessionLock(chatId, async () => {
       const abortController = new AbortController();
       this.activeChatTurns.set(chatId, abortController);
       try {
+        const existingDecision = this.ports.coachDecisions?.getDecision(chatId);
+        if (existingDecision?.status === "unanswered") {
+          throw new Error(
+            "Answer or skip the active Coach decision before sending another message.",
+          );
+        }
+        if (
+          existingDecision?.status === "answered" &&
+          existingDecision.continuation.status === "pending"
+        ) {
+          throw new Error("Resume the active Coach decision before sending another message.");
+        }
+        if (
+          existingDecision?.status === "skipped" ||
+          (existingDecision?.status === "answered" &&
+            existingDecision.continuation.status === "completed")
+        ) {
+          this.repairCoachDecisionSession(existingDecision);
+        }
         const turnStart = this.ports.now();
         const turnId = this.ports.randomId();
         const emitEvent = (event: TurnEvent): void => {
@@ -940,7 +999,39 @@ export class CoachAgent {
                 onTextDelta: onAttemptTextDelta,
                 signal: abortController.signal,
               });
-              const { text, finishReason } = result;
+              let { text, finishReason } = result;
+
+              if (ctx.decision.fallbackText !== null) {
+                text = ctx.decision.fallbackText;
+                finishReason = "stop";
+              }
+
+              if (ctx.decision.requested !== null) {
+                const decision = ctx.decision.requested;
+                try {
+                  this.chatStore.persistDecisionContext({
+                    chatId,
+                    decisionId: decision.decisionId,
+                    athleteText: userMessage,
+                    request: decisionRequestInput(decision),
+                  });
+                } catch (error) {
+                  this.log.warn("decision_session_context_write_failed", error);
+                }
+                onDecision?.(decision);
+                emitEvent({ type: "decision-requested", turnId, chatId, decision });
+                this.emitTurnOutcome({
+                  turnId,
+                  chatId,
+                  ok: true,
+                  overflowAttempts,
+                  timeoutAttempts,
+                  rateLimitAttempts,
+                  duration_ms: this.ports.now() - turnStart,
+                  compactions,
+                });
+                return "";
+              }
 
               // A successful "length" finish whose prompt already filled the real
               // provider window is a context overflow, not a long answer. Route it
@@ -1385,6 +1476,348 @@ export class CoachAgent {
     };
   }
 
+  async getCoachDecision(request: GetCoachDecisionRpcParams): Promise<GetCoachDecisionRpcResult> {
+    const store = this.requireCoachDecisionStore();
+    return { decision: store.getDecision(request.chatId, request.decisionId) };
+  }
+
+  async answerCoachDecision(
+    request: AnswerCoachDecisionRpcParams,
+    onEvent?: TurnEventHandler,
+  ): Promise<AnswerCoachDecisionRpcResult> {
+    return withSessionLock(request.chatId, async () => {
+      const store = this.requireCoachDecisionStore();
+      const current = store.getDecision(request.chatId, request.decisionId);
+      if (current === null) throw new Error("Decision was not found.");
+      let answered: CoachDecisionReadModel;
+      if (current.status === "answered") {
+        if (JSON.stringify(current.answer) !== JSON.stringify(request.answer)) {
+          throw new Error("Decision is immutable after it is answered.");
+        }
+        answered = current;
+      } else {
+        if (current.status !== "unanswered") throw new Error("Decision is already terminal.");
+        const consequence = decisionConsequence(current, request.answer);
+        answered = store.answerDecision({
+          chatId: request.chatId,
+          decisionId: request.decisionId,
+          answer: request.answer,
+          consequence,
+          continuationId: this.ports.randomId(),
+          answeredAt: new Date(this.ports.now()).toISOString(),
+        });
+      }
+      const decision = await this.continueCoachDecision(answered, onEvent);
+      return { decision };
+    });
+  }
+
+  async skipCoachDecision(
+    request: SkipCoachDecisionRpcParams,
+  ): Promise<SkipCoachDecisionRpcResult> {
+    return withSessionLock(request.chatId, async () => {
+      const store = this.requireCoachDecisionStore();
+      const current = store.getDecision(request.chatId, request.decisionId);
+      if (current === null) throw new Error("Decision was not found.");
+      const decision = store.skipDecision({
+        chatId: request.chatId,
+        decisionId: request.decisionId,
+        skippedAt: new Date(this.ports.now()).toISOString(),
+      });
+      const athleteText = store.getDecisionAthleteText(request.chatId, request.decisionId);
+      if (athleteText === null) throw new Error("Decision athlete context was not found.");
+      try {
+        this.chatStore.persistDecisionContext({
+          chatId: request.chatId,
+          decisionId: request.decisionId,
+          athleteText,
+          request: decisionRequestInput(current),
+          result: RequestUserDecisionResultSchema.parse({
+            status: "skipped",
+            decisionId: request.decisionId,
+          }),
+        });
+      } catch (error) {
+        this.log.warn("decision_session_skip_write_failed", error);
+      }
+      return { decision };
+    });
+  }
+
+  async resumeCoachDecision(
+    request: ResumeCoachDecisionRpcParams,
+    onEvent?: TurnEventHandler,
+  ): Promise<ResumeCoachDecisionRpcResult> {
+    return withSessionLock(request.chatId, async () => {
+      const current = this.requireCoachDecisionStore().getDecision(
+        request.chatId,
+        request.decisionId,
+      );
+      if (current === null) throw new Error("Decision was not found.");
+      if (current.status !== "answered") throw new Error("Decision has no continuation.");
+      const alreadyCompleted = current.continuation.status === "completed";
+      const decision = await this.continueCoachDecision(current, onEvent);
+      return { decision, resumed: !alreadyCompleted };
+    });
+  }
+
+  private requireCoachDecisionStore() {
+    if (this.ports.coachDecisions === undefined) {
+      throw new Error("Coach decisions are unavailable for this engine.");
+    }
+    return this.ports.coachDecisions;
+  }
+
+  private repairCoachDecisionSession(decision: CoachDecisionReadModel): void {
+    if (decision.status !== "skipped" && decision.status !== "answered") return;
+    if (decision.status === "answered" && decision.continuation.status !== "completed") return;
+    const store = this.requireCoachDecisionStore();
+    const athleteText = store.getDecisionAthleteText(decision.chatId, decision.decisionId);
+    if (athleteText === null) throw new Error("Decision athlete context was not found.");
+    const result =
+      decision.status === "skipped"
+        ? RequestUserDecisionResultSchema.parse({
+            status: "skipped",
+            decisionId: decision.decisionId,
+          })
+        : RequestUserDecisionResultSchema.parse({
+            status: "answered",
+            decisionId: decision.decisionId,
+            answer: decision.answer,
+            consequence: decision.consequence,
+          });
+    const completed =
+      decision.status === "answered" && decision.continuation.status === "completed"
+        ? decision.continuation
+        : undefined;
+    this.chatStore.persistDecisionContext({
+      chatId: decision.chatId,
+      decisionId: decision.decisionId,
+      athleteText,
+      request: decisionRequestInput(decision),
+      result,
+      ...(completed === undefined || completed.lineage === undefined
+        ? {}
+        : {
+            coachText: completed.coachText,
+            continuationId: completed.continuationId,
+            lineage: completed.lineage,
+          }),
+    });
+  }
+
+  private async continueCoachDecision(
+    decision: CoachDecisionReadModel,
+    onEvent?: TurnEventHandler,
+  ): Promise<CoachDecisionReadModel> {
+    if (decision.status !== "answered") throw new Error("Decision has no continuation.");
+    if (decision.continuation.status === "completed") {
+      if (!("turnId" in decision.continuation) || !("coachText" in decision.continuation)) {
+        throw new Error("Completed decision continuation is incomplete.");
+      }
+      try {
+        onEvent?.({
+          type: "turn-start",
+          turnId: decision.continuation.turnId,
+          chatId: decision.chatId,
+        });
+      } catch {}
+      this.repairCoachDecisionSession(decision);
+      try {
+        onEvent?.({
+          type: "final-text",
+          turnId: decision.continuation.turnId,
+          text: decision.continuation.coachText,
+        });
+      } catch {}
+      return decision;
+    }
+    const store = this.requireCoachDecisionStore();
+    const active = store.getDecision(decision.chatId);
+    if (active?.status === "unanswered" && active.decisionId !== decision.decisionId) {
+      throw new Error("Another Coach decision is active.");
+    }
+    const turnId = this.ports.randomId();
+    try {
+      onEvent?.({ type: "turn-start", turnId, chatId: decision.chatId });
+    } catch {}
+    const context = createTurnContext(null, decision.chatId, EMPTY_PROVENANCE, "");
+    const system =
+      buildSystemPrompt(this.sport, this.memory, this.tz, this.buildDegradeBlock(), {
+        excludeSections: this.excludedSectionNames,
+        confirmationGate: this.confirmationGate,
+      }) + `\n\n# Decision Continuation\n\n${decisionContinuationMessage(decision)}`;
+    const { messages: history } = this.chatStore.load(decision.chatId);
+    const athleteText = store.getDecisionAthleteText(decision.chatId, decision.decisionId);
+    if (athleteText === null) throw new Error("Decision athlete context was not found.");
+    const historyWithAthlete =
+      athleteText === "" ||
+      history.some((message) => message.role === "user" && messageText(message) === athleteText)
+        ? history
+        : [...history, { role: "user", content: athleteText } as ModelMessage];
+    const toolCallId = `decision-${decision.decisionId}`;
+    const toolInput = decisionRequestInput(decision);
+    const toolResult = RequestUserDecisionResultSchema.parse({
+      status: "answered",
+      decisionId: decision.decisionId,
+      answer: decision.answer,
+      consequence: decision.consequence,
+    });
+    const hasDecisionCall = historyWithAthlete.some(
+      (message) =>
+        message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some(
+          (part) =>
+            part.type === "tool-call" &&
+            part.toolCallId === toolCallId &&
+            part.toolName === COACH_DECISION_TOOL_NAME,
+        ),
+    );
+    const messages = [
+      ...historyWithAthlete,
+      ...(hasDecisionCall
+        ? []
+        : [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool-call",
+                  toolCallId,
+                  toolName: COACH_DECISION_TOOL_NAME,
+                  input: toolInput,
+                },
+              ],
+            },
+          ]),
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId,
+            toolName: COACH_DECISION_TOOL_NAME,
+            output: { type: "json", value: toolResult },
+          },
+        ],
+      },
+    ] as ModelMessage[];
+    const abortController = new AbortController();
+    let streamedText = "";
+    this.activeChatTurns.set(decision.chatId, abortController);
+    try {
+      const result = await this.llm.generate({
+        system,
+        messages,
+        tools: undefined,
+        stopWhen: stepCountIs(10),
+        maxSteps: 10,
+        caller: "chat",
+        context,
+        cacheKey: sha256_16(decision.chatId),
+        signal: abortController.signal,
+        onTextDelta: (delta) => {
+          streamedText += delta;
+          try {
+            onEvent?.({ type: "text_delta", turnId, delta });
+          } catch {}
+        },
+      });
+      const coachText = result.text.trim();
+      if (coachText === "") throw new Error("Decision continuation returned no Coach text.");
+      return this.completeCoachDecisionContinuation(
+        decision,
+        coachText,
+        turnId,
+        { system, messages },
+        onEvent,
+      );
+    } catch (error) {
+      if (!abortController.signal.aborted) throw error;
+      this.recordInterruptedTurn({
+        chatId: decision.chatId,
+        turnId,
+        completedAt: new Date(this.ports.now()).toISOString(),
+        athleteText: "",
+        coachText: streamedText,
+      });
+      try {
+        onEvent?.({ type: "interrupted", turnId, chatId: decision.chatId, text: streamedText });
+      } catch {}
+      return this.requireCoachDecisionStore().getDecision(
+        decision.chatId,
+        decision.decisionId,
+      )!;
+    } finally {
+      if (this.activeChatTurns.get(decision.chatId) === abortController) {
+        this.activeChatTurns.delete(decision.chatId);
+      }
+    }
+  }
+
+  private completeCoachDecisionContinuation(
+    decision: Extract<CoachDecisionReadModel, { status: "answered" }>,
+    coachText: string,
+    turnId: string,
+    lineageInput: { readonly system: string; readonly messages: ModelMessage[] },
+    onEvent?: TurnEventHandler,
+  ): CoachDecisionReadModel {
+    const store = this.requireCoachDecisionStore();
+    const lineage: CoachDecisionContinuationLineage = {
+      templateHash: computeTemplateHash({
+        soul: this.sport.soul,
+        skills: this.sport.skills,
+        ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
+          confirmationGate: this.confirmationGate,
+        }),
+        toolSchemas:
+          this.decisionTool === undefined
+            ? undefined
+            : { [COACH_DECISION_TOOL_NAME]: this.decisionTool },
+        model: this.config.llm.model,
+      }),
+      assembledHash: computeAssembledHash(lineageInput.system, lineageInput.messages),
+      provider: this.config.llm.provider,
+      model: this.config.llm.model,
+      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+    };
+    const completed = store.completeDecisionContinuation({
+      chatId: decision.chatId,
+      decisionId: decision.decisionId,
+      continuationId: decision.continuation.continuationId,
+      turnId,
+      coachText,
+      lineage,
+      completedAt: new Date(this.ports.now()).toISOString(),
+    });
+    const athleteText = store.getDecisionAthleteText(decision.chatId, decision.decisionId);
+    if (athleteText === null) throw new Error("Decision athlete context was not found.");
+    try {
+      this.chatStore.persistDecisionContext({
+        chatId: decision.chatId,
+        decisionId: decision.decisionId,
+        athleteText,
+        request: decisionRequestInput(decision),
+        result: RequestUserDecisionResultSchema.parse({
+          status: "answered",
+          decisionId: decision.decisionId,
+          answer: decision.answer,
+          consequence: decision.consequence,
+        }),
+        coachText,
+        continuationId: decision.continuation.continuationId,
+        lineage,
+      });
+    } catch (error) {
+      this.log.warn("decision_session_continuation_write_failed", error);
+    }
+    try {
+      onEvent?.({ type: "final-text", turnId, text: coachText });
+    } catch {}
+    return completed;
+  }
+
   hasSession(chatId: string): boolean {
     return this.chatStore.hasSession(chatId);
   }
@@ -1394,6 +1827,10 @@ export class CoachAgent {
     // with an in-flight turn for the same chat (which would archive history the
     // turn is mid-write on).
     return withSessionLock(chatId, async () => {
+      const decision = this.ports.coachDecisions?.getDecision(chatId);
+      if (decision?.status === "answered" && decision.continuation.status === "pending") {
+        throw new Error("Resume the active Coach decision before starting a new conversation.");
+      }
       // Flush before reset to avoid losing un-persisted context
       let memoryFlushed = true;
       let history: ModelMessage[] = [];

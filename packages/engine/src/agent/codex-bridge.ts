@@ -12,6 +12,8 @@ import type {
   CodexUsage,
 } from "./codex/responses.js";
 import { PRICE_TABLE, priceUsage } from "./codex/cost.js";
+import { COACH_DECISION_TOOL_NAME } from "./coach-decision-tool.js";
+import { getTurnContext } from "./turn-context.js";
 
 const DEFAULT_STEP_LIMIT = 10;
 const MAX_AUTH_REFRESH_ATTEMPTS = 1;
@@ -185,6 +187,12 @@ interface ToolResultPart {
   output: { type: "text" | "error-text"; value: string };
 }
 
+export function isAdmissibleCoachDecisionBatch(
+  calls: readonly { readonly name: string }[],
+): boolean {
+  return !calls.some((call) => call.name === COACH_DECISION_TOOL_NAME) || calls.length === 1;
+}
+
 async function executeToolCall(
   call: CodexToolCall,
   tools: ToolSet,
@@ -337,12 +345,24 @@ export async function codexGenerateText(
     if (calls.length === 0 || result.stopReason !== "toolUse") break;
     if (!tools) break;
 
-    // Run tool calls in parallel to match AI SDK behavior; Promise.all preserves
-    // order so the conversation stays aligned.
-    const results = await Promise.all(
-      calls.map((call) => executeToolCall(call, tools, initialMessages, signal, context)),
-    );
+    const results = isAdmissibleCoachDecisionBatch(calls)
+      ? await Promise.all(
+          calls.map((call) => executeToolCall(call, tools, initialMessages, signal, context)),
+        )
+      : calls.map((call) =>
+          errorResult(call, "request_user_decision must be the only tool call in its batch"),
+        );
     convo.push({ role: "tool", content: results } as ModelMessage);
+    if (calls.length === 1 && calls[0]?.name === COACH_DECISION_TOOL_NAME) {
+      const turn = getTurnContext({ experimental_context: context });
+      if (
+        turn === undefined ||
+        turn.decision.requested !== null ||
+        turn.decision.fallbackText !== null
+      ) {
+        break;
+      }
+    }
   }
 
   if (!lastResult) {

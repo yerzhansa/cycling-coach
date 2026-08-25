@@ -65,6 +65,12 @@ The host may require confirmation for intervals_create_workout, intervals_create
 
 After a pending-confirmation result, state what you proposed and that confirmation is pending. Never claim the write happened. Never call the tool again to retry a pending proposal. Propose at most one mutation per turn because a new proposal replaces the outstanding one.`;
 
+export const COACH_DECISION_RULES = `# Material Coach Decisions
+
+When available, call request_user_decision only for a material choice between coaching or Plan directions; the host renders the panel. Otherwise ask the same choice as numbered text. Ask ordinary questions in text.
+
+Give 2–5 options with a short label, one-sentence description, consequence, and recommendation flag. Recommend at most one. Call the tool alone. Never use it for medical red flags or to mutate Plan, Calendar, or Training.`;
+
 const CROSS_SPORT_VOICE_RULES = `# Voice & Register
 
 ## Mirror the athlete's register
@@ -274,6 +280,7 @@ export function staticRuleBlocks(
     CROSS_SPORT_VOICE_RULES,
     workoutReviewRules(sessionClusterGapMinutes),
     STEP_BUDGET_RULES,
+    COACH_DECISION_RULES,
   ];
   return LAYER_3_GROUNDING_ENABLED ? [...blocks, LAYER_3_PROMPT_RULES] : blocks;
 }
@@ -283,7 +290,11 @@ export function buildSystemPrompt(
   memory: MemoryStorePort,
   tz: string = "UTC",
   degradeBlock?: string,
-  opts?: { excludeSections?: readonly string[]; context?: string; confirmationGate?: boolean },
+  opts?: {
+    excludeSections?: readonly string[];
+    context?: string;
+    confirmationGate?: boolean;
+  },
 ): string {
   const skillsContent = Object.entries(persona.skills)
     .map(([name, content]) => `## Skill: ${name}\n\n${content}`)

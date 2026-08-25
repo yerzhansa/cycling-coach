@@ -21,10 +21,18 @@ import { TextDecoder } from "node:util";
 import type {
   ConversationResetInput,
   TranscriptCompletedTurnInput,
-  TranscriptInterruptedTurnInput,
   TranscriptConversationBoundaryReason,
+  TranscriptInterruptedTurnInput,
   TranscriptWriterPort,
 } from "@enduragent/engine";
+import {
+  CoachDecisionAnswerSchema,
+  CoachDecisionReadModelSchema,
+  type CoachDecisionAnswer,
+  type CoachDecisionContinuationLineage,
+  type CoachDecisionOption,
+  type CoachDecisionReadModel,
+} from "@enduragent/coach-contract";
 import {
   WindowsPrivatePathPolicyError,
   assertWindowsPrivateDirectoryStable,
@@ -119,14 +127,110 @@ export interface TranscriptConversationBoundaryRecord extends ConversationResetI
   readonly resetId: string;
 }
 
+export interface TranscriptDecisionRequestedRecord {
+  readonly version: typeof TRANSCRIPT_SCHEMA_VERSION;
+  readonly kind: "decision-requested";
+  readonly chatId: string;
+  readonly decisionId: string;
+  readonly toolCallId: string;
+  readonly messageId: string;
+  readonly athleteText: string;
+  readonly question: string;
+  readonly options: CoachDecisionOption[];
+  readonly requestedAt: string;
+}
+
+export interface TranscriptDecisionAnsweredRecord {
+  readonly version: typeof TRANSCRIPT_SCHEMA_VERSION;
+  readonly kind: "decision-answered";
+  readonly chatId: string;
+  readonly decisionId: string;
+  readonly answer: CoachDecisionAnswer;
+  readonly consequence: string;
+  readonly continuationId: string;
+  readonly answeredAt: string;
+}
+
+export interface TranscriptDecisionSkippedRecord {
+  readonly version: typeof TRANSCRIPT_SCHEMA_VERSION;
+  readonly kind: "decision-skipped";
+  readonly chatId: string;
+  readonly decisionId: string;
+  readonly skippedAt: string;
+}
+
+export interface TranscriptDecisionAbandonedRecord {
+  readonly version: typeof TRANSCRIPT_SCHEMA_VERSION;
+  readonly kind: "decision-abandoned";
+  readonly chatId: string;
+  readonly decisionId: string;
+  readonly reason: "new_conversation";
+  readonly abandonedAt: string;
+}
+
+export interface TranscriptDecisionContinuationCompletedRecord {
+  readonly version: typeof TRANSCRIPT_SCHEMA_VERSION;
+  readonly kind: "decision-continuation-completed";
+  readonly chatId: string;
+  readonly decisionId: string;
+  readonly continuationId: string;
+  readonly turnId: string;
+  readonly coachText: string;
+  readonly lineage?: CoachDecisionContinuationLineage;
+  readonly completedAt: string;
+}
+
 export interface ResetIntentRecord extends ConversationResetInput {
   readonly version: typeof RESET_INTENT_SCHEMA_VERSION;
   readonly kind: "conversation-reset-intent";
   readonly resetId: string;
 }
 
+export type TranscriptDecisionRecord =
+  | TranscriptDecisionRequestedRecord
+  | TranscriptDecisionAnsweredRecord
+  | TranscriptDecisionSkippedRecord
+  | TranscriptDecisionAbandonedRecord
+  | TranscriptDecisionContinuationCompletedRecord;
+
 export type TranscriptTurnRecord = TranscriptCompletedTurnRecord | TranscriptInterruptedTurnRecord;
-export type TranscriptRecord = TranscriptTurnRecord | TranscriptConversationBoundaryRecord;
+
+export type TranscriptRecord =
+  | TranscriptTurnRecord
+  | TranscriptConversationBoundaryRecord
+  | TranscriptDecisionRecord;
+
+export interface TranscriptDecisionRequestedInput {
+  readonly decision: CoachDecisionReadModel;
+  readonly toolCallId: string;
+  readonly athleteText: string;
+  readonly requestedAt: string;
+}
+
+export interface TranscriptDecisionAnsweredInput {
+  readonly chatId: string;
+  readonly decisionId: string;
+  readonly answer: CoachDecisionAnswer;
+  readonly consequence: string;
+  readonly continuationId: string;
+  readonly answeredAt: string;
+}
+
+export interface TranscriptDecisionSkippedInput {
+  readonly chatId: string;
+  readonly decisionId: string;
+  readonly skippedAt: string;
+}
+
+export interface TranscriptDecisionContinuationCompletedInput {
+  readonly chatId: string;
+  readonly decisionId: string;
+  readonly continuationId: string;
+  readonly turnId: string;
+  readonly coachText: string;
+  readonly lineage: CoachDecisionContinuationLineage;
+  readonly completedAt: string;
+}
 
 export interface TranscriptPageTurn {
   readonly turnId: string;
@@ -135,6 +239,44 @@ export interface TranscriptPageTurn {
   readonly coachText: string;
   readonly delivery?: "interrupted";
 }
+
+export type TranscriptPageEntry =
+  | ({ readonly kind: "turn" } & TranscriptPageTurn)
+  | {
+      readonly kind: "decision-requested";
+      readonly recordedAt: string;
+      readonly athleteText: string;
+      readonly decision: CoachDecisionReadModel;
+    }
+  | {
+      readonly kind: "decision-answered";
+      readonly recordedAt: string;
+      readonly decisionId: string;
+      readonly answer: CoachDecisionAnswer;
+      readonly consequence: string;
+      readonly continuationId: string;
+    }
+  | {
+      readonly kind: "decision-skipped";
+      readonly recordedAt: string;
+      readonly decisionId: string;
+    }
+  | {
+      readonly kind: "decision-abandoned";
+      readonly recordedAt: string;
+      readonly decisionId: string;
+      readonly reason: "new_conversation";
+    }
+  | {
+      readonly kind: "decision-continuation-completed";
+      readonly recordedAt: string;
+      readonly completedAt: string;
+      readonly decisionId: string;
+      readonly continuationId: string;
+      readonly turnId: string;
+      readonly coachText: string;
+      readonly lineage?: CoachDecisionContinuationLineage;
+    };
 
 export interface TranscriptPageRequest {
   readonly cursor: string | null;
@@ -146,6 +288,13 @@ export type TranscriptPageResult =
       readonly schemaVersion: 1;
       readonly status: "page";
       readonly turns: TranscriptPageTurn[];
+      readonly nextCursor: string | null;
+    }
+  | {
+      readonly schemaVersion: 2;
+      readonly status: "page";
+      readonly turns: TranscriptPageTurn[];
+      readonly entries: TranscriptPageEntry[];
       readonly nextCursor: string | null;
     }
   | {
@@ -169,7 +318,7 @@ export interface ArchivedConversationList {
 }
 
 interface IndexedTranscriptTurn {
-  readonly record: TranscriptTurnRecord;
+  readonly record: Exclude<TranscriptRecord, TranscriptConversationBoundaryRecord>;
   readonly start: number;
   readonly end: number;
 }
@@ -228,6 +377,32 @@ function isIsoTimestamp(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isDecisionContinuationLineage(
+  value: unknown,
+): value is CoachDecisionContinuationLineage {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    hasExactKeys(record, [
+      "templateHash",
+      "assembledHash",
+      "provider",
+      "model",
+      "lineageVersion",
+    ]) &&
+    typeof record.templateHash === "string" &&
+    record.templateHash.length > 0 &&
+    typeof record.assembledHash === "string" &&
+    record.assembledHash.length > 0 &&
+    typeof record.provider === "string" &&
+    record.provider.length > 0 &&
+    typeof record.model === "string" &&
+    record.model.length > 0 &&
+    typeof record.lineageVersion === "string" &&
+    record.lineageVersion.length > 0
+  );
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -311,6 +486,131 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
       return null;
     }
     return value as unknown as TranscriptConversationBoundaryRecord;
+  }
+
+  if (value.kind === "decision-requested") {
+    if (
+      !hasExactKeys(value, [
+        "version",
+        "kind",
+        "chatId",
+        "decisionId",
+        "toolCallId",
+        "messageId",
+        "athleteText",
+        "question",
+        "options",
+        "requestedAt",
+      ]) ||
+      typeof value.chatId !== "string" ||
+      typeof value.decisionId !== "string" ||
+      value.decisionId.length === 0 ||
+      typeof value.toolCallId !== "string" ||
+      value.toolCallId.length === 0 ||
+      typeof value.messageId !== "string" ||
+      value.messageId.length === 0 ||
+      typeof value.athleteText !== "string" ||
+      typeof value.question !== "string" ||
+      !Array.isArray(value.options) ||
+      !isIsoTimestamp(String(value.requestedAt)) ||
+      !CoachDecisionReadModelSchema.safeParse({
+        status: "unanswered",
+        decisionId: value.decisionId,
+        chatId: value.chatId,
+        messageId: value.messageId,
+        question: value.question,
+        options: value.options,
+      }).success
+    ) {
+      return null;
+    }
+    return value as unknown as TranscriptDecisionRequestedRecord;
+  }
+
+  if (value.kind === "decision-answered") {
+    if (
+      !hasExactKeys(value, [
+        "version",
+        "kind",
+        "chatId",
+        "decisionId",
+        "answer",
+        "consequence",
+        "continuationId",
+        "answeredAt",
+      ]) ||
+      typeof value.chatId !== "string" ||
+      typeof value.decisionId !== "string" ||
+      value.decisionId.length === 0 ||
+      !CoachDecisionAnswerSchema.safeParse(value.answer).success ||
+      typeof value.consequence !== "string" ||
+      value.consequence.length === 0 ||
+      value.consequence.length > 2_000 ||
+      typeof value.continuationId !== "string" ||
+      value.continuationId.length === 0 ||
+      typeof value.answeredAt !== "string" ||
+      !isIsoTimestamp(value.answeredAt)
+    ) {
+      return null;
+    }
+    return value as unknown as TranscriptDecisionAnsweredRecord;
+  }
+
+  if (value.kind === "decision-skipped") {
+    if (
+      !hasExactKeys(value, ["version", "kind", "chatId", "decisionId", "skippedAt"]) ||
+      typeof value.chatId !== "string" ||
+      typeof value.decisionId !== "string" ||
+      value.decisionId.length === 0 ||
+      typeof value.skippedAt !== "string" ||
+      !isIsoTimestamp(value.skippedAt)
+    )
+      return null;
+    return value as unknown as TranscriptDecisionSkippedRecord;
+  }
+
+  if (value.kind === "decision-abandoned") {
+    if (
+      !hasExactKeys(value, ["version", "kind", "chatId", "decisionId", "reason", "abandonedAt"]) ||
+      typeof value.chatId !== "string" ||
+      typeof value.decisionId !== "string" ||
+      value.decisionId.length === 0 ||
+      value.reason !== "new_conversation" ||
+      typeof value.abandonedAt !== "string" ||
+      !isIsoTimestamp(value.abandonedAt)
+    )
+      return null;
+    return value as unknown as TranscriptDecisionAbandonedRecord;
+  }
+
+  if (value.kind === "decision-continuation-completed") {
+    const keys = [
+      "version",
+      "kind",
+      "chatId",
+      "decisionId",
+      "continuationId",
+      "turnId",
+      "coachText",
+      "completedAt",
+    ];
+    if (
+      (!hasExactKeys(value, keys) && !hasExactKeys(value, [...keys, "lineage"])) ||
+      typeof value.chatId !== "string" ||
+      typeof value.decisionId !== "string" ||
+      value.decisionId.length === 0 ||
+      typeof value.continuationId !== "string" ||
+      value.continuationId.length === 0 ||
+      typeof value.turnId !== "string" ||
+      value.turnId.length === 0 ||
+      typeof value.coachText !== "string" ||
+      (Object.hasOwn(value, "lineage") &&
+        !isDecisionContinuationLineage(value.lineage)) ||
+      typeof value.completedAt !== "string" ||
+      !isIsoTimestamp(value.completedAt)
+    )
+      return null;
+    return value as unknown as TranscriptDecisionContinuationCompletedRecord;
   }
 
   return null;
@@ -596,6 +896,60 @@ function transcriptPageTurn(record: TranscriptTurnRecord): TranscriptPageTurn {
   };
 }
 
+function transcriptPageEntry(
+  record: Exclude<TranscriptRecord, TranscriptConversationBoundaryRecord>,
+): TranscriptPageEntry {
+  if (record.kind === "turn-completed" || record.kind === "turn-interrupted") {
+    return { kind: "turn", ...transcriptPageTurn(record) };
+  }
+  if (record.kind === "decision-requested") {
+    return {
+      kind: record.kind,
+      recordedAt: record.requestedAt,
+      athleteText: record.athleteText,
+      decision: {
+        status: "unanswered",
+        decisionId: record.decisionId,
+        chatId: record.chatId,
+        messageId: record.messageId,
+        question: record.question,
+        options: record.options,
+      },
+    };
+  }
+  if (record.kind === "decision-answered") {
+    return {
+      kind: record.kind,
+      recordedAt: record.answeredAt,
+      decisionId: record.decisionId,
+      answer: record.answer,
+      consequence: record.consequence,
+      continuationId: record.continuationId,
+    };
+  }
+  if (record.kind === "decision-skipped") {
+    return { kind: record.kind, recordedAt: record.skippedAt, decisionId: record.decisionId };
+  }
+  if (record.kind === "decision-abandoned") {
+    return {
+      kind: record.kind,
+      recordedAt: record.abandonedAt,
+      decisionId: record.decisionId,
+      reason: record.reason,
+    };
+  }
+  return {
+    kind: record.kind,
+    recordedAt: record.completedAt,
+    completedAt: record.completedAt,
+    decisionId: record.decisionId,
+    continuationId: record.continuationId,
+    turnId: record.turnId,
+    coachText: record.coachText,
+    ...(record.lineage === undefined ? {} : { lineage: record.lineage }),
+  };
+}
+
 function restartRequiredPage(): TranscriptPageResult {
   return {
     schemaVersion: 1,
@@ -609,16 +963,98 @@ function pageResult(
   turns: readonly IndexedTranscriptTurn[],
   nextCursor: string | null,
 ): TranscriptPageResult {
+  const pageTurns = turns.flatMap(({ record }) =>
+    record.kind === "turn-completed" || record.kind === "turn-interrupted"
+      ? [transcriptPageTurn(record)]
+      : [],
+  );
+  if (
+    turns.every(
+      ({ record }) => record.kind === "turn-completed" || record.kind === "turn-interrupted",
+    )
+  ) {
+    return { schemaVersion: 1, status: "page", turns: pageTurns, nextCursor };
+  }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: "page",
-    turns: turns.map(({ record }) => transcriptPageTurn(record)),
+    turns: pageTurns,
+    entries: turns.map(({ record }) => transcriptPageEntry(record)),
     nextCursor,
   };
 }
 
 function encodedPageBytes(result: TranscriptPageResult): number {
   return Buffer.byteLength(JSON.stringify(result), "utf8");
+}
+
+function transcriptDecisionId(
+  record: Exclude<TranscriptRecord, TranscriptConversationBoundaryRecord>,
+): string | null {
+  return record.kind === "turn-completed" || record.kind === "turn-interrupted"
+    ? null
+    : record.decisionId;
+}
+
+function decisionReadModels(
+  records: readonly Exclude<TranscriptRecord, TranscriptConversationBoundaryRecord>[],
+): Map<string, CoachDecisionReadModel> {
+  const decisions = new Map<string, CoachDecisionReadModel>();
+  for (const record of records) {
+    if (record.kind === "decision-requested") {
+      decisions.set(record.decisionId, {
+        status: "unanswered",
+        decisionId: record.decisionId,
+        chatId: record.chatId,
+        messageId: record.messageId,
+        question: record.question,
+        options: record.options,
+      });
+      continue;
+    }
+    if (record.kind === "turn-completed" || record.kind === "turn-interrupted") continue;
+    const current = decisions.get(record.decisionId);
+    if (current === undefined) continue;
+    if (record.kind === "decision-answered" && current.status === "unanswered") {
+      decisions.set(record.decisionId, {
+        ...current,
+        status: "answered",
+        answer: record.answer,
+        consequence: record.consequence,
+        continuation: { continuationId: record.continuationId, status: "pending" },
+      });
+      continue;
+    }
+    if (record.kind === "decision-skipped" && current.status === "unanswered") {
+      decisions.set(record.decisionId, { ...current, status: "skipped" });
+      continue;
+    }
+    if (record.kind === "decision-abandoned" && current.status === "unanswered") {
+      decisions.set(record.decisionId, {
+        ...current,
+        status: "abandoned",
+        reason: record.reason,
+      });
+      continue;
+    }
+    if (
+      record.kind === "decision-continuation-completed" &&
+      current.status === "answered" &&
+      current.continuation.continuationId === record.continuationId
+    ) {
+      decisions.set(record.decisionId, {
+        ...current,
+        continuation: {
+          continuationId: record.continuationId,
+          status: "completed",
+          turnId: record.turnId,
+          coachText: record.coachText,
+          ...(record.lineage === undefined ? {} : { lineage: record.lineage }),
+        },
+      });
+    }
+  }
+  return decisions;
 }
 
 function assertValidPageRequest(
@@ -653,9 +1089,19 @@ function backwardPage(
   let index = turns.length - 1;
   while (index >= 0 && turns[index]!.end > cursor.before) index -= 1;
   let selected: readonly IndexedTranscriptTurn[] = [];
-  while (index >= 0 && selected.length < limit) {
-    const tentative = [turns[index]!, ...selected];
-    const hasMore = index > 0;
+  let selectedUnits = 0;
+  while (index >= 0 && selectedUnits < limit) {
+    const decisionId = transcriptDecisionId(turns[index]!.record);
+    let unitStart = index;
+    while (
+      decisionId !== null &&
+      unitStart > 0 &&
+      transcriptDecisionId(turns[unitStart - 1]!.record) === decisionId
+    ) {
+      unitStart -= 1;
+    }
+    const tentative = [...turns.slice(unitStart, index + 1), ...selected];
+    const hasMore = unitStart > 0;
     const nextCursor = hasMore ? encode({ ...cursor, before: tentative[0]!.start }) : null;
     const tentativeResult = pageResult(tentative, nextCursor);
     if (encodedPageBytes(tentativeResult) > MAX_TRANSCRIPT_PAGE_RESPONSE_BYTES) {
@@ -665,7 +1111,8 @@ function backwardPage(
       break;
     }
     selected = tentative;
-    index -= 1;
+    selectedUnits += 1;
+    index = unitStart - 1;
   }
   const nextCursor = index >= 0 ? encode({ ...cursor, before: selected[0]!.start }) : null;
   const result = pageResult(selected, nextCursor);
@@ -780,7 +1227,193 @@ export class TranscriptStore implements TranscriptWriterPort {
     this.appendRecord(input.chatId, bytes);
   }
 
-  readCurrentConversation(chatId: string): TranscriptTurnRecord[] {
+  appendDecisionRequested(input: TranscriptDecisionRequestedInput): CoachDecisionReadModel {
+    const parsed = CoachDecisionReadModelSchema.parse(input.decision);
+    if (
+      parsed.status !== "unanswered" ||
+      input.toolCallId.length === 0 ||
+      typeof input.athleteText !== "string" ||
+      !isIsoTimestamp(input.requestedAt)
+    ) {
+      throw new TypeError("Decision request is invalid.");
+    }
+    const matchingToolCall = this.readCurrentRecords(parsed.chatId).find(
+      (record) => record.kind === "decision-requested" && record.toolCallId === input.toolCallId,
+    );
+    if (matchingToolCall?.kind === "decision-requested") {
+      const existing = this.getDecision(parsed.chatId, matchingToolCall.decisionId);
+      const matchingOptions = matchingToolCall.options.map(({ id: _id, ...option }) => option);
+      const requestedOptions = parsed.options.map(({ id: _id, ...option }) => option);
+      const sameRequest =
+        matchingToolCall.athleteText === input.athleteText &&
+        matchingToolCall.question === parsed.question &&
+        JSON.stringify(matchingOptions) === JSON.stringify(requestedOptions);
+      if (sameRequest && existing !== null) return existing;
+      throw new Error("Tool call identifier already belongs to another decision request.");
+    }
+    const current = this.getDecision(parsed.chatId, parsed.decisionId);
+    if (current !== null) throw new Error("Decision identifier already exists.");
+    const active = this.getDecision(parsed.chatId);
+    if (
+      active?.status === "unanswered" ||
+      (active?.status === "answered" && active.continuation.status === "pending")
+    ) {
+      throw new Error("A decision is already active.");
+    }
+    const record: TranscriptDecisionRequestedRecord = {
+      version: TRANSCRIPT_SCHEMA_VERSION,
+      kind: "decision-requested",
+      chatId: parsed.chatId,
+      decisionId: parsed.decisionId,
+      toolCallId: input.toolCallId,
+      messageId: parsed.messageId,
+      athleteText: input.athleteText,
+      question: parsed.question,
+      options: parsed.options,
+      requestedAt: input.requestedAt,
+    };
+    this.appendRecord(parsed.chatId, serializeTranscriptRecord(record));
+    return parsed;
+  }
+
+  answerDecision(input: TranscriptDecisionAnsweredInput): CoachDecisionReadModel {
+    if (
+      !isIsoTimestamp(input.answeredAt) ||
+      input.continuationId.length === 0 ||
+      input.consequence.length === 0 ||
+      input.consequence.length > 2_000 ||
+      !CoachDecisionAnswerSchema.safeParse(input.answer).success
+    )
+      throw new TypeError("Decision answer is invalid.");
+    const current = this.getDecision(input.chatId, input.decisionId);
+    if (current === null) throw new Error("Decision was not found.");
+    if (current.status === "answered") {
+      if (
+        JSON.stringify(current.answer) === JSON.stringify(input.answer) &&
+        current.consequence === input.consequence &&
+        current.continuation.continuationId === input.continuationId
+      )
+        return current;
+      throw new Error("Decision is immutable after it is answered.");
+    }
+    if (current.status !== "unanswered") throw new Error("Decision is already terminal.");
+    if (input.answer.kind === "option") {
+      const optionId = input.answer.optionId;
+      if (!current.options.some((option) => option.id === optionId)) {
+        throw new TypeError("Decision answer references an unknown option.");
+      }
+    }
+    const record: TranscriptDecisionAnsweredRecord = {
+      version: TRANSCRIPT_SCHEMA_VERSION,
+      kind: "decision-answered",
+      chatId: input.chatId,
+      decisionId: input.decisionId,
+      answer: input.answer,
+      consequence: input.consequence,
+      continuationId: input.continuationId,
+      answeredAt: input.answeredAt,
+    };
+    this.appendRecord(input.chatId, serializeTranscriptRecord(record));
+    return this.getDecision(input.chatId, input.decisionId)!;
+  }
+
+  skipDecision(input: TranscriptDecisionSkippedInput): CoachDecisionReadModel {
+    if (!isIsoTimestamp(input.skippedAt)) throw new TypeError("Decision skip is invalid.");
+    const current = this.getDecision(input.chatId, input.decisionId);
+    if (current === null) throw new Error("Decision was not found.");
+    if (current.status === "skipped") return current;
+    if (current.status !== "unanswered") throw new Error("Decision is already terminal.");
+    const record: TranscriptDecisionSkippedRecord = {
+      version: TRANSCRIPT_SCHEMA_VERSION,
+      kind: "decision-skipped",
+      chatId: input.chatId,
+      decisionId: input.decisionId,
+      skippedAt: input.skippedAt,
+    };
+    this.appendRecord(input.chatId, serializeTranscriptRecord(record));
+    return this.getDecision(input.chatId, input.decisionId)!;
+  }
+
+  completeDecisionContinuation(
+    input: TranscriptDecisionContinuationCompletedInput,
+  ): CoachDecisionReadModel {
+    if (
+      !isIsoTimestamp(input.completedAt) ||
+      input.continuationId.length === 0 ||
+      input.turnId.length === 0 ||
+      typeof input.coachText !== "string" ||
+      input.coachText.length === 0 ||
+      !isDecisionContinuationLineage(input.lineage)
+    ) {
+      throw new TypeError("Decision continuation completion is invalid.");
+    }
+    const current = this.getDecision(input.chatId, input.decisionId);
+    if (current === null) throw new Error("Decision was not found.");
+    if (current.status !== "answered") throw new Error("Decision has no continuation.");
+    if (current.continuation.continuationId !== input.continuationId) {
+      throw new Error("Decision continuation identifier does not match.");
+    }
+    if (current.continuation.status === "completed") {
+      if (
+        current.continuation.turnId === input.turnId &&
+        current.continuation.coachText === input.coachText &&
+        JSON.stringify(current.continuation.lineage) === JSON.stringify(input.lineage)
+      ) {
+        return current;
+      }
+      throw new Error("Decision continuation is immutable after it is completed.");
+    }
+    const record: TranscriptDecisionContinuationCompletedRecord = {
+      version: TRANSCRIPT_SCHEMA_VERSION,
+      kind: "decision-continuation-completed",
+      chatId: input.chatId,
+      decisionId: input.decisionId,
+      continuationId: input.continuationId,
+      turnId: input.turnId,
+      coachText: input.coachText,
+      lineage: input.lineage,
+      completedAt: input.completedAt,
+    };
+    this.appendRecord(input.chatId, serializeTranscriptRecord(record));
+    return this.getDecision(input.chatId, input.decisionId)!;
+  }
+
+  abandonUnansweredDecisions(chatId: string, abandonedAt: string): CoachDecisionReadModel[] {
+    if (!isIsoTimestamp(abandonedAt)) throw new TypeError("Decision abandonment is invalid.");
+    const unanswered = [...decisionReadModels(this.readCurrentRecords(chatId)).values()].filter(
+      (decision) => decision.status === "unanswered",
+    );
+    for (const decision of unanswered) {
+      const record: TranscriptDecisionAbandonedRecord = {
+        version: TRANSCRIPT_SCHEMA_VERSION,
+        kind: "decision-abandoned",
+        chatId,
+        decisionId: decision.decisionId,
+        reason: "new_conversation",
+        abandonedAt,
+      };
+      this.appendRecord(chatId, serializeTranscriptRecord(record));
+    }
+    return unanswered.map((decision) => this.getDecision(chatId, decision.decisionId)!);
+  }
+
+  getDecision(chatId: string, decisionId?: string): CoachDecisionReadModel | null {
+    const decisions = decisionReadModels(this.readCurrentRecords(chatId));
+    if (decisionId !== undefined) return decisions.get(decisionId) ?? null;
+    const values = [...decisions.values()];
+    return values.at(-1) ?? null;
+  }
+
+  getDecisionAthleteText(chatId: string, decisionId: string): string | null {
+    const request = this.readCurrentRecords(chatId).find(
+      (record) => record.kind === "decision-requested" && record.decisionId === decisionId,
+    );
+    return request?.kind === "decision-requested" ? request.athleteText : null;
+  }
+
+  private readCurrentRecords(
+    chatId: string,
+  ): Exclude<TranscriptRecord, TranscriptConversationBoundaryRecord>[] {
     return this.withDirectory((directoryDescriptor) => {
       const path = this.transcriptPath(chatId);
       const descriptor = this.openExistingFile(directoryDescriptor, path, constants.O_RDONLY, true);
@@ -796,6 +1429,13 @@ export class TranscriptStore implements TranscriptWriterPort {
         closeSync(descriptor);
       }
     });
+  }
+
+  readCurrentConversation(chatId: string): TranscriptTurnRecord[] {
+    return this.readCurrentRecords(chatId).filter(
+      (record): record is TranscriptTurnRecord =>
+        record.kind === "turn-completed" || record.kind === "turn-interrupted",
+    );
   }
 
   readCurrentConversationPage(
@@ -906,7 +1546,12 @@ export class TranscriptStore implements TranscriptWriterPort {
             boundaryRef: segment.boundary.resetId,
             boundaryAt: segment.boundary.boundaryAt,
             reason: segment.boundary.reason,
-            turnCount: segment.turns.length,
+            turnCount: segment.turns.filter(
+              ({ record }) =>
+                record.kind === "turn-completed" ||
+                record.kind === "turn-interrupted" ||
+                record.kind === "decision-requested",
+            ).length,
           })),
           truncated: newestFirst.length > selected.length,
         };

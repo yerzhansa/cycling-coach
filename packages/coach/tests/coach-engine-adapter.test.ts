@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type AthleteState,
   type ChatRequest,
+  type CoachDecisionReadModel,
   type CoachEngine,
   type TurnEvent,
 } from "@enduragent/coach-contract";
@@ -33,6 +34,30 @@ const ftp: CyclingFtpAnchorResult = {
   stale: false,
 };
 
+const unansweredDecision = {
+  decisionId: "decision-1",
+  chatId: "chat-1",
+  messageId: "message-1",
+  question: "Choose tomorrow's priority.",
+  options: [
+    {
+      id: "option-1",
+      label: "Recover",
+      description: "Protect the weekend session.",
+      recommended: true,
+      consequence: "Tomorrow stays easy.",
+    },
+    {
+      id: "option-2",
+      label: "Train",
+      description: "Keep the planned session.",
+      recommended: false,
+      consequence: "Tomorrow keeps its workout.",
+    },
+  ],
+  status: "unanswered",
+} satisfies CoachDecisionReadModel;
+
 function resolver(result: CyclingFtpAnchorResult = ftp): {
   value: CyclingFtpAnchorResolver;
   resolve: ReturnType<typeof vi.fn<CyclingFtpAnchorResolver["resolve"]>>;
@@ -44,6 +69,16 @@ function resolver(result: CyclingFtpAnchorResult = ftp): {
 function backend(overrides: Partial<CoachEngine> = {}): CoachEngine {
   return {
     chat: async () => ({ text: "ok" }),
+    getCoachDecision: async () => ({ decision: null }),
+    answerCoachDecision: async () => {
+      throw new Error("not implemented");
+    },
+    skipCoachDecision: async () => {
+      throw new Error("not implemented");
+    },
+    resumeCoachDecision: async () => {
+      throw new Error("not implemented");
+    },
     resetSession: async () => ({ memoryFlushed: true }),
     hasSession: async () => ({ hasSession: false }),
     getAthleteState: async () => state,
@@ -224,22 +259,6 @@ describe("coach engine adapter", () => {
     await expect(engine.resetSession({ chatId: "x" })).rejects.toThrow();
   });
 
-  it("strictly validates scoped Stop requests and responses", async () => {
-    const stopChat = vi.fn(async () => ({ stopped: true }));
-    const engine = createCoachEngineAdapter({
-      backend: backend({ stopChat }),
-      getAthleteState: async () => state,
-      cyclingFtpAnchorResolver: resolver().value,
-      now: () => 0,
-    });
-
-    await expect(engine.stopChat?.({ chatId: "x", extra: 1 } as never)).rejects.toThrow();
-    expect(stopChat).not.toHaveBeenCalled();
-    await expect(engine.stopChat?.({ chatId: "x" })).resolves.toEqual({ stopped: true });
-    stopChat.mockResolvedValueOnce({ stopped: true, extra: 1 } as never);
-    await expect(engine.stopChat?.({ chatId: "x" })).rejects.toThrow();
-  });
-
   it("strictly validates has-session requests and responses asynchronously", async () => {
     const hasSession = vi.fn<CoachEngine["hasSession"]>(async () => ({ hasSession: true }));
     const engine = createCoachEngineAdapter({
@@ -256,7 +275,78 @@ describe("coach engine adapter", () => {
     await expect(engine.hasSession({ chatId: "x" })).rejects.toThrow();
   });
 
-  it("validates injected athlete state and exposes exactly five methods", async () => {
+  it("validates decision requests, events, and responses at the engine boundary", async () => {
+    const answeredDecision = {
+      ...unansweredDecision,
+      status: "answered" as const,
+      answer: { kind: "option" as const, optionId: "option-1" },
+      consequence: "Tomorrow stays easy.",
+      continuation: { continuationId: "continuation-1", status: "pending" as const },
+    };
+    const completedDecision = {
+      ...answeredDecision,
+      continuation: {
+        continuationId: "continuation-1",
+        status: "completed" as const,
+        turnId: "turn-1",
+        coachText: "Keep tomorrow easy.",
+      },
+    };
+    const getCoachDecision = vi.fn<CoachEngine["getCoachDecision"]>(async () => ({
+      decision: unansweredDecision,
+    }));
+    const answerCoachDecision = vi.fn<CoachEngine["answerCoachDecision"]>(
+      async (_request, onEvent) => {
+        onEvent?.({ type: "turn-start", turnId: "turn-1", chatId: "chat-1" });
+        return { decision: answeredDecision };
+      },
+    );
+    const skipCoachDecision = vi.fn<CoachEngine["skipCoachDecision"]>(async () => ({
+      decision: { ...unansweredDecision, status: "skipped" },
+    }));
+    const resumeCoachDecision = vi.fn<CoachEngine["resumeCoachDecision"]>(
+      async (_request, onEvent) => {
+        onEvent?.({ type: "final-text", turnId: "turn-1", text: "Keep tomorrow easy." });
+        return { decision: completedDecision, resumed: true };
+      },
+    );
+    const engine = createCoachEngineAdapter({
+      backend: backend({
+        getCoachDecision,
+        answerCoachDecision,
+        skipCoachDecision,
+        resumeCoachDecision,
+      }),
+      getAthleteState: async () => state,
+      cyclingFtpAnchorResolver: resolver().value,
+      now: () => 0,
+    });
+    await expect(engine.getCoachDecision({ chatId: "chat-1" })).resolves.toEqual({
+      decision: unansweredDecision,
+    });
+    await expect(
+      engine.answerCoachDecision(
+        {
+          chatId: "chat-1",
+          decisionId: "decision-1",
+          answer: { kind: "option", optionId: "option-1" },
+        },
+        () => {},
+      ),
+    ).resolves.toEqual({ decision: answeredDecision });
+    await expect(
+      engine.skipCoachDecision({ chatId: "chat-1", decisionId: "decision-1" }),
+    ).resolves.toEqual({ decision: { ...unansweredDecision, status: "skipped" } });
+    await expect(
+      engine.resumeCoachDecision({ chatId: "chat-1", decisionId: "decision-1" }, () => {}),
+    ).resolves.toEqual({ decision: completedDecision, resumed: true });
+    await expect(
+      engine.getCoachDecision({ chatId: "chat-1", extra: true } as never),
+    ).rejects.toThrow();
+    expect(getCoachDecision).toHaveBeenCalledOnce();
+  });
+
+  it("validates injected athlete state and exposes exactly eight methods", async () => {
     const getAthleteState = vi.fn(async (): Promise<AthleteState> => state);
     const engine = createCoachEngineAdapter({
       backend: backend(),
@@ -267,10 +357,14 @@ describe("coach engine adapter", () => {
     await expect(engine.getAthleteState()).resolves.toEqual(state);
     expect(getAthleteState).toHaveBeenCalledOnce();
     expect(Object.keys(engine).sort()).toEqual([
+      "answerCoachDecision",
       "chat",
       "getAthleteState",
+      "getCoachDecision",
       "hasSession",
       "resetSession",
+      "resumeCoachDecision",
+      "skipCoachDecision",
       "stopChat",
     ]);
     await expect(
