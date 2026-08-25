@@ -41,6 +41,8 @@ export interface PlanViewAdapter {
   retryQueuedCoachTurn(claimId: string): void;
   answerCoachDecision(decisionId: string, answer: CoachDecisionAnswer): void;
   skipCoachDecision(decisionId: string): void;
+  saveFtp(watts: number): void;
+  refreshFtp(): void;
   createDraft(): void;
   updateDraft(message: string): void;
   openDiscardConfirmation(): void;
@@ -256,6 +258,13 @@ export function createPlanViewAdapter(input: {
       }
       active = null;
       input.publishTransition({ status: "idle" });
+      if (
+        command.transitionId === "PL-T04" &&
+        (result.state.scenarioId === "PL-S060" || result.state.scenarioId === "PL-S062")
+      ) {
+        lastCommand = null;
+        queueMicrotask(() => void refresh(false));
+      }
     } catch {
       if (
         disposed ||
@@ -465,6 +474,28 @@ export function createPlanViewAdapter(input: {
       coachDecisionAnswerLabel = "Question skipped";
       coachDecisionError = null;
       submitCommand("Question skipped", { action: "skip", decisionId });
+    },
+    saveFtp(watts) {
+      const data = currentCoachData();
+      if (data === null) return;
+      void execute({
+        transitionId: "PL-T04",
+        commandId: createCommandId(),
+        conversationId: data.conversationId,
+        source: "manual",
+        watts,
+      });
+    },
+    refreshFtp() {
+      const data = currentCoachData();
+      if (data === null) return;
+      void execute({
+        transitionId: "PL-T04",
+        commandId: createCommandId(),
+        conversationId: data.conversationId,
+        source: "intervals",
+        watts: null,
+      });
     },
     createDraft() {
       const data = currentCoachData();

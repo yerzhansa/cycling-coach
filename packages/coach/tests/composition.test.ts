@@ -519,9 +519,9 @@ describe("local coach composition", () => {
     const { engineInput, lifecycle } = await composeWithCapturedEngineInput(home);
 
     expect(engineInput.ports.platform.calendarMutations.updateEvent).toBeTypeOf("function");
-    expect(engineInput.ports.toolConfirmations!.gatedToolNames.has("intervals_update_workout")).toBe(
-      true,
-    );
+    expect(
+      engineInput.ports.toolConfirmations!.gatedToolNames.has("intervals_update_workout"),
+    ).toBe(true);
 
     await lifecycle.close();
   });
@@ -1942,6 +1942,96 @@ describe("local coach composition", () => {
       plannedWorkouts: state.plannedWorkouts,
       degraded: true,
     });
+    await lifecycle.close();
+  });
+
+  it("composes Plan FTP precedence from Intervals anchors, eFTP, and athlete input", async () => {
+    const home = await freshHome();
+    await mkdir(home.storeDir, { recursive: true });
+    const store = openSqliteStorage(join(home.storeDir, "store.db"));
+    stores.push(store);
+    await runMigrations(store, MIGRATIONS);
+    await store.run(
+      "INSERT INTO anchor_history (id, sport, anchor_type, value, unit, valid_from, source, confidence, note, provenance, device_id, hlc_physical_ms, hlc_counter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [
+        "intervals-ftp",
+        "cycling",
+        "ftp",
+        275,
+        "W",
+        1_752_796_000,
+        "intervals-icu",
+        "platform",
+        null,
+        "sync",
+        null,
+        null,
+        null,
+      ],
+    );
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () => backend(),
+        now: () => 1_752_796_800_000,
+      },
+      { home, store, listener: inertWriterProtocolListener },
+    );
+    const started = await lifecycle.operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    });
+    expect(started).toMatchObject({
+      status: "completed",
+      state: {
+        data: {
+          ftp: {
+            usedSource: "intervals-ftp",
+            usedWatts: 275,
+            intervalsEftp: { watts: 260 },
+            conflict: true,
+          },
+        },
+      },
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await expect(
+      lifecycle.operations.executePlanTransition?.({
+        transitionId: "PL-T04",
+        commandId: "command-2",
+        conversationId,
+        source: "manual",
+        watts: 282,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S060",
+        data: { ftp: { usedSource: "manual", usedWatts: 282, conflict: true } },
+      },
+    });
+    await expect(
+      lifecycle.operations.executePlanTransition?.({
+        transitionId: "PL-T04",
+        commandId: "command-3",
+        conversationId,
+        source: "manual",
+        watts: 285,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { data: { ftp: { usedSource: "manual", usedWatts: 285 } } },
+    });
+    await expect(
+      store.get(
+        "SELECT value, source, confidence FROM anchor_history WHERE sport = ? AND anchor_type = ? AND confidence = ?",
+        ["cycling", "ftp", "manual"],
+      ),
+    ).resolves.toEqual({ value: 285, source: "athlete", confidence: "manual" });
     await lifecycle.close();
   });
 

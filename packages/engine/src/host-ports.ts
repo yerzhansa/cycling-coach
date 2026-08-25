@@ -403,6 +403,7 @@ export interface ReferenceStateSnapshot {
   } | null;
   readonly latest: {
     readonly metadata?: { readonly last_updated?: string };
+    readonly derived_metrics?: { readonly eftp?: number | null };
   } | null;
 }
 

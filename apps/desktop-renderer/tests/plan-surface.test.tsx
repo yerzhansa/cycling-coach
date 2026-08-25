@@ -18,6 +18,8 @@ function actions(): PlanActions {
     retryQueuedCoachTurn: vi.fn(),
     answerCoachDecision: vi.fn(),
     skipCoachDecision: vi.fn(),
+    saveFtp: vi.fn(),
+    refreshFtp: vi.fn(),
     createDraft: vi.fn(),
     updateDraft: vi.fn(),
     openDiscardConfirmation: vi.fn(),
@@ -154,6 +156,117 @@ describe("Plan surface", () => {
     expect(planActions.submitCoach).toHaveBeenCalledWith("Four days each week.");
     await user.click(screen.getByRole("button", { name: "Create draft" }));
     expect(planActions.createDraft).toHaveBeenCalledOnce();
+  });
+
+  it("resolves FTP with one compact whole-watts control and an Intervals refresh", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const state = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S003",
+      projection: "coach",
+      data: planCoachData({
+        ftp: {
+          status: "required",
+          manual: null,
+          intervalsFtp: null,
+          intervalsEftp: null,
+          usedSource: null,
+          usedWatts: null,
+          conflict: false,
+          error: null,
+        },
+      }),
+    });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(
+      screen.getByRole("heading", { name: "FTP needed before we build your cycling block" }),
+    ).toBeInTheDocument();
+    const input = screen.getByRole("textbox", { name: "FTP in whole watts" });
+    expect(input).toHaveAttribute("maxlength", "4");
+    expect(input).toHaveClass("w-28");
+    await user.type(input, "282");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(planActions.saveFtp).toHaveBeenCalledWith(282);
+    await user.click(screen.getByRole("button", { name: "Refresh Intervals" }));
+    expect(planActions.refreshFtp).toHaveBeenCalledOnce();
+  });
+
+  it("shows the selected FTP source and keeps conflicting values visible", () => {
+    const state = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S060",
+      projection: "coach",
+      data: planCoachData({
+        ftp: {
+          status: "conflict",
+          manual: { watts: 282, refreshedAtMs: 1 },
+          intervalsFtp: { watts: 278, refreshedAtMs: 2 },
+          intervalsEftp: { watts: 280, refreshedAtMs: 3 },
+          usedSource: "manual",
+          usedWatts: 282,
+          conflict: true,
+          error: null,
+        },
+      }),
+    });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+    });
+    render(<PlanView />);
+
+    expect(screen.getByText(/282 W.*Used for this Draft/u)).toBeInTheDocument();
+    expect(screen.getByText(/278 W/u)).toBeInTheDocument();
+    expect(screen.getByText(/280 W/u)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("highest-precedence value");
+  });
+
+  it("keeps a failed Intervals refresh recoverable without hiding manual entry", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const error = { code: "provider-failed" as const, message: "Refresh failed", retryable: true };
+    const state = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S059",
+      projection: "coach",
+      data: planCoachData({
+        ftp: {
+          status: "refresh-failed",
+          manual: null,
+          intervalsFtp: null,
+          intervalsEftp: null,
+          usedSource: null,
+          usedWatts: null,
+          conflict: false,
+          error,
+        },
+      }),
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+        transition: {
+          status: "failed",
+          commandId: "command-1",
+          transitionId: "PL-T04",
+          error,
+        },
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(screen.getByRole("textbox", { name: "FTP in whole watts" })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Refresh failed");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(planActions.refreshFtp).toHaveBeenCalledOnce();
   });
 
   it("confirms Draft discard with Cancel focused before the destructive action", async () => {

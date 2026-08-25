@@ -49,6 +49,7 @@ import {
   type EngineConfig,
   type EngineHostPorts,
   type ModelTransportDecorator,
+  type PlanFtpSourceValue,
   type ReferenceStateSnapshot,
 } from "@enduragent/engine";
 import { resolveUserTimezone, todayInTZ } from "@enduragent/engine/sport";
@@ -85,10 +86,11 @@ import {
   type ListArchivedConversationsRpcParams,
   type ListArchivedConversationsRpcResult,
   type GetRuntimeConfigRpcResult,
+  type PlanningOperations,
   type VerifyIntervalsCredentialRpcParams,
   type VerifyIntervalsCredentialRpcResult,
 } from "@enduragent/coach-contract";
-import { cyclingSport } from "@enduragent/sport-cycling";
+import { createCyclingPlanFtpAdapter, cyclingSport } from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import { createPowerProgressStateSource } from "./power-progress.js";
 import { createRecentRidesSource } from "./recent-rides.js";
@@ -163,7 +165,7 @@ interface OAuthCredential extends StoredProfile {
 
 export interface LocalCoachComposition {
   readonly engine: CoachEngine;
-  readonly operations: CoachOperations;
+  readonly operations: CoachOperations & PlanningOperations;
   readonly spendMeter: SpendMeterService;
   readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   startInitialRefresh(): Promise<void>;
@@ -1455,42 +1457,125 @@ export async function createLocalCoachComposition(
       credentials: options.liveIntervals,
       sources: trustedActivitySources,
     });
-    const planningOperations = createPlanningOperations({
-      context: input.context,
-      engine: reconfigurable.engine,
-      identity: planningIdentity,
+    const coachOperations = createCoachOperations(
+      {
+        home: input.home,
+        context: input.context,
+        runtime,
+        intervalsCredentials: options.liveIntervals,
+        historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
+        readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
+        readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
+        readArchivedTranscriptPage: (request) => reconfigurable.getArchivedTranscriptPage(request),
+        applyRuntimeConfig,
+        verifyIntervalsCredential,
+        intervalsVerificationPending,
+        readRuntimeConfig: () =>
+          runtimeConfigSnapshot(
+            input.home.configDir,
+            unapprovedConfig,
+            input.env,
+            activeTimezone,
+            intervalsVerificationPending(),
+          ),
+      },
+      dependencies.operationsDependencies,
+    );
+    const readFtpAnchor = async (
+      confidence: "manual" | "platform",
+    ): Promise<PlanFtpSourceValue | null> => {
+      const row =
+        confidence === "manual"
+          ? await input.context.store.get(
+              "SELECT value, valid_from FROM anchor_history WHERE sport = ? AND anchor_type = ? AND confidence = ? ORDER BY valid_from DESC, id DESC LIMIT 1",
+              ["cycling", "ftp", confidence],
+            )
+          : await input.context.store.get(
+              "SELECT value, valid_from FROM anchor_history WHERE sport = ? AND anchor_type = ? AND confidence = ? AND source = ? ORDER BY valid_from DESC, id DESC LIMIT 1",
+              ["cycling", "ftp", confidence, "intervals-icu"],
+            );
+      if (
+        row === undefined ||
+        typeof row.value !== "number" ||
+        typeof row.valid_from !== "number"
+      ) {
+        return null;
+      }
+      return { watts: row.value, refreshedAtMs: row.valid_from * 1_000 };
+    };
+    const ftp = createCyclingPlanFtpAdapter({
+      readManual: () => readFtpAnchor("manual"),
+      readIntervalsFtp: () => readFtpAnchor("platform"),
+      async readIntervalsEftp() {
+        const latest = readReferenceState(input.home.root).latest;
+        const watts = latest?.derived_metrics?.eftp;
+        const refreshedAtMs = Date.parse(latest?.metadata?.last_updated ?? "");
+        return typeof watts === "number" && Number.isFinite(refreshedAtMs)
+          ? { watts, refreshedAtMs }
+          : null;
+      },
+      async saveManual(watts) {
+        const stamp = planningIdentity.hlcStamp();
+        const validFrom = Math.floor(stamp.physicalMs / 1_000);
+        const deviceId = await planningIdentity.deviceId();
+        const inserted = await repository.insertIfAbsent({
+          id: planningIdentity.newUlid(),
+          sport: "cycling",
+          anchor_type: "ftp",
+          value: watts,
+          unit: "W",
+          valid_from: validFrom,
+          source: "athlete",
+          confidence: "manual",
+          note: null,
+          provenance: "manual",
+          device_id: deviceId,
+          hlc_physical_ms: stamp.physicalMs,
+          hlc_counter: stamp.counter,
+        });
+        if (inserted) return;
+        const existing = await input.context.store.get(
+          "SELECT confidence FROM anchor_history WHERE sport = ? AND anchor_type = ? AND valid_from = ?",
+          ["cycling", "ftp", validFrom],
+        );
+        if (existing?.confidence !== "manual") throw new Error("Manual FTP could not be saved.");
+        await input.context.store.run(
+          "UPDATE anchor_history SET value = ?, unit = ?, source = ?, note = ?, provenance = ?, device_id = ?, hlc_physical_ms = ?, hlc_counter = ? WHERE sport = ? AND anchor_type = ? AND valid_from = ? AND confidence = ?",
+          [
+            watts,
+            "W",
+            "athlete",
+            null,
+            "manual",
+            deviceId,
+            stamp.physicalMs,
+            stamp.counter,
+            "cycling",
+            "ftp",
+            validFrom,
+            "manual",
+          ],
+        );
+      },
+      async refreshIntervals() {
+        await coachOperations.sync({});
+      },
     });
+    const planningOperations = createPlanningOperations(
+      {
+        context: input.context,
+        engine: reconfigurable.engine,
+        identity: planningIdentity,
+      },
+      { ftp },
+    );
     const operations = {
-      ...createCoachOperations(
-        {
-          home: input.home,
-          context: input.context,
-          runtime,
-          intervalsCredentials: options.liveIntervals,
-          historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
-          readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
-          readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
-          readArchivedTranscriptPage: (request) =>
-            reconfigurable.getArchivedTranscriptPage(request),
-          applyRuntimeConfig,
-          verifyIntervalsCredential,
-          intervalsVerificationPending,
-          readRuntimeConfig: () =>
-            runtimeConfigSnapshot(
-              input.home.configDir,
-              unapprovedConfig,
-              input.env,
-              activeTimezone,
-              intervalsVerificationPending(),
-            ),
-        },
-        dependencies.operationsDependencies,
-      ),
+      ...coachOperations,
       getActivityAnalysis: (request, signal) =>
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
       ...planningOperations,
-    } satisfies CoachOperations;
+    } satisfies CoachOperations & PlanningOperations;
     return {
       engine: reconfigurable.engine,
       operations,

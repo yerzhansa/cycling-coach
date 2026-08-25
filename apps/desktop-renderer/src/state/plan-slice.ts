@@ -49,6 +49,8 @@ export interface PlanActions {
   retryQueuedCoachTurn(claimId: string): void;
   answerCoachDecision(decisionId: string, answer: CoachDecisionAnswer): void;
   skipCoachDecision(decisionId: string): void;
+  saveFtp(watts: number): void;
+  refreshFtp(): void;
   createDraft(): void;
   updateDraft(message: string): void;
   openDiscardConfirmation(): void;

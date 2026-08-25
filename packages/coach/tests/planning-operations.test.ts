@@ -10,6 +10,7 @@ import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/ke
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
+import type { PlanFtpAdapter, PlanFtpSnapshot } from "@enduragent/engine";
 import { createPlanningOperations, type PlanDraftBuilder } from "../src/planning-operations.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 
@@ -244,6 +245,131 @@ describe("Plan operations", () => {
     await expect(
       createPlanConversationRepository(store).readConversation(conversationId),
     ).resolves.toMatchObject({ status: "open" });
+  });
+
+  it("resolves manual and Intervals FTP sources before returning to the Plan coach", async () => {
+    let snapshot: PlanFtpSnapshot = {
+      manual: null,
+      intervalsFtp: null,
+      intervalsEftp: null,
+      usedSource: null,
+      usedWatts: null,
+      conflict: false,
+    };
+    const saveManual = vi.fn(async (watts: number) => {
+      snapshot = {
+        ...snapshot,
+        manual: { watts, refreshedAtMs: 10 },
+        usedSource: "manual",
+        usedWatts: watts,
+      };
+      return snapshot;
+    });
+    const refreshIntervals = vi.fn(async () => snapshot);
+    const ftp: PlanFtpAdapter = { read: async () => snapshot, saveManual, refreshIntervals };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { ftp, isReady: () => true },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    });
+    expect(started).toMatchObject({ status: "completed", state: { scenarioId: "PL-S003" } });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    const saved = await operations.executePlanTransition?.({
+      transitionId: "PL-T04",
+      commandId: "command-2",
+      conversationId,
+      source: "manual",
+      watts: 282,
+    });
+    expect(saveManual).toHaveBeenCalledWith(282);
+    expect(saved).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S062",
+        data: { ftp: { usedSource: "manual", usedWatts: 282 } },
+      },
+    });
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T04",
+      commandId: "command-3",
+      conversationId,
+      source: "intervals",
+      watts: null,
+    });
+    expect(refreshIntervals).toHaveBeenCalledOnce();
+  });
+
+  it("keeps FTP refresh failures retryable and exposes source conflicts", async () => {
+    let mode: "failure" | "conflict" = "failure";
+    const empty: PlanFtpSnapshot = {
+      manual: null,
+      intervalsFtp: null,
+      intervalsEftp: null,
+      usedSource: null,
+      usedWatts: null,
+      conflict: false,
+    };
+    const conflict: PlanFtpSnapshot = {
+      manual: { watts: 282, refreshedAtMs: 1 },
+      intervalsFtp: { watts: 278, refreshedAtMs: 2 },
+      intervalsEftp: { watts: 280, refreshedAtMs: 3 },
+      usedSource: "manual",
+      usedWatts: 282,
+      conflict: true,
+    };
+    const ftp: PlanFtpAdapter = {
+      read: async () => (mode === "conflict" ? conflict : empty),
+      saveManual: async () => empty,
+      refreshIntervals: async () => {
+        if (mode === "failure") throw new Error("offline");
+        return conflict;
+      },
+    };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { ftp },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T04",
+        commandId: "command-2",
+        conversationId,
+        source: "intervals",
+        watts: null,
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { retryable: true },
+      state: { scenarioId: "PL-S059", data: { ftp: { status: "refresh-failed" } } },
+    });
+    mode = "conflict";
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T04",
+        commandId: "command-3",
+        conversationId,
+        source: "intervals",
+        watts: null,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S060",
+        data: { ftp: { status: "conflict", usedSource: "manual", usedWatts: 282 } },
+      },
+    });
   });
 
   it("retries an interrupted Plan queue claim and persists the recovered turn", async () => {

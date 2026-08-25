@@ -281,6 +281,14 @@ export {
   type RaceCourseRecalculatingState,
   type RaceCourseRecalculationFailedState,
 } from "./planning/race-course.js";
+export {
+  executePlanFtpTransition,
+  type PlanFtpAdapter,
+  type PlanFtpSnapshot,
+  type PlanFtpSource,
+  type PlanFtpSourceValue,
+  type PlanFtpTransitionInput,
+} from "./planning/ftp.js";
 export { makeSummaryMessage, splitHistoryByBudget, SUMMARY_PREFIX } from "./agent/history-limit.js";
 export { truncateUtf16Safe } from "./text-truncate.js";
 export { warnOrphanSections, _resetOrphanWarnCacheForTesting } from "./sport/orphan-sections.js";

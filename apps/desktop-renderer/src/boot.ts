@@ -192,6 +192,8 @@ export function bootRenderer(): Disposer {
     answerCoachDecision: (decisionId, answer) =>
       planAdapter.answerCoachDecision(decisionId, answer),
     skipCoachDecision: (decisionId) => planAdapter.skipCoachDecision(decisionId),
+    saveFtp: (watts) => planAdapter.saveFtp(watts),
+    refreshFtp: () => planAdapter.refreshFtp(),
     createDraft: () => planAdapter.createDraft(),
     updateDraft: (message) => planAdapter.updateDraft(message),
     openDiscardConfirmation: () => planAdapter.openDiscardConfirmation(),

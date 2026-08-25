@@ -64,6 +64,7 @@ describe("engine public export surface", () => {
       "demoteSummaryHeadings",
       "ensureClaudeCliReady",
       "ensureCodexAgentReady",
+      "executePlanFtpTransition",
       "extractAccountId",
       "failRaceCourseRecalculation",
       "formatCompactionNote",

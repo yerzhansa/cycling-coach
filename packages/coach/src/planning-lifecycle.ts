@@ -6,6 +6,7 @@ import {
   type PlanAttention,
   type PlanCoachMessage,
   type PlanDraftProjection,
+  type PlanFtpProjection,
   type PlanLifecycle,
   type PlanProjectionKind,
   type PlanReadModel,
@@ -33,6 +34,8 @@ export interface BuildPlanLifecycleReadModelInput {
   readonly queue: ChatQueueSnapshot;
   readonly decision: CoachDecisionReadModel | null;
   readonly draft: PlanDraftProjection | null;
+  readonly ftp?: PlanFtpProjection | null;
+  readonly ftpScenario?: "PL-S057" | "PL-S058" | "PL-S059" | "PL-S060" | "PL-S061" | "PL-S062";
 }
 
 const EMPTY_ATTENTION: PlanAttention = Object.freeze({
@@ -141,8 +144,31 @@ function stateKind(input: BuildPlanLifecycleReadModelInput): {
       ],
     };
   }
+  const ftpScenario =
+    input.ftpScenario ??
+    (input.ftp !== undefined && input.ftp?.usedSource === null ? "PL-S003" : null);
+  if (ftpScenario !== null) {
+    const copy = {
+      "PL-S003": ["FTP required", "Add FTP before the cycling Draft can be built."],
+      "PL-S057": ["Refreshing Intervals", "Checking FTP and eFTP sources."],
+      "PL-S058": ["FTP required", "No FTP source was found in Intervals."],
+      "PL-S059": ["FTP required", "Intervals could not be refreshed."],
+      "PL-S060": ["FTP source selected", "The highest-precedence source controls this Draft."],
+      "PL-S061": ["FTP required", "Enter 1–9999 whole watts."],
+      "PL-S062": ["FTP accepted", "Returning to the Plan coach automatically."],
+    } as const;
+    return {
+      scenarioId: ftpScenario,
+      lifecycle: replacement ? "replacement-intake" : "intake",
+      projection: "coach",
+      title: copy[ftpScenario][0],
+      summary: copy[ftpScenario][1],
+      transitions: [guard("PL-T04")],
+    };
+  }
   const discarded = draft?.status === "discarded";
-  const ready = input.readyToCreateDraft && !discarded;
+  const ftpReady = input.ftp === undefined || input.ftp === null || input.ftp.usedSource !== null;
+  const ready = input.readyToCreateDraft && ftpReady && !discarded;
   return {
     scenarioId: discarded
       ? "PL-S020"
@@ -199,6 +225,7 @@ export function buildPlanLifecycleReadModel(
     queue: input.queue,
     decision: input.decision,
     draft: input.draft,
+    ...(input.ftp === undefined ? {} : { ftp: input.ftp }),
   });
   return PlanReadModelSchema.parse({
     schemaVersion: 1,
