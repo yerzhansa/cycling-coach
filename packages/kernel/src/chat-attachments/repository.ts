@@ -650,6 +650,58 @@ export function createChatAttachmentRepository(
       });
     },
 
+    async updateReadyProjection({ conversationId, attachmentId, stateJson, updatedAtMs }) {
+      if (conversationId.length < 1 || conversationId.length > 512 || !SAFE_ID.test(attachmentId)) {
+        throw new ChatAttachmentInvariantError(
+          "invalid_attachment_projection",
+          "attachment projection update is invalid",
+        );
+      }
+      try {
+        JSON.parse(stateJson);
+      } catch {
+        throw new ChatAttachmentInvariantError(
+          "invalid_state_json",
+          "attachment state is invalid JSON",
+        );
+      }
+      integer(updatedAtMs, "updated_at_ms");
+      return store.transaction(async () => {
+        const selected = await store.get(
+          `SELECT ${ATTACHMENT_COLUMNS} FROM chat_attachment WHERE id=? AND conversation_id=?`,
+          [attachmentId, conversationId],
+        );
+        if (selected === undefined) {
+          throw new ChatAttachmentInvariantError("attachment_missing", "attachment is missing");
+        }
+        const current = mapAttachment(selected);
+        if (
+          current.status !== "ready" ||
+          current.message_id !== null ||
+          updatedAtMs < current.updated_at_ms
+        ) {
+          throw new ChatAttachmentInvariantError(
+            "attachment_projection_conflict",
+            "attachment projection update conflicts with durable state",
+          );
+        }
+        if (current.state_json === stateJson) return current;
+        const updated = await store.get(
+          `UPDATE chat_attachment SET state_json=?,updated_at_ms=?
+             WHERE id=? AND conversation_id=? AND status='ready' AND message_id IS NULL AND updated_at_ms=?
+             RETURNING ${ATTACHMENT_COLUMNS}`,
+          [stateJson, updatedAtMs, attachmentId, conversationId, current.updated_at_ms],
+        );
+        if (updated === undefined) {
+          throw new ChatAttachmentInvariantError(
+            "attachment_projection_conflict",
+            "attachment changed during projection update",
+          );
+        }
+        return mapAttachment(updated);
+      });
+    },
+
     async listMessageAttachments(messageId) {
       return (
         await store.all(

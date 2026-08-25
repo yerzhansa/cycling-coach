@@ -1,7 +1,11 @@
 export * from "./types.js";
 export * from "./fit-row-mapper.js";
 export * from "./stream-codec.js";
-export { deleteAllDerivedRowsInTransaction, rebuildRawFile, rebuildRawFileInTransaction } from "./rebuild.js";
+export {
+  deleteAllDerivedRowsInTransaction,
+  rebuildRawFile,
+  rebuildRawFileInTransaction,
+} from "./rebuild.js";
 export * from "./pool-size-rescale.js";
 export * from "./repair/index.js";
 export * from "./xml-types.js";
@@ -16,3 +20,9 @@ export * from "./source-ledger.js";
 export * from "./import-report.js";
 export * from "./dedup-rekey.js";
 export * from "./incremental-rekey.js";
+export {
+  childElements,
+  parseXmlDocument,
+  preprocessXml,
+  validateDocumentShell,
+} from "./xml-common.js";
