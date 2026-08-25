@@ -14,6 +14,7 @@ import { createArchiveViewAdapter } from "./state/adapters/archive.js";
 import { createChatViewAdapter } from "./state/adapters/chat.js";
 import { createFirstSyncViewAdapter } from "./state/adapters/first-sync.js";
 import { createOnboardingViewAdapter } from "./state/adapters/onboarding.js";
+import { createPlanViewAdapter } from "./state/adapters/plan.js";
 import { createRideImportAdapter } from "./state/adapters/ride-import.js";
 import {
   createAthleteSettingsAdapter,
@@ -170,6 +171,19 @@ export function bootRenderer(): Disposer {
   const disposeSetupReadiness = store.subscribe((state, previousState) => {
     if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
   });
+
+  const planAdapter = createPlanViewAdapter({
+    bridge: window.enduragentAuth,
+    read: () => store.getState().plan,
+    publishHydration: (next) => store.getState().setPlanHydration(next),
+    publishTransition: (next) => store.getState().setPlanTransition(next),
+  });
+  store.getState().bindPlanActions({
+    open: () => planAdapter.open(),
+    startPlan: () => planAdapter.startPlan(),
+    retry: () => planAdapter.retry(),
+  });
+  planAdapter.start();
 
   const archiveAdapter = createArchiveViewAdapter({
     publish: (next) => store.getState().setArchive(next),
@@ -449,6 +463,7 @@ export function bootRenderer(): Disposer {
     store.getState().bindRideAnalysisActions(null);
     store.getState().bindTrainingExportActions(null);
     store.getState().bindOnboardingActions(null);
+    store.getState().bindPlanActions(null);
     disposeRideAnalysisSelection();
     disposeSetupReadiness();
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
@@ -468,6 +483,7 @@ export function bootRenderer(): Disposer {
     trainingSyncCoordinator.dispose();
     chatController.dispose();
     archiveController.dispose();
+    planAdapter.dispose();
     spendController.dispose();
     trainingContextController.dispose();
     rideAnalysisController.dispose();
