@@ -60,11 +60,26 @@ describe("managed Chat attachment store", () => {
     await managed.copyInspectedSource({ source, relativePath });
     const target = join(archiveDir, ...relativePath.split("/"));
     await expect(readFile(target, "utf8")).resolves.toBe("steady ride\n");
+    await expect(
+      managed.readObjectBytes({
+        relativePath,
+        byteSize: source.byteSize,
+        sha256: source.sha256,
+      }),
+    ).resolves.toEqual(Buffer.from("steady ride\n"));
     if (process.platform !== "win32") {
       expect((await lstat(target)).mode & 0o777).toBe(0o600);
       expect((await lstat(join(archiveDir, "chat-attachments"))).mode & 0o777).toBe(0o700);
       expect((await lstat(join(archiveDir, "chat-attachments", KEY))).mode & 0o777).toBe(0o700);
     }
+    await writeFile(target, "tamper ride\n");
+    await expect(
+      managed.readObjectBytes({
+        relativePath,
+        byteSize: source.byteSize,
+        sha256: source.sha256,
+      }),
+    ).rejects.toBeInstanceOf(ManagedAttachmentSourceError);
   });
 
   it("rejects unknown extensions, signature mismatches, invalid UTF-8, and links", async () => {

@@ -68,6 +68,11 @@ export interface ManagedChatAttachmentStore {
     readonly displayName: string;
     readonly bytes: Uint8Array;
   }): Promise<{ readonly sourcePath: string; readonly displayName: string }>;
+  readObjectBytes(input: {
+    readonly relativePath: string;
+    readonly byteSize: number;
+    readonly sha256: string;
+  }): Promise<Uint8Array>;
   removeObject(relativePath: string): Promise<void>;
   reconcile(
     repository: ChatAttachmentRepository,
@@ -491,6 +496,60 @@ export function createManagedChatAttachmentStore(
       if (platform !== "win32") await chmod(path, PRIVATE_FILE_MODE);
       await syncDirectory(ingressRoot, platform);
       return { sourcePath: path, displayName };
+    },
+
+    async readObjectBytes({ relativePath, byteSize, sha256 }) {
+      if (!Number.isSafeInteger(byteSize) || byteSize < 1 || !/^[0-9a-f]{64}$/u.test(sha256)) {
+        throw new TypeError("managed attachment identity is invalid");
+      }
+      const path = resolveManagedPath(options.archiveDir, relativePath);
+      let before: Awaited<ReturnType<typeof lstat>>;
+      try {
+        before = await lstat(path);
+      } catch {
+        throw new ManagedAttachmentSourceError("unsafe_source");
+      }
+      assertOrdinaryFile(before);
+      if (before.size !== byteSize) throw new ManagedAttachmentSourceError("unsafe_source");
+      const identity = sourceIdentity(before);
+      let handle: FileHandle | undefined;
+      try {
+        const flags = constants.O_RDONLY | (platform === "win32" ? 0 : constants.O_NOFOLLOW);
+        handle = await open(path, flags);
+        const opened = await handle.stat();
+        assertOrdinaryFile(opened);
+        if (!sameIdentity(identity, sourceIdentity(opened))) {
+          throw new ManagedAttachmentSourceError("unsafe_source");
+        }
+        const bytes = Buffer.allocUnsafe(byteSize);
+        let offset = 0;
+        while (offset < byteSize) {
+          const result = await handle.read(bytes, offset, byteSize - offset, offset);
+          if (result.bytesRead === 0) break;
+          offset += result.bytesRead;
+        }
+        const afterRead = await handle.stat();
+        if (
+          offset !== byteSize ||
+          !sameIdentity(identity, sourceIdentity(afterRead)) ||
+          createHash("sha256").update(bytes).digest("hex") !== sha256
+        ) {
+          throw new ManagedAttachmentSourceError("unsafe_source");
+        }
+        await handle.close();
+        handle = undefined;
+        const afterPath = await lstat(path);
+        assertOrdinaryFile(afterPath);
+        if (!sameIdentity(identity, sourceIdentity(afterPath))) {
+          throw new ManagedAttachmentSourceError("unsafe_source");
+        }
+        return bytes;
+      } catch (error) {
+        if (error instanceof ManagedAttachmentSourceError) throw error;
+        throw new ManagedAttachmentSourceError("unsafe_source");
+      } finally {
+        await handle?.close().catch(() => {});
+      }
     },
 
     async removeObject(relativePath) {
