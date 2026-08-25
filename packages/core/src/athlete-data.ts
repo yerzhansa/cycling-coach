@@ -1,6 +1,7 @@
 import type { ApiError, EventInput, IntervalsClient } from "intervals-icu-api";
 import type { ProducedLocalBundle } from "@enduragent/kernel/reference/local-bundle";
 import type { CanonicalActivityReader } from "@enduragent/kernel/store";
+import { PLANNING_EVENT_CATEGORIES } from "@enduragent/kernel/reference/schemas";
 import type {
   AthleteDataReaderPort as AthleteDataReader,
   AthleteReadResult,
@@ -82,7 +83,7 @@ export function createPlatformAthleteDataReader(intervals: IntervalsClient): Ath
       return { ok: true as const, value: await platformValue(intervals.events.list({
         oldest: input.start,
         newest: input.end,
-        category: ["WORKOUT"],
+        category: [...PLANNING_EVENT_CATEGORIES],
       })) as unknown[] };
     },
     freshness: () => undefined,

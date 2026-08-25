@@ -35,6 +35,11 @@ export { cyclingSport, CYCLING_VOCABULARY } from "./sport.js";
 export { CYCLING_PRESCRIPTION_CAPABILITY } from "./prescription-posture.js";
 export type { PrescriptionCapability } from "./prescription-posture.js";
 export { migrateCyclingLegacySections } from "./migrate.js";
+export {
+  CyclingRaceCourseError,
+  interpretCyclingRaceCourse,
+} from "./race-course.js";
+export type { CyclingRaceCourseInterpretation } from "./race-course.js";
 
 export {
   cyclingReferenceAdapter,

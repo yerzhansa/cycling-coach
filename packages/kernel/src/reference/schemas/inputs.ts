@@ -193,12 +193,25 @@ export const FtpHistoryPointSchema = z.looseObject({
 export type FtpHistoryPoint = z.infer<typeof FtpHistoryPointSchema>;
 
 /** Calendar event — planned workout for compliance/consistency metrics. */
+export const PLANNING_EVENT_CATEGORIES = ["WORKOUT", "RACE_A", "RACE_B", "RACE_C"] as const;
+export type PlanningEventCategory = typeof PLANNING_EVENT_CATEGORIES[number];
+
+const planningEventCategorySet = new Set<string>(PLANNING_EVENT_CATEGORIES);
+
+export function isPlanningEventCategory(value: string): value is PlanningEventCategory {
+  return planningEventCategorySet.has(value);
+}
+
 export const PlannedEventSchema = z.looseObject({
   id: z.number(),
   category: z.string(), // "WORKOUT", "RACE", etc.
   start_date_local: z.string(),
   name: z.string().nullable().optional(),
   type: z.string().nullable().optional(),
+  moving_time: z.number().int().nonnegative().nullable().optional(),
+  icu_training_load: z.number().finite().nonnegative().nullable().optional(),
+  description: z.string().nullable().optional(),
+  workout_doc: z.unknown().nullable().optional(),
 });
 export type PlannedEvent = z.infer<typeof PlannedEventSchema>;
 

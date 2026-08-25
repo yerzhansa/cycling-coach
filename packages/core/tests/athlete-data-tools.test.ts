@@ -307,6 +307,18 @@ describe("store athlete reader", () => {
     );
   });
 
+  it("reads Workout and Race categories for Planning", async () => {
+    const list = vi.fn(async () => ({ ok: true as const, value: [] }));
+    const reader = createPlatformAthleteDataReader({ events: { list } } as unknown as IntervalsClient);
+    await expect(reader.listCalendar({ start: "1998-07-01", end: "1998-07-31" }))
+      .resolves.toEqual({ ok: true, value: [] });
+    expect(list).toHaveBeenCalledWith({
+      oldest: "1998-07-01",
+      newest: "1998-07-31",
+      category: ["WORKOUT", "RACE_A", "RACE_B", "RACE_C"],
+    });
+  });
+
   it("forwards an exact partial event update through the platform adapter", async () => {
     const update = vi.fn(async () => ({ ok: true as const, value: { id: 91 } }));
     const client = { events: { update } } as unknown as IntervalsClient;

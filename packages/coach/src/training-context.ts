@@ -116,6 +116,10 @@ function projectPlan(input: ProjectCyclingTrainingContextInput): CyclingTraining
       name: row.name ?? null,
       category: row.category,
       workoutType: row.type as string,
+      durationSeconds: row.moving_time ?? null,
+      load: row.icu_training_load ?? null,
+      description: row.description ?? null,
+      workoutDoc: row.workout_doc ?? null,
     }));
   return items.length === 0
     ? { kind: "unknown", reason: "no-plan" }

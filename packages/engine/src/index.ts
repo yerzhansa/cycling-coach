@@ -90,6 +90,27 @@ export {
   type PlanReconcilerDeps,
   type PlanReconcilerIdentity,
 } from "./planning/reconciler.js";
+export {
+  RaceCourseLifecycleError,
+  acceptParsedRaceCourse,
+  beginRaceCourseParsing,
+  beginRaceCourseRemoval,
+  completeRaceCourseRecalculation,
+  failRaceCourseRecalculation,
+  openRaceCoursePicker,
+  rejectRaceCourseFile,
+  retryRaceCourseRecalculation,
+  useRouteWithoutElevation,
+  type RaceCourseInvalidState,
+  type RaceCourseLifecycleKind,
+  type RaceCourseLifecycleState,
+  type RaceCourseMissingElevationState,
+  type RaceCourseParsingState,
+  type RaceCoursePickerState,
+  type RaceCourseReadyState,
+  type RaceCourseRecalculatingState,
+  type RaceCourseRecalculationFailedState,
+} from "./planning/race-course.js";
 export { makeSummaryMessage, splitHistoryByBudget, SUMMARY_PREFIX } from "./agent/history-limit.js";
 export { truncateUtf16Safe } from "./text-truncate.js";
 export { warnOrphanSections, _resetOrphanWarnCacheForTesting } from "./sport/orphan-sections.js";

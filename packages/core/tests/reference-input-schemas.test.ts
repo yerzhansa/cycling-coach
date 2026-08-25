@@ -37,6 +37,21 @@ describe("PlannedEventSchema", () => {
       expect(PlannedEventSchema.parse(event)).toEqual(event);
     },
   );
+
+  it("types the full Planning event payload", () => {
+    const event = {
+      id: 2,
+      category: "RACE_A",
+      start_date_local: "2026-10-04T08:00:00",
+      name: "Gran Fondo Almaty",
+      type: null,
+      moving_time: 18_000,
+      icu_training_load: 360,
+      description: "A-priority goal event",
+      workout_doc: { steps: [] },
+    };
+    expect(PlannedEventSchema.parse(event)).toEqual(event);
+  });
 });
 
 describe("ActivitySchema (z.looseObject)", () => {
