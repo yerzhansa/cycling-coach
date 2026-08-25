@@ -30,9 +30,37 @@ export interface ParsedWorkoutSetProjection {
   readonly parserVersion: string;
 }
 
+export interface ManagedDocumentProjection {
+  readonly kind: "managed-document";
+  readonly objectId: string;
+  readonly reader: "pdf" | "text" | "csv" | "docx";
+  readonly readerVersion: string;
+  readonly extractedTextSha256: string;
+  readonly extractedTextChars: number;
+  readonly visualPageNumbers: readonly number[];
+}
+
+export interface ManagedImageProjection {
+  readonly kind: "managed-image";
+  readonly objectId: string;
+  readonly mediaType: "image/png" | "image/jpeg" | "image/webp";
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: number;
+}
+
 export interface FailedChatAttachmentProjection {
   readonly stage: "parsing" | "import";
   readonly failureCode: string;
+}
+
+export interface BlockedChatAttachmentProjection {
+  readonly reason:
+    | "encrypted_pdf"
+    | "metadata_stale"
+    | "model_incompatible"
+    | "validation_failed"
+    | "visual_pdf_unsupported";
 }
 
 export interface ChatAttachmentCapacityLimits {

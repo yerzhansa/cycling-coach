@@ -139,7 +139,7 @@ describe("running canonical engine compatibility", () => {
       content: "injected reply",
       provider: "openai-codex",
       model: "gpt-5.4",
-      lineageVersion: "2",
+      lineageVersion: "3",
     });
     expect(sessionLines[1].templateHash).toEqual(expect.any(String));
     expect(sessionLines[1].assembledHash).toEqual(expect.any(String));

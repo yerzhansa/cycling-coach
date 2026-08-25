@@ -5,7 +5,7 @@ import type { ModelMessage } from "ai";
 // ANY edit to a hash basis recipe: template/assembled basis fields,
 // stableSerialize normalization, the digest, or the system-prompt assembly
 // shape. An absent stamp on a stored line means "pre-contract", not "0".
-export const PROMPT_LINEAGE_SCHEMA_VERSION = "2";
+export const PROMPT_LINEAGE_SCHEMA_VERSION = "3";
 
 export function sha256_16(input: string): string {
   return createHash("sha256").update(input).digest("hex").slice(0, 16);
@@ -30,6 +30,20 @@ export interface PromptLineage {
 }
 
 function stableSerialize(value: unknown): unknown {
+  if (value instanceof ArrayBuffer) {
+    const bytes = new Uint8Array(value);
+    return {
+      binaryByteLength: bytes.byteLength,
+      binarySha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+  }
+  if (ArrayBuffer.isView(value)) {
+    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return {
+      binaryByteLength: bytes.byteLength,
+      binarySha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+  }
   if (Array.isArray(value)) {
     return value.map(stableSerialize);
   }
@@ -56,7 +70,7 @@ export function computeTemplateHash(input: PromptTemplateInput): string {
 }
 
 export function computeAssembledHash(systemPrompt: string, messages: ModelMessage[]): string {
-  const assembledBasis = JSON.stringify({ system: systemPrompt, messages });
+  const assembledBasis = JSON.stringify(stableSerialize({ system: systemPrompt, messages }));
   return sha256_16(assembledBasis);
 }
 

@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { computePromptLineage } from "../src/agent/prompt-lineage.js";
+import {
+  computePromptLineage,
+  PROMPT_LINEAGE_SCHEMA_VERSION,
+} from "../src/agent/prompt-lineage.js";
 import type { PromptLineageInput } from "../src/agent/prompt-lineage.js";
 import { staticRuleBlocks } from "../src/agent/system-prompt.js";
 import type { ModelMessage } from "ai";
@@ -74,5 +77,26 @@ describe("computePromptLineage", () => {
       toolSchemas: { plan_save: { kind: "object" }, memory_query: { kind: "object" } },
     });
     expect(b.templateHash).toBe(a.templateHash);
+  });
+
+  it("hashes native media by digest without serializing its bytes into lineage", () => {
+    const messages = (image: Uint8Array): ModelMessage[] => [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "review this" },
+          { type: "image", image, mediaType: "image/png" },
+        ],
+      },
+    ];
+    const first = computePromptLineage({ ...base, messages: messages(new Uint8Array([1, 2, 3])) });
+    const same = computePromptLineage({ ...base, messages: messages(Buffer.from([1, 2, 3])) });
+    const changed = computePromptLineage({
+      ...base,
+      messages: messages(new Uint8Array([1, 2, 4])),
+    });
+    expect(PROMPT_LINEAGE_SCHEMA_VERSION).toBe("3");
+    expect(same.assembledHash).toBe(first.assembledHash);
+    expect(changed.assembledHash).not.toBe(first.assembledHash);
   });
 });

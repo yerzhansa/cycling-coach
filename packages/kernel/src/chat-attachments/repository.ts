@@ -60,7 +60,7 @@ const STATUS_TRANSITIONS: Readonly<
   preprocessing: new Set(["ready", "blocked", "failed"]),
   blocked: new Set(["preprocessing"]),
   failed: new Set(["preprocessing", "importing"]),
-  ready: new Set(["importing", "sent"]),
+  ready: new Set(["blocked", "importing", "sent"]),
   importing: new Set(["imported", "failed"]),
   imported: new Set(["sent"]),
   sent: new Set(),

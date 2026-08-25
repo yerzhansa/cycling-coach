@@ -125,7 +125,7 @@ describe("retry loop on the codex-agent path", () => {
       expect(assistant.content).toBe(text);
       expect(assistant.provider).toBe("codex-agent");
       expect(assistant.model).toBe("gpt-5.6-sol");
-      expect(assistant.lineageVersion).toBe("2");
+      expect(assistant.lineageVersion).toBe("3");
       expect(typeof assistant.templateHash).toBe("string");
       expect(typeof assistant.assembledHash).toBe("string");
     },

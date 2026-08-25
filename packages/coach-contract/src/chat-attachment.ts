@@ -43,6 +43,84 @@ export const WorkoutAttachmentExtensionSchema = z.enum(["zwo", "mrc", "erg"]);
 export const ImageAttachmentExtensionSchema = z.enum(["png", "jpg", "jpeg", "webp"]);
 export const ChatAttachmentKindSchema = z.enum(["document", "activity", "workout", "image"]);
 
+const AttachmentCapabilityBaseSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    active: z
+      .object({
+        provider: z.string().min(1).max(128),
+        model: z.string().min(1).max(256),
+        transport: z.string().min(1).max(128),
+      })
+      .strict(),
+    documents: z
+      .object({
+        enabled: z.literal(true),
+        extensions: z.tuple([
+          z.literal("pdf"),
+          z.literal("txt"),
+          z.literal("csv"),
+          z.literal("docx"),
+        ]),
+      })
+      .strict(),
+    completedActivities: z
+      .object({
+        enabled: z.literal(true),
+        extensions: z.tuple([z.literal("fit"), z.literal("tcx"), z.literal("gpx")]),
+      })
+      .strict(),
+    plannedWorkouts: z
+      .object({
+        enabled: z.literal(true),
+        extensions: z.tuple([z.literal("zwo"), z.literal("erg"), z.literal("mrc")]),
+      })
+      .strict(),
+  })
+  .strict();
+
+const AttachmentCapabilityCheckedAtSchema = z.string().max(64).datetime({ offset: true });
+
+export const AttachmentCapabilitiesReadModelSchema = z.union([
+  AttachmentCapabilityBaseSchema.extend({
+    images: z
+      .object({
+        enabled: z.literal(true),
+        mediaTypes: z.tuple([
+          z.literal("image/png"),
+          z.literal("image/jpeg"),
+          z.literal("image/webp"),
+        ]),
+        reason: z.literal("supported"),
+        source: z.enum(["maintained_catalogue", "provider_metadata"]),
+        checkedAt: AttachmentCapabilityCheckedAtSchema,
+      })
+      .strict(),
+  }).strict(),
+  AttachmentCapabilityBaseSchema.extend({
+    images: z
+      .object({
+        enabled: z.literal(false),
+        mediaTypes: z.tuple([]),
+        reason: z.enum([
+          "metadata_stale",
+          "model_incompatible",
+          "unknown_model",
+          "transport_incompatible",
+        ]),
+        source: z.enum([
+          "maintained_catalogue",
+          "provider_metadata",
+          "unknown",
+          "transport_blocked",
+        ]),
+        checkedAt: AttachmentCapabilityCheckedAtSchema,
+      })
+      .strict(),
+  }).strict(),
+]);
+export type AttachmentCapabilitiesReadModel = z.infer<typeof AttachmentCapabilitiesReadModelSchema>;
+
 export const NativeChatAttachmentCandidateSchema = z
   .object({
     kind: z.literal("native-path"),
