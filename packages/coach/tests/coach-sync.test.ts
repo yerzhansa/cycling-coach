@@ -81,13 +81,9 @@ function syntheticHome(root = "synthetic-root"): AthleteHome {
 }
 
 function writerOperation<T>(
-  operationOrPlan:
-    | ((context: CoachStoreWriterContext) => Promise<T>)
-    | CoachStoreWriterPlan<T>,
+  operationOrPlan: ((context: CoachStoreWriterContext) => Promise<T>) | CoachStoreWriterPlan<T>,
 ): (context: CoachStoreWriterContext) => Promise<T> {
-  return typeof operationOrPlan === "function"
-    ? operationOrPlan
-    : operationOrPlan.operation;
+  return typeof operationOrPlan === "function" ? operationOrPlan : operationOrPlan.operation;
 }
 
 function syntheticStore(): CoachStoreWriterContext["store"] {
@@ -320,17 +316,23 @@ describe("coach sync composition", () => {
       await options.beforeStoreOpen?.(context.home);
       return { status: "completed", value: await options.operation(context) };
     };
-    await expect(withCoachStoreWriter({}, {
-      beforeStoreOpen: async (home) => {
-        expect(home).toBe(context.home);
-        trace.push("before");
-      },
-      operation: async (received) => {
-        expect(received).toBe(context);
-        trace.push("operation");
-        return "done";
-      },
-    }, { runWriter })).resolves.toBe("done");
+    await expect(
+      withCoachStoreWriter(
+        {},
+        {
+          beforeStoreOpen: async (home) => {
+            expect(home).toBe(context.home);
+            trace.push("before");
+          },
+          operation: async (received) => {
+            expect(received).toBe(context);
+            trace.push("operation");
+            return "done";
+          },
+        },
+        { runWriter },
+      ),
+    ).resolves.toBe("done");
     expect(trace).toEqual(["before", "operation"]);
     const cause = new Error("private");
     expect(new CoachStoreWriterError("writer-failed", "open store", { cause }).cause).toBe(cause);
@@ -343,9 +345,7 @@ describe("coach sync composition", () => {
     const context = syntheticContext();
     const withWriter: typeof withCoachStoreWriter = async <T>(
       _env: Record<string, string | undefined>,
-      operationOrPlan:
-        | ((value: CoachStoreWriterContext) => Promise<T>)
-        | CoachStoreWriterPlan<T>,
+      operationOrPlan: ((value: CoachStoreWriterContext) => Promise<T>) | CoachStoreWriterPlan<T>,
     ): Promise<T> => {
       writerCalls += 1;
       return writerOperation(operationOrPlan)(context);
@@ -447,9 +447,7 @@ describe("coach sync composition", () => {
     let maximumRunning = 0;
     const withWriter: typeof withCoachStoreWriter = async <T>(
       _env: Record<string, string | undefined>,
-      operationOrPlan:
-        | ((value: CoachStoreWriterContext) => Promise<T>)
-        | CoachStoreWriterPlan<T>,
+      operationOrPlan: ((value: CoachStoreWriterContext) => Promise<T>) | CoachStoreWriterPlan<T>,
     ): Promise<T> => writerOperation(operationOrPlan)(context);
     const importFiles: typeof importFilesWithReport = async () => importReport;
     const binding = (id: SourceId, shouldFail: boolean): CoachSourceBinding => ({
@@ -507,9 +505,7 @@ describe("coach sync composition", () => {
     let importCalls = 0;
     const withWriter: typeof withCoachStoreWriter = async <T>(
       _env: Record<string, string | undefined>,
-      operationOrPlan:
-        | ((value: CoachStoreWriterContext) => Promise<T>)
-        | CoachStoreWriterPlan<T>,
+      operationOrPlan: ((value: CoachStoreWriterContext) => Promise<T>) | CoachStoreWriterPlan<T>,
     ): Promise<T> => writerOperation(operationOrPlan)(context);
     const importFiles: typeof importFilesWithReport = async (options) => {
       importCalls += 1;
@@ -552,9 +548,7 @@ describe("coach sync composition", () => {
     let importCalls = 0;
     const withWriter: typeof withCoachStoreWriter = async <T>(
       _env: Record<string, string | undefined>,
-      operationOrPlan:
-        | ((value: CoachStoreWriterContext) => Promise<T>)
-        | CoachStoreWriterPlan<T>,
+      operationOrPlan: ((value: CoachStoreWriterContext) => Promise<T>) | CoachStoreWriterPlan<T>,
     ): Promise<T> => writerOperation(operationOrPlan)(context);
     const importFiles: typeof importFilesWithReport = async () => {
       importCalls += 1;
@@ -571,34 +565,37 @@ describe("coach sync composition", () => {
     expect(importCalls).toBe(0);
   });
 
-  it.runIf(hasLoopback)("real writer lifecycle migrates closes and releases an isolated store", async () => {
-    const root = await mkdtemp(join(await realpath(tmpdir()), "coach-runtime-"));
-    const home = syntheticHome(root);
-    try {
-      const value = await withCoachStoreWriter(
-        { ENDURAGENT_HOME: root },
-        async ({ home: receivedHome, store }) => {
-          expect(receivedHome).toEqual(home);
-          return store.get("PRAGMA user_version");
-        },
-      );
-      expect(value).toEqual({ user_version: 12 });
-      expect(await pathExists(join(home.storeDir, "store.db"))).toBe(true);
-      expect(await pathExists(join(home.configDir, LOCKFILE_NAME))).toBe(false);
-      expect(await pathExists(join(home.configDir, PORT_FILE_NAME))).toBe(false);
-
-      const reopened = openSqliteStorage(join(home.storeDir, "store.db"));
+  it.runIf(hasLoopback)(
+    "real writer lifecycle migrates closes and releases an isolated store",
+    async () => {
+      const root = await mkdtemp(join(await realpath(tmpdir()), "coach-runtime-"));
+      const home = syntheticHome(root);
       try {
-        await expect(reopened.get("PRAGMA user_version")).resolves.toEqual({
-          user_version: 12,
-        });
+        const value = await withCoachStoreWriter(
+          { ENDURAGENT_HOME: root },
+          async ({ home: receivedHome, store }) => {
+            expect(receivedHome).toEqual(home);
+            return store.get("PRAGMA user_version");
+          },
+        );
+        expect(value).toEqual({ user_version: 13 });
+        expect(await pathExists(join(home.storeDir, "store.db"))).toBe(true);
+        expect(await pathExists(join(home.configDir, LOCKFILE_NAME))).toBe(false);
+        expect(await pathExists(join(home.configDir, PORT_FILE_NAME))).toBe(false);
+
+        const reopened = openSqliteStorage(join(home.storeDir, "store.db"));
+        try {
+          await expect(reopened.get("PRAGMA user_version")).resolves.toEqual({
+            user_version: 13,
+          });
+        } finally {
+          await reopened.close();
+        }
       } finally {
-        await reopened.close();
+        await rm(root, { recursive: true, force: true });
       }
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it.runIf(hasLoopback)("isolates concurrent writers for two athlete homes", async () => {
     const temporaryRoot = await realpath(tmpdir());

@@ -1,6 +1,15 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { createServer as createNetServer } from "node:net";
@@ -8,10 +17,7 @@ import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ImportReport } from "@enduragent/kernel/ingest";
 import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
-import {
-  inertWriterProtocolListener,
-  type WriteLockHandle,
-} from "@enduragent/kernel-node/lock";
+import { inertWriterProtocolListener, type WriteLockHandle } from "@enduragent/kernel-node/lock";
 
 type RunCoachDev = typeof import("../src/cli/coach-dev.js").runCoachDev;
 type RunCoachDevWriter = typeof import("../src/cli/coach-dev.js").runCoachDevWriter;
@@ -592,7 +598,7 @@ describe("coach-dev import --report", () => {
     expect(await exists(databasePath)).toBe(true);
     const store = openSqliteStorage(databasePath);
     try {
-      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 12 });
+      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 13 });
       expect(await store.get("SELECT count(*) AS c FROM raw_file")).toEqual({ c: 1 });
       expect(await store.get("SELECT count(*) AS c FROM source_record")).toEqual({ c: 0 });
       expect(
@@ -644,51 +650,55 @@ describe("coach-dev import --report", () => {
     await expectLockFilesAbsent(realHome!);
   });
 
-  it.runIf(hasLoopback)("held-lock refuses safely", async () => {
-    const homePath = await freshHome("coach-dev-held-");
-    const home = resolveAthleteHome({ ENDURAGENT_HOME: homePath });
-    const result = await acquireWriteLock({
-      configDir: home.configDir,
-      athleteHome: home.root,
-      version: "test-parent",
-    });
-    expect(result.status).toBe("acquired");
-    if (result.status !== "acquired") throw new Error("expected acquired lock");
-    const foreignServer = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ service: "foreign", version: "test" }));
-    });
-    await new Promise<void>((resolveListen) => {
-      foreignServer.listen({ host: "127.0.0.1", port: 0 }, resolveListen);
-    });
-    const foreignAddress = foreignServer.address();
-    if (foreignAddress === null || typeof foreignAddress === "string") {
-      throw new Error("foreign holder did not bind a TCP port");
-    }
-    await writeFile(join(home.configDir, PORT_FILE_NAME), `${foreignAddress.port}\n`, {
-      mode: 0o600,
-    });
-    try {
-      const child = await runChild(homePath, [
-        "import",
-        "--report",
-        resolve("packages/kernel-node/tests/fixtures/ingest/triathlon-multisport.fit"),
-      ]);
-      expect(child).toEqual({
-        exitCode: 3,
-        stdout: WRITER_LOCK_STDOUT,
-        stderr: WRITER_LOCK_STDERR,
+  it.runIf(hasLoopback)(
+    "held-lock refuses safely",
+    async () => {
+      const homePath = await freshHome("coach-dev-held-");
+      const home = resolveAthleteHome({ ENDURAGENT_HOME: homePath });
+      const result = await acquireWriteLock({
+        configDir: home.configDir,
+        athleteHome: home.root,
+        version: "test-parent",
       });
-      expect(await exists(home.storeDir)).toBe(true);
-      expect(await exists(join(home.storeDir, "store.db"))).toBe(false);
-    } finally {
-      await new Promise<void>((resolveClose, reject) => {
-        foreignServer.close((error) => (error ? reject(error) : resolveClose()));
+      expect(result.status).toBe("acquired");
+      if (result.status !== "acquired") throw new Error("expected acquired lock");
+      const foreignServer = createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ service: "foreign", version: "test" }));
       });
-      await result.release();
-    }
-    await expectLockFilesAbsent(homePath);
-  }, 15_000);
+      await new Promise<void>((resolveListen) => {
+        foreignServer.listen({ host: "127.0.0.1", port: 0 }, resolveListen);
+      });
+      const foreignAddress = foreignServer.address();
+      if (foreignAddress === null || typeof foreignAddress === "string") {
+        throw new Error("foreign holder did not bind a TCP port");
+      }
+      await writeFile(join(home.configDir, PORT_FILE_NAME), `${foreignAddress.port}\n`, {
+        mode: 0o600,
+      });
+      try {
+        const child = await runChild(homePath, [
+          "import",
+          "--report",
+          resolve("packages/kernel-node/tests/fixtures/ingest/triathlon-multisport.fit"),
+        ]);
+        expect(child).toEqual({
+          exitCode: 3,
+          stdout: WRITER_LOCK_STDOUT,
+          stderr: WRITER_LOCK_STDERR,
+        });
+        expect(await exists(home.storeDir)).toBe(true);
+        expect(await exists(join(home.storeDir, "store.db"))).toBe(false);
+      } finally {
+        await new Promise<void>((resolveClose, reject) => {
+          foreignServer.close((error) => (error ? reject(error) : resolveClose()));
+        });
+        await result.release();
+      }
+      await expectLockFilesAbsent(homePath);
+    },
+    15_000,
+  );
 
   it.runIf(hasLoopback)("healthy-peer refuses without ownership", async () => {
     const homePath = await freshHome("coach-dev-peer-");
@@ -850,7 +860,9 @@ describe("coach-dev import --report", () => {
       failed.deps,
     );
     expect(failure).toEqual({ status: "failed", stage: "invoke operation" });
-    expect(failure.status === "failed" && failure.cause instanceof Error && failure.cause.message).toBe(privateValues[0]);
+    expect(
+      failure.status === "failed" && failure.cause instanceof Error && failure.cause.message,
+    ).toBe(privateValues[0]);
     expect(failed.calls).toEqual([
       "resolve",
       "prepare",
@@ -932,18 +944,23 @@ describe("coach-dev import --report", () => {
 
   it("runs the pre-open hook under the writer before store effects and releases on failure", async () => {
     const successful = injected();
-    await expect(runCoachDevWriter({
-      env: {},
-      writerVersion: "generic-operation/1",
-      beforeStoreOpen: async (home) => {
-        expect(home).toBe(successful.home);
-        successful.calls.push("pre-open");
-      },
-      operation: async () => {
-        successful.calls.push("operation");
-        return "done";
-      },
-    }, successful.deps)).resolves.toEqual({ status: "completed", value: "done" });
+    await expect(
+      runCoachDevWriter(
+        {
+          env: {},
+          writerVersion: "generic-operation/1",
+          beforeStoreOpen: async (home) => {
+            expect(home).toBe(successful.home);
+            successful.calls.push("pre-open");
+          },
+          operation: async () => {
+            successful.calls.push("operation");
+            return "done";
+          },
+        },
+        successful.deps,
+      ),
+    ).resolves.toEqual({ status: "completed", value: "done" });
     expect(successful.calls).toEqual([
       "resolve",
       "prepare",
@@ -960,18 +977,21 @@ describe("coach-dev import --report", () => {
 
     const failure = { kind: "pre-open" };
     const failed = injected();
-    const result = await runCoachDevWriter({
-      env: {},
-      writerVersion: "generic-operation/1",
-      beforeStoreOpen: async () => {
-        failed.calls.push("pre-open");
-        throw failure;
+    const result = await runCoachDevWriter(
+      {
+        env: {},
+        writerVersion: "generic-operation/1",
+        beforeStoreOpen: async () => {
+          failed.calls.push("pre-open");
+          throw failure;
+        },
+        operation: async () => {
+          failed.calls.push("operation");
+          return null;
+        },
       },
-      operation: async () => {
-        failed.calls.push("operation");
-        return null;
-      },
-    }, failed.deps);
+      failed.deps,
+    );
     expect(result).toEqual({ status: "failed", stage: "run pre-open operation" });
     expect(result.status === "failed" && result.cause).toBe(failure);
     expect(failed.calls).toEqual(["resolve", "prepare", "acquire", "pre-open", "release"]);
@@ -1006,11 +1026,16 @@ describe("coach-dev import --report", () => {
       portFile: "synthetic/config/store-writer.port",
     };
     const typedScenario = injected({ fail: { acquire: typedForeign } });
-    await expect(runCoachDevWriter({
-      env: {},
-      writerVersion: "generic-operation/1",
-      operation: async () => null,
-    }, typedScenario.deps)).resolves.toEqual({
+    await expect(
+      runCoachDevWriter(
+        {
+          env: {},
+          writerVersion: "generic-operation/1",
+          operation: async () => null,
+        },
+        typedScenario.deps,
+      ),
+    ).resolves.toEqual({
       status: "writer-lock-held",
       contention: typedForeign.contention,
     });
@@ -1032,8 +1057,15 @@ describe("coach-dev import --report", () => {
   });
 
   it("never serializes failure causes carrying enumerable private data", async () => {
-    const privateTexts = ["/private/athlete/home/store.db", "thrown-plain-object-secret", "thrown-string-secret"];
-    const fsLike = Object.assign(new Error("EACCES: permission denied"), { path: privateTexts[0], syscall: "open" });
+    const privateTexts = [
+      "/private/athlete/home/store.db",
+      "thrown-plain-object-secret",
+      "thrown-string-secret",
+    ];
+    const fsLike = Object.assign(new Error("EACCES: permission denied"), {
+      path: privateTexts[0],
+      syscall: "open",
+    });
     for (const thrown of [fsLike, { detail: privateTexts[1] }, privateTexts[2]]) {
       const scenario = injected();
       const failure = await runCoachDevWriter(
@@ -1111,7 +1143,17 @@ describe("coach-dev import --report", () => {
         stage: "migrate",
         error: new Error("private migration failure"),
         diagnostic: "run migrations",
-        calls: ["resolve", "prepare", "acquire", "mkdir", "chmod", "open", "migrate", "close", "release"],
+        calls: [
+          "resolve",
+          "prepare",
+          "acquire",
+          "mkdir",
+          "chmod",
+          "open",
+          "migrate",
+          "close",
+          "release",
+        ],
       },
       {
         stage: "import",

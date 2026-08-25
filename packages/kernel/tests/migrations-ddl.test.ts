@@ -53,6 +53,11 @@ const EXPECTED_FULL_TABLES = [
   "activity_analysis_projection",
   "plan",
   "plan_workout",
+  "chat_attachment_object",
+  "chat_attachment",
+  "chat_attachment_draft",
+  "chat_attachment_draft_ref",
+  "chat_message_attachment",
 ];
 const MIGRATION_002 = `ALTER TABLE swim_length ADD COLUMN distance_m REAL;
 
@@ -174,6 +179,7 @@ describe("001_init migration", () => {
       { version: 10, name: "010_analytics_curves" },
       { version: 11, name: "011_activity_analysis_projection" },
       { version: 12, name: "012_plan" },
+      { version: 13, name: "013_chat_attachments" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -275,7 +281,7 @@ describe("001_init migration", () => {
       .map((row) => row.name)
       .sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
-    expect(names).toHaveLength(44);
+    expect(names).toHaveLength(49);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
@@ -787,8 +793,9 @@ describe("001_init migration", () => {
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_operation");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_failure");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("store_owner");
-    expect(DUMP_TABLES.map(({ table }) => String(table)))
-      .not.toContain("analytics_curve_refresh_failure");
+    expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain(
+      "analytics_curve_refresh_failure",
+    );
     for (const table of [
       "analytics_curve_current",
       "analytics_curve_evidence",
@@ -851,14 +858,18 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     );
     const columns = db.prepare("PRAGMA table_info(store_owner)").all();
     expect(columns).toContainEqual(expect.objectContaining({ name: "singleton", pk: 1 }));
-    expect(columns).toContainEqual(expect.objectContaining({ name: "account_fingerprint", notnull: 1 }));
+    expect(columns).toContainEqual(
+      expect.objectContaining({ name: "account_fingerprint", notnull: 1 }),
+    );
     expect(() =>
       db!
         .prepare("INSERT INTO store_owner(singleton,account_fingerprint) VALUES(1,?)")
         .run("a".repeat(64)),
     ).not.toThrow();
     expect(() => db!.prepare("INSERT INTO store_owner VALUES(2,?)").run("b".repeat(64))).toThrow();
-    expect(() => db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64))).toThrow();
+    expect(() =>
+      db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64)),
+    ).toThrow();
     expect(() => db!.prepare("DELETE FROM store_owner").run()).toThrow();
   });
 
@@ -867,9 +878,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(createHash("sha256").update(MIGRATIONS[8]!.sql).digest("hex")).toBe(
       "4fe2e7648bbb09ad62c60a86e26ac4a9e09f4c0e24882428e12ad8722f3d420c",
     );
-    expect(
-      db.prepare("PRAGMA index_info(idx_source_record_session_source)").all(),
-    ).toEqual([
+    expect(db.prepare("PRAGMA index_info(idx_source_record_session_source)").all()).toEqual([
       expect.objectContaining({ seqno: 0, name: "session_key" }),
       expect.objectContaining({ seqno: 1, name: "source" }),
       expect.objectContaining({ seqno: 2, name: "id" }),
@@ -905,24 +914,54 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(createHash("sha256").update(MIGRATIONS[10]!.sql).digest("hex")).toBe(
       "b9c22b99343093655536059e68c1846b5deb8b77355a08e38013d807906e300e",
     );
-    const table = db.prepare("PRAGMA table_list").all().find(
-      (row) => (row as { name?: unknown }).name === "activity_analysis_projection",
-    ) as { strict: number; wr: number } | undefined;
+    const table = db
+      .prepare("PRAGMA table_list")
+      .all()
+      .find((row) => (row as { name?: unknown }).name === "activity_analysis_projection") as
+      | { strict: number; wr: number }
+      | undefined;
     expect(table).toMatchObject({ strict: 1, wr: 1 });
-    expect(db.prepare("PRAGMA foreign_key_list(activity_analysis_projection)").all())
-      .toContainEqual(expect.objectContaining({ table: "session", on_delete: "CASCADE" }));
-    expect(db.prepare("PRAGMA index_info(idx_activity_analysis_projection_lru)").all())
-      .toEqual([
-        expect.objectContaining({ seqno: 0, name: "accessed_epoch_s" }),
-        expect.objectContaining({ seqno: 1, name: "canonical_activity_id" }),
-        expect.objectContaining({ seqno: 2, name: "source_revision" }),
-        expect.objectContaining({ seqno: 3, name: "contract_version" }),
-        expect.objectContaining({ seqno: 4, name: "section" }),
-      ]);
-    expect(DUMP_TABLES.map(({ table: name }) => name)).toContain(
-      "activity_analysis_projection",
-    );
+    expect(
+      db.prepare("PRAGMA foreign_key_list(activity_analysis_projection)").all(),
+    ).toContainEqual(expect.objectContaining({ table: "session", on_delete: "CASCADE" }));
+    expect(db.prepare("PRAGMA index_info(idx_activity_analysis_projection_lru)").all()).toEqual([
+      expect.objectContaining({ seqno: 0, name: "accessed_epoch_s" }),
+      expect.objectContaining({ seqno: 1, name: "canonical_activity_id" }),
+      expect.objectContaining({ seqno: 2, name: "source_revision" }),
+      expect.objectContaining({ seqno: 3, name: "contract_version" }),
+      expect.objectContaining({ seqno: 4, name: "section" }),
+    ]);
+    expect(DUMP_TABLES.map(({ table: name }) => name)).toContain("activity_analysis_projection");
     expect(DERIVED_TABLES).not.toContain("activity_analysis_projection");
+  });
+
+  it("adds strict conversation-owned attachment storage", () => {
+    db = openFull();
+    const tables = db.prepare("PRAGMA table_list").all() as Array<{
+      name: string;
+      strict: number;
+      wr: number;
+    }>;
+    for (const name of [
+      "chat_attachment_object",
+      "chat_attachment",
+      "chat_attachment_draft",
+      "chat_attachment_draft_ref",
+      "chat_message_attachment",
+    ]) {
+      expect(tables.find((row) => row.name === name)).toMatchObject({ strict: 1, wr: 1 });
+    }
+    const indexes = new Set(
+      (
+        db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as Array<{
+          name: string;
+        }>
+      ).map(({ name }) => name),
+    );
+    expect(indexes).toContain("idx_chat_attachment_object_live_digest");
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("chat_attachment");
+    expect(PURE_AUTHORED_TABLES).not.toContain("chat_attachment" as never);
   });
 
   it("omits the unreleased prior bone-stress column from the baseline schema", () => {
