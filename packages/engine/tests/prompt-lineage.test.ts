@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  computeAssembledHash,
   computePromptLineage,
+  promptLineageSchemaVersion,
+  PROMPT_LINEAGE_NATIVE_MEDIA_SCHEMA_VERSION,
   PROMPT_LINEAGE_SCHEMA_VERSION,
+  sha256_16,
 } from "../src/agent/prompt-lineage.js";
 import type { PromptLineageInput } from "../src/agent/prompt-lineage.js";
 import { staticRuleBlocks } from "../src/agent/system-prompt.js";
@@ -95,8 +99,17 @@ describe("computePromptLineage", () => {
       ...base,
       messages: messages(new Uint8Array([1, 2, 4])),
     });
-    expect(PROMPT_LINEAGE_SCHEMA_VERSION).toBe("3");
+    expect(PROMPT_LINEAGE_SCHEMA_VERSION).toBe("2");
+    expect(PROMPT_LINEAGE_NATIVE_MEDIA_SCHEMA_VERSION).toBe("3");
+    expect(promptLineageSchemaVersion(baseMessages)).toBe("2");
+    expect(promptLineageSchemaVersion(messages(new Uint8Array([1])))).toBe("3");
     expect(same.assembledHash).toBe(first.assembledHash);
     expect(changed.assembledHash).not.toBe(first.assembledHash);
+  });
+
+  it("preserves the v2 assembled-hash recipe for binary-free prompts", () => {
+    expect(computeAssembledHash(base.systemPrompt, baseMessages)).toBe(
+      sha256_16(JSON.stringify({ system: base.systemPrompt, messages: baseMessages })),
+    );
   });
 });

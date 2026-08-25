@@ -35,7 +35,7 @@ import { ATHLETE_CONTEXT_MAX_CHARS, buildSystemPrompt, staticRuleBlocks } from "
 import {
   computeAssembledHash,
   computeTemplateHash,
-  PROMPT_LINEAGE_SCHEMA_VERSION,
+  promptLineageSchemaVersion,
   sha256_16,
 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
@@ -1132,7 +1132,7 @@ export class CoachAgent {
                   assembledHash,
                   provider: this.config.llm.provider,
                   model: this.config.llm.model,
-                  lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                  lineageVersion: promptLineageSchemaVersion(providerMessages),
                   provenance: ctx.provenance.value,
                 });
               } catch (persistErr) {
@@ -1375,20 +1375,18 @@ export class CoachAgent {
               toolSchemas: this.tools,
               model: this.config.llm.model,
             }));
+            const providerMessages = attachNativeMediaToCurrentUserMessage(
+              messages,
+              providerUserMessage,
+              turn?.nativeMedia ?? [],
+            );
             try {
               this.chatStore.appendTurn(chatId, userMessage, streamedText, {
                 templateHash,
-                assembledHash: computeAssembledHash(
-                  this.systemPrompt,
-                  attachNativeMediaToCurrentUserMessage(
-                    messages,
-                    providerUserMessage,
-                    turn?.nativeMedia ?? [],
-                  ),
-                ),
+                assembledHash: computeAssembledHash(this.systemPrompt, providerMessages),
                 provider: this.config.llm.provider,
                 model: this.config.llm.model,
-                lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                lineageVersion: promptLineageSchemaVersion(providerMessages),
                 provenance: ctx.provenance.value,
               });
             } catch (persistErr) {
@@ -1826,7 +1824,7 @@ export class CoachAgent {
       assembledHash: computeAssembledHash(lineageInput.system, lineageInput.messages),
       provider: this.config.llm.provider,
       model: this.config.llm.model,
-      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+      lineageVersion: promptLineageSchemaVersion(lineageInput.messages),
     };
     const completed = store.completeDecisionContinuation({
       chatId: decision.chatId,
