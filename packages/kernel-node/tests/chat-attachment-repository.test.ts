@@ -275,6 +275,73 @@ describe("chat attachment repository", () => {
     ).rejects.toMatchObject({ code: "attachment_transition_conflict" });
   });
 
+  it("updates a ready planned-Workout selection before Message linkage only", async () => {
+    const repository = createChatAttachmentRepository(store);
+    const object = objectRow("object-workout", "chat-a", "9".repeat(64));
+    await repository.reserveObject({ object, limits: LIMITS });
+    const workout = {
+      ...attachmentRow("attachment-workout", object),
+      kind: "workout" as const,
+      display_name: "tempo.zwo",
+      media_type: "application/vnd.zwift.workout+xml",
+      extension: "zwo",
+    };
+    await repository.commitAdmission({
+      objectId: object.id,
+      attachment: workout,
+      draftUpdatedAtMs: 3,
+    });
+    const initial = JSON.stringify({
+      kind: "parsed-workout-set",
+      setId: "set-1",
+      selectedWorkoutId: null,
+    });
+    await repository.transitionAttachment({
+      conversationId: "chat-a",
+      attachmentId: workout.id,
+      from: ["preprocessing"],
+      to: "ready",
+      stateJson: initial,
+      messageId: null,
+      updatedAtMs: 4,
+    });
+    const selected = JSON.stringify({
+      kind: "parsed-workout-set",
+      setId: "set-1",
+      selectedWorkoutId: "workout-1",
+    });
+    await expect(
+      repository.updateReadyProjection({
+        conversationId: "chat-a",
+        attachmentId: workout.id,
+        stateJson: selected,
+        updatedAtMs: 5,
+      }),
+    ).resolves.toMatchObject({ status: "ready", state_json: selected, message_id: null });
+    await expect(
+      repository.updateReadyProjection({
+        conversationId: "chat-a",
+        attachmentId: workout.id,
+        stateJson: selected,
+        updatedAtMs: 5,
+      }),
+    ).resolves.toMatchObject({ state_json: selected, updated_at_ms: 5 });
+    await repository.linkMessage({
+      conversationId: "chat-a",
+      messageId: "message-workout",
+      attachmentIds: [workout.id],
+      createdAtMs: 6,
+    });
+    await expect(
+      repository.updateReadyProjection({
+        conversationId: "chat-a",
+        attachmentId: workout.id,
+        stateJson: initial,
+        updatedAtMs: 7,
+      }),
+    ).rejects.toMatchObject({ code: "attachment_projection_conflict" });
+  });
+
   it("serializes competing reservations so aggregate capacity cannot be oversubscribed", async () => {
     const repository = createChatAttachmentRepository(store);
     const limits = {

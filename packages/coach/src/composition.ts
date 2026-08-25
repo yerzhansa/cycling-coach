@@ -154,6 +154,8 @@ import { serializeBoundaryError } from "./daemon/error-boundary.js";
 import { createPlanStorageService } from "./plan-storage.js";
 import { createManagedChatAttachmentOperations } from "./attachment-operations.js";
 import { createActivityAttachmentOperations } from "./activity-attachment-operations.js";
+import { createWorkoutAttachmentOperations } from "./workout-attachment-operations.js";
+import { createManagedWorkoutReader } from "@enduragent/sport-cycling/workout-import";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -985,12 +987,39 @@ export async function createLocalCoachComposition(
       runExclusive: (work) => runtime!.runExclusive(work),
       now,
     });
+    const workoutLimits = {
+      candidates: CHAT_ATTACHMENT_LIMITS.workoutCandidates,
+      segmentsPerWorkout: CHAT_ATTACHMENT_LIMITS.workoutSegments,
+      durationSeconds: CHAT_ATTACHMENT_LIMITS.workoutDurationSeconds,
+      diagnostics: CHAT_ATTACHMENT_LIMITS.workoutDiagnostics,
+      diagnosticChars: CHAT_ATTACHMENT_LIMITS.workoutDiagnosticChars,
+      titleChars: CHAT_ATTACHMENT_LIMITS.workoutTitleChars,
+      purposeChars: CHAT_ATTACHMENT_LIMITS.workoutPurposeChars,
+    } as const;
+    const workoutAttachmentOperations = createWorkoutAttachmentOperations({
+      repository: attachmentRepository,
+      reader: createManagedWorkoutReader({
+        objects: attachmentObjects,
+        limits: {
+          ...workoutLimits,
+          workoutBytes: CHAT_ATTACHMENT_LIMITS.workoutBytes,
+          parserMs: CHAT_ATTACHMENT_LIMITS.parserMs,
+          parserOldGenerationMiB: CHAT_ATTACHMENT_LIMITS.parserOldGenerationMiB,
+        },
+      }),
+      limits: workoutLimits,
+      runExclusive: (work) => runtime!.runExclusive(work),
+      now,
+    });
     const attachmentOperations = createManagedChatAttachmentOperations({
       repository: attachmentRepository,
       objects: attachmentObjects,
       runExclusive: (work) => runtime!.runExclusive(work),
       now,
-      onAdmitted: activityAttachmentOperations.preprocessAdmitted,
+      onAdmitted: async (admitted) => {
+        await activityAttachmentOperations.preprocessAdmitted(admitted);
+        await workoutAttachmentOperations.preprocessAdmitted(admitted);
+      },
     });
     await attachmentOperations.reconcile();
     const planIdentity = createAuthoredIdentity(input.home.configDir, { now });

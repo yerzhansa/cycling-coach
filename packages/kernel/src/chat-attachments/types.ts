@@ -22,6 +22,14 @@ export interface CanonicalActivityProjection {
   readonly activityIds: readonly string[];
 }
 
+export interface ParsedWorkoutSetProjection {
+  readonly kind: "parsed-workout-set";
+  readonly setId: string;
+  readonly selectedWorkoutId: string | null;
+  readonly sourceFormat: "zwo" | "mrc" | "erg";
+  readonly parserVersion: string;
+}
+
 export interface FailedChatAttachmentProjection {
   readonly stage: "parsing" | "import";
   readonly failureCode: string;
@@ -120,6 +128,12 @@ export interface ChatAttachmentRepository {
     readonly to: ChatAttachmentStatus;
     readonly stateJson: string | null;
     readonly messageId: string | null;
+    readonly updatedAtMs: number;
+  }): Promise<ChatAttachmentRow>;
+  updateReadyProjection(input: {
+    readonly conversationId: string;
+    readonly attachmentId: string;
+    readonly stateJson: string;
     readonly updatedAtMs: number;
   }): Promise<ChatAttachmentRow>;
   listMessageAttachments(messageId: string): Promise<readonly ChatAttachmentRow[]>;
