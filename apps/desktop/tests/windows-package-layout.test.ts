@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { createPackage } from "@electron/asar";
+import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   WINDOWS_PACKAGE_GUID,
@@ -33,6 +33,7 @@ const exclusions = [
   "!**/.env*",
   "!**/{test,tests,__tests__,fixture,fixtures,dev-fixture,dev-fixtures}/**",
   "!**/*.{test,spec}.{js,cjs,mjs,ts,cts,mts,jsx,tsx}",
+  "!**/{test,spec}.{js,cjs,mjs,ts,cts,mts,jsx,tsx}",
   "!**/vitest.config.{js,cjs,mjs,ts,cts,mts}",
   "!**/vitest.workspace.{js,cjs,mjs,ts,cts,mts}",
   "!**/node_modules/vitest/**",
@@ -512,6 +513,42 @@ describe("Windows package verification", () => {
     ).rejects.toThrow(
       'windows-package/resource-inventory: undeclared package resource: "stale-resource.json"',
     );
+  });
+
+  it("accepts only ASAR-declared unpacked runtime files", async () => {
+    const fixture = await syntheticWindowsPackage();
+    const manifest = Buffer.from(
+      `${JSON.stringify({
+        ...sourceManifest,
+        dependencies: { ...sourceManifest.dependencies, jszip: "1.0.0" },
+      })}\n`,
+    );
+    await Promise.all([
+      writeFile(join(fixture.desktop, "package.json"), manifest),
+      fixture.writeArchive("package.json", manifest),
+      fixture.writeArchive(
+        "node_modules/jszip/package.json",
+        `${JSON.stringify({ name: "jszip", version: "1.0.0", main: "index.js" })}\n`,
+      ),
+      fixture.writeArchive("node_modules/jszip/index.js"),
+    ]);
+    const archive = join(fixture.application, "resources/app.asar");
+    await rm(archive, { force: true });
+    const packed = await createPackageWithOptions(fixture.archiveSource, archive, {
+      unpackDir: "node_modules/jszip",
+    });
+    await finished(packed);
+    await expect(
+      verifyWindowsPackageLayout(fixture.application, { desktopRoot: fixture.desktop }),
+    ).resolves.toBeDefined();
+
+    await writeFile(
+      join(fixture.application, "resources/app.asar.unpacked/node_modules/jszip/stale.js"),
+      "stale runtime\n",
+    );
+    await expect(
+      verifyWindowsPackageLayout(fixture.application, { desktopRoot: fixture.desktop }),
+    ).rejects.toThrow(/windows-package\/asar-inventory: undeclared unpacked resource/u);
   });
 
   it("rejects stale external resource bytes", async () => {
