@@ -639,12 +639,7 @@ export function createCredentialSettingsController(input: {
       }
       if (disposed || activeResetOperation !== resetOperation) return;
       if (generation !== operationGeneration) {
-        const repairCredential =
-          result.status === "refused" ? repairRequiredCredential(currentState) : null;
-        render({
-          status: "closed",
-          ...(repairCredential === null ? {} : { repairCredential }),
-        });
+        render({ status: "closed" });
         return;
       }
       releaseMutation();
