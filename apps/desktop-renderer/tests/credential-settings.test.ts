@@ -700,6 +700,53 @@ describe("credential settings controller", () => {
     expect(credentialChangesBlocked(controller.state(), false)).toBe(false);
   });
 
+  it("clears existing repair debt after a closed refused reset reconciles", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject, resetAllCredentials } = createSubject({
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      },
+      onReconciled,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() =>
+      expect(controller.state()).toMatchObject({
+        status: "error",
+        repairCredential: "anthropic",
+      }),
+    );
+
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    controller.close();
+    expect(controller.state()).toEqual({
+      status: "closed",
+      repairCredential: "anthropic",
+      resetUncertain: true,
+    });
+    resolveReset({ status: "refused", reason: "storage-failed" });
+
+    await vi.waitFor(() => {
+      expect(onReconciled).toHaveBeenCalledOnce();
+      expect(controller.state()).toEqual({ status: "closed" });
+    });
+
+    await controller.activate();
+    expect(controller.state().status).toBe("ready");
+    expect(onReconciled).toHaveBeenCalledOnce();
+  });
+
   it("keeps reset uncertainty when a closed reset cannot reload authoritative state", async () => {
     let resolveReset!: (result: CredentialResetResult) => void;
     const reset = new Promise<CredentialResetResult>((resolve) => {
