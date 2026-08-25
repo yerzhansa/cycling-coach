@@ -11,6 +11,7 @@ import {
   windowsReleaseArtifactNames,
 } from "./windows-release-plan.mjs";
 import { requireStableSemVer } from "./macos-release-plan.mjs";
+import { createWindowsAuthenticodeVerifyMode } from "./verify-windows-authenticode.mjs";
 
 export const WINDOWS_UPDATER_METADATA_MAX_BYTES = 16_384;
 
@@ -264,10 +265,17 @@ function parseArguments(arguments_) {
   let version;
   let commit;
   let authenticode;
+  let publisherDn;
+  let thumbprint;
+  let allowSelfSignedTest = false;
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
     if (!argument.startsWith("--") && directory === undefined) {
       directory = argument;
+      continue;
+    }
+    if (argument === "--allow-self-signed-test" && !allowSelfSignedTest) {
+      allowSelfSignedTest = true;
       continue;
     }
     const value = arguments_[index + 1];
@@ -276,14 +284,30 @@ function parseArguments(arguments_) {
     if (argument === "--version" && version === undefined) version = value;
     else if (argument === "--commit" && commit === undefined) commit = value;
     else if (argument === "--authenticode" && authenticode === undefined) authenticode = value;
+    else if (argument === "--publisher-dn" && publisherDn === undefined) publisherDn = value;
+    else if (argument === "--thumbprint" && thumbprint === undefined) thumbprint = value;
     else fail("Windows release verification failed");
   }
-  return { directory, version, commit, authenticode };
+  return { directory, version, commit, authenticode, publisherDn, thumbprint, allowSelfSignedTest };
 }
 
 async function main() {
   const arguments_ = parseArguments(process.argv.slice(2));
-  if (arguments_.authenticode !== WINDOWS_AUTHENTICODE_PENDING) {
+  let authenticodeMode;
+  if (
+    arguments_.authenticode === WINDOWS_AUTHENTICODE_PENDING &&
+    arguments_.publisherDn === undefined &&
+    arguments_.thumbprint === undefined &&
+    !arguments_.allowSelfSignedTest
+  ) {
+    authenticodeMode = WINDOWS_AUTHENTICODE_PENDING;
+  } else if (arguments_.authenticode === "verify" && arguments_.publisherDn !== undefined) {
+    authenticodeMode = createWindowsAuthenticodeVerifyMode({
+      expectedPublisherDn: arguments_.publisherDn,
+      expectedThumbprint: arguments_.thumbprint,
+      allowSelfSignedTest: arguments_.allowSelfSignedTest,
+    });
+  } else {
     fail("Authenticode verification mode is required");
   }
   const result = await verifyWindowsReleaseAssets(
@@ -291,7 +315,8 @@ async function main() {
     {
       version: arguments_.version,
       commit: arguments_.commit,
-      authenticode: arguments_.authenticode,
+      expectedPublisherName: arguments_.publisherDn,
+      authenticode: authenticodeMode,
     },
     { notice: (message) => process.stderr.write(`${message}\n`) },
   );

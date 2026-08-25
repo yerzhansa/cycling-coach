@@ -22,6 +22,8 @@
     "test:windows-parity-contract": "vitest run tests/windows-parity-contract.test.ts",
     "verify:package-layout": "node scripts/verify-package-layout.mjs",
     "verify:win-package": "node scripts/verify-windows-package.mjs",
+    "verify:win-authenticode": "node scripts/verify-windows-authenticode.mjs",
+    "verify:win-pe-inventory": "node scripts/windows-pe-inventory.mjs",
     "verify:win-release": "node scripts/verify-windows-release.mjs",
     "upload:win-release": "node scripts/upload-windows-release.mjs",
     "verify:mac-release": "node scripts/verify-macos-release.mjs",

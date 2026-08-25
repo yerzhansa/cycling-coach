@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { stringify } from "yaml";
 import {
   WINDOWS_AUTHENTICODE_PENDING,
+  WINDOWS_PUBLISHER_DN_PLACEHOLDER,
   assertKnownWindowsReleaseAssets,
   createWindowsReleasePlan,
   parseWindowsReleaseUpdaterMetadata,
@@ -105,6 +106,8 @@ describe("Windows release plan", () => {
       arch: "x64",
       mode: "steady",
       authenticode: WINDOWS_AUTHENTICODE_PENDING,
+      publisherDn: WINDOWS_PUBLISHER_DN_PLACEHOLDER,
+      publisherDnIsPlaceholder: true,
     });
     expect(plan.builderOptions.config.forceCodeSigning).toBe(true);
     expect(plan.builderOptions.config.nsis.differentialPackage).toBe(true);
@@ -113,9 +116,20 @@ describe("Windows release plan", () => {
     ]);
     expect(plan.builderOptions.publish).toBe("never");
     expect(plan.builderOptions.config.win).toEqual({
+      publisherName: [WINDOWS_PUBLISHER_DN_PLACEHOLDER],
       verifyUpdateCodeSignature: true,
       target: [{ target: "nsis", arch: ["x64"] }],
     });
+    expect(plan.updaterMetadata.publisherName).toBe(WINDOWS_PUBLISHER_DN_PLACEHOLDER);
+    const customPublisherDn = "CN=Enduragent Test Publisher, O=Enduragent Test";
+    const customPlan = createWindowsReleasePlan(planInput({ publisherDn: customPublisherDn }));
+    expect(customPlan.publisherDn).toBe(customPublisherDn);
+    expect(customPlan.publisherDnIsPlaceholder).toBe(false);
+    expect(customPlan.builderOptions.config.win.publisherName).toEqual([customPublisherDn]);
+    expect(customPlan.updaterMetadata.publisherName).toBe(customPublisherDn);
+    expect(() => createWindowsReleasePlan(planInput({ publisherDn: "  " }))).toThrow(
+      "Windows publisher DN is invalid",
+    );
     expect(Object.isFrozen(plan)).toBe(true);
   });
 
