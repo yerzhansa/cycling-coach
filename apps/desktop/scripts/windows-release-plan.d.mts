@@ -22,6 +22,7 @@ export interface WindowsReleaseInput {
   readonly baselineVersion?: string;
   readonly repositoryRoot?: string;
   readonly desktopRoot?: string;
+  readonly publisherDn?: string;
 }
 
 export interface WindowsReleaseBuilderOptions {
@@ -40,6 +41,7 @@ export interface WindowsReleaseBuilderOptions {
       { readonly provider: "generic"; readonly url: string; readonly channel: "latest" },
     ];
     readonly win: {
+      readonly publisherName: readonly [string];
       readonly verifyUpdateCodeSignature: true;
       readonly target: readonly [{ readonly target: "nsis"; readonly arch: readonly ["x64"] }];
     };
@@ -59,6 +61,8 @@ export interface WindowsReleasePlan {
   readonly mode: WindowsReleaseMode;
   readonly baselineVersion: string | null;
   readonly feedUrl: string;
+  readonly publisherDn: string;
+  readonly publisherDnIsPlaceholder: boolean;
   readonly artifactNames: WindowsReleaseArtifactNames;
   readonly assetNames: readonly string[];
   readonly updaterMetadata: WindowsReleaseUpdaterMetadata;
@@ -70,6 +74,7 @@ export const WINDOWS_RELEASE_ARCH: "x64";
 export const WINDOWS_RELEASE_PLATFORM: "win32";
 export const WINDOWS_RELEASE_METADATA_NAME: "latest.yml";
 export const WINDOWS_AUTHENTICODE_PENDING: "pending-w19";
+export const WINDOWS_PUBLISHER_DN_PLACEHOLDER: "CN=ENDURAGENT PUBLISHER DN PLACEHOLDER, O=PLACEHOLDER";
 export function safeWindowsReleasePlanMessage(error: unknown): string | undefined;
 export function requireReleaseCommit(value: unknown): string;
 export function windowsReleaseArtifactNames(version: string): WindowsReleaseArtifactNames;

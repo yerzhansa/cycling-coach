@@ -21,12 +21,15 @@ const safeWindowsReleasePlanMessages = new Set([
   "steady Windows release requires a lower stable baseline version",
   "release updater metadata is invalid",
   "release updater publisher name mismatch",
+  "Windows publisher DN is invalid",
 ]);
 
 export const WINDOWS_RELEASE_ARCH = "x64";
 export const WINDOWS_RELEASE_PLATFORM = "win32";
 export const WINDOWS_RELEASE_METADATA_NAME = "latest.yml";
 export const WINDOWS_AUTHENTICODE_PENDING = "pending-w19";
+export const WINDOWS_PUBLISHER_DN_PLACEHOLDER =
+  "CN=ENDURAGENT PUBLISHER DN PLACEHOLDER, O=PLACEHOLDER";
 
 function exactObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -47,7 +50,7 @@ function compareStableVersions(left, right) {
   return 0;
 }
 
-function freezeBuilderOptions(desktopRoot, version, feedUrl) {
+function freezeBuilderOptions(desktopRoot, version, feedUrl, publisherDn) {
   const publish = Object.freeze([
     Object.freeze({ provider: "generic", url: feedUrl, channel: "latest" }),
   ]);
@@ -60,7 +63,11 @@ function freezeBuilderOptions(desktopRoot, version, feedUrl) {
     forceCodeSigning: true,
     extraMetadata: Object.freeze({ version, enduragentDesktopRelease: true }),
     publish,
-    win: Object.freeze({ verifyUpdateCodeSignature: true, target }),
+    win: Object.freeze({
+      publisherName: Object.freeze([publisherDn]),
+      verifyUpdateCodeSignature: true,
+      target,
+    }),
     nsis: Object.freeze({
       artifactName: `Enduragent-${version}-x64.\${ext}`,
       differentialPackage: true,
@@ -192,6 +199,11 @@ export function createWindowsReleasePlan(input) {
   const version = requireStableSemVer(input.version);
   const commit = requireReleaseCommit(input.commit);
   const feedUrl = requireGenericFeedUrl(input.feedUrl);
+  const publisherDn =
+    input.publisherDn === undefined ? WINDOWS_PUBLISHER_DN_PLACEHOLDER : input.publisherDn?.trim();
+  if (typeof publisherDn !== "string" || publisherDn.length === 0) {
+    throw new TypeError("Windows publisher DN is invalid");
+  }
   if (input.mode !== "genesis" && input.mode !== "steady") {
     throw new TypeError("Windows release mode must be genesis or steady");
   }
@@ -221,6 +233,7 @@ export function createWindowsReleasePlan(input) {
     url: feedUrl,
     channel: "latest",
     updaterCacheDirName: DESKTOP_UPDATER_CACHE_DIRECTORY,
+    publisherName: publisherDn,
   });
   return Object.freeze({
     version,
@@ -231,10 +244,12 @@ export function createWindowsReleasePlan(input) {
     mode: input.mode,
     baselineVersion,
     feedUrl,
+    publisherDn,
+    publisherDnIsPlaceholder: publisherDn === WINDOWS_PUBLISHER_DN_PLACEHOLDER,
     artifactNames,
     assetNames,
     updaterMetadata,
     authenticode: WINDOWS_AUTHENTICODE_PENDING,
-    builderOptions: freezeBuilderOptions(desktopRoot, version, feedUrl),
+    builderOptions: freezeBuilderOptions(desktopRoot, version, feedUrl, publisherDn),
   });
 }

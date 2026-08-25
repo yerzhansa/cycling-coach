@@ -167,6 +167,9 @@ describe("Windows release artifact verification", () => {
     );
     expect(success.status).toBe(0);
     expect(success.stdout).toMatch(/^Windows release envelope verified [0-9a-f]{64}\n$/u);
+    expect(success.stderr).toBe(
+      "Authenticode verification is pending W19; signature not verified\n",
+    );
     const failure = spawnSync(
       process.execPath,
       [script, directory, "--version", version, "--authenticode", "verified"],

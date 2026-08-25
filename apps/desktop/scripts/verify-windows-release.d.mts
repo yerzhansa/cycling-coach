@@ -4,6 +4,8 @@ import type { WindowsReleaseArtifactNames } from "./windows-release-plan.mjs";
 export type WindowsAuthenticodeMode =
   | "pending-w19"
   | {
+      readonly mode?: "verify";
+      readonly expectedPublisherDn?: string;
       readonly verify: (
         installerPath: string,
         context: { readonly version: string; readonly publisherName?: string },
