@@ -14,6 +14,20 @@ import type { SourceProvenance } from "./provenance.js";
 
 export type { CoachEngine } from "@enduragent/coach-contract";
 export type { ChatStreamTimeouts } from "./host-ports.js";
+export {
+  createAttachmentCapabilityResolver,
+  transportForProvider,
+  type ActiveAttachmentModel,
+  type AttachmentCapabilityResolver,
+  type AttachmentCapabilityResolverOptions,
+  type NativeMediaTransport,
+} from "./attachment-capabilities.js";
+export {
+  parseOpenRouterModelMetadataSnapshot,
+  type OpenRouterModelMetadataCache,
+  type OpenRouterModelMetadataSnapshot,
+  type ResolveOpenRouterModelMetadataInput,
+} from "./openrouter-model-metadata.js";
 export type {
   AthleteDataReaderPort,
   AthleteReadResult,
@@ -25,6 +39,8 @@ export type {
   ChatAttachmentActivitySummary,
   ChatAttachmentTurnPort,
   ChatAttachmentTurnPreparation,
+  ChatNativeMediaInput,
+  AttachmentCapabilitiesPort,
   CoachDecisionStorePort,
   ConversationResetInput,
   EngineConfig,
@@ -164,24 +180,44 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       }
       let interrupted = false;
       try {
+        const capabilities = selected.some((item) => item.attachmentIds.length > 0)
+          ? await input.ports.attachmentCapabilities?.resolve()
+          : undefined;
         const attachmentPreparation = await input.ports.chatAttachments?.prepareQueuedTurn({
           chatId,
           messages: selected.map((item) => ({
             messageId: item.messageId,
             attachmentIds: item.attachmentIds,
           })),
+          ...(capabilities === undefined ? {} : { capabilities }),
         });
-        const normalizedActivityContext =
+        const normalizedAttachmentContext = [
           attachmentPreparation === undefined
             ? undefined
-            : activityContext(attachmentPreparation.activities);
+            : activityContext(attachmentPreparation.activities),
+          attachmentPreparation?.attachmentContext,
+        ]
+          .filter((value): value is string => value !== undefined && value.length > 0)
+          .join("\n\n");
         let decision;
         const text = await agent.chat(
           chatId,
           queueText(selected),
-          normalizedActivityContext === undefined
+          normalizedAttachmentContext.length === 0 &&
+            attachmentPreparation?.untrustedAttachmentText === undefined &&
+            (attachmentPreparation?.nativeMedia?.length ?? 0) === 0
             ? undefined
-            : { attachmentContext: normalizedActivityContext },
+            : {
+                ...(normalizedAttachmentContext.length === 0
+                  ? {}
+                  : { attachmentContext: normalizedAttachmentContext }),
+                ...(attachmentPreparation?.nativeMedia === undefined
+                  ? {}
+                  : { nativeMedia: attachmentPreparation.nativeMedia }),
+                ...(attachmentPreparation?.untrustedAttachmentText === undefined
+                  ? {}
+                  : { untrustedAttachmentText: attachmentPreparation.untrustedAttachmentText }),
+              },
           (event) => {
             if (event.type === "interrupted") interrupted = true;
             onEvent?.(event);

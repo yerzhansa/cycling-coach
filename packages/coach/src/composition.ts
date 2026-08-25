@@ -44,10 +44,13 @@ import {
   type StoredProfileSnapshot,
 } from "@enduragent/core";
 import {
+  createAttachmentCapabilityResolver,
   createCoachEngine,
+  transportForProvider,
   type CreateCoachEngineInput,
   type EngineConfig,
   type EngineHostPorts,
+  type ChatAttachmentTurnPort,
   type ModelTransportDecorator,
   type ReferenceStateSnapshot,
 } from "@enduragent/engine";
@@ -70,6 +73,8 @@ import { createAuthoredIdentity, type AthleteHome } from "@enduragent/kernel-nod
 import {
   createManagedActivityReader,
   createManagedChatAttachmentStore,
+  createManagedDocumentReader,
+  createManagedMediaReader,
 } from "@enduragent/kernel-node/chat-attachments";
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import type { CoachStoreWriterContext } from "./runtime.js";
@@ -156,6 +161,8 @@ import { createManagedChatAttachmentOperations } from "./attachment-operations.j
 import { createActivityAttachmentOperations } from "./activity-attachment-operations.js";
 import { createWorkoutAttachmentOperations } from "./workout-attachment-operations.js";
 import { createManagedWorkoutReader } from "@enduragent/sport-cycling/workout-import";
+import { createPersistentOpenRouterModelMetadataCache } from "./openrouter-model-metadata-cache.js";
+import { createDocumentMediaAttachmentOperations } from "./document-media-attachment-operations.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -1011,12 +1018,51 @@ export async function createLocalCoachComposition(
       runExclusive: (work) => runtime!.runExclusive(work),
       now,
     });
+    const documentMediaAttachmentOperations = createDocumentMediaAttachmentOperations({
+      repository: attachmentRepository,
+      documents: createManagedDocumentReader({
+        objects: attachmentObjects,
+        limits: {
+          documentBytes: CHAT_ATTACHMENT_LIMITS.documentBytes,
+          extractedTextChars: CHAT_ATTACHMENT_LIMITS.extractedTextChars,
+          pdfPages: CHAT_ATTACHMENT_LIMITS.pdfPages,
+          pdfVisualPages: CHAT_ATTACHMENT_LIMITS.pdfVisualPages,
+          pdfUsefulTextCharsPerPage: CHAT_ATTACHMENT_LIMITS.pdfUsefulTextCharsPerPage,
+          docxEntries: CHAT_ATTACHMENT_LIMITS.docxEntries,
+          docxExpandedBytes: CHAT_ATTACHMENT_LIMITS.docxExpandedBytes,
+          docxCompressionRatio: CHAT_ATTACHMENT_LIMITS.docxCompressionRatio,
+          csvRows: CHAT_ATTACHMENT_LIMITS.csvRows,
+          csvColumns: CHAT_ATTACHMENT_LIMITS.csvColumns,
+          csvRecordChars: CHAT_ATTACHMENT_LIMITS.csvRecordChars,
+          parserMs: CHAT_ATTACHMENT_LIMITS.parserMs,
+          parserOldGenerationMiB: CHAT_ATTACHMENT_LIMITS.parserOldGenerationMiB,
+        },
+      }),
+      media: createManagedMediaReader({
+        objects: attachmentObjects,
+        limits: {
+          imageBytes: CHAT_ATTACHMENT_LIMITS.imageBytes,
+          imageDimension: CHAT_ATTACHMENT_LIMITS.imageDimension,
+          imagePixels: CHAT_ATTACHMENT_LIMITS.imagePixels,
+          documentBytes: CHAT_ATTACHMENT_LIMITS.documentBytes,
+          pdfPages: CHAT_ATTACHMENT_LIMITS.pdfPages,
+          pdfVisualPages: CHAT_ATTACHMENT_LIMITS.pdfVisualPages,
+          pdfVisualPixels: CHAT_ATTACHMENT_LIMITS.pdfVisualPixels,
+          pdfPageDimension: CHAT_ATTACHMENT_LIMITS.pdfPageDimension,
+          parserMs: CHAT_ATTACHMENT_LIMITS.parserMs,
+          parserOldGenerationMiB: CHAT_ATTACHMENT_LIMITS.parserOldGenerationMiB,
+        },
+      }),
+      runExclusive: (work) => runtime!.runExclusive(work),
+      now,
+    });
     const attachmentOperations = createManagedChatAttachmentOperations({
       repository: attachmentRepository,
       objects: attachmentObjects,
       runExclusive: (work) => runtime!.runExclusive(work),
       now,
       onAdmitted: async (admitted) => {
+        await documentMediaAttachmentOperations.preprocessAdmitted(admitted);
         await activityAttachmentOperations.preprocessAdmitted(admitted);
         await workoutAttachmentOperations.preprocessAdmitted(admitted);
       },
@@ -1035,6 +1081,9 @@ export async function createLocalCoachComposition(
       resolveUserTimezone(approvedConfig().session.timezone),
     ).importLegacyPlan(join(input.home.root, "plans", "current-plan.json"));
     const getAccessToken = createAccessTokenReader(input.home.configDir);
+    const openRouterModelMetadata = createPersistentOpenRouterModelMetadataCache(
+      input.home.configDir,
+    );
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
       input.context.store,
     );
@@ -1071,6 +1120,11 @@ export async function createLocalCoachComposition(
         { platform: dependencies.platform },
       );
       const projectedConfig = engineConfigFromConfig(effectiveConfig);
+      const attachmentCapabilityResolver = createAttachmentCapabilityResolver({
+        openRouterCache: openRouterModelMetadata,
+        metadataMaxAgeMs: CHAT_ATTACHMENT_LIMITS.capabilityMetadataMaxAgeMs,
+        now,
+      });
       const legacyClient =
         config.intervals.apiKey.length === 0
           ? null
@@ -1079,12 +1133,37 @@ export async function createLocalCoachComposition(
               athleteId: config.intervals.athleteId,
             });
       const confirmations = new ConfirmationGate(now);
+      const chatAttachments: ChatAttachmentTurnPort = {
+        prepareQueuedTurn: async (request) => {
+          const activity = await activityAttachmentOperations.turnPort.prepareQueuedTurn(request);
+          const documentMedia = await documentMediaAttachmentOperations.prepareLinkedTurn(request);
+          return { ...activity, ...documentMedia };
+        },
+        completeQueuedTurn: async (request) => {
+          await activityAttachmentOperations.turnPort.completeQueuedTurn(request);
+          await documentMediaAttachmentOperations.completeLinkedTurn(request);
+        },
+      };
       const ports: EngineHostPorts = {
         config: projectedConfig,
         memory,
         planPersistence: createPlanPersistence(timezone),
         chatStore: conversationStore,
-        chatAttachments: activityAttachmentOperations.turnPort,
+        chatAttachments,
+        attachmentCapabilities: {
+          resolve: (signal) =>
+            attachmentCapabilityResolver.resolve(
+              {
+                provider: projectedConfig.llm.provider,
+                model: projectedConfig.llm.model,
+                transport: transportForProvider(projectedConfig.llm.provider),
+                ...(projectedConfig.llm.apiKey.length === 0
+                  ? {}
+                  : { apiKey: projectedConfig.llm.apiKey }),
+              },
+              signal,
+            ),
+        },
         transcriptWriter: conversationStore,
         coachDecisions: conversationStore,
         secrets: { resolve: resolveSecretRef },

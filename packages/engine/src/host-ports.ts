@@ -1,4 +1,5 @@
 import type {
+  AttachmentCapabilitiesReadModel,
   AthleteState,
   ChatQueueSnapshot,
   CoachDecisionAnswer,
@@ -185,8 +186,20 @@ export interface ChatAttachmentActivitySummary {
   }[];
 }
 
+export interface ChatNativeMediaInput {
+  readonly attachmentId: string;
+  readonly mediaType: "image/png" | "image/jpeg" | "image/webp";
+  readonly bytes: Uint8Array;
+  readonly width: number;
+  readonly height: number;
+  readonly pageNumber?: number;
+}
+
 export interface ChatAttachmentTurnPreparation {
   readonly activities: readonly ChatAttachmentActivitySummary[];
+  readonly attachmentContext?: string;
+  readonly untrustedAttachmentText?: string;
+  readonly nativeMedia?: readonly ChatNativeMediaInput[];
 }
 
 export interface ChatAttachmentTurnPort {
@@ -196,11 +209,16 @@ export interface ChatAttachmentTurnPort {
       readonly messageId: string;
       readonly attachmentIds: readonly string[];
     }[];
+    readonly capabilities?: AttachmentCapabilitiesReadModel;
   }): Promise<ChatAttachmentTurnPreparation>;
   completeQueuedTurn(input: {
     readonly chatId: string;
     readonly messageIds: readonly string[];
   }): Promise<void>;
+}
+
+export interface AttachmentCapabilitiesPort {
+  resolve(signal?: AbortSignal): Promise<AttachmentCapabilitiesReadModel>;
 }
 
 export type TranscriptConversationBoundaryReason = "explicit-reset" | "stale-reset";
@@ -436,6 +454,7 @@ export interface EngineHostPorts {
   readonly planPersistence?: PlanPersistencePort;
   readonly chatStore: ChatStorePort;
   readonly chatAttachments?: ChatAttachmentTurnPort;
+  readonly attachmentCapabilities?: AttachmentCapabilitiesPort;
   readonly transcriptWriter: TranscriptWriterPort;
   readonly coachDecisions?: CoachDecisionStorePort;
   readonly secrets: SecretsPort;

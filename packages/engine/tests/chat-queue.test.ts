@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cyclingSport } from "@enduragent/sport-cycling";
 import { createCoachEngine } from "../src/index.js";
 import type { EngineHostPorts, ModelTransportRequest } from "../src/host-ports.js";
-import type { ChatAttachmentTurnPort } from "../src/host-ports.js";
+import type { AttachmentCapabilitiesPort, ChatAttachmentTurnPort } from "../src/host-ports.js";
 import type { GenerateResult, Sport } from "../src/sport.js";
 import { baseAgentConfig } from "./helpers/base-agent-config.js";
 
@@ -31,6 +31,7 @@ function setup(
   generate: (request: ModelTransportRequest) => Promise<GenerateResult> = async () =>
     generated("Done"),
   chatAttachments?: ChatAttachmentTurnPort,
+  attachmentCapabilities?: AttachmentCapabilitiesPort,
 ) {
   if (!roots.includes(root)) roots.push(root);
   const base = baseAgentConfig(root);
@@ -41,6 +42,7 @@ function setup(
     randomId: () => `id-${++sequence}`,
     modelTransportDecorator: () => ({ generate }),
     ...(chatAttachments === undefined ? {} : { chatAttachments }),
+    ...(attachmentCapabilities === undefined ? {} : { attachmentCapabilities }),
   };
   return {
     root,
@@ -156,6 +158,79 @@ describe("engine durable chat queue", () => {
       items: [{ messageId: "id-2", attachmentIds: ["attachment-1"] }],
       retryRequired: { queuedMessageIds: ["id-1"] },
     });
+  });
+
+  it("revalidates capability before Send and keeps provider image bytes out of history", async () => {
+    const order: string[] = [];
+    const capabilities: Awaited<ReturnType<AttachmentCapabilitiesPort["resolve"]>> = {
+      schemaVersion: 1,
+      active: { provider: "openai", model: "gpt-5.6-sol", transport: "ai-sdk" },
+      documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+      completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+      plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+      images: {
+        enabled: true,
+        mediaTypes: ["image/png", "image/jpeg", "image/webp"],
+        reason: "supported",
+        source: "maintained_catalogue",
+        checkedAt: "2026-08-26T00:00:00.000Z",
+      },
+    };
+    const mediaBytes = new Uint8Array([137, 80, 78, 71]);
+    const prepareQueuedTurn = vi.fn(async (request) => {
+      order.push("prepared");
+      expect(request.capabilities).toEqual(capabilities);
+      return {
+        activities: [],
+        nativeMedia: [
+          {
+            attachmentId: "attachment-1",
+            mediaType: "image/png" as const,
+            bytes: mediaBytes,
+            width: 1,
+            height: 1,
+          },
+        ],
+      };
+    });
+    const requests: ModelTransportRequest[] = [];
+    const value = setup(
+      undefined,
+      async (request) => {
+        order.push("coach");
+        requests.push(request);
+        return generated("Reviewed image");
+      },
+      { prepareQueuedTurn, completeQueuedTurn: async () => {} },
+      {
+        resolve: async () => {
+          order.push("capability");
+          return capabilities;
+        },
+      },
+    );
+    await value.engine.enqueueChatMessage!({
+      chatId: "desktop",
+      submissionId: "submission-image",
+      text: "Review this image",
+      attachmentIds: ["attachment-1"],
+    });
+    await value.engine.resumeChatQueue!({ chatId: "desktop" });
+    expect(order).toEqual(["capability", "prepared", "coach"]);
+    const providerUser = requests[0]?.options.messages?.at(-1);
+    expect(providerUser).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: expect.stringContaining("Review this image") },
+        { type: "image", image: mediaBytes, mediaType: "image/png" },
+      ],
+    });
+    const history = value.ports.chatStore.load("desktop").messages;
+    expect(history).toMatchObject([
+      { role: "user", content: "Review this image" },
+      { role: "assistant", content: "Reviewed image" },
+    ]);
+    expect(JSON.stringify(history)).not.toContain("137,80,78,71");
   });
 
   it("groups consecutive ordinary messages and stops at a command barrier", async () => {

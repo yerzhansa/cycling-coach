@@ -19,6 +19,7 @@ import type {
 import { RequestUserDecisionResultSchema } from "@enduragent/coach-contract";
 import type {
   ChatStorePort,
+  ChatNativeMediaInput,
   EngineConfig,
   EngineHostPorts,
   LoggerPort,
@@ -34,14 +35,18 @@ import { ATHLETE_CONTEXT_MAX_CHARS, buildSystemPrompt, staticRuleBlocks } from "
 import {
   computeAssembledHash,
   computeTemplateHash,
-  PROMPT_LINEAGE_SCHEMA_VERSION,
+  promptLineageSchemaVersion,
   sha256_16,
 } from "./prompt-lineage.js";
 import { withSessionLock } from "./session-lock.js";
 import { capToolResult, TOOL_RESULT_SHARE } from "./tool-result-cap.js";
 import { memoizeReadTool, evictMemoryReadEntries } from "./read-memoizer.js";
 import { createTurnContext, getTurnContext, type TurnContext } from "./turn-context.js";
-import { markUntrustedResult, isUntrustedEnvelope } from "./prompt-fence.js";
+import {
+  isUntrustedEnvelope,
+  markUntrustedResult,
+  wrapAthleteContextFence,
+} from "./prompt-fence.js";
 import { renderGarminAttribution } from "./garmin-attribution.js";
 import { provenanceFromToolResult } from "./tool-provenance.js";
 import {
@@ -83,6 +88,7 @@ import {
   decisionContinuationMessage,
   decisionRequestInput,
 } from "./coach-decision-tool.js";
+import { attachNativeMediaToCurrentUserMessage } from "../native-media-message.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -689,6 +695,8 @@ export class CoachAgent {
       resolvedCs?: ResolvedCs | null;
       referenceProvenance?: SourceProvenance;
       attachmentContext?: string;
+      untrustedAttachmentText?: string;
+      nativeMedia?: readonly ChatNativeMediaInput[];
     },
     onEvent?: TurnEventHandler,
     onDecision?: (decision: CoachDecisionReadModel) => void,
@@ -905,6 +913,13 @@ export class CoachAgent {
         // prefix carries only the TZ name, not the date. Idempotent: safe
         // across the retry/compaction loop below.
         const userMessageWithTime = appendCurrentTimeLine(userMessage, this.tz);
+        const providerUserMessage =
+          turn?.untrustedAttachmentText === undefined
+            ? userMessageWithTime
+            : `${userMessageWithTime}\n\n${wrapAthleteContextFence({
+                text: turn.untrustedAttachmentText,
+                maxChars: 200_000,
+              })}`;
 
         // One-turn model-visible archive marker: after an automatic reset, tell
         // the model to disclose the fresh session. Not persisted (it is rebuilt
@@ -1000,9 +1015,14 @@ export class CoachAgent {
                 contextProvenance,
                 provenanceOfMessages(messages),
               );
+              const providerMessages = attachNativeMediaToCurrentUserMessage(
+                messages,
+                providerUserMessage,
+                turn?.nativeMedia ?? [],
+              );
               const result = await this.llm.generate({
                 system: this.systemPrompt,
-                messages,
+                messages: providerMessages,
                 tools: this.tools,
                 stopWhen: stepCountIs(10),
                 maxSteps: 10,
@@ -1072,7 +1092,7 @@ export class CoachAgent {
               const recovered = await this.recoverStepExhaustedText(
                 text,
                 finishReason,
-                messages,
+                providerMessages,
                 cacheKey,
                 turnBudget,
                 onAttemptTextDelta,
@@ -1101,7 +1121,7 @@ export class CoachAgent {
                 toolSchemas: this.tools,
                 model: this.config.llm.model,
               }));
-              const assembledHash = computeAssembledHash(this.systemPrompt, messages);
+              const assembledHash = computeAssembledHash(this.systemPrompt, providerMessages);
 
               // Append BOTH after success as one atomic write — JSONL unchanged
               // on failure, no dangling user line on a partial write.
@@ -1112,7 +1132,7 @@ export class CoachAgent {
                   assembledHash,
                   provider: this.config.llm.provider,
                   model: this.config.llm.model,
-                  lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                  lineageVersion: promptLineageSchemaVersion(providerMessages),
                   provenance: ctx.provenance.value,
                 });
               } catch (persistErr) {
@@ -1355,13 +1375,18 @@ export class CoachAgent {
               toolSchemas: this.tools,
               model: this.config.llm.model,
             }));
+            const providerMessages = attachNativeMediaToCurrentUserMessage(
+              messages,
+              providerUserMessage,
+              turn?.nativeMedia ?? [],
+            );
             try {
               this.chatStore.appendTurn(chatId, userMessage, streamedText, {
                 templateHash,
-                assembledHash: computeAssembledHash(this.systemPrompt, messages),
+                assembledHash: computeAssembledHash(this.systemPrompt, providerMessages),
                 provider: this.config.llm.provider,
                 model: this.config.llm.model,
-                lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+                lineageVersion: promptLineageSchemaVersion(providerMessages),
                 provenance: ctx.provenance.value,
               });
             } catch (persistErr) {
@@ -1799,7 +1824,7 @@ export class CoachAgent {
       assembledHash: computeAssembledHash(lineageInput.system, lineageInput.messages),
       provider: this.config.llm.provider,
       model: this.config.llm.model,
-      lineageVersion: PROMPT_LINEAGE_SCHEMA_VERSION,
+      lineageVersion: promptLineageSchemaVersion(lineageInput.messages),
     };
     const completed = store.completeDecisionContinuation({
       chatId: decision.chatId,

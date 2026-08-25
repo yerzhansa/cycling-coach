@@ -32,6 +32,24 @@ describe("messageText", () => {
       }),
     ).toBe("hi there");
   });
+
+  it("uses bounded placeholders for binary image and file parts", () => {
+    expect(
+      messageText({
+        role: "user",
+        content: [
+          { type: "text", text: "inspect" },
+          { type: "image", image: new Uint8Array([1, 2, 3]), mediaType: "image/png" },
+          {
+            type: "file",
+            data: new Uint8Array([4, 5]),
+            mediaType: "application/pdf",
+            filename: "sample.pdf",
+          },
+        ],
+      }),
+    ).toBe("inspect[image:image/png:3][file:application/pdf:2]");
+  });
 });
 
 describe("estimateMessagesTokens", () => {
