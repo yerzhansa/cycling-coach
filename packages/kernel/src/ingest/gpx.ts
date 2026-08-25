@@ -23,6 +23,12 @@ import {
   type XmlValidationIssue,
 } from "./xml-common.js";
 import type { XmlChannel, XmlParseReport, XmlSession } from "./xml-types.js";
+import type {
+  CourseRoute,
+  CourseRouteParseResult,
+  CourseRoutePoint,
+  CourseRouteSegment,
+} from "./course-route.js";
 
 const GPX_10 = "http://www.topografix.com/GPX/1/0";
 const GPX_11 = "http://www.topografix.com/GPX/1/1";
@@ -310,5 +316,67 @@ export function parseGpx(xml: string): GpxParseReport {
   } catch (error) {
     if (!(error instanceof XmlViolation)) throw error;
     return { format: "gpx", sessions: [], quarantine: error.quarantine };
+  }
+}
+
+function parseCoursePoint(point: Element, core: string): CourseRoutePoint {
+  const latitudeNode = point.getAttributeNode("lat");
+  const longitudeNode = point.getAttributeNode("lon");
+  if (!latitudeNode) throw quarantine("xml.missing_required", attributePath(point, "lat"));
+  if (!longitudeNode) throw quarantine("xml.missing_required", attributePath(point, "lon"));
+  const latitude = parseDecimal(latitudeNode.value, attributePath(point, "lat"));
+  const longitude = parseDecimal(longitudeNode.value, attributePath(point, "lon"));
+  if (latitude < -90 || latitude > 90) {
+    throw quarantine("xml.invalid_coordinate", attributePath(point, "lat"));
+  }
+  if (longitude < -180 || longitude > 180) {
+    throw quarantine("xml.invalid_coordinate", attributePath(point, "lon"));
+  }
+  const elevations = many(point, core, "ele");
+  if (elevations.length > 1) throw quarantine("xml.duplicate", elementPath(elevations[1]!));
+  const elevation = elevations[0];
+  return Object.freeze({
+    latitude,
+    longitude,
+    elevationM: elevation ? parseDecimal(textValue(elevation), elementPath(elevation)) : null,
+  });
+}
+
+function parseCourseSegments(root: Element, core: string): readonly CourseRouteSegment[] {
+  const result: CourseRouteSegment[] = [];
+  for (const track of many(root, core, "trk")) {
+    for (const segment of many(track, core, "trkseg")) {
+      const routePoints = many(segment, core, "trkpt").map((point) => parseCoursePoint(point, core));
+      if (routePoints.length > 0) result.push(Object.freeze({ points: Object.freeze(routePoints) }));
+    }
+  }
+  for (const route of many(root, core, "rte")) {
+    const routePoints = many(route, core, "rtept").map((point) => parseCoursePoint(point, core));
+    if (routePoints.length > 0) result.push(Object.freeze({ points: Object.freeze(routePoints) }));
+  }
+  return Object.freeze(result);
+}
+
+export function parseGpxCourse(xml: string): CourseRouteParseResult {
+  try {
+    const root = validateDocumentShell(parseXmlDocument(preprocessXml(xml)));
+    const core = root.namespaceURI ?? "";
+    if (root.localName !== "gpx" || (core !== GPX_10 && core !== GPX_11)) {
+      throw quarantine("xml.namespace", "$");
+    }
+    const version = root.getAttributeNode("version");
+    const expected = core === GPX_11 ? "1.1" : "1.0";
+    if (!version || version.namespaceURI || version.value.trim() !== expected) {
+      throw quarantine("xml.namespace", "$/@version");
+    }
+    const segments = parseCourseSegments(root, core);
+    if (!segments.some((segment) => segment.points.length >= 2)) {
+      return { ok: false, reason: "route-missing", detail: "The GPX file does not contain a usable route." };
+    }
+    const route: CourseRoute = Object.freeze({ format: "gpx", segments });
+    return { ok: true, route };
+  } catch (error) {
+    if (!(error instanceof XmlViolation)) throw error;
+    return { ok: false, reason: "unreadable", detail: error.quarantine.message };
   }
 }

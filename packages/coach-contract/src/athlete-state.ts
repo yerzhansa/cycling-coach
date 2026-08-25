@@ -324,6 +324,10 @@ export const PlanItemSchema = z
     name: z.string().nullable(),
     category: z.string().min(1),
     workoutType: z.string().min(1),
+    durationSeconds: z.number().int().nonnegative().nullable().optional(),
+    load: z.number().finite().nonnegative().nullable().optional(),
+    description: z.string().nullable().optional(),
+    workoutDoc: z.unknown().nullable().optional(),
   })
   .strict();
 

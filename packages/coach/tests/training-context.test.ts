@@ -123,6 +123,10 @@ function project(overrides: Partial<Parameters<typeof projectCyclingTrainingCont
         start_date_local: "2026-07-20T08:00:00",
         name: null,
         type: "Ride",
+        moving_time: 5_400,
+        icu_training_load: 120,
+        description: "Race-specific endurance",
+        workout_doc: { steps: [{ duration: 300 }] },
       },
     ],
     wellness: [wellness("2026-07-17")],
@@ -298,6 +302,45 @@ describe("cycling training context projection", () => {
       ]);
     }
     expect(project({ plannedWorkouts: [] }).plan).toEqual({ kind: "unknown", reason: "no-plan" });
+  });
+
+  it("carries Planning fields while keeping Race events out of the workout panel", () => {
+    const result = project({
+      plannedWorkouts: [
+        {
+          id: 1,
+          category: "WORKOUT",
+          start_date_local: "2026-07-20T08:00:00",
+          name: "Endurance",
+          type: "Ride",
+          moving_time: 5_400,
+          icu_training_load: 120,
+          description: "Race-specific endurance",
+          workout_doc: { steps: [{ duration: 300 }] },
+        },
+        {
+          id: 2,
+          category: "RACE_A",
+          start_date_local: "2026-07-21T08:00:00",
+          name: "Gran Fondo",
+        },
+      ],
+    });
+    expect(result.plan).toEqual({
+      kind: "computed",
+      asOf: "2026-07-18T00:00:00.000Z",
+      items: [{
+        id: "1",
+        date: "2026-07-20T08:00:00",
+        name: "Endurance",
+        category: "WORKOUT",
+        workoutType: "Ride",
+        durationSeconds: 5_400,
+        load: 120,
+        description: "Race-specific endurance",
+        workoutDoc: { steps: [{ duration: 300 }] },
+      }],
+    });
   });
 
   it("projects persisted adherence only when its complete shape is valid", () => {

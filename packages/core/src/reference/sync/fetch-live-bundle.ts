@@ -41,7 +41,12 @@ import {
   type ReferenceBundle,
   type RenameSummary,
 } from "@enduragent/kernel/reference/local-bundle";
-import { PlannedEventSchema, type PlannedEvent } from "@enduragent/kernel/reference/schemas";
+import {
+  PLANNING_EVENT_CATEGORIES,
+  PlannedEventSchema,
+  isPlanningEventCategory,
+  type PlannedEvent,
+} from "@enduragent/kernel/reference/schemas";
 
 import {
   AthleteSchema,
@@ -247,7 +252,7 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
   const eventResult = await client.events.list({
     oldest: planOldest,
     newest: planNewest,
-    category: ["WORKOUT"],
+    category: [...PLANNING_EVENT_CATEGORIES],
   });
   if (!eventResult.ok) {
     const detail = renderEndpointError(eventResult.error);
@@ -264,9 +269,9 @@ export async function fetchLiveBundle(deps: LiveFetchDeps): Promise<LiveFetchRes
         continue;
       }
       if (
-        parsed.data.category !== "WORKOUT" ||
-        parsed.data.type == null ||
-        !cyclingSportTypes.has(parsed.data.type)
+        !isPlanningEventCategory(parsed.data.category)
+        || (parsed.data.category === "WORKOUT"
+          && (parsed.data.type == null || !cyclingSportTypes.has(parsed.data.type)))
       ) {
         continue;
       }

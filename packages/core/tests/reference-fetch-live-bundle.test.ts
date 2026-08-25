@@ -288,6 +288,22 @@ describe("fetchLiveBundle", () => {
           startDateLocal: "2026-06-10T08:00:00",
           name: "Future",
           type: "Ride",
+          movingTime: 5_400,
+          icuTrainingLoad: 120,
+          description: "Race-specific endurance",
+          workoutDoc: { steps: [{ duration: 300 }] },
+        },
+        {
+          id: 6,
+          category: "RACE_A",
+          startDateLocal: "2026-06-11T08:00:00",
+          name: "Gran Fondo",
+        },
+        {
+          id: 7,
+          category: "RACE_C",
+          startDateLocal: "2026-06-12T08:00:00",
+          name: "Local race",
         },
         {
           id: 4,
@@ -309,10 +325,20 @@ describe("fetchLiveBundle", () => {
       log: () => {},
     });
     expect(eventCalls).toEqual([
-      { oldest: "2026-06-03", newest: "2026-07-07", category: ["WORKOUT"] },
+      {
+        oldest: "2026-06-03",
+        newest: "2026-07-07",
+        category: ["WORKOUT", "RACE_A", "RACE_B", "RACE_C"],
+      },
     ]);
     expect(result.bundle.pastEvents?.map((event) => event.id)).toEqual([3, 2]);
-    expect(result.plannedWorkouts.map((event) => event.id)).toEqual([2, 1]);
+    expect(result.plannedWorkouts.map((event) => event.id)).toEqual([2, 1, 6, 7]);
+    expect(result.plannedWorkouts.find((event) => event.id === 1)).toMatchObject({
+      moving_time: 5_400,
+      icu_training_load: 120,
+      description: "Race-specific endurance",
+      workout_doc: { steps: [{ duration: 300 }] },
+    });
   });
 
   it("records an event endpoint failure instead of publishing a false empty plan", async () => {
