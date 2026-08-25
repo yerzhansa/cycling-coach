@@ -1,5 +1,7 @@
 #include "partition-description.h"
 
+#include <vector>
+
 namespace {
 
 CFStringRef ExpectedPartition() {
@@ -23,6 +25,42 @@ bool HasUnambiguousPartitionKey(CFStringRef description) {
          OccurrenceCount(description, CFSTR("<!ENTITY")) == 0;
 }
 
+int HexValue(UniChar value) {
+  if (value >= '0' && value <= '9')
+    return value - '0';
+  if (value >= 'a' && value <= 'f')
+    return value - 'a' + 10;
+  if (value >= 'A' && value <= 'F')
+    return value - 'A' + 10;
+  return -1;
+}
+
+CFStringRef CopyDecodedPartitionDescription(CFStringRef description) {
+  const CFIndex length = CFStringGetLength(description);
+  bool hexadecimal = length > 0 && length % 2 == 0;
+  std::vector<UInt8> bytes;
+  if (hexadecimal) {
+    bytes.reserve(static_cast<size_t>(length / 2));
+    for (CFIndex index = 0; index < length; index += 2) {
+      const int high = HexValue(CFStringGetCharacterAtIndex(description, index));
+      const int low =
+          HexValue(CFStringGetCharacterAtIndex(description, index + 1));
+      if (high < 0 || low < 0) {
+        hexadecimal = false;
+        break;
+      }
+      bytes.push_back(static_cast<UInt8>((high << 4) | low));
+    }
+  }
+  if (!hexadecimal) {
+    CFRetain(description);
+    return description;
+  }
+  return CFStringCreateWithBytes(kCFAllocatorDefault, bytes.data(),
+                                 static_cast<CFIndex>(bytes.size()),
+                                 kCFStringEncodingUTF8, false);
+}
+
 bool IsAuthorization(CFTypeRef value, CFStringRef expected) {
   return value != nullptr && CFGetTypeID(value) == CFStringGetTypeID() &&
          CFEqual(value, expected);
@@ -35,10 +73,16 @@ bool IsExpectedPartitionDescription(CFStringRef description) {
       CFGetTypeID(description) != CFStringGetTypeID()) {
     return false;
   }
-  if (!HasUnambiguousPartitionKey(description))
+  CFStringRef decoded = CopyDecodedPartitionDescription(description);
+  if (decoded == nullptr)
     return false;
+  if (!HasUnambiguousPartitionKey(decoded)) {
+    CFRelease(decoded);
+    return false;
+  }
   CFDataRef serialized = CFStringCreateExternalRepresentation(
-      kCFAllocatorDefault, description, kCFStringEncodingUTF8, 0);
+      kCFAllocatorDefault, decoded, kCFStringEncodingUTF8, 0);
+  CFRelease(decoded);
   if (serialized == nullptr)
     return false;
   CFErrorRef error = nullptr;
@@ -80,13 +124,20 @@ bool IsExpectedPartitionDescription(CFStringRef description) {
 bool AreExpectedPartitionDescriptions(CFArrayRef descriptions) {
   if (descriptions == nullptr ||
       CFGetTypeID(descriptions) != CFArrayGetTypeID() ||
-      CFArrayGetCount(descriptions) != 1) {
+      CFArrayGetCount(descriptions) == 0) {
     return false;
   }
-  CFTypeRef description = CFArrayGetValueAtIndex(descriptions, 0);
-  return description != nullptr &&
-         CFGetTypeID(description) == CFStringGetTypeID() &&
-         IsExpectedPartitionDescription(static_cast<CFStringRef>(description));
+  const CFIndex count = CFArrayGetCount(descriptions);
+  for (CFIndex index = 0; index < count; index += 1) {
+    CFTypeRef description = CFArrayGetValueAtIndex(descriptions, index);
+    if (description == nullptr ||
+        CFGetTypeID(description) != CFStringGetTypeID() ||
+        !IsExpectedPartitionDescription(
+            static_cast<CFStringRef>(description))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool IsExpectedPartitionAcl(CFArrayRef authorizations, CFArrayRef applications,
@@ -179,5 +230,5 @@ void IncludeKeychainAcl(KeychainAccessAclInspection &inspection,
 bool IsExpectedKeychainAccess(
     const KeychainAccessAclInspection &inspection) {
   return inspection.exact && inspection.ownerCount == 1 &&
-         inspection.partitionCount == 1;
+         inspection.partitionCount >= 1;
 }

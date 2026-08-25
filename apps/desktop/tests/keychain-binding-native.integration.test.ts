@@ -34,12 +34,20 @@ const alternatePartitionDescription = `<?xml version="1.0" encoding="UTF-8"?>
     </array>
   </dict>
 </plist>`;
+const wrongTeamPartitionDescription = alternatePartitionDescription.replace(
+  "teamid:FA494ACVTF",
+  "teamid:OTHER",
+);
 let root = "";
 let parserHarness = "";
 let creationRollbackHarness = "";
 
 function plistDictionary(contents: string) {
   return `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>${contents}</dict></plist>`;
+}
+
+function hexDescription(description: string) {
+  return Buffer.from(description, "utf8").toString("hex");
 }
 
 function harnessStatus(...arguments_: string[]) {
@@ -232,15 +240,16 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       );
       expect(source).toContain("kSecMatchSearchList");
       expect(source).toContain("kSecUseKeychain");
-      expect(accessConstruction).toContain(
-        "acceptable = IsExpectedOwnerAcl(authorizations, applications)",
-      );
+      expect(accessConstruction).toContain("IsExpectedOwnerAcl(authorizations, applications)");
       expect(accessConstruction.indexOf("IsExpectedOwnerAcl")).toBeLessThan(
         accessConstruction.indexOf("SecACLSetContents"),
       );
-      expect(accessConstruction).toContain(
-        "InspectAccess(access) != PartitionInspection::kPresent",
+      expect(accessConstruction).toContain("SecKeychainPromptSelector{}");
+      expect(accessConstruction).toMatch(
+        /ownerCount != 1 \|\| !ownerExact \|\| partitionCount != 0 \|\| hasUnsafe/u,
       );
+      expect(accessConstruction).not.toContain("SecACLCreateWithSimpleContents");
+      expect(accessConstruction).not.toContain("InspectAccess(access)");
       expect(reading.indexOf("RetryCreationRollback(")).toBeLessThan(
         reading.indexOf("CopyDefaultKeychain"),
       );
@@ -325,6 +334,12 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       expect(partitionDescriptionStatus(alternatePartitionDescription)).toBe(0);
     });
 
+    it("accepts hex-encoded pretty-printed partition property lists", () => {
+      const hexadecimal = hexDescription(alternatePartitionDescription);
+      expect(partitionDescriptionStatus(hexadecimal)).toBe(0);
+      expect(partitionDescriptionStatus(hexadecimal.toUpperCase())).toBe(0);
+    });
+
     it("accepts only exact persisted partition ACL fields", () => {
       expect(partitionAclStatus("exact", "null", "zero")).toBe(0);
       expect(partitionAclStatus("extra", "null", "zero")).toBe(1);
@@ -334,9 +349,10 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       expect(partitionAclStatus("exact", "null", "nonzero")).toBe(1);
     });
 
-    it("accepts one protected owner with one exact partition ACL", () => {
+    it("accepts one protected owner with one or more exact partition ACLs", () => {
       expect(accessAclStatus("exact", "empty", "single", "single", "none")).toBe(0);
       expect(accessAclStatus("exact", "empty", "single", "single", "default")).toBe(0);
+      expect(accessAclStatus("exact", "empty", "single", "duplicate", "none")).toBe(0);
     });
 
     it("rejects an unsafe or ambiguous owner ACL", () => {
@@ -349,7 +365,6 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
 
     it("rejects ambiguous partitions and unrestricted mutation authority", () => {
       expect(accessAclStatus("exact", "empty", "single", "missing", "none")).toBe(1);
-      expect(accessAclStatus("exact", "empty", "single", "duplicate", "none")).toBe(1);
       expect(accessAclStatus("exact", "empty", "single", "single", "any")).toBe(1);
       expect(accessAclStatus("exact", "empty", "single", "single", "change-owner")).toBe(1);
     });
@@ -386,6 +401,21 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       }
     });
 
+    it("rejects hex-encoded wrong teams and malformed hex", () => {
+      expect(partitionDescriptionStatus(hexDescription(wrongTeamPartitionDescription))).toBe(1);
+      expect(partitionDescriptionStatus("abc")).toBe(1);
+      expect(partitionDescriptionStatus("gg")).toBe(1);
+    });
+
+    it("rejects entities after decoding a hex description", () => {
+      const withEntity =
+        '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<!DOCTYPE plist [<!ENTITY team "teamid:FA494ACVTF">]>' +
+        '<plist version="1.0"><dict><key>Partitions</key><array>' +
+        "<string>&team;</string></array></dict></plist>";
+      expect(partitionDescriptionStatus(hexDescription(withEntity))).toBe(1);
+    });
+
     it("rejects duplicate partition dictionary keys", () => {
       const expected = "<key>Partitions</key><array><string>teamid:FA494ACVTF</string></array>";
       const wrong = "<key>Partitions</key><array><string>teamid:OTHER</string></array>";
@@ -393,10 +423,13 @@ describe.skipIf(process.platform !== "darwin" || !keychainBindingCompilerAvailab
       expect(partitionDescriptionStatus(plistDictionary(expected + wrong))).toBe(1);
     });
 
-    it("rejects zero or multiple partition-authorized ACL descriptions", () => {
+    it("accepts multiple expected descriptions and rejects zero or mixed descriptions", () => {
       expect(partitionDescriptionStatus()).toBe(1);
       expect(
         partitionDescriptionStatus(canonicalPartitionDescription, alternatePartitionDescription),
+      ).toBe(0);
+      expect(
+        partitionDescriptionStatus(canonicalPartitionDescription, wrongTeamPartitionDescription),
       ).toBe(1);
     });
   },

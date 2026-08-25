@@ -234,8 +234,6 @@ CFMutableDictionaryRef Query(const std::string &service,
 
 enum class PartitionInspection { kPresent, kAbsent, kUninspectable };
 
-PartitionInspection InspectAccess(SecAccessRef access);
-
 SecAccessRef MakeAccess() {
   SecAccessRef access = nullptr;
   CFStringRef label = String("Enduragent credential encryption key");
@@ -253,6 +251,9 @@ SecAccessRef MakeAccess() {
   }
   const CFIndex count = CFArrayGetCount(aclList);
   CFIndex ownerCount = 0;
+  CFIndex partitionCount = 0;
+  bool ownerExact = true;
+  bool hasUnsafe = false;
   for (CFIndex index = 0; index < count; index += 1) {
     SecACLRef acl = static_cast<SecACLRef>(
         const_cast<void *>(CFArrayGetValueAtIndex(aclList, index)));
@@ -263,12 +264,15 @@ SecAccessRef MakeAccess() {
       return nullptr;
     }
     const KeychainAclRole role = ClassifyKeychainAcl(authorizations);
-    if (role == KeychainAclRole::kPartition ||
-        role == KeychainAclRole::kUnsafe) {
+    if (role == KeychainAclRole::kPartition) {
+      partitionCount += 1;
       CFRelease(authorizations);
-      CFRelease(aclList);
-      CFRelease(access);
-      return nullptr;
+      continue;
+    }
+    if (role == KeychainAclRole::kUnsafe) {
+      hasUnsafe = true;
+      CFRelease(authorizations);
+      continue;
     }
     CFArrayRef applications = nullptr;
     CFStringRef description = nullptr;
@@ -287,12 +291,13 @@ SecAccessRef MakeAccess() {
     bool acceptable = true;
     if (role == KeychainAclRole::kOwner) {
       ownerCount += 1;
-      acceptable = IsExpectedOwnerAcl(authorizations, applications);
+      ownerExact = ownerExact &&
+                   IsExpectedOwnerAcl(authorizations, applications);
     } else {
       acceptable = SecACLSetContents(
                        acl, nullptr,
                        description == nullptr ? CFSTR("") : description,
-                       prompt) == errSecSuccess;
+                       SecKeychainPromptSelector{}) == errSecSuccess;
     }
     if (applications != nullptr)
       CFRelease(applications);
@@ -306,36 +311,7 @@ SecAccessRef MakeAccess() {
     }
   }
   CFRelease(aclList);
-  if (ownerCount != 1) {
-    CFRelease(access);
-    return nullptr;
-  }
-  CFStringRef partition =
-      String("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-             "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
-             "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">"
-             "<plist version=\"1.0\"><dict><key>Partitions</key><array>"
-             "<string>teamid:FA494ACVTF</string></array></dict></plist>");
-  SecACLRef partitionAcl = nullptr;
-  const OSStatus createStatus = SecACLCreateWithSimpleContents(
-      access, nullptr, partition, SecKeychainPromptSelector{}, &partitionAcl);
-  CFRelease(partition);
-  if (createStatus != errSecSuccess || partitionAcl == nullptr) {
-    CFRelease(access);
-    return nullptr;
-  }
-  const void *authorization = kSecACLAuthorizationPartitionID;
-  CFArrayRef authorizations = CFArrayCreate(kCFAllocatorDefault, &authorization,
-                                            1, &kCFTypeArrayCallBacks);
-  const OSStatus updateStatus =
-      SecACLUpdateAuthorizations(partitionAcl, authorizations);
-  CFRelease(authorizations);
-  CFRelease(partitionAcl);
-  if (updateStatus != errSecSuccess) {
-    CFRelease(access);
-    return nullptr;
-  }
-  if (InspectAccess(access) != PartitionInspection::kPresent) {
+  if (ownerCount != 1 || !ownerExact || partitionCount != 0 || hasUnsafe) {
     CFRelease(access);
     return nullptr;
   }
