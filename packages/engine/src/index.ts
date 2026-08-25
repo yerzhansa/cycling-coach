@@ -73,6 +73,22 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
 }
 
 export { extractAccountId };
+export {
+  PLAN_MIRROR_DAYS,
+  PLAN_MIRROR_EXTERNAL_ID_PREFIX,
+  cleanupPlanMirror,
+  planMirrorExternalId,
+  planMirrorExternalIdPrefix,
+  projectPlanReconciliation,
+  reconcileActivePlanWindow,
+  type PlanMirrorCalendarPort,
+  type PlanMirrorCreateInput,
+  type PlanMirrorEvent,
+  type PlanReconciliationDomainState,
+  type PlanReconciliationProjection,
+  type PlanReconcilerDeps,
+  type PlanReconcilerIdentity,
+} from "./planning/reconciler.js";
 export { makeSummaryMessage, splitHistoryByBudget, SUMMARY_PREFIX } from "./agent/history-limit.js";
 export { truncateUtf16Safe } from "./text-truncate.js";
 export { warnOrphanSections, _resetOrphanWarnCacheForTesting } from "./sport/orphan-sections.js";
