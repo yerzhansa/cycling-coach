@@ -379,6 +379,7 @@ export class CoachAgent {
           ? undefined
           : ports.platform.calendarMutations,
       memory: this.memory,
+      planPersistence: ports.planPersistence,
       secrets: ports.secrets,
       bindMemoryToolProvenance: true,
       tz: this.tz,

@@ -41,6 +41,7 @@ export type {
   ModelTransportRequest,
   PlatformCalendarMutationsPort,
   PlatformClientPort,
+  PlanPersistencePort,
   ReferenceStateSnapshot,
   SecretRef,
   SecretsPort,

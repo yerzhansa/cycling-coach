@@ -9,6 +9,7 @@ import storeOwner008 from "./008_store_owner.sql";
 import activitySourceResolver009 from "./009_activity_source_resolver.sql";
 import analyticsCurves010 from "./010_analytics_curves.sql";
 import activityAnalysisProjection011 from "./011_activity_analysis_projection.sql";
+import plan012 from "./012_plan.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -35,4 +36,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 9, name: "009_activity_source_resolver", sql: activitySourceResolver009 },
   { version: 10, name: "010_analytics_curves", sql: analyticsCurves010 },
   { version: 11, name: "011_activity_analysis_projection", sql: activityAnalysisProjection011 },
+  { version: 12, name: "012_plan", sql: plan012 },
 ];

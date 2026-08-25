@@ -142,6 +142,7 @@ export interface SportRuntimePorts {
   athleteData?: AthleteDataReaderPort;
   calendarMutations?: PlatformCalendarMutationsPort;
   memory: MemoryStorePort;
+  planPersistence?: import("./host-ports.js").PlanPersistencePort;
   secrets: SecretsPort;
   /** Enables host-private provenance binding on memory read results. */
   bindMemoryToolProvenance?: boolean;

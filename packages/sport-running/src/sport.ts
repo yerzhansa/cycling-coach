@@ -88,6 +88,7 @@ export const runningSport: Sport = {
     const toolset = {
       ...createMemoryTools(deps.memory, sections, {
         bindProvenance: deps.bindMemoryToolProvenance,
+        planPersistence: deps.planPersistence,
       }),
       ...createPureCoreIntervalsTools(deps.intervals, deps.tz, deps.athleteData, deps.calendarMutations),
       ...createCoreToolsWithSportConfig(deps.intervals, runningSport.intervalsActivityTypes, deps.athleteData),

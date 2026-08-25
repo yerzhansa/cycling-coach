@@ -638,6 +638,7 @@ describe("local coach composition", () => {
       "modelTransportDecorator",
       "now",
       "onToolsAssembled",
+      "planPersistence",
       "platform",
       "randomId",
       "readReferenceState",

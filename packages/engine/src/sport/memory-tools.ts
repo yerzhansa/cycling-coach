@@ -1,7 +1,7 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import type { MemorySectionSpec } from "../sport.js";
-import type { MemoryStorePort } from "../host-ports.js";
+import type { MemoryStorePort, PlanPersistencePort } from "../host-ports.js";
 import { isRealDateKey, parseDateKeyMs, MS_PER_DAY } from "./date-keys.js";
 import { truncateUtf16Safe } from "../text-truncate.js";
 import { DATE_KEY_RE } from "./date-schema.js";
@@ -165,7 +165,7 @@ export function createMemoryQueryTool(memory: MemoryStorePort, bindProvenance: b
 export function createMemoryTools(
   memory: MemoryStorePort,
   sections: readonly MemorySectionSpec[],
-  opts?: { bindProvenance?: boolean },
+  opts?: { bindProvenance?: boolean; planPersistence?: PlanPersistencePort },
 ) {
   if (sections.length === 0) {
     throw new Error(
@@ -213,6 +213,7 @@ export function createMemoryTools(
       ),
       execute: async (input: { plan: Record<string, unknown> }) => {
         memory.savePlan(input.plan, "chat-tool");
+        await opts?.planPersistence?.save(input.plan);
         return { saved: true };
       },
     }),
