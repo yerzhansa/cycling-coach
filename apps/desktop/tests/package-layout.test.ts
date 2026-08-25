@@ -22,6 +22,7 @@ const exclusions = [
   "!**/.env*",
   "!**/{test,tests,__tests__,fixture,fixtures,dev-fixture,dev-fixtures}/**",
   "!**/*.{test,spec}.{js,cjs,mjs,ts,cts,mts,jsx,tsx}",
+  "!**/{test,spec}.{js,cjs,mjs,ts,cts,mts,jsx,tsx}",
   "!**/vitest.config.{js,cjs,mjs,ts,cts,mts}",
   "!**/vitest.workspace.{js,cjs,mjs,ts,cts,mts}",
   "!**/node_modules/vitest/**",
