@@ -12,7 +12,7 @@ import {
 } from "./windows-release-plan.mjs";
 import { requireStableSemVer } from "./macos-release-plan.mjs";
 
-const maximumUpdaterMetadataBytes = 16_384;
+export const WINDOWS_UPDATER_METADATA_MAX_BYTES = 16_384;
 
 class WindowsReleaseVerificationError extends Error {
   constructor(message) {
@@ -205,7 +205,7 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
   const [installer, blockmap, metadataBytes] = await Promise.all([
     readRegularFile(paths.installer, "Windows installer", dependencies),
     readRegularFile(paths.blockmap, "installer blockmap", dependencies),
-    readRegularFile(paths.metadata, "latest.yml", dependencies, maximumUpdaterMetadataBytes),
+    readRegularFile(paths.metadata, "latest.yml", dependencies, WINDOWS_UPDATER_METADATA_MAX_BYTES),
   ]);
   const metadata = parseUpdaterMetadata(metadataBytes);
   const installerSha512 = createHash("sha512").update(installer).digest("base64");

@@ -44,6 +44,7 @@ export interface VerifiedWindowsReleaseAssets {
   readonly authenticode: "pending-w19" | "verified";
 }
 
+export const WINDOWS_UPDATER_METADATA_MAX_BYTES: 16_384;
 export function safeWindowsReleaseVerificationMessage(error: unknown): string | undefined;
 export function verifyWindowsReleaseAssets(
   artifactDirectory: string,

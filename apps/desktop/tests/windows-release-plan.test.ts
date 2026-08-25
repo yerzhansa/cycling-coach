@@ -108,6 +108,10 @@ describe("Windows release plan", () => {
     });
     expect(plan.builderOptions.config.forceCodeSigning).toBe(true);
     expect(plan.builderOptions.config.nsis.differentialPackage).toBe(true);
+    expect(plan.builderOptions.config.publish).toEqual([
+      { provider: "generic", url: feedUrl, channel: "latest" },
+    ]);
+    expect(plan.builderOptions.publish).toBe("never");
     expect(plan.builderOptions.config.win).toEqual({
       verifyUpdateCodeSignature: true,
       target: [{ target: "nsis", arch: ["x64"] }],
