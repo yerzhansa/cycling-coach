@@ -109,8 +109,16 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       throw new Error("Durable chat queue storage is unavailable.");
     return operation as NonNullable<EngineHostPorts["chatStore"][K]>;
   };
-  const snapshot = (chatId: string): ChatQueueSnapshot =>
-    queuePort("getChatQueue").call(input.ports.chatStore, chatId);
+  const snapshot = async (chatId: string): Promise<ChatQueueSnapshot> => {
+    const completedClaim = input.ports.chatStore.getCompletedChatQueueClaim?.(chatId);
+    if (completedClaim !== undefined && completedClaim !== null) {
+      await input.ports.chatAttachments?.completeQueuedTurn({
+        chatId,
+        messageIds: completedClaim.messageIds,
+      });
+    }
+    return queuePort("getChatQueue").call(input.ports.chatStore, chatId);
+  };
   const queueText = (items: readonly QueuedChatMessage[]): string =>
     items.map((item) => item.text).join("\n\n");
   const activityContext = (
@@ -132,7 +140,7 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
     const active = queueRuns.get(chatId);
     if (active !== undefined) return active;
     const task = withQueueAuthority(chatId, async (): Promise<ChatQueueRunResult> => {
-      const before = snapshot(chatId);
+      const before = await snapshot(chatId);
       const pendingDecision = input.ports.coachDecisions?.getDecision(chatId);
       if (
         pendingDecision?.status === "unanswered" ||
@@ -217,6 +225,10 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
                 ...(attachmentPreparation?.untrustedAttachmentText === undefined
                   ? {}
                   : { untrustedAttachmentText: attachmentPreparation.untrustedAttachmentText }),
+                ...(attachmentPreparation?.attachments === undefined ||
+                attachmentPreparation.attachments.length === 0
+                  ? {}
+                  : { attachments: attachmentPreparation.attachments }),
               },
           (event) => {
             if (event.type === "interrupted") interrupted = true;

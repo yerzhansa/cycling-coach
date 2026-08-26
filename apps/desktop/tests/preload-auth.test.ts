@@ -926,6 +926,14 @@ describe("desktop preload ChatGPT auth", () => {
           completedAt: "1998-07-06T00:00:00.000Z",
           athleteText: "a",
           coachText: "b",
+          attachments: [
+            {
+              attachmentId: "attachment-1",
+              displayName: "training-notes.txt",
+              kind: "document",
+              extension: "txt",
+            },
+          ],
         },
       ],
       nextCursor: cursor,
@@ -978,6 +986,28 @@ describe("desktop preload ChatGPT auth", () => {
             completedAt: "not-a-timestamp",
             athleteText: "a",
             coachText: "b",
+          },
+        ],
+        nextCursor: null,
+      },
+      {
+        schemaVersion: 1,
+        status: "page",
+        turns: [
+          {
+            turnId: "turn-1",
+            completedAt: "1998-07-06T00:00:00.000Z",
+            athleteText: "a",
+            coachText: "b",
+            attachments: [
+              {
+                attachmentId: "attachment-1",
+                displayName: "ride.fit",
+                kind: "activity",
+                extension: "fit",
+                sourcePath: "/private/ride.fit",
+              },
+            ],
           },
         ],
         nextCursor: null,

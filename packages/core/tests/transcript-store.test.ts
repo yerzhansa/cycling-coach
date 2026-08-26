@@ -410,6 +410,54 @@ describe("TranscriptStore append and corruption handling", () => {
     ]);
   });
 
+  it("round-trips only safe sent-attachment references for relaunch hydration", () => {
+    const dataDir = makeDataDir();
+    const store = new TranscriptStore(dataDir);
+    const input = {
+      ...turn("chat-attachments", "turn-1", "Review this", "Reviewed"),
+      attachments: [
+        {
+          attachmentId: "attachment-1",
+          displayName: "training-notes.txt",
+          kind: "document" as const,
+          extension: "txt" as const,
+        },
+      ],
+    };
+
+    store.appendCompletedTurn(input);
+
+    expect(store.readCurrentConversation(input.chatId)).toEqual([
+      { version: 1, kind: "turn-completed", ...input },
+    ]);
+    const page = store.readCurrentConversationPage(input.chatId, { cursor: null, limit: 10 });
+    expect(page).toMatchObject({
+      status: "page",
+      turns: [{ turnId: "turn-1", attachments: input.attachments }],
+    });
+    expect(readFileSync(transcriptPath(dataDir, input.chatId), "utf8")).not.toContain(
+      "private/source/path",
+    );
+  });
+
+  it("rejects attachment transcript fields outside the strict safe reference shape", () => {
+    const store = new TranscriptStore(makeDataDir());
+    expect(() =>
+      store.appendCompletedTurn({
+        ...turn("chat-attachments-invalid", "turn-1"),
+        attachments: [
+          {
+            attachmentId: "attachment-1",
+            displayName: "ride.fit",
+            kind: "activity",
+            extension: "fit",
+            sourcePath: "/private/ride.fit",
+          },
+        ],
+      } as never),
+    ).toThrow("Completed transcript turn is invalid");
+  });
+
   it("round-trips an interrupted turn and projects its delivery on transcript pages", () => {
     const dataDir = makeDataDir();
     const store = new TranscriptStore(dataDir);

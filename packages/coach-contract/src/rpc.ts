@@ -18,6 +18,7 @@ import {
   AdmitChatAttachmentRequestSchema,
   AttachmentAdmissionReadModelSchema,
   ChatAttachmentComposerReadModelSchema,
+  ChatAttachmentReferenceSchema,
   ChatAttachmentMutationRequestSchema,
   ClearChatAttachmentDraftRequestSchema,
   GetChatAttachmentComposerRequestSchema,
@@ -386,6 +387,7 @@ export const TranscriptPageTurnSchema = z
     athleteText: z.string(),
     coachText: z.string(),
     delivery: z.literal("interrupted").optional(),
+    attachments: z.array(ChatAttachmentReferenceSchema).max(5).optional(),
   })
   .strict();
 export type TranscriptPageTurn = z.infer<typeof TranscriptPageTurnSchema>;

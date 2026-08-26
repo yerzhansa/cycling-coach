@@ -304,10 +304,27 @@ export class ChatQueueStore {
 
   reconcile(chatId: string, completedTurnIds: ReadonlySet<string>): ChatQueueSnapshot {
     const state = this.read(chatId);
-    if (state.claim?.status !== "claimed") return this.snapshot(state);
+    if (state.claim === undefined) return this.snapshot(state);
     return completedTurnIds.has(state.claim.turnId)
       ? this.complete(chatId, state.claim.claimId)
-      : this.requireRetry(chatId, state.claim.claimId);
+      : state.claim.status === "claimed"
+        ? this.requireRetry(chatId, state.claim.claimId)
+        : this.snapshot(state);
+  }
+
+  getCompletedClaim(
+    chatId: string,
+    completedTurnIds: ReadonlySet<string>,
+  ): { readonly turnId: string; readonly messageIds: readonly string[] } | null {
+    const state = this.read(chatId);
+    if (state.claim === undefined || !completedTurnIds.has(state.claim.turnId)) return null;
+    const claimedIds = new Set(state.claim.queuedMessageIds);
+    return {
+      turnId: state.claim.turnId,
+      messageIds: state.items
+        .filter((item) => claimedIds.has(item.queuedMessageId))
+        .map((item) => item.messageId),
+    };
   }
 
   private snapshot(state: StoredQueue): ChatQueueSnapshot {

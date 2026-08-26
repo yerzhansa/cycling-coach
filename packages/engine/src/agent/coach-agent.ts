@@ -5,6 +5,7 @@ import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import type {
   AnswerCoachDecisionRpcParams,
   AnswerCoachDecisionRpcResult,
+  ChatAttachmentReference,
   CoachDecisionContinuationLineage,
   CoachDecisionReadModel,
   GetCoachDecisionRpcParams,
@@ -697,6 +698,7 @@ export class CoachAgent {
       attachmentContext?: string;
       untrustedAttachmentText?: string;
       nativeMedia?: readonly ChatNativeMediaInput[];
+      attachments?: readonly ChatAttachmentReference[];
     },
     onEvent?: TurnEventHandler,
     onDecision?: (decision: CoachDecisionReadModel) => void,
@@ -1180,6 +1182,7 @@ export class CoachAgent {
                 completedAt: new Date(this.ports.now()).toISOString(),
                 athleteText: userMessage,
                 coachText: responseText,
+                ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }),
               });
               emitEvent({ type: "final-text", turnId, text: responseText });
               return responseText;
@@ -1230,6 +1233,7 @@ export class CoachAgent {
                   completedAt: new Date(this.ports.now()).toISOString(),
                   athleteText: userMessage,
                   coachText: TAINTED_BY_WRITES_MESSAGE,
+                  ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }),
                 });
                 emitEvent({ type: "final-text", turnId, text: TAINTED_BY_WRITES_MESSAGE });
                 return TAINTED_BY_WRITES_MESSAGE;
@@ -1398,6 +1402,7 @@ export class CoachAgent {
               completedAt: new Date(this.ports.now()).toISOString(),
               athleteText: userMessage,
               coachText: streamedText,
+              ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }),
             });
             this.emitTurnOutcome({
               turnId,

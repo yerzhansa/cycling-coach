@@ -132,6 +132,12 @@ const CLAUDE_CLI_STATES = new Set([
   "working-area-unavailable",
 ]);
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
+const CHAT_ATTACHMENT_EXTENSIONS = {
+  document: new Set(["pdf", "txt", "csv", "docx"]),
+  activity: new Set(["fit", "tcx", "gpx"]),
+  workout: new Set(["zwo", "mrc", "erg"]),
+  image: new Set(["png", "jpg", "jpeg", "webp"]),
+} as const;
 const ACTIVITY_EXPORT_FORMATS = new Set(["fit", "gpx"]);
 const WORKOUT_ARCHIVE_FORMATS = new Set(["zwo", "mrc", "erg", "fit"]);
 const TRAINING_EXPORT_REFUSAL_REASONS = new Set([
@@ -403,6 +409,36 @@ function canonicalIsoTimestamp(value: unknown): value is string {
   }
 }
 
+function parseTranscriptAttachments(value: unknown): readonly unknown[] {
+  if (!Array.isArray(value) || value.length > 5) throw new TypeError();
+  return value.map((attachment) => {
+    if (
+      !record(attachment) ||
+      !exactKeys(attachment, ["attachmentId", "displayName", "kind", "extension"]) ||
+      typeof attachment.attachmentId !== "string" ||
+      attachment.attachmentId.length === 0 ||
+      attachment.attachmentId.length > 128 ||
+      typeof attachment.displayName !== "string" ||
+      attachment.displayName.length === 0 ||
+      attachment.displayName.length > 512 ||
+      typeof attachment.kind !== "string" ||
+      !(attachment.kind in CHAT_ATTACHMENT_EXTENSIONS) ||
+      typeof attachment.extension !== "string" ||
+      !CHAT_ATTACHMENT_EXTENSIONS[attachment.kind as keyof typeof CHAT_ATTACHMENT_EXTENSIONS].has(
+        attachment.extension as never,
+      )
+    ) {
+      throw new TypeError();
+    }
+    return {
+      attachmentId: attachment.attachmentId,
+      displayName: attachment.displayName,
+      kind: attachment.kind,
+      extension: attachment.extension,
+    };
+  });
+}
+
 function parseTranscriptPage(
   value: unknown,
   cursor: (candidate: unknown) => candidate is string = transcriptCursor,
@@ -420,9 +456,10 @@ function parseTranscriptPage(
     throw new TypeError();
   }
   const turns = value.turns.map((turn) => {
+    const turnKeys = ["turnId", "completedAt", "athleteText", "coachText"];
     if (
       !record(turn) ||
-      !exactKeys(turn, ["turnId", "completedAt", "athleteText", "coachText"]) ||
+      (!exactKeys(turn, turnKeys) && !exactKeys(turn, [...turnKeys, "attachments"])) ||
       typeof turn.turnId !== "string" ||
       turn.turnId.length === 0 ||
       !canonicalIsoTimestamp(turn.completedAt) ||
@@ -436,6 +473,9 @@ function parseTranscriptPage(
       completedAt: turn.completedAt,
       athleteText: turn.athleteText,
       coachText: turn.coachText,
+      ...(turn.attachments === undefined
+        ? {}
+        : { attachments: parseTranscriptAttachments(turn.attachments) }),
     };
   });
   if (value.status === "restart-required" && (turns.length !== 0 || value.nextCursor !== null)) {
