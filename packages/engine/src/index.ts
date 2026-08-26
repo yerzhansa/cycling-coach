@@ -14,6 +14,7 @@ import type { SourceProvenance } from "./provenance.js";
 
 export type { CoachEngine } from "@enduragent/coach-contract";
 export type { ChatStreamTimeouts } from "./host-ports.js";
+export * from "./planning/proposal.js";
 export type {
   AthleteDataReaderPort,
   AthleteReadResult,

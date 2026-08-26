@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PlanActiveProjectionDataSchema } from "@enduragent/coach-contract";
 import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { PlanView } from "../src/ui/plan/PlanView.js";
@@ -43,6 +44,10 @@ function actions(): PlanActions {
     closeWorkout: vi.fn(),
     resolveWorkoutMatch: vi.fn(),
     resolveWorkoutDrift: vi.fn(),
+    openProposal: vi.fn(),
+    reviseProposal: vi.fn(),
+    approveProposal: vi.fn(),
+    rejectProposal: vi.fn(),
     openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
@@ -672,6 +677,235 @@ describe("Plan surface", () => {
     expect(planActions.resolveWorkoutMatch).toHaveBeenCalledWith(workoutId, activityId, "confirm");
     await user.click(screen.getByRole("button", { name: "Not this activity" }));
     expect(planActions.resolveWorkoutMatch).toHaveBeenCalledWith(workoutId, activityId, "reject");
+  });
+
+  it("renders structured Proposal diffs, read-only evidence, and explicit decisions", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const workoutId = "00000000000000000000000004";
+    const proposalId = "00000000000000000000000005";
+    const state = {
+      ...planReadModel({
+        lifecycle: "active",
+        scenarioId: "PL-S007",
+        projection: "active",
+        planId,
+        attentionCount: 1,
+        data: {
+          plan: {
+            id: planId,
+            name: "Gran Fondo Almaty",
+            primaryGoal: "Finish in the front half",
+            startDate: "2026-07-13",
+            targetDate: "2026-10-04",
+            kind: "full-plan",
+            totalWeeks: 12,
+            weekStartDay: 1,
+            workoutCount: 20,
+            plannedDurationS: 72_000,
+          },
+          today: "2026-08-18",
+          weekIndex: 6,
+          todayWorkout: null,
+          workouts: [
+            {
+              id: workoutId,
+              date: "2026-08-23",
+              sport: "cycling",
+              name: "Endurance",
+              durationS: 5_400,
+            },
+          ],
+          selectedWorkoutId: null,
+          selectedProposalId: proposalId,
+          proposals: [
+            {
+              id: proposalId,
+              revision: 1,
+              title: "Sunday recovery",
+              rationale: "Saturday fatigue is 12 above your normal range.",
+              confidence: "High",
+              targetWorkoutId: workoutId,
+              affectedDate: "2026-08-23",
+              stale: false,
+              diff: [
+                { field: "duration", label: "Duration", before: "1:30", after: "0:30" },
+                { field: "workout", label: "Workout", before: "Endurance", after: "Recovery" },
+                { field: "week-load", label: "Week load", before: "420", after: "360" },
+              ],
+              premises: [
+                {
+                  id: "00000000000000000000000006",
+                  sourceType: "activity",
+                  sourceId: "ride-21-aug",
+                  sourceLabel: "Saturday ride · 21 Aug · Assioma pedals",
+                  sourceDate: "2026-08-21",
+                  confidence: "High",
+                  snapshotJson: '{"loadAboveNormal":12}',
+                },
+              ],
+              error: null,
+            },
+          ],
+        },
+      }),
+      transitions: ["PL-T17", "PL-T18", "PL-T19", "PL-T20"].map((transitionId) => ({
+        transitionId: transitionId as "PL-T17" | "PL-T18" | "PL-T19" | "PL-T20",
+        status: "available" as const,
+        reason: null,
+      })),
+    };
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("Duration1:30 → 0:30");
+    expect(dialog).toHaveTextContent("WorkoutEndurance → Recovery");
+    expect(dialog).toHaveTextContent("Week load420 → 360");
+    const evidence = screen.getByRole("button", { name: "View evidence" });
+    await user.click(evidence);
+    expect(screen.getByRole("heading", { name: "Where this came from" })).toBeInTheDocument();
+    expect(screen.getByText("Saturday ride · 21 Aug · Assioma pedals")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "View evidence" })).toHaveFocus(),
+    );
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    expect(planActions.rejectProposal).toHaveBeenCalledWith(proposalId);
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(planActions.approveProposal).toHaveBeenCalledWith(proposalId, 1);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.type(screen.getByLabelText("Your change"), "Keep 45 minutes and make it recovery.");
+    await user.click(screen.getByRole("button", { name: "Update Proposal" }));
+    expect(planActions.reviseProposal).toHaveBeenCalledWith(
+      proposalId,
+      "Keep 45 minutes and make it recovery.",
+    );
+    const failedState = {
+      ...state,
+      scenarioId: "PL-S022" as const,
+      data: {
+        ...PlanActiveProjectionDataSchema.parse(state.data),
+        proposalRevisionText: "Keep 45 minutes and make it recovery.",
+      },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: failedState });
+    });
+    expect(await screen.findByLabelText("Your change")).toHaveValue(
+      "Keep 45 minutes and make it recovery.",
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("heading", { name: "Sunday recovery" })).toBeInTheDocument();
+    const currentData = PlanActiveProjectionDataSchema.parse(state.data);
+    const revisedProposalId = "00000000000000000000000007";
+    const revisedState = {
+      ...state,
+      scenarioId: "PL-S023" as const,
+      data: {
+        ...currentData,
+        selectedProposalId: revisedProposalId,
+        proposals: [
+          {
+            ...currentData.proposals![0]!,
+            id: revisedProposalId,
+            revision: 2,
+            title: "Sunday recovery · revised",
+          },
+        ],
+      },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: revisedState });
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Sunday recovery · revised" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Your change")).not.toBeInTheDocument();
+
+    const staleState = {
+      ...state,
+      scenarioId: "PL-S025" as const,
+      data: {
+        ...currentData,
+        selectedProposalId: revisedProposalId,
+        proposals: [
+          {
+            ...currentData.proposals![0]!,
+            id: revisedProposalId,
+            revision: 2,
+            title: "Sunday recovery · revised",
+            stale: true,
+            error: {
+              code: "stale-base" as const,
+              message: "The Plan changed before approval. Review the updated Proposal.",
+              retryable: false,
+            },
+          },
+        ],
+      },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: staleState });
+    });
+    const revalidate = await screen.findByRole("button", { name: "Revalidate" });
+    expect(revalidate).toBeEnabled();
+    await user.click(revalidate);
+    expect(planActions.approveProposal).toHaveBeenLastCalledWith(revisedProposalId, 2);
+
+    const unavailableState = {
+      ...state,
+      transitions: state.transitions.filter(
+        (guard) => guard.transitionId !== "PL-T18" && guard.transitionId !== "PL-T19",
+      ),
+      data: {
+        ...currentData,
+        selectedProposalId: proposalId,
+        proposals: [
+          {
+            ...currentData.proposals![0]!,
+            error: {
+              code: "unavailable" as const,
+              message: "This Plan action is not available yet.",
+              retryable: true,
+            },
+          },
+        ],
+      },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: unavailableState });
+    });
+    expect(await screen.findByText("This Plan action is not available yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revalidate" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+
+    const rejectedState = {
+      ...state,
+      scenarioId: "PL-S097" as const,
+      attentionCount: 0,
+      data: {
+        ...currentData,
+        selectedProposalId: null,
+        proposals: [],
+      },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: rejectedState });
+    });
+    expect(await screen.findByRole("heading", { name: "Proposal rejected" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to Plan" }));
+    expect(planActions.closeWorkout).toHaveBeenCalledOnce();
   });
 
   it("shows the outside-edit comparison and exposes explicit adopt or restore choices", async () => {

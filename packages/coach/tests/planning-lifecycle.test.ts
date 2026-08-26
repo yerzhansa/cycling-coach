@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildActivePlanReadModel, buildPlanLifecycleReadModel } from "../src/planning-lifecycle.js";
+import {
+  buildActivePlanReadModel,
+  buildPlanLifecycleReadModel,
+} from "../src/planning-lifecycle.js";
 
 const queue = { schemaVersion: 1 as const, revision: 0, items: [] };
 const conversation = {
@@ -80,6 +83,101 @@ describe("Plan lifecycle projection", () => {
       reconciliation: multiple.reconciliation,
     });
     expect(single.attention).toMatchObject({ count: 1, destination: "direct" });
+  });
+
+  it("only advertises Proposal actions backed by the required capabilities", () => {
+    const proposalId = "proposal-1";
+    const data = {
+      plan: {
+        id: "plan-1",
+        name: "Gran Fondo",
+        primaryGoal: "Finish",
+        startDate: "2026-08-17",
+        targetDate: null,
+        kind: "short-race-preparation" as const,
+        totalWeeks: 4,
+        weekStartDay: 1,
+        workoutCount: 1,
+        plannedDurationS: 3_600,
+      },
+      today: "2026-08-18",
+      weekIndex: 1,
+      todayWorkout: null,
+      workouts: [
+        {
+          id: "workout-1",
+          date: "2026-08-18",
+          sport: "cycling",
+          name: "Endurance",
+          durationS: 3_600,
+        },
+      ],
+      selectedWorkoutId: null,
+      selectedProposalId: proposalId,
+      proposals: [
+        {
+          id: proposalId,
+          revision: 1,
+          title: "Shorten Sunday",
+          rationale: "Protect recovery.",
+          confidence: "High" as const,
+          targetWorkoutId: "workout-1",
+          affectedDate: "2026-08-18",
+          stale: false,
+          diff: [{ field: "week-load" as const, label: "Week load", before: "420", after: "360" }],
+          premises: [],
+          error: null,
+        },
+      ],
+    };
+    const base = {
+      scenarioId: "PL-S007" as const,
+      planId: "plan-1",
+      revision: 1,
+      data,
+      reconciliation: {
+        status: "not-applicable" as const,
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: null,
+        error: null,
+      },
+    };
+
+    const unavailable = buildActivePlanReadModel(base);
+    expect(unavailable.transitions.map((transition) => transition.transitionId)).not.toEqual(
+      expect.arrayContaining(["PL-T18", "PL-T19"]),
+    );
+
+    const available = buildActivePlanReadModel({
+      ...base,
+      proposalCapabilities: {
+        canRevise: true,
+        canVerifyPremises: true,
+        canCalculateLoad: true,
+      },
+    });
+    expect(available.transitions.map((transition) => transition.transitionId)).toEqual(
+      expect.arrayContaining(["PL-T18", "PL-T19"]),
+    );
+
+    const staleWithoutReviser = buildActivePlanReadModel({
+      ...base,
+      data: {
+        ...data,
+        proposals: data.proposals.map((proposal) => ({ ...proposal, stale: true })),
+      },
+      proposalCapabilities: {
+        canRevise: false,
+        canVerifyPremises: true,
+        canCalculateLoad: true,
+      },
+    });
+    expect(
+      staleWithoutReviser.transitions.map((transition) => transition.transitionId),
+    ).not.toContain("PL-T19");
   });
 
   it("blocks Draft creation until an FTP source is available", () => {

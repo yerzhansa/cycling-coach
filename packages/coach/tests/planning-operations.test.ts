@@ -10,6 +10,7 @@ import {
   createPlanReconciliationRepository,
   createPlanRepository,
   createPlanWorkoutMatchRepository,
+  createPlanProposalRepository,
   createRaceCourseSnapshot,
   type PlanRecord,
   type PlanWorkoutRecord,
@@ -21,6 +22,9 @@ import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   planMirrorExternalId,
+  capturePlanProposalBase,
+  encodePlanProposalBase,
+  encodePlanProposalMutation,
   type PlanFtpAdapter,
   type PlanFtpSnapshot,
   type PlanMirrorCalendarPort,
@@ -856,7 +860,15 @@ describe("Plan operations", () => {
   });
 
   it("activates locally before an idempotent seven-day Intervals reconciliation", async () => {
-    const events: Array<{ id: number; dateKey: number; externalId: string | null }> = [];
+    const events: Array<{
+      id: number;
+      dateKey: number;
+      externalId: string | null;
+      name: string;
+      durationS: number | null;
+      description: string | null;
+      workoutDoc: Readonly<Record<string, unknown>> | null;
+    }> = [];
     let createFailures = 1;
     const calendar: PlanMirrorCalendarPort = {
       async listEvents({ startDateKey, endDateKey }) {
@@ -869,11 +881,28 @@ describe("Plan operations", () => {
           createFailures -= 1;
           throw new Error("provider failed");
         }
+        const structure = JSON.parse(value.structureJson) as Record<string, unknown>;
         events.push({
           id: events.length + 1,
           dateKey: value.dateKey,
           externalId: value.externalId,
+          name: value.name,
+          durationS: value.durationS,
+          description: typeof structure.description === "string" ? structure.description : null,
+          workoutDoc:
+            structure.workoutDoc !== null &&
+            typeof structure.workoutDoc === "object" &&
+            !Array.isArray(structure.workoutDoc)
+              ? (structure.workoutDoc as Readonly<Record<string, unknown>>)
+              : null,
         });
+      },
+      async updateEvent(value) {
+        const event = events.find((candidate) => candidate.id === value.eventId);
+        if (event === undefined) throw new Error("missing event");
+        event.dateKey = value.dateKey;
+        event.name = value.name;
+        event.durationS = value.durationS;
       },
       async deleteEvent({ eventId }) {
         const index = events.findIndex((event) => event.id === eventId);
@@ -1164,6 +1193,7 @@ describe("Plan operations", () => {
         calendar: {
           listEvents: async () => [],
           createEvent: async () => {},
+          updateEvent: async () => {},
           deleteEvent: async () => {},
         },
       },
@@ -1278,5 +1308,393 @@ describe("Plan operations", () => {
     ).resolves.toMatchObject([
       { athleteText: "Keep Sunday free.", coachText: "Sunday stays free." },
     ]);
+  });
+
+  it("routes a structured Proposal through review, provenance, revision, and approval", async () => {
+    const planId = `${"0".repeat(25)}P`;
+    const workoutId = `${"0".repeat(25)}Q`;
+    const proposalId = `${"0".repeat(25)}R`;
+    const premiseId = `${"0".repeat(25)}S`;
+    const activePlan: PlanRecord = {
+      ...plan(planId, 10),
+      status: "active",
+      updatedAtMs: 10,
+      hlcPhysicalMs: 10,
+    };
+    const workout: PlanWorkoutRecord = {
+      id: workoutId,
+      planId,
+      dateKey: 20260830,
+      sport: "cycling",
+      name: "Endurance",
+      durationS: 5_400,
+      structureJson: "{}",
+      origin: "coach",
+      deviceId: "device-1",
+      hlcPhysicalMs: 10,
+      hlcCounter: 0,
+    };
+    const plans = createPlanRepository(store);
+    const proposals = createPlanProposalRepository(store);
+    let forceCompareAndSwapRace = true;
+    let failLoadCalculation = false;
+    let premiseReadCount = 0;
+    await plans.replace(activePlan, [workout]);
+    await proposals.save(
+      {
+        id: proposalId,
+        planId,
+        parentProposalId: null,
+        revision: 1,
+        status: "proposed",
+        title: "Sunday recovery",
+        rationale: "Saturday fatigue is 12 above your normal range.",
+        confidence: "High",
+        mutationJson: encodePlanProposalMutation({
+          schemaVersion: 1,
+          changes: [
+            {
+              workoutId,
+              before: {
+                dateKey: workout.dateKey,
+                sport: workout.sport,
+                name: workout.name,
+                durationS: workout.durationS,
+                structureJson: workout.structureJson,
+              },
+              after: {
+                dateKey: workout.dateKey,
+                sport: workout.sport,
+                name: "Recovery",
+                durationS: 1_800,
+                structureJson: workout.structureJson,
+              },
+            },
+          ],
+          weekLoad: { before: 420, after: 360 },
+        }),
+        baseSnapshotJson: encodePlanProposalBase(capturePlanProposalBase(activePlan, [workout])),
+        refusalReason: null,
+        createdAtMs: 20,
+        updatedAtMs: 20,
+        resolvedAtMs: null,
+        deviceId: "device-1",
+        hlcPhysicalMs: 20,
+        hlcCounter: 0,
+      },
+      [
+        {
+          id: premiseId,
+          proposalId,
+          sourceType: "activity",
+          sourceId: "ride-21-aug",
+          sourceLabel: "Saturday ride · 21 Aug · Assioma pedals",
+          sourceDateKey: 20260821,
+          confidence: "High",
+          snapshotJson: '{"loadAboveNormal":12}',
+          createdAtMs: 20,
+          deviceId: "device-1",
+          hlcPhysicalMs: 20,
+          hlcCounter: 0,
+        },
+      ],
+    );
+    const invalidProposalId = `${"0".repeat(25)}V`;
+    await store.run(
+      `INSERT INTO plan_proposal (
+        id, plan_id, parent_proposal_id, revision, status, title, rationale, confidence,
+        mutation_json, base_snapshot_json, refusal_reason, created_at_ms, updated_at_ms,
+        resolved_at_ms, device_id, hlc_physical_ms, hlc_counter
+      ) VALUES (?, ?, NULL, 1, 'proposed', ?, ?, 'Low', ?, ?, NULL, 21, 21, NULL, 'device-1', 21, 0)`,
+      [
+        invalidProposalId,
+        planId,
+        "Unsafe free-text change",
+        "This record simulates an unsupported persisted mutation.",
+        '{"freeText":"change whatever is needed"}',
+        encodePlanProposalBase(capturePlanProposalBase(activePlan, [workout])),
+      ],
+    );
+    const readOnlyOperations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { plans, proposals, todayDateKey: () => 20260826 },
+    );
+    const readOnlyOpen = await readOnlyOperations.executePlanTransition?.({
+      transitionId: "PL-T17",
+      commandId: "command-proposal-open-without-capabilities",
+      planId,
+      proposalId,
+    });
+    expect(readOnlyOpen).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S007",
+        data: {
+          selectedProposalId: proposalId,
+          proposals: [{ id: proposalId, error: { code: "unavailable" } }],
+        },
+      },
+    });
+    if (readOnlyOpen?.status !== "completed") {
+      throw new TypeError("Read-only Proposal did not open.");
+    }
+    expect(readOnlyOpen.state.transitions.map((transition) => transition.transitionId)).toEqual(
+      expect.arrayContaining(["PL-T17", "PL-T20"]),
+    );
+    expect(readOnlyOpen.state.transitions.map((transition) => transition.transitionId)).not.toEqual(
+      expect.arrayContaining(["PL-T18", "PL-T19"]),
+    );
+    await expect(proposals.read(proposalId)).resolves.toMatchObject({ status: "proposed" });
+    await expect(proposals.read(invalidProposalId)).resolves.toMatchObject({ status: "refused" });
+    const reviseWithoutLoadCalculation = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        proposals,
+        todayDateKey: () => 20260826,
+        proposalReviser: {
+          revise: vi.fn(() => {
+            throw new Error("Proposal revision must not start without load calculation.");
+          }),
+        },
+      },
+    );
+    await expect(
+      reviseWithoutLoadCalculation.executePlanTransition?.({
+        transitionId: "PL-T18",
+        commandId: "command-proposal-revise-without-load-calculation",
+        proposalId,
+        text: "Keep 45 minutes.",
+      }),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "unavailable" } });
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        proposals,
+        todayDateKey: () => 20260826,
+        proposalLoadCalculator: (workouts) => {
+          if (failLoadCalculation) throw new Error("load calculator unavailable");
+          const duration = workouts.find((candidate) => candidate.id === workoutId)?.durationS;
+          if (duration === 5_400) return 420;
+          if (duration === 1_800) return 360;
+          if (duration === 2_700) return 375;
+          return 0;
+        },
+        proposalPremiseReader: {
+          async read() {
+            premiseReadCount += 1;
+            if (forceCompareAndSwapRace) {
+              forceCompareAndSwapRace = false;
+              await plans.replace({ ...activePlan, updatedAtMs: 11, hlcPhysicalMs: 11 }, [workout]);
+            }
+            return premiseReadCount === 1 ? '{"loadAboveNormal":12}' : '{"loadAboveNormal":13}';
+          },
+        },
+        proposalReviser: {
+          async revise(input) {
+            expect(input.plan).toMatchObject({ updatedAtMs: 11, hlcPhysicalMs: 11 });
+            expect(input.premises).toEqual([
+              expect.objectContaining({ snapshotJson: '{"loadAboveNormal":13}' }),
+            ]);
+            return {
+              title: "Sunday recovery · revised",
+              rationale: "Keep more easy volume while protecting recovery.",
+              confidence: "High",
+              mutation: {
+                schemaVersion: 1,
+                changes: [
+                  {
+                    workoutId,
+                    before: {
+                      dateKey: workout.dateKey,
+                      sport: workout.sport,
+                      name: workout.name,
+                      durationS: workout.durationS,
+                      structureJson: workout.structureJson,
+                    },
+                    after: {
+                      dateKey: workout.dateKey,
+                      sport: workout.sport,
+                      name: "Recovery",
+                      durationS: 2_700,
+                      structureJson: workout.structureJson,
+                    },
+                  },
+                ],
+                weekLoad: { before: 420, after: 375 },
+              },
+              premises: [
+                {
+                  sourceType: "activity",
+                  sourceId: "ride-21-aug",
+                  sourceLabel: "Saturday ride · 21 Aug · Assioma pedals",
+                  sourceDateKey: 20260821,
+                  confidence: "High",
+                  snapshotJson: '{"loadAboveNormal":13}',
+                },
+              ],
+            };
+          },
+        },
+      },
+    );
+    const insertMalformedProposal = async (id: string, timestamp: number): Promise<void> => {
+      await store.run(
+        `INSERT INTO plan_proposal (
+          id, plan_id, parent_proposal_id, revision, status, title, rationale, confidence,
+          mutation_json, base_snapshot_json, refusal_reason, created_at_ms, updated_at_ms,
+          resolved_at_ms, device_id, hlc_physical_ms, hlc_counter
+        ) VALUES (?, ?, NULL, 1, 'proposed', 'Malformed Proposal', 'Imported malformed data.',
+          'Low', ?, ?, NULL, ?, ?, NULL, 'device-1', ?, 0)`,
+        [
+          id,
+          planId,
+          '{"freeText":"unsupported"}',
+          encodePlanProposalBase(capturePlanProposalBase(activePlan, [workout])),
+          timestamp,
+          timestamp,
+          timestamp,
+        ],
+      );
+    };
+    const invalidReviseId = `${"0".repeat(25)}W`;
+    await insertMalformedProposal(invalidReviseId, 22);
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T18",
+        commandId: "command-malformed-proposal-revise",
+        proposalId: invalidReviseId,
+        text: "Change it.",
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S097" } });
+    await expect(proposals.read(invalidReviseId)).resolves.toMatchObject({ status: "refused" });
+
+    const invalidApproveId = `${"0".repeat(25)}X`;
+    await insertMalformedProposal(invalidApproveId, 23);
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T19",
+        commandId: "command-malformed-proposal-approve",
+        proposalId: invalidApproveId,
+        expectedRevision: 1,
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S097" } });
+    await expect(proposals.read(invalidApproveId)).resolves.toMatchObject({ status: "refused" });
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: {
+        attention: { count: 1, destination: "direct" },
+        data: {
+          proposals: [
+            {
+              id: proposalId,
+              diff: [
+                { label: "Duration", before: "1:30", after: "0:30" },
+                { label: "Workout", before: "Endurance", after: "Recovery" },
+                { label: "Week load", before: "420", after: "360" },
+              ],
+              premises: [{ sourceLabel: "Saturday ride · 21 Aug · Assioma pedals" }],
+            },
+          ],
+        },
+      },
+    });
+    await expect(proposals.read(invalidProposalId)).resolves.toMatchObject({
+      status: "refused",
+      refusalReason: "This Proposal could not be applied safely. The active Plan is unchanged.",
+    });
+    failLoadCalculation = true;
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: {
+        data: {
+          proposals: [{ id: proposalId, error: { code: "unavailable", retryable: true } }],
+        },
+      },
+    });
+    await expect(proposals.read(proposalId)).resolves.toMatchObject({ status: "proposed" });
+    failLoadCalculation = false;
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T17",
+        commandId: "command-proposal-open",
+        planId,
+        proposalId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S007", data: { selectedProposalId: proposalId } },
+    });
+    const staleResult = await operations.executePlanTransition?.({
+      transitionId: "PL-T19",
+      commandId: "command-proposal-stale-race",
+      proposalId,
+      expectedRevision: 1,
+    });
+    expect(staleResult).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S025",
+        data: { proposals: [{ revision: 2, stale: false }] },
+      },
+    });
+    const revalidated = (await proposals.readOpenForPlan(planId))[0];
+    if (revalidated === undefined) throw new TypeError("Revalidated Proposal missing.");
+    expect(staleResult).toMatchObject({
+      state: { data: { selectedProposalId: revalidated.id } },
+    });
+    const revisedResult = await operations.executePlanTransition?.({
+      transitionId: "PL-T18",
+      commandId: "command-proposal-revise",
+      proposalId: revalidated.id,
+      text: "Keep 45 minutes and make it recovery.",
+    });
+    expect(revisedResult).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S023",
+        data: {
+          proposals: [
+            {
+              revision: 3,
+              title: "Sunday recovery · revised",
+              diff: [
+                { label: "Duration", before: "1:30", after: "0:45" },
+                { label: "Workout", before: "Endurance", after: "Recovery" },
+                { label: "Week load", before: "420", after: "375" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const revised = (await proposals.readOpenForPlan(planId))[0];
+    if (revised === undefined) throw new TypeError("Revised Proposal missing.");
+    await expect(proposals.read(proposalId)).resolves.toMatchObject({ status: "superseded" });
+    await expect(proposals.read(revalidated.id)).resolves.toMatchObject({ status: "superseded" });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T19",
+        commandId: "command-proposal-approve",
+        proposalId: revised.id,
+        expectedRevision: 3,
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S008" } });
+    await expect(plans.readWorkouts(planId)).resolves.toEqual([
+      expect.objectContaining({ name: "Recovery", durationS: 2_700 }),
+    ]);
+    await expect(proposals.read(revised.id)).resolves.toMatchObject({ status: "applied" });
+    await expect(
+      createPlanReconciliationRepository(store).readLatestJob(planId, "mirror"),
+    ).resolves.toMatchObject({ status: "pending" });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T17",
+        commandId: "command-proposal-open-after-apply",
+        planId,
+        proposalId: revised.id,
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
   });
 });

@@ -67,6 +67,10 @@ export interface PlanViewAdapter {
   closeWorkout(): void;
   resolveWorkoutMatch(workoutId: string, activityId: string, decision: "confirm" | "reject"): void;
   resolveWorkoutDrift(workoutId: string, eventId: string, decision: "adopt" | "restore"): void;
+  openProposal(proposalId: string): void;
+  reviseProposal(proposalId: string, text: string): void;
+  approveProposal(proposalId: string, expectedRevision: number): void;
+  rejectProposal(proposalId: string): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
@@ -738,6 +742,42 @@ export function createPlanViewAdapter(input: {
         planId: model.planId,
         workoutId,
         eventId,
+      });
+    },
+    openProposal(proposalId) {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T17",
+        commandId: createCommandId(),
+        planId: model.planId,
+        proposalId,
+      });
+    },
+    reviseProposal(proposalId, text) {
+      if (active !== null || !/\S/u.test(text)) return;
+      void execute({
+        transitionId: "PL-T18",
+        commandId: createCommandId(),
+        proposalId,
+        text,
+      });
+    },
+    approveProposal(proposalId, expectedRevision) {
+      if (active !== null) return;
+      void execute({
+        transitionId: "PL-T19",
+        commandId: createCommandId(),
+        proposalId,
+        expectedRevision,
+      });
+    },
+    rejectProposal(proposalId) {
+      if (active !== null) return;
+      void execute({
+        transitionId: "PL-T20",
+        commandId: createCommandId(),
+        proposalId,
       });
     },
     openAttention(attentionId) {

@@ -22,6 +22,7 @@ import {
   type PlanError,
   type PlanFtpProjection,
   type PlanProgressEvent,
+  type PlanProposalProjection,
   type PlanRaceCourseProjection,
   type PlanRaceCourseSummary,
   type PlanStartDateProjection,
@@ -58,6 +59,18 @@ import {
   type PlanStartDatePreview,
   type RaceCourseRecalculatingState,
   type PlanWorkoutDriftSnapshot,
+  applyValidatedPlanProposal,
+  capturePlanProposalBase,
+  encodePlanProposalBase,
+  encodePlanProposalMutation,
+  parsePlanProposalMutation,
+  projectPlanProposalDiff,
+  revalidatePlanProposalPremises,
+  validatePlanProposal,
+  PlanProposalError,
+  type PlanProposalLoadCalculator,
+  type PlanProposalMutation,
+  type PlanProposalPremiseReader,
 } from "@enduragent/engine";
 import {
   buildActivePlanReadModel,
@@ -71,6 +84,7 @@ import {
   createPlanRepository,
   createPlanWorkoutMatchRepository,
   createPlanWorkoutDriftRepository,
+  createPlanProposalRepository,
   planWeekIndex,
   PlanConversationValidationError,
   type PlanConversationRecord,
@@ -84,6 +98,10 @@ import {
   type PlanWorkoutMatchRepository,
   type PlanWorkoutDriftRecord,
   type PlanWorkoutDriftRepository,
+  type PlanProposalRecord,
+  type PlanProposalPremiseRecord,
+  type PlanProposalRepository,
+  PlanProposalValidationError,
   parseRaceCourseSnapshot,
   type RaceCourseSnapshot,
 } from "@enduragent/kernel/planning";
@@ -181,6 +199,25 @@ const DRAFT_STALE: PlanError = Object.freeze({
   retryable: false,
 });
 
+const PROPOSAL_STALE: PlanError = Object.freeze({
+  code: "stale-base",
+  message: "The Plan changed before approval. Review the updated Proposal.",
+  retryable: false,
+});
+
+const PROPOSAL_INVALID: PlanError = Object.freeze({
+  code: "invalid-input",
+  message: "This Proposal could not be applied safely. The active Plan is unchanged.",
+  retryable: false,
+});
+
+function isProposalStale(error: unknown): boolean {
+  return (
+    (error instanceof PlanProposalError && error.code === "stale-base") ||
+    (error instanceof PlanProposalValidationError && error.code === "stale-base")
+  );
+}
+
 export interface PlanDraftBuild {
   readonly plan: PlanRecord;
   readonly workouts: readonly PlanWorkoutRecord[];
@@ -221,6 +258,27 @@ export interface PlanReadinessInput {
   readonly draft: PlanDraftRevisionRecord | undefined;
 }
 
+export interface PlanProposalRevisionBuild {
+  readonly title: string;
+  readonly rationale: string;
+  readonly confidence: PlanProposalRecord["confidence"];
+  readonly mutation: PlanProposalMutation;
+  readonly premises: readonly Omit<
+    PlanProposalPremiseRecord,
+    "id" | "proposalId" | "createdAtMs" | "deviceId" | "hlcPhysicalMs" | "hlcCounter"
+  >[];
+}
+
+export interface PlanProposalReviser {
+  revise(input: {
+    readonly proposal: PlanProposalRecord;
+    readonly premises: readonly PlanProposalPremiseRecord[];
+    readonly plan: PlanRecord;
+    readonly workouts: readonly PlanWorkoutRecord[];
+    readonly instruction: string;
+  }): Promise<PlanProposalRevisionBuild>;
+}
+
 export interface CreatePlanningOperationsDependencies {
   readonly conversations?: PlanConversationRepository;
   readonly plans?: PlanRepository;
@@ -232,6 +290,10 @@ export interface CreatePlanningOperationsDependencies {
   readonly calendar?: PlanMirrorCalendarPort;
   readonly workoutMatches?: PlanWorkoutMatchRepository;
   readonly workoutDrifts?: PlanWorkoutDriftRepository;
+  readonly proposals?: PlanProposalRepository;
+  readonly proposalReviser?: PlanProposalReviser;
+  readonly proposalPremiseReader?: PlanProposalPremiseReader;
+  readonly proposalLoadCalculator?: PlanProposalLoadCalculator;
   readonly workoutDriftCalendar?: PlanMirrorCalendarPort;
   readonly todayDateKey?: () => number;
 }
@@ -325,6 +387,38 @@ function startDateProjection(input: {
   }
 }
 
+function proposalProjection(input: {
+  readonly proposal: PlanProposalRecord;
+  readonly premises: readonly PlanProposalPremiseRecord[];
+  readonly mutation: PlanProposalMutation;
+  readonly stale: boolean;
+  readonly error?: PlanError | null;
+}): PlanProposalProjection {
+  const first = input.mutation.changes[0];
+  if (first === undefined) throw new PlanProposalError("invalid-mutation");
+  return {
+    id: input.proposal.id,
+    revision: input.proposal.revision,
+    title: input.proposal.title,
+    rationale: input.proposal.rationale,
+    confidence: input.proposal.confidence,
+    targetWorkoutId: first.workoutId,
+    affectedDate: dateText(first.after.dateKey),
+    stale: input.stale,
+    diff: [...projectPlanProposalDiff(input.mutation)],
+    premises: input.premises.map((premise) => ({
+      id: premise.id,
+      sourceType: premise.sourceType,
+      sourceId: premise.sourceId,
+      sourceLabel: premise.sourceLabel,
+      sourceDate: premise.sourceDateKey === null ? null : dateText(premise.sourceDateKey),
+      confidence: premise.confidence,
+      snapshotJson: premise.snapshotJson,
+    })),
+    error: input.error ?? null,
+  };
+}
+
 function activePlanData(input: {
   readonly plan: PlanRecord;
   readonly workouts: readonly PlanWorkoutRecord[];
@@ -337,6 +431,9 @@ function activePlanData(input: {
   readonly selectedWorkoutId?: string | null;
   readonly drifts: readonly PlanWorkoutDriftRecord[];
   readonly driftError?: PlanError | null;
+  readonly proposals: readonly PlanProposalProjection[];
+  readonly selectedProposalId?: string | null;
+  readonly proposalRevisionText?: string | null;
 }): PlanActiveProjectionData {
   const plan = draftPlanProjection(input.plan, input.workouts);
   if (plan === null) throw new TypeError("An active Plan projection requires a Plan.");
@@ -443,6 +540,9 @@ function activePlanData(input: {
     workouts: allWorkouts,
     matchSync: input.matchSync,
     selectedWorkoutId: input.selectedWorkoutId ?? null,
+    proposals: input.proposals,
+    selectedProposalId: input.selectedProposalId ?? null,
+    proposalRevisionText: input.proposalRevisionText ?? null,
   });
 }
 
@@ -599,6 +699,9 @@ interface ReadOverrides {
   readonly activeScenario?: ActivePlanScenario;
   readonly selectedWorkoutId?: string | null;
   readonly driftError?: PlanError | null;
+  readonly selectedProposalId?: string | null;
+  readonly proposalRevisionText?: string | null;
+  readonly proposalOverride?: PlanProposalProjection;
 }
 
 function queueText(queue: ChatQueueSnapshot): string {
@@ -636,7 +739,35 @@ export function createPlanningOperations(
     dependencies.workoutMatches ?? createPlanWorkoutMatchRepository(input.context.store);
   const workoutDrifts =
     dependencies.workoutDrifts ?? createPlanWorkoutDriftRepository(input.context.store);
+  const proposalRepository =
+    dependencies.proposals ?? createPlanProposalRepository(input.context.store);
   const enqueue = createSerializedLane();
+  const refuseProposal = async (
+    proposal: PlanProposalRecord,
+    reason = PROPOSAL_INVALID.message,
+  ): Promise<void> => {
+    const stamp = input.identity.hlcStamp();
+    await proposalRepository.resolve({
+      id: proposal.id,
+      status: "refused",
+      reason,
+      resolvedAtMs: stamp.physicalMs,
+      deviceId: await input.identity.deviceId(),
+      hlcPhysicalMs: stamp.physicalMs,
+      hlcCounter: stamp.counter,
+    });
+  };
+  const parseProposalMutationOrRefuse = async (
+    proposal: PlanProposalRecord,
+  ): Promise<PlanProposalMutation | null> => {
+    try {
+      return parsePlanProposalMutation(proposal.mutationJson);
+    } catch (error) {
+      if (!(error instanceof PlanProposalError)) throw error;
+      await refuseProposal(proposal);
+      return null;
+    }
+  };
 
   const readActive = async (
     plan: PlanRecord,
@@ -715,6 +846,66 @@ export function createPlanningOperations(
             ? "failed"
             : "running";
     const verificationFailure = projection?.job.lastErrorCode === "calendar-verification-failed";
+    const proposalRows = await proposalRepository.readOpenForPlan(plan.id);
+    const proposalProjections = (
+      await Promise.all(
+        proposalRows.map(async (proposal): Promise<PlanProposalProjection | null> => {
+          const premises = await proposalRepository.readPremises(proposal.id);
+          try {
+            const validated = validatePlanProposal({
+              proposal,
+              premises,
+              plan,
+              workouts,
+              todayDateKey,
+              calculateWeekLoad: dependencies.proposalLoadCalculator,
+            });
+            return proposalProjection({
+              proposal,
+              premises,
+              mutation: validated.mutation,
+              stale: false,
+            });
+          } catch (error) {
+            if (!(error instanceof PlanProposalError)) throw error;
+            if (error.code === "missing-capability") {
+              return proposalProjection({
+                proposal,
+                premises,
+                mutation: parsePlanProposalMutation(proposal.mutationJson),
+                stale: false,
+                error: UNAVAILABLE,
+              });
+            }
+            if (error.code !== "stale-base") {
+              await refuseProposal(proposal);
+              return null;
+            }
+            try {
+              return proposalProjection({
+                proposal,
+                premises,
+                mutation: parsePlanProposalMutation(proposal.mutationJson),
+                stale: true,
+                error: PROPOSAL_STALE,
+              });
+            } catch {
+              await refuseProposal(proposal);
+              return null;
+            }
+          }
+        }),
+      )
+    ).filter((proposal): proposal is PlanProposalProjection => proposal !== null);
+    const mergedProposalProjections =
+      overrides.proposalOverride === undefined
+        ? proposalProjections
+        : [
+            overrides.proposalOverride,
+            ...proposalProjections.filter(
+              (proposal) => proposal.id !== overrides.proposalOverride!.id,
+            ),
+          ];
     return buildActivePlanReadModel({
       scenarioId,
       planId: plan.id,
@@ -728,6 +919,9 @@ export function createPlanningOperations(
         selectedWorkoutId: overrides.selectedWorkoutId,
         drifts,
         driftError: overrides.driftError,
+        proposals: mergedProposalProjections,
+        selectedProposalId: overrides.selectedProposalId,
+        proposalRevisionText: overrides.proposalRevisionText,
       }),
       reconciliation: {
         status,
@@ -743,6 +937,11 @@ export function createPlanningOperations(
               ? CALENDAR_VERIFICATION_FAILED
               : CALENDAR_UPDATE_FAILED
             : null,
+      },
+      proposalCapabilities: {
+        canRevise: dependencies.proposalReviser !== undefined,
+        canVerifyPremises: dependencies.proposalPremiseReader !== undefined,
+        canCalculateLoad: dependencies.proposalLoadCalculator !== undefined,
       },
     });
   };
@@ -1009,6 +1208,68 @@ export function createPlanningOperations(
       hlcPhysicalMs: stamp.physicalMs,
       hlcCounter: stamp.counter,
     });
+  };
+
+  const saveProposalRevision = async (inputValue: {
+    readonly current: PlanProposalRecord;
+    readonly premises: readonly PlanProposalPremiseRecord[];
+    readonly plan: PlanRecord;
+    readonly workouts: readonly PlanWorkoutRecord[];
+    readonly instruction: string;
+  }): Promise<PlanProposalRecord> => {
+    if (dependencies.proposalReviser === undefined)
+      throw new Error("Proposal revision unavailable.");
+    const build = await dependencies.proposalReviser.revise({
+      proposal: inputValue.current,
+      premises: inputValue.premises,
+      plan: inputValue.plan,
+      workouts: inputValue.workouts,
+      instruction: inputValue.instruction,
+    });
+    const timestamp = input.identity.hlcStamp().physicalMs;
+    const stamp = input.identity.hlcStamp();
+    const deviceId = await input.identity.deviceId();
+    const next: PlanProposalRecord = {
+      id: input.identity.newUlid(),
+      planId: inputValue.plan.id,
+      parentProposalId: inputValue.current.id,
+      revision: inputValue.current.revision + 1,
+      status: "proposed",
+      title: build.title,
+      rationale: build.rationale,
+      confidence: build.confidence,
+      mutationJson: encodePlanProposalMutation(build.mutation),
+      baseSnapshotJson: encodePlanProposalBase(
+        capturePlanProposalBase(inputValue.plan, inputValue.workouts),
+      ),
+      refusalReason: null,
+      createdAtMs: timestamp,
+      updatedAtMs: timestamp,
+      resolvedAtMs: null,
+      deviceId,
+      hlcPhysicalMs: stamp.physicalMs,
+      hlcCounter: stamp.counter,
+    };
+    const premiseRecords = build.premises.map(
+      (premise): PlanProposalPremiseRecord => ({
+        ...premise,
+        id: input.identity.newUlid(),
+        proposalId: next.id,
+        createdAtMs: timestamp,
+        deviceId,
+        hlcPhysicalMs: stamp.physicalMs,
+        hlcCounter: stamp.counter,
+      }),
+    );
+    validatePlanProposal({
+      proposal: next,
+      premises: premiseRecords,
+      plan: inputValue.plan,
+      workouts: inputValue.workouts,
+      todayDateKey: dependencies.todayDateKey?.() ?? utcTodayDateKey(),
+      calculateWeekLoad: dependencies.proposalLoadCalculator,
+    });
+    return proposalRepository.save(next, premiseRecords);
   };
 
   const reject = async (
@@ -1848,6 +2109,308 @@ export function createPlanningOperations(
             });
           }
         }
+        if (command.transitionId === "PL-T17") {
+          const [proposal, plan] = await Promise.all([
+            proposalRepository.read(command.proposalId),
+            plans.read(command.planId),
+          ]);
+          if (
+            proposal?.status !== "proposed" ||
+            plan?.status !== "active" ||
+            proposal.planId !== plan.id
+          ) {
+            return reject(UNAVAILABLE);
+          }
+          const [workouts, premises] = await Promise.all([
+            plans.readWorkouts(plan.id),
+            proposalRepository.readPremises(proposal.id),
+          ]);
+          try {
+            const validated = validatePlanProposal({
+              proposal,
+              premises,
+              plan,
+              workouts,
+              todayDateKey: dependencies.todayDateKey?.() ?? utcTodayDateKey(),
+              calculateWeekLoad: dependencies.proposalLoadCalculator,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                activeScenario: "PL-S007",
+                selectedProposalId: proposal.id,
+                proposalOverride: proposalProjection({
+                  proposal,
+                  premises,
+                  mutation: validated.mutation,
+                  stale: false,
+                }),
+              }),
+            });
+          } catch (error) {
+            if (!(error instanceof PlanProposalError)) throw error;
+            if (error.code === "missing-capability") {
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: await read({
+                  activeScenario: "PL-S007",
+                  selectedProposalId: proposal.id,
+                  proposalOverride: proposalProjection({
+                    proposal,
+                    premises,
+                    mutation: parsePlanProposalMutation(proposal.mutationJson),
+                    stale: false,
+                    error: UNAVAILABLE,
+                  }),
+                }),
+              });
+            }
+            if (error.code === "stale-base") {
+              const projected = proposalProjection({
+                proposal,
+                premises,
+                mutation: parsePlanProposalMutation(proposal.mutationJson),
+                stale: true,
+                error: PROPOSAL_STALE,
+              });
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: await read({
+                  activeScenario: "PL-S025",
+                  selectedProposalId: proposal.id,
+                  proposalOverride: projected,
+                }),
+              });
+            }
+            await refuseProposal(proposal);
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: "PL-S097" }),
+            });
+          }
+        }
+        if (command.transitionId === "PL-T18") {
+          if (dependencies.proposalReviser === undefined) return reject(UNAVAILABLE);
+          const proposal = await proposalRepository.read(command.proposalId);
+          if (proposal?.status !== "proposed") return reject(UNAVAILABLE);
+          const mutation = await parseProposalMutationOrRefuse(proposal);
+          if (mutation === null) {
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: "PL-S097" }),
+            });
+          }
+          if (mutation.weekLoad !== null && dependencies.proposalLoadCalculator === undefined) {
+            return reject(UNAVAILABLE);
+          }
+          const [plan, workouts, premises] = await Promise.all([
+            plans.read(proposal.planId),
+            plans.readWorkouts(proposal.planId),
+            proposalRepository.readPremises(proposal.id),
+          ]);
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          try {
+            const revised = await saveProposalRevision({
+              current: proposal,
+              premises,
+              plan,
+              workouts,
+              instruction: command.text,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                activeScenario: "PL-S023",
+                selectedProposalId: revised.id,
+                proposalRevisionText: command.text,
+              }),
+            });
+          } catch (error) {
+            if (error instanceof PlanProposalError && error.code === "missing-capability") {
+              return reject(UNAVAILABLE, {
+                activeScenario: "PL-S007",
+                selectedProposalId: proposal.id,
+              });
+            }
+            return reject(PERSISTENCE_FAILED, {
+              activeScenario: "PL-S022",
+              selectedProposalId: proposal.id,
+              proposalRevisionText: command.text,
+            });
+          }
+        }
+        if (command.transitionId === "PL-T19") {
+          const proposal = await proposalRepository.read(command.proposalId);
+          if (proposal?.status !== "proposed" || proposal.revision !== command.expectedRevision) {
+            return reject(PROPOSAL_STALE);
+          }
+          const mutation = await parseProposalMutationOrRefuse(proposal);
+          if (mutation === null) {
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: "PL-S097" }),
+            });
+          }
+          const [plan, workouts, premises] = await Promise.all([
+            plans.read(proposal.planId),
+            plans.readWorkouts(proposal.planId),
+            proposalRepository.readPremises(proposal.id),
+          ]);
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          const premiseReader = dependencies.proposalPremiseReader;
+          if (premiseReader === undefined) return reject(UNAVAILABLE);
+          if (mutation.weekLoad !== null && dependencies.proposalLoadCalculator === undefined) {
+            return reject(UNAVAILABLE);
+          }
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total: 1,
+          });
+          try {
+            await revalidatePlanProposalPremises(premises, premiseReader);
+            const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+            const validated = validatePlanProposal({
+              proposal,
+              premises,
+              plan,
+              workouts,
+              todayDateKey,
+              calculateWeekLoad: dependencies.proposalLoadCalculator,
+            });
+            const stamp = input.identity.hlcStamp();
+            await applyValidatedPlanProposal(validated, {
+              repository: proposalRepository,
+              plan,
+              resolvedAtMs: stamp.physicalMs,
+              deviceId: await input.identity.deviceId(),
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+              mirrorJob: {
+                id: input.identity.newUlid(),
+                windowStartDateKey: todayDateKey,
+                windowEndDateKey: addCivilDays(todayDateKey, 6),
+                createdAtMs: stamp.physicalMs,
+              },
+            });
+          } catch (error) {
+            if (error instanceof PlanProposalError && error.code === "missing-capability") {
+              deliver(onEvent, {
+                commandId: command.commandId,
+                transitionId: command.transitionId,
+                operationId,
+                phase: "failed",
+                completed: 0,
+                total: 1,
+              });
+              return reject(UNAVAILABLE, {
+                activeScenario: "PL-S007",
+                selectedProposalId: proposal.id,
+              });
+            }
+            if (isProposalStale(error)) {
+              let current = proposal;
+              if (dependencies.proposalReviser !== undefined) {
+                try {
+                  const latestPlan = await plans.read(proposal.planId);
+                  if (latestPlan?.status !== "active") throw new Error("Plan is not active.");
+                  const [latestWorkouts, refreshedPremises] = await Promise.all([
+                    plans.readWorkouts(proposal.planId),
+                    Promise.all(
+                      premises.map(async (premise) => {
+                        const snapshotJson = await premiseReader.read({
+                          sourceType: premise.sourceType,
+                          sourceId: premise.sourceId,
+                        });
+                        if (snapshotJson === null) throw new Error("Proposal premise is missing.");
+                        return Object.freeze({ ...premise, snapshotJson });
+                      }),
+                    ),
+                  ]);
+                  current = await saveProposalRevision({
+                    current: proposal,
+                    premises: refreshedPremises,
+                    plan: latestPlan,
+                    workouts: latestWorkouts,
+                    instruction:
+                      "Revalidate this Proposal against the current Plan and source data without changing the athlete's intent.",
+                  });
+                } catch {
+                  current = proposal;
+                }
+              }
+              const currentPremises = await proposalRepository.readPremises(current.id);
+              const projected = proposalProjection({
+                proposal: current,
+                premises: currentPremises,
+                mutation: parsePlanProposalMutation(current.mutationJson),
+                stale: current.id === proposal.id,
+                error: current.id === proposal.id ? PROPOSAL_STALE : null,
+              });
+              deliver(onEvent, {
+                commandId: command.commandId,
+                transitionId: command.transitionId,
+                operationId,
+                phase: "completed",
+                completed: 1,
+                total: 1,
+              });
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: await read({
+                  activeScenario: "PL-S025",
+                  selectedProposalId: current.id,
+                  proposalOverride: projected,
+                }),
+              });
+            }
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total: 1,
+            });
+            return reject(PROPOSAL_INVALID, {
+              activeScenario: "PL-S007",
+              selectedProposalId: proposal.id,
+            });
+          }
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "completed",
+            completed: 1,
+            total: 1,
+          });
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await read({ activeScenario: "PL-S008" }),
+          });
+        }
+        if (command.transitionId === "PL-T20") {
+          const proposal = await proposalRepository.read(command.proposalId);
+          if (proposal?.status !== "proposed") return reject(UNAVAILABLE);
+          const stamp = input.identity.hlcStamp();
+          await proposalRepository.resolve({
+            id: proposal.id,
+            status: "rejected",
+            resolvedAtMs: stamp.physicalMs,
+            deviceId: await input.identity.deviceId(),
+            hlcPhysicalMs: stamp.physicalMs,
+            hlcCounter: stamp.counter,
+          });
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await read({ activeScenario: "PL-S097" }),
+          });
+        }
         if (command.transitionId === "PL-T33") {
           const state = await read();
           if (state.planId !== command.planId || state.attention.count === 0) {
@@ -1873,6 +2436,18 @@ export function createPlanningOperations(
                 }),
               });
             }
+            if (item.id.startsWith("proposal:")) {
+              const proposalId = item.id.slice("proposal:".length);
+              const proposal = await proposalRepository.read(proposalId);
+              if (proposal?.status !== "proposed") return reject(UNAVAILABLE);
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: await read({
+                  activeScenario: item.scenarioId === "PL-S025" ? "PL-S025" : "PL-S007",
+                  selectedProposalId: proposalId,
+                }),
+              });
+            }
             return ExecutePlanTransitionRpcResultSchema.parse({ status: "completed", state });
           }
           return ExecutePlanTransitionRpcResultSchema.parse({
@@ -1889,9 +2464,37 @@ export function createPlanningOperations(
         if (command.transitionId === "PL-T34") {
           const isMatch = command.attentionId.startsWith("workout-match:");
           const isDrift = command.attentionId.startsWith("workout-drift:");
-          if (!isMatch && !isDrift) return reject(UNAVAILABLE);
+          const isProposal = command.attentionId.startsWith("proposal:");
+          if (!isMatch && !isDrift && !isProposal) return reject(UNAVAILABLE);
           const plan = await plans.readLatest();
           if (plan?.status !== "active") return reject(UNAVAILABLE);
+          if (isProposal) {
+            const proposalId = command.attentionId.slice("proposal:".length);
+            const proposal = await proposalRepository.read(proposalId);
+            if (proposal?.status !== "proposed" || proposal.planId !== plan.id) {
+              return reject(UNAVAILABLE);
+            }
+            const premises = await proposalRepository.readPremises(proposal.id);
+            let scenario: ActivePlanScenario = "PL-S007";
+            try {
+              validatePlanProposal({
+                proposal,
+                premises,
+                plan,
+                workouts: await plans.readWorkouts(plan.id),
+                todayDateKey: dependencies.todayDateKey?.() ?? utcTodayDateKey(),
+                calculateWeekLoad: dependencies.proposalLoadCalculator,
+              });
+            } catch (error) {
+              if (error instanceof PlanProposalError && error.code === "stale-base") {
+                scenario = "PL-S025";
+              }
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: scenario, selectedProposalId: proposalId }),
+            });
+          }
           const workoutId = command.attentionId.slice(
             isMatch ? "workout-match:".length : "workout-drift:".length,
           );
