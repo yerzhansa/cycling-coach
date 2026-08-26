@@ -198,7 +198,7 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 - Upload owner-only, read-only copies of the verified bytes through `gh-personal release upload`. The original artifact paths are never uploaded.
 - Re-read the release after upload and fail unless all three assets are present and each GitHub asset `digest` and size equals the uploaded bytes.
 - Re-check `releases/latest` after the digest reconciliation. When the release stopped being latest during the upload, the uploader deletes its three assets and fails with `release lost latest status during upload; Windows assets removed`. Re-run the whole Windows release for the newer version.
-- Treat a failed record with `uploaded: true` after that rollback as an incomplete upload. Remove the listed assets by hand.
+- Treat a failed record with `uploaded: true` or `uploaded: "unknown"` after that rollback as an incomplete upload. Remove the listed assets by hand; with `uploadedAssets: null`, inspect the release by hand.
 - Read `uploadedAssets` in a failed record before retrying. A partial upload lists the assets that became public.
 - Trigger the separate verification workflow from the repository root:
 

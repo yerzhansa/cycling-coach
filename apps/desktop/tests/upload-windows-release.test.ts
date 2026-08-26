@@ -288,6 +288,19 @@ describe("Windows release upload", () => {
     expect(written.uploadedAssets).toEqual([verified.names.blockmap, verified.names.metadata]);
   });
 
+  it("refuses to delete when a GitHub asset has no numeric id", async () => {
+    const withoutIds = JSON.parse(releaseAssetsApi()) as { assets: { id?: number }[] };
+    for (const asset of withoutIds.assets) delete asset.id;
+    const executeFile = successfulExecutor({
+      latestTagAfterUpload: "enduragent-desktop@0.1.7",
+      assetsApi: JSON.stringify(withoutIds),
+    });
+    await expect(
+      runWindowsReleaseUpload(input(), { executeFile, verifyAssets: vi.fn(async () => verified) }),
+    ).rejects.toThrow("Windows release upload is incomplete");
+    expect(executeFile.mock.calls.flat(2)).not.toContain("DELETE");
+  });
+
   it("reports an incomplete upload when the post-upload latest check is unavailable", async () => {
     const base = successfulExecutor();
     let uploads = 0;

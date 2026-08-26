@@ -106,7 +106,7 @@ jobs:
       - name: Refuse to mark assets while Authenticode is pending
         if: ${{ inputs.dry_run == false && inputs.authenticode != 'verify' }}
         run: |
-          echo '::error::Authenticode verification is not enabled; refusing to mark assets'
+          echo '::error::Authenticode verification is not enabled; refusing to record verification evidence'
           exit 1
       - name: Download Windows assets
         env:
@@ -169,7 +169,8 @@ jobs:
             --arg publisherDnSha256 "$PUBLISHER_SHA256" \
             '{schemaVersion: 1, tag: $tag, version: $version, commit: $commit, arch: "x64", authenticode: "verified", installerSha256: $installerSha256, publisherDnSha256: $publisherDnSha256}' \
             > "$TEMP/$EVIDENCE"
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" | jq -e --arg name "$EVIDENCE" '.assets[] | select(.name == $name)' >/dev/null; then
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$TEMP/release.json"
+          if [ "$(jq -r --arg name "$EVIDENCE" '[.assets[] | select(.name == $name)] | length' "$TEMP/release.json")" != '0' ]; then
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$TEMP/existing" --pattern "$EVIDENCE"
             if cmp -s "$TEMP/$EVIDENCE" "$TEMP/existing/$EVIDENCE"; then
               echo "::notice::Windows verification evidence already recorded"
@@ -185,4 +186,4 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          echo "::notice::dry_run=true; release enduragent-desktop@$VERSION was verified but not marked"
+          echo "::notice::dry_run=true; release enduragent-desktop@$VERSION was verified; no evidence asset was recorded"
