@@ -92,6 +92,7 @@ import {
   type ListArchivedConversationsRpcParams,
   type ListArchivedConversationsRpcResult,
   type GetRuntimeConfigRpcResult,
+  type PlanningReadOperations,
   type VerifyIntervalsCredentialRpcParams,
   type VerifyIntervalsCredentialRpcResult,
 } from "@enduragent/coach-contract";
@@ -166,6 +167,7 @@ import { createManagedWorkoutReader } from "@enduragent/sport-cycling/workout-im
 import { createPersistentOpenRouterModelMetadataCache } from "./openrouter-model-metadata-cache.js";
 import { createDocumentMediaAttachmentOperations } from "./document-media-attachment-operations.js";
 import { createAttachmentComposerOperations } from "./attachment-composer-operations.js";
+import { createPlanningReadService } from "./planning-read-service.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -178,7 +180,7 @@ interface OAuthCredential extends StoredProfile {
 
 export interface LocalCoachComposition {
   readonly engine: CoachEngine;
-  readonly operations: CoachOperations;
+  readonly operations: CoachOperations & PlanningReadOperations;
   readonly spendMeter: SpendMeterService;
   readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   startInitialRefresh(): Promise<void>;
@@ -1840,10 +1842,16 @@ export async function createLocalCoachComposition(
           request.workoutId,
         ),
       clearChatAttachmentDraft: (request) => attachmentComposerOperations.clear(request.chatId),
+      getPlanningReadModel: (request) =>
+        createPlanningReadService({
+          store: input.context.store,
+          timezone: activeTimezone,
+          now,
+        }).getPlanningReadModel(request),
       getActivityAnalysis: (request, signal) =>
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
-    } satisfies CoachOperations;
+    } satisfies CoachOperations & PlanningReadOperations;
     return {
       engine: reconfigurable.engine,
       operations,

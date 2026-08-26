@@ -1185,6 +1185,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "exportTrainingFile",
         "getArchivedTranscriptPage",
         "getDaemonConnection",
+        "getPlanningReadModel",
         "getTranscriptPage",
         "getUpdateState",
         "initialSetupStatusSettled",

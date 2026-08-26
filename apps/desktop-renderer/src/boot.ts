@@ -54,6 +54,7 @@ import {
 import { createRideImportController, subscribeToDroppedRideImports } from "./ride-import.js";
 import { createTrainingExportController } from "./training-export/controller.js";
 import { settleInitialSetupStatus } from "./initial-setup-status.js";
+import { createPlanController } from "./plan/controller.js";
 
 export type Disposer = () => void;
 
@@ -126,6 +127,17 @@ export function bootRenderer(): Disposer {
   const trainingContextController = createTrainingContextController({
     clients,
     view: trainingAdapter.view,
+  });
+  const planController = createPlanController({
+    read: () => window.enduragentAuth.getPlanningReadModel(),
+    render: (next) => store.getState().setPlanSurface(next),
+    navigate: (view) => store.getState().setActiveView(view),
+    focus: (target, returnToChat) => store.getState().setPlanFocus(target, returnToChat),
+  });
+  store.getState().bindPlanActions({
+    refresh: () => void planController.refresh(),
+    openFromChat: (target) => planController.openFromChat(target),
+    backToChat: () => planController.backToChat(),
   });
   const trainingSyncCoordinator = createTrainingSyncCoordinator({
     clients,
@@ -437,6 +449,7 @@ export function bootRenderer(): Disposer {
   );
 
   void trainingContextController.start();
+  void planController.start();
   spendController.start();
   void telegramSettingsController.activate();
   void chatController.start();
@@ -463,6 +476,7 @@ export function bootRenderer(): Disposer {
     disposed = true;
     store.getState().bindChatActions(null);
     store.getState().bindArchiveActions(null);
+    store.getState().bindPlanActions(null);
     store.getState().bindSettingsPorts(null);
     store.getState().bindSyncActions(null);
     store.getState().bindRideImportActions(null);
@@ -491,6 +505,7 @@ export function bootRenderer(): Disposer {
     archiveController.dispose();
     spendController.dispose();
     trainingContextController.dispose();
+    planController.dispose();
     rideAnalysisController.dispose();
     void clients.close();
   };

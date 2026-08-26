@@ -59,6 +59,7 @@ interface AuthBridge {
   getTranscriptPage(input: unknown): Promise<unknown>;
   listArchivedConversations(): Promise<unknown>;
   getArchivedTranscriptPage(input: unknown): Promise<unknown>;
+  getPlanningReadModel(): Promise<unknown>;
   credentialStatuses(): Promise<unknown>;
   credentialRecoveryStatus(): Promise<unknown>;
   retryCredentialRecovery(): Promise<unknown>;
@@ -346,6 +347,7 @@ describe("desktop preload ChatGPT auth", () => {
         "getUpdateState",
         "getDaemonConnection",
         "getTranscriptPage",
+        "getPlanningReadModel",
         "initialSetupStatusSettled",
         "listArchivedConversations",
         "listTelegramAllowedSenders",
@@ -954,6 +956,23 @@ describe("desktop preload ChatGPT auth", () => {
       cursor: null,
       limit: 25,
     });
+  });
+
+  it("validates and copies the Planning-owned read model", async () => {
+    const response = {
+      schemaVersion: 1,
+      status: "no-plan",
+      asOfDateKey: 20260826,
+      plan: null,
+    };
+    mocks.invoke.mockResolvedValueOnce(response);
+    const value = await bridge.getPlanningReadModel();
+    expect(value).toEqual(response);
+    expect(value).not.toBe(response);
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:planning:read");
+
+    mocks.invoke.mockResolvedValueOnce({ ...response, athleteHome: "/private/athlete" });
+    await expect(bridge.getPlanningReadModel()).rejects.toBeInstanceOf(TypeError);
   });
 
   it("rejects malformed transcript requests before IPC and redacts malformed responses", async () => {

@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
-import { formatDateLabel, formatWholeNumber } from "../../training-context/format.js";
+import { formatWholeNumber } from "../../training-context/format.js";
 
 function ContextSection(props: {
   readonly label: string;
@@ -33,10 +33,11 @@ export function TrainingContextPanel(props: {
   readonly className?: string;
 }): ReactElement {
   const training = useEnduragentStore((state) => state.training);
-  const setActiveView = useEnduragentStore((state) => state.setActiveView);
+  const planning = useEnduragentStore((state) => state.planSurface);
+  const planActions = useEnduragentStore((state) => state.planActions);
   const context = training.trainingContext;
-  const nextWorkout = context.plan.kind === "computed" ? context.plan.items[0] : undefined;
-  const upcomingCount = context.plan.kind === "computed" ? context.plan.items.length : 0;
+  const currentPlan = planning.value?.status === "ready" ? planning.value.plan : null;
+  const todayWorkout = currentPlan?.todayWorkout ?? null;
 
   return (
     <aside
@@ -61,37 +62,42 @@ export function TrainingContextPanel(props: {
         </p>
       ) : (
         <div>
-          {nextWorkout === undefined ? (
+          {todayWorkout === null ? (
             <ContextSection
-              label="Next workout"
+              label="Today"
               title={
-                context.plan.kind === "unknown"
-                  ? unavailableCopy(context.plan.reason)
-                  : "No upcoming workouts"
+                planning.status === "loading"
+                  ? "Loading Plan…"
+                  : planning.value?.status === "no-plan"
+                    ? "No current Plan"
+                    : "No workout today"
               }
             />
           ) : (
             <ContextSection
-              label="Next workout"
-              title={nextWorkout.name ?? "Cycling workout"}
-              detail={`${formatDateLabel(nextWorkout.date)} · ${nextWorkout.workoutType}`}
+              label="Today"
+              title={todayWorkout.name}
+              detail={
+                todayWorkout.durationSeconds === null
+                  ? todayWorkout.sport
+                  : `${Math.round(todayWorkout.durationSeconds / 60)} min · ${todayWorkout.sport}`
+              }
             />
           )}
 
           <ContextSection
-            label="Upcoming plan"
+            label="Current Plan"
             title={
-              context.plan.kind === "computed"
-                ? `${upcomingCount} scheduled ${upcomingCount === 1 ? "workout" : "workouts"}`
-                : unavailableCopy(context.plan.reason)
+              currentPlan === null
+                ? planning.status === "loading"
+                  ? "Loading Plan…"
+                  : "Not available yet"
+                : currentPlan.name
             }
             detail={
-              context.plan.kind === "computed" && context.plan.items.length > 1
-                ? context.plan.items
-                    .slice(1, 3)
-                    .map((item) => item.name ?? item.workoutType)
-                    .join(" · ")
-                : undefined
+              currentPlan?.currentWeek === null || currentPlan === null
+                ? undefined
+                : `Week ${currentPlan.currentWeek} of ${currentPlan.totalWeeks}${currentPlan.phase === null ? "" : ` · ${currentPlan.phase}`}`
             }
           />
 
@@ -130,17 +136,18 @@ export function TrainingContextPanel(props: {
           Showing saved context; refresh is unavailable.
         </p>
       ) : null}
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="mt-inset -ml-inset text-ink-2"
-        onClick={() => {
-          setActiveView("training");
-        }}
-      >
-        Open Training
-      </Button>
+      {currentPlan === null ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="mt-inset -ml-inset text-ink-2"
+          onClick={() => planActions?.openFromChat(currentPlan.navigation)}
+          disabled={planActions === null}
+        >
+          Open Plan
+        </Button>
+      )}
     </aside>
   );
 }

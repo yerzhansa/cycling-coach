@@ -30,6 +30,7 @@ import {
 import { createSyncSlice, type SyncSlice } from "./sync-slice.js";
 import { createTrainingSlice, type TrainingSlice } from "./training-slice.js";
 import { createTrainingExportSlice, type TrainingExportSlice } from "./training-export-slice.js";
+import { createPlanSlice, type PlanSlice } from "./plan-slice.js";
 
 export interface EnduragentState
   extends
@@ -37,6 +38,7 @@ export interface EnduragentState
     ArchiveSlice,
     SettingsSlice,
     TrainingSlice,
+    PlanSlice,
     TrainingExportSlice,
     ActivityAnalysisSlice,
     SyncSlice,
@@ -68,6 +70,7 @@ export const useEnduragentStore = create<EnduragentState>((set, get, api) => ({
   ...createArchiveSlice(set, get, api),
   ...createSettingsSlice(set, get, api),
   ...createTrainingSlice(set, get, api),
+  ...createPlanSlice(set, get, api),
   ...createTrainingExportSlice(set, get, api),
   ...createActivityAnalysisSlice(set, get, api),
   ...createSyncSlice(set, get, api),

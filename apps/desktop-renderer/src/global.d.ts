@@ -16,6 +16,7 @@ interface EnduragentAuth {
     readonly cursor: string | null;
     readonly limit: number;
   }): Promise<DesktopTranscriptPage>;
+  getPlanningReadModel(): Promise<DesktopPlanningReadModel>;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: {
@@ -73,6 +74,7 @@ interface EnduragentAuth {
 type DesktopPlatformProjection = import("./platform-copy").DesktopPlatformProjection;
 type DesktopAttachmentAdmission = import("@enduragent/coach-contract").AttachmentAdmissionReadModel;
 type DesktopAttachmentReference = import("@enduragent/coach-contract").ChatAttachmentReference;
+type DesktopPlanningReadModel = import("@enduragent/coach-contract").PlanningReadModel;
 type CredentialRecoveryStatus = import("./onboarding/bridge").CredentialRecoveryStatus;
 type CredentialResetResult = import("./onboarding/bridge").CredentialResetResult;
 

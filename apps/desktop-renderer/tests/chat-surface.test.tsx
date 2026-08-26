@@ -137,6 +137,10 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       training: EMPTY_TRAINING_SURFACE,
+      planSurface: { status: "loading", value: null },
+      planFocus: null,
+      planReturnToChat: false,
+      planActions: null,
       chatActions: actions,
       onboarding: READY_ONBOARDING,
     });
@@ -147,6 +151,10 @@ describe("chat surface", () => {
       chat: EMPTY_CHAT_SURFACE,
       firstSync: { status: "idle" },
       training: EMPTY_TRAINING_SURFACE,
+      planSurface: { status: "loading", value: null },
+      planFocus: null,
+      planReturnToChat: false,
+      planActions: null,
       chatActions: null,
       onboarding: CLOSED_ONBOARDING,
     });
@@ -354,6 +362,57 @@ describe("chat surface", () => {
     it("projects only available workout, Load, and cycling-anchor facts", () => {
       act(() => {
         useEnduragentStore.setState({
+          planSurface: {
+            status: "ready",
+            value: {
+              schemaVersion: 1,
+              status: "ready",
+              asOfDateKey: 19980825,
+              plan: {
+                id: "plan-1",
+                name: "Eight-week consistency",
+                goal: "Build consistency",
+                lifecycle: "active",
+                startDateKey: 19980824,
+                targetDateKey: null,
+                currentWeek: 1,
+                totalWeeks: 8,
+                phase: "Base",
+                weekStartDateKey: 19980824,
+                weekEndDateKey: 19980830,
+                workouts: [
+                  {
+                    id: "workout-1",
+                    dateKey: 19980825,
+                    sport: "cycling",
+                    name: "Tempo builder",
+                    durationSeconds: 3_600,
+                    origin: "coach",
+                    navigation: { destination: "plan", focus: "workout", entityId: "workout-1" },
+                  },
+                  {
+                    id: "workout-2",
+                    dateKey: 19980827,
+                    sport: "cycling",
+                    name: "Recovery spin",
+                    durationSeconds: 2_700,
+                    origin: "coach",
+                    navigation: { destination: "plan", focus: "workout", entityId: "workout-2" },
+                  },
+                ],
+                todayWorkout: {
+                  id: "workout-1",
+                  dateKey: 19980825,
+                  sport: "cycling",
+                  name: "Tempo builder",
+                  durationSeconds: 3_600,
+                  origin: "coach",
+                  navigation: { destination: "plan", focus: "workout", entityId: "workout-1" },
+                },
+                navigation: { destination: "plan", focus: "active-plan", entityId: "plan-1" },
+              },
+            },
+          },
           training: {
             ...EMPTY_TRAINING_SURFACE,
             status: "ready",
@@ -414,8 +473,9 @@ describe("chat surface", () => {
       render(<Harness />);
       const context = screen.getByRole("complementary", { name: "Training context" });
       expect(context).toHaveTextContent("Tempo builder");
-      expect(context).toHaveTextContent("1998-08-25 · Tempo");
-      expect(context).toHaveTextContent("2 scheduled workouts");
+      expect(context).toHaveTextContent("60 min · cycling");
+      expect(context).toHaveTextContent("Eight-week consistency");
+      expect(context).toHaveTextContent("Week 1 of 8 · Base");
       expect(context).toHaveTextContent("4 cycling activities · 7 days");
       expect(context).toHaveTextContent("182 W");
       expect(context).not.toHaveTextContent(/Fitness|Fatigue|Form|Memory|Updated|Fresh 2m/u);

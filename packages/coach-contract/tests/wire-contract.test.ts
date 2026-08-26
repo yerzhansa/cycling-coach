@@ -1285,6 +1285,12 @@ describe("coach request and event projection", () => {
           plannedWorkouts: [],
           wellness: {},
         }),
+      getPlanningReadModel: async () => ({
+        schemaVersion: 1,
+        status: "no-plan" as const,
+        asOfDateKey: 20260826,
+        plan: null,
+      }),
       getActivityAnalysis: async () => {
         throw new Error("not exercised by registry exhaustiveness");
       },
@@ -1873,7 +1879,7 @@ describe("coach request and event projection", () => {
 });
 
 describe("handshake", () => {
-  it("round trips a protocol-26 accepted frame with its authenticated home and renderer capability", () => {
+  it("round trips a protocol-27 accepted frame with its authenticated home and renderer capability", () => {
     const accepted = createAcceptedServerHandshakeFrame("service-managed", PROTOCOL_VERSION, {
       ...acceptedHandshakeBinding,
     });
@@ -1881,8 +1887,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 26,
-      serverProtocolVersion: 26,
+      clientProtocolVersion: 27,
+      serverProtocolVersion: 27,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1891,7 +1897,7 @@ describe("handshake", () => {
 
   it("refuses a previous-protocol client with a version-mismatch frame instead of a parse error", () => {
     const previous = PROTOCOL_VERSION - 1;
-    expect(previous).toBe(25);
+    expect(previous).toBe(26);
     expect(() =>
       createAcceptedServerHandshakeFrame("service-managed", previous, {
         ...acceptedHandshakeBinding,
@@ -1966,7 +1972,7 @@ describe("handshake", () => {
 
   it("accepts aligned protocol 26 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(26);
+    expect(client.clientProtocolVersion).toBe(27);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -2093,6 +2099,6 @@ describe("additive protocol signals", () => {
   });
 
   it("uses protocol version 26", () => {
-    expect(PROTOCOL_VERSION).toBe(26);
+    expect(PROTOCOL_VERSION).toBe(27);
   });
 });
