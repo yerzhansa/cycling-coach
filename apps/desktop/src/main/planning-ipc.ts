@@ -9,14 +9,18 @@ import {
   GetPlanStateRpcParamsSchema,
   GetPlanStateRpcResultSchema,
   PlanProgressEventSchema,
+  PlanRaceCourseFileSelectionSchema,
   type ExecutePlanTransitionRpcParams,
   type ExecutePlanTransitionRpcResult,
   type GetPlanStateRpcParams,
   type GetPlanStateRpcResult,
   type PlanProgressEvent,
 } from "@enduragent/coach-contract";
-import type { BrowserWindow, IpcMain, IpcMainInvokeEvent } from "electron";
+import { homedir } from "node:os";
+import { extname, isAbsolute } from "node:path";
+import type { BrowserWindow, IpcMain, IpcMainInvokeEvent, OpenDialogOptions } from "electron";
 import {
+  DESKTOP_PLAN_COURSE_FILE_CHANNEL,
   DESKTOP_PLAN_PROGRESS_CHANNEL,
   DESKTOP_PLAN_STATE_CHANNEL,
   DESKTOP_PLAN_TRANSITION_CHANNEL,
@@ -34,6 +38,13 @@ export interface DesktopPlanningClient {
     request: ExecutePlanTransitionRpcParams,
     onEvent?: (event: PlanProgressEvent) => void,
   ): Promise<ExecutePlanTransitionRpcResult>;
+}
+
+export interface DesktopPlanningDialogPort {
+  showOpenDialog(
+    window: BrowserWindow,
+    options: OpenDialogOptions,
+  ): Promise<{ readonly canceled: boolean; readonly filePaths: readonly string[] }>;
 }
 
 export function createConnectionPlanningClient(
@@ -67,9 +78,7 @@ export function createConnectionPlanningClient(
     },
     async executePlanTransition(request, onEvent) {
       try {
-        return await call((client) =>
-          client.call("executePlanTransition", request, { onEvent }),
-        );
+        return await call((client) => client.call("executePlanTransition", request, { onEvent }));
       } catch (error) {
         if (error instanceof CoachRpcRemoteError && error.code === -32601) return unsupported;
         throw error;
@@ -81,6 +90,7 @@ export function createConnectionPlanningClient(
 export function installDesktopPlanningIpc(input: {
   readonly ipcMain: Pick<IpcMain, "handle" | "removeHandler">;
   readonly currentWindow: () => BrowserWindow | undefined;
+  readonly dialog: DesktopPlanningDialogPort;
   readonly getPlanState: (request: GetPlanStateRpcParams) => Promise<GetPlanStateRpcResult>;
   readonly executePlanTransition: (
     request: ExecutePlanTransitionRpcParams,
@@ -110,7 +120,8 @@ export function installDesktopPlanningIpc(input: {
       if (!isTrustedConnectionRequest(event, input.currentWindow())) {
         throw new Error("untrusted desktop Planning request");
       }
-      const parsed = args.length === 1 ? ExecutePlanTransitionRpcParamsSchema.safeParse(args[0]) : undefined;
+      const parsed =
+        args.length === 1 ? ExecutePlanTransitionRpcParamsSchema.safeParse(args[0]) : undefined;
       if (parsed === undefined || !parsed.success) {
         throw new TypeError("invalid desktop Planning request");
       }
@@ -133,8 +144,43 @@ export function installDesktopPlanningIpc(input: {
       }
     },
   );
+  input.ipcMain.handle(
+    DESKTOP_PLAN_COURSE_FILE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+      const window = input.currentWindow();
+      if (!isTrustedConnectionRequest(event, window)) {
+        throw new Error("untrusted desktop Planning request");
+      }
+      if (args.length !== 0 || window === undefined) {
+        throw new TypeError("invalid desktop Planning request");
+      }
+      try {
+        const result = await input.dialog.showOpenDialog(window, {
+          defaultPath: homedir(),
+          properties: ["openFile"],
+          filters: [{ name: "Race Course", extensions: ["gpx", "fit"] }],
+        });
+        if (result.canceled) return null;
+        const path = result.filePaths[0];
+        if (
+          result.filePaths.length !== 1 ||
+          typeof path !== "string" ||
+          path.length > 4_096 ||
+          !isAbsolute(path) ||
+          ![".gpx", ".fit"].includes(extname(path).toLowerCase())
+        ) {
+          throw new TypeError("invalid Race Course selection");
+        }
+        return PlanRaceCourseFileSelectionSchema.parse(path);
+      } catch (error) {
+        if (error instanceof TypeError) throw error;
+        return null;
+      }
+    },
+  );
   return () => {
     input.ipcMain.removeHandler(DESKTOP_PLAN_STATE_CHANNEL);
     input.ipcMain.removeHandler(DESKTOP_PLAN_TRANSITION_CHANNEL);
+    input.ipcMain.removeHandler(DESKTOP_PLAN_COURSE_FILE_CHANNEL);
   };
 }

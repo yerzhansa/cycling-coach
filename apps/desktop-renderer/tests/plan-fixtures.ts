@@ -6,6 +6,7 @@ import type {
   PlanError,
   PlanFtpProjection,
   PlanProjectionKind,
+  PlanRaceCourseProjection,
   PlanReadModel,
 } from "@enduragent/coach-contract";
 
@@ -81,6 +82,7 @@ export function planCoachData(
       readonly text: string;
     }[];
     readonly ftp?: PlanFtpProjection | null;
+    readonly course?: PlanRaceCourseProjection;
   } = {},
 ): PlanReadModel["data"] {
   return {
@@ -101,5 +103,6 @@ export function planCoachData(
     decision: input.decision ?? null,
     draft: input.draft ?? null,
     ...(input.ftp === undefined ? {} : { ftp: input.ftp }),
+    ...(input.course === undefined ? {} : { course: input.course }),
   };
 }

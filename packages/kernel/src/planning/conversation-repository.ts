@@ -1,13 +1,17 @@
 import type { MigratorStore } from "../store/migrator.js";
 import type { Row, SqlStore } from "../store/ports.js";
+import { parseRaceCourseSnapshot } from "./race-course.js";
 
 export type PlanConversationStatus = "open" | "ended";
 export type PlanDraftRevisionStatus = "forming" | "ready" | "failed" | "discarded" | "approved";
+export type PlanRaceCourseChoiceStatus = "undecided" | "omitted" | "attached";
 
 export interface PlanConversationRecord {
   readonly id: string;
   readonly planId: string | null;
   readonly replacesPlanId: string | null;
+  readonly courseChoiceStatus: PlanRaceCourseChoiceStatus;
+  readonly raceCourseJson: string | null;
   readonly status: PlanConversationStatus;
   readonly endedAtMs: number | null;
   readonly createdAtMs: number;
@@ -38,6 +42,7 @@ export interface PlanDraftRevisionRecord {
   readonly parentRevisionId: string | null;
   readonly status: PlanDraftRevisionStatus;
   readonly snapshotJson: string;
+  readonly raceCourseJson: string | null;
   readonly createdAtMs: number;
   readonly updatedAtMs: number;
   readonly deviceId: string;
@@ -72,6 +77,7 @@ export type PlanConversationValidationErrorCode =
   | "invalid-turn"
   | "invalid-draft-revision"
   | "invalid-source-request"
+  | "invalid-race-course"
   | "missing-conversation"
   | "missing-source-request"
   | "conversation-ended"
@@ -126,11 +132,16 @@ function validJson(value: unknown): value is string {
   }
 }
 
-function validHlc(record: { readonly hlcPhysicalMs: number; readonly hlcCounter: number }): boolean {
-  return Number.isSafeInteger(record.hlcPhysicalMs)
-    && record.hlcPhysicalMs >= 0
-    && Number.isSafeInteger(record.hlcCounter)
-    && record.hlcCounter >= 0;
+function validHlc(record: {
+  readonly hlcPhysicalMs: number;
+  readonly hlcCounter: number;
+}): boolean {
+  return (
+    Number.isSafeInteger(record.hlcPhysicalMs) &&
+    record.hlcPhysicalMs >= 0 &&
+    Number.isSafeInteger(record.hlcCounter) &&
+    record.hlcCounter >= 0
+  );
 }
 
 function validateConversation(record: PlanConversationRecord): void {
@@ -145,24 +156,31 @@ function validateConversation(record: PlanConversationRecord): void {
   if (record.planId !== null && record.planId === record.replacesPlanId) {
     throw new PlanConversationValidationError("same-plan");
   }
+  if (
+    (record.courseChoiceStatus === "attached") !== (record.raceCourseJson !== null) ||
+    !["undecided", "omitted", "attached"].includes(record.courseChoiceStatus) ||
+    !validRaceCourseJson(record.raceCourseJson)
+  ) {
+    throw new PlanConversationValidationError("invalid-race-course");
+  }
   if (!CONVERSATION_STATUS.has(record.status)) {
     throw new PlanConversationValidationError("invalid-status");
   }
   if (
-    (record.status === "open" && endedAtMs !== null)
-    || (record.status === "ended"
-      && (!Number.isSafeInteger(endedAtMs)
-        || endedAtMs === null
-        || endedAtMs < record.createdAtMs
-        || endedAtMs > record.updatedAtMs))
+    (record.status === "open" && endedAtMs !== null) ||
+    (record.status === "ended" &&
+      (!Number.isSafeInteger(endedAtMs) ||
+        endedAtMs === null ||
+        endedAtMs < record.createdAtMs ||
+        endedAtMs > record.updatedAtMs))
   ) {
     throw new PlanConversationValidationError("invalid-ended-at");
   }
   if (
-    !Number.isSafeInteger(record.createdAtMs)
-    || record.createdAtMs < 0
-    || !Number.isSafeInteger(record.updatedAtMs)
-    || record.updatedAtMs < record.createdAtMs
+    !Number.isSafeInteger(record.createdAtMs) ||
+    record.createdAtMs < 0 ||
+    !Number.isSafeInteger(record.updatedAtMs) ||
+    record.updatedAtMs < record.createdAtMs
   ) {
     throw new PlanConversationValidationError("invalid-timestamp");
   }
@@ -174,19 +192,19 @@ function validateConversation(record: PlanConversationRecord): void {
 
 function validateTurn(record: PlanConversationTurnRecord): void {
   if (
-    !ULID.test(record.id)
-    || !ULID.test(record.conversationId)
-    || !Number.isSafeInteger(record.sequence)
-    || record.sequence <= 0
-    || typeof record.athleteText !== "string"
-    || record.athleteText.length === 0
-    || typeof record.coachText !== "string"
-    || record.coachText.length === 0
-    || !validJson(record.lineageJson)
-    || !Number.isSafeInteger(record.completedAtMs)
-    || record.completedAtMs < 0
-    || !DEVICE_ID.test(record.deviceId)
-    || !validHlc(record)
+    !ULID.test(record.id) ||
+    !ULID.test(record.conversationId) ||
+    !Number.isSafeInteger(record.sequence) ||
+    record.sequence <= 0 ||
+    typeof record.athleteText !== "string" ||
+    record.athleteText.length === 0 ||
+    typeof record.coachText !== "string" ||
+    record.coachText.length === 0 ||
+    !validJson(record.lineageJson) ||
+    !Number.isSafeInteger(record.completedAtMs) ||
+    record.completedAtMs < 0 ||
+    !DEVICE_ID.test(record.deviceId) ||
+    !validHlc(record)
   ) {
     throw new PlanConversationValidationError("invalid-turn");
   }
@@ -194,43 +212,52 @@ function validateTurn(record: PlanConversationTurnRecord): void {
 
 function validateDraftRevision(record: PlanDraftRevisionRecord): void {
   if (
-    !ULID.test(record.id)
-    || !ULID.test(record.conversationId)
-    || !ULID.test(record.planId)
-    || !Number.isSafeInteger(record.revision)
-    || record.revision <= 0
-    || (record.parentRevisionId !== null && !ULID.test(record.parentRevisionId))
-    || (record.revision === 1) !== (record.parentRevisionId === null)
-    || !DRAFT_STATUS.has(record.status)
-    || !validJson(record.snapshotJson)
-    || !Number.isSafeInteger(record.createdAtMs)
-    || record.createdAtMs < 0
-    || !Number.isSafeInteger(record.updatedAtMs)
-    || record.updatedAtMs < record.createdAtMs
-    || !Number.isSafeInteger(record.updatedAtMs)
-    || record.updatedAtMs < record.createdAtMs
-    || !DEVICE_ID.test(record.deviceId)
-    || !validHlc(record)
+    !ULID.test(record.id) ||
+    !ULID.test(record.conversationId) ||
+    !ULID.test(record.planId) ||
+    !Number.isSafeInteger(record.revision) ||
+    record.revision <= 0 ||
+    (record.parentRevisionId !== null && !ULID.test(record.parentRevisionId)) ||
+    (record.revision === 1) !== (record.parentRevisionId === null) ||
+    !DRAFT_STATUS.has(record.status) ||
+    !validJson(record.snapshotJson) ||
+    !validRaceCourseJson(record.raceCourseJson) ||
+    !Number.isSafeInteger(record.createdAtMs) ||
+    record.createdAtMs < 0 ||
+    !Number.isSafeInteger(record.updatedAtMs) ||
+    record.updatedAtMs < record.createdAtMs ||
+    !DEVICE_ID.test(record.deviceId) ||
+    !validHlc(record)
   ) {
     throw new PlanConversationValidationError("invalid-draft-revision");
   }
 }
 
+function validRaceCourseJson(value: string | null): boolean {
+  if (value === null) return true;
+  try {
+    parseRaceCourseSnapshot(JSON.parse(value) as unknown);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function validateSourceRequest(record: PlanSourceRequestRecord): void {
   if (
-    !ULID.test(record.id)
-    || !ULID.test(record.conversationId)
-    || typeof record.sourceChatId !== "string"
-    || record.sourceChatId.length === 0
-    || (record.sourceBoundaryRef !== null
-      && (typeof record.sourceBoundaryRef !== "string" || record.sourceBoundaryRef.length === 0))
-    || typeof record.sourceMessageId !== "string"
-    || record.sourceMessageId.length === 0
-    || !validJson(record.requestJson)
-    || !Number.isSafeInteger(record.createdAtMs)
-    || record.createdAtMs < 0
-    || !DEVICE_ID.test(record.deviceId)
-    || !validHlc(record)
+    !ULID.test(record.id) ||
+    !ULID.test(record.conversationId) ||
+    typeof record.sourceChatId !== "string" ||
+    record.sourceChatId.length === 0 ||
+    (record.sourceBoundaryRef !== null &&
+      (typeof record.sourceBoundaryRef !== "string" || record.sourceBoundaryRef.length === 0)) ||
+    typeof record.sourceMessageId !== "string" ||
+    record.sourceMessageId.length === 0 ||
+    !validJson(record.requestJson) ||
+    !Number.isSafeInteger(record.createdAtMs) ||
+    record.createdAtMs < 0 ||
+    !DEVICE_ID.test(record.deviceId) ||
+    !validHlc(record)
   ) {
     throw new PlanConversationValidationError("invalid-source-request");
   }
@@ -271,6 +298,8 @@ function conversationFromRow(row: Row): PlanConversationRecord {
     id: text(row, "id"),
     planId: nullableText(row, "plan_id"),
     replacesPlanId: nullableText(row, "replaces_plan_id"),
+    courseChoiceStatus: text(row, "course_choice_status") as PlanRaceCourseChoiceStatus,
+    raceCourseJson: nullableText(row, "race_course_json"),
     status: text(row, "status") as PlanConversationStatus,
     endedAtMs: nullableInteger(row, "ended_at_ms"),
     createdAtMs: integer(row, "created_at_ms"),
@@ -309,6 +338,7 @@ function draftRevisionFromRow(row: Row): PlanDraftRevisionRecord {
     parentRevisionId: nullableText(row, "parent_revision_id"),
     status: text(row, "status") as PlanDraftRevisionStatus,
     snapshotJson: text(row, "snapshot_json"),
+    raceCourseJson: nullableText(row, "race_course_json"),
     createdAtMs: integer(row, "created_at_ms"),
     updatedAtMs: integer(row, "updated_at_ms"),
     deviceId: text(row, "device_id"),
@@ -359,7 +389,8 @@ export function createPlanConversationRepository(store: PlanningStore): PlanConv
 
   const requireOpenConversation = async (id: string): Promise<PlanConversationRecord> => {
     const conversation = await readConversation(id);
-    if (conversation === undefined) throw new PlanConversationValidationError("missing-conversation");
+    if (conversation === undefined)
+      throw new PlanConversationValidationError("missing-conversation");
     if (conversation.status === "ended") {
       throw new PlanConversationValidationError("conversation-ended");
     }
@@ -379,37 +410,44 @@ export function createPlanConversationRepository(store: PlanningStore): PlanConv
             return;
           }
           if (
-            existing.createdAtMs !== record.createdAtMs
-            || existing.updatedAtMs > record.updatedAtMs
-            || existing.planId !== null && existing.planId !== record.planId
-            || existing.replacesPlanId !== record.replacesPlanId
+            existing.createdAtMs !== record.createdAtMs ||
+            existing.updatedAtMs > record.updatedAtMs ||
+            (existing.planId !== null && existing.planId !== record.planId) ||
+            existing.replacesPlanId !== record.replacesPlanId
           ) {
             throw new PlanConversationValidationError("conversation-conflict");
           }
         }
-        await store.run(`INSERT INTO plan_conversation (
-  id, plan_id, replaces_plan_id, status, ended_at_ms, created_at_ms, updated_at_ms,
-  device_id, hlc_physical_ms, hlc_counter
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        await store.run(
+          `INSERT INTO plan_conversation (
+  id, plan_id, replaces_plan_id, course_choice_status, race_course_json, status,
+  ended_at_ms, created_at_ms, updated_at_ms, device_id, hlc_physical_ms, hlc_counter
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
   plan_id = excluded.plan_id,
+  course_choice_status = excluded.course_choice_status,
+  race_course_json = excluded.race_course_json,
   status = excluded.status,
   ended_at_ms = excluded.ended_at_ms,
   updated_at_ms = excluded.updated_at_ms,
   device_id = excluded.device_id,
   hlc_physical_ms = excluded.hlc_physical_ms,
-  hlc_counter = excluded.hlc_counter`, [
-          record.id,
-          record.planId,
-          record.replacesPlanId,
-          record.status,
-          record.endedAtMs,
-          record.createdAtMs,
+  hlc_counter = excluded.hlc_counter`,
+          [
+            record.id,
+            record.planId,
+            record.replacesPlanId,
+            record.courseChoiceStatus,
+            record.raceCourseJson,
+            record.status,
+            record.endedAtMs,
+            record.createdAtMs,
           record.updatedAtMs,
-          record.deviceId,
-          record.hlcPhysicalMs,
-          record.hlcCounter,
-        ]);
+            record.deviceId,
+            record.hlcPhysicalMs,
+            record.hlcCounter,
+          ],
+        );
       });
     },
 
@@ -439,7 +477,9 @@ ON CONFLICT (id) DO UPDATE SET
       validateTurn(record);
       return store.transaction(async () => {
         await requireOpenConversation(record.conversationId);
-        const existingRow = await store.get("SELECT * FROM plan_conversation_turn WHERE id = ?", [record.id]);
+        const existingRow = await store.get("SELECT * FROM plan_conversation_turn WHERE id = ?", [
+          record.id,
+        ]);
         if (existingRow !== undefined) {
           const existing = turnFromRow(existingRow);
           if (!sameRecord(existing, record)) {
@@ -455,21 +495,24 @@ ON CONFLICT (id) DO UPDATE SET
         if (record.sequence !== expected) {
           throw new PlanConversationValidationError("turn-conflict");
         }
-        await store.run(`INSERT INTO plan_conversation_turn (
+        await store.run(
+          `INSERT INTO plan_conversation_turn (
   id, conversation_id, sequence, athlete_text, coach_text, lineage_json,
   completed_at_ms, device_id, hlc_physical_ms, hlc_counter
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-          record.id,
-          record.conversationId,
-          record.sequence,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            record.id,
+            record.conversationId,
+            record.sequence,
           record.athleteText,
           record.coachText,
           record.lineageJson,
           record.completedAtMs,
-          record.deviceId,
-          record.hlcPhysicalMs,
-          record.hlcCounter,
-        ]);
+            record.deviceId,
+            record.hlcPhysicalMs,
+            record.hlcCounter,
+          ],
+        );
         return record;
       });
     },
@@ -496,19 +539,20 @@ ON CONFLICT (id) DO UPDATE SET
         const existing = await readDraftRevision(record.id);
         if (existing !== undefined) {
           if (
-            existing.conversationId !== record.conversationId
-            || existing.planId !== record.planId
-            || existing.revision !== record.revision
-            || existing.parentRevisionId !== record.parentRevisionId
-            || existing.createdAtMs !== record.createdAtMs
-            || existing.updatedAtMs > record.updatedAtMs
+            existing.conversationId !== record.conversationId ||
+            existing.planId !== record.planId ||
+            existing.revision !== record.revision ||
+            existing.parentRevisionId !== record.parentRevisionId ||
+            existing.createdAtMs !== record.createdAtMs ||
+            existing.updatedAtMs > record.updatedAtMs
           ) {
             throw new PlanConversationValidationError("draft-lineage-conflict");
           }
         } else if (record.revision === 1) {
-          const first = await store.get("SELECT id FROM plan_draft_revision WHERE plan_id = ? LIMIT 1", [
-            record.planId,
-          ]);
+          const first = await store.get(
+            "SELECT id FROM plan_draft_revision WHERE plan_id = ? LIMIT 1",
+            [record.planId],
+          );
           if (first !== undefined) {
             throw new PlanConversationValidationError("draft-lineage-conflict");
           }
@@ -519,41 +563,47 @@ ON CONFLICT (id) DO UPDATE SET
             [record.planId],
           );
           if (
-            parent === undefined
-            || parent.conversationId !== record.conversationId
-            || parent.planId !== record.planId
-            || parent.revision + 1 !== record.revision
-            || latest === undefined
-            || text(latest, "id") !== parent.id
+            parent === undefined ||
+            parent.conversationId !== record.conversationId ||
+            parent.planId !== record.planId ||
+            parent.revision + 1 !== record.revision ||
+            latest === undefined ||
+            text(latest, "id") !== parent.id
           ) {
             throw new PlanConversationValidationError("draft-lineage-conflict");
           }
         }
-        await store.run(`INSERT INTO plan_draft_revision (
+        await store.run(
+          `INSERT INTO plan_draft_revision (
   id, conversation_id, plan_id, revision, parent_revision_id, parent_revision, status,
-  snapshot_json, created_at_ms, updated_at_ms, device_id, hlc_physical_ms, hlc_counter
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  snapshot_json, race_course_json, created_at_ms, updated_at_ms, device_id, hlc_physical_ms,
+  hlc_counter
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
   status = excluded.status,
   snapshot_json = excluded.snapshot_json,
+  race_course_json = excluded.race_course_json,
   updated_at_ms = excluded.updated_at_ms,
   device_id = excluded.device_id,
   hlc_physical_ms = excluded.hlc_physical_ms,
-  hlc_counter = excluded.hlc_counter`, [
-          record.id,
-          record.conversationId,
-          record.planId,
+  hlc_counter = excluded.hlc_counter`,
+          [
+            record.id,
+            record.conversationId,
+            record.planId,
           record.revision,
           record.parentRevisionId,
-          record.parentRevisionId === null ? null : record.revision - 1,
-          record.status,
-          record.snapshotJson,
-          record.createdAtMs,
-          record.updatedAtMs,
-          record.deviceId,
-          record.hlcPhysicalMs,
-          record.hlcCounter,
-        ]);
+            record.parentRevisionId === null ? null : record.revision - 1,
+            record.status,
+            record.snapshotJson,
+            record.raceCourseJson,
+            record.createdAtMs,
+            record.updatedAtMs,
+            record.deviceId,
+            record.hlcPhysicalMs,
+            record.hlcCounter,
+          ],
+        );
       });
     },
 
@@ -586,22 +636,25 @@ ON CONFLICT (id) DO UPDATE SET
           }
           return existing;
         }
-        await store.run(`INSERT INTO plan_source_request (
+        await store.run(
+          `INSERT INTO plan_source_request (
   id, conversation_id, source_chat_id, source_boundary_ref, source_message_id,
   request_json, created_at_ms, updated_at_ms, device_id, hlc_physical_ms, hlc_counter
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-          record.id,
-          record.conversationId,
-          record.sourceChatId,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            record.id,
+            record.conversationId,
+            record.sourceChatId,
           record.sourceBoundaryRef,
           record.sourceMessageId,
           record.requestJson,
           record.createdAtMs,
           record.updatedAtMs,
-          record.deviceId,
-          record.hlcPhysicalMs,
-          record.hlcCounter,
-        ]);
+            record.deviceId,
+            record.hlcPhysicalMs,
+            record.hlcCounter,
+          ],
+        );
         return record;
       });
     },
@@ -617,12 +670,12 @@ ON CONFLICT (id) DO UPDATE SET
           throw new PlanConversationValidationError("missing-source-request");
         }
         if (
-          existing.conversationId !== record.conversationId
-          || existing.sourceChatId !== record.sourceChatId
-          || existing.sourceMessageId !== record.sourceMessageId
-          || existing.requestJson !== record.requestJson
-          || existing.createdAtMs !== record.createdAtMs
-          || existing.updatedAtMs > record.updatedAtMs
+          existing.conversationId !== record.conversationId ||
+          existing.sourceChatId !== record.sourceChatId ||
+          existing.sourceMessageId !== record.sourceMessageId ||
+          existing.requestJson !== record.requestJson ||
+          existing.createdAtMs !== record.createdAtMs ||
+          existing.updatedAtMs > record.updatedAtMs
         ) {
           throw new PlanConversationValidationError("source-request-conflict");
         }
@@ -632,20 +685,23 @@ ON CONFLICT (id) DO UPDATE SET
           }
           return existing;
         }
-        await store.run(`UPDATE plan_source_request SET
+        await store.run(
+          `UPDATE plan_source_request SET
   source_boundary_ref = ?,
   updated_at_ms = ?,
   device_id = ?,
   hlc_physical_ms = ?,
   hlc_counter = ?
-WHERE id = ?`, [
-          record.sourceBoundaryRef,
-          record.updatedAtMs,
-          record.deviceId,
-          record.hlcPhysicalMs,
-          record.hlcCounter,
-          record.id,
-        ]);
+WHERE id = ?`,
+          [
+            record.sourceBoundaryRef,
+            record.updatedAtMs,
+            record.deviceId,
+            record.hlcPhysicalMs,
+            record.hlcCounter,
+            record.id,
+          ],
+        );
         return record;
       });
     },

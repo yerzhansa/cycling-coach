@@ -449,9 +449,7 @@ async function runDesktop(): Promise<void> {
     let windowCreation: Promise<BrowserWindow> | undefined;
     const rendererNavigationTracker = createDesktopRendererNavigationTracker<BrowserWindow>();
     const currentWindow = (): BrowserWindow | null =>
-      window !== null && !window.isDestroyed() && !window.webContents.isDestroyed()
-        ? window
-        : null;
+      window !== null && !window.isDestroyed() && !window.webContents.isDestroyed() ? window : null;
     const startRendererNavigation = (
       target: BrowserWindow,
       navigationUrl: string,
@@ -681,10 +679,7 @@ async function runDesktop(): Promise<void> {
       return page;
     };
     const useActivePlanning = async <T>(
-      use: (
-        planning: DesktopPlanningClient,
-        isCurrent: () => boolean,
-      ) => Promise<T>,
+      use: (planning: DesktopPlanningClient, isCurrent: () => boolean) => Promise<T>,
     ): Promise<T> => {
       const binding = activeRuntimeBinding;
       const lifecycleState = daemonLifecycle?.snapshot();
@@ -1012,10 +1007,8 @@ async function runDesktop(): Promise<void> {
               shouldReleaseInitialRefreshForWindowEvent(
                 currentWindow(),
                 created,
-                connectionIpc?.isCurrentDocumentNavigation(
-                  created,
-                  created.webContents.getURL(),
-                ) ?? false,
+                connectionIpc?.isCurrentDocumentNavigation(created, created.webContents.getURL()) ??
+                  false,
               )
             ) {
               void initialRefreshCoordinator.releaseCurrent();
@@ -1091,9 +1084,9 @@ async function runDesktop(): Promise<void> {
     });
     disposePlanningIpc = installDesktopPlanningIpc({
       ipcMain,
+      dialog,
       currentWindow: () => mainWindow.current() ?? undefined,
-      getPlanState: (request) =>
-        useActivePlanning((planning) => planning.getPlanState(request)),
+      getPlanState: (request) => useActivePlanning((planning) => planning.getPlanState(request)),
       executePlanTransition: (request, onEvent) =>
         useActivePlanning((planning, isCurrent) =>
           planning.executePlanTransition(request, (event) => {

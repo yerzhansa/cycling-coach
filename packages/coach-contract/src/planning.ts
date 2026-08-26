@@ -266,6 +266,93 @@ export const PlanDraftProjectionSchema = z
   .strict();
 export type PlanDraftProjection = z.infer<typeof PlanDraftProjectionSchema>;
 
+export const PlanRaceCourseSummarySchema = z
+  .object({
+    fileName: z.string().min(1),
+    format: z.enum(["gpx", "fit"]),
+    pointCount: z.number().int().positive(),
+    distanceM: z.number().positive(),
+    elevationGainM: z.number().nonnegative().nullable(),
+    elevationStatus: z.enum(["available", "unavailable"]),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if ((value.elevationStatus === "available") !== (value.elevationGainM !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["elevationGainM"],
+        message: "Course elevation status must match its gain",
+      });
+    }
+  });
+export type PlanRaceCourseSummary = z.infer<typeof PlanRaceCourseSummarySchema>;
+
+export const PlanRaceCourseProjectionSchema = z
+  .object({
+    status: z.enum([
+      "undecided",
+      "omitted",
+      "parsing",
+      "invalid",
+      "missing-elevation",
+      "recalculating",
+      "recalculation-failed",
+      "ready",
+      "omission-failed",
+    ]),
+    accepted: PlanRaceCourseSummarySchema.nullable(),
+    candidate: PlanRaceCourseSummarySchema.nullable(),
+    fileName: z.string().min(1).nullable(),
+    detail: z.string().min(1).nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const empty =
+      value.accepted === null &&
+      value.candidate === null &&
+      value.fileName === null &&
+      value.detail === null;
+    const valid =
+      ((value.status === "undecided" || value.status === "omitted") && empty) ||
+      (value.status === "ready" &&
+        value.accepted !== null &&
+        value.candidate === null &&
+        value.fileName === null &&
+        value.detail === null) ||
+      (value.status === "parsing" &&
+        value.candidate === null &&
+        value.fileName !== null &&
+        value.detail === null) ||
+      (value.status === "invalid" &&
+        value.candidate === null &&
+        value.fileName !== null &&
+        value.detail !== null) ||
+      (value.status === "missing-elevation" &&
+        value.candidate?.elevationStatus === "unavailable" &&
+        value.fileName === null &&
+        value.detail === null) ||
+      (value.status === "recalculating" && value.fileName === null && value.detail === null) ||
+      (value.status === "recalculation-failed" &&
+        value.fileName === null &&
+        value.detail !== null) ||
+      (value.status === "omission-failed" &&
+        value.accepted === null &&
+        value.candidate === null &&
+        value.fileName === null &&
+        value.detail !== null);
+    if (!valid) {
+      context.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "Course projection fields do not match its status",
+      });
+    }
+  });
+export type PlanRaceCourseProjection = z.infer<typeof PlanRaceCourseProjectionSchema>;
+
+export const PlanRaceCourseFileSelectionSchema = PlatformAbsolutePathSchema.nullable();
+export type PlanRaceCourseFileSelection = z.infer<typeof PlanRaceCourseFileSelectionSchema>;
+
 export const PlanFtpSourceValueSchema = z
   .object({
     watts: z.number().int().min(1).max(9_999),
@@ -350,6 +437,7 @@ export const PlanCoachProjectionDataSchema = z
     decision: CoachDecisionReadModelSchema.nullable(),
     draft: PlanDraftProjectionSchema.nullable(),
     ftp: PlanFtpProjectionSchema.nullable().optional(),
+    course: PlanRaceCourseProjectionSchema.optional(),
   })
   .strict();
 export type PlanCoachProjectionData = z.infer<typeof PlanCoachProjectionDataSchema>;
@@ -420,6 +508,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       commandId: CommandIdSchema,
       conversationId: EntityIdSchema,
       filePath: PlatformAbsolutePathSchema,
+      elevation: z.enum(["require", "allow-missing"]),
     })
     .strict(),
   z
@@ -497,7 +586,13 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       commandId: CommandIdSchema,
       draftId: EntityIdSchema,
       course: z.discriminatedUnion("action", [
-        z.object({ action: z.literal("attach"), filePath: PlatformAbsolutePathSchema }).strict(),
+        z
+          .object({
+            action: z.literal("attach"),
+            filePath: PlatformAbsolutePathSchema,
+            elevation: z.enum(["require", "allow-missing"]),
+          })
+          .strict(),
         z.object({ action: z.literal("remove") }).strict(),
       ]),
     })

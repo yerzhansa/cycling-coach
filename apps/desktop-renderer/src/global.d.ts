@@ -17,9 +17,7 @@ interface EnduragentAuth {
     readonly limit: number;
   }): Promise<DesktopTranscriptPage>;
   getPlanState(): Promise<DesktopPlanStateResult>;
-  executePlanTransition(
-    input: DesktopPlanTransitionCommand,
-  ): Promise<DesktopPlanTransitionResult>;
+  executePlanTransition(input: DesktopPlanTransitionCommand): Promise<DesktopPlanTransitionResult>;
   onPlanProgress(listener: (progress: DesktopPlanProgressEvent) => void): () => void;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
@@ -59,6 +57,7 @@ interface EnduragentAuth {
   acknowledgeTelegramGapWarning(): Promise<DesktopTelegramMutationResult>;
   setAppearance(appearance: "system" | "light" | "dark"): void;
   chooseImportFiles(): Promise<readonly string[]>;
+  choosePlanRaceCourseFile(): Promise<string | null>;
   exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   getUpdateState(): Promise<DesktopUpdateState>;

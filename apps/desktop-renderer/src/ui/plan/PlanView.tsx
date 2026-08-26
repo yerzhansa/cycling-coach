@@ -1,9 +1,11 @@
-import { CheckCircle2, LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
+import { CheckCircle2, LoaderCircle, MapPinned, RefreshCw, TriangleAlert } from "lucide-react";
 import { useRef, useState, type FormEvent, type ReactElement } from "react";
 import {
   PlanCoachProjectionDataSchema,
   type PlanFtpProjection,
   type PlanFtpSourceValue,
+  type PlanRaceCourseProjection,
+  type PlanRaceCourseSummary,
 } from "@enduragent/coach-contract";
 import { Button } from "../../components/ui/button.js";
 import {
@@ -63,6 +65,262 @@ function StaleNotice(props: { readonly message: string }): ReactElement {
       <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
       <p className="m-0 text-ink-2">{props.message}</p>
     </div>
+  );
+}
+
+function courseSummaryCopy(course: PlanRaceCourseSummary): string {
+  const distance = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(
+    course.distanceM / 1_000,
+  );
+  const elevation =
+    course.elevationGainM === null
+      ? "Elevation unavailable"
+      : `${Math.round(course.elevationGainM).toLocaleString()} m climbing`;
+  return `${distance} km · ${elevation}`;
+}
+
+function CourseActions(props: {
+  readonly replace?: boolean;
+  readonly routeOnly?: boolean;
+  readonly retry?: boolean;
+  readonly continueWithout?: boolean;
+  readonly remove?: boolean;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const busy = transition.status === "submitting" || transition.status === "running";
+  return (
+    <div className="flex flex-wrap justify-end gap-inset pt-inset">
+      {props.replace === true ? (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={actions === null || busy}
+          onClick={() => actions?.openCoursePicker()}
+        >
+          Replace file
+        </Button>
+      ) : null}
+      {props.routeOnly === true ? (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={actions === null || busy}
+          onClick={() => actions?.useCourseWithoutElevation()}
+        >
+          Use route only
+        </Button>
+      ) : null}
+      {props.retry === true ? (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={actions === null || busy}
+          onClick={() => actions?.retry()}
+        >
+          Retry
+        </Button>
+      ) : null}
+      {props.continueWithout === true ? (
+        <Button
+          type="button"
+          disabled={actions === null || busy}
+          onClick={() => actions?.continueWithoutCourse()}
+        >
+          Continue without course
+        </Button>
+      ) : null}
+      {props.remove === true ? (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={actions === null || busy}
+          onClick={() => actions?.removeCourse()}
+        >
+          Continue without course
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function RaceCoursePanel(props: {
+  readonly course: PlanRaceCourseProjection;
+  readonly draft: boolean;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const busy =
+    (transition.status === "submitting" || transition.status === "running") &&
+    (transition.transitionId === "PL-T02" || transition.transitionId === "PL-T09");
+  if (busy) {
+    const recalculating = props.draft && transition.transitionId === "PL-T09";
+    return (
+      <section className="flex items-start gap-row rounded-card bg-sunk p-4" aria-live="polite">
+        <LoaderCircle
+          className="mt-0.5 size-4 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+        <div className={SUPPORT_PAIR}>
+          <h3 className="m-0 text-sm font-medium">
+            {recalculating ? "Recalculating Draft" : "Reading Race Course"}
+          </h3>
+          <p className="m-0 text-ink-2">
+            {recalculating
+              ? "Your previous Draft stays available until this update is complete."
+              : "Checking route shape, distance, and elevation."}
+          </p>
+        </div>
+      </section>
+    );
+  }
+  const course = props.course;
+  if (course.status === "ready" && course.accepted !== null) {
+    return (
+      <section className="grid gap-row rounded-card bg-sunk p-4">
+        <div className="flex items-start gap-row">
+          <MapPinned className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+          <div className={`${SUPPORT_PAIR} min-w-0 flex-1`}>
+            <h3 className="m-0 text-sm font-medium">{course.accepted.fileName}</h3>
+            <p className="m-0 text-ink-2">{courseSummaryCopy(course.accepted)}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap justify-end gap-inset pt-inset">
+          <Button type="button" variant="outline" onClick={() => actions?.openCoursePicker()}>
+            Replace file
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() =>
+              props.draft ? actions?.removeCourse() : actions?.continueWithoutCourse()
+            }
+          >
+            Continue without course
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  if (course.status === "invalid") {
+    return (
+      <section className="grid gap-row rounded-card bg-sunk p-4" role="alert">
+        <div className="flex items-start gap-row">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-sm font-medium">This file can’t be read</h3>
+            <p className="m-0 text-ink-2">{course.detail}</p>
+          </div>
+        </div>
+        <CourseActions replace continueWithout />
+      </section>
+    );
+  }
+  if (course.status === "missing-elevation" && course.candidate !== null) {
+    return (
+      <section className="grid gap-row rounded-card bg-sunk p-4" role="status">
+        <div className="flex items-start gap-row">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-sm font-medium">Route found, elevation missing</h3>
+            <p className="m-0 text-ink-2">{courseSummaryCopy(course.candidate)}</p>
+          </div>
+        </div>
+        <CourseActions replace routeOnly continueWithout />
+      </section>
+    );
+  }
+  if (course.status === "recalculation-failed") {
+    return (
+      <section className="grid gap-row rounded-card bg-sunk p-4" role="alert">
+        <div className="flex items-start gap-row">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-sm font-medium">Draft recalculation failed</h3>
+            <p className="m-0 text-ink-2">Your previous Draft is unchanged.</p>
+          </div>
+        </div>
+        <CourseActions retry replace continueWithout />
+      </section>
+    );
+  }
+  if (course.status === "omission-failed") {
+    return (
+      <section className="grid gap-row rounded-card bg-sunk p-4" role="alert">
+        <div className="flex items-start gap-row">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-sm font-medium">Couldn’t continue without a Race Course</h3>
+            <p className="m-0 text-ink-2">Nothing changed.</p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-inset pt-inset">
+          <Button type="button" variant="outline" onClick={() => actions?.returnToCoach()}>
+            Back to coach
+          </Button>
+          <Button type="button" onClick={() => actions?.retry()}>
+            Retry
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section className="grid gap-row rounded-card bg-sunk p-4">
+      <div className={SUPPORT_PAIR}>
+        <h3 className="m-0 text-sm font-medium">Race Course · optional</h3>
+        <p className="m-0 text-ink-2">
+          {course.status === "omitted"
+            ? "This Draft stays course-agnostic."
+            : "Add a GPX or FIT file, or continue without one."}
+        </p>
+      </div>
+      <div className="flex flex-wrap justify-end gap-inset pt-inset">
+        <Button type="button" variant="outline" onClick={() => actions?.openCoursePicker()}>
+          {course.status === "omitted" ? "Add file" : "Attach GPX/FIT"}
+        </Button>
+        {course.status === "undecided" ? (
+          <Button type="button" onClick={() => actions?.continueWithoutCourse()}>
+            Continue without course
+          </Button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function CoursePickerDialog(): ReactElement {
+  const open = useEnduragentStore((state) => state.plan.coursePicker);
+  const actions = useEnduragentStore((state) => state.planActions);
+  const cancel = useRef<HTMLButtonElement>(null);
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) actions?.closeCoursePicker();
+      }}
+    >
+      <DialogContent
+        className="w-[min(520px,calc(100vw-32px))] max-w-none gap-0 p-6 shadow-elev-4 sm:max-w-none"
+        showCloseButton={false}
+        initialFocus={cancel}
+      >
+        <DialogHeader className="gap-2.5">
+          <DialogTitle className="m-0 text-xl">Add Race Course</DialogTitle>
+          <DialogDescription className="m-0 leading-[1.5]">
+            Choose a GPX or FIT file. Your Draft stays here while it is checked.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="mx-0 mt-[22px] mb-0 flex-row justify-end border-0 bg-transparent p-0">
+          <DialogClose render={<Button ref={cancel} variant="outline" size="lg" />}>
+            Cancel
+          </DialogClose>
+          <Button type="button" size="lg" onClick={() => actions?.chooseCourseFile()}>
+            Choose file
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -414,6 +672,7 @@ function PlanCoach(): ReactElement {
         }}
       />
       <PlanQueue />
+      {data?.course === undefined ? null : <RaceCoursePanel course={data.course} draft={false} />}
       {ready ? (
         <section className="grid gap-row rounded-card bg-sunk p-4">
           <div className={SUPPORT_PAIR}>
@@ -549,6 +808,9 @@ function DraftProjection(): ReactElement {
             <strong>Ready for review</strong>
           </div>
         </div>
+        {parsed?.success === true && parsed.data.course !== undefined ? (
+          <RaceCoursePanel course={parsed.data.course} draft />
+        ) : null}
         {revisionComposer ? (
           <form className="grid gap-inset pt-row" onSubmit={submit}>
             <label className="text-sm font-medium" htmlFor="plan-draft-revision">
@@ -674,6 +936,7 @@ export function PlanView(): ReactElement {
         ) : (
           <ReadyProjection />
         )}
+        <CoursePickerDialog />
       </div>
     </Page>
   );

@@ -5,6 +5,7 @@ import {
   GetPlanStateRpcResultSchema,
   PlanDraftProjectionSchema,
   PlanFtpProjectionSchema,
+  PlanRaceCourseProjectionSchema,
   PlanProgressEventSchema,
   type ChatQueueRunResult,
   type ChatQueueSnapshot,
@@ -15,14 +16,25 @@ import {
   type PlanError,
   type PlanFtpProjection,
   type PlanProgressEvent,
+  type PlanRaceCourseProjection,
+  type PlanRaceCourseSummary,
   type PlanReadModel,
   type PlanningOperations,
   type TurnEvent,
 } from "@enduragent/coach-contract";
 import {
+  acceptParsedRaceCourse,
+  beginRaceCourseParsing,
+  beginRaceCourseRemoval,
+  completeRaceCourseRecalculation,
   executePlanFtpTransition,
+  failRaceCourseRecalculation,
+  openRaceCoursePicker,
+  rejectRaceCourseFile,
+  useRouteWithoutElevation,
   type PlanFtpAdapter,
   type PlanFtpSnapshot,
+  type RaceCourseRecalculatingState,
 } from "@enduragent/engine";
 import { buildPlanLifecycleReadModel } from "./planning-lifecycle.js";
 import {
@@ -35,9 +47,12 @@ import {
   type PlanRecord,
   type PlanRepository,
   type PlanWorkoutRecord,
+  parseRaceCourseSnapshot,
+  type RaceCourseSnapshot,
 } from "@enduragent/kernel/planning";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
 import type { CoachStoreWriterContext } from "./runtime.js";
+import type { PlanRaceCourseAdapter } from "./planning-race-course.js";
 
 const EMPTY_QUEUE: ChatQueueSnapshot = Object.freeze({
   schemaVersion: 1,
@@ -75,6 +90,18 @@ const FTP_SAVE_FAILED: PlanError = Object.freeze({
   retryable: true,
 });
 
+const COURSE_INVALID: PlanError = Object.freeze({
+  code: "invalid-input",
+  message: "This file can’t be read. Choose another GPX or FIT file.",
+  retryable: true,
+});
+
+const COURSE_RECALCULATION_FAILED: PlanError = Object.freeze({
+  code: "provider-failed",
+  message: "The Draft could not be recalculated. Your previous Draft is unchanged.",
+  retryable: true,
+});
+
 export interface PlanDraftBuild {
   readonly plan: PlanRecord;
   readonly workouts: readonly PlanWorkoutRecord[];
@@ -85,12 +112,20 @@ export interface PlanDraftBuilder {
   form(input: {
     readonly conversation: PlanConversationRecord;
     readonly turns: readonly PlanConversationTurnRecord[];
+    readonly course: RaceCourseSnapshot | null;
   }): Promise<PlanDraftBuild>;
   revise(input: {
     readonly conversation: PlanConversationRecord;
     readonly turns: readonly PlanConversationTurnRecord[];
     readonly previous: PlanDraftRevisionRecord;
     readonly instruction: string;
+    readonly course: RaceCourseSnapshot | null;
+  }): Promise<PlanDraftBuild>;
+  recalculateCourse(input: {
+    readonly conversation: PlanConversationRecord;
+    readonly turns: readonly PlanConversationTurnRecord[];
+    readonly previous: PlanDraftRevisionRecord;
+    readonly course: RaceCourseSnapshot | null;
   }): Promise<PlanDraftBuild>;
 }
 
@@ -106,6 +141,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly draftBuilder?: PlanDraftBuilder;
   readonly isReady?: (input: PlanReadinessInput) => boolean | Promise<boolean>;
   readonly ftp?: PlanFtpAdapter;
+  readonly course?: PlanRaceCourseAdapter;
 }
 
 function createSerializedLane(): <T>(operation: () => Promise<T>) => Promise<T> {
@@ -166,6 +202,100 @@ function ftpProjection(
   });
 }
 
+type CourseScenario =
+  | "PL-S064"
+  | "PL-S065"
+  | "PL-S067"
+  | "PL-S068"
+  | "PL-S069"
+  | "PL-S070"
+  | "PL-S104";
+
+function courseSummary(value: RaceCourseSnapshot): PlanRaceCourseSummary {
+  return {
+    fileName: value.fileName,
+    format: value.format,
+    pointCount: value.preview.pointCount,
+    distanceM: value.preview.distanceM,
+    elevationGainM: value.preview.elevationGainM,
+    elevationStatus: value.preview.elevationStatus,
+  };
+}
+
+function courseFromJson(value: string | null): RaceCourseSnapshot | null {
+  return value === null ? null : parseRaceCourseSnapshot(JSON.parse(value) as unknown);
+}
+
+function storedCourseProjection(
+  conversation: PlanConversationRecord,
+  draft: PlanDraftRevisionRecord | undefined,
+): PlanRaceCourseProjection {
+  if (draft !== undefined && draft.status !== "discarded") {
+    const course = courseFromJson(draft.raceCourseJson);
+    return PlanRaceCourseProjectionSchema.parse(
+      course === null
+        ? { status: "omitted", accepted: null, candidate: null, fileName: null, detail: null }
+        : {
+            status: "ready",
+            accepted: courseSummary(course),
+            candidate: null,
+            fileName: null,
+            detail: null,
+          },
+    );
+  }
+  const course = courseFromJson(conversation.raceCourseJson);
+  if (conversation.courseChoiceStatus === "undecided") {
+    return PlanRaceCourseProjectionSchema.parse({
+      status: "undecided",
+      accepted: null,
+      candidate: null,
+      fileName: null,
+      detail: null,
+    });
+  }
+  return PlanRaceCourseProjectionSchema.parse(
+    course === null
+      ? { status: "omitted", accepted: null, candidate: null, fileName: null, detail: null }
+      : {
+          status: "ready",
+          accepted: courseSummary(course),
+          candidate: null,
+          fileName: null,
+          detail: null,
+        },
+  );
+}
+
+function courseProjection(input: {
+  readonly status: PlanRaceCourseProjection["status"];
+  readonly accepted?: RaceCourseSnapshot | null;
+  readonly candidate?: RaceCourseSnapshot | null;
+  readonly fileName?: string | null;
+  readonly detail?: string | null;
+}): PlanRaceCourseProjection {
+  return PlanRaceCourseProjectionSchema.parse({
+    status: input.status,
+    accepted:
+      input.accepted === undefined || input.accepted === null
+        ? null
+        : courseSummary(input.accepted),
+    candidate:
+      input.candidate === undefined || input.candidate === null
+        ? null
+        : courseSummary(input.candidate),
+    fileName: input.fileName ?? null,
+    detail: input.detail ?? null,
+  });
+}
+
+interface ReadOverrides {
+  readonly ftpScenario?: FtpScenario;
+  readonly ftpError?: PlanError | null;
+  readonly courseScenario?: CourseScenario;
+  readonly course?: PlanRaceCourseProjection;
+}
+
 function queueText(queue: ChatQueueSnapshot): string {
   const head = queue.items[0];
   if (head === undefined) return "";
@@ -197,10 +327,7 @@ export function createPlanningOperations(
   const plans = dependencies.plans ?? createPlanRepository(input.context.store);
   const enqueue = createSerializedLane();
 
-  const read = async (
-    ftpScenario?: FtpScenario,
-    ftpError: PlanError | null = null,
-  ): Promise<PlanReadModel> => {
+  const read = async (overrides: ReadOverrides = {}): Promise<PlanReadModel> => {
     const conversation = await conversations.readLatestOpenConversation();
     if (conversation === undefined) {
       return buildPlanLifecycleReadModel({
@@ -223,8 +350,9 @@ export function createPlanningOperations(
         .catch(() => null),
       dependencies.ftp?.read(),
     ]);
-    const ready = await (dependencies.isReady?.({ conversation, turns, draft }) ??
-      Promise.resolve(false));
+    const ready =
+      conversation.courseChoiceStatus !== "undecided" &&
+      (await (dependencies.isReady?.({ conversation, turns, draft }) ?? Promise.resolve(false)));
     return buildPlanLifecycleReadModel({
       conversation: {
         id: conversation.id,
@@ -237,8 +365,14 @@ export function createPlanningOperations(
       queue,
       decision,
       draft: draftProjection(draft),
-      ...(ftp === undefined ? {} : { ftp: ftpProjection(ftp, ftpScenario, ftpError) }),
-      ...(ftpScenario === undefined ? {} : { ftpScenario }),
+      ...(ftp === undefined
+        ? {}
+        : { ftp: ftpProjection(ftp, overrides.ftpScenario, overrides.ftpError ?? null) }),
+      ...(overrides.ftpScenario === undefined ? {} : { ftpScenario: overrides.ftpScenario }),
+      course: overrides.course ?? storedCourseProjection(conversation, draft),
+      ...(overrides.courseScenario === undefined
+        ? {}
+        : { courseScenario: overrides.courseScenario }),
     });
   };
 
@@ -389,6 +523,7 @@ export function createPlanningOperations(
     conversation: PlanConversationRecord,
     previous: PlanDraftRevisionRecord | undefined,
     build: PlanDraftBuild,
+    course: RaceCourseSnapshot | null,
   ): Promise<void> => {
     const timestamp = input.identity.hlcStamp().physicalMs;
     await plans.replace(build.plan, build.workouts);
@@ -396,6 +531,8 @@ export function createPlanningOperations(
     await conversations.saveConversation({
       ...conversation,
       planId: build.plan.id,
+      courseChoiceStatus: course === null ? "omitted" : "attached",
+      raceCourseJson: course === null ? null : JSON.stringify(course),
       updatedAtMs: timestamp,
       deviceId: await input.identity.deviceId(),
       hlcPhysicalMs: conversationStamp.physicalMs,
@@ -410,6 +547,7 @@ export function createPlanningOperations(
       parentRevisionId: previous?.id ?? null,
       status: "ready",
       snapshotJson: JSON.stringify(build.snapshot),
+      raceCourseJson: course === null ? null : JSON.stringify(course),
       createdAtMs: timestamp,
       updatedAtMs: timestamp,
       deviceId: await input.identity.deviceId(),
@@ -418,14 +556,30 @@ export function createPlanningOperations(
     });
   };
 
+  const saveConversationCourse = async (
+    conversation: PlanConversationRecord,
+    course: RaceCourseSnapshot | null,
+  ): Promise<void> => {
+    const stamp = input.identity.hlcStamp();
+    await conversations.saveConversation({
+      ...conversation,
+      courseChoiceStatus: course === null ? "omitted" : "attached",
+      raceCourseJson: course === null ? null : JSON.stringify(course),
+      updatedAtMs: stamp.physicalMs,
+      deviceId: await input.identity.deviceId(),
+      hlcPhysicalMs: stamp.physicalMs,
+      hlcCounter: stamp.counter,
+    });
+  };
+
   const reject = async (
     error: PlanError,
-    ftpScenario?: FtpScenario,
+    overrides: ReadOverrides = {},
   ): Promise<ExecutePlanTransitionRpcResult> =>
     ExecutePlanTransitionRpcResultSchema.parse({
       status: "rejected",
       error,
-      state: await read(ftpScenario, error),
+      state: await read({ ...overrides, ftpError: error }),
     });
 
   return {
@@ -445,6 +599,8 @@ export function createPlanningOperations(
               id: input.identity.newUlid(),
               planId: null,
               replacesPlanId: null,
+              courseChoiceStatus: "undecided",
+              raceCourseJson: null,
               status: "open",
               endedAtMs: null,
               createdAtMs: timestamp,
@@ -459,6 +615,130 @@ export function createPlanningOperations(
             status: "completed",
             state: await read(),
           });
+        }
+        if (command.transitionId === "PL-T02") {
+          if (dependencies.course === undefined) return reject(UNAVAILABLE);
+          const conversation = await conversations.readConversation(command.conversationId);
+          if (conversation === undefined || conversation.status !== "open") {
+            return reject(UNAVAILABLE);
+          }
+          const draft = await conversations.readLatestDraftRevision(conversation.id);
+          if (draft !== undefined && draft.status !== "discarded") return reject(UNAVAILABLE);
+          const accepted = courseFromJson(conversation.raceCourseJson);
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total: 1,
+          });
+          const parsed = await dependencies.course.parse(command.filePath);
+          const picker = openRaceCoursePicker({
+            planStatus: "draft",
+            draft: null,
+            acceptedCourse: accepted,
+          });
+          const parsing = beginRaceCourseParsing(
+            picker,
+            parsed.ok ? parsed.course.fileName : parsed.fileName,
+          );
+          if (!parsed.ok) {
+            const invalid = rejectRaceCourseFile(parsing, parsed.detail);
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total: 1,
+            });
+            return reject(COURSE_INVALID, {
+              courseScenario: "PL-S065",
+              course: courseProjection({
+                status: "invalid",
+                accepted: invalid.acceptedCourse,
+                fileName: invalid.fileName,
+                detail: invalid.detail,
+              }),
+            });
+          }
+          let next = acceptParsedRaceCourse(parsing, parsed.course);
+          if (next.kind === "course-missing-elevation" && command.elevation === "require") {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: 1,
+              total: 1,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                courseScenario: "PL-S067",
+                course: courseProjection({
+                  status: "missing-elevation",
+                  accepted: next.acceptedCourse,
+                  candidate: next.candidateCourse,
+                }),
+              }),
+            });
+          }
+          if (next.kind === "course-missing-elevation") next = useRouteWithoutElevation(next);
+          const ready = completeRaceCourseRecalculation(next, {
+            planStatus: "draft",
+            recalculatedDraft: null,
+          });
+          try {
+            await saveConversationCourse(conversation, ready.acceptedCourse);
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: 1,
+              total: 1,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read(),
+            });
+          } catch {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total: 1,
+            });
+            return reject(PERSISTENCE_FAILED);
+          }
+        }
+        if (command.transitionId === "PL-T03") {
+          const conversation = await conversations.readConversation(command.conversationId);
+          if (conversation === undefined || conversation.status !== "open") {
+            return reject(UNAVAILABLE);
+          }
+          const draft = await conversations.readLatestDraftRevision(conversation.id);
+          if (draft !== undefined && draft.status !== "discarded") return reject(UNAVAILABLE);
+          try {
+            await saveConversationCourse(conversation, null);
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read(),
+            });
+          } catch {
+            return reject(PERSISTENCE_FAILED, {
+              courseScenario: "PL-S104",
+              course: courseProjection({
+                status: "omission-failed",
+                detail: "Couldn’t continue without a Race Course. Nothing changed.",
+              }),
+            });
+          }
         }
         if (command.transitionId === "PL-T05") {
           const operationId = input.identity.newUlid();
@@ -527,7 +807,7 @@ export function createPlanningOperations(
             });
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
-              state: await read(scenario),
+              state: await read({ ftpScenario: scenario }),
             });
           } catch {
             deliver(onEvent, {
@@ -539,8 +819,8 @@ export function createPlanningOperations(
               total: 1,
             });
             return command.source === "manual"
-              ? reject(FTP_SAVE_FAILED, "PL-S061")
-              : reject(FTP_REFRESH_FAILED, "PL-S059");
+              ? reject(FTP_SAVE_FAILED, { ftpScenario: "PL-S061" })
+              : reject(FTP_REFRESH_FAILED, { ftpScenario: "PL-S059" });
           }
         }
         if (command.transitionId === "PL-T06" || command.transitionId === "PL-T07") {
@@ -569,9 +849,21 @@ export function createPlanningOperations(
               return reject(UNAVAILABLE);
             const turns = await conversations.readTurns(conversation.id);
             const previous = await conversations.readLatestDraftRevision(conversation.id);
+            if (
+              command.transitionId === "PL-T06" &&
+              (conversation.courseChoiceStatus === "undecided" ||
+                !(await (dependencies.isReady?.({ conversation, turns, draft: previous }) ??
+                  Promise.resolve(false))))
+            ) {
+              return reject(UNAVAILABLE);
+            }
+            const course =
+              previous === undefined
+                ? courseFromJson(conversation.raceCourseJson)
+                : courseFromJson(previous.raceCourseJson);
             const build =
               command.transitionId === "PL-T06"
-                ? await dependencies.draftBuilder.form({ conversation, turns })
+                ? await dependencies.draftBuilder.form({ conversation, turns, course })
                 : previous === undefined
                   ? null
                   : await dependencies.draftBuilder.revise({
@@ -579,9 +871,10 @@ export function createPlanningOperations(
                       turns,
                       previous,
                       instruction: command.text,
+                      course,
                     });
             if (build === null) return reject(UNAVAILABLE);
-            await saveDraft(conversation, previous, build);
+            await saveDraft(conversation, previous, build, course);
             deliver(onEvent, {
               commandId: command.commandId,
               transitionId: command.transitionId,
@@ -606,6 +899,126 @@ export function createPlanningOperations(
             return reject(PERSISTENCE_FAILED);
           }
         }
+        if (command.transitionId === "PL-T09") {
+          if (dependencies.draftBuilder === undefined) return reject(UNAVAILABLE);
+          const current = await conversations.readDraftRevision(command.draftId);
+          if (current === undefined || current.status !== "ready") return reject(UNAVAILABLE);
+          const conversation = await conversations.readConversation(current.conversationId);
+          const plan = await plans.read(current.planId);
+          if (
+            conversation === undefined ||
+            conversation.status !== "open" ||
+            plan === undefined ||
+            plan.status !== "draft"
+          ) {
+            return reject(UNAVAILABLE);
+          }
+          const accepted = courseFromJson(current.raceCourseJson);
+          const picker = openRaceCoursePicker({
+            planStatus: plan.status,
+            draft: current,
+            acceptedCourse: accepted,
+          });
+          let recalculating: RaceCourseRecalculatingState<PlanDraftRevisionRecord>;
+          if (command.course.action === "remove") {
+            recalculating = beginRaceCourseRemoval(picker);
+          } else {
+            if (dependencies.course === undefined) return reject(UNAVAILABLE);
+            const parsed = await dependencies.course.parse(command.course.filePath);
+            const parsing = beginRaceCourseParsing(
+              picker,
+              parsed.ok ? parsed.course.fileName : parsed.fileName,
+            );
+            if (!parsed.ok) {
+              const invalid = rejectRaceCourseFile(parsing, parsed.detail);
+              return reject(COURSE_INVALID, {
+                courseScenario: "PL-S065",
+                course: courseProjection({
+                  status: "invalid",
+                  accepted: invalid.acceptedCourse,
+                  fileName: invalid.fileName,
+                  detail: invalid.detail,
+                }),
+              });
+            }
+            let next = acceptParsedRaceCourse(parsing, parsed.course);
+            if (
+              next.kind === "course-missing-elevation" &&
+              command.course.elevation === "require"
+            ) {
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: await read({
+                  courseScenario: "PL-S067",
+                  course: courseProjection({
+                    status: "missing-elevation",
+                    accepted: next.acceptedCourse,
+                    candidate: next.candidateCourse,
+                  }),
+                }),
+              });
+            }
+            if (next.kind === "course-missing-elevation") next = useRouteWithoutElevation(next);
+            recalculating = next;
+          }
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total: 1,
+          });
+          const turns = await conversations.readTurns(conversation.id);
+          try {
+            const build = await dependencies.draftBuilder.recalculateCourse({
+              conversation,
+              turns,
+              previous: current,
+              course: recalculating.candidateCourse,
+            });
+            const ready = completeRaceCourseRecalculation(recalculating, {
+              planStatus: plan.status,
+              recalculatedDraft: build,
+            });
+            await saveDraft(conversation, current, ready.draft, ready.acceptedCourse);
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: 1,
+              total: 1,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read(ready.acceptedCourse === null ? {} : { courseScenario: "PL-S070" }),
+            });
+          } catch {
+            const failed = failRaceCourseRecalculation(
+              recalculating,
+              COURSE_RECALCULATION_FAILED.message,
+            );
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total: 1,
+            });
+            return reject(COURSE_RECALCULATION_FAILED, {
+              courseScenario: "PL-S069",
+              course: courseProjection({
+                status: "recalculation-failed",
+                accepted: failed.acceptedCourse,
+                candidate: failed.candidateCourse,
+                detail: failed.detail,
+              }),
+            });
+          }
+        }
         if (command.transitionId === "PL-T10") {
           try {
             const current = await conversations.readDraftRevision(command.draftId);
@@ -615,6 +1028,7 @@ export function createPlanningOperations(
             await conversations.saveDraftRevision({
               ...current,
               status: "discarded",
+              raceCourseJson: current.raceCourseJson,
               updatedAtMs: timestamp,
               deviceId: await input.identity.deviceId(),
               hlcPhysicalMs: stamp.physicalMs,

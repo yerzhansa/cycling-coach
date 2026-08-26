@@ -152,6 +152,7 @@ import {
 } from "./activity-power-heart-rate.js";
 import { createTrainingExportService } from "./training-export.js";
 import { createPlanningOperations } from "./planning-operations.js";
+import { createNodePlanRaceCourseAdapter } from "./planning-race-course.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
 
 interface OAuthCredential extends StoredProfile {
@@ -1567,7 +1568,7 @@ export async function createLocalCoachComposition(
         engine: reconfigurable.engine,
         identity: planningIdentity,
       },
-      { ftp },
+      { ftp, course: createNodePlanRaceCourseAdapter() },
     );
     const operations = {
       ...coachOperations,

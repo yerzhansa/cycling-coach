@@ -966,6 +966,10 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       }
       textarea.value = "How should I recover?";
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      // A real key press occurs in a later browser task. Let React commit the
+      // controlled draft before exercising Enter so this test observes the
+      // product path instead of racing the synthetic input event.
+      await new Promise((resolve) => setTimeout(resolve, 0));
       textarea.focus();
       const streamingInputEnabled = !textarea.disabled;
       const stop = document.querySelector('[aria-label="Stop responding"]');
@@ -1104,6 +1108,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "chatgptStatus",
         "checkForUpdates",
         "chooseImportFiles",
+        "choosePlanRaceCourseFile",
         "claudeCliRecheck",
         "claudeCliStatus",
         "credentialStatuses",

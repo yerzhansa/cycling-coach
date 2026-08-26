@@ -5,13 +5,20 @@ import type {
   PlanProgressEvent,
   TurnEvent,
 } from "@enduragent/coach-contract";
-import { createPlanConversationRepository, type PlanRecord } from "@enduragent/kernel/planning";
+import {
+  createPlanConversationRepository,
+  createPlanRepository,
+  createRaceCourseSnapshot,
+  type PlanRecord,
+  type RaceCourseSnapshot,
+} from "@enduragent/kernel/planning";
 import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import type { PlanFtpAdapter, PlanFtpSnapshot } from "@enduragent/engine";
 import { createPlanningOperations, type PlanDraftBuilder } from "../src/planning-operations.js";
+import type { PlanRaceCourseAdapter } from "../src/planning-race-course.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
 
 const EMPTY_QUEUE: ChatQueueSnapshot = { schemaVersion: 1, revision: 0, items: [] };
@@ -73,6 +80,40 @@ function plan(id: string, timestamp: number): PlanRecord {
   };
 }
 
+function course(
+  fileName: string,
+  elevationStatus: "available" | "unavailable" = "available",
+): RaceCourseSnapshot {
+  return createRaceCourseSnapshot({
+    fileName,
+    route: {
+      format: "gpx",
+      segments: [
+        {
+          points: [
+            {
+              latitude: 43.2,
+              longitude: 76.8,
+              elevationM: elevationStatus === "available" ? 900 : null,
+            },
+            {
+              latitude: 43.3,
+              longitude: 76.9,
+              elevationM: elevationStatus === "available" ? 960 : null,
+            },
+          ],
+        },
+      ],
+    },
+    preview: {
+      pointCount: 2,
+      distanceM: 14_000,
+      elevationGainM: elevationStatus === "available" ? 60 : null,
+      elevationStatus,
+    },
+  });
+}
+
 describe("Plan operations", () => {
   let store: SqlStore & MigratorStore;
   let context: CoachStoreWriterContext;
@@ -130,7 +171,7 @@ describe("Plan operations", () => {
     );
     expect(sent).toMatchObject({
       status: "completed",
-      state: { scenarioId: "PL-S016", projection: "coach" },
+      state: { scenarioId: "PL-S017", projection: "coach" },
     });
     expect(progress.map((event) => event.phase)).toEqual([
       "queued",
@@ -151,6 +192,16 @@ describe("Plan operations", () => {
         coachText: "I found your rides.",
       },
     ]);
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T03",
+        commandId: "command-3",
+        conversationId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S016", projection: "coach" },
+    });
     const restored = createPlanningOperations(
       { context, engine: coach, identity: authored },
       readiness,
@@ -192,6 +243,14 @@ describe("Plan operations", () => {
           snapshot: { completeWeeks: 12, revision },
         };
       },
+      async recalculateCourse() {
+        revision += 1;
+        return {
+          plan: plan(`${"0".repeat(25)}T`, 202),
+          workouts: [],
+          snapshot: { completeWeeks: 12, revision },
+        };
+      },
     };
     const operations = createPlanningOperations(
       { context, engine: coach, identity: authored },
@@ -204,6 +263,11 @@ describe("Plan operations", () => {
     });
     if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
     const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "command-course-choice",
+      conversationId,
+    });
     const formed = await operations.executePlanTransition?.({
       transitionId: "PL-T06",
       commandId: "command-2",
@@ -370,6 +434,256 @@ describe("Plan operations", () => {
         data: { ftp: { status: "conflict", usedSource: "manual", usedWatts: 282 } },
       },
     });
+  });
+
+  it("requires an explicit Race Course choice and preserves it across relaunch", async () => {
+    const fullCourse = course("almaty-gran-fondo.gpx");
+    const routeOnly = course("route-only.gpx", "unavailable");
+    const adapter: PlanRaceCourseAdapter = {
+      parse: vi.fn(async (filePath) => {
+        if (filePath.endsWith("invalid.gpx")) {
+          return { ok: false as const, fileName: "invalid.gpx", detail: "No route found." };
+        }
+        return {
+          ok: true as const,
+          course: filePath.endsWith("route-only.gpx") ? routeOnly : fullCourse,
+        };
+      }),
+    };
+    const readiness = { isReady: () => true, course: adapter };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      readiness,
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T06",
+        commandId: "command-2",
+        conversationId,
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T02",
+        commandId: "command-3",
+        conversationId,
+        filePath: "/tmp/invalid.gpx",
+        elevation: "require",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      state: { scenarioId: "PL-S065", data: { course: { status: "invalid" } } },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T02",
+        commandId: "command-4",
+        conversationId,
+        filePath: "/tmp/route-only.gpx",
+        elevation: "require",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S067",
+        data: {
+          course: { status: "missing-elevation", candidate: { elevationStatus: "unavailable" } },
+        },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T02",
+        commandId: "command-5",
+        conversationId,
+        filePath: "/tmp/route-only.gpx",
+        elevation: "allow-missing",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S016",
+        data: { readyToCreateDraft: true, course: { status: "ready" } },
+      },
+    });
+    await expect(
+      createPlanConversationRepository(store).readConversation(conversationId),
+    ).resolves.toMatchObject({ courseChoiceStatus: "attached" });
+
+    const restored = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      readiness,
+    );
+    await expect(restored.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: {
+        scenarioId: "PL-S016",
+        data: { course: { status: "ready", accepted: { fileName: "route-only.gpx" } } },
+      },
+    });
+  });
+
+  it("keeps a failed course-omission write visible and retryable", async () => {
+    const conversations = createPlanConversationRepository(store);
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { conversations, isReady: () => true },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    vi.spyOn(conversations, "saveConversation").mockRejectedValueOnce(new Error("disk full"));
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T03",
+        commandId: "command-2",
+        conversationId,
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "persistence-failed", retryable: true },
+      state: { scenarioId: "PL-S104", data: { course: { status: "omission-failed" } } },
+    });
+    await expect(conversations.readConversation(conversationId)).resolves.toMatchObject({
+      courseChoiceStatus: "undecided",
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T03",
+        commandId: "command-3",
+        conversationId,
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S016" } });
+  });
+
+  it("recalculates a Draft atomically and rejects Course edits after activation", async () => {
+    const firstCourse = course("almaty-gran-fondo.gpx");
+    const secondCourse = course("replacement.gpx");
+    const adapter: PlanRaceCourseAdapter = {
+      parse: vi.fn(async (filePath) => ({
+        ok: true as const,
+        course: filePath.endsWith("replacement.gpx") ? secondCourse : firstCourse,
+      })),
+    };
+    let buildRevision = 0;
+    let failRecalculation = false;
+    const builder: PlanDraftBuilder = {
+      async form() {
+        buildRevision += 1;
+        return {
+          plan: plan(`${"0".repeat(25)}V`, 300),
+          workouts: [],
+          snapshot: { completeWeeks: 12, buildRevision },
+        };
+      },
+      async revise() {
+        throw new TypeError("not used");
+      },
+      async recalculateCourse() {
+        if (failRecalculation) throw new Error("builder unavailable");
+        buildRevision += 1;
+        return {
+          plan: plan(`${"0".repeat(25)}V`, 301),
+          workouts: [],
+          snapshot: { completeWeeks: 12, buildRevision },
+        };
+      },
+    };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { course: adapter, draftBuilder: builder, isReady: () => true },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "command-2",
+      conversationId,
+    });
+    const formed = await operations.executePlanTransition?.({
+      transitionId: "PL-T06",
+      commandId: "command-3",
+      conversationId,
+    });
+    if (formed?.status !== "completed") throw new TypeError("Draft did not form.");
+    const draftId = String((formed.state.data.draft as { id: string }).id);
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T09",
+        commandId: "command-4",
+        draftId,
+        course: { action: "attach", filePath: "/tmp/almaty-gran-fondo.gpx", elevation: "require" },
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S070",
+        revision: 2,
+        data: { course: { status: "ready", accepted: { fileName: "almaty-gran-fondo.gpx" } } },
+      },
+    });
+    const latest =
+      await createPlanConversationRepository(store).readLatestDraftRevision(conversationId);
+    expect(latest).toMatchObject({ revision: 2 });
+    expect(latest?.raceCourseJson).toContain("almaty-gran-fondo.gpx");
+
+    failRecalculation = true;
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T09",
+        commandId: "command-5",
+        draftId: String(latest?.id),
+        course: { action: "attach", filePath: "/tmp/replacement.gpx", elevation: "require" },
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      state: {
+        scenarioId: "PL-S069",
+        revision: 2,
+        data: {
+          course: {
+            status: "recalculation-failed",
+            accepted: { fileName: "almaty-gran-fondo.gpx" },
+            candidate: { fileName: "replacement.gpx" },
+          },
+        },
+      },
+    });
+    await expect(
+      createPlanConversationRepository(store).readLatestDraftRevision(conversationId),
+    ).resolves.toMatchObject({ revision: 2, raceCourseJson: latest?.raceCourseJson });
+
+    await createPlanRepository(store).replace(
+      { ...plan(`${"0".repeat(25)}V`, 302), status: "active" },
+      [],
+    );
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T09",
+        commandId: "command-6",
+        draftId: String(latest?.id),
+        course: { action: "remove" },
+      }),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "unavailable" } });
   });
 
   it("retries an interrupted Plan queue claim and persists the recovered turn", async () => {

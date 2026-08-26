@@ -33,6 +33,7 @@ function harness(
   input: {
     readonly getPlanState?: () => Promise<GetPlanStateRpcResult>;
     readonly executePlanTransition?: PlanBridge["executePlanTransition"];
+    readonly choosePlanRaceCourseFile?: PlanBridge["choosePlanRaceCourseFile"];
     readonly ids?: readonly string[];
     readonly clients?: DesktopCoachClientProvider;
     readonly messageIds?: readonly string[];
@@ -53,11 +54,15 @@ function harness(
   const executePlanTransition = vi.fn<PlanBridge["executePlanTransition"]>(
     input.executePlanTransition ?? defaultExecute,
   );
+  const choosePlanRaceCourseFile = vi.fn<PlanBridge["choosePlanRaceCourseFile"]>(
+    input.choosePlanRaceCourseFile ?? (async () => null),
+  );
   const ids = [...(input.ids ?? ["command-1", "command-2", "command-3"])];
   const messageIds = [...(input.messageIds ?? ["message-1", "message-2", "message-3"])];
   const adapter = createPlanViewAdapter({
     bridge: {
       getPlanState,
+      choosePlanRaceCourseFile,
       executePlanTransition,
       onPlanProgress(listener) {
         progressListener = listener;
@@ -83,6 +88,9 @@ function harness(
     publishRevisionComposer(open) {
       surface = { ...surface, revisionComposer: open };
     },
+    publishCoursePicker(open) {
+      surface = { ...surface, coursePicker: open };
+    },
     createCommandId: () => ids.shift() ?? "unexpected-command",
     createMessageId: () => messageIds.shift() ?? "unexpected-message",
   });
@@ -93,6 +101,7 @@ function harness(
     },
     getPlanState,
     executePlanTransition,
+    choosePlanRaceCourseFile,
     disposeProgress,
     progress(value: PlanProgressEvent) {
       progressListener?.(value);
@@ -262,6 +271,154 @@ describe("Plan view adapter", () => {
       conversationId: "00000000000000000000000001",
       source: "intervals",
       watts: null,
+    });
+  });
+
+  it("uses the native picker and resumes a route-only Course choice", async () => {
+    const summary = {
+      fileName: "route-only.gpx",
+      format: "gpx" as const,
+      pointCount: 42,
+      distanceM: 120_000,
+      elevationGainM: null,
+      elevationStatus: "unavailable" as const,
+    };
+    const initial = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData({
+        course: {
+          status: "undecided",
+          accepted: null,
+          candidate: null,
+          fileName: null,
+          detail: null,
+        },
+      }),
+    });
+    const missingElevation = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S067",
+      projection: "coach",
+      data: planCoachData({
+        course: {
+          status: "missing-elevation",
+          accepted: null,
+          candidate: summary,
+          fileName: null,
+          detail: null,
+        },
+      }),
+    });
+    const ready = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S016",
+      projection: "coach",
+      data: planCoachData({
+        ready: true,
+        course: {
+          status: "ready",
+          accepted: summary,
+          candidate: null,
+          fileName: null,
+          detail: null,
+        },
+      }),
+    });
+    const executePlanTransition = vi
+      .fn<PlanBridge["executePlanTransition"]>()
+      .mockResolvedValueOnce({ status: "completed", state: missingElevation })
+      .mockResolvedValueOnce({ status: "completed", state: ready });
+    const subject = harness({
+      ids: ["course-command", "route-only-command"],
+      getPlanState: async () => ({ status: "ready", state: initial }),
+      choosePlanRaceCourseFile: async () => "/tmp/route-only.gpx",
+      executePlanTransition,
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.openCoursePicker();
+    expect(subject.surface.coursePicker).toBe(true);
+    subject.adapter.chooseCourseFile();
+    await settle();
+    expect(subject.choosePlanRaceCourseFile).toHaveBeenCalledOnce();
+    expect(subject.surface.coursePicker).toBe(false);
+    expect(executePlanTransition).toHaveBeenNthCalledWith(1, {
+      transitionId: "PL-T02",
+      commandId: "course-command",
+      conversationId: "00000000000000000000000001",
+      filePath: "/tmp/route-only.gpx",
+      elevation: "require",
+    });
+
+    subject.adapter.useCourseWithoutElevation();
+    await settle();
+    expect(executePlanTransition).toHaveBeenNthCalledWith(2, {
+      transitionId: "PL-T02",
+      commandId: "route-only-command",
+      conversationId: "00000000000000000000000001",
+      filePath: "/tmp/route-only.gpx",
+      elevation: "allow-missing",
+    });
+  });
+
+  it("persists Course omission in intake and removes a Course through Draft recalculation", async () => {
+    const intake = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData({
+        course: {
+          status: "undecided",
+          accepted: null,
+          candidate: null,
+          fileName: null,
+          detail: null,
+        },
+      }),
+    });
+    const subject = harness({
+      ids: ["omit-command"],
+      getPlanState: async () => ({ status: "ready", state: intake }),
+    });
+    subject.adapter.start();
+    await settle();
+    subject.adapter.continueWithoutCourse();
+    await settle();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T03",
+      commandId: "omit-command",
+      conversationId: "00000000000000000000000001",
+    });
+
+    const draft = {
+      id: "00000000000000000000000002",
+      planId: "00000000000000000000000003",
+      revision: 1,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    const draftState = planReadModel({
+      lifecycle: "draft",
+      scenarioId: "PL-S002",
+      projection: "draft",
+      data: planCoachData({ draft }),
+    });
+    const draftSubject = harness({
+      ids: ["remove-command"],
+      getPlanState: async () => ({ status: "ready", state: draftState }),
+    });
+    draftSubject.adapter.start();
+    await settle();
+    draftSubject.adapter.removeCourse();
+    await settle();
+    expect(draftSubject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T09",
+      commandId: "remove-command",
+      draftId: draft.id,
+      course: { action: "remove" },
     });
   });
 
