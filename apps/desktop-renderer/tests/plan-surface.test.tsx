@@ -54,6 +54,11 @@ function actions(): PlanActions {
     openPlanSettings: vi.fn(),
     closePlanSettings: vi.fn(),
     setPlanSetting: vi.fn(),
+    openEndConfirmation: vi.fn(),
+    closeEndConfirmation: vi.fn(),
+    confirmEndPlan: vi.fn(),
+    retryPlanCleanup: vi.fn(),
+    verifyPlanCleanup: vi.fn(),
     openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
@@ -616,6 +621,94 @@ describe("Plan surface", () => {
     await user.click(screen.getByRole("button", { name: "Verify again" }));
     expect(planActions.reconcilePlan).toHaveBeenCalledOnce();
     expect(planActions.verifyReconciliation).toHaveBeenCalledOnce();
+  });
+
+  it("confirms End Plan with Cancel focused and keeps failed cleanup recoverable", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const plan = {
+      id: planId,
+      name: "Gran Fondo Almaty",
+      primaryGoal: "Finish in the front half",
+      startDate: "2026-07-13",
+      targetDate: "2026-10-04",
+      kind: "full-plan" as const,
+      totalWeeks: 12,
+      weekStartDay: 1,
+      workoutCount: 20,
+      plannedDurationS: 72_000,
+    };
+    const confirmation = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S051",
+      projection: "active",
+      planId,
+      data: {
+        plan,
+        today: "2026-08-26",
+        weekIndex: 7,
+        todayWorkout: null,
+        workouts: [],
+      },
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state: confirmation },
+        lastReady: confirmation,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    const dialog = screen.getByRole("dialog");
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "End Plan" }));
+    expect(planActions.confirmEndPlan).toHaveBeenCalledOnce();
+
+    const failed = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S053",
+      projection: "ended",
+      planId,
+      attentionCount: 1,
+      reconciliation: {
+        status: "failed",
+        created: 0,
+        pending: 0,
+        failed: 1,
+        total: 1,
+        currentThrough: null,
+        error: { code: "provider-failed", message: "Cleanup failed.", retryable: true },
+      },
+      data: {
+        plan,
+        endedAtMs: 20,
+        cleanupItems: [
+          {
+            id: "00000000000000000000000004",
+            date: "2026-08-27",
+            externalId: "cycling-coach:plan:workout",
+            status: "failed",
+            errorCode: "calendar-delete-failed",
+          },
+        ],
+      },
+    });
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: failed });
+    });
+    expect(
+      screen.getByRole("heading", { name: "Calendar cleanup needs attention" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Continue anyway/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Verify again" }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(planActions.verifyPlanCleanup).toHaveBeenCalledOnce();
+    expect(planActions.retryPlanCleanup).toHaveBeenCalledOnce();
   });
 
   it("highlights WorkoutMatch decisions and keeps drawer actions visible", async () => {

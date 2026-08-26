@@ -126,6 +126,7 @@ function planRepository(): PlanRepository {
   return {
     replace: vi.fn(),
     replaceNew: vi.fn(),
+    endActive: vi.fn(),
     read: vi.fn(async () => plan),
     readByOriginId: vi.fn(),
     readLatest: vi.fn(async () => plan),

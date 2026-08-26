@@ -151,6 +151,7 @@ describe("engine scaffold", () => {
       "validatePlanProposal",
       "validatePlanUndo",
       "validateWorkoutCreationDate",
+      "verifyPlanCleanup",
       "verifyPlanMirror",
       "warnOrphanSections",
       "wrapAthleteContextFence",

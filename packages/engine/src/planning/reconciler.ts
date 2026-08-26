@@ -403,9 +403,7 @@ export async function reconcileActivePlanWindow(
       item.planWorkoutId === null ? undefined : selectedWorkoutById.get(item.planWorkoutId);
     if (workout === undefined) throw new PlanReconciliationError("invalid-workout");
     if (matches.length === 1) {
-      if (
-        canVerifyMirrorEvent(item, matches[0]!)
-      ) {
+      if (canVerifyMirrorEvent(item, matches[0]!)) {
         await deps.repository.verifyItem(item.id, matches[0]!.id, deps.now());
         continue;
       }
@@ -429,9 +427,7 @@ export async function reconcileActivePlanWindow(
       continue;
     }
     if (immediateMatches.length === 1) {
-      if (
-        canVerifyMirrorEvent(item, immediateMatches[0]!)
-      ) {
+      if (canVerifyMirrorEvent(item, immediateMatches[0]!)) {
         await deps.repository.verifyItem(item.id, immediateMatches[0]!.id, deps.now());
         continue;
       }
@@ -512,11 +508,12 @@ export async function cleanupPlanMirror(
   input: {
     readonly planId: string;
     readonly todayDateKey: number;
+    readonly startDateKey?: number;
     readonly endDateKey: number;
   },
   deps: PlanReconcilerDeps,
 ): Promise<PlanReconciliationProjection> {
-  const startDateKey = addCivilDays(input.todayDateKey, 1);
+  const startDateKey = input.startDateKey ?? addCivilDays(input.todayDateKey, 1);
   const now = deps.now();
   const job = await deps.repository.createOrGetJob({
     id: deps.identity.newId(),
@@ -593,6 +590,51 @@ export async function cleanupPlanMirror(
   for (const item of await deps.repository.readItems(job.id)) {
     const remaining = after.get(item.externalId) ?? [];
     if (remaining.length === 0) {
+      await deps.repository.verifyItem(item.id, null, deps.now());
+    } else {
+      await deps.repository.failItem(item.id, "calendar-verification-failed", deps.now());
+    }
+  }
+  return finishJob(deps, running);
+}
+
+export async function verifyPlanCleanup(
+  job: PlanReconciliationJobRecord,
+  deps: PlanReconcilerDeps,
+): Promise<PlanReconciliationProjection> {
+  const stored = await deps.repository.readJob(job.id);
+  if (stored === undefined || stored.kind !== "cleanup") {
+    throw new PlanReconciliationError("missing-job");
+  }
+  const running = await deps.repository.beginAttempt(stored.id, deps.now());
+  let events: Map<string, PlanMirrorEvent[]>;
+  try {
+    events = groupedEvents(
+      await deps.calendar.listEvents({
+        startDateKey: running.windowStartDateKey,
+        endDateKey: running.windowEndDateKey,
+      }),
+    );
+  } catch {
+    return failListedJob(deps, running);
+  }
+  const prefix = planMirrorExternalIdPrefix(running.planId);
+  for (const [externalId, matches] of events) {
+    if (!externalId.startsWith(prefix) || matches.length === 0) continue;
+    const first = matches[0]!;
+    await deps.repository.prepareItem({
+      id: deps.identity.newId(),
+      jobId: running.id,
+      planWorkoutId: null,
+      operation: "delete",
+      dateKey: first.dateKey,
+      externalId,
+      expectedJson: JSON.stringify(matches.map((event) => JSON.parse(cleanupExpected(event)))),
+      createdAtMs: deps.now(),
+    });
+  }
+  for (const item of await deps.repository.readItems(running.id)) {
+    if ((events.get(item.externalId) ?? []).length === 0) {
       await deps.repository.verifyItem(item.id, null, deps.now());
     } else {
       await deps.repository.failItem(item.id, "calendar-verification-failed", deps.now());

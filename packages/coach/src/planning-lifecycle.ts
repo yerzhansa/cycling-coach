@@ -1,11 +1,13 @@
 import {
   PlanActiveProjectionDataSchema,
+  PlanEndedProjectionDataSchema,
   PlanCoachProjectionDataSchema,
   PlanReadModelSchema,
   type ChatQueueSnapshot,
   type CoachDecisionReadModel,
   type PlanAttention,
   type PlanActiveProjectionData,
+  type PlanEndedProjectionData,
   type PlanCoachMessage,
   type PlanDraftProjection,
   type PlanDraftPlanProjection,
@@ -46,6 +48,7 @@ export type ActivePlanScenario =
   | "PL-S041"
   | "PL-S042"
   | "PL-S043"
+  | "PL-S051"
   | "PL-S090"
   | "PL-S091"
   | "PL-S092"
@@ -403,6 +406,10 @@ export function buildActivePlanReadModel(input: {
     "PL-S041": ["Calendar update still needs attention", "Retry or verify the provider again."],
     "PL-S042": ["Resuming calendar update", "The interrupted update is continuing safely."],
     "PL-S043": ["Plan active", "Intervals is current for the next seven days."],
+    "PL-S051": [
+      "End this Plan?",
+      "Today's workout stays; tomorrow-onward Enduragent workouts will be removed.",
+    ],
     "PL-S090": ["Plan settings", "Changes save immediately."],
     "PL-S091": ["Plan settings", "Saving this setting."],
     "PL-S092": ["Plan settings", "This setting is saved."],
@@ -488,11 +495,72 @@ export function buildActivePlanReadModel(input: {
       guard("PL-T20"),
       ...(canUndo ? [guard("PL-T21")] : []),
       guard("PL-T22"),
+      guard("PL-T23"),
       guard("PL-T39"),
     ],
     reconciliation: input.reconciliation,
     attention,
     activeOperation: null,
     data: PlanActiveProjectionDataSchema.parse(input.data),
+  });
+}
+
+export type EndedPlanScenario =
+  | "PL-S014"
+  | "PL-S052"
+  | "PL-S053"
+  | "PL-S054"
+  | "PL-S055"
+  | "PL-S056"
+  | "PL-S089";
+
+export function buildEndedPlanReadModel(input: {
+  readonly scenarioId: EndedPlanScenario;
+  readonly planId: string;
+  readonly revision: number;
+  readonly data: PlanEndedProjectionData;
+  readonly reconciliation: PlanReconciliation;
+}): PlanReadModel {
+  const copy = {
+    "PL-S014": ["Plan ended", "This Plan is saved in History and no longer changes training."],
+    "PL-S052": ["Plan ended", "Removing tomorrow-onward Enduragent workouts from Intervals."],
+    "PL-S053": ["Cleanup needs attention", "The Plan is ended, but some calendar cleanup remains."],
+    "PL-S054": ["Checking Intervals", "Verifying that no future Enduragent workouts remain."],
+    "PL-S055": ["Retrying cleanup", "Removing only the remaining Plan-owned workouts."],
+    "PL-S056": ["Plan ended", "Calendar cleanup is verified."],
+    "PL-S089": ["Plan ended", "Calendar cleanup is verified and Plan history is saved."],
+  } as const;
+  const failed = input.scenarioId === "PL-S053";
+  return PlanReadModelSchema.parse({
+    schemaVersion: 1,
+    scenarioId: input.scenarioId,
+    lifecycle: "ended",
+    planId: input.planId,
+    revision: input.revision,
+    title: copy[input.scenarioId][0],
+    summary: copy[input.scenarioId][1],
+    projection: "ended",
+    transitions: [
+      ...(failed ? [guard("PL-T24")] : []),
+      ...(input.reconciliation.status === "verified" ? [guard("PL-T01")] : []),
+    ],
+    reconciliation: input.reconciliation,
+    attention: failed
+      ? {
+          count: 1,
+          destination: "direct",
+          items: [
+            {
+              id: `cleanup:${input.planId}`,
+              title: "Calendar cleanup needs attention",
+              scenarioId: "PL-S053",
+              priority: "blocker",
+              affectedDate: null,
+            },
+          ],
+        }
+      : EMPTY_ATTENTION,
+    activeOperation: null,
+    data: PlanEndedProjectionDataSchema.parse(input.data),
   });
 }

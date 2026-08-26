@@ -16,6 +16,7 @@ import {
   projectPlanReconciliation,
   reconcileActivePlanWindow,
   verifyPlanMirror,
+  verifyPlanCleanup,
   type PlanMirrorCalendarPort,
   type PlanMirrorCreateInput,
   type PlanMirrorEvent,
@@ -757,6 +758,25 @@ describe("Plan reconciler", () => {
     expect(result).toMatchObject({ state: "reconcile-verified", created: 1, total: 1 });
     expect(value.calendar.deletes).toEqual([2, 3]);
     expect(value.calendar.events.map((event) => event.id)).toEqual([1, 4, 5]);
+  });
+
+  it("verifies cleanup without deleting and discovers remaining Plan events", async () => {
+    const value = harness();
+    const ownTomorrow = planMirrorExternalId(PLAN_ID, "01K00000000000000000000102");
+    const job = await value.repository.createOrGetJob({
+      id: "01K00000000000000000000901",
+      planId: PLAN_ID,
+      kind: "cleanup",
+      windowStartDateKey: 20260826,
+      windowEndDateKey: 20260831,
+      createdAtMs: 1,
+    });
+    value.calendar.events.push({ id: 2, dateKey: 20260826, externalId: ownTomorrow });
+
+    const result = await verifyPlanCleanup(job, value.deps);
+
+    expect(result).toMatchObject({ state: "reconcile-failed", created: 0, failed: 1, total: 1 });
+    expect(value.calendar.deletes).toEqual([]);
   });
 
   it("persists a list failure without mutating the active local Plan", async () => {

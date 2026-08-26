@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "
 import {
   PLAN_MIN_FULL_DAYS,
   PlanActiveProjectionDataSchema,
+  PlanEndedProjectionDataSchema,
   PlanCoachProjectionDataSchema,
   type PlanDraftPlanProjection,
   type PlanFtpProjection,
@@ -1836,6 +1837,7 @@ function ActiveProjection(): ReactElement {
   const [proposalMode, setProposalMode] = useState<"proposal" | "evidence" | "edit">("proposal");
   const [revisionText, setRevisionText] = useState("");
   const evidenceTrigger = useRef<HTMLButtonElement>(null);
+  const endCancel = useRef<HTMLButtonElement>(null);
   const previousScenario = useRef(model?.scenarioId ?? null);
   const selectedProposalKey =
     typeof model?.data.selectedProposalId === "string" ? model.data.selectedProposalId : null;
@@ -2123,6 +2125,55 @@ function ActiveProjection(): ReactElement {
           })}
         </div>
       </section>
+
+      <section className="flex flex-col gap-row rounded-card bg-surface p-5 shadow-elev-1 sm:flex-row sm:items-center sm:justify-between">
+        <p className="m-0 text-sm text-ink-2">
+          End this Plan. Today's workout stays; tomorrow-onward Enduragent workouts are removed.
+        </p>
+        <Button
+          id="plan-end-trigger"
+          type="button"
+          variant="destructive"
+          disabled={actions === null || transition.status !== "idle"}
+          onClick={() => actions?.openEndConfirmation()}
+        >
+          End Plan
+        </Button>
+      </section>
+
+      <Dialog
+        open={model.scenarioId === "PL-S051"}
+        onOpenChange={(open) => {
+          if (!open) actions?.closeEndConfirmation();
+        }}
+      >
+        <DialogContent initialFocus={endCancel} showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>End this Plan?</DialogTitle>
+            <DialogDescription>
+              The Plan ends now. Today's workout stays, and tomorrow-onward Enduragent workouts are
+              removed from Intervals.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              ref={endCancel}
+              type="button"
+              variant="outline"
+              onClick={() => actions?.closeEndConfirmation()}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive-solid"
+              onClick={() => actions?.confirmEndPlan()}
+            >
+              End Plan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={selectedWorkout !== null}
@@ -2437,6 +2488,124 @@ function ActiveProjection(): ReactElement {
   );
 }
 
+function EndedProjection(): ReactElement {
+  const model = useEnduragentStore((state) => planReadModel(state.plan));
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const actions = useEnduragentStore((state) => state.planActions);
+  if (model === null) return <StatusCard title="Plan" support="Refreshing your Plan…" />;
+  const parsed = PlanEndedProjectionDataSchema.safeParse(model.data);
+  if (!parsed.success) return <StatusCard title={model.title} support={model.summary} />;
+  const data = parsed.data;
+  const busy =
+    (transition.status === "submitting" || transition.status === "running") &&
+    transition.transitionId === "PL-T24";
+  const failed = model.reconciliation.status === "failed";
+  const verified = model.reconciliation.status === "verified";
+  const remaining = data.cleanupItems.filter((item) => item.status !== "verified");
+  return (
+    <section className="overflow-hidden rounded-card bg-surface shadow-elev-1" aria-live="polite">
+      <div className="grid gap-6 p-5">
+        <div className="flex items-start gap-row">
+          {failed ? (
+            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+          ) : verified ? (
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+          ) : (
+            <LoaderCircle
+              className="mt-0.5 size-5 shrink-0 animate-spin text-primary"
+              aria-hidden="true"
+            />
+          )}
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-base font-semibold">{data.plan.name} Plan ended</h2>
+            <p className="m-0 text-ink-2">The Plan no longer changes future training.</p>
+          </div>
+        </div>
+        <div className="border-t border-line pt-row">
+          <div className="flex items-start gap-row">
+            {verified ? (
+              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+            ) : failed ? (
+              <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+            ) : (
+              <LoaderCircle
+                className="mt-0.5 size-5 shrink-0 animate-spin text-primary"
+                aria-hidden="true"
+              />
+            )}
+            <div className={SUPPORT_PAIR}>
+              <h3 className="m-0 text-base font-semibold">
+                {verified
+                  ? "Calendar cleanup verified"
+                  : failed
+                    ? "Calendar cleanup needs attention"
+                    : busy || model.scenarioId === "PL-S055"
+                      ? "Cleaning up Intervals"
+                      : "Checking Intervals"}
+              </h3>
+              <p className="m-0 text-ink-2">
+                {verified
+                  ? "Today stayed. No tomorrow-onward Enduragent workouts remain in Intervals."
+                  : failed
+                    ? "The Plan remains ended. Retry cleanup or verify Intervals again."
+                    : "Today stays while tomorrow-onward Plan workouts are checked."}
+              </p>
+            </div>
+          </div>
+          {failed && remaining.length > 0 ? (
+            <div className="mt-row divide-y divide-line border-y border-line">
+              {remaining.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between gap-row py-inset text-sm"
+                >
+                  <span>{formatCivilDate(item.date)}</span>
+                  <span className="text-warn">Still in Intervals</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <div className="grid gap-inset border-t border-line pt-row text-sm">
+          <div className="flex justify-between gap-row">
+            <span>Plan history</span>
+            <strong>Saved</strong>
+          </div>
+          <div className="flex justify-between gap-row">
+            <span>Past rides and athlete-created events</span>
+            <strong>Preserved</strong>
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-wrap justify-end gap-inset border-t border-line px-5 py-row">
+        {failed ? (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy || actions === null}
+              onClick={() => actions?.verifyPlanCleanup()}
+            >
+              Verify again
+            </Button>
+            <Button
+              type="button"
+              disabled={busy || actions === null}
+              onClick={() => actions?.retryPlanCleanup()}
+            >
+              {busy ? "Working…" : "Retry"}
+            </Button>
+          </>
+        ) : verified ? (
+          <Button type="button" disabled={actions === null} onClick={() => actions?.startPlan()}>
+            Start new Plan
+          </Button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function ReadyProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
   const transition = useEnduragentStore((state) => state.plan.transition);
@@ -2451,6 +2620,7 @@ function ReadyProjection(): ReactElement {
   if (model.projection === "coach") return <PlanCoach />;
   if (model.projection === "draft") return <DraftProjection />;
   if (model.projection === "active") return <ActiveProjection />;
+  if (model.projection === "ended") return <EndedProjection />;
   if (model.projection === "attention") return <AttentionProjection />;
   return (
     <StatusCard

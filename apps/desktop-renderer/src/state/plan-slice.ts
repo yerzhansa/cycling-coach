@@ -90,6 +90,11 @@ export interface PlanActions {
   openPlanSettings(): void;
   closePlanSettings(): void;
   setPlanSetting(setting: "auto-apply" | "weekly-review", value: boolean): void;
+  openEndConfirmation(): void;
+  closeEndConfirmation(): void;
+  confirmEndPlan(): void;
+  retryPlanCleanup(): void;
+  verifyPlanCleanup(): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;

@@ -256,6 +256,7 @@ export {
   projectPlanReconciliation,
   reconcileActivePlanWindow,
   verifyPlanMirror,
+  verifyPlanCleanup,
   type PlanMirrorCalendarPort,
   type PlanMirrorCreateInput,
   type PlanMirrorEvent,

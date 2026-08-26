@@ -2045,4 +2045,100 @@ describe("Plan operations", () => {
       }),
     ).resolves.toMatchObject({ status: "rejected" });
   });
+
+  it("ends locally, preserves today and athlete events, and recovers cleanup", async () => {
+    const planId = `${"0".repeat(25)}F`;
+    const activePlan = { ...plan(planId, 10), status: "active" as const };
+    const plans = createPlanRepository(store);
+    await plans.replace(activePlan, []);
+    const ownToday = planMirrorExternalId(planId, `${"0".repeat(25)}G`);
+    const ownTomorrow = planMirrorExternalId(planId, `${"0".repeat(25)}H`);
+    const events = [
+      { id: 1, dateKey: 20260826, externalId: ownToday },
+      { id: 2, dateKey: 20260827, externalId: ownTomorrow },
+      { id: 3, dateKey: 20260827, externalId: null },
+    ];
+    const deletes: number[] = [];
+    let failListing = true;
+    let todayDateKey = 20260826;
+    const calendar: PlanMirrorCalendarPort = {
+      async listEvents({ startDateKey, endDateKey }) {
+        if (failListing) {
+          failListing = false;
+          throw new Error("provider unavailable");
+        }
+        return events.filter(
+          (event) => event.dateKey >= startDateKey && event.dateKey <= endDateKey,
+        );
+      },
+      async createEvent() {},
+      async updateEvent() {},
+      async deleteEvent({ eventId }) {
+        deletes.push(eventId);
+        const index = events.findIndex((event) => event.id === eventId);
+        if (index >= 0) events.splice(index, 1);
+      },
+    };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { plans, calendar, todayDateKey: () => todayDateKey },
+    );
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T23",
+        commandId: "command-end-confirmation",
+        planId,
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S051" } });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T24",
+        commandId: "command-end",
+        planId,
+        mode: "cleanup",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      state: { lifecycle: "ended", scenarioId: "PL-S053" },
+    });
+    await expect(plans.read(planId)).resolves.toMatchObject({ status: "ended" });
+    todayDateKey = 20260827;
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T24",
+        commandId: "command-verify",
+        planId,
+        mode: "verify",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "verification-failed" },
+      state: { scenarioId: "PL-S053", attention: { count: 1 } },
+    });
+    expect(deletes).toEqual([]);
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T24",
+        commandId: "command-cleanup-retry",
+        planId,
+        mode: "cleanup",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { lifecycle: "ended", scenarioId: "PL-S056", reconciliation: { status: "verified" } },
+    });
+    expect(deletes).toEqual([2]);
+    expect(events).toEqual([
+      { id: 1, dateKey: 20260826, externalId: ownToday },
+      { id: 3, dateKey: 20260827, externalId: null },
+    ]);
+
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: { lifecycle: "ended", scenarioId: "PL-S089" },
+    });
+  });
 });
