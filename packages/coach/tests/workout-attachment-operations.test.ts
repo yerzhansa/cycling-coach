@@ -98,7 +98,7 @@ async function harness(content = zwo) {
   });
   expect(admitted.status).toBe("accepted");
   if (admitted.status !== "accepted") throw new Error("fixture admission failed");
-  return { store, repository, operations, attachmentId: admitted.attachmentId };
+  return { store, repository, operations, attachmentId: admitted.attachmentId, now };
 }
 
 describe("planned Workout attachments", () => {
@@ -151,6 +151,57 @@ describe("planned Workout attachments", () => {
     );
     await expect(value.operations.readWorkoutSet(value.attachmentId)).resolves.toMatchObject({
       selectedWorkoutId: null,
+    });
+    await value.store.close();
+  });
+
+  it("requires one selection, gives Coach only normalized Workout data, and marks it sent", async () => {
+    const missing = await harness();
+    await missing.repository.linkMessage({
+      conversationId: "chat-workout",
+      messageId: "message-workout",
+      attachmentIds: [missing.attachmentId],
+      createdAtMs: missing.now(),
+    });
+    const request = {
+      chatId: "chat-workout",
+      messages: [{ messageId: "message-workout", attachmentIds: [missing.attachmentId] }],
+    };
+    await expect(missing.operations.prepareLinkedTurn(request)).rejects.toMatchObject({
+      code: "workout_selection_required",
+    });
+    await missing.store.close();
+
+    const value = await harness();
+    const set = await value.operations.readWorkoutSet(value.attachmentId);
+    const workoutId = set.workouts[0]!.workoutId;
+    await value.operations.selectWorkout({
+      conversationId: "chat-workout",
+      attachmentId: value.attachmentId,
+      workoutId,
+    });
+    await value.repository.linkMessage({
+      conversationId: "chat-workout",
+      messageId: "message-selected",
+      attachmentIds: [value.attachmentId],
+      createdAtMs: value.now(),
+    });
+    const prepared = await value.operations.prepareLinkedTurn({
+      chatId: "chat-workout",
+      messages: [{ messageId: "message-selected", attachmentIds: [value.attachmentId] }],
+    });
+    expect(prepared.attachmentContext).toContain("never claim it was scheduled");
+    expect(prepared.untrustedAttachmentText).toContain("Tempo builder");
+    expect(prepared.untrustedAttachmentText).toContain(workoutId);
+    expect(prepared.untrustedAttachmentText).not.toContain("<workout_file>");
+
+    await value.operations.completeLinkedTurn({
+      chatId: "chat-workout",
+      messageIds: ["message-selected"],
+    });
+    await expect(value.repository.readAttachment(value.attachmentId)).resolves.toMatchObject({
+      status: "sent",
+      message_id: "message-selected",
     });
     await value.store.close();
   });

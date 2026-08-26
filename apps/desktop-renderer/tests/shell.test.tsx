@@ -55,6 +55,13 @@ const SELECTED_RIDE = Object.freeze({
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(),
+    chooseAttachments: vi.fn(),
+    pasteAttachment: vi.fn(),
+    receiveAttachmentAdmissions: vi.fn(),
+    saveAttachmentDraftText: vi.fn(),
+    removeAttachment: vi.fn(),
+    retryAttachment: vi.fn(),
+    selectAttachmentWorkout: vi.fn(),
     stop: vi.fn(),
     removeQueued: vi.fn(),
     runQueuedCommand: vi.fn(),

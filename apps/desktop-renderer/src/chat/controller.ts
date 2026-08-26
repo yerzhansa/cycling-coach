@@ -10,6 +10,8 @@ import {
   CoachClientProtocolError,
 } from "@enduragent/coach-client";
 import type {
+  AttachmentAdmissionReadModel,
+  ChatAttachmentComposerReadModel,
   CoachDecisionAnswer,
   CoachDecisionReadModel,
   ChatQueueSnapshot,
@@ -24,6 +26,7 @@ import {
   hasClearableConversation,
   nextDrainGroup,
   reduceChatState,
+  type ChatSentAttachment,
   type ChatState,
 } from "../turn-state.js";
 import {
@@ -51,6 +54,8 @@ export const CHAT_DECISION_LOAD_FAILURE_COPY =
 export const CHAT_QUEUE_LOAD_FAILURE_COPY =
   "We couldn’t check your saved messages. Reconnect and try again.";
 export const CHAT_QUEUE_REMOVE_FAILURE_COPY = "We couldn’t remove that saved message. Try again.";
+export const CHAT_ATTACHMENT_FAILURE_COPY =
+  "We couldn’t update that attachment. Your message draft is preserved.";
 export const NEW_CONVERSATION_SUCCESS_COPY = "New conversation started.";
 export const NEW_CONVERSATION_MEMORY_WARNING_COPY =
   "New conversation started. Some recent details may not have been saved to coach memory.";
@@ -71,6 +76,12 @@ export interface ChatViewControls {
   readonly decisionLoadError?: string | null;
   readonly queueLoadError?: string | null;
   readonly queueMutationError?: string | null;
+  readonly attachments?: {
+    readonly value: ChatAttachmentComposerReadModel | null;
+    readonly admissions: readonly AttachmentAdmissionReadModel[];
+    readonly busy: boolean;
+    readonly error: string | null;
+  };
   readonly appendDelta?: ChatAppendDelta;
   readonly hydration?: {
     readonly status: TranscriptHydrationStatus;
@@ -94,7 +105,14 @@ export interface ChatView {
 export interface ChatController {
   start(): Promise<void>;
   resume(): Promise<void>;
-  submit(message: string): Promise<boolean>;
+  submit(message: string, attachmentIds?: readonly string[]): Promise<boolean>;
+  chooseAttachments(): Promise<void>;
+  pasteAttachment(): Promise<void>;
+  receiveAttachmentAdmissions(results: readonly AttachmentAdmissionReadModel[]): void;
+  saveAttachmentDraftText(text: string): void;
+  removeAttachment(attachmentId: string): void;
+  retryAttachment(attachmentId: string): void;
+  selectAttachmentWorkout(attachmentId: string, workoutId: string): void;
   stop(): void;
   removeQueued(id: string): void;
   runQueuedCommand(id: string): Promise<void>;
@@ -138,6 +156,10 @@ export function createChatController(input: {
   }) => Promise<TranscriptPage>;
   readonly canChat?: () => boolean;
   readonly initialQueueSnapshot?: ChatQueueSnapshot;
+  readonly nativeAttachments?: {
+    readonly choose: () => Promise<readonly AttachmentAdmissionReadModel[]>;
+    readonly paste: () => Promise<readonly AttachmentAdmissionReadModel[]>;
+  };
 }): ChatController {
   let state =
     input.initialQueueSnapshot === undefined
@@ -168,6 +190,13 @@ export function createChatController(input: {
   let queueLoaded = input.initialQueueSnapshot !== undefined;
   let queueLoadError: string | null = null;
   let queueMutationError: string | null = null;
+  let attachmentSurface: ChatAttachmentComposerReadModel | null = null;
+  let attachmentAdmissions: readonly AttachmentAdmissionReadModel[] = [];
+  let attachmentBusy = false;
+  let attachmentError: string | null = null;
+  let attachmentTextRevision = 0;
+  let attachmentTextSaveTask: Promise<void> = Promise.resolve();
+  const attachmentSummaries = new Map<string, ChatSentAttachment>();
   let decisionContinuationTask: Promise<void> | undefined;
   let epoch = 0;
   const canChat = input.canChat ?? (() => true);
@@ -185,7 +214,8 @@ export function createChatController(input: {
     !disposed &&
     (hasClearableConversation(state) ||
       hydration.turns.length > 0 ||
-      hydration.entries.length > 0) &&
+      hydration.entries.length > 0 ||
+      attachmentSurface?.draft != null) &&
     state.session.resetPhase === "idle" &&
     state.status !== "streaming" &&
     state.queued.length === 0 &&
@@ -211,6 +241,12 @@ export function createChatController(input: {
           decisionLoadError,
           queueLoadError,
           queueMutationError,
+          attachments: {
+            value: attachmentSurface,
+            admissions: attachmentAdmissions,
+            busy: attachmentBusy,
+            error: attachmentError,
+          },
           ...(appendDelta === undefined ? {} : { appendDelta }),
           hydration: {
             status: hydration.status,
@@ -283,6 +319,7 @@ export function createChatController(input: {
           readonly queuedMessageIds: readonly string[];
         }
       | { readonly method: "resumeChatQueue"; readonly queuedMessageIds: readonly string[] },
+    attachments: readonly ChatSentAttachment[] = [],
   ): ChatRun => {
     epoch += 1;
     const requestKey = Number(nextId("request").slice("request-".length));
@@ -296,6 +333,7 @@ export function createChatController(input: {
       userMessageId,
       assistantMessageId,
       includeUser,
+      attachments,
     });
     let callStarted = false;
     const task = (async () => {
@@ -619,7 +657,11 @@ export function createChatController(input: {
       | { readonly method: "resumeChatQueue"; readonly queuedMessageIds: readonly string[] },
     includeUser = true,
   ): Promise<void> => {
-    const chatRun = run(userMessage, includeUser, false, queueCall);
+    const attachments = queueCall.queuedMessageIds
+      .flatMap((id) => state.queued.find((message) => message.id === id)?.attachmentIds ?? [])
+      .map((id) => attachmentSummaries.get(id))
+      .filter((attachment): attachment is ChatSentAttachment => attachment !== undefined);
+    const chatRun = run(userMessage, includeUser, false, queueCall, attachments);
     return chatRun.task.then(() => (chatRun.completed() ? drain() : undefined));
   };
 
@@ -659,6 +701,72 @@ export function createChatController(input: {
     queueLoaded = true;
     queueLoadError = null;
     render();
+  };
+
+  const refreshAttachments = async (client?: CoachClient): Promise<void> => {
+    const activeClient = client ?? (await input.clients.getClient());
+    const surface = await activeClient.call("getChatAttachmentComposer", {
+      chatId: DESKTOP_CHAT_ID,
+    });
+    if (disposed) return;
+    attachmentSurface = surface;
+    attachmentError = null;
+    render();
+  };
+
+  const receiveAdmissions = (results: readonly AttachmentAdmissionReadModel[]): void => {
+    if (disposed) return;
+    attachmentAdmissions = results.filter((result) => result.status !== "accepted");
+    attachmentError = null;
+    render();
+    void refreshAttachments().catch(() => {
+      if (disposed) return;
+      attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+      render();
+    });
+  };
+
+  const runNativeAttachmentAction = async (
+    operation: (() => Promise<readonly AttachmentAdmissionReadModel[]>) | undefined,
+  ): Promise<void> => {
+    if (operation === undefined || disposed || attachmentBusy || resetBlocksWork()) return;
+    attachmentBusy = true;
+    attachmentError = null;
+    render();
+    try {
+      receiveAdmissions(await operation());
+    } catch {
+      if (!disposed) attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+    } finally {
+      if (!disposed) {
+        attachmentBusy = false;
+        render();
+      }
+    }
+  };
+
+  const mutateAttachment = async (
+    operation: (client: CoachClient) => Promise<ChatAttachmentComposerReadModel>,
+  ): Promise<void> => {
+    if (disposed || resetBlocksWork()) return;
+    attachmentBusy = true;
+    attachmentError = null;
+    render();
+    try {
+      const client = await input.clients.getClient();
+      const surface = await operation(client);
+      if (!disposed) {
+        attachmentSurface = surface;
+        attachmentError = null;
+      }
+    } catch {
+      if (!disposed) attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+    } finally {
+      if (!disposed) {
+        attachmentBusy = false;
+        render();
+      }
+    }
   };
 
   const continueDecision = (
@@ -1014,11 +1122,21 @@ export function createChatController(input: {
         render();
       }
     })();
-    const task = Promise.all([transcriptLoadTask, sessionProbeTask, loadTask, queueLoadTask]).then(
-      async () => {
-        if (!decisionBlocksWork()) await drain();
-      },
-    );
+    const attachmentLoadTask = refreshAttachments().catch(() => {
+      if (!disposed) {
+        attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+        render();
+      }
+    });
+    const task = Promise.all([
+      transcriptLoadTask,
+      sessionProbeTask,
+      loadTask,
+      queueLoadTask,
+      attachmentLoadTask,
+    ]).then(async () => {
+      if (!decisionBlocksWork()) await drain();
+    });
     probeTask = task;
     return task;
   };
@@ -1031,11 +1149,12 @@ export function createChatController(input: {
     resume() {
       return start().then(() => drain());
     },
-    submit(message) {
+    submit(message, attachmentIds = []) {
       if (
         !canChat() ||
         !queueLoaded ||
-        !/\S/u.test(message) ||
+        (!/\S/u.test(message) && attachmentIds.length === 0) ||
+        (/^\s*\//u.test(message) && attachmentIds.length > 0) ||
         disposed ||
         resetBlocksWork() ||
         decisionBlocksWork()
@@ -1043,17 +1162,84 @@ export function createChatController(input: {
         return Promise.resolve(false);
       }
       const submissionId = globalThis.crypto.randomUUID();
+      const submittedAttachments = (attachmentSurface?.draft?.attachments ?? [])
+        .filter((attachment) => attachmentIds.includes(attachment.attachmentId))
+        .map(({ attachmentId, displayName, kind, extension }) => ({
+          attachmentId,
+          displayName,
+          kind,
+          extension,
+        }));
       return input.clients.getClient().then(async (client) => {
+        await attachmentTextSaveTask;
         const acknowledged = await client.call("enqueueChatMessage", {
           chatId: DESKTOP_CHAT_ID,
           submissionId,
           text: message,
+          ...(attachmentIds.length === 0 ? {} : { attachmentIds: [...attachmentIds] }),
         });
         if (disposed) return false;
+        for (const attachment of submittedAttachments) {
+          attachmentSummaries.set(attachment.attachmentId, attachment);
+        }
+        attachmentAdmissions = [];
+        attachmentSurface =
+          attachmentSurface === null ? null : { ...attachmentSurface, draft: null };
         applyQueueSnapshot(acknowledged);
         void drain();
+        void refreshAttachments(client).catch(() => {});
         return true;
       });
+    },
+    chooseAttachments() {
+      return runNativeAttachmentAction(input.nativeAttachments?.choose);
+    },
+    pasteAttachment() {
+      return runNativeAttachmentAction(input.nativeAttachments?.paste);
+    },
+    receiveAttachmentAdmissions(results) {
+      receiveAdmissions(results);
+    },
+    saveAttachmentDraftText(text) {
+      if (disposed || resetBlocksWork()) return;
+      const revision = ++attachmentTextRevision;
+      const task = attachmentTextSaveTask.then(async () => {
+        try {
+          const client = await input.clients.getClient();
+          const surface = await client.call("saveChatAttachmentDraftText", {
+            chatId: DESKTOP_CHAT_ID,
+            text,
+          });
+          if (disposed || revision !== attachmentTextRevision) return;
+          attachmentSurface = surface;
+          attachmentError = null;
+          render();
+        } catch {
+          if (disposed || revision !== attachmentTextRevision) return;
+          attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+          render();
+        }
+      });
+      attachmentTextSaveTask = task;
+    },
+    removeAttachment(attachmentId) {
+      void mutateAttachment((client) =>
+        client.call("removeChatAttachment", { chatId: DESKTOP_CHAT_ID, attachmentId }),
+      );
+    },
+    retryAttachment(attachmentId) {
+      void mutateAttachment((client) =>
+        client.call("retryChatAttachment", { chatId: DESKTOP_CHAT_ID, attachmentId }),
+      );
+    },
+    selectAttachmentWorkout(attachmentId, workoutId) {
+      void mutateAttachment((client) =>
+        client.call("selectChatAttachmentWorkout", {
+          chatId: DESKTOP_CHAT_ID,
+          attachmentId,
+          workoutId,
+        }),
+      );
     },
     stop() {
       if (disposed || state.status !== "streaming" || state.activeTurn === null) return;
@@ -1233,6 +1419,15 @@ export function createChatController(input: {
           const client = await input.clients.getClient();
           const result = await client.call("resetSession", { chatId: DESKTOP_CHAT_ID });
           if (disposed || epoch !== resetEpoch) return;
+          try {
+            attachmentSurface = await client.call("clearChatAttachmentDraft", {
+              chatId: DESKTOP_CHAT_ID,
+            });
+            attachmentAdmissions = [];
+            attachmentError = null;
+          } catch {
+            attachmentError = CHAT_ATTACHMENT_FAILURE_COPY;
+          }
           sequence += 1;
           retryClient = undefined;
           queuedRetry = undefined;
@@ -1242,6 +1437,7 @@ export function createChatController(input: {
           decisionPhase = "idle";
           decisionAnswerLabel = null;
           decisionError = null;
+          attachmentSummaries.clear();
           updateReset(() => hydrator.resetSucceeded(), {
             type: "reset-succeeded",
             announcement: result.memoryFlushed

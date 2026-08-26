@@ -8,6 +8,7 @@ import {
   type CoachClientCallOptions,
 } from "@enduragent/coach-client";
 import type {
+  ChatAttachmentComposerReadModel,
   ChatQueueSnapshot,
   CoachTurnEventNotificationEnvelope,
   QueuedChatMessage,
@@ -98,6 +99,9 @@ function client(
       chatId: string;
       turnId: string;
     }) => Promise<{ stopped: boolean }>;
+    readonly composer?: () => Promise<ChatAttachmentComposerReadModel>;
+    readonly saveAttachmentDraftText?: (text: string) => Promise<ChatAttachmentComposerReadModel>;
+    readonly clearAttachmentDraft?: () => Promise<ChatAttachmentComposerReadModel>;
   } = {},
 ): CoachClient {
   let queueRevision = 0;
@@ -118,13 +122,58 @@ function client(
     const hideQueueCall = (): void => {
       call.mock.calls.pop();
     };
+    const emptyComposer = (): ChatAttachmentComposerReadModel => ({
+      schemaVersion: 1,
+      capabilities: {
+        schemaVersion: 1,
+        active: { provider: "test", model: "text-only", transport: "test" },
+        documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+        completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+        plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+        images: {
+          enabled: false,
+          mediaTypes: [],
+          reason: "model_incompatible",
+          source: "maintained_catalogue",
+          checkedAt: "2001-01-01T00:00:00.000Z",
+        },
+      },
+      draft: null,
+    });
+    if (method === "getChatAttachmentComposer") {
+      hideQueueCall();
+      return (sessions.composer?.() ?? Promise.resolve(emptyComposer())) as never;
+    }
+    if (method === "saveChatAttachmentDraftText") {
+      hideQueueCall();
+      const value = request as { text: string };
+      return (sessions.saveAttachmentDraftText?.(value.text) ??
+        Promise.resolve(emptyComposer())) as never;
+    }
+    if (
+      method === "removeChatAttachment" ||
+      method === "retryChatAttachment" ||
+      method === "selectChatAttachmentWorkout" ||
+      method === "clearChatAttachmentDraft"
+    ) {
+      hideQueueCall();
+      return (
+        method === "clearChatAttachmentDraft" && sessions.clearAttachmentDraft !== undefined
+          ? sessions.clearAttachmentDraft()
+          : Promise.resolve(emptyComposer())
+      ) as never;
+    }
     if (method === "getChatQueue") {
       hideQueueCall();
       return Promise.resolve(snapshot()) as never;
     }
     if (method === "enqueueChatMessage") {
       hideQueueCall();
-      const value = request as { submissionId: string; text: string };
+      const value = request as {
+        submissionId: string;
+        text: string;
+        attachmentIds?: readonly string[];
+      };
       if (!queued.some((item) => item.submissionId === value.submissionId)) {
         queued.push({
           queuedMessageId: `queued-${value.submissionId}`,
@@ -132,7 +181,7 @@ function client(
           submissionId: value.submissionId,
           text: value.text,
           kind: value.text.trimStart().startsWith("/") ? "slash-command" : "ordinary",
-          attachmentIds: [],
+          attachmentIds: [...(value.attachmentIds ?? [])],
           position: queued.length,
           restored: false,
         });
@@ -270,9 +319,9 @@ function subject(
   });
   const submittedController = {
     ...controller,
-    async submit(message: string): Promise<boolean> {
+    async submit(message: string, attachmentIds: readonly string[] = []): Promise<boolean> {
       const alreadyStreaming = states.at(-1)?.status === "streaming";
-      const acknowledged = await controller.submit(message);
+      const acknowledged = await controller.submit(message, attachmentIds);
       if (
         !settleSubmissions ||
         !acknowledged ||
@@ -1007,6 +1056,120 @@ describe("chat controller", () => {
     const { controller } = subject(fake);
     await controller.submit("  \n");
     expect(fake.call).not.toHaveBeenCalled();
+  });
+
+  it("restores the durable Composer and sends an attachment-only Message", async () => {
+    const surface: ChatAttachmentComposerReadModel = {
+      schemaVersion: 1,
+      capabilities: {
+        schemaVersion: 1,
+        active: { provider: "test", model: "text-only", transport: "test" },
+        documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+        completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+        plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+        images: {
+          enabled: false,
+          mediaTypes: [],
+          reason: "model_incompatible",
+          source: "maintained_catalogue",
+          checkedAt: "2026-08-26T00:00:00.000Z",
+        },
+      },
+      draft: {
+        schemaVersion: 1,
+        chatId: "desktop",
+        text: "",
+        state: "restored",
+        updatedAt: "2026-08-26T00:00:00.000Z",
+        attachments: [
+          {
+            schemaVersion: 1,
+            attachmentId: "attachment-1",
+            displayName: "notes.txt",
+            kind: "document",
+            extension: "txt",
+            byteSize: 42,
+            status: "ready",
+            preview: { kind: "document", extractedTextChars: 42, visualPageCount: 0 },
+          },
+        ],
+      },
+    };
+    const fake = client(replies(), { composer: async () => surface });
+    const { controller, controls, states } = subject(fake);
+    await controller.start();
+    expect(controls.at(-1)?.attachments?.value).toEqual(surface);
+
+    await expect(controller.submit("", ["attachment-1"])).resolves.toBe(true);
+    expect(chatMessages(fake)).toEqual([""]);
+    expect(states.at(-1)?.messages).toContainEqual(
+      expect.objectContaining({
+        role: "athlete",
+        text: "",
+        attachments: [
+          {
+            attachmentId: "attachment-1",
+            displayName: "notes.txt",
+            kind: "document",
+            extension: "txt",
+          },
+        ],
+      }),
+    );
+    await expect(controller.submit("/status", ["attachment-1"])).resolves.toBe(false);
+  });
+
+  it("serializes the latest durable draft save before enqueueing Send", async () => {
+    let releaseSave!: () => void;
+    const saved = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const order: string[] = [];
+    const fake = client(
+      async () => {
+        order.push("chat");
+        return { text: "Done" };
+      },
+      {
+        saveAttachmentDraftText: async () => {
+          order.push("save-start");
+          await saved;
+          order.push("save-end");
+          return {
+            schemaVersion: 1,
+            capabilities: {
+              schemaVersion: 1,
+              active: { provider: "test", model: "text-only", transport: "test" },
+              documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+              completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+              plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+              images: {
+                enabled: false,
+                mediaTypes: [],
+                reason: "model_incompatible",
+                source: "maintained_catalogue",
+                checkedAt: "2026-08-26T00:00:00.000Z",
+              },
+            },
+            draft: null,
+          };
+        },
+      },
+    );
+    const { controller } = subject(
+      fake,
+      fake,
+      async () => {},
+      async () => {},
+      () => true,
+      false,
+    );
+    controller.saveAttachmentDraftText("Latest draft");
+    const submission = controller.submit("Latest draft");
+    await vi.waitFor(() => expect(order).toEqual(["save-start"]));
+    releaseSave();
+    await submission;
+    expect(order).toEqual(["save-start", "save-end", "chat"]);
   });
 
   it("starts one exact session probe and deduplicates repeated starts", async () => {

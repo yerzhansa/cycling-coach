@@ -1,4 +1,4 @@
-import { Check, X } from "lucide-react";
+import { Activity, CalendarDays, Check, FileText, Image as ImageIcon, X } from "lucide-react";
 import type { ReactElement } from "react";
 import type { ChatChoiceView, ChatMessageView } from "../../state/chat-slice.js";
 import { cn } from "../../lib/utils.js";
@@ -32,7 +32,37 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
         {message.role === "athlete" ? "Your message" : "Coach response"}
       </span>
       {message.role === "athlete" ? (
-        <AthleteMessage text={message.text} />
+        <div className="grid gap-2.5">
+          {message.attachments?.map((attachment) => {
+            const Icon =
+              attachment.kind === "activity"
+                ? Activity
+                : attachment.kind === "workout"
+                  ? CalendarDays
+                  : attachment.kind === "image"
+                    ? ImageIcon
+                    : FileText;
+            return (
+              <div
+                key={attachment.attachmentId}
+                className="grid grid-cols-[32px_minmax(0,1fr)] items-center gap-2.5 rounded-md bg-bg-2 p-2.5"
+              >
+                <span className="flex size-8 items-center justify-center text-ink-2">
+                  <Icon className="size-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0">
+                  <strong className="block truncate text-sm leading-5">
+                    {attachment.displayName}
+                  </strong>
+                  <small className="block text-xs leading-4 text-ink-2">
+                    {attachment.extension.toUpperCase()}
+                  </small>
+                </span>
+              </div>
+            );
+          })}
+          {message.text.length === 0 ? null : <AthleteMessage text={message.text} />}
+        </div>
       ) : streaming ? (
         <StreamingMessage messageId={message.id} />
       ) : (

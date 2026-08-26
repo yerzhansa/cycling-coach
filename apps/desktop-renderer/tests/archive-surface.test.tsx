@@ -29,6 +29,13 @@ function archiveActions(): ArchiveActions {
 function chatActions(): ChatActions {
   return {
     submit: vi.fn(),
+    chooseAttachments: vi.fn(),
+    pasteAttachment: vi.fn(),
+    receiveAttachmentAdmissions: vi.fn(),
+    saveAttachmentDraftText: vi.fn(),
+    removeAttachment: vi.fn(),
+    retryAttachment: vi.fn(),
+    selectAttachmentWorkout: vi.fn(),
     stop: vi.fn(),
     retry: vi.fn(),
     removeQueued: vi.fn(),

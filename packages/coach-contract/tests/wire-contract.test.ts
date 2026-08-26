@@ -1090,6 +1090,38 @@ describe("coach request and event projection", () => {
         failureCode: "admission_unavailable",
         retryable: false,
       }),
+      admitPastedChatAttachment: async ({ selectionId, displayName }) => ({
+        selectionId,
+        displayName,
+        status: "storage_failed",
+        failureCode: "admission_unavailable",
+        retryable: false,
+      }),
+      getChatAttachmentComposer: async () => ({
+        schemaVersion: 1,
+        capabilities: {
+          schemaVersion: 1,
+          active: { provider: "test", model: "text-only", transport: "test" },
+          documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+          completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+          plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+          images: {
+            enabled: false,
+            mediaTypes: [],
+            reason: "model_incompatible",
+            source: "maintained_catalogue",
+            checkedAt: "2026-08-26T00:00:00.000Z",
+          },
+        },
+        draft: null,
+      }),
+      saveChatAttachmentDraftText: async () =>
+        fake.getChatAttachmentComposer!({ chatId: "desktop" }),
+      removeChatAttachment: async () => fake.getChatAttachmentComposer!({ chatId: "desktop" }),
+      retryChatAttachment: async () => fake.getChatAttachmentComposer!({ chatId: "desktop" }),
+      selectChatAttachmentWorkout: async () =>
+        fake.getChatAttachmentComposer!({ chatId: "desktop" }),
+      clearChatAttachmentDraft: async () => fake.getChatAttachmentComposer!({ chatId: "desktop" }),
       enqueueChatMessage: async () => ({ schemaVersion: 1, revision: 1, items: [] }),
       getChatQueue: async () => ({ schemaVersion: 1, revision: 1, items: [] }),
       removeQueuedChatMessage: async () => ({ schemaVersion: 1, revision: 2, items: [] }),
@@ -1819,8 +1851,8 @@ describe("handshake", () => {
     expect(ServerHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(accepted)))).toEqual({
       type: "handshake",
       status: "accepted",
-      clientProtocolVersion: 24,
-      serverProtocolVersion: 24,
+      clientProtocolVersion: 25,
+      serverProtocolVersion: 25,
       owner: "service-managed",
       athleteHome: "/synthetic/athlete",
       rendererCapability: "A".repeat(43),
@@ -1829,7 +1861,7 @@ describe("handshake", () => {
 
   it("refuses a previous-protocol client with a version-mismatch frame instead of a parse error", () => {
     const previous = PROTOCOL_VERSION - 1;
-    expect(previous).toBe(23);
+    expect(previous).toBe(24);
     expect(() =>
       createAcceptedServerHandshakeFrame("service-managed", previous, {
         ...acceptedHandshakeBinding,
@@ -1904,7 +1936,7 @@ describe("handshake", () => {
 
   it("accepts aligned protocol 24 peers and classifies mismatches in both directions", () => {
     const client = createClientHandshakeFrame("synthetic-test-token");
-    expect(client.clientProtocolVersion).toBe(24);
+    expect(client.clientProtocolVersion).toBe(25);
     expect(ClientHandshakeFrameSchema.parse(JSON.parse(JSON.stringify(client)))).toEqual(client);
     const accepted = createAcceptedServerHandshakeFrame(
       "service-managed",
@@ -2030,7 +2062,7 @@ describe("additive protocol signals", () => {
     expect(AgentErrorKindSchema.safeParse("aborted").success).toBe(false);
   });
 
-  it("uses protocol version 24", () => {
-    expect(PROTOCOL_VERSION).toBe(24);
+  it("uses protocol version 25", () => {
+    expect(PROTOCOL_VERSION).toBe(25);
   });
 });

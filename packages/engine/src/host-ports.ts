@@ -203,6 +203,11 @@ export interface ChatAttachmentTurnPreparation {
 }
 
 export interface ChatAttachmentTurnPort {
+  acceptQueuedMessage?(input: {
+    readonly chatId: string;
+    readonly messageId: string;
+    readonly attachmentIds: readonly string[];
+  }): Promise<void>;
   prepareQueuedTurn(input: {
     readonly chatId: string;
     readonly messages: readonly {

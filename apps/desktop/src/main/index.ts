@@ -39,6 +39,11 @@ import {
 import { bindDesktopAppUserModelId, createDesktopActivationRelay } from "./desktop-lifecycle.js";
 import { installDesktopAppearanceIpc } from "./appearance-ipc.js";
 import { installDesktopExternalLinkIpc } from "./external-link-ipc.js";
+import {
+  createConnectionChatAttachmentClient,
+  installDesktopChatAttachmentIpc,
+  type DesktopChatAttachmentClient,
+} from "./chat-attachment-ipc.js";
 import { DESKTOP_LIFECYCLE_CHANNEL, DESKTOP_RENDERER_URL, DESKTOP_SCHEME } from "./constants.js";
 import { isDesktopRendererUrl } from "./renderer-navigation.js";
 import {
@@ -267,6 +272,7 @@ async function runDesktop(): Promise<void> {
   let protocolInstalled = false;
   let connectionIpc: DesktopConnectionIpcController | undefined;
   let disposeTranscriptIpc: (() => void) | undefined;
+  let disposeChatAttachmentIpc: (() => void) | undefined;
   let disposeTrainingExportIpc: (() => void) | undefined;
   let disposeExternalLinkIpc: (() => void) | undefined;
   let disposeAppearanceIpc: (() => void) | undefined;
@@ -332,6 +338,8 @@ async function runDesktop(): Promise<void> {
       connectionIpc = undefined;
       disposeTranscriptIpc?.();
       disposeTranscriptIpc = undefined;
+      disposeChatAttachmentIpc?.();
+      disposeChatAttachmentIpc = undefined;
       disposeTrainingExportIpc?.();
       disposeTrainingExportIpc = undefined;
       disposeExternalLinkIpc?.();
@@ -441,9 +449,7 @@ async function runDesktop(): Promise<void> {
     let windowCreation: Promise<BrowserWindow> | undefined;
     const rendererNavigationTracker = createDesktopRendererNavigationTracker<BrowserWindow>();
     const currentWindow = (): BrowserWindow | null =>
-      window !== null && !window.isDestroyed() && !window.webContents.isDestroyed()
-        ? window
-        : null;
+      window !== null && !window.isDestroyed() && !window.webContents.isDestroyed() ? window : null;
     const startRendererNavigation = (
       target: BrowserWindow,
       navigationUrl: string,
@@ -466,6 +472,7 @@ async function runDesktop(): Promise<void> {
       readonly credentials: CredentialRuntimeApplication;
       readonly transcript: DesktopTranscriptReader;
       readonly trainingExporter: DesktopTrainingExporter;
+      readonly chatAttachments: DesktopChatAttachmentClient;
     };
     let activeRuntimeBinding: RuntimeBinding | undefined;
     const preparedRuntimeBindings = new Map<
@@ -618,6 +625,7 @@ async function runDesktop(): Promise<void> {
         authority,
         transcript: createConnectionTranscriptReader(boundConnection),
         trainingExporter: createConnectionTrainingExporter(boundConnection),
+        chatAttachments: createConnectionChatAttachmentClient(boundConnection),
         credentials: createCredentialRuntimeApplication({
           configureRuntime: authority.configureRuntime,
           clearRuntimeCredential: authority.clearCredential,
@@ -981,10 +989,8 @@ async function runDesktop(): Promise<void> {
               shouldReleaseInitialRefreshForWindowEvent(
                 currentWindow(),
                 created,
-                connectionIpc?.isCurrentDocumentNavigation(
-                  created,
-                  created.webContents.getURL(),
-                ) ?? false,
+                connectionIpc?.isCurrentDocumentNavigation(created, created.webContents.getURL()) ??
+                  false,
               )
             ) {
               void initialRefreshCoordinator.releaseCurrent();
@@ -1067,6 +1073,19 @@ async function runDesktop(): Promise<void> {
         const lifecycleState = daemonLifecycle?.snapshot();
         return binding !== undefined && lifecycleState?.status === "ready"
           ? binding.trainingExporter
+          : undefined;
+      },
+    });
+    disposeChatAttachmentIpc = installDesktopChatAttachmentIpc({
+      ipcMain,
+      currentWindow: () => mainWindow.current() ?? undefined,
+      dialog,
+      clipboard,
+      client: () => {
+        const binding = activeRuntimeBinding;
+        const lifecycleState = daemonLifecycle?.snapshot();
+        return binding !== undefined && lifecycleState?.status === "ready"
+          ? binding.chatAttachments
           : undefined;
       },
     });

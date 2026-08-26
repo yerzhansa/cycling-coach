@@ -68,6 +68,7 @@ export interface ManagedChatAttachmentStore {
     readonly displayName: string;
     readonly bytes: Uint8Array;
   }): Promise<{ readonly sourcePath: string; readonly displayName: string }>;
+  removeStagedSource(sourcePath: string): Promise<void>;
   readObjectBytes(input: {
     readonly relativePath: string;
     readonly byteSize: number;
@@ -496,6 +497,15 @@ export function createManagedChatAttachmentStore(
       if (platform !== "win32") await chmod(path, PRIVATE_FILE_MODE);
       await syncDirectory(ingressRoot, platform);
       return { sourcePath: path, displayName };
+    },
+
+    async removeStagedSource(sourcePath) {
+      const ingress = resolve(ingressRoot);
+      const target = resolve(sourcePath);
+      if (dirname(target) !== ingress || !target.startsWith(`${ingress}${sep}`)) {
+        throw new TypeError("staged attachment path is invalid");
+      }
+      await removeIfPresent(target);
     },
 
     async readObjectBytes({ relativePath, byteSize, sha256 }) {

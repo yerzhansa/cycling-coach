@@ -174,3 +174,209 @@ export const AttachmentAdmissionReadModelSchema = z.discriminatedUnion("status",
   AttachmentAdmissionBaseSchema.extend({ status: z.literal("removed") }).strict(),
 ]);
 export type AttachmentAdmissionReadModel = z.infer<typeof AttachmentAdmissionReadModelSchema>;
+
+export const ChatAttachmentExtensionSchema = z.union([
+  DocumentAttachmentExtensionSchema,
+  ActivityAttachmentExtensionSchema,
+  WorkoutAttachmentExtensionSchema,
+  ImageAttachmentExtensionSchema,
+]);
+export type ChatAttachmentExtension = z.infer<typeof ChatAttachmentExtensionSchema>;
+
+const ChatAttachmentComposerBaseSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    attachmentId: z.string().min(1).max(128),
+    displayName: z.string().min(1).max(512),
+    kind: ChatAttachmentKindSchema,
+    extension: ChatAttachmentExtensionSchema,
+    byteSize: z.number().int().positive().max(CHAT_ATTACHMENT_LIMITS.activityBytes),
+  })
+  .strict();
+
+export const ChatAttachmentActivityPreviewSchema = z
+  .object({
+    sourceFormat: ActivityAttachmentExtensionSchema,
+    sessions: z
+      .array(
+        z
+          .object({
+            sport: z.string().min(1).max(64),
+            startUtc: z.number().int().nonnegative(),
+            durationSeconds: z.number().finite().nonnegative(),
+            distanceMeters: z.number().finite().nonnegative().nullable(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(256),
+  })
+  .strict();
+export type ChatAttachmentActivityPreview = z.infer<typeof ChatAttachmentActivityPreviewSchema>;
+
+export const ChatAttachmentWorkoutCandidateSchema = z
+  .object({
+    workoutId: z.string().min(1).max(128),
+    title: z.string().min(1).max(CHAT_ATTACHMENT_LIMITS.workoutTitleChars),
+    durationSeconds: z.number().int().positive().max(CHAT_ATTACHMENT_LIMITS.workoutDurationSeconds),
+    target: z.string().min(1).max(160),
+    purpose: z.string().min(1).max(CHAT_ATTACHMENT_LIMITS.workoutPurposeChars).nullable(),
+  })
+  .strict();
+export type ChatAttachmentWorkoutCandidate = z.infer<typeof ChatAttachmentWorkoutCandidateSchema>;
+
+export const ChatAttachmentComposerItemSchema = z.discriminatedUnion("status", [
+  ChatAttachmentComposerBaseSchema.extend({ status: z.literal("preprocessing") }).strict(),
+  ChatAttachmentComposerBaseSchema.extend({
+    status: z.literal("blocked"),
+    reason: z.enum([
+      "encrypted_pdf",
+      "metadata_stale",
+      "model_incompatible",
+      "validation_failed",
+      "visual_pdf_unsupported",
+    ]),
+  }).strict(),
+  ChatAttachmentComposerBaseSchema.extend({
+    status: z.literal("failed"),
+    stage: z.enum(["storage", "parsing", "import"]),
+    failureCode: z.string().min(1).max(128),
+    retryable: z.boolean(),
+  }).strict(),
+  ChatAttachmentComposerBaseSchema.extend({
+    status: z.literal("ready"),
+    preview: z.discriminatedUnion("kind", [
+      z
+        .object({
+          kind: z.literal("document"),
+          extractedTextChars: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(CHAT_ATTACHMENT_LIMITS.extractedTextChars),
+          visualPageCount: z
+            .number()
+            .int()
+            .nonnegative()
+            .max(CHAT_ATTACHMENT_LIMITS.pdfVisualPages),
+        })
+        .strict(),
+      ChatAttachmentActivityPreviewSchema.extend({ kind: z.literal("activity") }).strict(),
+      z
+        .object({
+          kind: z.literal("workout"),
+          sourceFormat: WorkoutAttachmentExtensionSchema,
+          selectedWorkoutId: z.string().min(1).max(128).nullable(),
+          workouts: z
+            .array(ChatAttachmentWorkoutCandidateSchema)
+            .min(1)
+            .max(CHAT_ATTACHMENT_LIMITS.workoutCandidates),
+        })
+        .strict()
+        .superRefine((value, context) => {
+          if (
+            value.selectedWorkoutId !== null &&
+            !value.workouts.some((workout) => workout.workoutId === value.selectedWorkoutId)
+          ) {
+            context.addIssue({
+              code: "custom",
+              path: ["selectedWorkoutId"],
+              message: "selected workout must exist",
+            });
+          }
+        }),
+      z
+        .object({
+          kind: z.literal("image"),
+          mediaType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+          width: z.number().int().positive().max(CHAT_ATTACHMENT_LIMITS.imageDimension),
+          height: z.number().int().positive().max(CHAT_ATTACHMENT_LIMITS.imageDimension),
+        })
+        .strict(),
+    ]),
+  }).strict(),
+]);
+export type ChatAttachmentComposerItem = z.infer<typeof ChatAttachmentComposerItemSchema>;
+
+export const ChatAttachmentDraftReadModelSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    chatId: z.string().min(1).max(512),
+    text: z.string(),
+    state: z.enum(["active", "restored", "submitting", "clearing"]),
+    updatedAt: z.string().datetime({ offset: true }),
+    attachments: z
+      .array(ChatAttachmentComposerItemSchema)
+      .max(CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.text.length === 0 && value.attachments.length === 0) {
+      context.addIssue({ code: "custom", message: "attachment draft cannot be empty" });
+    }
+    const ids = value.attachments.map((attachment) => attachment.attachmentId);
+    if (new Set(ids).size !== ids.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["attachments"],
+        message: "attachment ids must be unique",
+      });
+    }
+  });
+export type ChatAttachmentDraftReadModel = z.infer<typeof ChatAttachmentDraftReadModelSchema>;
+
+export const ChatAttachmentComposerReadModelSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    capabilities: AttachmentCapabilitiesReadModelSchema,
+    draft: ChatAttachmentDraftReadModelSchema.nullable(),
+  })
+  .strict();
+export type ChatAttachmentComposerReadModel = z.infer<typeof ChatAttachmentComposerReadModelSchema>;
+
+export const GetChatAttachmentComposerRequestSchema = z
+  .object({ chatId: z.string().min(1).max(512) })
+  .strict();
+export type GetChatAttachmentComposerRequest = z.infer<
+  typeof GetChatAttachmentComposerRequestSchema
+>;
+
+export const SaveChatAttachmentDraftTextRequestSchema = z
+  .object({
+    chatId: z.string().min(1).max(512),
+    text: z.string(),
+  })
+  .strict();
+export type SaveChatAttachmentDraftTextRequest = z.infer<
+  typeof SaveChatAttachmentDraftTextRequestSchema
+>;
+
+export const ChatAttachmentMutationRequestSchema = z
+  .object({
+    chatId: z.string().min(1).max(512),
+    attachmentId: z.string().min(1).max(128),
+  })
+  .strict();
+export type ChatAttachmentMutationRequest = z.infer<typeof ChatAttachmentMutationRequestSchema>;
+
+export const SelectChatAttachmentWorkoutRequestSchema = ChatAttachmentMutationRequestSchema.extend({
+  workoutId: z.string().min(1).max(128),
+}).strict();
+export type SelectChatAttachmentWorkoutRequest = z.infer<
+  typeof SelectChatAttachmentWorkoutRequestSchema
+>;
+
+export const ClearChatAttachmentDraftRequestSchema = GetChatAttachmentComposerRequestSchema;
+export type ClearChatAttachmentDraftRequest = z.infer<typeof ClearChatAttachmentDraftRequestSchema>;
+
+export const AdmitPastedChatAttachmentRequestSchema = z
+  .object({
+    chatId: z.string().min(1).max(512),
+    selectionId: z.string().min(1).max(128),
+    displayName: z.string().min(1).max(512),
+    dataBase64: z.string().min(1).max(30_000_000),
+  })
+  .strict();
+export type AdmitPastedChatAttachmentRequest = z.infer<
+  typeof AdmitPastedChatAttachmentRequestSchema
+>;

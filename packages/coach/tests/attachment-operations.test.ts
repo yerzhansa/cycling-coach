@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -185,6 +185,27 @@ describe("managed Chat attachment operations", () => {
       status: "failed",
       failure_code: "storage_write_failed",
     });
+  });
+
+  it("stages pasted bytes privately and removes the ingress file after durable admission", async () => {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURf8AAP///0EdNBEAAAABYktHRAH/Ai3eAAAAB3RJTUUH6ggZFCsjqVJGJwAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0wOC0yNVQyMDo0MzozNSswMDowML+eSE4AAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMDgtMjVUMjA6NDM6MzUrMDA6MDDOw/DyAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTA4LTI1VDIwOjQzOjM1KzAwOjAwmdbRLQAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const { operations, repository } = createOperations(["object-paste", "attachment-paste"]);
+    await expect(
+      operations.admitPasted({
+        chatId: "desktop",
+        selectionId: "selection-paste",
+        displayName: "Pasted image.png",
+        bytes: png,
+      }),
+    ).resolves.toMatchObject({ status: "accepted", attachmentId: "attachment-paste" });
+    await expect(repository.readAttachment("attachment-paste")).resolves.toMatchObject({
+      kind: "image",
+      status: "preprocessing",
+    });
+    await expect(readdir(join(archiveDir, "chat-attachments", ".ingress"))).resolves.toEqual([]);
   });
 
   it("restores the same managed identifiers and draft after a database relaunch", async () => {

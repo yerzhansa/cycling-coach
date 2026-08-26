@@ -184,6 +184,7 @@ export function createChatViewAdapter(input: {
       delivery: message.delivery,
       historical: message.historical === true,
       text: isStreamingCoach(message) ? "" : message.text,
+      ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
     }));
     const workBlocked =
       controls?.workBlocked ??
@@ -243,6 +244,19 @@ export function createChatViewAdapter(input: {
     const decisionLoading = controls?.decisionLoading === true;
     const decisionLoadError = controls?.queueLoadError ?? controls?.decisionLoadError ?? null;
     const decisionUnavailable = decisionLoading || decisionLoadError !== null;
+    const attachments = controls?.attachments;
+    const attachmentDraft = attachments?.value?.draft;
+    const attachmentUnavailable =
+      attachments?.busy === true ||
+      (attachments?.admissions.length ?? 0) > 0 ||
+      (attachmentDraft?.attachments.some(
+        (attachment) =>
+          attachment.status !== "ready" ||
+          (attachment.preview.kind === "workout" && attachment.preview.selectedWorkoutId === null),
+      ) ??
+        false) ||
+      ((attachmentDraft?.attachments.length ?? 0) > 0 &&
+        /^\s*\//u.test(attachmentDraft?.text ?? ""));
     return {
       messages: sameChatMessages(published.messages, messages) ? published.messages : messages,
       queued: sameChatQueued(published.queued, queued) ? published.queued : queued,
@@ -253,6 +267,10 @@ export function createChatViewAdapter(input: {
       decisionError: decision?.error ?? null,
       decisionLoadError,
       queueMutationError: controls?.queueMutationError ?? null,
+      attachments: attachments?.value ?? null,
+      attachmentAdmissions: attachments?.admissions ?? EMPTY_CHAT_SURFACE.attachmentAdmissions,
+      attachmentBusy: attachments?.busy ?? false,
+      attachmentError: attachments?.error ?? null,
       timeline: sameChatTimeline(published.timeline, timeline) ? published.timeline : timeline,
       status: state.status,
       notice:
@@ -262,7 +280,8 @@ export function createChatViewAdapter(input: {
         state.status === "streaming" && state.activeTurn?.error === null ? state.progress : null,
       interrupted: state.status === "interrupted",
       workBlocked,
-      sendDisabled: workBlocked || decisionBlocksWork || decisionUnavailable,
+      sendDisabled:
+        workBlocked || decisionBlocksWork || decisionUnavailable || attachmentUnavailable,
       inputDisabled: workBlocked,
       newConversationUnavailable: newConversationUnavailable || decisionUnavailable,
       resetPhase: state.session.resetPhase,

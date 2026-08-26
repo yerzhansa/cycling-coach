@@ -558,6 +558,26 @@ export function createChatAttachmentRepository(
             );
           }
         }
+        for (const attachmentId of attachmentIds) {
+          await store.run(
+            "DELETE FROM chat_attachment_draft_ref WHERE conversation_id=? AND attachment_id=?",
+            [conversationId, attachmentId],
+          );
+        }
+        const remaining = await store.get(
+          "SELECT COUNT(*) AS attachment_count FROM chat_attachment_draft_ref WHERE conversation_id=?",
+          [conversationId],
+        );
+        if (Number(remaining?.attachment_count ?? 0) === 0) {
+          await store.run("DELETE FROM chat_attachment_draft WHERE conversation_id=?", [
+            conversationId,
+          ]);
+        } else {
+          await store.run(
+            "UPDATE chat_attachment_draft SET text='',state='active',updated_at_ms=? WHERE conversation_id=?",
+            [createdAtMs, conversationId],
+          );
+        }
       });
     },
 

@@ -50,6 +50,15 @@ export interface ActivityAttachmentOperations {
     readonly attachment: ChatAttachmentRow;
     readonly object: ChatAttachmentObjectRow;
   }): Promise<void>;
+  readPreview(attachmentId: string): Promise<{
+    readonly sourceFormat: ManagedActivityExtension;
+    readonly sessions: readonly {
+      readonly sport: string;
+      readonly startUtc: number;
+      readonly durationSeconds: number;
+      readonly distanceMeters: number | null;
+    }[];
+  }>;
 }
 
 export interface ActivityAttachmentOperationsInput {
@@ -403,5 +412,36 @@ export function createActivityAttachmentOperations(
   return {
     turnPort,
     preprocessAdmitted: ({ attachment, object }) => preprocess(attachment, object).then(() => {}),
+    readPreview: (attachmentId) =>
+      input.runExclusive(async () => {
+        const attachment = await input.repository.readAttachment(attachmentId);
+        if (
+          attachment === undefined ||
+          attachment.kind !== "activity" ||
+          attachment.status !== "ready"
+        ) {
+          throw new ActivityAttachmentTurnError("activity_not_ready");
+        }
+        const object = await input.repository.readObject(attachment.object_id);
+        if (object === undefined) {
+          throw new ActivityAttachmentTurnError("activity_source_missing");
+        }
+        const result = await input.reader.read(
+          source(attachment, object),
+          await readRepairFixerSettings(input.store),
+        );
+        if (result.outcome !== "prepared") {
+          throw new ActivityAttachmentTurnError("activity_not_ready");
+        }
+        return {
+          sourceFormat: attachment.extension as ManagedActivityExtension,
+          sessions: result.prepared.value.summaries.map((summary) => ({
+            sport: summary.sport_family,
+            startUtc: summary.start_utc,
+            durationSeconds: summary.duration_s,
+            distanceMeters: summary.distance_m,
+          })),
+        };
+      }),
   };
 }

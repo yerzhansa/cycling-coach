@@ -1,11 +1,19 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { PlatformAbsolutePathSchema } from "@enduragent/coach-contract";
+import {
+  AttachmentAdmissionReadModelSchema,
+  CHAT_ATTACHMENT_LIMITS,
+  PlatformAbsolutePathSchema,
+  type AttachmentAdmissionReadModel,
+} from "@enduragent/coach-contract";
 import { parseDesktopAppearance } from "../main/appearance.js";
 import { desktopPlatformProjection } from "../main/platform-copy.js";
 import { desktopRendererNavigationToken } from "../main/renderer-navigation.js";
 import {
   DESKTOP_APPEARANCE_CHANNEL,
   DESKTOP_CONNECTION_CHANNEL,
+  DESKTOP_CHAT_ATTACHMENT_DROP_CHANNEL,
+  DESKTOP_CHAT_ATTACHMENT_PASTE_CHANNEL,
+  DESKTOP_CHAT_ATTACHMENT_PICK_CHANNEL,
   DESKTOP_DOCUMENT_REGISTRATION_CHANNEL,
   DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL,
   DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
@@ -975,6 +983,13 @@ function parsePaths(value: unknown): readonly string[] {
   return paths;
 }
 
+function parseAttachmentAdmissions(value: unknown): readonly AttachmentAdmissionReadModel[] {
+  if (!Array.isArray(value) || value.length > CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage) {
+    throw new TypeError();
+  }
+  return value.map((item) => AttachmentAdmissionReadModelSchema.parse(item));
+}
+
 function telegramUsername(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(value);
 }
@@ -1302,6 +1317,7 @@ async function invokeTelegramSenders(): Promise<unknown> {
 }
 
 let dropDisposer: (() => void) | undefined;
+let chatAttachmentDropDisposer: (() => void) | undefined;
 const updateListeners = new Set<(state: PreloadUpdateState) => void>();
 const chatGptLoginProgressListeners = new Set<(progress: PreloadChatGptLoginProgress) => void>();
 const desktopDocumentNavigationToken = desktopRendererNavigationToken(window.location.href);
@@ -1550,6 +1566,18 @@ contextBridge.exposeInMainWorld(
     },
     chooseImportFiles: async () =>
       parsePaths(await ipcRenderer.invoke(DESKTOP_CHOOSE_IMPORT_FILES_CHANNEL)),
+    chooseChatAttachments: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseAttachmentAdmissions(
+        await ipcRenderer.invoke(DESKTOP_CHAT_ATTACHMENT_PICK_CHANNEL),
+      );
+    },
+    pasteChatAttachment: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      return parseAttachmentAdmissions(
+        await ipcRenderer.invoke(DESKTOP_CHAT_ATTACHMENT_PASTE_CHANNEL),
+      );
+    },
     exportTrainingFile: async (input: unknown) => {
       const request = parseTrainingExportRequest(input);
       return parseTrainingExportResult(
@@ -1591,6 +1619,48 @@ contextBridge.exposeInMainWorld(
         if (dropDisposer === dispose) dropDisposer = undefined;
       };
       dropDisposer = dispose;
+      return dispose;
+    },
+    onDroppedChatAttachments: (listener: unknown) => {
+      if (typeof listener !== "function" || chatAttachmentDropDisposer !== undefined) {
+        throw new TypeError();
+      }
+      const onDrop = (event: DragEvent): void => {
+        const target = event.target;
+        if (
+          !(target instanceof Element) ||
+          target.closest("[data-chat-attachment-dropzone]") === null
+        ) {
+          return;
+        }
+        event.preventDefault();
+        const paths = Array.from(event.dataTransfer?.files ?? [])
+          .map((file) => webUtils.getPathForFile(file))
+          .filter((path) => PlatformAbsolutePathSchema.safeParse(path).success)
+          .slice(0, CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage);
+        if (paths.length === 0) return;
+        void ipcRenderer
+          .invoke(DESKTOP_CHAT_ATTACHMENT_DROP_CHANNEL, paths)
+          .then((value) => listener(parseAttachmentAdmissions(value)))
+          .catch(() => {});
+      };
+      const onDragOver = (event: DragEvent): void => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.closest("[data-chat-attachment-dropzone]") !== null
+        ) {
+          event.preventDefault();
+        }
+      };
+      window.addEventListener("dragover", onDragOver);
+      window.addEventListener("drop", onDrop);
+      const dispose = (): void => {
+        window.removeEventListener("dragover", onDragOver);
+        window.removeEventListener("drop", onDrop);
+        if (chatAttachmentDropDisposer === dispose) chatAttachmentDropDisposer = undefined;
+      };
+      chatAttachmentDropDisposer = dispose;
       return dispose;
     },
   }),

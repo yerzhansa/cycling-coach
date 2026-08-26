@@ -54,6 +54,11 @@ interface EnduragentAuth {
   acknowledgeTelegramGapWarning(): Promise<DesktopTelegramMutationResult>;
   setAppearance(appearance: "system" | "light" | "dark"): void;
   chooseImportFiles(): Promise<readonly string[]>;
+  chooseChatAttachments(): Promise<readonly DesktopAttachmentAdmission[]>;
+  pasteChatAttachment(): Promise<readonly DesktopAttachmentAdmission[]>;
+  onDroppedChatAttachments(
+    listener: (results: readonly DesktopAttachmentAdmission[]) => void,
+  ): () => void;
   exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   getUpdateState(): Promise<DesktopUpdateState>;
@@ -63,6 +68,7 @@ interface EnduragentAuth {
 }
 
 type DesktopPlatformProjection = import("./platform-copy").DesktopPlatformProjection;
+type DesktopAttachmentAdmission = import("@enduragent/coach-contract").AttachmentAdmissionReadModel;
 
 type DesktopTrainingExportRequest =
   | {

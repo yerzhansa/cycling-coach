@@ -163,6 +163,7 @@ import { createWorkoutAttachmentOperations } from "./workout-attachment-operatio
 import { createManagedWorkoutReader } from "@enduragent/sport-cycling/workout-import";
 import { createPersistentOpenRouterModelMetadataCache } from "./openrouter-model-metadata-cache.js";
 import { createDocumentMediaAttachmentOperations } from "./document-media-attachment-operations.js";
+import { createAttachmentComposerOperations } from "./attachment-composer-operations.js";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -1084,6 +1085,26 @@ export async function createLocalCoachComposition(
     const openRouterModelMetadata = createPersistentOpenRouterModelMetadataCache(
       input.home.configDir,
     );
+    const resolveAttachmentCapabilities = () => {
+      const config = engineConfigFromConfig(approvedConfig());
+      return createAttachmentCapabilityResolver({
+        openRouterCache: openRouterModelMetadata,
+        metadataMaxAgeMs: CHAT_ATTACHMENT_LIMITS.capabilityMetadataMaxAgeMs,
+        now,
+      }).resolve({
+        provider: config.llm.provider,
+        model: config.llm.model,
+        transport: transportForProvider(config.llm.provider),
+        ...(config.llm.apiKey.length === 0 ? {} : { apiKey: config.llm.apiKey }),
+      });
+    };
+    const attachmentComposerOperations = createAttachmentComposerOperations({
+      repository: attachmentRepository,
+      attachments: attachmentOperations,
+      activities: activityAttachmentOperations,
+      workouts: workoutAttachmentOperations,
+      capabilities: resolveAttachmentCapabilities,
+    });
     const repository = (dependencies.createRepository ?? createAnchorRepository)(
       input.context.store,
     );
@@ -1134,14 +1155,38 @@ export async function createLocalCoachComposition(
             });
       const confirmations = new ConfirmationGate(now);
       const chatAttachments: ChatAttachmentTurnPort = {
+        acceptQueuedMessage: async (request) => {
+          await attachmentRepository.linkMessage({
+            conversationId: request.chatId,
+            messageId: request.messageId,
+            attachmentIds: request.attachmentIds,
+            createdAtMs: now(),
+          });
+        },
         prepareQueuedTurn: async (request) => {
           const activity = await activityAttachmentOperations.turnPort.prepareQueuedTurn(request);
           const documentMedia = await documentMediaAttachmentOperations.prepareLinkedTurn(request);
-          return { ...activity, ...documentMedia };
+          const workout = await workoutAttachmentOperations.prepareLinkedTurn(request);
+          const attachmentContext = [documentMedia.attachmentContext, workout.attachmentContext]
+            .filter((value): value is string => value !== undefined)
+            .join("\n");
+          const untrustedAttachmentText = [
+            documentMedia.untrustedAttachmentText,
+            workout.untrustedAttachmentText,
+          ]
+            .filter((value): value is string => value !== undefined)
+            .join("\n");
+          return {
+            ...activity,
+            nativeMedia: documentMedia.nativeMedia,
+            ...(attachmentContext.length === 0 ? {} : { attachmentContext }),
+            ...(untrustedAttachmentText.length === 0 ? {} : { untrustedAttachmentText }),
+          };
         },
         completeQueuedTurn: async (request) => {
           await activityAttachmentOperations.turnPort.completeQueuedTurn(request);
           await documentMediaAttachmentOperations.completeLinkedTurn(request);
+          await workoutAttachmentOperations.completeLinkedTurn(request);
         },
       };
       const ports: EngineHostPorts = {
@@ -1625,6 +1670,44 @@ export async function createLocalCoachComposition(
         dependencies.operationsDependencies,
       ),
       admitChatAttachment: (request) => attachmentOperations.admit(request),
+      admitPastedChatAttachment: (request) => {
+        const bytes = Buffer.from(request.dataBase64, "base64");
+        if (
+          bytes.byteLength === 0 ||
+          bytes.toString("base64") !== request.dataBase64 ||
+          bytes.byteLength > CHAT_ATTACHMENT_LIMITS.imageBytes
+        ) {
+          return Promise.resolve({
+            selectionId: request.selectionId,
+            displayName: request.displayName,
+            status: "rejected" as const,
+            reason:
+              bytes.byteLength > CHAT_ATTACHMENT_LIMITS.imageBytes
+                ? ("file_too_large" as const)
+                : ("validation_failed" as const),
+          });
+        }
+        return attachmentOperations.admitPasted({
+          chatId: request.chatId,
+          selectionId: request.selectionId,
+          displayName: request.displayName,
+          bytes,
+        });
+      },
+      getChatAttachmentComposer: (request) => attachmentComposerOperations.read(request.chatId),
+      saveChatAttachmentDraftText: (request) =>
+        attachmentComposerOperations.saveText(request.chatId, request.text),
+      removeChatAttachment: (request) =>
+        attachmentComposerOperations.remove(request.chatId, request.attachmentId),
+      retryChatAttachment: (request) =>
+        attachmentComposerOperations.retry(request.chatId, request.attachmentId),
+      selectChatAttachmentWorkout: (request) =>
+        attachmentComposerOperations.selectWorkout(
+          request.chatId,
+          request.attachmentId,
+          request.workoutId,
+        ),
+      clearChatAttachmentDraft: (request) => attachmentComposerOperations.clear(request.chatId),
       getActivityAnalysis: (request, signal) =>
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
