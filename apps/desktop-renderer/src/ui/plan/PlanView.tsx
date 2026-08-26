@@ -1,4 +1,5 @@
 import {
+  Activity,
   CalendarDays,
   CheckCircle2,
   ChevronLeft,
@@ -11,6 +12,7 @@ import {
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 import {
   PLAN_MIN_FULL_DAYS,
+  PlanActiveProjectionDataSchema,
   PlanCoachProjectionDataSchema,
   type PlanDraftPlanProjection,
   type PlanFtpProjection,
@@ -1296,6 +1298,141 @@ function AttentionProjection(): ReactElement {
   );
 }
 
+function ActiveProjection(): ReactElement {
+  const model = useEnduragentStore((state) => planReadModel(state.plan));
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const actions = useEnduragentStore((state) => state.planActions);
+  if (model === null) return <StatusCard title="Plan" support="Refreshing your Plan…" />;
+  const parsed = PlanActiveProjectionDataSchema.safeParse(model.data);
+  if (!parsed.success) return <StatusCard title={model.title} support={model.summary} />;
+  const data = parsed.data;
+  const reconciling =
+    (transition.status === "submitting" || transition.status === "running") &&
+    transition.transitionId === "PL-T12";
+  const failed = model.reconciliation.status === "failed";
+  const verified = model.reconciliation.status === "verified";
+  const retrying = reconciling && failed;
+  const running = reconciling || model.reconciliation.status === "running";
+  const completed = model.reconciliation.created;
+  const total = model.reconciliation.total;
+  const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
+  const calendarTitle = verified
+    ? `Intervals · current through ${formatCivilDate(model.reconciliation.currentThrough!)}`
+    : retrying
+      ? "Retrying Intervals update"
+      : running
+        ? model.scenarioId === "PL-S042"
+          ? "Resuming Intervals update"
+          : "Updating Intervals"
+        : failed
+          ? model.scenarioId === "PL-S041"
+            ? "Intervals still needs attention"
+            : "Intervals update needs attention"
+          : "Update Intervals for the next seven days";
+  return (
+    <div className="grid gap-6">
+      <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
+        <div className="flex items-start gap-row">
+          <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-base font-semibold">
+              Plan active · week {data.weekIndex} of {data.plan.totalWeeks}
+            </h2>
+            <p className="m-0 text-ink-2">
+              {data.plan.name} · starts {formatCivilDate(data.plan.startDate)}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-start gap-row border-t border-line pt-row">
+          <Activity className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-base font-semibold">
+              Today · {data.todayWorkout?.name ?? "Rest"}
+            </h3>
+            <p className="m-0 text-ink-2">
+              {data.todayWorkout?.durationS === null || data.todayWorkout === null
+                ? data.todayWorkout === null
+                  ? "No workout scheduled."
+                  : "Follow the workout details in your Plan."
+                : plannedTime(data.todayWorkout.durationS)}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section
+        className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1"
+        aria-live="polite"
+      >
+        <div className="flex items-start gap-row">
+          {failed && !retrying ? (
+            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+          ) : verified ? (
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+          ) : running ? (
+            <LoaderCircle
+              className="mt-0.5 size-5 shrink-0 animate-spin text-primary"
+              aria-hidden="true"
+            />
+          ) : (
+            <CalendarDays className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+          )}
+          <div className={`${SUPPORT_PAIR} min-w-0 flex-1`}>
+            <h2 className="m-0 text-base font-semibold">{calendarTitle}</h2>
+            <p className="m-0 text-ink-2">
+              {total > 0
+                ? `Created ${completed} · Pending ${model.reconciliation.pending} · Failed ${model.reconciliation.failed} · Total ${total}`
+                : "Only today plus the next six civil dates will be written."}
+            </p>
+          </div>
+          {verified ? (
+            <span className="rounded-full border border-ok px-3 py-1 text-sm text-ok">
+              Verified
+            </span>
+          ) : null}
+        </div>
+        {total > 0 ? (
+          <div
+            className="h-2 overflow-hidden rounded-full bg-sunk"
+            role="progressbar"
+            aria-label="Intervals calendar update"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+          >
+            <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
+          </div>
+        ) : null}
+        {!running && !verified ? (
+          <div className="flex flex-wrap justify-end gap-inset">
+            {failed ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={actions === null}
+                onClick={() => actions?.verifyReconciliation()}
+              >
+                Verify again
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              disabled={actions === null}
+              onClick={() => actions?.reconcilePlan()}
+            >
+              {failed
+                ? "Retry"
+                : model.scenarioId === "PL-S037"
+                  ? "View calendar progress"
+                  : "Update Intervals"}
+            </Button>
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
 function ReadyProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
   const transition = useEnduragentStore((state) => state.plan.transition);
@@ -1309,6 +1446,7 @@ function ReadyProjection(): ReactElement {
   if (model.lifecycle === "none" || model.projection === "no-plan") return <NoPlan />;
   if (model.projection === "coach") return <PlanCoach />;
   if (model.projection === "draft") return <DraftProjection />;
+  if (model.projection === "active") return <ActiveProjection />;
   if (model.projection === "attention") return <AttentionProjection />;
   return (
     <StatusCard

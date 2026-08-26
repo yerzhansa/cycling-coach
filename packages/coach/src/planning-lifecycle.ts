@@ -1,9 +1,11 @@
 import {
+  PlanActiveProjectionDataSchema,
   PlanCoachProjectionDataSchema,
   PlanReadModelSchema,
   type ChatQueueSnapshot,
   type CoachDecisionReadModel,
   type PlanAttention,
+  type PlanActiveProjectionData,
   type PlanCoachMessage,
   type PlanDraftProjection,
   type PlanDraftPlanProjection,
@@ -12,10 +14,21 @@ import {
   type PlanProjectionKind,
   type PlanRaceCourseProjection,
   type PlanStartDateProjection,
+  type PlanReconciliation,
   type PlanReadModel,
   type PlanScenarioId,
   type PlanTransitionGuard,
 } from "@enduragent/coach-contract";
+
+export type ActivePlanScenario =
+  | "PL-S010"
+  | "PL-S037"
+  | "PL-S038"
+  | "PL-S039"
+  | "PL-S040"
+  | "PL-S041"
+  | "PL-S042"
+  | "PL-S043";
 
 export interface PlanConversationProjection {
   readonly id: string;
@@ -311,5 +324,55 @@ export function buildPlanLifecycleReadModel(
     attention: EMPTY_ATTENTION,
     activeOperation: null,
     data,
+  });
+}
+
+export function buildActivePlanReadModel(input: {
+  readonly scenarioId: ActivePlanScenario;
+  readonly planId: string;
+  readonly revision: number;
+  readonly data: PlanActiveProjectionData;
+  readonly reconciliation: PlanReconciliation;
+}): PlanReadModel {
+  const copy = {
+    "PL-S010": ["Plan active", "Calendar update has not started."],
+    "PL-S037": ["Plan active locally", "Intervals is ready to update."],
+    "PL-S038": ["Updating Intervals", "Writing today plus the next six days."],
+    "PL-S039": ["Calendar update needs attention", "Some workouts could not be written."],
+    "PL-S040": ["Retrying calendar update", "Only unresolved workouts are being checked."],
+    "PL-S041": ["Calendar update still needs attention", "Retry or verify the provider again."],
+    "PL-S042": ["Resuming calendar update", "The interrupted update is continuing safely."],
+    "PL-S043": ["Plan active", "Intervals is current for the next seven days."],
+  } as const;
+  const athleteAction = input.scenarioId === "PL-S039" || input.scenarioId === "PL-S041";
+  const attention: PlanAttention = athleteAction
+    ? {
+        count: 1,
+        destination: "direct",
+        items: [
+          {
+            id: `reconciliation:${input.planId}`,
+            title: "Calendar update needs attention",
+            scenarioId: input.scenarioId,
+            priority: "dated",
+            affectedDate: input.data.today,
+          },
+        ],
+      }
+    : EMPTY_ATTENTION;
+  return PlanReadModelSchema.parse({
+    schemaVersion: 1,
+    scenarioId: input.scenarioId,
+    lifecycle: "active",
+    planId: input.planId,
+    revision: input.revision,
+    title: copy[input.scenarioId][0],
+    summary: copy[input.scenarioId][1],
+    projection: "active",
+    transitions: [guard("PL-T12")],
+    reconciliation: input.reconciliation,
+    attention,
+    activeOperation: null,
+    data: PlanActiveProjectionDataSchema.parse(input.data),
   });
 }

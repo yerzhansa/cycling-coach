@@ -284,6 +284,28 @@ export const PlanDraftPlanProjectionSchema = z
   .strict();
 export type PlanDraftPlanProjection = z.infer<typeof PlanDraftPlanProjectionSchema>;
 
+export const PlanActiveWorkoutProjectionSchema = z
+  .object({
+    id: z.string().min(1),
+    date: TrainingExportCivilDateSchema,
+    sport: z.string().min(1),
+    name: z.string().min(1),
+    durationS: z.number().int().positive().nullable(),
+  })
+  .strict();
+export type PlanActiveWorkoutProjection = z.infer<typeof PlanActiveWorkoutProjectionSchema>;
+
+export const PlanActiveProjectionDataSchema = z
+  .object({
+    plan: PlanDraftPlanProjectionSchema,
+    today: TrainingExportCivilDateSchema,
+    weekIndex: z.number().int().positive(),
+    todayWorkout: PlanActiveWorkoutProjectionSchema.nullable(),
+    workouts: z.array(PlanActiveWorkoutProjectionSchema),
+  })
+  .strict();
+export type PlanActiveProjectionData = z.infer<typeof PlanActiveProjectionDataSchema>;
+
 export const PlanStartDateProjectionSchema = z
   .object({
     status: z.enum(["ready", "invalid", "recalculating", "failed", "updated"]),
@@ -675,6 +697,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       transitionId: z.literal("PL-T12"),
       commandId: CommandIdSchema,
       planId: EntityIdSchema,
+      mode: z.enum(["reconcile", "verify"]).optional(),
     })
     .strict(),
   z

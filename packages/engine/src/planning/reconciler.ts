@@ -68,7 +68,7 @@ export interface PlanReconciliationProjection {
 }
 
 export class PlanReconciliationError extends Error {
-  readonly code: "plan-not-active" | "invalid-workout" | "invalid-provider-event";
+  readonly code: "plan-not-active" | "invalid-workout" | "invalid-provider-event" | "missing-job";
 
   constructor(code: PlanReconciliationError["code"]) {
     super(`plan reconciliation failed: ${code}`);
@@ -93,10 +93,10 @@ function groupedEvents(events: readonly PlanMirrorEvent[]): Map<string, PlanMirr
   const grouped = new Map<string, PlanMirrorEvent[]>();
   for (const event of events) {
     if (
-      !Number.isSafeInteger(event.id)
-      || event.id <= 0
-      || !Number.isSafeInteger(event.dateKey)
-      || (event.externalId !== null && typeof event.externalId !== "string")
+      !Number.isSafeInteger(event.id) ||
+      event.id <= 0 ||
+      !Number.isSafeInteger(event.dateKey) ||
+      (event.externalId !== null && typeof event.externalId !== "string")
     ) {
       throw new PlanReconciliationError("invalid-provider-event");
     }
@@ -108,10 +108,9 @@ function groupedEvents(events: readonly PlanMirrorEvent[]): Map<string, PlanMirr
   return grouped;
 }
 
-function itemError(operation: PlanReconciliationItemRecord["operation"]): Exclude<
-  PlanReconciliationErrorCode,
-  "calendar-list-failed"
-> {
+function itemError(
+  operation: PlanReconciliationItemRecord["operation"],
+): Exclude<PlanReconciliationErrorCode, "calendar-list-failed"> {
   return operation === "create" ? "calendar-create-failed" : "calendar-delete-failed";
 }
 
@@ -130,7 +129,9 @@ export async function projectPlanReconciliation(
   job: PlanReconciliationJobRecord,
 ): Promise<PlanReconciliationProjection> {
   const items = await repository.readItems(job.id);
-  const created = items.filter((item) => item.status === "created" || item.status === "verified").length;
+  const created = items.filter(
+    (item) => item.status === "created" || item.status === "verified",
+  ).length;
   const failed = items.filter((item) => item.status === "failed").length;
   const pending = items.length - created - failed;
   return Object.freeze({
@@ -189,20 +190,19 @@ async function verifyCreateItems(
     if (matches.length === 1) {
       await deps.repository.verifyItem(item.id, matches[0]!.id, deps.now());
     } else {
-      await deps.repository.failItem(
-        item.id,
-        "calendar-verification-failed",
-        deps.now(),
-      );
+      await deps.repository.failItem(item.id, "calendar-verification-failed", deps.now());
     }
   }
 }
 
-export async function reconcileActivePlanWindow(input: {
-  readonly plan: PlanRecord;
-  readonly workouts: readonly PlanWorkoutRecord[];
-  readonly todayDateKey: number;
-}, deps: PlanReconcilerDeps): Promise<PlanReconciliationProjection> {
+export async function reconcileActivePlanWindow(
+  input: {
+    readonly plan: PlanRecord;
+    readonly workouts: readonly PlanWorkoutRecord[];
+    readonly todayDateKey: number;
+  },
+  deps: PlanReconcilerDeps,
+): Promise<PlanReconciliationProjection> {
   if (input.plan.status !== "active") throw new PlanReconciliationError("plan-not-active");
   const windowEndDateKey = addCivilDays(input.todayDateKey, PLAN_MIRROR_DAYS - 1);
   const now = deps.now();
@@ -216,9 +216,11 @@ export async function reconcileActivePlanWindow(input: {
   });
   const selected = input.workouts.filter((workout) => {
     if (workout.planId !== input.plan.id) throw new PlanReconciliationError("invalid-workout");
-    return workout.origin === "coach"
-      && workout.dateKey >= input.todayDateKey
-      && workout.dateKey <= windowEndDateKey;
+    return (
+      workout.origin === "coach" &&
+      workout.dateKey >= input.todayDateKey &&
+      workout.dateKey <= windowEndDateKey
+    );
   });
   for (const workout of selected) {
     await deps.repository.prepareItem({
@@ -235,10 +237,12 @@ export async function reconcileActivePlanWindow(input: {
   const running = await deps.repository.beginAttempt(job.id, deps.now());
   let before: Map<string, PlanMirrorEvent[]>;
   try {
-    before = groupedEvents(await deps.calendar.listEvents({
-      startDateKey: input.todayDateKey,
-      endDateKey: windowEndDateKey,
-    }));
+    before = groupedEvents(
+      await deps.calendar.listEvents({
+        startDateKey: input.todayDateKey,
+        endDateKey: windowEndDateKey,
+      }),
+    );
   } catch {
     return failListedJob(deps, running);
   }
@@ -257,10 +261,12 @@ export async function reconcileActivePlanWindow(input: {
     if (workout === undefined) throw new PlanReconciliationError("invalid-workout");
     let immediate: Map<string, PlanMirrorEvent[]>;
     try {
-      immediate = groupedEvents(await deps.calendar.listEvents({
-        startDateKey: item.dateKey,
-        endDateKey: item.dateKey,
-      }));
+      immediate = groupedEvents(
+        await deps.calendar.listEvents({
+          startDateKey: item.dateKey,
+          endDateKey: item.dateKey,
+        }),
+      );
     } catch {
       return failListedJob(deps, running);
     }
@@ -293,10 +299,12 @@ export async function reconcileActivePlanWindow(input: {
   }
   let after: Map<string, PlanMirrorEvent[]>;
   try {
-    after = groupedEvents(await deps.calendar.listEvents({
-      startDateKey: input.todayDateKey,
-      endDateKey: windowEndDateKey,
-    }));
+    after = groupedEvents(
+      await deps.calendar.listEvents({
+        startDateKey: input.todayDateKey,
+        endDateKey: windowEndDateKey,
+      }),
+    );
   } catch {
     for (const item of await deps.repository.readItems(job.id)) {
       if (item.status === "running" || item.status === "created") {
@@ -309,15 +317,46 @@ export async function reconcileActivePlanWindow(input: {
   return finishJob(deps, running);
 }
 
-function cleanupExpected(event: PlanMirrorEvent): string {
-  return JSON.stringify({ eventId: event.id, dateKey: event.dateKey, externalId: event.externalId });
+export async function verifyPlanMirror(
+  job: PlanReconciliationJobRecord,
+  deps: PlanReconcilerDeps,
+): Promise<PlanReconciliationProjection> {
+  const stored = await deps.repository.readJob(job.id);
+  if (stored === undefined || stored.kind !== "mirror") {
+    throw new PlanReconciliationError("missing-job");
+  }
+  const running = await deps.repository.beginAttempt(stored.id, deps.now());
+  let events: Map<string, PlanMirrorEvent[]>;
+  try {
+    events = groupedEvents(
+      await deps.calendar.listEvents({
+        startDateKey: running.windowStartDateKey,
+        endDateKey: running.windowEndDateKey,
+      }),
+    );
+  } catch {
+    return failListedJob(deps, running);
+  }
+  await verifyCreateItems(deps, running, events);
+  return finishJob(deps, running);
 }
 
-export async function cleanupPlanMirror(input: {
-  readonly planId: string;
-  readonly todayDateKey: number;
-  readonly endDateKey: number;
-}, deps: PlanReconcilerDeps): Promise<PlanReconciliationProjection> {
+function cleanupExpected(event: PlanMirrorEvent): string {
+  return JSON.stringify({
+    eventId: event.id,
+    dateKey: event.dateKey,
+    externalId: event.externalId,
+  });
+}
+
+export async function cleanupPlanMirror(
+  input: {
+    readonly planId: string;
+    readonly todayDateKey: number;
+    readonly endDateKey: number;
+  },
+  deps: PlanReconcilerDeps,
+): Promise<PlanReconciliationProjection> {
   const startDateKey = addCivilDays(input.todayDateKey, 1);
   const now = deps.now();
   const job = await deps.repository.createOrGetJob({
@@ -331,17 +370,20 @@ export async function cleanupPlanMirror(input: {
   const running = await deps.repository.beginAttempt(job.id, deps.now());
   let before: Map<string, PlanMirrorEvent[]>;
   try {
-    before = groupedEvents(await deps.calendar.listEvents({
-      startDateKey,
-      endDateKey: input.endDateKey,
-    }));
+    before = groupedEvents(
+      await deps.calendar.listEvents({
+        startDateKey,
+        endDateKey: input.endDateKey,
+      }),
+    );
   } catch {
     return failListedJob(deps, running);
   }
   const prefix = planMirrorExternalIdPrefix(input.planId);
-  const eligible = [...before.entries()].filter(([externalId, events]) =>
-    externalId.startsWith(prefix)
-    && events.some((event) => event.dateKey >= startDateKey && event.dateKey <= input.endDateKey)
+  const eligible = [...before.entries()].filter(
+    ([externalId, events]) =>
+      externalId.startsWith(prefix) &&
+      events.some((event) => event.dateKey >= startDateKey && event.dateKey <= input.endDateKey),
   );
   for (const [externalId, events] of eligible) {
     const first = events[0]!;
@@ -375,10 +417,12 @@ export async function cleanupPlanMirror(input: {
   }
   let after: Map<string, PlanMirrorEvent[]>;
   try {
-    after = groupedEvents(await deps.calendar.listEvents({
-      startDateKey,
-      endDateKey: input.endDateKey,
-    }));
+    after = groupedEvents(
+      await deps.calendar.listEvents({
+        startDateKey,
+        endDateKey: input.endDateKey,
+      }),
+    );
   } catch {
     for (const item of await deps.repository.readItems(job.id)) {
       if (item.status === "running") {

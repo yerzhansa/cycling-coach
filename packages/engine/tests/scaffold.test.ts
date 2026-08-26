@@ -53,6 +53,7 @@ describe("engine scaffold", () => {
       "UNKNOWN_PROVENANCE",
       "_resetOrphanWarnCacheForTesting",
       "acceptParsedRaceCourse",
+      "activatePlanDraft",
       "applyPlanStartDatePreview",
       "beginRaceCourseParsing",
       "beginRaceCourseRemoval",
@@ -120,6 +121,7 @@ describe("engine scaffold", () => {
       "useRouteWithoutElevation",
       "validateListRange",
       "validateWorkoutCreationDate",
+      "verifyPlanMirror",
       "warnOrphanSections",
       "wrapAthleteContextFence",
     ]);

@@ -4,6 +4,7 @@ import {
   GetPlanStateRpcParamsSchema,
   GetPlanStateRpcResultSchema,
   PlanDraftPlanProjectionSchema,
+  PlanActiveProjectionDataSchema,
   PlanDraftProjectionSchema,
   PlanFtpProjectionSchema,
   PlanRaceCourseProjectionSchema,
@@ -15,6 +16,7 @@ import {
   type ExecutePlanTransitionRpcParams,
   type ExecutePlanTransitionRpcResult,
   type PlanDraftProjection,
+  type PlanActiveProjectionData,
   type PlanDraftPlanProjection,
   type PlanError,
   type PlanFtpProjection,
@@ -27,6 +29,7 @@ import {
   type TurnEvent,
 } from "@enduragent/coach-contract";
 import {
+  activatePlanDraft,
   acceptParsedRaceCourse,
   beginRaceCourseParsing,
   beginRaceCourseRemoval,
@@ -35,22 +38,36 @@ import {
   failRaceCourseRecalculation,
   openRaceCoursePicker,
   previewPlanStartDate,
+  projectPlanReconciliation,
+  reconcileActivePlanWindow,
   rejectRaceCourseFile,
   useRouteWithoutElevation,
+  verifyPlanMirror,
+  type PlanMirrorCalendarPort,
+  type PlanReconciliationProjection,
   type PlanFtpAdapter,
   type PlanFtpSnapshot,
   type PlanStartDatePreview,
   type RaceCourseRecalculatingState,
 } from "@enduragent/engine";
-import { buildPlanLifecycleReadModel } from "./planning-lifecycle.js";
 import {
+  buildActivePlanReadModel,
+  buildPlanLifecycleReadModel,
+  type ActivePlanScenario,
+} from "./planning-lifecycle.js";
+import {
+  addCivilDays,
   createPlanConversationRepository,
+  createPlanReconciliationRepository,
   createPlanRepository,
+  planWeekIndex,
+  PlanConversationValidationError,
   type PlanConversationRecord,
   type PlanConversationRepository,
   type PlanConversationTurnRecord,
   type PlanDraftRevisionRecord,
   type PlanRecord,
+  type PlanReconciliationRepository,
   type PlanRepository,
   type PlanWorkoutRecord,
   parseRaceCourseSnapshot,
@@ -120,6 +137,24 @@ const START_DATE_RECALCULATION_FAILED: PlanError = Object.freeze({
   retryable: true,
 });
 
+const CALENDAR_UPDATE_FAILED: PlanError = Object.freeze({
+  code: "provider-failed",
+  message: "Some workouts could not be updated in Intervals.",
+  retryable: true,
+});
+
+const CALENDAR_VERIFICATION_FAILED: PlanError = Object.freeze({
+  code: "verification-failed",
+  message: "Intervals does not match the active Plan yet.",
+  retryable: true,
+});
+
+const DRAFT_STALE: PlanError = Object.freeze({
+  code: "stale-base",
+  message: "This Draft changed before approval. Review the latest Draft.",
+  retryable: false,
+});
+
 export interface PlanDraftBuild {
   readonly plan: PlanRecord;
   readonly workouts: readonly PlanWorkoutRecord[];
@@ -167,6 +202,8 @@ export interface CreatePlanningOperationsDependencies {
   readonly isReady?: (input: PlanReadinessInput) => boolean | Promise<boolean>;
   readonly ftp?: PlanFtpAdapter;
   readonly course?: PlanRaceCourseAdapter;
+  readonly reconciliations?: PlanReconciliationRepository;
+  readonly calendar?: PlanMirrorCalendarPort;
   readonly todayDateKey?: () => number;
 }
 
@@ -257,6 +294,51 @@ function startDateProjection(input: {
       error: input.error ?? START_DATE_INVALID,
     });
   }
+}
+
+function activePlanData(input: {
+  readonly plan: PlanRecord;
+  readonly workouts: readonly PlanWorkoutRecord[];
+  readonly todayDateKey: number;
+}): PlanActiveProjectionData {
+  const plan = draftPlanProjection(input.plan, input.workouts);
+  if (plan === null) throw new TypeError("An active Plan projection requires a Plan.");
+  const week = planWeekIndex(input.plan, input.todayDateKey);
+  const weekIndex =
+    week.kind === "inside" ? week.weekIndex : week.side === "before" ? 1 : input.plan.totalWeeks;
+  const windowEndDateKey = addCivilDays(input.todayDateKey, 6);
+  const workouts = input.workouts
+    .filter(
+      (workout) => workout.dateKey >= input.todayDateKey && workout.dateKey <= windowEndDateKey,
+    )
+    .map((workout) => ({
+      id: workout.id,
+      date: dateText(workout.dateKey),
+      sport: workout.sport,
+      name: workout.name,
+      durationS: workout.durationS,
+    }));
+  return PlanActiveProjectionDataSchema.parse({
+    plan,
+    today: dateText(input.todayDateKey),
+    weekIndex,
+    todayWorkout: workouts.find((workout) => workout.date === dateText(input.todayDateKey)) ?? null,
+    workouts,
+  });
+}
+
+function activeScenario(
+  projection: PlanReconciliationProjection | null,
+  override: ActivePlanScenario | undefined,
+): ActivePlanScenario {
+  if (override !== undefined) return override;
+  if (projection === null) return "PL-S010";
+  if (projection.job.status === "pending") return "PL-S037";
+  if (projection.job.status === "verified") return "PL-S043";
+  if (projection.job.status === "running" || projection.job.status === "retrying") {
+    return "PL-S042";
+  }
+  return projection.job.failureCount > 1 ? "PL-S041" : "PL-S039";
 }
 
 function draftProjection(value: PlanDraftRevisionRecord | undefined): PlanDraftProjection | null {
@@ -395,6 +477,7 @@ interface ReadOverrides {
   readonly course?: PlanRaceCourseProjection;
   readonly dateScenario?: "PL-S046" | "PL-S048" | "PL-S050";
   readonly startDate?: PlanStartDateProjection;
+  readonly activeScenario?: ActivePlanScenario;
 }
 
 function queueText(queue: ChatQueueSnapshot): string {
@@ -426,11 +509,60 @@ export function createPlanningOperations(
   const conversations =
     dependencies.conversations ?? createPlanConversationRepository(input.context.store);
   const plans = dependencies.plans ?? createPlanRepository(input.context.store);
+  const reconciliations =
+    dependencies.reconciliations ?? createPlanReconciliationRepository(input.context.store);
   const enqueue = createSerializedLane();
+
+  const readActive = async (
+    plan: PlanRecord,
+    revision: number,
+    overrides: ReadOverrides,
+  ): Promise<PlanReadModel> => {
+    const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+    const [workouts, job] = await Promise.all([
+      plans.readWorkouts(plan.id),
+      reconciliations.readLatestJob(plan.id, "mirror"),
+    ]);
+    const projection =
+      job === undefined ? null : await projectPlanReconciliation(reconciliations, job);
+    const scenarioId = activeScenario(projection, overrides.activeScenario);
+    const status =
+      projection === null || projection.job.status === "pending"
+        ? "not-started"
+        : projection.job.status === "verified"
+          ? "verified"
+          : projection.job.status === "failed"
+            ? "failed"
+            : "running";
+    const verificationFailure = projection?.job.lastErrorCode === "calendar-verification-failed";
+    return buildActivePlanReadModel({
+      scenarioId,
+      planId: plan.id,
+      revision,
+      data: activePlanData({ plan, workouts, todayDateKey }),
+      reconciliation: {
+        status,
+        created: projection?.created ?? 0,
+        pending: projection?.pending ?? 0,
+        failed: projection?.failed ?? 0,
+        total: projection?.total ?? 0,
+        currentThrough:
+          projection?.job.status === "verified" ? dateText(projection.job.windowEndDateKey) : null,
+        error:
+          status === "failed"
+            ? verificationFailure
+              ? CALENDAR_VERIFICATION_FAILED
+              : CALENDAR_UPDATE_FAILED
+            : null,
+      },
+    });
+  };
 
   const read = async (overrides: ReadOverrides = {}): Promise<PlanReadModel> => {
     const conversation = await conversations.readLatestOpenConversation();
     if (conversation === undefined) {
+      const latestPlan = await plans.readLatest();
+      if (latestPlan?.status === "active") return readActive(latestPlan, 0, overrides);
       return buildPlanLifecycleReadModel({
         conversation: null,
         turns: [],
@@ -451,8 +583,12 @@ export function createPlanningOperations(
         .catch(() => null),
       dependencies.ftp?.read(),
     ]);
-    const draftPlan = draft === undefined ? undefined : await plans.read(draft.planId);
+    const projectedPlanId = draft?.planId ?? conversation.planId;
+    const draftPlan = projectedPlanId === null ? undefined : await plans.read(projectedPlanId);
     const draftWorkouts = draftPlan === undefined ? [] : await plans.readWorkouts(draftPlan.id);
+    if (draftPlan?.status === "active") {
+      return readActive(draftPlan, draft?.revision ?? 0, overrides);
+    }
     const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
     const projectedStartDate =
       overrides.startDate ??
@@ -1268,6 +1404,140 @@ export function createPlanningOperations(
             });
           } catch {
             return reject(PERSISTENCE_FAILED);
+          }
+        }
+        if (command.transitionId === "PL-T11") {
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total: 1,
+          });
+          try {
+            const activation = await activatePlanDraft(
+              {
+                draftRevisionId: command.draftId,
+                expectedRevision: command.expectedRevision,
+              },
+              { drafts: conversations, identity: input.identity },
+            );
+            const plan = await plans.read(activation.planId);
+            if (plan === undefined || plan.status !== "active")
+              throw new Error("Plan activation failed.");
+            const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+            const stamp = input.identity.hlcStamp();
+            await reconciliations
+              .createOrGetJob({
+                id: input.identity.newUlid(),
+                planId: plan.id,
+                kind: "mirror",
+                windowStartDateKey: todayDateKey,
+                windowEndDateKey: addCivilDays(todayDateKey, 6),
+                createdAtMs: stamp.physicalMs,
+              })
+              .catch(() => undefined);
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: 1,
+              total: 1,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read(),
+            });
+          } catch (error) {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total: 1,
+            });
+            return reject(
+              error instanceof PlanConversationValidationError &&
+                (error.code === "stale-draft" || error.code === "plan-not-draft")
+                ? DRAFT_STALE
+                : PERSISTENCE_FAILED,
+            );
+          }
+        }
+        if (command.transitionId === "PL-T12") {
+          if (dependencies.calendar === undefined) return reject(UNAVAILABLE);
+          const plan = await plans.read(command.planId);
+          if (plan === undefined || plan.status !== "active") return reject(UNAVAILABLE);
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          const workouts = await plans.readWorkouts(plan.id);
+          const existingJob = await reconciliations.readLatestJob(plan.id, "mirror");
+          const existingItems =
+            existingJob === undefined ? [] : await reconciliations.readItems(existingJob.id);
+          const total = Math.max(existingItems.length, 1);
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total,
+          });
+          try {
+            const reconcilerDependencies = {
+              repository: reconciliations,
+              calendar: dependencies.calendar,
+              identity: { newId: () => input.identity.newUlid() },
+              now: () => input.identity.hlcStamp().physicalMs,
+            };
+            const result =
+              command.mode === "verify" && existingJob !== undefined && existingItems.length > 0
+                ? await verifyPlanMirror(existingJob, reconcilerDependencies)
+                : await reconcileActivePlanWindow(
+                    { plan, workouts, todayDateKey },
+                    reconcilerDependencies,
+                  );
+            if (result.job.status === "failed") {
+              deliver(onEvent, {
+                commandId: command.commandId,
+                transitionId: command.transitionId,
+                operationId,
+                phase: "failed",
+                completed: Math.min(result.created, Math.max(result.total, 1)),
+                total: Math.max(result.total, 1),
+              });
+              const error =
+                result.job.lastErrorCode === "calendar-verification-failed"
+                  ? CALENDAR_VERIFICATION_FAILED
+                  : CALENDAR_UPDATE_FAILED;
+              return reject(error);
+            }
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: Math.max(result.total, 1),
+              total: Math.max(result.total, 1),
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read(),
+            });
+          } catch {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total,
+            });
+            return reject(CALENDAR_UPDATE_FAILED);
           }
         }
         return reject(UNAVAILABLE);

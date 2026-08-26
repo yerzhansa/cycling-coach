@@ -15,6 +15,7 @@ import {
   planMirrorExternalId,
   projectPlanReconciliation,
   reconcileActivePlanWindow,
+  verifyPlanMirror,
   type PlanMirrorCalendarPort,
   type PlanMirrorCreateInput,
   type PlanMirrorEvent,
@@ -65,11 +66,12 @@ class MemoryReconciliationRepository implements PlanReconciliationRepository {
   readonly items = new Map<string, PlanReconciliationItemRecord>();
 
   async createOrGetJob(record: NewPlanReconciliationJob): Promise<PlanReconciliationJobRecord> {
-    const existing = [...this.jobs.values()].find((job) =>
-      job.planId === record.planId
-      && job.kind === record.kind
-      && job.windowStartDateKey === record.windowStartDateKey
-      && job.windowEndDateKey === record.windowEndDateKey
+    const existing = [...this.jobs.values()].find(
+      (job) =>
+        job.planId === record.planId &&
+        job.kind === record.kind &&
+        job.windowStartDateKey === record.windowStartDateKey &&
+        job.windowEndDateKey === record.windowEndDateKey,
     );
     if (existing !== undefined) return existing;
     const job: PlanReconciliationJobRecord = {
@@ -95,7 +97,9 @@ class MemoryReconciliationRepository implements PlanReconciliationRepository {
     planId: string,
     kind: PlanReconciliationKind,
   ): Promise<PlanReconciliationJobRecord | undefined> {
-    return [...this.jobs.values()].filter((job) => job.planId === planId && job.kind === kind).at(-1);
+    return [...this.jobs.values()]
+      .filter((job) => job.planId === planId && job.kind === kind)
+      .at(-1);
   }
 
   async beginAttempt(id: string, updatedAtMs: number): Promise<PlanReconciliationJobRecord> {
@@ -104,10 +108,13 @@ class MemoryReconciliationRepository implements PlanReconciliationRepository {
       ...current,
       status: current.status === "failed" || current.status === "retrying" ? "retrying" : "running",
       attemptCount: current.attemptCount + 1,
-      resumedCount: current.resumedCount + (current.status === "running" || current.status === "retrying" ? 1 : 0),
-      lastResumedAttempt: current.status === "running" || current.status === "retrying"
-        ? current.attemptCount + 1
-        : null,
+      resumedCount:
+        current.resumedCount +
+        (current.status === "running" || current.status === "retrying" ? 1 : 0),
+      lastResumedAttempt:
+        current.status === "running" || current.status === "retrying"
+          ? current.attemptCount + 1
+          : null,
       lastErrorCode: null,
       updatedAtMs,
       completedAtMs: null,
@@ -147,16 +154,17 @@ class MemoryReconciliationRepository implements PlanReconciliationRepository {
   }
 
   async prepareItem(record: NewPlanReconciliationItem): Promise<PlanReconciliationItemRecord> {
-    const existing = [...this.items.values()].find((item) =>
-      item.jobId === record.jobId
-      && item.operation === record.operation
-      && item.externalId === record.externalId
+    const existing = [...this.items.values()].find(
+      (item) =>
+        item.jobId === record.jobId &&
+        item.operation === record.operation &&
+        item.externalId === record.externalId,
     );
     if (existing !== undefined) {
       if (
-        existing.expectedJson !== record.expectedJson
-        || existing.dateKey !== record.dateKey
-        || existing.planWorkoutId !== record.planWorkoutId
+        existing.expectedJson !== record.expectedJson ||
+        existing.dateKey !== record.dateKey ||
+        existing.planWorkoutId !== record.planWorkoutId
       ) {
         const changed: PlanReconciliationItemRecord = {
           ...existing,
@@ -222,7 +230,12 @@ class MemoryReconciliationRepository implements PlanReconciliationRepository {
     errorCode: Exclude<PlanReconciliationErrorCode, "calendar-list-failed">,
     updatedAtMs: number,
   ): Promise<PlanReconciliationItemRecord> {
-    const item = { ...this.items.get(id)!, status: "failed" as const, lastErrorCode: errorCode, updatedAtMs };
+    const item = {
+      ...this.items.get(id)!,
+      status: "failed" as const,
+      lastErrorCode: errorCode,
+      updatedAtMs,
+    };
     this.items.set(id, item);
     return item;
   }
@@ -259,7 +272,9 @@ class MemoryCalendar implements PlanMirrorCalendarPort {
     if (this.listFailure) throw new Error("unavailable");
     this.lists.push(input);
     this.onList?.(this.lists.length);
-    return this.events.filter((event) => event.dateKey >= input.startDateKey && event.dateKey <= input.endDateKey);
+    return this.events.filter(
+      (event) => event.dateKey >= input.startDateKey && event.dateKey <= input.endDateKey,
+    );
   }
 
   async createEvent(input: PlanMirrorCreateInput) {
@@ -268,7 +283,11 @@ class MemoryCalendar implements PlanMirrorCalendarPort {
       this.createFailures -= 1;
       throw new Error("unavailable");
     }
-    this.events.push({ id: this.nextEventId++, dateKey: input.dateKey, externalId: input.externalId });
+    this.events.push({
+      id: this.nextEventId++,
+      dateKey: input.dateKey,
+      externalId: input.externalId,
+    });
   }
 
   async deleteEvent(input: { eventId: number }) {
@@ -310,10 +329,31 @@ describe("Plan reconciler", () => {
     const states: Array<readonly [PlanReconciliationJobRecord, string]> = [
       [base, "activation-local"],
       [{ ...base, status: "running", attemptCount: 1 }, "reconcile-running"],
-      [{ ...base, status: "failed", attemptCount: 1, failureCount: 1, lastErrorCode: "calendar-create-failed" }, "reconcile-failed"],
+      [
+        {
+          ...base,
+          status: "failed",
+          attemptCount: 1,
+          failureCount: 1,
+          lastErrorCode: "calendar-create-failed",
+        },
+        "reconcile-failed",
+      ],
       [{ ...base, status: "retrying", attemptCount: 2, failureCount: 1 }, "reconcile-retrying"],
-      [{ ...base, status: "failed", attemptCount: 2, failureCount: 2, lastErrorCode: "calendar-create-failed" }, "reconcile-failed-again"],
-      [{ ...base, status: "running", attemptCount: 2, resumedCount: 1, lastResumedAttempt: 2 }, "reconcile-crash-resume"],
+      [
+        {
+          ...base,
+          status: "failed",
+          attemptCount: 2,
+          failureCount: 2,
+          lastErrorCode: "calendar-create-failed",
+        },
+        "reconcile-failed-again",
+      ],
+      [
+        { ...base, status: "running", attemptCount: 2, resumedCount: 1, lastResumedAttempt: 2 },
+        "reconcile-crash-resume",
+      ],
       [{ ...base, status: "verified", attemptCount: 1, completedAtMs: 2 }, "reconcile-verified"],
     ];
     for (const [job, expected] of states) {
@@ -331,18 +371,30 @@ describe("Plan reconciler", () => {
       dateKey: today.dateKey,
       externalId: planMirrorExternalId(PLAN_ID, today.id),
     });
-    const first = await reconcileActivePlanWindow({
-      plan: plan(),
-      workouts: [today, daySix, outside],
-      todayDateKey: 20260825,
-    }, value.deps);
-    expect(first).toMatchObject({ state: "reconcile-verified", created: 2, pending: 0, failed: 0, total: 2 });
+    const first = await reconcileActivePlanWindow(
+      {
+        plan: plan(),
+        workouts: [today, daySix, outside],
+        todayDateKey: 20260825,
+      },
+      value.deps,
+    );
+    expect(first).toMatchObject({
+      state: "reconcile-verified",
+      created: 2,
+      pending: 0,
+      failed: 0,
+      total: 2,
+    });
     expect(value.calendar.creates.map((created) => created.planWorkoutId)).toEqual([daySix.id]);
-    await reconcileActivePlanWindow({
-      plan: plan(),
-      workouts: [today, daySix, outside],
-      todayDateKey: 20260825,
-    }, value.deps);
+    await reconcileActivePlanWindow(
+      {
+        plan: plan(),
+        workouts: [today, daySix, outside],
+        todayDateKey: 20260825,
+      },
+      value.deps,
+    );
     expect(value.calendar.creates).toHaveLength(1);
   });
 
@@ -358,11 +410,14 @@ describe("Plan reconciler", () => {
         });
       }
     };
-    const result = await reconcileActivePlanWindow({
-      plan: plan(),
-      workouts: [target],
-      todayDateKey: 20260825,
-    }, value.deps);
+    const result = await reconcileActivePlanWindow(
+      {
+        plan: plan(),
+        workouts: [target],
+        todayDateKey: 20260825,
+      },
+      value.deps,
+    );
     expect(result).toMatchObject({ state: "reconcile-verified", created: 1, total: 1 });
     expect(value.calendar.creates).toEqual([]);
     expect(value.calendar.lists.slice(0, 2)).toEqual([
@@ -382,11 +437,14 @@ describe("Plan reconciler", () => {
     value.calendar.onList = (call) => {
       if (call === 2) value.calendar.events.splice(0);
     };
-    const result = await reconcileActivePlanWindow({
-      plan: plan(),
-      workouts: [target],
-      todayDateKey: 20260825,
-    }, value.deps);
+    const result = await reconcileActivePlanWindow(
+      {
+        plan: plan(),
+        workouts: [target],
+        todayDateKey: 20260825,
+      },
+      value.deps,
+    );
     expect(result).toMatchObject({ state: "reconcile-failed", created: 0, failed: 1, total: 1 });
     expect(value.calendar.creates).toEqual([]);
   });
@@ -421,11 +479,14 @@ describe("Plan reconciler", () => {
     await value.repository.beginAttempt(job.id, 2);
     await value.repository.startItem(item.id, 3);
     value.calendar.events.push({ id: 42, dateKey: target.dateKey, externalId: item.externalId });
-    const result = await reconcileActivePlanWindow({
-      plan: plan(),
-      workouts: [target],
-      todayDateKey: 20260825,
-    }, value.deps);
+    const result = await reconcileActivePlanWindow(
+      {
+        plan: plan(),
+        workouts: [target],
+        todayDateKey: 20260825,
+      },
+      value.deps,
+    );
     expect(result).toMatchObject({ state: "reconcile-verified", created: 1, failed: 0 });
     expect(result.job).toMatchObject({ attemptCount: 2, resumedCount: 1 });
     expect(value.calendar.creates).toHaveLength(0);
@@ -435,13 +496,42 @@ describe("Plan reconciler", () => {
     const value = harness();
     const target = workout("01K00000000000000000000101", 20260825);
     value.calendar.createFailures = 2;
-    const first = await reconcileActivePlanWindow({ plan: plan(), workouts: [target], todayDateKey: 20260825 }, value.deps);
-    const second = await reconcileActivePlanWindow({ plan: plan(), workouts: [target], todayDateKey: 20260825 }, value.deps);
-    const third = await reconcileActivePlanWindow({ plan: plan(), workouts: [target], todayDateKey: 20260825 }, value.deps);
+    const first = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      value.deps,
+    );
+    const second = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      value.deps,
+    );
+    const third = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      value.deps,
+    );
     expect(first.state).toBe("reconcile-failed");
     expect(second.state).toBe("reconcile-failed-again");
     expect(third).toMatchObject({ state: "reconcile-verified", created: 1, failed: 0 });
     expect(value.calendar.creates).toHaveLength(3);
+  });
+
+  it("verifies provider state without creating another event", async () => {
+    const value = harness();
+    const target = workout("01K00000000000000000000101", 20260825);
+    value.calendar.createFailures = 1;
+    const failed = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      value.deps,
+    );
+    value.calendar.events.push({
+      id: 88,
+      dateKey: target.dateKey,
+      externalId: planMirrorExternalId(PLAN_ID, target.id),
+    });
+
+    const verified = await verifyPlanMirror(failed.job, value.deps);
+
+    expect(verified).toMatchObject({ state: "reconcile-verified", created: 1, failed: 0 });
+    expect(value.calendar.creates).toHaveLength(1);
   });
 
   it("cleanup preserves today and other Plans while deleting every duplicate tomorrow onward", async () => {
@@ -456,11 +546,14 @@ describe("Plan reconciler", () => {
       { id: 4, dateKey: 20260826, externalId: otherTomorrow },
       { id: 5, dateKey: 20260826, externalId: null },
     );
-    const result = await cleanupPlanMirror({
-      planId: PLAN_ID,
-      todayDateKey: 20260825,
-      endDateKey: 20260831,
-    }, value.deps);
+    const result = await cleanupPlanMirror(
+      {
+        planId: PLAN_ID,
+        todayDateKey: 20260825,
+        endDateKey: 20260831,
+      },
+      value.deps,
+    );
     expect(result).toMatchObject({ state: "reconcile-verified", created: 1, total: 1 });
     expect(value.calendar.deletes).toEqual([2, 3]);
     expect(value.calendar.events.map((event) => event.id)).toEqual([1, 4, 5]);
@@ -470,11 +563,14 @@ describe("Plan reconciler", () => {
     const value = harness();
     const active = plan();
     value.calendar.listFailure = true;
-    const result = await reconcileActivePlanWindow({
-      plan: active,
-      workouts: [workout("01K00000000000000000000101", 20260825)],
-      todayDateKey: 20260825,
-    }, value.deps);
+    const result = await reconcileActivePlanWindow(
+      {
+        plan: active,
+        workouts: [workout("01K00000000000000000000101", 20260825)],
+        todayDateKey: 20260825,
+      },
+      value.deps,
+    );
     expect(result).toMatchObject({ state: "reconcile-failed", created: 0, pending: 1, failed: 0 });
     expect(active.status).toBe("active");
     expect(value.calendar.creates).toHaveLength(0);

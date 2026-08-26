@@ -61,6 +61,8 @@ export interface PlanViewAdapter {
   closeDatePicker(): void;
   recalculateStartDate(startDate: string): void;
   approveDraft(): void;
+  reconcilePlan(): void;
+  verifyReconciliation(): void;
   returnToCoach(): void;
   retry(): void;
   dispose(): void;
@@ -131,6 +133,7 @@ export function createPlanViewAdapter(input: {
   let coachDecisionAnswerLabel: string | null = null;
   let coachDecisionError: string | null = null;
   let recoveringDecisionId: string | null = null;
+  let autoResumingPlanId: string | null = null;
   let active: {
     readonly commandId: string;
     readonly transitionId: PlanTransitionId;
@@ -197,7 +200,27 @@ export function createPlanViewAdapter(input: {
 
   const publishHydration = (next: PlanHydrationState): void => {
     input.publishHydration(next);
-    if (next.status === "ready" || next.status === "stale") syncCoach(next.state);
+    if (next.status === "ready" || next.status === "stale") {
+      syncCoach(next.state);
+      if (
+        next.state.scenarioId === "PL-S042" &&
+        next.state.planId !== null &&
+        autoResumingPlanId !== next.state.planId &&
+        active === null
+      ) {
+        const planId = next.state.planId;
+        autoResumingPlanId = planId;
+        queueMicrotask(() => {
+          if (disposed || active !== null) return;
+          void execute({
+            transitionId: "PL-T12",
+            commandId: createCommandId(),
+            planId,
+            mode: "reconcile",
+          });
+        });
+      }
+    }
   };
 
   const refresh = async (showLoading: boolean): Promise<void> => {
@@ -653,6 +676,26 @@ export function createPlanViewAdapter(input: {
         commandId: createCommandId(),
         draftId: data.draft.id,
         expectedRevision: data.draft.revision,
+      });
+    },
+    reconcilePlan() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T12",
+        commandId: createCommandId(),
+        planId: model.planId,
+        mode: "reconcile",
+      });
+    },
+    verifyReconciliation() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T12",
+        commandId: createCommandId(),
+        planId: model.planId,
+        mode: "verify",
       });
     },
     returnToCoach() {

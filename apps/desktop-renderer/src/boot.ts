@@ -213,6 +213,8 @@ export function bootRenderer(): Disposer {
     closeDatePicker: () => planAdapter.closeDatePicker(),
     recalculateStartDate: (startDate) => planAdapter.recalculateStartDate(startDate),
     approveDraft: () => planAdapter.approveDraft(),
+    reconcilePlan: () => planAdapter.reconcilePlan(),
+    verifyReconciliation: () => planAdapter.verifyReconciliation(),
     returnToCoach: () => planAdapter.returnToCoach(),
     retry: () => planAdapter.retry(),
   });

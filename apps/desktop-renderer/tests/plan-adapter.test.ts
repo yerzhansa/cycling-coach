@@ -840,6 +840,66 @@ describe("Plan view adapter", () => {
     });
   });
 
+  it("dispatches retry and provider-only verification for the active Plan", async () => {
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S039",
+      projection: "active",
+      planId: "00000000000000000000000003",
+    });
+    const subject = harness({
+      ids: ["retry-command", "verify-command"],
+      getPlanState: async () => ({ status: "ready", state }),
+      executePlanTransition: async () => ({ status: "completed", state }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.reconcilePlan();
+    await settle();
+    subject.adapter.verifyReconciliation();
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(1, {
+      transitionId: "PL-T12",
+      commandId: "retry-command",
+      planId: "00000000000000000000000003",
+      mode: "reconcile",
+    });
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(2, {
+      transitionId: "PL-T12",
+      commandId: "verify-command",
+      planId: "00000000000000000000000003",
+      mode: "verify",
+    });
+  });
+
+  it("resumes an interrupted reconciliation once after hydration", async () => {
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S042",
+      projection: "active",
+      planId: "00000000000000000000000003",
+    });
+    const subject = harness({
+      ids: ["resume-command"],
+      getPlanState: async () => ({ status: "ready", state }),
+      executePlanTransition: async () => ({ status: "completed", state }),
+    });
+
+    subject.adapter.start();
+    await settle();
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenCalledOnce();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T12",
+      commandId: "resume-command",
+      planId: "00000000000000000000000003",
+      mode: "reconcile",
+    });
+  });
+
   it("accepts progress only for the current command, transition, and operation", async () => {
     const state = planReadModel({ lifecycle: "intake", projection: "coach" });
     const subject = harness({

@@ -68,6 +68,8 @@ function stubPlanActions(): PlanActions {
     closeDatePicker: vi.fn(),
     recalculateStartDate: vi.fn(),
     approveDraft: vi.fn(),
+    reconcilePlan: vi.fn(),
+    verifyReconciliation: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
   };

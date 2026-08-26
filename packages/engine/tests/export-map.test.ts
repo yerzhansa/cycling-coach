@@ -41,6 +41,7 @@ describe("engine public export surface", () => {
       "UNKNOWN_PROVENANCE",
       "_resetOrphanWarnCacheForTesting",
       "acceptParsedRaceCourse",
+      "activatePlanDraft",
       "applyPlanStartDatePreview",
       "beginRaceCourseParsing",
       "beginRaceCourseRemoval",
@@ -108,6 +109,7 @@ describe("engine public export surface", () => {
       "useRouteWithoutElevation",
       "validateListRange",
       "validateWorkoutCreationDate",
+      "verifyPlanMirror",
       "warnOrphanSections",
       "wrapAthleteContextFence",
     ]);

@@ -64,6 +64,20 @@ export interface PlanSourceRequestRecord {
   readonly hlcCounter: number;
 }
 
+export interface ApprovePlanDraftInput {
+  readonly draftRevisionId: string;
+  readonly expectedRevision: number;
+  readonly updatedAtMs: number;
+  readonly deviceId: string;
+  readonly hlcPhysicalMs: number;
+  readonly hlcCounter: number;
+}
+
+export interface ApprovePlanDraftResult {
+  readonly planId: string;
+  readonly draft: PlanDraftRevisionRecord;
+}
+
 export type PlanConversationValidationErrorCode =
   | "invalid-id"
   | "invalid-plan-id"
@@ -85,7 +99,10 @@ export type PlanConversationValidationErrorCode =
   | "turn-conflict"
   | "draft-lineage-conflict"
   | "source-request-conflict"
-  | "plan-not-draft";
+  | "plan-not-draft"
+  | "stale-draft"
+  | "active-plan-exists"
+  | "replacement-requires-swap";
 
 export class PlanConversationValidationError extends Error {
   readonly code: PlanConversationValidationErrorCode;
@@ -109,6 +126,7 @@ export interface PlanConversationRepository {
   readDraftRevision(id: string): Promise<PlanDraftRevisionRecord | undefined>;
   readDraftRevisions(conversationId: string): Promise<readonly PlanDraftRevisionRecord[]>;
   readLatestDraftRevision(conversationId: string): Promise<PlanDraftRevisionRecord | undefined>;
+  approveDraft(input: ApprovePlanDraftInput): Promise<ApprovePlanDraftResult>;
   createOrGetSourceRequest(record: PlanSourceRequestRecord): Promise<PlanSourceRequestRecord>;
   bindSourceBoundary(record: PlanSourceRequestRecord): Promise<PlanSourceRequestRecord>;
   readSourceRequest(id: string): Promise<PlanSourceRequestRecord | undefined>;
@@ -442,7 +460,7 @@ ON CONFLICT (id) DO UPDATE SET
             record.status,
             record.endedAtMs,
             record.createdAtMs,
-          record.updatedAtMs,
+            record.updatedAtMs,
             record.deviceId,
             record.hlcPhysicalMs,
             record.hlcCounter,
@@ -504,10 +522,10 @@ ON CONFLICT (id) DO UPDATE SET
             record.id,
             record.conversationId,
             record.sequence,
-          record.athleteText,
-          record.coachText,
-          record.lineageJson,
-          record.completedAtMs,
+            record.athleteText,
+            record.coachText,
+            record.lineageJson,
+            record.completedAtMs,
             record.deviceId,
             record.hlcPhysicalMs,
             record.hlcCounter,
@@ -591,8 +609,8 @@ ON CONFLICT (id) DO UPDATE SET
             record.id,
             record.conversationId,
             record.planId,
-          record.revision,
-          record.parentRevisionId,
+            record.revision,
+            record.parentRevisionId,
             record.parentRevisionId === null ? null : record.revision - 1,
             record.status,
             record.snapshotJson,
@@ -625,6 +643,77 @@ ON CONFLICT (id) DO UPDATE SET
       return row === undefined ? undefined : draftRevisionFromRow(row);
     },
 
+    async approveDraft(input) {
+      if (
+        !ULID.test(input.draftRevisionId) ||
+        !Number.isSafeInteger(input.expectedRevision) ||
+        input.expectedRevision <= 0 ||
+        !Number.isSafeInteger(input.updatedAtMs) ||
+        input.updatedAtMs < 0 ||
+        !DEVICE_ID.test(input.deviceId) ||
+        !validHlc(input)
+      ) {
+        throw new PlanConversationValidationError("invalid-draft-revision");
+      }
+      return store.transaction(async () => {
+        const draft = await readDraftRevision(input.draftRevisionId);
+        if (draft === undefined) {
+          throw new PlanConversationValidationError("stale-draft");
+        }
+        const latest = await store.get(
+          "SELECT id FROM plan_draft_revision WHERE conversation_id = ? ORDER BY revision DESC, id DESC LIMIT 1",
+          [draft.conversationId],
+        );
+        if (
+          latest === undefined ||
+          text(latest, "id") !== draft.id ||
+          draft.revision !== input.expectedRevision
+        ) {
+          throw new PlanConversationValidationError("stale-draft");
+        }
+        const conversation = await requireOpenConversation(draft.conversationId);
+        if (conversation.replacesPlanId !== null) {
+          throw new PlanConversationValidationError("replacement-requires-swap");
+        }
+        const plan = await store.get("SELECT status FROM plan WHERE id = ?", [draft.planId]);
+        if (
+          draft.status === "approved" &&
+          plan !== undefined &&
+          text(plan, "status") === "active"
+        ) {
+          return { planId: draft.planId, draft };
+        }
+        if (draft.status !== "ready") {
+          throw new PlanConversationValidationError("stale-draft");
+        }
+        if (plan === undefined || text(plan, "status") !== "draft") {
+          throw new PlanConversationValidationError("plan-not-draft");
+        }
+        const active = await store.get("SELECT id FROM plan WHERE status = 'active' LIMIT 1");
+        if (active !== undefined && text(active, "id") !== draft.planId) {
+          throw new PlanConversationValidationError("active-plan-exists");
+        }
+        if (input.updatedAtMs < draft.updatedAtMs) {
+          throw new PlanConversationValidationError("stale-draft");
+        }
+        await store.run(
+          `UPDATE plan SET status='active',updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=?
+           WHERE id=? AND status='draft'`,
+          [input.updatedAtMs, input.deviceId, input.hlcPhysicalMs, input.hlcCounter, draft.planId],
+        );
+        await store.run(
+          `UPDATE plan_draft_revision SET status='approved',updated_at_ms=?,device_id=?,
+             hlc_physical_ms=?,hlc_counter=? WHERE id=? AND status='ready'`,
+          [input.updatedAtMs, input.deviceId, input.hlcPhysicalMs, input.hlcCounter, draft.id],
+        );
+        const approved = await readDraftRevision(draft.id);
+        if (approved === undefined || approved.status !== "approved") {
+          throw new PlanConversationValidationError("stale-draft");
+        }
+        return { planId: draft.planId, draft: approved };
+      });
+    },
+
     async createOrGetSourceRequest(record) {
       validateSourceRequest(record);
       return store.transaction(async () => {
@@ -645,11 +734,11 @@ ON CONFLICT (id) DO UPDATE SET
             record.id,
             record.conversationId,
             record.sourceChatId,
-          record.sourceBoundaryRef,
-          record.sourceMessageId,
-          record.requestJson,
-          record.createdAtMs,
-          record.updatedAtMs,
+            record.sourceBoundaryRef,
+            record.sourceMessageId,
+            record.requestJson,
+            record.createdAtMs,
+            record.updatedAtMs,
             record.deviceId,
             record.hlcPhysicalMs,
             record.hlcCounter,
