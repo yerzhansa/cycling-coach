@@ -226,6 +226,9 @@ export function bootRenderer(): Disposer {
     approveProposal: (proposalId, expectedRevision) =>
       planAdapter.approveProposal(proposalId, expectedRevision),
     rejectProposal: (proposalId) => planAdapter.rejectProposal(proposalId),
+    openHistory: () => planAdapter.openHistory(),
+    closeHistory: () => planAdapter.closeHistory(),
+    undoPlanChange: (ledgerId) => planAdapter.undoPlanChange(ledgerId),
     openAttention: (attentionId) => planAdapter.openAttention(attentionId),
     returnToCoach: () => planAdapter.returnToCoach(),
     retry: () => planAdapter.retry(),

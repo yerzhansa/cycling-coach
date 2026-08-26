@@ -71,6 +71,9 @@ export interface PlanViewAdapter {
   reviseProposal(proposalId: string, text: string): void;
   approveProposal(proposalId: string, expectedRevision: number): void;
   rejectProposal(proposalId: string): void;
+  openHistory(): void;
+  closeHistory(): void;
+  undoPlanChange(ledgerId: string): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
@@ -778,6 +781,40 @@ export function createPlanViewAdapter(input: {
         transitionId: "PL-T20",
         commandId: createCommandId(),
         proposalId,
+      });
+    },
+    openHistory() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "open",
+        sourceScenarioId: model.scenarioId,
+        destinationScenarioId: "PL-S005",
+        returnFocusId: model.planId,
+      });
+    },
+    closeHistory() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "back",
+        sourceScenarioId: model.scenarioId,
+        destinationScenarioId: "PL-S004",
+        returnFocusId: model.planId,
+      });
+    },
+    undoPlanChange(ledgerId) {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T21",
+        commandId: createCommandId(),
+        planId: model.planId,
+        ledgerId,
       });
     },
     openAttention(attentionId) {

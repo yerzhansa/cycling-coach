@@ -1,6 +1,8 @@
 import { canonicalJson } from "@enduragent/kernel/archive";
 import {
   addCivilDays,
+  encodePlanAdaptationWorkoutSnapshot,
+  planAdaptationWorkoutSnapshot,
   planWeekIndex,
   type PlanProposalPremiseRecord,
   type PlanProposalRecord,
@@ -459,6 +461,7 @@ export async function applyValidatedPlanProposal(
       readonly windowEndDateKey: number;
       readonly createdAtMs: number;
     };
+    readonly ledgerId: string;
   },
 ): Promise<PlanProposalRecord> {
   const workouts = validated.changes.map(({ next }) =>
@@ -469,6 +472,8 @@ export async function applyValidatedPlanProposal(
       hlcCounter: input.hlcCounter,
     }),
   );
+  const change = validated.changes[0];
+  if (change === undefined) throw new PlanProposalError("invalid-mutation");
   return input.repository.apply({
     id: validated.proposal.id,
     expectedPlanUpdatedAtMs: validated.base.planUpdatedAtMs,
@@ -476,6 +481,25 @@ export async function applyValidatedPlanProposal(
     expectedPlanHlcCounter: validated.base.planHlcCounter,
     expectedWorkouts: validated.changes.map(({ current }) => current),
     mirrorJob: input.mirrorJob,
+    ledger: {
+      id: input.ledgerId,
+      planId: input.plan.id,
+      targetWorkoutId: change.current.id,
+      kind: "proposal-applied",
+      sourceId: validated.proposal.id,
+      reversalOfId: null,
+      label: validated.proposal.title,
+      beforeJson: encodePlanAdaptationWorkoutSnapshot(
+        planAdaptationWorkoutSnapshot(change.current),
+      ),
+      afterJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(workouts[0]!)),
+      weekLoadBefore: validated.mutation.weekLoad?.before ?? null,
+      weekLoadAfter: validated.mutation.weekLoad?.after ?? null,
+      occurredAtMs: input.resolvedAtMs,
+      deviceId: input.deviceId,
+      hlcPhysicalMs: input.hlcPhysicalMs,
+      hlcCounter: input.hlcCounter,
+    },
     plan: Object.freeze({
       ...input.plan,
       updatedAtMs: input.resolvedAtMs,

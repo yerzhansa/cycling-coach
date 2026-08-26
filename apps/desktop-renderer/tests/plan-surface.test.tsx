@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanActiveProjectionDataSchema } from "@enduragent/coach-contract";
@@ -48,6 +48,9 @@ function actions(): PlanActions {
     reviseProposal: vi.fn(),
     approveProposal: vi.fn(),
     rejectProposal: vi.fn(),
+    openHistory: vi.fn(),
+    closeHistory: vi.fn(),
+    undoPlanChange: vi.fn(),
     openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
@@ -977,6 +980,171 @@ describe("Plan surface", () => {
     expect(planActions.resolveWorkoutDrift).toHaveBeenCalledWith(workoutId, "42", "adopt");
     await user.click(screen.getByRole("button", { name: "Restore Plan workout" }));
     expect(planActions.resolveWorkoutDrift).toHaveBeenCalledWith(workoutId, "42", "restore");
+  });
+
+  it("renders connected Plan history and the applied, expired, and undone destinations", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const workoutId = "00000000000000000000000004";
+    const ledgerId = "00000000000000000000000005";
+    const undoId = "00000000000000000000000006";
+    const baseData = {
+      plan: {
+        id: planId,
+        name: "Gran Fondo Almaty",
+        primaryGoal: "Finish in the front half",
+        startDate: "2026-07-13",
+        targetDate: "2026-10-04",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 20,
+        plannedDurationS: 72_000,
+      },
+      today: "2026-08-18",
+      weekIndex: 6,
+      todayWorkout: null,
+      workouts: [],
+      history: [
+        {
+          id: ledgerId,
+          kind: "proposal-applied" as const,
+          label: "Sunday adjustment applied",
+          occurredAtMs: 1_787_477_200_000,
+          targetWorkoutId: workoutId,
+          before: { date: "2026-08-23", name: "Endurance", durationS: 5_400 },
+          after: { date: "2026-08-23", name: "Recovery", durationS: 1_800 },
+          weekLoadBefore: 420,
+          weekLoadAfter: 360,
+          undoStatus: "eligible" as const,
+          undoReason: null,
+        },
+        {
+          id: `activation:${planId}`,
+          kind: "activation" as const,
+          label: "Plan approved",
+          occurredAtMs: 1_784_000_000_000,
+          targetWorkoutId: null,
+          before: null,
+          after: null,
+          weekLoadBefore: null,
+          weekLoadAfter: null,
+          undoStatus: "none" as const,
+          undoReason: null,
+        },
+      ],
+    };
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId,
+      data: baseData,
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+      },
+      planActions,
+    });
+    const { container } = render(<PlanView />);
+
+    await user.click(screen.getByRole("button", { name: "Plan history" }));
+    expect(planActions.openHistory).toHaveBeenCalledOnce();
+
+    const historyState = { ...state, scenarioId: "PL-S005" as const };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: historyState });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Plan history" })).toHaveFocus(),
+    );
+    expect(screen.getByText("Sunday adjustment applied")).toBeInTheDocument();
+    expect(screen.getByText("Plan approved")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Undo" })).toHaveLength(1);
+    expect(
+      container.querySelector(".relative.grid.pl-8 > span.absolute.bottom-4.top-4"),
+    ).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(planActions.undoPlanChange).toHaveBeenCalledWith(ledgerId);
+
+    const appliedState = {
+      ...state,
+      scenarioId: "PL-S008" as const,
+      data: { ...baseData, selectedHistoryId: ledgerId },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: appliedState });
+    });
+    const appliedHeading = await screen.findByRole("heading", { name: "Recovery is now active" });
+    const appliedSection = appliedHeading.closest("section");
+    if (appliedSection === null) throw new TypeError("Applied result section missing.");
+    expect(within(appliedSection).getByText("Endurance · 1:30")).toBeInTheDocument();
+    expect(within(appliedSection).getByText("Recovery · 0:30")).toBeInTheDocument();
+    expect(within(appliedSection).getByText("−60")).toBeInTheDocument();
+    expect(within(appliedSection).getByRole("button", { name: "Undo" })).toBeInTheDocument();
+    expect(
+      within(appliedSection).getByRole("button", { name: "Back to Plan" }),
+    ).toBeInTheDocument();
+
+    const expiredState = {
+      ...state,
+      scenarioId: "PL-S026" as const,
+      data: {
+        ...baseData,
+        selectedHistoryId: ledgerId,
+        history: [
+          {
+            ...baseData.history[0]!,
+            undoStatus: "expired" as const,
+            undoReason: "newer-change" as const,
+          },
+          baseData.history[1]!,
+        ],
+      },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: expiredState });
+    });
+    const expiredHeading = await screen.findByRole("heading", { name: "Undo expired" });
+    await waitFor(() => expect(expiredHeading).toHaveFocus());
+    expect(screen.getByText("A newer change was applied.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to history" }));
+    expect(planActions.openHistory).toHaveBeenCalledTimes(2);
+
+    const undoEntry = {
+      ...baseData.history[0]!,
+      id: undoId,
+      kind: "undo" as const,
+      label: "Sunday adjustment undone",
+      before: baseData.history[0]!.after,
+      after: baseData.history[0]!.before,
+      weekLoadBefore: baseData.history[0]!.weekLoadAfter,
+      weekLoadAfter: baseData.history[0]!.weekLoadBefore,
+      undoStatus: "undone" as const,
+      undoReason: "already-undone" as const,
+    };
+    const undoneState = {
+      ...state,
+      scenarioId: "PL-S027" as const,
+      data: {
+        ...baseData,
+        selectedHistoryId: undoId,
+        history: [undoEntry, baseData.history[0]!, baseData.history[1]!],
+      },
+    };
+    document.documentElement.setAttribute("data-theme", "dark");
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: undoneState });
+    });
+    const undoneHeading = await screen.findByRole("heading", { name: "Plan change undone" });
+    await waitFor(() => expect(undoneHeading).toHaveFocus());
+    expect(screen.getByText(/Endurance · 1:30 is restored/u)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to Plan" }));
+    expect(planActions.closeHistory).toHaveBeenCalledOnce();
   });
 
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {

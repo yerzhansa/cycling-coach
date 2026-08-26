@@ -1,5 +1,7 @@
 import { canonicalJson } from "@enduragent/kernel/archive";
 import {
+  encodePlanAdaptationWorkoutSnapshot,
+  planAdaptationWorkoutSnapshot,
   planWeekIndex,
   type PlanRecord,
   type PlanRepository,
@@ -309,21 +311,40 @@ export async function adoptProviderWorkoutEdit(
   protectedEvent(value.plan, value.workout, value.event, input.todayDateKey);
   const provider = providerWorkoutDriftSnapshot(value.event);
   const stamp = deps.identity.stamp();
+  const deviceId = await deps.identity.deviceId();
   const adoptedWorkout: PlanWorkoutRecord = {
     ...value.workout,
     dateKey: provider.dateKey,
     name: provider.name,
     durationS: provider.durationS,
     structureJson: mergedStructure(value.workout.structureJson, provider),
-    deviceId: await deps.identity.deviceId(),
+    deviceId,
     hlcPhysicalMs: stamp.physicalMs,
     hlcCounter: stamp.counter,
   };
   return deps.repository.adopt({
     id: value.drift.id,
+    expectedWorkout: value.workout,
     workout: adoptedWorkout,
+    ledger: {
+      id: deps.identity.newId(),
+      planId: value.plan.id,
+      targetWorkoutId: value.workout.id,
+      kind: "drift-adopted",
+      sourceId: value.drift.id,
+      reversalOfId: null,
+      label: "External edit adopted",
+      beforeJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(value.workout)),
+      afterJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(adoptedWorkout)),
+      weekLoadBefore: null,
+      weekLoadAfter: null,
+      occurredAtMs: stamp.physicalMs,
+      deviceId,
+      hlcPhysicalMs: stamp.physicalMs,
+      hlcCounter: stamp.counter,
+    },
     resolvedAtMs: stamp.physicalMs,
-    deviceId: await deps.identity.deviceId(),
+    deviceId,
     hlcPhysicalMs: stamp.physicalMs,
     hlcCounter: stamp.counter,
   });

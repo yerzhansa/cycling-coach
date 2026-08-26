@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  createPlanAdaptationLedgerRepository,
   createPlanProposalRepository,
   createPlanReconciliationRepository,
   createPlanRepository,
+  encodePlanAdaptationWorkoutSnapshot,
+  planAdaptationWorkoutSnapshot,
+  type PlanAdaptationLedgerRecord,
   PlanProposalValidationError,
   type PlanProposalPremiseRecord,
   type PlanProposalRecord,
@@ -13,7 +17,7 @@ import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/ke
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { openSqliteStorage } from "../src/sqlite/index.js";
 
-const id = (suffix: number): string => `${"0".repeat(25)}${suffix}`;
+const id = (suffix: number): string => String(suffix).padStart(26, "0");
 const PLAN_ID = id(1);
 const WORKOUT_ID = id(2);
 
@@ -89,6 +93,32 @@ function premise(proposalId: string, premiseId: string): PlanProposalPremiseReco
     createdAtMs: 20,
     deviceId: "device-1",
     hlcPhysicalMs: 20,
+    hlcCounter: 0,
+  };
+}
+
+function ledger(
+  ledgerId: string,
+  proposalId: string,
+  before: PlanWorkoutRecord,
+  after: PlanWorkoutRecord,
+  occurredAtMs: number,
+): PlanAdaptationLedgerRecord {
+  return {
+    id: ledgerId,
+    planId: PLAN_ID,
+    targetWorkoutId: WORKOUT_ID,
+    kind: "proposal-applied",
+    sourceId: proposalId,
+    reversalOfId: null,
+    label: "Sunday recovery applied",
+    beforeJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(before)),
+    afterJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(after)),
+    weekLoadBefore: 420,
+    weekLoadAfter: 360,
+    occurredAtMs,
+    deviceId: "device-1",
+    hlcPhysicalMs: occurredAtMs,
     hlcCounter: 0,
   };
 }
@@ -177,6 +207,13 @@ describe("Plan proposal repository", () => {
     const proposals = createPlanProposalRepository(store);
     const plans = createPlanRepository(store);
     const reconciliations = createPlanReconciliationRepository(store);
+    const history = createPlanAdaptationLedgerRepository(store);
+    const nextWorkout = {
+      ...workout,
+      name: "Recovery",
+      durationS: 1_800,
+      hlcPhysicalMs: 40,
+    };
     await proposals.save(proposal(id(3)), [premise(id(3), id(4))]);
     await reconciliations.createOrGetJob({
       id: id(7),
@@ -213,7 +250,8 @@ describe("Plan proposal repository", () => {
           createdAtMs: 40,
         },
         plan: { ...plan, updatedAtMs: 40, hlcPhysicalMs: 40 },
-        workouts: [{ ...workout, name: "Recovery", durationS: 1_800, hlcPhysicalMs: 40 }],
+        workouts: [nextWorkout],
+        ledger: ledger(id(10), id(3), workout, nextWorkout, 40),
         resolvedAtMs: 40,
         deviceId: "device-1",
         hlcPhysicalMs: 40,
@@ -222,6 +260,9 @@ describe("Plan proposal repository", () => {
     ).resolves.toMatchObject({ status: "applied" });
     await expect(plans.readWorkouts(PLAN_ID)).resolves.toEqual([
       expect.objectContaining({ name: "Recovery", durationS: 1_800 }),
+    ]);
+    await expect(history.readForPlan(PLAN_ID)).resolves.toEqual([
+      expect.objectContaining({ id: id(10), sourceId: id(3), kind: "proposal-applied" }),
     ]);
     await expect(reconciliations.readLatestJob(PLAN_ID, "mirror")).resolves.toMatchObject({
       id: id(7),
@@ -244,7 +285,8 @@ describe("Plan proposal repository", () => {
           createdAtMs: 50,
         },
         plan: { ...plan, updatedAtMs: 50, hlcPhysicalMs: 50 },
-        workouts: [{ ...workout, name: "Recovery", durationS: 1_800, hlcPhysicalMs: 50 }],
+        workouts: [{ ...nextWorkout, hlcPhysicalMs: 50 }],
+        ledger: ledger(id(11), id(3), workout, { ...nextWorkout, hlcPhysicalMs: 50 }, 50),
         resolvedAtMs: 50,
         deviceId: "device-1",
         hlcPhysicalMs: 50,
@@ -263,6 +305,12 @@ describe("Plan proposal repository", () => {
       WORKOUT_ID,
       PLAN_ID,
     ]);
+    const nextWorkout = {
+      ...workout,
+      name: "Recovery",
+      durationS: 1_800,
+      hlcPhysicalMs: 40,
+    };
 
     await expect(
       proposals.apply({
@@ -278,7 +326,8 @@ describe("Plan proposal repository", () => {
           createdAtMs: 40,
         },
         plan: { ...plan, updatedAtMs: 40, hlcPhysicalMs: 40 },
-        workouts: [{ ...workout, name: "Recovery", durationS: 1_800, hlcPhysicalMs: 40 }],
+        workouts: [nextWorkout],
+        ledger: ledger(id(10), id(3), workout, nextWorkout, 40),
         resolvedAtMs: 40,
         deviceId: "device-1",
         hlcPhysicalMs: 40,
@@ -295,6 +344,12 @@ describe("Plan proposal repository", () => {
     const proposals = createPlanProposalRepository(store);
     await proposals.save(proposal(id(3)), [premise(id(3), id(4))]);
     await store.run("UPDATE plan SET hlc_counter=? WHERE id=?", [1, PLAN_ID]);
+    const nextWorkout = {
+      ...workout,
+      name: "Recovery",
+      durationS: 1_800,
+      hlcPhysicalMs: 40,
+    };
 
     await expect(
       proposals.apply({
@@ -310,7 +365,8 @@ describe("Plan proposal repository", () => {
           createdAtMs: 40,
         },
         plan: { ...plan, updatedAtMs: 40, hlcPhysicalMs: 40 },
-        workouts: [{ ...workout, name: "Recovery", durationS: 1_800, hlcPhysicalMs: 40 }],
+        workouts: [nextWorkout],
+        ledger: ledger(id(10), id(3), workout, nextWorkout, 40),
         resolvedAtMs: 40,
         deviceId: "device-1",
         hlcPhysicalMs: 40,

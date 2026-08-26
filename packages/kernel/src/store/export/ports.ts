@@ -86,6 +86,7 @@ export const PURE_AUTHORED_TABLES = [
   "pool_size_correction_overlay",
   "dedup_confirmation",
   "plan",
+  "plan_adaptation_ledger",
   "plan_conversation",
   "plan_conversation_turn",
   "plan_draft_revision",

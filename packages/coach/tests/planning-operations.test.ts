@@ -1673,14 +1673,35 @@ describe("Plan operations", () => {
     if (revised === undefined) throw new TypeError("Revised Proposal missing.");
     await expect(proposals.read(proposalId)).resolves.toMatchObject({ status: "superseded" });
     await expect(proposals.read(revalidated.id)).resolves.toMatchObject({ status: "superseded" });
-    await expect(
-      operations.executePlanTransition?.({
-        transitionId: "PL-T19",
-        commandId: "command-proposal-approve",
-        proposalId: revised.id,
-        expectedRevision: 3,
-      }),
-    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S008" } });
+    const appliedResult = await operations.executePlanTransition?.({
+      transitionId: "PL-T19",
+      commandId: "command-proposal-approve",
+      proposalId: revised.id,
+      expectedRevision: 3,
+    });
+    expect(appliedResult).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S008",
+        data: {
+          history: [
+            expect.objectContaining({
+              kind: "proposal-applied",
+              undoStatus: "eligible",
+              before: expect.objectContaining({ name: "Endurance", durationS: 5_400 }),
+              after: expect.objectContaining({ name: "Recovery", durationS: 2_700 }),
+              weekLoadBefore: 420,
+              weekLoadAfter: 375,
+            }),
+            expect.objectContaining({ kind: "activation", undoStatus: "none" }),
+          ],
+        },
+      },
+    });
+    if (appliedResult?.status !== "completed") {
+      throw new TypeError("Proposal application did not complete.");
+    }
+    const ledgerId = String(appliedResult.state.data.selectedHistoryId);
     await expect(plans.readWorkouts(planId)).resolves.toEqual([
       expect.objectContaining({ name: "Recovery", durationS: 2_700 }),
     ]);
@@ -1696,5 +1717,73 @@ describe("Plan operations", () => {
         proposalId: revised.id,
       }),
     ).resolves.toMatchObject({ status: "rejected" });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-history-open",
+        action: "open",
+        sourceScenarioId: "PL-S008",
+        destinationScenarioId: "PL-S005",
+        returnFocusId: planId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S005", data: { history: expect.any(Array) } },
+    });
+    const undoneResult = await operations.executePlanTransition?.({
+      transitionId: "PL-T21",
+      commandId: "command-history-undo",
+      planId,
+      ledgerId,
+    });
+    expect(undoneResult).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S027",
+        data: {
+          history: expect.arrayContaining([
+            expect.objectContaining({ kind: "undo", undoStatus: "undone" }),
+            expect.objectContaining({
+              id: ledgerId,
+              kind: "proposal-applied",
+              undoStatus: "undone",
+            }),
+          ]),
+        },
+      },
+    });
+    await expect(plans.readWorkouts(planId)).resolves.toEqual([
+      expect.objectContaining({ name: "Endurance", durationS: 5_400 }),
+    ]);
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T21",
+        commandId: "command-history-undo-again",
+        planId,
+        ledgerId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S026",
+        data: {
+          selectedHistoryId: ledgerId,
+          history: expect.arrayContaining([
+            expect.objectContaining({ id: ledgerId, undoStatus: "undone" }),
+          ]),
+        },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-history-back-after-expiry",
+        action: "open",
+        sourceScenarioId: "PL-S026",
+        destinationScenarioId: "PL-S005",
+        returnFocusId: ledgerId,
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S005" } });
   });
 });

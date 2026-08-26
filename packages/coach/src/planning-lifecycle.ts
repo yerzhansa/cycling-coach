@@ -22,6 +22,7 @@ import {
 
 export type ActivePlanScenario =
   | "PL-S004"
+  | "PL-S005"
   | "PL-S007"
   | "PL-S008"
   | "PL-S013"
@@ -30,6 +31,8 @@ export type ActivePlanScenario =
   | "PL-S023"
   | "PL-S024"
   | "PL-S025"
+  | "PL-S026"
+  | "PL-S027"
   | "PL-S032"
   | "PL-S033"
   | "PL-S034"
@@ -356,6 +359,7 @@ export function buildActivePlanReadModel(input: {
 }): PlanReadModel {
   const copy = {
     "PL-S004": ["Plan active", "This week reflects your Plan and completed activities."],
+    "PL-S005": ["Plan history", "Plan changes are immutable and ordered newest first."],
     "PL-S007": [
       "Plan change needs review",
       "Review the proposed change before it affects your Plan.",
@@ -373,6 +377,8 @@ export function buildActivePlanReadModel(input: {
       "Plan changed before approval",
       "Review the recalculated Proposal before approving it.",
     ],
+    "PL-S026": ["Undo expired", "This change remains in History and cannot be undone."],
+    "PL-S027": ["Plan change undone", "The previous local Workout values are restored."],
     "PL-S032": ["Workout changed in Intervals", "Choose which version becomes authoritative."],
     "PL-S033": [
       "Updating the Plan",
@@ -450,6 +456,7 @@ export function buildActivePlanReadModel(input: {
     input.proposalCapabilities?.canVerifyPremises === true &&
     canCalculateProposal &&
     (selectedProposal?.stale !== true || input.proposalCapabilities?.canRevise === true);
+  const canUndo = input.data.history?.some((entry) => entry.undoStatus === "eligible") === true;
   return PlanReadModelSchema.parse({
     schemaVersion: 1,
     scenarioId: input.scenarioId,
@@ -469,6 +476,7 @@ export function buildActivePlanReadModel(input: {
       ...(canReviseProposal ? [guard("PL-T18")] : []),
       ...(canApproveProposal ? [guard("PL-T19")] : []),
       guard("PL-T20"),
+      ...(canUndo ? [guard("PL-T21")] : []),
       guard("PL-T39"),
     ],
     reconciliation: input.reconciliation,

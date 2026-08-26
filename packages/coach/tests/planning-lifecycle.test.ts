@@ -180,6 +180,91 @@ describe("Plan lifecycle projection", () => {
     ).not.toContain("PL-T19");
   });
 
+  it("advertises single-step Undo only when the server projection marks an entry eligible", () => {
+    const data = {
+      plan: {
+        id: "plan-1",
+        name: "Gran Fondo",
+        primaryGoal: "Finish",
+        startDate: "2026-08-17",
+        targetDate: null,
+        kind: "short-race-preparation" as const,
+        totalWeeks: 4,
+        weekStartDay: 1,
+        workoutCount: 1,
+        plannedDurationS: 3_600,
+      },
+      today: "2026-08-18",
+      weekIndex: 1,
+      todayWorkout: null,
+      workouts: [
+        {
+          id: "workout-1",
+          date: "2026-08-20",
+          sport: "cycling",
+          name: "Recovery",
+          durationS: 1_800,
+        },
+      ],
+      history: [
+        {
+          id: "history-1",
+          kind: "proposal-applied" as const,
+          label: "Sunday recovery applied",
+          occurredAtMs: 20,
+          targetWorkoutId: "workout-1",
+          before: {
+            date: "2026-08-20",
+            name: "Endurance",
+            durationS: 5_400,
+          },
+          after: {
+            date: "2026-08-20",
+            name: "Recovery",
+            durationS: 1_800,
+          },
+          weekLoadBefore: 420,
+          weekLoadAfter: 360,
+          undoStatus: "eligible" as const,
+          undoReason: null,
+        },
+      ],
+    };
+    const base = {
+      scenarioId: "PL-S005" as const,
+      planId: "plan-1",
+      revision: 1,
+      data,
+      reconciliation: {
+        status: "not-applicable" as const,
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: null,
+        error: null,
+      },
+    };
+    expect(
+      buildActivePlanReadModel(base).transitions.map((transition) => transition.transitionId),
+    ).toContain("PL-T21");
+    expect(
+      buildActivePlanReadModel({
+        ...base,
+        data: {
+          ...data,
+          history: [
+            {
+              ...data.history[0]!,
+              undoStatus: "expired" as const,
+              undoReason: "newer-change" as const,
+            },
+          ],
+        },
+      }).transitions.map((transition) => transition.transitionId),
+    ).not.toContain("PL-T21");
+  });
+
   it("blocks Draft creation until an FTP source is available", () => {
     const ftp = {
       status: "required" as const,

@@ -80,6 +80,9 @@ export interface PlanActions {
   reviseProposal(proposalId: string, text: string): void;
   approveProposal(proposalId: string, expectedRevision: number): void;
   rejectProposal(proposalId: string): void;
+  openHistory(): void;
+  closeHistory(): void;
+  undoPlanChange(ledgerId: string): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;

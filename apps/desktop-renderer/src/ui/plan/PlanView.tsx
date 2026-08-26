@@ -4,10 +4,12 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  History,
   LoaderCircle,
   MapPinned,
   RefreshCw,
   TriangleAlert,
+  Undo2,
 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
 import {
@@ -17,6 +19,7 @@ import {
   type PlanDraftPlanProjection,
   type PlanFtpProjection,
   type PlanFtpSourceValue,
+  type PlanHistoryEntry,
   type PlanRaceCourseProjection,
   type PlanRaceCourseSummary,
   type PlanStartDateProjection,
@@ -76,6 +79,244 @@ function plannedTime(durationS: number): string {
   const minutes = Math.round((durationS % 3_600) / 60);
   if (hours === 0) return `${minutes} min`;
   return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
+}
+
+function historyDuration(durationS: number | null): string {
+  if (durationS === null) return "—";
+  const hours = Math.floor(durationS / 3_600);
+  const minutes = Math.floor((durationS % 3_600) / 60);
+  return `${hours}:${String(minutes).padStart(2, "0")}`;
+}
+
+function historyReason(entry: PlanHistoryEntry): string | null {
+  if (entry.undoStatus === "eligible") {
+    return "Undo is available while this is the newest change and its Workout is future and coach-owned.";
+  }
+  if (entry.undoStatus === "undone") return "Undone; this entry remains in History.";
+  if (entry.undoStatus !== "expired") return null;
+  if (entry.undoReason === "newer-change") return "A newer change was applied.";
+  if (entry.undoReason === "workout-not-future") return "The Workout is no longer in the future.";
+  if (entry.undoReason === "workout-not-coach-owned")
+    return "The Workout is no longer coach-owned.";
+  if (entry.undoReason === "workout-changed") return "The Workout changed after this entry.";
+  if (entry.undoReason === "plan-not-active") return "The Plan is no longer active.";
+  if (entry.undoReason === "workout-missing") return "The Workout is no longer in this Plan.";
+  return "Undo is no longer available.";
+}
+
+function historyDetail(entry: PlanHistoryEntry): string {
+  if (entry.before === null || entry.after === null) return "Approved locally";
+  const workout = `${entry.before.name} · ${historyDuration(entry.before.durationS)} → ${entry.after.name} · ${historyDuration(entry.after.durationS)}`;
+  return entry.weekLoadBefore === null || entry.weekLoadAfter === null
+    ? workout
+    : `${workout} · Week load ${entry.weekLoadBefore} → ${entry.weekLoadAfter}`;
+}
+
+function PlanHistoryProjection(props: {
+  readonly entries: readonly PlanHistoryEntry[];
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  return (
+    <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
+      <div className="flex items-start justify-between gap-row">
+        <div className={SUPPORT_PAIR}>
+          <h2
+            id="plan-history-heading"
+            tabIndex={-1}
+            className="m-0 text-lg font-semibold outline-none"
+          >
+            Plan history
+          </h2>
+          <p className="m-0 text-ink-2">Plan changes are saved here and cannot be edited.</p>
+        </div>
+        <Button type="button" variant="outline" onClick={() => actions?.closeHistory()}>
+          Back to Plan
+        </Button>
+      </div>
+      <div className="relative grid pl-8">
+        <span className="absolute bottom-4 left-[7px] top-4 w-px bg-line" aria-hidden="true" />
+        {props.entries.map((entry) => (
+          <article
+            key={entry.id}
+            className="relative grid gap-[calc(var(--inset)/2)] border-b border-line py-row last:border-b-0"
+          >
+            <span
+              className="absolute -left-8 top-[calc(var(--row-inset)+2px)] size-[15px] rounded-full border-[4px] border-surface bg-primary"
+              aria-hidden="true"
+            />
+            <div className="flex items-start justify-between gap-row">
+              <div className={SUPPORT_PAIR}>
+                <h3 className="m-0 text-base font-semibold">{entry.label}</h3>
+                <p className="m-0 text-sm text-ink-2">
+                  {new Intl.DateTimeFormat(undefined, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  }).format(new Date(entry.occurredAtMs))}
+                  {" · "}
+                  {historyDetail(entry)}
+                </p>
+              </div>
+              {entry.undoStatus === "eligible" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => actions?.undoPlanChange(entry.id)}
+                >
+                  <Undo2 className="size-4" aria-hidden="true" />
+                  Undo
+                </Button>
+              ) : null}
+            </div>
+            {historyReason(entry) === null ? null : (
+              <p className="m-0 text-sm text-ink-2">{historyReason(entry)}</p>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function HistoryResultProjection(props: {
+  readonly scenarioId: string;
+  readonly entry: PlanHistoryEntry | null;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  if (props.scenarioId === "PL-S026") {
+    return (
+      <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
+        <div className="flex items-start gap-row">
+          <History className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h2
+              id="plan-history-result-heading"
+              tabIndex={-1}
+              className="m-0 text-lg font-semibold outline-none"
+            >
+              Undo expired
+            </h2>
+            <p className="m-0 text-ink-2">
+              {props.entry === null
+                ? "This change remains in History but can no longer be undone."
+                : (historyReason(props.entry) ??
+                  "This change remains in History but can no longer be undone.")}
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <Button type="button" onClick={() => actions?.openHistory()}>
+            Back to history
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
+      <div className="flex items-start gap-row">
+        <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+        <div className={SUPPORT_PAIR}>
+          <h2
+            id="plan-history-result-heading"
+            tabIndex={-1}
+            className="m-0 text-lg font-semibold outline-none"
+          >
+            Plan change undone
+          </h2>
+          <p className="m-0 text-ink-2">
+            {props.entry?.after === null || props.entry?.after === undefined
+              ? "The previous Workout values are restored."
+              : `${props.entry.after.name} · ${historyDuration(props.entry.after.durationS)} is restored. The seven-day Intervals window will reconcile next.`}
+          </p>
+        </div>
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={() => actions?.openHistory()}>
+          View history
+        </Button>
+        <Button type="button" onClick={() => actions?.closeHistory()}>
+          Back to Plan
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function AppliedHistoryProjection(props: {
+  readonly entry: PlanHistoryEntry | null;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const before = props.entry?.before ?? null;
+  const after = props.entry?.after ?? null;
+  return (
+    <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
+      <div className="flex items-start gap-row">
+        <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+        <div className={SUPPORT_PAIR}>
+          <h2 className="m-0 text-lg font-semibold">
+            {after === null ? "Plan updated" : `${after.name} is now active`}
+          </h2>
+          <p className="m-0 text-ink-2">
+            The approved change is part of your Plan. The seven-day Intervals update has not started
+            yet.
+          </p>
+        </div>
+      </div>
+      {before === null || after === null ? null : (
+        <div className="grid gap-inset rounded-card bg-sunk p-row sm:grid-cols-2">
+          <div className={SUPPORT_PAIR}>
+            <p className="m-0 text-sm text-ink-2">Before</p>
+            <p className="m-0 font-semibold">
+              {before.name} · {historyDuration(before.durationS)}
+            </p>
+          </div>
+          <div className={SUPPORT_PAIR}>
+            <p className="m-0 text-sm text-ink-2">After</p>
+            <p className="m-0 font-semibold">
+              {after.name} · {historyDuration(after.durationS)}
+            </p>
+          </div>
+        </div>
+      )}
+      {props.entry === null ||
+      props.entry.weekLoadBefore === null ||
+      props.entry.weekLoadAfter === null ? null : (
+        <div className="flex items-center justify-between gap-inset">
+          <span className="text-sm text-ink-2">Week load change</span>
+          <strong>
+            {props.entry.weekLoadAfter - props.entry.weekLoadBefore < 0 ? "−" : "+"}
+            {Math.abs(props.entry.weekLoadAfter - props.entry.weekLoadBefore)}
+          </strong>
+        </div>
+      )}
+      {props.entry?.undoStatus === "eligible" ? (
+        <div className="flex flex-col gap-inset sm:flex-row sm:items-center sm:justify-between">
+          <p className="m-0 text-sm text-ink-2">
+            Undo is available while this is the newest change and its Workout is future and
+            coach-owned.
+          </p>
+          <span className="self-start rounded-full bg-sunk px-3 py-1 text-sm text-ink-2">
+            Eligible
+          </span>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap justify-end gap-inset">
+        {props.entry?.undoStatus === "eligible" ? (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => actions?.undoPlanChange(props.entry!.id)}
+          >
+            <Undo2 className="size-4" aria-hidden="true" />
+            Undo
+          </Button>
+        ) : null}
+        <Button type="button" onClick={() => actions?.closeHistory()}>
+          Back to Plan
+        </Button>
+      </div>
+    </section>
+  );
 }
 
 const MATCH_STATUS_COPY = {
@@ -1469,6 +1710,7 @@ function ActiveProjection(): ReactElement {
   const [proposalMode, setProposalMode] = useState<"proposal" | "evidence" | "edit">("proposal");
   const [revisionText, setRevisionText] = useState("");
   const evidenceTrigger = useRef<HTMLButtonElement>(null);
+  const previousScenario = useRef(model?.scenarioId ?? null);
   const selectedProposalKey =
     typeof model?.data.selectedProposalId === "string" ? model.data.selectedProposalId : null;
   const failedRevisionText =
@@ -1477,10 +1719,39 @@ function ActiveProjection(): ReactElement {
     setProposalMode(model?.scenarioId === "PL-S022" ? "edit" : "proposal");
     setRevisionText(model?.scenarioId === "PL-S022" ? failedRevisionText : "");
   }, [failedRevisionText, model?.scenarioId, selectedProposalKey]);
+  useEffect(() => {
+    const current = model?.scenarioId ?? null;
+    const previous = previousScenario.current;
+    previousScenario.current = current;
+    if (current === previous || previous === null) return;
+    const focusId =
+      current === "PL-S004"
+        ? "plan-history-trigger"
+        : current === "PL-S005"
+          ? "plan-history-heading"
+          : current === "PL-S026" || current === "PL-S027"
+            ? "plan-history-result-heading"
+            : null;
+    if (focusId === null) return;
+    requestAnimationFrame(() => document.getElementById(focusId)?.focus());
+  }, [model?.scenarioId]);
   if (model === null) return <StatusCard title="Plan" support="Refreshing your Plan…" />;
   const parsed = PlanActiveProjectionDataSchema.safeParse(model.data);
   if (!parsed.success) return <StatusCard title={model.title} support={model.summary} />;
   const data = parsed.data;
+  const selectedHistoryEntry =
+    data.selectedHistoryId === undefined || data.selectedHistoryId === null
+      ? null
+      : ((data.history ?? []).find((entry) => entry.id === data.selectedHistoryId) ?? null);
+  if (model.scenarioId === "PL-S005") {
+    return <PlanHistoryProjection entries={data.history ?? []} />;
+  }
+  if (model.scenarioId === "PL-S008") {
+    return <AppliedHistoryProjection entry={selectedHistoryEntry} />;
+  }
+  if (model.scenarioId === "PL-S026" || model.scenarioId === "PL-S027") {
+    return <HistoryResultProjection scenarioId={model.scenarioId} entry={selectedHistoryEntry} />;
+  }
   const reconciling =
     (transition.status === "submitting" || transition.status === "running") &&
     transition.transitionId === "PL-T12";
@@ -1527,15 +1798,7 @@ function ActiveProjection(): ReactElement {
   }
   return (
     <div className="grid gap-6">
-      {model.scenarioId === "PL-S008" ? (
-        <section className="flex items-start gap-row rounded-card bg-surface p-5 shadow-elev-1">
-          <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
-          <div className={SUPPORT_PAIR}>
-            <h2 className="m-0 text-base font-semibold">Plan updated</h2>
-            <p className="m-0 text-ink-2">The approved change is now part of your active Plan.</p>
-          </div>
-        </section>
-      ) : model.scenarioId === "PL-S097" ? (
+      {model.scenarioId === "PL-S097" ? (
         <section className="flex items-start gap-row rounded-card bg-surface p-5 shadow-elev-1">
           <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
           <div className={`min-w-0 flex-1 ${SUPPORT_PAIR}`}>
@@ -1548,16 +1811,27 @@ function ActiveProjection(): ReactElement {
         </section>
       ) : null}
       <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
-        <div className="flex items-start gap-row">
-          <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
-          <div className={SUPPORT_PAIR}>
-            <h2 className="m-0 text-base font-semibold">
-              Plan active · week {data.weekIndex} of {data.plan.totalWeeks}
-            </h2>
-            <p className="m-0 text-ink-2">
-              {data.plan.name} · starts {formatCivilDate(data.plan.startDate)}
-            </p>
+        <div className="flex flex-col gap-row sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-row">
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <h2 className="m-0 text-base font-semibold">
+                Plan active · week {data.weekIndex} of {data.plan.totalWeeks}
+              </h2>
+              <p className="m-0 text-ink-2">
+                {data.plan.name} · starts {formatCivilDate(data.plan.startDate)}
+              </p>
+            </div>
           </div>
+          <Button
+            id="plan-history-trigger"
+            type="button"
+            variant="outline"
+            onClick={() => actions?.openHistory()}
+          >
+            <History className="size-4" aria-hidden="true" />
+            Plan history
+          </Button>
         </div>
         <div className="flex items-start gap-row border-t border-line pt-row">
           <Activity className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />

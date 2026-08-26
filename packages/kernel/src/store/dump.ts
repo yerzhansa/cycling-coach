@@ -41,6 +41,7 @@ export const DUMP_TABLES = [
   { table: "mean_max_cache", orderBy: "mmax_key" },
   { table: "metric_snapshot", orderBy: "snapshot_key" },
   { table: "plan", orderBy: "id" },
+  { table: "plan_adaptation_ledger", orderBy: "plan_id, occurred_at_ms, id" },
   { table: "plan_conversation", orderBy: "id" },
   { table: "plan_conversation_turn", orderBy: "conversation_id, sequence, id" },
   { table: "plan_draft_revision", orderBy: "conversation_id, revision, id" },
