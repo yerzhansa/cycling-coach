@@ -145,6 +145,25 @@ const readySetupStatus = {
   durableTrainingData: true,
 } as const;
 
+const emptyAttachmentComposer = {
+  schemaVersion: 1,
+  capabilities: {
+    schemaVersion: 1,
+    active: { provider: "test", model: "text-only", transport: "test" },
+    documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+    completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+    plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+    images: {
+      enabled: false,
+      mediaTypes: [],
+      reason: "model_incompatible",
+      source: "maintained_catalogue",
+      checkedAt: "2026-08-26T00:00:00.000Z",
+    },
+  },
+  draft: null,
+} as const;
+
 const tallTurn =
   "Long ride notes that make the newest restored turn taller than the window. ".repeat(52);
 
@@ -376,6 +395,16 @@ function makeScript(
         return response({ value: units, source: "cycling" });
       }
       if (request.method === "getChatQueue") return response(queueSnapshot());
+      if (
+        request.method === "getChatAttachmentComposer" ||
+        request.method === "saveChatAttachmentDraftText" ||
+        request.method === "removeChatAttachment" ||
+        request.method === "retryChatAttachment" ||
+        request.method === "selectChatAttachmentWorkout" ||
+        request.method === "clearChatAttachmentDraft"
+      ) {
+        return response(emptyAttachmentComposer);
+      }
       if (request.method === "enqueueChatMessage") {
         const params = request.params as { readonly submissionId: string; readonly text: string };
         if (!queueItems.some((item) => item.submissionId === params.submissionId)) {
