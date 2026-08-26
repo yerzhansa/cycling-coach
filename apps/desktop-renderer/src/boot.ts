@@ -141,7 +141,9 @@ export function bootRenderer(): Disposer {
   });
   const trainingSyncCoordinator = createTrainingSyncCoordinator({
     clients,
-    refreshTrainingContext: () => trainingContextController.refresh(),
+    refreshTrainingContext: async () => {
+      await Promise.all([trainingContextController.refresh(), planController.refresh()]);
+    },
   });
   const syncAdapter = createManualSyncViewAdapter({
     publish: (next) =>
@@ -174,7 +176,9 @@ export function bootRenderer(): Disposer {
   const chatController = createChatController({
     clients,
     view: chatAdapter.view,
-    refreshTrainingContext: () => trainingContextController.refresh(),
+    refreshTrainingContext: async () => {
+      await Promise.all([trainingContextController.refresh(), planController.refresh()]);
+    },
     refreshSpend: () => spendController.refresh(),
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
     canChat: () => setupReady(store.getState()),

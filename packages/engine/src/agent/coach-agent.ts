@@ -89,6 +89,7 @@ import {
   decisionContinuationMessage,
   decisionRequestInput,
 } from "./coach-decision-tool.js";
+import { PLAN_REFERENCE_TOOL_NAME, createPlanReferenceTool } from "./plan-reference-tool.js";
 import { attachNativeMediaToCurrentUserMessage } from "../native-media-message.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
@@ -330,6 +331,7 @@ export class CoachAgent {
   private log: LoggerPort;
   private tools: ToolSet;
   private readonly decisionTool: Tool | undefined;
+  private readonly planReferenceTool: Tool | undefined;
   private systemPrompt: string;
   private tz: string;
   // Derived once from getEffectiveSections(sport): the spec'd sections with
@@ -440,10 +442,27 @@ export class CoachAgent {
           now: ports.now,
         })
       : undefined;
-    this.tools =
-      this.decisionTool === undefined
-        ? sportTools
-        : { ...sportTools, [COACH_DECISION_TOOL_NAME]: this.decisionTool };
+    this.planReferenceTool =
+      ports.planningRead === undefined
+        ? undefined
+        : this.observeToolProvenance(
+            PLAN_REFERENCE_TOOL_NAME,
+            memoizeReadTool(
+              PLAN_REFERENCE_TOOL_NAME,
+              capToolResult(
+                markUntrustedResult(createPlanReferenceTool({ planning: ports.planningRead })),
+                { maxResultTokens },
+              ),
+              (options: unknown) => getTurnContext(options)?.readToolCache,
+            ),
+          );
+    this.tools = {
+      ...sportTools,
+      ...(this.decisionTool === undefined ? {} : { [COACH_DECISION_TOOL_NAME]: this.decisionTool }),
+      ...(this.planReferenceTool === undefined
+        ? {}
+        : { [PLAN_REFERENCE_TOOL_NAME]: this.planReferenceTool }),
+    };
     ports.onToolsAssembled?.(Object.freeze(Object.keys(this.tools)));
     // systemPrompt is rebuilt at the top of every chat() call; no need to bake one here.
     this.systemPrompt = "";
@@ -1183,7 +1202,17 @@ export class CoachAgent {
                 athleteText: userMessage,
                 coachText: responseText,
                 ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }),
+                ...(ctx.planReference.selection === null
+                  ? {}
+                  : { planReference: ctx.planReference.selection }),
               });
+              if (ctx.planReference.selection !== null) {
+                emitEvent({
+                  type: "plan-reference",
+                  turnId,
+                  selection: ctx.planReference.selection,
+                });
+              }
               emitEvent({ type: "final-text", turnId, text: responseText });
               return responseText;
             } catch (err) {

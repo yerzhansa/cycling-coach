@@ -20,6 +20,7 @@ export interface ChatMessageView {
   readonly historical: boolean;
   readonly text: string;
   readonly attachments?: ChatTranscriptMessage["attachments"];
+  readonly planReference?: ChatTranscriptMessage["planReference"];
 }
 
 export interface ChatQueuedView {
@@ -162,6 +163,7 @@ export function sameChatMessages(
       message.delivery === other.delivery &&
       message.historical === other.historical &&
       message.text === other.text &&
+      JSON.stringify(message.planReference) === JSON.stringify(other.planReference) &&
       sameAttachments(message.attachments, other.attachments)
     );
   });

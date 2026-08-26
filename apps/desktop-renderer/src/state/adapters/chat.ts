@@ -90,6 +90,7 @@ function historicalTimeline(
             delivery: "complete",
             historical: true,
             text: entry.coachText,
+            ...(entry.planReference === undefined ? {} : { planReference: entry.planReference }),
           },
         },
       );
@@ -186,6 +187,7 @@ export function createChatViewAdapter(input: {
       historical: message.historical === true,
       text: isStreamingCoach(message) ? "" : message.text,
       ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
+      ...(message.planReference === undefined ? {} : { planReference: message.planReference }),
     }));
     const workBlocked =
       controls?.workBlocked ??

@@ -2,6 +2,7 @@ import type {
   ChatAttachmentComposerItem,
   ChatQueueRecoveryClaim,
   ChatQueueSnapshot,
+  PlanReferenceSelection,
   TurnEvent,
 } from "@enduragent/coach-contract";
 import { isSlashCommandText } from "./chat/commands.js";
@@ -47,6 +48,7 @@ export interface ChatTranscriptMessage {
   readonly delivery: "complete" | "streaming" | "interrupted";
   readonly historical?: boolean;
   readonly attachments?: readonly ChatSentAttachment[];
+  readonly planReference?: PlanReferenceSelection;
 }
 
 export type ChatSentAttachment = Pick<
@@ -282,6 +284,17 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
             messages: hasText
               ? updateAssistant(state, next, action.event.text, "streaming")
               : state.messages,
+          };
+        }
+        case "plan-reference": {
+          const selection = action.event.selection;
+          return {
+            ...state,
+            messages: state.messages.map((message) =>
+              message.id === active.assistantMessageId
+                ? { ...message, planReference: selection }
+                : message,
+            ),
           };
         }
         case "error":

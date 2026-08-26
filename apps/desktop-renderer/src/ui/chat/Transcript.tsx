@@ -6,6 +6,7 @@ import { useEnduragentStore } from "../../state/store.js";
 import { AthleteMessage } from "./AthleteMessage.js";
 import { CoachMessage } from "./CoachMessage.js";
 import { HistoryControls } from "./HistoryControls.js";
+import { PlanReferenceCard } from "./PlanReferenceCard.js";
 import { StreamingMessage } from "./StreamingMessage.js";
 
 function MessageRow(props: { readonly message: ChatMessageView }): ReactElement {
@@ -66,7 +67,12 @@ function MessageRow(props: { readonly message: ChatMessageView }): ReactElement 
       ) : streaming ? (
         <StreamingMessage messageId={message.id} />
       ) : (
-        <CoachMessage text={message.text} />
+        <div className="min-w-0">
+          <CoachMessage text={message.text} />
+          {message.planReference === undefined ? null : (
+            <PlanReferenceCard selection={message.planReference} />
+          )}
+        </div>
       )}
     </article>
   );

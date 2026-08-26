@@ -1194,6 +1194,11 @@ export async function createLocalCoachComposition(
         config.session.resetArchiveRetentionDays,
         { platform: dependencies.platform },
       );
+      const planningReadService = createPlanningReadService({
+        store: input.context.store,
+        timezone,
+        now,
+      });
       const projectedConfig = engineConfigFromConfig(effectiveConfig);
       const attachmentCapabilityResolver = createAttachmentCapabilityResolver({
         openRouterCache: openRouterModelMetadata,
@@ -1302,6 +1307,9 @@ export async function createLocalCoachComposition(
         },
         transcriptWriter: conversationStore,
         coachDecisions: conversationStore,
+        planningRead: {
+          getPlanningReadModel: () => planningReadService.getPlanningReadModel({}),
+        },
         secrets: { resolve: resolveSecretRef },
         platform: {
           legacyClient,

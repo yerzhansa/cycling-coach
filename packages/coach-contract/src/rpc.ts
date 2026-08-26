@@ -13,6 +13,7 @@ import {
 } from "./engine.js";
 import { TurnEventSchema, type TurnEvent } from "./turn-event.js";
 import { PlatformAbsolutePathSchema } from "./platform-path.js";
+import { PlanReferenceSelectionSchema } from "./plan-chat-card.js";
 import {
   AdmitPastedChatAttachmentRequestSchema,
   AdmitChatAttachmentRequestSchema,
@@ -394,8 +395,18 @@ export const TranscriptPageTurnSchema = z
     coachText: z.string(),
     delivery: z.literal("interrupted").optional(),
     attachments: z.array(ChatAttachmentReferenceSchema).max(5).optional(),
+    planReference: PlanReferenceSelectionSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.delivery === "interrupted" && value.planReference !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["planReference"],
+        message: "interrupted turns cannot carry Plan references",
+      });
+    }
+  });
 export type TranscriptPageTurn = z.infer<typeof TranscriptPageTurnSchema>;
 
 export const TranscriptPageEntrySchema = z.discriminatedUnion("kind", [

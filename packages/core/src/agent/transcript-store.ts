@@ -29,10 +29,13 @@ import {
   ChatAttachmentReferenceSchema,
   CoachDecisionAnswerSchema,
   CoachDecisionReadModelSchema,
+  PlanReferenceSelectionSchema,
   type CoachDecisionAnswer,
   type CoachDecisionContinuationLineage,
   type CoachDecisionOption,
   type CoachDecisionReadModel,
+  type ChatAttachmentReference,
+  type PlanReferenceSelection,
 } from "@enduragent/coach-contract";
 import {
   WindowsPrivatePathPolicyError,
@@ -241,6 +244,8 @@ export interface TranscriptPageTurn {
   readonly athleteText: string;
   readonly coachText: string;
   readonly delivery?: "interrupted";
+  readonly attachments?: ChatAttachmentReference[];
+  readonly planReference?: PlanReferenceSelection;
 }
 
 export type TranscriptPageEntry =
@@ -452,8 +457,12 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
 
   if (value.kind === "turn-completed" || value.kind === "turn-interrupted") {
     const keys = ["version", "kind", "chatId", "turnId", "completedAt", "athleteText", "coachText"];
+    const optionalKeys = [
+      ...(value.attachments === undefined ? [] : ["attachments"]),
+      ...(value.planReference === undefined ? [] : ["planReference"]),
+    ];
     if (
-      (!hasExactKeys(value, keys) && !hasExactKeys(value, [...keys, "attachments"])) ||
+      !hasExactKeys(value, [...keys, ...optionalKeys]) ||
       typeof value.chatId !== "string" ||
       typeof value.turnId !== "string" ||
       value.turnId.length === 0 ||
@@ -461,8 +470,11 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
       !isIsoTimestamp(value.completedAt) ||
       typeof value.athleteText !== "string" ||
       typeof value.coachText !== "string" ||
+      (value.kind === "turn-interrupted" && value.planReference !== undefined) ||
       (value.attachments !== undefined &&
-        !ChatAttachmentReferenceSchema.array().max(5).safeParse(value.attachments).success)
+        !ChatAttachmentReferenceSchema.array().max(5).safeParse(value.attachments).success) ||
+      (value.planReference !== undefined &&
+        !PlanReferenceSelectionSchema.safeParse(value.planReference).success)
     ) {
       return null;
     }
@@ -636,7 +648,9 @@ function completedTurnRecord(input: TranscriptCompletedTurnInput): TranscriptCom
     typeof input.athleteText !== "string" ||
     typeof input.coachText !== "string" ||
     (input.attachments !== undefined &&
-      !ChatAttachmentReferenceSchema.array().max(5).safeParse(input.attachments).success)
+      !ChatAttachmentReferenceSchema.array().max(5).safeParse(input.attachments).success) ||
+    (input.planReference !== undefined &&
+      !PlanReferenceSelectionSchema.safeParse(input.planReference).success)
   ) {
     throw new TypeError("Completed transcript turn is invalid.");
   }
@@ -649,12 +663,16 @@ function completedTurnRecord(input: TranscriptCompletedTurnInput): TranscriptCom
     athleteText: input.athleteText,
     coachText: input.coachText,
     ...(input.attachments === undefined ? {} : { attachments: [...input.attachments] }),
+    ...(input.planReference === undefined ? {} : { planReference: { ...input.planReference } }),
   };
 }
 
 function interruptedTurnRecord(
   input: TranscriptInterruptedTurnInput,
 ): TranscriptInterruptedTurnRecord {
+  if (input.planReference !== undefined) {
+    throw new TypeError("Interrupted transcript turn cannot carry a Plan reference.");
+  }
   const completed = completedTurnRecord(input);
   return { ...completed, kind: "turn-interrupted" };
 }
@@ -905,7 +923,8 @@ function transcriptPageTurn(record: TranscriptTurnRecord): TranscriptPageTurn {
     completedAt: record.completedAt,
     athleteText: record.athleteText,
     coachText: record.coachText,
-    ...(record.attachments === undefined ? {} : { attachments: record.attachments }),
+    ...(record.attachments === undefined ? {} : { attachments: [...record.attachments] }),
+    ...(record.planReference === undefined ? {} : { planReference: record.planReference }),
     ...(record.kind === "turn-interrupted" ? { delivery: "interrupted" as const } : {}),
   };
 }

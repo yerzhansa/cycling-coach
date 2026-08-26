@@ -641,6 +641,7 @@ describe("local coach composition", () => {
       "now",
       "onToolsAssembled",
       "planPersistence",
+      "planningRead",
       "platform",
       "randomId",
       "readReferenceState",

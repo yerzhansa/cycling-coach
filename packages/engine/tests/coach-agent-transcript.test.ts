@@ -53,6 +53,7 @@ function harness(input: {
   appendInterruptedTurn?: (turn: TranscriptInterruptedTurnInput) => void;
   config?: Partial<EngineHostPorts["config"]["session"]>;
   randomId?: () => string;
+  planningRead?: EngineHostPorts["planningRead"];
 }) {
   const dataDir = makeDataDir();
   const base = baseAgentConfig(dataDir);
@@ -81,6 +82,7 @@ function harness(input: {
       appendInterruptedTurn: input.appendInterruptedTurn ?? ((turn) => interrupted.push(turn)),
     },
     modelTransportDecorator: () => ({ generate: input.generate }),
+    ...(input.planningRead === undefined ? {} : { planningRead: input.planningRead }),
   };
   return {
     dataDir,
@@ -157,6 +159,57 @@ describe("CoachAgent transcript recording", () => {
       athleteText: "athlete retry text",
       coachText: "recovered response",
     });
+  });
+
+  it("emits and persists one Desktop Plan reference before final text", async () => {
+    const setup = harness({
+      planningRead: {
+        getPlanningReadModel: async () => ({
+          schemaVersion: 1,
+          status: "ready",
+          asOfDateKey: 20260826,
+          plan: {
+            id: "plan-1",
+            name: "Twelve-week base",
+            goal: "Build consistency",
+            lifecycle: "active",
+            startDateKey: 20260824,
+            targetDateKey: null,
+            currentWeek: 1,
+            totalWeeks: 12,
+            phase: "Base",
+            weekStartDateKey: 20260824,
+            weekEndDateKey: 20260830,
+            workouts: [],
+            todayWorkout: null,
+            navigation: { destination: "plan", focus: "active-plan", entityId: "plan-1" },
+          },
+        }),
+      },
+      generate: async (request) => {
+        const planTool = request.options.tools?.read_plan_reference;
+        if (planTool?.execute === undefined) throw new TypeError("Plan reference tool missing");
+        await (planTool.execute as (input: unknown, options: unknown) => Promise<unknown>)(
+          { kind: "active_plan_summary" },
+          { toolCallId: "tool-1", experimental_context: request.options.context },
+        );
+        return result("Your current Plan is Twelve-week base.");
+      },
+    });
+    const events: TurnEvent[] = [];
+
+    await setup.agent.chat("desktop", "Show my Plan", undefined, (event) => events.push(event));
+
+    const selection = { kind: "active_plan_summary" as const, planId: "plan-1" };
+    expect(setup.completed).toMatchObject([{ planReference: selection }]);
+    expect(events.slice(-2)).toEqual([
+      { type: "plan-reference", turnId: "turn-transcript-1", selection },
+      {
+        type: "final-text",
+        turnId: "turn-transcript-1",
+        text: "Your current Plan is Twelve-week base.",
+      },
+    ]);
   });
 
   it.each(["ENOSPC", "EACCES"])(

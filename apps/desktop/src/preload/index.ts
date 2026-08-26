@@ -2,7 +2,9 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   AttachmentAdmissionReadModelSchema,
   CHAT_ATTACHMENT_LIMITS,
+  GetArchivedTranscriptPageRpcResultSchema,
   GetPlanningReadModelRpcResultSchema,
+  GetTranscriptPageRpcResultSchema,
   PlatformAbsolutePathSchema,
   type AttachmentAdmissionReadModel,
 } from "@enduragent/coach-contract";
@@ -138,12 +140,6 @@ const CLAUDE_CLI_STATES = new Set([
   "working-area-unavailable",
 ]);
 const IMPORT_EXTENSIONS = new Set([".fit", ".tcx", ".gpx"]);
-const CHAT_ATTACHMENT_EXTENSIONS = {
-  document: new Set(["pdf", "txt", "csv", "docx"]),
-  activity: new Set(["fit", "tcx", "gpx"]),
-  workout: new Set(["zwo", "mrc", "erg"]),
-  image: new Set(["png", "jpg", "jpeg", "webp"]),
-} as const;
 const ACTIVITY_EXPORT_FORMATS = new Set(["fit", "gpx"]);
 const WORKOUT_ARCHIVE_FORMATS = new Set(["zwo", "mrc", "erg", "fit"]);
 const TRAINING_EXPORT_REFUSAL_REASONS = new Set([
@@ -415,87 +411,16 @@ function canonicalIsoTimestamp(value: unknown): value is string {
   }
 }
 
-function parseTranscriptAttachments(value: unknown): readonly unknown[] {
-  if (!Array.isArray(value) || value.length > 5) throw new TypeError();
-  return value.map((attachment) => {
-    if (
-      !record(attachment) ||
-      !exactKeys(attachment, ["attachmentId", "displayName", "kind", "extension"]) ||
-      typeof attachment.attachmentId !== "string" ||
-      attachment.attachmentId.length === 0 ||
-      attachment.attachmentId.length > 128 ||
-      typeof attachment.displayName !== "string" ||
-      attachment.displayName.length === 0 ||
-      attachment.displayName.length > 512 ||
-      typeof attachment.kind !== "string" ||
-      !(attachment.kind in CHAT_ATTACHMENT_EXTENSIONS) ||
-      typeof attachment.extension !== "string" ||
-      !CHAT_ATTACHMENT_EXTENSIONS[attachment.kind as keyof typeof CHAT_ATTACHMENT_EXTENSIONS].has(
-        attachment.extension as never,
-      )
-    ) {
-      throw new TypeError();
-    }
-    return {
-      attachmentId: attachment.attachmentId,
-      displayName: attachment.displayName,
-      kind: attachment.kind,
-      extension: attachment.extension,
-    };
-  });
-}
-
 function parseTranscriptPage(
   value: unknown,
-  cursor: (candidate: unknown) => candidate is string = transcriptCursor,
+  schema: typeof GetTranscriptPageRpcResultSchema | typeof GetArchivedTranscriptPageRpcResultSchema,
 ): unknown {
-  if (
-    !record(value) ||
-    !exactKeys(value, ["schemaVersion", "status", "turns", "nextCursor"]) ||
-    value.schemaVersion !== 1 ||
-    (value.status !== "page" && value.status !== "restart-required") ||
-    !Array.isArray(value.turns) ||
-    value.turns.length > TRANSCRIPT_PAGE_MAX_TURNS ||
-    (value.nextCursor !== null && !cursor(value.nextCursor)) ||
-    textEncoder.encode(JSON.stringify(value)).byteLength > TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES
-  ) {
+  if (textEncoder.encode(JSON.stringify(value)).byteLength > TRANSCRIPT_PAGE_MAX_RESPONSE_BYTES) {
     throw new TypeError();
   }
-  const turns = value.turns.map((turn) => {
-    const turnKeys = ["turnId", "completedAt", "athleteText", "coachText"];
-    if (
-      !record(turn) ||
-      (!exactKeys(turn, turnKeys) && !exactKeys(turn, [...turnKeys, "attachments"])) ||
-      typeof turn.turnId !== "string" ||
-      turn.turnId.length === 0 ||
-      !canonicalIsoTimestamp(turn.completedAt) ||
-      typeof turn.athleteText !== "string" ||
-      typeof turn.coachText !== "string"
-    ) {
-      throw new TypeError();
-    }
-    return {
-      turnId: turn.turnId,
-      completedAt: turn.completedAt,
-      athleteText: turn.athleteText,
-      coachText: turn.coachText,
-      ...(turn.attachments === undefined
-        ? {}
-        : { attachments: parseTranscriptAttachments(turn.attachments) }),
-    };
-  });
-  if (value.status === "restart-required" && (turns.length !== 0 || value.nextCursor !== null)) {
-    throw new TypeError();
-  }
-  if (value.status === "page" && turns.length === 0 && value.nextCursor !== null) {
-    throw new TypeError();
-  }
-  return {
-    schemaVersion: 1,
-    status: value.status,
-    turns,
-    nextCursor: value.nextCursor,
-  };
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new TypeError();
+  return parsed.data;
 }
 
 function parseArchivedConversations(value: unknown): unknown {
@@ -1516,6 +1441,7 @@ contextBridge.exposeInMainWorld(
       const request = parseTranscriptPageRequest(input);
       return parseTranscriptPage(
         await ipcRenderer.invoke(DESKTOP_TRANSCRIPT_PAGE_CHANNEL, request),
+        GetTranscriptPageRpcResultSchema,
       );
     },
     listArchivedConversations: async () =>
@@ -1524,7 +1450,7 @@ contextBridge.exposeInMainWorld(
       const request = parseArchivedPageRequest(input);
       return parseTranscriptPage(
         await ipcRenderer.invoke(DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL, request),
-        archivedTranscriptCursor,
+        GetArchivedTranscriptPageRpcResultSchema,
       );
     },
     getPlanningReadModel: async () =>

@@ -18,6 +18,9 @@ export const PlanWorkoutReadModelSchema = z
     sport: z.string().min(1),
     name: z.string().min(1),
     durationSeconds: z.number().int().nonnegative().nullable(),
+    targets: z.string().min(1).max(2_000).nullable().optional(),
+    purpose: z.string().min(1).max(2_000).nullable().optional(),
+    safetyGuardrail: z.string().min(1).max(2_000).nullable().optional(),
     origin: z.enum(["coach", "athlete"]),
     navigation: PlanNavigationTargetSchema,
   })
@@ -51,7 +54,10 @@ export const ActivePlanReadModelSchema = z
         message: "current week and its date range must appear together",
       });
     }
-    if (value.todayWorkout !== null && !value.workouts.some((item) => item.id === value.todayWorkout?.id)) {
+    if (
+      value.todayWorkout !== null &&
+      !value.workouts.some((item) => item.id === value.todayWorkout?.id)
+    ) {
       context.addIssue({
         code: "custom",
         path: ["todayWorkout"],
