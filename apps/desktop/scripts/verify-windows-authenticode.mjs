@@ -2,8 +2,9 @@ import { execFile } from "node:child_process";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { parseWindowsReleaseProvenance, requireReleaseCommit } from "./windows-release-plan.mjs";
 
-export const WINDOWS_AUTHENTICODE_SUMMARY_SCHEMA = "windows-authenticode-verification/1";
+export const WINDOWS_AUTHENTICODE_SUMMARY_SCHEMA = "windows-authenticode-verification/2";
 export const WINDOWS_AUTHENTICODE_REQUIRED_CHECKS = Object.freeze([
   "file",
   "status",
@@ -25,6 +26,7 @@ const safeMessages = new Set([
   "Authenticode publisher mismatch",
   "Authenticode thumbprint mismatch",
   "Authenticode chain is untrusted",
+  "Authenticode provenance mismatch",
   "signtool verification failed",
   "Authenticode summary is invalid",
   "PowerShell 7 is required for Authenticode verification",
@@ -75,6 +77,7 @@ function validSummary(summary) {
       "digestAlgorithm",
       "rfc3161",
       "signtool",
+      "versionInfo",
       "allowSelfSignedTest",
       "checks",
     ]) ||
@@ -117,6 +120,14 @@ function validSummary(summary) {
     return false;
   }
   if (
+    !exactObject(summary.versionInfo) ||
+    !hasExactKeys(summary.versionInfo, ["productVersion", "legalTrademarks"]) ||
+    !nullableString(summary.versionInfo.productVersion) ||
+    !nullableString(summary.versionInfo.legalTrademarks)
+  ) {
+    return false;
+  }
+  if (
     !Array.isArray(summary.checks) ||
     !summary.checks.every(
       (check) =>
@@ -149,22 +160,36 @@ function checkMap(summary) {
   return new Map(summary.checks.map((check) => [check.name, check]));
 }
 
-function validExpectedValues(expectedPublisherDn, expectedThumbprint) {
+function validExpectedValues(expectedPublisherDn, expectedThumbprint, expectedCommit) {
   return (
     typeof expectedPublisherDn === "string" &&
     expectedPublisherDn.length > 0 &&
     expectedPublisherDn === expectedPublisherDn.trim() &&
-    (expectedThumbprint === undefined || /^[0-9a-f]{40}$/iu.test(expectedThumbprint))
+    (expectedThumbprint === undefined || /^[0-9a-f]{40}$/iu.test(expectedThumbprint)) &&
+    (expectedCommit === undefined || /^[0-9a-f]{40}$/u.test(expectedCommit))
   );
+}
+
+function provenanceMatches(summary, expectedCommit, expectedVersion) {
+  if (expectedCommit !== undefined) {
+    if (parseWindowsReleaseProvenance(summary.versionInfo.legalTrademarks) !== expectedCommit) {
+      return false;
+    }
+  }
+  if (expectedVersion !== undefined && summary.versionInfo.productVersion !== expectedVersion) {
+    return false;
+  }
+  return true;
 }
 
 export function decideWindowsAuthenticode(
   summary,
-  { expectedPublisherDn, expectedThumbprint, allowSelfSignedTest = false },
+  { expectedPublisherDn, expectedThumbprint, expectedCommit, expectedVersion, allowSelfSignedTest = false },
 ) {
   if (
     !validSummary(summary) ||
-    !validExpectedValues(expectedPublisherDn, expectedThumbprint) ||
+    !validExpectedValues(expectedPublisherDn, expectedThumbprint, expectedCommit) ||
+    (expectedVersion !== undefined && typeof expectedVersion !== "string") ||
     typeof allowSelfSignedTest !== "boolean" ||
     summary.allowSelfSignedTest !== allowSelfSignedTest
   ) {
@@ -214,6 +239,9 @@ export function decideWindowsAuthenticode(
     fail("Authenticode chain is untrusted");
   }
   if (!checks.get("signtool").ok) fail("signtool verification failed");
+  if (!provenanceMatches(summary, expectedCommit, expectedVersion)) {
+    fail("Authenticode provenance mismatch");
+  }
   if (!checks.get("status").ok || !summary.ok || summary.checks.some((check) => !check.ok)) {
     fail("Authenticode signature is not valid");
   }
@@ -238,7 +266,11 @@ async function runWindowsAuthenticode(options, dependencies = {}) {
   if (
     !exactObject(options) ||
     !isAbsolute(options.installerPath) ||
-    !validExpectedValues(options.expectedPublisherDn, options.expectedThumbprint)
+    !validExpectedValues(
+      options.expectedPublisherDn,
+      options.expectedThumbprint,
+      options.expectedCommit,
+    )
   ) {
     fail("Authenticode summary is invalid");
   }
@@ -289,6 +321,8 @@ export async function verifyWindowsAuthenticode(options, dependencies = {}) {
   return decideWindowsAuthenticode(summary, {
     expectedPublisherDn: options.expectedPublisherDn,
     expectedThumbprint: options.expectedThumbprint,
+    expectedCommit: options.expectedCommit,
+    expectedVersion: options.expectedVersion,
     allowSelfSignedTest: options.allowSelfSignedTest ?? false,
   });
 }
@@ -311,11 +345,19 @@ export function createWindowsAuthenticodeVerifyMode(options, dependencies = {}) 
       ) {
         fail("Authenticode publisher mismatch");
       }
+      let expectedCommit;
+      try {
+        expectedCommit = requireReleaseCommit(context?.commit);
+      } catch {
+        fail("Authenticode provenance mismatch");
+      }
       await verifyWindowsAuthenticode(
         {
           installerPath,
           expectedPublisherDn,
           expectedThumbprint: options.expectedThumbprint,
+          expectedCommit,
+          expectedVersion: context.version,
           allowSelfSignedTest: options.allowSelfSignedTest,
           allowMissingSigntool: options.allowMissingSigntool,
         },
@@ -329,6 +371,7 @@ function parseArguments(arguments_) {
   let installerPath;
   let expectedPublisherDn;
   let expectedThumbprint;
+  let expectedCommit;
   let allowSelfSignedTest = false;
   let allowMissingSigntool = false;
   for (let index = 0; index < arguments_.length; index += 1) {
@@ -352,6 +395,8 @@ function parseArguments(arguments_) {
       expectedPublisherDn = value;
     } else if (argument === "--thumbprint" && expectedThumbprint === undefined) {
       expectedThumbprint = value;
+    } else if (argument === "--commit" && expectedCommit === undefined) {
+      expectedCommit = value;
     } else {
       fail("Authenticode summary is invalid");
     }
@@ -363,6 +408,7 @@ function parseArguments(arguments_) {
     installerPath: resolve(installerPath),
     expectedPublisherDn,
     expectedThumbprint,
+    expectedCommit,
     allowSelfSignedTest,
     allowMissingSigntool,
   };

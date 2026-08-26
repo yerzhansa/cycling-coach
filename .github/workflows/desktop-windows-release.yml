@@ -32,9 +32,12 @@ concurrency:
 
 jobs:
   verify-windows-envelope:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: windows-latest
+    timeout-minutes: 45
     permissions: { contents: write }
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -81,6 +84,20 @@ jobs:
           fi
           RELEASE_ID=$(printf '%s' "$RELEASE" | jq -er '.id')
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          REF=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/enduragent-desktop@$VERSION")
+          OBJECT_TYPE=$(printf '%s' "$REF" | jq -er '.object.type')
+          OBJECT_SHA=$(printf '%s' "$REF" | jq -er '.object.sha')
+          if [ "$OBJECT_TYPE" = 'tag' ]; then
+            OBJECT_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$OBJECT_SHA" | jq -er 'select(.object.type == "commit") | .object.sha')
+          elif [ "$OBJECT_TYPE" != 'commit' ]; then
+            echo '::error::Desktop release tag is unresolvable'
+            exit 1
+          fi
+          if ! printf '%s' "$OBJECT_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo '::error::Desktop release tag is unresolvable'
+            exit 1
+          fi
+          echo "commit=$OBJECT_SHA" >> "$GITHUB_OUTPUT"
       - name: Refuse to mark assets while Authenticode is pending
         if: ${{ inputs.dry_run == false && inputs.authenticode != 'verify' }}
         run: |
@@ -92,32 +109,36 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/windows-release"
+          WORK="$(cygpath -u "$RUNNER_TEMP")/windows-release"
+          mkdir -p "$WORK"
           gh release download "enduragent-desktop@$VERSION" \
             --repo "$GITHUB_REPOSITORY" \
-            --dir "$RUNNER_TEMP/windows-release" \
+            --dir "$WORK" \
             --pattern "Enduragent-$VERSION-x64.exe" \
             --pattern "Enduragent-$VERSION-x64.exe.blockmap" \
             --pattern latest.yml
-          test "$(ls -1 "$RUNNER_TEMP/windows-release" | LC_ALL=C sort)" = "$(printf '%s\n' "Enduragent-$VERSION-x64.exe" "Enduragent-$VERSION-x64.exe.blockmap" latest.yml | LC_ALL=C sort)"
+          test "$(ls -1 "$WORK" | LC_ALL=C sort)" = "$(printf '%s\n' "Enduragent-$VERSION-x64.exe" "Enduragent-$VERSION-x64.exe.blockmap" latest.yml | LC_ALL=C sort)"
       - name: Verify Windows release envelope
         id: verify
         env:
           VERSION: ${{ inputs.version }}
           AUTHENTICODE: ${{ inputs.authenticode }}
           PUBLISHER_DN: ${{ inputs.publisher_dn }}
+          COMMIT: ${{ steps.release.outputs.commit }}
         run: |
           set -euo pipefail
+          WORK="$(cygpath -u "$RUNNER_TEMP")/windows-release"
+          WORK_WIN="$(cygpath -w "$WORK")"
           if [ "$AUTHENTICODE" = 'verify' ]; then
             if [ -z "$PUBLISHER_DN" ] || [ "$PUBLISHER_DN" = 'CN=ENDURAGENT PUBLISHER DN PLACEHOLDER, O=PLACEHOLDER' ]; then
               echo '::error::publisher_dn is required'
               exit 1
             fi
-            node apps/desktop/scripts/verify-windows-release.mjs "$RUNNER_TEMP/windows-release" --version "$VERSION" --authenticode verify --publisher-dn "$PUBLISHER_DN" | tee "$RUNNER_TEMP/verify.out"
+            node apps/desktop/scripts/verify-windows-release.mjs "$WORK_WIN" --version "$VERSION" --commit "$COMMIT" --authenticode verify --publisher-dn "$PUBLISHER_DN" | tee "$WORK/../verify.out"
           else
-            node apps/desktop/scripts/verify-windows-release.mjs "$RUNNER_TEMP/windows-release" --version "$VERSION" --authenticode pending-w19 | tee "$RUNNER_TEMP/verify.out"
+            node apps/desktop/scripts/verify-windows-release.mjs "$WORK_WIN" --version "$VERSION" --commit "$COMMIT" --authenticode pending-w19 | tee "$WORK/../verify.out"
           fi
-          INSTALLER_SHA256=$(awk '/^Windows release envelope verified [0-9a-f]{64}$/{sha=$NF} END{if (sha == "") exit 1; print sha}' "$RUNNER_TEMP/verify.out")
+          INSTALLER_SHA256=$(awk '/^Windows release envelope verified [0-9a-f]{64}$/{sha=$NF} END{if (sha == "") exit 1; print sha}' "$WORK/../verify.out")
           echo "installer_sha256=$INSTALLER_SHA256" >> "$GITHUB_OUTPUT"
           echo "authenticode=$AUTHENTICODE" >> "$GITHUB_OUTPUT"
       - name: Mark Windows assets verified
@@ -128,16 +149,17 @@ jobs:
           INSTALLER_SHA256: ${{ steps.verify.outputs.installer_sha256 }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/release.json"
-          jq -j '.body // ""' "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/release-body.txt"
+          TEMP="$(cygpath -u "$RUNNER_TEMP")"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$TEMP/release.json"
+          jq -j '.body // ""' "$TEMP/release.json" > "$TEMP/release-body.txt"
           MARKER="Windows assets verified: $INSTALLER_SHA256 (Authenticode verified)"
-          if grep -Fxq "$MARKER" "$RUNNER_TEMP/release-body.txt"; then
+          if grep -Fxq "$MARKER" "$TEMP/release-body.txt"; then
             exit 0
           fi
-          printf '\n\n%s' "$MARKER" >> "$RUNNER_TEMP/release-body.txt"
-          jq -n --rawfile body "$RUNNER_TEMP/release-body.txt" '{body: $body}' > "$RUNNER_TEMP/release-patch.json"
+          printf '\n\n%s' "$MARKER" >> "$TEMP/release-body.txt"
+          jq -n --rawfile body "$TEMP/release-body.txt" '{body: $body}' > "$TEMP/release-patch.json"
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            --input "$RUNNER_TEMP/release-patch.json" >/dev/null
+            --input "$TEMP/release-patch.json" >/dev/null
       - name: Dry run summary
         if: ${{ inputs.dry_run == true }}
         env:

@@ -8,7 +8,11 @@ export type WindowsAuthenticodeMode =
       readonly expectedPublisherDn?: string;
       readonly verify: (
         installerPath: string,
-        context: { readonly version: string; readonly publisherName?: string },
+        context: {
+          readonly version: string;
+          readonly commit: string;
+          readonly publisherName?: string;
+        },
       ) => Promise<void>;
     };
 
@@ -48,6 +52,10 @@ export interface VerifiedWindowsReleaseAssets {
 
 export const WINDOWS_UPDATER_METADATA_MAX_BYTES: 16_384;
 export function safeWindowsReleaseVerificationMessage(error: unknown): string | undefined;
+export function checkWindowsInstallerBlockmap(
+  blockmap: Uint8Array,
+  installer: Uint8Array,
+): string | null;
 export function verifyWindowsReleaseAssets(
   artifactDirectory: string,
   options: VerifyWindowsReleaseOptions,

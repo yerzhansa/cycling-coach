@@ -126,6 +126,7 @@ describe("Windows release plan", () => {
       signtoolOptions: { publisherName: [WINDOWS_PUBLISHER_DN_PLACEHOLDER] },
       signExecutable: true,
       verifyUpdateCodeSignature: true,
+      legalTrademarks: `enduragent-release-commit:${commit}`,
       target: [{ target: "nsis", arch: ["x64"] }],
     });
     expect(plan.updaterMetadata.publisherName).toBe(WINDOWS_PUBLISHER_DN_PLACEHOLDER);

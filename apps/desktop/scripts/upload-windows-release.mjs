@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
-  WINDOWS_AUTHENTICODE_PENDING,
+  WINDOWS_PUBLISHER_DN_PLACEHOLDER,
   requireReleaseCommit,
   windowsReleaseArtifactNames,
 } from "./windows-release-plan.mjs";
@@ -13,6 +13,10 @@ import {
   safeWindowsReleaseVerificationMessage,
   verifyWindowsReleaseAssets,
 } from "./verify-windows-release.mjs";
+import {
+  createWindowsAuthenticodeVerifyMode,
+  safeWindowsAuthenticodeMessage,
+} from "./verify-windows-authenticode.mjs";
 import { requireStableSemVer } from "./macos-release-plan.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -23,7 +27,12 @@ const safeWindowsReleaseUploadMessages = new Set([
   "release commit mismatch",
   "Windows release upload is incomplete",
   "Authenticode verification mode is required",
+  "Windows publisher DN is invalid",
+  "Authenticode thumbprint is invalid",
+  "unsigned Windows installer refused",
+  "artifact directory must be absolute",
   "upload record path must be absolute",
+  "upload record must be outside the artifact directory",
   "upload record already exists",
   "upload record directory is missing",
   "release repository is invalid",
@@ -44,6 +53,31 @@ export function safeWindowsReleaseUploadMessage(error) {
       safeExistingAssetMessagePattern.test(error.message))
     ? error.message
     : undefined;
+}
+
+function requirePublisherDn(value) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value !== value.trim() ||
+    value === WINDOWS_PUBLISHER_DN_PLACEHOLDER
+  ) {
+    throw new TypeError("Windows publisher DN is invalid");
+  }
+  return value;
+}
+
+function requireThumbprint(value) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^[0-9a-f]{40}$/iu.test(value)) {
+    throw new TypeError("Authenticode thumbprint is invalid");
+  }
+  return value;
+}
+
+function recordInsideDirectory(record, directory) {
+  const path = relative(resolve(directory), resolve(record));
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
 function requireRepository(value) {
@@ -172,13 +206,24 @@ async function releaseFileRecords(verified, dependencies) {
 export async function runWindowsReleaseUpload(input, dependencies = {}) {
   const version = requireStableSemVer(input.version);
   const commit = requireReleaseCommit(input.commit);
-  if (!isAbsolute(input.directory)) throw new TypeError("artifact directory must be absolute");
-  if (input.authenticode !== WINDOWS_AUTHENTICODE_PENDING) {
+  if (typeof input.directory !== "string" || !isAbsolute(input.directory)) {
+    throw new TypeError("artifact directory must be absolute");
+  }
+  if (input.authenticode !== "verify") {
     throw new TypeError("Authenticode verification mode is required");
   }
+  const publisherDn = requirePublisherDn(input.publisherDn);
+  const thumbprint = requireThumbprint(input.thumbprint);
+  const authenticodeMode = createWindowsAuthenticodeVerifyMode({
+    expectedPublisherDn: publisherDn,
+    expectedThumbprint: thumbprint,
+  });
   const repository = requireRepository(input.repo ?? defaultRepository);
   if (input.record !== undefined && !isAbsolute(input.record)) {
     throw new TypeError("upload record path must be absolute");
+  }
+  if (input.record !== undefined && recordInsideDirectory(input.record, input.directory)) {
+    throw new TypeError("upload record must be outside the artifact directory");
   }
   const executeFile = dependencies.executeFile ?? executeSystemFile;
   const verifyAssets = dependencies.verifyAssets ?? verifyWindowsReleaseAssets;
@@ -198,12 +243,28 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
     }
   }
   let uploaded = false;
+  let uploadedAssets = [];
+  const reconcile = async () => {
+    try {
+      const current = await viewRelease(executeFile, tag, repository);
+      const currentNames = new Set(releaseAssetNames(current));
+      uploadedAssets = expectedNames.filter((name) => currentNames.has(name));
+      uploaded = uploadedAssets.length > 0;
+    } catch {
+      uploadedAssets = null;
+      uploaded = "unknown";
+    }
+  };
   try {
     const verified = await verifyAssets(input.directory, {
       version,
       commit,
-      authenticode: input.authenticode,
+      expectedPublisherName: publisherDn,
+      authenticode: authenticodeMode,
     });
+    if (verified.authenticode !== "verified") {
+      throw new TypeError("unsigned Windows installer refused");
+    }
     const files = Object.freeze(await releaseFileRecords(verified, fileDependencies));
     const release = await viewRelease(executeFile, tag, repository);
     const tagCommit = await resolveTagCommit(executeFile, repository, tag);
@@ -214,20 +275,25 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
         throw new TypeError(`Windows release asset already exists: ${name}`);
       }
     }
-    await executeFile("gh-personal", [
-      "release",
-      "upload",
-      tag,
-      "--repo",
-      repository,
-      verified.paths.installer,
-      verified.paths.blockmap,
-      verified.paths.metadata,
-    ]);
+    try {
+      await executeFile("gh-personal", [
+        "release",
+        "upload",
+        tag,
+        "--repo",
+        repository,
+        verified.paths.installer,
+        verified.paths.blockmap,
+        verified.paths.metadata,
+      ]);
+    } catch (error) {
+      await reconcile();
+      if (uploaded !== false) throw new TypeError("Windows release upload is incomplete");
+      throw error;
+    }
     uploaded = true;
-    const uploadedRelease = await viewRelease(executeFile, tag, repository);
-    const uploadedNames = new Set(releaseAssetNames(uploadedRelease));
-    if (expectedNames.some((name) => !uploadedNames.has(name))) {
+    await reconcile();
+    if (uploadedAssets === null || uploadedAssets.length !== expectedNames.length) {
       throw new TypeError("Windows release upload is incomplete");
     }
     const record = Object.freeze({
@@ -260,8 +326,10 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
         error:
           safeWindowsReleaseUploadMessage(error) ??
           safeWindowsReleaseVerificationMessage(error) ??
+          safeWindowsAuthenticodeMessage(error) ??
           "Windows release upload failed",
         uploaded,
+        uploadedAssets,
       };
       try {
         await fileDependencies.writeFile(
@@ -275,6 +343,17 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
   }
 }
 
+const commandOptions = Object.freeze({
+  version: "version",
+  directory: "directory",
+  commit: "commit",
+  authenticode: "authenticode",
+  "publisher-dn": "publisherDn",
+  thumbprint: "thumbprint",
+  repo: "repo",
+  record: "record",
+});
+
 function parseArguments(arguments_) {
   const parsed = { repo: defaultRepository };
   for (let index = 0; index < arguments_.length; index += 2) {
@@ -284,13 +363,12 @@ function parseArguments(arguments_) {
       throw new TypeError("Windows release upload failed");
     }
     const key = name.slice(2);
-    if (!["version", "directory", "commit", "authenticode", "repo", "record"].includes(key)) {
+    const option = Object.hasOwn(commandOptions, key) ? commandOptions[key] : undefined;
+    if (option === undefined) throw new TypeError("Windows release upload failed");
+    if (Object.hasOwn(parsed, option) && option !== "repo") {
       throw new TypeError("Windows release upload failed");
     }
-    if (Object.hasOwn(parsed, key) && key !== "repo") {
-      throw new TypeError("Windows release upload failed");
-    }
-    parsed[key] = value;
+    parsed[option] = value;
   }
   return parsed;
 }
@@ -307,6 +385,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
     const message =
       safeWindowsReleaseUploadMessage(error) ??
       safeWindowsReleaseVerificationMessage(error) ??
+      safeWindowsAuthenticodeMessage(error) ??
       "Windows release upload failed";
     process.stderr.write(`${message}\n`);
     process.exitCode = 1;

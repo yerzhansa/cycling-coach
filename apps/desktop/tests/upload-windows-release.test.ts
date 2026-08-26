@@ -11,6 +11,7 @@ import { windowsReleaseArtifactNames } from "../scripts/windows-release-plan.mjs
 
 const version = "0.1.5";
 const commit = "a".repeat(40);
+const publisherDn = "CN=Enduragent Test Publisher, O=Enduragent Test";
 const tag = `enduragent-desktop@${version}`;
 const repository = "yerzhansa/enduragent";
 const script = resolve(
@@ -58,7 +59,7 @@ beforeEach(async () => {
     },
     installerSha512: createHash("sha512").update(contents.installer).digest("base64"),
     installerSha256: createHash("sha256").update(contents.installer).digest("hex"),
-    authenticode: "pending-w19",
+    authenticode: "verified",
   };
 });
 
@@ -106,7 +107,8 @@ function input(overrides: Record<string, unknown> = {}) {
     version,
     directory,
     commit,
-    authenticode: "pending-w19" as const,
+    authenticode: "verify" as const,
+    publisherDn,
     ...overrides,
   };
 }
@@ -119,7 +121,8 @@ describe("Windows release upload", () => {
     expect(verifyAssets).toHaveBeenCalledWith(directory, {
       version,
       commit,
-      authenticode: "pending-w19",
+      expectedPublisherName: publisherDn,
+      authenticode: expect.objectContaining({ mode: "verify", expectedPublisherDn: publisherDn }),
     });
     const viewArguments = [
       "release",
@@ -247,7 +250,8 @@ describe("Windows release upload", () => {
   });
 
   it("refuses a pre-existing upload record before verification or GitHub access", async () => {
-    const recordPath = join(directory, "upload-record.json");
+    const recordPath = join(directory, "..", `upload-record-existing-${process.pid}.json`);
+    temporaryRoots.push(recordPath);
     await writeFile(recordPath, "existing");
     const executeFile = successfulExecutor();
     const verifyAssets = vi.fn(async () => verified);
@@ -259,7 +263,8 @@ describe("Windows release upload", () => {
   });
 
   it("writes a safe failed record when release lookup fails", async () => {
-    const recordPath = join(directory, "upload-record.json");
+    const recordPath = join(directory, "..", `upload-record-failed-${process.pid}.json`);
+    temporaryRoots.push(recordPath);
     const executeFile = vi.fn(async () => Promise.reject(new Error("not found")));
     await expect(
       runWindowsReleaseUpload(input({ record: recordPath }), {
@@ -276,15 +281,114 @@ describe("Windows release upload", () => {
       status: "failed",
       error: `release does not exist: ${tag}`,
       uploaded: false,
+      uploadedAssets: [],
     });
     expect(executeFile.mock.calls.flat(2)).not.toContain("upload");
+  });
+
+  it("records the assets that became public when a multi-asset upload fails partway", async () => {
+    const recordPath = join(directory, "..", `upload-record-${process.pid}.json`);
+    temporaryRoots.push(recordPath);
+    let views = 0;
+    const executeFile = vi.fn(async (_executable: string, arguments_: readonly string[]) => {
+      if (arguments_[0] === "release" && arguments_[1] === "view") {
+        views += 1;
+        return {
+          stdout: views === 1 ? release([]) : release([verified.names.installer, verified.names.blockmap]),
+        };
+      }
+      if (arguments_[0] === "api") {
+        return { stdout: JSON.stringify({ object: { type: "commit", sha: commit } }) };
+      }
+      throw new Error("upload interrupted");
+    });
+    await expect(
+      runWindowsReleaseUpload(input({ record: recordPath }), {
+        executeFile,
+        verifyAssets: vi.fn(async () => verified),
+      }),
+    ).rejects.toThrow("Windows release upload is incomplete");
+    expect(JSON.parse(await readFile(recordPath, "utf8"))).toMatchObject({
+      status: "failed",
+      error: "Windows release upload is incomplete",
+      uploaded: true,
+      uploadedAssets: [verified.names.installer, verified.names.blockmap],
+    });
+  });
+
+  it("records an unknown upload state when reconciliation fails after an upload error", async () => {
+    const recordPath = join(directory, "..", `upload-record-unknown-${process.pid}.json`);
+    temporaryRoots.push(recordPath);
+    let views = 0;
+    const executeFile = vi.fn(async (_executable: string, arguments_: readonly string[]) => {
+      if (arguments_[0] === "release" && arguments_[1] === "view") {
+        views += 1;
+        if (views === 1) return { stdout: release([]) };
+        throw new Error("network");
+      }
+      if (arguments_[0] === "api") {
+        return { stdout: JSON.stringify({ object: { type: "commit", sha: commit } }) };
+      }
+      throw new Error("upload interrupted");
+    });
+    await expect(
+      runWindowsReleaseUpload(input({ record: recordPath }), {
+        executeFile,
+        verifyAssets: vi.fn(async () => verified),
+      }),
+    ).rejects.toThrow("Windows release upload is incomplete");
+    expect(JSON.parse(await readFile(recordPath, "utf8"))).toMatchObject({
+      status: "failed",
+      uploaded: "unknown",
+      uploadedAssets: null,
+    });
+  });
+
+  it("refuses an upload record inside the artifact directory before touching it", async () => {
+    const executeFile = successfulExecutor();
+    const verifyAssets = vi.fn(async () => verified);
+    for (const recordPath of [join(directory, "upload-record.json"), join(directory, "..record.json")]) {
+      await expect(
+        runWindowsReleaseUpload(input({ record: recordPath }), { executeFile, verifyAssets }),
+      ).rejects.toThrow("upload record must be outside the artifact directory");
+      await expect(stat(recordPath)).rejects.toThrow();
+    }
+    expect(verifyAssets).not.toHaveBeenCalled();
+    expect(executeFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses the placeholder or missing publisher DN before verification", async () => {
+    const executeFile = vi.fn(async () => ({ stdout: "" }));
+    const verifyAssets = vi.fn(async () => verified);
+    await expect(
+      runWindowsReleaseUpload(
+        input({ publisherDn: "CN=ENDURAGENT PUBLISHER DN PLACEHOLDER, O=PLACEHOLDER" }),
+        { executeFile, verifyAssets },
+      ),
+    ).rejects.toThrow("Windows publisher DN is invalid");
+    await expect(
+      runWindowsReleaseUpload(input({ publisherDn: undefined }), { executeFile, verifyAssets }),
+    ).rejects.toThrow("Windows publisher DN is invalid");
+    expect(verifyAssets).not.toHaveBeenCalled();
+    expect(executeFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses an installer the verifier did not mark as Authenticode verified", async () => {
+    const executeFile = successfulExecutor();
+    await expect(
+      runWindowsReleaseUpload(input(), {
+        executeFile,
+        verifyAssets: vi.fn(async () => ({ ...verified, authenticode: "pending-w19" }) as never),
+      }),
+    ).rejects.toThrow("unsigned Windows installer refused");
+    expect(executeFile).not.toHaveBeenCalled();
   });
 
   it("refuses unsupported Authenticode modes before verification or upload", async () => {
     const executeFile = vi.fn(async () => ({ stdout: "" }));
     const verifyAssets = vi.fn(async () => verified);
     await expect(
-      runWindowsReleaseUpload(input({ authenticode: "verified" }) as never, {
+      runWindowsReleaseUpload(input({ authenticode: "pending-w19" }) as never, {
         executeFile,
         verifyAssets,
       }),
@@ -305,7 +409,9 @@ describe("Windows release upload", () => {
         "--commit",
         commit,
         "--authenticode",
-        "verified",
+        "pending-w19",
+        "--publisher-dn",
+        publisherDn,
       ],
       { encoding: "utf8" },
     );
@@ -314,7 +420,8 @@ describe("Windows release upload", () => {
   });
 
   it("writes an owner-only immutable upload record with all file hashes", async () => {
-    const recordPath = join(directory, "upload-record.json");
+    const recordPath = join(directory, "..", `upload-record-ok-${process.pid}.json`);
+    temporaryRoots.push(recordPath);
     const result = await runWindowsReleaseUpload(input({ record: recordPath }), {
       executeFile: successfulExecutor(),
       verifyAssets: vi.fn(async () => verified),
@@ -330,7 +437,7 @@ describe("Windows release upload", () => {
       tagCommit: commit,
       arch: "x64",
       status: "uploaded",
-      authenticode: "pending-w19",
+      authenticode: "verified",
     });
     expect(recorded.files.map((file: { name: string }) => file.name)).toEqual([
       verified.names.installer,

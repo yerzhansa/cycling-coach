@@ -139,15 +139,21 @@ function installerMetadataMatches(metadata, version, installerName, sha512, size
   );
 }
 
-function verifyBlockmap(bytes, installer) {
-  if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) {
-    fail("installer blockmap is invalid");
+export function checkWindowsInstallerBlockmap(bytes, installer) {
+  if (
+    !(bytes instanceof Uint8Array) ||
+    !(installer instanceof Uint8Array) ||
+    bytes.length < 2 ||
+    bytes[0] !== 0x1f ||
+    bytes[1] !== 0x8b
+  ) {
+    return "installer blockmap is invalid";
   }
   let blockmap;
   try {
     blockmap = JSON.parse(gunzipSync(bytes).toString("utf8"));
   } catch {
-    fail("installer blockmap is invalid");
+    return "installer blockmap is invalid";
   }
   if (
     !exactObject(blockmap) ||
@@ -158,7 +164,7 @@ function verifyBlockmap(bytes, installer) {
     !exactObject(blockmap.files[0]) ||
     !hasExactKeys(blockmap.files[0], ["name", "offset", "checksums", "sizes"])
   ) {
-    fail("installer blockmap is invalid");
+    return "installer blockmap is invalid";
   }
   const file = blockmap.files[0];
   if (
@@ -175,10 +181,10 @@ function verifyBlockmap(bytes, installer) {
     ) ||
     !file.sizes.every((size) => Number.isSafeInteger(size) && size > 0)
   ) {
-    fail("installer blockmap is invalid");
+    return "installer blockmap is invalid";
   }
   if (file.sizes.reduce((total, size) => total + size, 0) !== installer.length) {
-    fail("installer blockmap does not match the Windows installer");
+    return "installer blockmap does not match the Windows installer";
   }
   let offset = file.offset;
   for (let index = 0; index < file.sizes.length; index += 1) {
@@ -187,10 +193,16 @@ function verifyBlockmap(bytes, installer) {
       blake2b(installer.subarray(offset, offset + size), { dkLen: BLOCKMAP_CHECKSUM_BYTES }),
     ).toString("base64");
     if (file.checksums[index] !== expectedChecksum) {
-      fail("installer blockmap does not match the Windows installer");
+      return "installer blockmap does not match the Windows installer";
     }
     offset += size;
   }
+  return null;
+}
+
+function verifyBlockmap(bytes, installer) {
+  const message = checkWindowsInstallerBlockmap(bytes, installer);
+  if (message !== null) fail(message);
 }
 
 function requireVersion(value) {
@@ -220,6 +232,9 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
   const version = requireVersion(options?.version);
   const commit = options?.commit === undefined ? null : requireCommit(options.commit);
   const authenticodeMode = requireAuthenticodeMode(options?.authenticode);
+  if (authenticodeMode !== WINDOWS_AUTHENTICODE_PENDING && commit === null) {
+    fail("release commit is required for Authenticode verification");
+  }
   const dependencies = {
     lstat: overrides.lstat ?? lstat,
     readdir: overrides.readdir ?? readdir,
@@ -289,6 +304,7 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
     try {
       await authenticodeMode.verify(paths.installer, {
         version,
+        commit,
         publisherName: options.expectedPublisherName,
       });
     } catch {
@@ -353,7 +369,11 @@ async function main() {
     !arguments_.allowSelfSignedTest
   ) {
     authenticodeMode = WINDOWS_AUTHENTICODE_PENDING;
-  } else if (arguments_.authenticode === "verify" && arguments_.publisherDn !== undefined) {
+  } else if (
+    arguments_.authenticode === "verify" &&
+    arguments_.publisherDn !== undefined &&
+    arguments_.commit !== undefined
+  ) {
     authenticodeMode = createWindowsAuthenticodeVerifyMode({
       expectedPublisherDn: arguments_.publisherDn,
       expectedThumbprint: arguments_.thumbprint,

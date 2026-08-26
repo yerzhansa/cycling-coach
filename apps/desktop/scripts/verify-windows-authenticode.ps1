@@ -21,6 +21,7 @@ $statusMessage = $null
 $digestAlgorithm = $null
 $rfc3161 = $false
 $signtool = [ordered]@{ path = $null; exitCode = $null; output = "" }
+$versionInfo = [ordered]@{ productVersion = $null; legalTrademarks = $null }
 
 function Add-VerificationCheck {
   param([string]$Name, [bool]$Ok, [string]$Detail)
@@ -30,7 +31,7 @@ function Add-VerificationCheck {
 function Write-VerificationSummary {
   param([bool]$Ok)
   $summary = [ordered]@{
-    schema = "windows-authenticode-verification/1"
+    schema = "windows-authenticode-verification/2"
     installerPath = $resolvedInstallerPath
     ok = $Ok
     signer = $signer
@@ -40,6 +41,7 @@ function Write-VerificationSummary {
     digestAlgorithm = $digestAlgorithm
     rfc3161 = $rfc3161
     signtool = $signtool
+    versionInfo = $versionInfo
     allowSelfSignedTest = [bool]$AllowSelfSignedTest
     checks = @($checks)
   }
@@ -189,6 +191,11 @@ try {
     exit 1
   }
 
+  $fileVersionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($resolvedInstallerPath)
+  if ($null -ne $fileVersionInfo) {
+    $versionInfo.productVersion = $fileVersionInfo.ProductVersion
+    $versionInfo.legalTrademarks = $fileVersionInfo.LegalTrademarks
+  }
   $null = Add-Type -AssemblyName System.Security.Cryptography.Pkcs
   $signature = Get-AuthenticodeSignature -LiteralPath $resolvedInstallerPath
   $status = [string]$signature.Status

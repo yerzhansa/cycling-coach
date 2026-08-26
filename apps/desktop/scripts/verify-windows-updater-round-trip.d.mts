@@ -1,6 +1,6 @@
 export interface WindowsUpdaterReleaseInput {
   readonly version: string;
-  readonly installer: Uint8Array | { readonly sha512: string; readonly size: number };
+  readonly installer: Uint8Array;
   readonly blockmap?: Uint8Array;
   readonly metadata: string | Uint8Array;
 }

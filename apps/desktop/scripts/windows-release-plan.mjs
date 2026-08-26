@@ -30,6 +30,7 @@ export const WINDOWS_RELEASE_METADATA_NAME = "latest.yml";
 export const WINDOWS_AUTHENTICODE_PENDING = "pending-w19";
 export const WINDOWS_PUBLISHER_DN_PLACEHOLDER =
   "CN=ENDURAGENT PUBLISHER DN PLACEHOLDER, O=PLACEHOLDER";
+export const WINDOWS_RELEASE_PROVENANCE_PREFIX = "enduragent-release-commit:";
 
 function exactObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -50,7 +51,7 @@ function compareStableVersions(left, right) {
   return 0;
 }
 
-function freezeBuilderOptions(desktopRoot, version, feedUrl, publisherDn) {
+function freezeBuilderOptions(desktopRoot, version, commit, feedUrl, publisherDn) {
   const publish = Object.freeze([
     Object.freeze({ provider: "generic", url: feedUrl, channel: "latest" }),
   ]);
@@ -69,6 +70,7 @@ function freezeBuilderOptions(desktopRoot, version, feedUrl, publisherDn) {
       }),
       signExecutable: true,
       verifyUpdateCodeSignature: true,
+      legalTrademarks: windowsReleaseProvenance(commit),
       target,
     }),
     nsis: Object.freeze({
@@ -97,6 +99,18 @@ export function requireReleaseCommit(value) {
     throw new TypeError("release commit must be a full lowercase SHA-1");
   }
   return value;
+}
+
+export function windowsReleaseProvenance(commit) {
+  return `${WINDOWS_RELEASE_PROVENANCE_PREFIX}${requireReleaseCommit(commit)}`;
+}
+
+export function parseWindowsReleaseProvenance(value) {
+  if (typeof value !== "string" || !value.startsWith(WINDOWS_RELEASE_PROVENANCE_PREFIX)) {
+    return null;
+  }
+  const commit = value.slice(WINDOWS_RELEASE_PROVENANCE_PREFIX.length);
+  return /^[0-9a-f]{40}$/u.test(commit) ? commit : null;
 }
 
 export function windowsReleaseArtifactNames(version) {
@@ -253,6 +267,6 @@ export function createWindowsReleasePlan(input) {
     assetNames,
     updaterMetadata,
     authenticode: WINDOWS_AUTHENTICODE_PENDING,
-    builderOptions: freezeBuilderOptions(desktopRoot, version, feedUrl, publisherDn),
+    builderOptions: freezeBuilderOptions(desktopRoot, version, commit, feedUrl, publisherDn),
   });
 }

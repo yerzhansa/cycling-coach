@@ -104,20 +104,31 @@ describe("Windows release artifact verification", () => {
     const verify = vi.fn(async () => {});
     const result = await verifyWindowsReleaseAssets(directory, {
       version,
+      commit,
       expectedPublisherName: "CN=Enduragent Test",
       authenticode: { verify },
     });
     expect(verify).toHaveBeenCalledWith(join(directory, `Enduragent-${version}-x64.exe`), {
       version,
+      commit,
       publisherName: "CN=Enduragent Test",
     });
     expect(result.authenticode).toBe("verified");
     await expect(
       verifyWindowsReleaseAssets(directory, {
         version,
+        commit,
         authenticode: { verify: vi.fn(async () => Promise.reject(new Error("signature"))) },
       }),
     ).rejects.toThrow("Windows installer Authenticode verification failed");
+  });
+
+  it("requires the release commit before running an Authenticode verifier", async () => {
+    const verify = vi.fn(async () => {});
+    await expect(
+      verifyWindowsReleaseAssets(directory, { version, authenticode: { verify } }),
+    ).rejects.toThrow("release commit is required for Authenticode verification");
+    expect(verify).not.toHaveBeenCalled();
   });
 
   it("rejects extra files and symlinked installers", async () => {

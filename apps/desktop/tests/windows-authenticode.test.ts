@@ -19,6 +19,7 @@ import { windowsReleaseArtifactNames } from "../scripts/windows-release-plan.mjs
 const version = "0.1.5";
 const publisherDn = "CN=Enduragent Test Publisher, O=Enduragent Test";
 const thumbprint = "a".repeat(40);
+const commit = "c".repeat(40);
 const scriptPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../scripts/verify-windows-authenticode.ps1",
@@ -39,7 +40,7 @@ function summary(
   overrides: Partial<WindowsAuthenticodeSummary> = {},
 ): WindowsAuthenticodeSummary {
   return {
-    schema: "windows-authenticode-verification/1",
+    schema: "windows-authenticode-verification/2",
     installerPath: "/synthetic/installer.exe",
     ok: true,
     signer: {
@@ -54,6 +55,7 @@ function summary(
     digestAlgorithm: "sha256",
     rfc3161: true,
     signtool: { path: "C:\\signtool.exe", exitCode: 0, output: "verified" },
+    versionInfo: { productVersion: version, legalTrademarks: `enduragent-release-commit:${commit}` },
     allowSelfSignedTest: false,
     checks: [
       { name: "file", ok: true, detail: "regular-executable" },
@@ -158,6 +160,34 @@ describe("Windows Authenticode decisions", () => {
     ).toThrow("Authenticode chain is untrusted");
   });
 
+  it("binds the sealed provenance to the expected commit and version", () => {
+    expect(
+      decideWindowsAuthenticode(summary(), {
+        ...decisionOptions(),
+        expectedCommit: commit,
+        expectedVersion: version,
+      }).ok,
+    ).toBe(true);
+    expect(() =>
+      decideWindowsAuthenticode(summary(), {
+        ...decisionOptions(),
+        expectedCommit: "d".repeat(40),
+      }),
+    ).toThrow("Authenticode provenance mismatch");
+    expect(() =>
+      decideWindowsAuthenticode(
+        summary({ versionInfo: { productVersion: version, legalTrademarks: null } }),
+        { ...decisionOptions(), expectedCommit: commit },
+      ),
+    ).toThrow("Authenticode provenance mismatch");
+    expect(() =>
+      decideWindowsAuthenticode(summary(), { ...decisionOptions(), expectedVersion: "0.1.6" }),
+    ).toThrow("Authenticode provenance mismatch");
+    expect(() =>
+      decideWindowsAuthenticode({ ...summary(), versionInfo: undefined } as never, decisionOptions()),
+    ).toThrow("Authenticode summary is invalid");
+  });
+
   it("rejects thumbprint and signtool failures", () => {
     expect(() =>
       decideWindowsAuthenticode(
@@ -220,10 +250,19 @@ describe("Windows Authenticode decisions", () => {
     );
     const result = await verifyWindowsReleaseAssets(directory, {
       version,
+      commit,
       expectedPublisherName: publisherDn,
       authenticode,
     });
     expect(result.authenticode).toBe("verified");
+    await expect(
+      verifyWindowsReleaseAssets(directory, {
+        version,
+        commit: "d".repeat(40),
+        expectedPublisherName: publisherDn,
+        authenticode,
+      }),
+    ).rejects.toThrow("Windows installer Authenticode verification failed");
     expect(executeFile).toHaveBeenCalledWith(
       "pwsh",
       expect.arrayContaining([
