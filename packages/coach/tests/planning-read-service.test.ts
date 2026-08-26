@@ -26,7 +26,9 @@ describe("Planning read service", () => {
 
   it("returns an explicit no-Plan state", async () => {
     await expect(
-      createPlanningReadService({ store, timezone: "UTC", now: () => NOW }).getPlanningReadModel({}),
+      createPlanningReadService({ store, timezone: "UTC", now: () => NOW }).getPlanningReadModel(
+        {},
+      ),
     ).resolves.toEqual({ schemaVersion: 1, status: "no-plan", asOfDateKey: 20260826, plan: null });
   });
 
@@ -61,7 +63,11 @@ describe("Planning read service", () => {
       sport: "cycling",
       name: "Tempo builder",
       duration_s: 3_600,
-      structure_json: "{}",
+      structure_json: JSON.stringify({
+        targets: "3 × 8 min · 85–90% FTP",
+        purpose: "Sustainable power",
+        safetyGuardrail: "Stop if the warm-up feels wrong",
+      }),
       origin: "coach",
       device_id: "desktop",
       hlc_physical_ms: NOW,
@@ -83,7 +89,13 @@ describe("Planning read service", () => {
       phase: "Base",
       weekStartDateKey: 20260824,
       weekEndDateKey: 20260830,
-      todayWorkout: { id: WORKOUT_ID, name: "Tempo builder" },
+      todayWorkout: {
+        id: WORKOUT_ID,
+        name: "Tempo builder",
+        targets: "3 × 8 min · 85–90% FTP",
+        purpose: "Sustainable power",
+        safetyGuardrail: "Stop if the warm-up feels wrong",
+      },
     });
     expect(result.plan.workouts).toHaveLength(1);
   });

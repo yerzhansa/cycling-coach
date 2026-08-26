@@ -157,6 +157,23 @@ describe("desktop turn state", () => {
     expect(state.progress).toBe("Checking your training data…");
   });
 
+  it("binds a typed Plan reference to the active coach message", () => {
+    const state = reduceChatState(started(), {
+      type: "event",
+      requestKey: 1,
+      event: {
+        type: "plan-reference",
+        turnId: "turn-1",
+        selection: { kind: "current_week", planId: "plan-1", weekNumber: 1 },
+      },
+    });
+    expect(state.messages.at(-1)?.planReference).toEqual({
+      kind: "current_week",
+      planId: "plan-1",
+      weekNumber: 1,
+    });
+  });
+
   it.each(["", " \n\t"])(
     "does not complete or expose a whitespace-only final text %j",
     (finalText) => {

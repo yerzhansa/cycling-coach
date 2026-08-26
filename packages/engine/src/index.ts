@@ -61,6 +61,7 @@ export type {
   PlatformCalendarMutationsPort,
   PlatformClientPort,
   PlanPersistencePort,
+  PlanningReadPort,
   ReferenceStateSnapshot,
   SecretRef,
   SecretsPort,

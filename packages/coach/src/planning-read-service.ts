@@ -68,13 +68,42 @@ function phaseForWeek(plan: PlanRow, weekIndex: number | null): string | null {
   return null;
 }
 
+function workoutDetails(row: PlanWorkoutRow): {
+  readonly targets: string | null;
+  readonly purpose: string | null;
+  readonly safetyGuardrail: string | null;
+} {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.structure_json) as unknown;
+  } catch {
+    return { targets: null, purpose: null, safetyGuardrail: null };
+  }
+  if (!record(parsed)) return { targets: null, purpose: null, safetyGuardrail: null };
+  const details = parsed;
+  const text = (...keys: readonly string[]): string | null => {
+    for (const key of keys) {
+      const value = details[key];
+      if (typeof value === "string" && value.trim().length > 0) return value.trim();
+    }
+    return null;
+  };
+  return {
+    targets: text("targets", "target"),
+    purpose: text("purpose", "description"),
+    safetyGuardrail: text("safetyGuardrail", "safety_guardrail", "guardrail"),
+  };
+}
+
 function workoutReadModel(row: PlanWorkoutRow): PlanWorkoutReadModel {
+  const details = workoutDetails(row);
   return {
     id: row.id,
     dateKey: row.date_key,
     sport: row.sport,
     name: row.name,
     durationSeconds: row.duration_s,
+    ...details,
     origin: row.origin,
     navigation: { destination: "plan", focus: "workout", entityId: row.id },
   };
@@ -112,7 +141,8 @@ export function createPlanningReadService(input: PlanningReadServiceInput): Plan
                   workout.date_key >= range.startDateKey && workout.date_key <= range.endDateKey,
               )
               .map(workoutReadModel);
-      const todayWorkout = currentWorkouts.find((workout) => workout.dateKey === asOfDateKey) ?? null;
+      const todayWorkout =
+        currentWorkouts.find((workout) => workout.dateKey === asOfDateKey) ?? null;
 
       return GetPlanningReadModelRpcResultSchema.parse({
         schemaVersion: 1,

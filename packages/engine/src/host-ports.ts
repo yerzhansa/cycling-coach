@@ -2,6 +2,8 @@ import type {
   AttachmentCapabilitiesReadModel,
   AthleteState,
   ChatAttachmentReference,
+  PlanningReadModel,
+  PlanReferenceSelection,
   ChatQueueSnapshot,
   CoachDecisionAnswer,
   CoachDecisionContinuationLineage,
@@ -247,6 +249,7 @@ export interface TranscriptCompletedTurnInput {
   readonly athleteText: string;
   readonly coachText: string;
   readonly attachments?: readonly ChatAttachmentReference[];
+  readonly planReference?: PlanReferenceSelection;
 }
 
 export type TranscriptInterruptedTurnInput = TranscriptCompletedTurnInput;
@@ -450,6 +453,10 @@ export interface AthleteStateReaderPort {
   getAthleteState(): Promise<AthleteState>;
 }
 
+export interface PlanningReadPort {
+  getPlanningReadModel(): Promise<PlanningReadModel>;
+}
+
 export interface ReferenceStateSnapshot {
   readonly errorState: {
     readonly mitigation?: string;
@@ -467,6 +474,7 @@ export interface EngineHostPorts {
   readonly chatStore: ChatStorePort;
   readonly chatAttachments?: ChatAttachmentTurnPort;
   readonly attachmentCapabilities?: AttachmentCapabilitiesPort;
+  readonly planningRead?: PlanningReadPort;
   readonly transcriptWriter: TranscriptWriterPort;
   readonly coachDecisions?: CoachDecisionStorePort;
   readonly secrets: SecretsPort;

@@ -152,7 +152,7 @@ describe("coach decision wire contract", () => {
   });
 
   it("projects resume completion explicitly at protocol 26", () => {
-    expect(PROTOCOL_VERSION).toBe(27);
+    expect(PROTOCOL_VERSION).toBe(28);
     expect(
       ResumeCoachDecisionRpcResultSchema.parse({
         resumed: true,

@@ -958,6 +958,43 @@ describe("desktop preload ChatGPT auth", () => {
     });
   });
 
+  it("validates decision-aware transcript pages with typed Plan references", async () => {
+    const turn = {
+      turnId: "turn-1",
+      completedAt: "1998-07-06T00:00:00.000Z",
+      athleteText: "Show Tuesday",
+      coachText: "Tempo builder",
+      planReference: { kind: "workout_detail", planId: "plan-1", workoutId: "workout-1" },
+    };
+    const response = {
+      schemaVersion: 2,
+      status: "page",
+      turns: [turn],
+      entries: [{ kind: "turn", ...turn }],
+      nextCursor: null,
+    };
+    mocks.invoke.mockResolvedValueOnce(response);
+
+    await expect(bridge.getTranscriptPage({ cursor: null, limit: 25 })).resolves.toEqual(response);
+
+    mocks.invoke.mockResolvedValueOnce({
+      ...response,
+      turns: [
+        { ...turn, planReference: { ...turn.planReference, markup: "<button>Apply</button>" } },
+      ],
+      entries: [
+        {
+          kind: "turn",
+          ...turn,
+          planReference: { ...turn.planReference, markup: "<button>Apply</button>" },
+        },
+      ],
+    });
+    await expect(bridge.getTranscriptPage({ cursor: null, limit: 25 })).rejects.toBeInstanceOf(
+      TypeError,
+    );
+  });
+
   it("validates and copies the Planning-owned read model", async () => {
     const response = {
       schemaVersion: 1,

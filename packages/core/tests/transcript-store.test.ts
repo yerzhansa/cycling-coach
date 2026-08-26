@@ -458,6 +458,45 @@ describe("TranscriptStore append and corruption handling", () => {
     ).toThrow("Completed transcript turn is invalid");
   });
 
+  it("round-trips one typed Plan reference for relaunch hydration", () => {
+    const dataDir = makeDataDir();
+    const store = new TranscriptStore(dataDir);
+    const input = {
+      ...turn("chat-plan-reference", "turn-1", "Show Tuesday", "Tempo builder"),
+      planReference: {
+        kind: "workout_detail" as const,
+        planId: "plan-1",
+        workoutId: "workout-1",
+      },
+    };
+
+    store.appendCompletedTurn(input);
+
+    expect(store.readCurrentConversation(input.chatId)).toEqual([
+      { version: 1, kind: "turn-completed", ...input },
+    ]);
+    expect(
+      store.readCurrentConversationPage(input.chatId, { cursor: null, limit: 10 }),
+    ).toMatchObject({
+      status: "page",
+      turns: [{ turnId: "turn-1", planReference: input.planReference }],
+    });
+  });
+
+  it("rejects arbitrary Plan-card markup in transcript records", () => {
+    const store = new TranscriptStore(makeDataDir());
+    expect(() =>
+      store.appendCompletedTurn({
+        ...turn("chat-plan-reference-invalid", "turn-1"),
+        planReference: {
+          kind: "active_plan_summary",
+          planId: "plan-1",
+          markup: "<button>Apply</button>",
+        },
+      } as never),
+    ).toThrow("Completed transcript turn is invalid");
+  });
+
   it("round-trips an interrupted turn and projects its delivery on transcript pages", () => {
     const dataDir = makeDataDir();
     const store = new TranscriptStore(dataDir);

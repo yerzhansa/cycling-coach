@@ -1,6 +1,6 @@
 import type { ResolvedCs } from "@enduragent/kernel/reference/cs-resolution";
 import { EMPTY_PROVENANCE, type SourceProvenance } from "../provenance.js";
-import type { CoachDecisionReadModel } from "@enduragent/coach-contract";
+import type { CoachDecisionReadModel, PlanReferenceSelection } from "@enduragent/coach-contract";
 
 export interface TurnWriteRecord {
   writesCommitted: number;
@@ -14,6 +14,10 @@ export interface TurnProvenanceRecord {
 export interface TurnDecisionRecord {
   requested: CoachDecisionReadModel | null;
   fallbackText: string | null;
+}
+
+export interface TurnPlanReferenceRecord {
+  selection: PlanReferenceSelection | null;
 }
 
 // Explicit per-turn state, threaded to tool execution through the
@@ -41,6 +45,7 @@ export interface TurnContext {
   /** Source labels of the reference snapshot the channel resolved this turn's anchor from. */
   readonly referenceProvenance: SourceProvenance;
   readonly decision: TurnDecisionRecord;
+  readonly planReference: TurnPlanReferenceRecord;
 }
 
 const TURN_CONTEXT_BRAND = Symbol("turn-context");
@@ -67,6 +72,7 @@ export function createTurnContext(
     provenance: { value: EMPTY_PROVENANCE },
     referenceProvenance,
     decision: { requested: null, fallbackText: null },
+    planReference: { selection: null },
   };
   return ctx;
 }
