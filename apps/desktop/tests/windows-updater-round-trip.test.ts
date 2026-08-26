@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { stringify } from "yaml";
@@ -12,21 +13,26 @@ import { windowsReleaseArtifactNames } from "../scripts/windows-release-plan.mjs
 
 type RoundTripInput = Parameters<typeof verifyWindowsUpdaterRoundTrip>[0];
 
+const require = createRequire(import.meta.url);
+const electronBuilderRequire = createRequire(require.resolve("electron-builder"));
+const { blake2b } = electronBuilderRequire("@noble/hashes/blake2.js") as {
+  blake2b: (input: Uint8Array, options: { dkLen: number }) => Uint8Array;
+};
 const baselineInstaller = Buffer.from("synthetic Windows installer 0.1.5\n");
 const candidateInstaller = Buffer.from("synthetic Windows installer 0.1.6\n");
-const blockmap = gzipSync(
-  JSON.stringify({
-    version: "2",
-    files: [
-      {
-        name: "file",
-        offset: 0,
-        checksums: [Buffer.alloc(18, 0xab).toString("base64")],
-        sizes: [1],
-      },
-    ],
-  }),
-);
+
+function blockmapFor(installer: Buffer, chunkSize = 16): Buffer {
+  const sizes: number[] = [];
+  const checksums: string[] = [];
+  for (let offset = 0; offset < installer.length; offset += chunkSize) {
+    const chunk = installer.subarray(offset, Math.min(offset + chunkSize, installer.length));
+    sizes.push(chunk.length);
+    checksums.push(Buffer.from(blake2b(chunk, { dkLen: 18 })).toString("base64"));
+  }
+  return gzipSync(
+    JSON.stringify({ version: "2", files: [{ name: "file", offset: 0, checksums, sizes }] }),
+  );
+}
 const releaseDate = "2026-08-25T00:00:00.000Z";
 const preflight: WindowsUpdaterPreflight = {
   feedUrl: "https://github.com/yerzhansa/enduragent/releases/latest/download/",
@@ -80,7 +86,9 @@ function release(
     installer,
     metadata: options.metadata ?? metadata(version, installer, options.metadataOverrides),
   };
-  if (options.includeBlockmap !== false) result.blockmap = options.blockmap ?? blockmap;
+  if (options.includeBlockmap !== false) {
+    result.blockmap = options.blockmap ?? blockmapFor(Buffer.from(installer));
+  }
   return result;
 }
 
@@ -149,6 +157,47 @@ const negativeScenarios: readonly {
         candidate: release("0.1.6", candidateInstaller, {
           blockmap: Buffer.from("not gzip"),
         }),
+      }),
+  },
+  {
+    name: "blockmap built from other installer bytes",
+    expected: "installer blockmap does not match the Windows installer",
+    input: () =>
+      roundTripInput({
+        candidate: release("0.1.6", candidateInstaller, {
+          blockmap: blockmapFor(baselineInstaller),
+        }),
+      }),
+  },
+  {
+    name: "blockmap chunk sizes covering fewer bytes than the installer",
+    expected: "installer blockmap does not match the Windows installer",
+    input: () =>
+      roundTripInput({
+        candidate: release("0.1.6", candidateInstaller, {
+          blockmap: blockmapFor(candidateInstaller.subarray(0, 1)),
+        }),
+      }),
+  },
+  {
+    name: "blockmap with a descriptor-only installer",
+    expected: "installer blockmap requires installer bytes",
+    input: () =>
+      roundTripInput({
+        candidate: release(
+          "0.1.6",
+          {
+            sha512: createHash("sha512").update(candidateInstaller).digest("base64"),
+            size: candidateInstaller.byteLength,
+          } as unknown as Uint8Array,
+          {
+            blockmap: blockmapFor(candidateInstaller),
+            metadataOverrides: {
+              sha512: createHash("sha512").update(candidateInstaller).digest("base64"),
+              size: candidateInstaller.byteLength,
+            },
+          },
+        ),
       }),
   },
   {

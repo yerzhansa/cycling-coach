@@ -181,32 +181,37 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 - Upload only `Enduragent-<x.y.z>-x64.exe`, `Enduragent-<x.y.z>-x64.exe.blockmap`, and `latest.yml` from the repository root on the signing host, using absolute paths:
 
   ```bash
-  node apps/desktop/scripts/upload-windows-release.mjs --version <x.y.z> --directory <absolute-artifact-dir> --commit <release-commit-sha> --authenticode pending-w19 --record <absolute-path>/windows-release-<x.y.z>.json
+  node apps/desktop/scripts/upload-windows-release.mjs --version <x.y.z> --directory <absolute-artifact-dir> --commit <release-commit-sha> --authenticode verify --publisher-dn "<PUBLISHER_DN>" --record <absolute-path>/windows-release-<x.y.z>.json
   ```
 
+- Pass `--authenticode verify` and the exact certificate subject as `--publisher-dn`. The uploader rejects every other mode and the placeholder DN.
+- Pass `--thumbprint <40-hex>` to pin the signing certificate. Omit it to accept any trusted certificate with the expected subject.
+- Run the upload on a Windows host with PowerShell 7 and `signtool.exe`. Local Authenticode verification runs before any release mutation.
+- Keep `--record` outside `--directory`. The uploader refuses a record path inside the artifact directory.
 - Omit `--record` only when no local JSON record is required.
 - Leave `--repo` unset to use `yerzhansa/enduragent`.
-- Let `upload-windows-release.mjs` run `verify-windows-release.mjs` locally.
+- Let `upload-windows-release.mjs` run `verify-windows-release.mjs` locally, including Authenticode and provenance verification.
 - Stop the upload when `enduragent-desktop@<x.y.z>` is missing or still a draft.
 - Refuse the upload when any Windows envelope asset already exists on the release.
 - Upload the verified envelope through `gh-personal release upload`.
 - Re-read the release after upload and fail unless all three assets are present.
+- Read `uploadedAssets` in a failed record before retrying. A partial upload lists the assets that became public.
 - Trigger the separate verification workflow from the repository root:
 
   ```bash
-  gh-personal workflow run desktop-windows-release.yml -f version=<x.y.z> -f dry_run=false
+  gh-personal workflow run desktop-windows-release.yml -f version=<x.y.z> -f dry_run=false -f authenticode=verify -f publisher_dn="<PUBLISHER_DN>"
   ```
 
 - Leave `dry_run` at its `true` default to verify without editing the release.
-- Pass `dry_run=false` only when the release body must record the completed verification.
-- Keep `desktop-windows-release.yml` to its single `verify-windows-envelope` job on `ubuntu-latest`.
+- Pass `dry_run=false` only when the release body must record the completed verification. The workflow refuses `dry_run=false` without `authenticode=verify` and a real `publisher_dn`.
+- Keep `desktop-windows-release.yml` to its single `verify-windows-envelope` job on `windows-latest`. `Get-AuthenticodeSignature` and `signtool.exe` exist only on Windows.
 - Reject a non-stable SemVer or a missing, draft, or prerelease `enduragent-desktop@<version>` release in `verify-windows-envelope`.
 - Require exactly `Enduragent-<version>-x64.exe`, `Enduragent-<version>-x64.exe.blockmap`, and `latest.yml` as the Windows envelope among the release assets.
 - Download only those three Windows assets in `verify-windows-envelope`.
-- Run `node apps/desktop/scripts/verify-windows-release.mjs <dir> --version <version> --authenticode pending-w19` against the downloaded envelope.
-- Print the `Authenticode verification pending` notice during verification.
-- Append `Windows assets verified: <installer sha256> (Authenticode verification pending)` to the release body only when `dry_run=false`.
+- Resolve the release tag to its commit and pass it as `--commit`.
+- Run `node apps/desktop/scripts/verify-windows-release.mjs <dir> --version <version> --commit <sha> --authenticode verify --publisher-dn <dn>` against the downloaded envelope.
+- Append `Windows assets verified: <installer sha256> (Authenticode verified)` to the release body only when `dry_run=false`.
 - Never create, move, or delete a release, tag, or asset in `desktop-windows-release.yml`.
 - Leave uploaded assets in place when verification fails.
 - Remove failed Windows assets by hand before retrying.
-- CI does not verify Authenticode yet. The workflow prints a pending notice and appends the marker with the text `(Authenticode verification pending)`.
+- Build provenance: `windows-release-plan.mjs` seals `enduragent-release-commit:<sha>` into the installer's `LegalTrademarks` version string. Verification reads it from the signed installer and compares it with `--commit`.

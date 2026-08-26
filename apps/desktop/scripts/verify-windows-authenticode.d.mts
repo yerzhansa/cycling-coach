@@ -12,7 +12,7 @@ export interface WindowsAuthenticodeSigner {
 }
 
 export interface WindowsAuthenticodeSummary {
-  readonly schema: "windows-authenticode-verification/1";
+  readonly schema: "windows-authenticode-verification/2";
   readonly installerPath: string;
   readonly ok: boolean;
   readonly signer: WindowsAuthenticodeSigner | null;
@@ -26,6 +26,10 @@ export interface WindowsAuthenticodeSummary {
     readonly exitCode: number | null;
     readonly output: string;
   };
+  readonly versionInfo: {
+    readonly productVersion: string | null;
+    readonly legalTrademarks: string | null;
+  };
   readonly allowSelfSignedTest: boolean;
   readonly checks: readonly WindowsAuthenticodeCheck[];
 }
@@ -34,6 +38,8 @@ export interface WindowsAuthenticodeOptions {
   readonly installerPath: string;
   readonly expectedPublisherDn: string;
   readonly expectedThumbprint?: string;
+  readonly expectedCommit?: string;
+  readonly expectedVersion?: string;
   readonly allowSelfSignedTest?: boolean;
   readonly allowMissingSigntool?: boolean;
 }
@@ -59,11 +65,15 @@ export interface WindowsAuthenticodeVerifyMode {
   readonly expectedPublisherDn: string;
   readonly verify: (
     installerPath: string,
-    context: { readonly version: string; readonly publisherName?: string },
+    context: {
+      readonly version: string;
+      readonly commit: string;
+      readonly publisherName?: string;
+    },
   ) => Promise<void>;
 }
 
-export const WINDOWS_AUTHENTICODE_SUMMARY_SCHEMA: "windows-authenticode-verification/1";
+export const WINDOWS_AUTHENTICODE_SUMMARY_SCHEMA: "windows-authenticode-verification/2";
 export const WINDOWS_AUTHENTICODE_REQUIRED_CHECKS: readonly [
   "file",
   "status",
@@ -76,7 +86,10 @@ export const WINDOWS_AUTHENTICODE_REQUIRED_CHECKS: readonly [
 export function parseWindowsAuthenticodeSummary(stdout: string): WindowsAuthenticodeSummary;
 export function decideWindowsAuthenticode(
   summary: WindowsAuthenticodeSummary,
-  options: Pick<WindowsAuthenticodeOptions, "expectedPublisherDn" | "expectedThumbprint" | "allowSelfSignedTest">,
+  options: Pick<
+    WindowsAuthenticodeOptions,
+    "expectedPublisherDn" | "expectedThumbprint" | "expectedCommit" | "expectedVersion" | "allowSelfSignedTest"
+  >,
 ): VerifiedWindowsAuthenticode;
 export function verifyWindowsAuthenticode(
   options: WindowsAuthenticodeOptions,
