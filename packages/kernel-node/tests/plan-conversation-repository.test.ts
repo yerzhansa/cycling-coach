@@ -292,13 +292,13 @@ describe("Plan conversation repository", () => {
           `${"0".repeat(25)}C`,
           SECOND_CONVERSATION_ID,
           SECOND_PLAN_ID,
-      2,
-      REVISION_ID,
-      1,
-      "ready",
-      '{"completeWeeks":12}',
-      17,
-      17,
+          2,
+          REVISION_ID,
+          1,
+          "ready",
+          '{"completeWeeks":12}',
+          17,
+          17,
           "device-1",
           17,
           0,
@@ -395,6 +395,81 @@ describe("Plan conversation repository", () => {
       }),
     ).rejects.toEqual(new PlanConversationValidationError("conversation-conflict"));
     await expect(repository.readConversation(CONVERSATION_ID)).resolves.toEqual(ended);
+  });
+
+  it("atomically approves the latest Draft and activates its local Plan", async () => {
+    const plans = createPlanRepository(store);
+    const repository = createPlanConversationRepository(store);
+    await plans.replace(plan(), []);
+    await repository.saveConversation(
+      conversation({ planId: PLAN_ID, courseChoiceStatus: "omitted" }),
+    );
+    await repository.saveDraftRevision(revision({ status: "ready" }));
+
+    const result = await repository.approveDraft({
+      draftRevisionId: REVISION_ID,
+      expectedRevision: 1,
+      updatedAtMs: 20,
+      deviceId: "device-1",
+      hlcPhysicalMs: 20,
+      hlcCounter: 0,
+    });
+
+    expect(result).toMatchObject({ planId: PLAN_ID, draft: { status: "approved" } });
+    await expect(plans.read(PLAN_ID)).resolves.toMatchObject({ status: "active" });
+    await expect(
+      repository.approveDraft({
+        draftRevisionId: REVISION_ID,
+        expectedRevision: 1,
+        updatedAtMs: 21,
+        deviceId: "device-1",
+        hlcPhysicalMs: 21,
+        hlcCounter: 0,
+      }),
+    ).resolves.toMatchObject({ planId: PLAN_ID, draft: { status: "approved" } });
+  });
+
+  it("keeps the Draft unchanged when approval is stale or another Plan is active", async () => {
+    const plans = createPlanRepository(store);
+    const repository = createPlanConversationRepository(store);
+    await plans.replace(plan(), []);
+    await repository.saveConversation(
+      conversation({ planId: PLAN_ID, courseChoiceStatus: "omitted" }),
+    );
+    await repository.saveDraftRevision(revision({ status: "ready" }));
+    await expect(
+      repository.approveDraft({
+        draftRevisionId: REVISION_ID,
+        expectedRevision: 2,
+        updatedAtMs: 20,
+        deviceId: "device-1",
+        hlcPhysicalMs: 20,
+        hlcCounter: 0,
+      }),
+    ).rejects.toEqual(new PlanConversationValidationError("stale-draft"));
+    await plans.replace(
+      plan({
+        id: SECOND_PLAN_ID,
+        status: "active",
+        updatedAtMs: 3,
+        hlcPhysicalMs: 3,
+      }),
+      [],
+    );
+    await expect(
+      repository.approveDraft({
+        draftRevisionId: REVISION_ID,
+        expectedRevision: 1,
+        updatedAtMs: 20,
+        deviceId: "device-1",
+        hlcPhysicalMs: 20,
+        hlcCounter: 0,
+      }),
+    ).rejects.toEqual(new PlanConversationValidationError("active-plan-exists"));
+    await expect(plans.read(PLAN_ID)).resolves.toMatchObject({ status: "draft" });
+    await expect(repository.readDraftRevision(REVISION_ID)).resolves.toMatchObject({
+      status: "ready",
+    });
   });
 });
 

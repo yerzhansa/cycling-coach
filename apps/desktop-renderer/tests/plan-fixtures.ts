@@ -43,6 +43,7 @@ export function planReadModel(
     readonly title?: string;
     readonly summary?: string;
     readonly revision?: number;
+    readonly reconciliation?: PlanReadModel["reconciliation"];
     readonly data?: PlanReadModel["data"];
   } = {},
 ): PlanReadModel {
@@ -56,7 +57,7 @@ export function planReadModel(
     summary: input.summary ?? "",
     projection: input.projection ?? "no-plan",
     transitions: [{ transitionId: "PL-T01", status: "available", reason: null }],
-    reconciliation: {
+    reconciliation: input.reconciliation ?? {
       status: "not-applicable",
       created: 0,
       pending: 0,

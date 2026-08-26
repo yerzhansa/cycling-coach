@@ -152,6 +152,7 @@ import {
 } from "./activity-power-heart-rate.js";
 import { createTrainingExportService } from "./training-export.js";
 import { createPlanningOperations } from "./planning-operations.js";
+import { createPlanMirrorCalendarAdapter } from "./planning-calendar.js";
 import { createNodePlanRaceCourseAdapter } from "./planning-race-course.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
 
@@ -1568,7 +1569,17 @@ export async function createLocalCoachComposition(
         engine: reconfigurable.engine,
         identity: planningIdentity,
       },
-      { ftp, course: createNodePlanRaceCourseAdapter(), todayDateKey: planningDateKey },
+      {
+        ftp,
+        course: createNodePlanRaceCourseAdapter(),
+        todayDateKey: planningDateKey,
+        calendar: createPlanMirrorCalendarAdapter(() => {
+          const intervals = approvedConfig().intervals;
+          return intervals.apiKey.length === 0
+            ? null
+            : makeChatClient({ apiKey: intervals.apiKey, athleteId: intervals.athleteId });
+        }),
+      },
     );
     const operations = {
       ...coachOperations,

@@ -70,6 +70,8 @@ export interface PlanActions {
   closeDatePicker(): void;
   recalculateStartDate(startDate: string): void;
   approveDraft(): void;
+  reconcilePlan(): void;
+  verifyReconciliation(): void;
   returnToCoach(): void;
   retry(): void;
 }

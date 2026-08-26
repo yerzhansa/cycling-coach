@@ -7,16 +7,18 @@ import type {
 } from "@enduragent/coach-contract";
 import {
   createPlanConversationRepository,
+  createPlanReconciliationRepository,
   createPlanRepository,
   createRaceCourseSnapshot,
   type PlanRecord,
+  type PlanWorkoutRecord,
   type RaceCourseSnapshot,
 } from "@enduragent/kernel/planning";
 import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
-import type { PlanFtpAdapter, PlanFtpSnapshot } from "@enduragent/engine";
+import type { PlanFtpAdapter, PlanFtpSnapshot, PlanMirrorCalendarPort } from "@enduragent/engine";
 import { createPlanningOperations, type PlanDraftBuilder } from "../src/planning-operations.js";
 import type { PlanRaceCourseAdapter } from "../src/planning-race-course.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
@@ -77,6 +79,38 @@ function plan(id: string, timestamp: number): PlanRecord {
     deviceId: "device-1",
     hlcPhysicalMs: timestamp,
     hlcCounter: 0,
+  };
+}
+
+function activationBuilder(): PlanDraftBuilder {
+  const planId = `${"0".repeat(25)}W`;
+  const workouts: PlanWorkoutRecord[] = [
+    ["X", 20260709],
+    ["Y", 20260715],
+    ["Z", 20260716],
+  ].map(([suffix, dateKey]) => ({
+    id: `${"0".repeat(25)}${suffix}`,
+    planId,
+    dateKey: dateKey as number,
+    sport: "cycling",
+    name: `Workout ${suffix}`,
+    durationS: 3_600,
+    structureJson: "{}",
+    origin: "coach",
+    deviceId: "device-1",
+    hlcPhysicalMs: 41,
+    hlcCounter: 0,
+  }));
+  return {
+    async form() {
+      return { plan: plan(planId, 40), workouts, snapshot: { weeks: 12 } };
+    },
+    async revise() {
+      return { plan: plan(planId, 40), workouts, snapshot: { weeks: 12 } };
+    },
+    async recalculateCourse() {
+      return { plan: plan(planId, 40), workouts, snapshot: { weeks: 12 } };
+    },
   };
 }
 
@@ -813,6 +847,179 @@ describe("Plan operations", () => {
     await expect(
       createPlanConversationRepository(store).readLatestDraftRevision(conversationId),
     ).resolves.toMatchObject({ revision: 2 });
+  });
+
+  it("activates locally before an idempotent seven-day Intervals reconciliation", async () => {
+    const events: Array<{ id: number; dateKey: number; externalId: string | null }> = [];
+    let createFailures = 1;
+    const calendar: PlanMirrorCalendarPort = {
+      async listEvents({ startDateKey, endDateKey }) {
+        return events.filter(
+          (event) => event.dateKey >= startDateKey && event.dateKey <= endDateKey,
+        );
+      },
+      async createEvent(value) {
+        if (createFailures > 0) {
+          createFailures -= 1;
+          throw new Error("provider failed");
+        }
+        events.push({
+          id: events.length + 1,
+          dateKey: value.dateKey,
+          externalId: value.externalId,
+        });
+      },
+      async deleteEvent({ eventId }) {
+        const index = events.findIndex((event) => event.id === eventId);
+        if (index >= 0) events.splice(index, 1);
+      },
+    };
+    const authored = identity();
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      {
+        draftBuilder: activationBuilder(),
+        isReady: () => true,
+        todayDateKey: () => 20260709,
+        calendar,
+      },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "command-2",
+      conversationId,
+    });
+    const formed = await operations.executePlanTransition?.({
+      transitionId: "PL-T06",
+      commandId: "command-3",
+      conversationId,
+    });
+    if (formed?.status !== "completed") throw new TypeError("Draft did not form.");
+    const draft = formed.state.data.draft as { id: string; revision: number };
+
+    const activated = await operations.executePlanTransition?.({
+      transitionId: "PL-T11",
+      commandId: "command-4",
+      draftId: draft.id,
+      expectedRevision: draft.revision,
+    });
+    expect(activated).toMatchObject({
+      status: "completed",
+      state: {
+        lifecycle: "active",
+        projection: "active",
+        scenarioId: "PL-S037",
+        reconciliation: { status: "not-started" },
+      },
+    });
+    await expect(createPlanRepository(store).read(`${"0".repeat(25)}W`)).resolves.toMatchObject({
+      status: "active",
+    });
+    await expect(
+      createPlanConversationRepository(store).readDraftRevision(draft.id),
+    ).resolves.toMatchObject({ status: "approved" });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T12",
+        commandId: "command-5",
+        planId: `${"0".repeat(25)}W`,
+        mode: "reconcile",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      state: {
+        lifecycle: "active",
+        scenarioId: "PL-S039",
+        attention: { count: 1, destination: "direct" },
+      },
+    });
+    const reconciled = await operations.executePlanTransition?.({
+      transitionId: "PL-T12",
+      commandId: "command-6",
+      planId: `${"0".repeat(25)}W`,
+      mode: "reconcile",
+    });
+    expect(reconciled).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S043",
+        reconciliation: { status: "verified", created: 2, total: 2 },
+        attention: { count: 0 },
+      },
+    });
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.dateKey).sort()).toEqual([20260709, 20260715]);
+
+    const restored = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { todayDateKey: () => 20260709, calendar },
+    );
+    await expect(restored.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: { scenarioId: "PL-S043", lifecycle: "active" },
+    });
+  });
+
+  it("hydrates an interrupted reconciliation as crash-resume work without attention", async () => {
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        draftBuilder: activationBuilder(),
+        isReady: () => true,
+        todayDateKey: () => 20260709,
+        calendar: {
+          listEvents: async () => [],
+          createEvent: async () => {},
+          deleteEvent: async () => {},
+        },
+      },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "command-2",
+      conversationId,
+    });
+    const formed = await operations.executePlanTransition?.({
+      transitionId: "PL-T06",
+      commandId: "command-3",
+      conversationId,
+    });
+    if (formed?.status !== "completed") throw new TypeError("Draft did not form.");
+    const draft = formed.state.data.draft as { id: string; revision: number };
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T11",
+      commandId: "command-4",
+      draftId: draft.id,
+      expectedRevision: draft.revision,
+    });
+    const repository = createPlanReconciliationRepository(store);
+    const job = await repository.readLatestJob(`${"0".repeat(25)}W`, "mirror");
+    if (job === undefined) throw new TypeError("Reconciliation job missing.");
+    await repository.beginAttempt(job.id, job.updatedAtMs + 1);
+
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: {
+        scenarioId: "PL-S042",
+        reconciliation: { status: "running" },
+        attention: { count: 0 },
+      },
+    });
   });
 
   it("retries an interrupted Plan queue claim and persists the recovered turn", async () => {

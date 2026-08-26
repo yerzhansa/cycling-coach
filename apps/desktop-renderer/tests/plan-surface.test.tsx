@@ -37,6 +37,8 @@ function actions(): PlanActions {
     closeDatePicker: vi.fn(),
     recalculateStartDate: vi.fn(),
     approveDraft: vi.fn(),
+    reconcilePlan: vi.fn(),
+    verifyReconciliation: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
   };
@@ -531,6 +533,73 @@ describe("Plan surface", () => {
     expect(planActions.openDatePicker).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(planActions.retry).toHaveBeenCalledOnce();
+  });
+
+  it("keeps reconciliation failures inline on the active Plan with retry and verify actions", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S039",
+      projection: "active",
+      planId: "00000000000000000000000003",
+      attentionCount: 1,
+      reconciliation: {
+        status: "failed",
+        created: 1,
+        pending: 0,
+        failed: 1,
+        total: 2,
+        currentThrough: null,
+        error: {
+          code: "provider-failed",
+          message: "Some workouts could not be updated in Intervals.",
+          retryable: true,
+        },
+      },
+      data: {
+        plan: {
+          id: "00000000000000000000000003",
+          name: "Gran Fondo Almaty",
+          primaryGoal: "Finish in the front half",
+          startDate: "2026-07-13",
+          targetDate: "2026-10-04",
+          kind: "full-plan",
+          totalWeeks: 12,
+          weekStartDay: 1,
+          workoutCount: 20,
+          plannedDurationS: 72_000,
+        },
+        today: "2026-08-18",
+        weekIndex: 6,
+        todayWorkout: {
+          id: "00000000000000000000000004",
+          date: "2026-08-18",
+          sport: "cycling",
+          name: "Recovery spin",
+          durationS: 2_700,
+        },
+        workouts: [],
+      },
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+      },
+      planActions,
+    });
+
+    render(<PlanView />);
+
+    expect(screen.getByRole("heading", { name: "Plan active · week 6 of 12" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Today · Recovery spin" })).toBeInTheDocument();
+    expect(screen.getByText("Created 1 · Pending 0 · Failed 1 · Total 2")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "Verify again" }));
+    expect(planActions.reconcilePlan).toHaveBeenCalledOnce();
+    expect(planActions.verifyReconciliation).toHaveBeenCalledOnce();
   });
 
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {

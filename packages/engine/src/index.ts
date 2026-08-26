@@ -252,6 +252,7 @@ export {
   planMirrorExternalIdPrefix,
   projectPlanReconciliation,
   reconcileActivePlanWindow,
+  verifyPlanMirror,
   type PlanMirrorCalendarPort,
   type PlanMirrorCreateInput,
   type PlanMirrorEvent,
@@ -260,6 +261,11 @@ export {
   type PlanReconcilerDeps,
   type PlanReconcilerIdentity,
 } from "./planning/reconciler.js";
+export {
+  activatePlanDraft,
+  type ActivatePlanDraftInput,
+  type PlanActivationIdentity,
+} from "./planning/activation.js";
 export {
   RaceCourseLifecycleError,
   acceptParsedRaceCourse,
