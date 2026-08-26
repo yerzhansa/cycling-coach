@@ -25,6 +25,7 @@ import { createChatViewAdapter } from "./chat.js";
 
 export interface PlanBridge {
   getPlanState(): Promise<GetPlanStateRpcResult>;
+  choosePlanRaceCourseFile(): Promise<string | null>;
   executePlanTransition(
     input: ExecutePlanTransitionRpcParams,
   ): Promise<ExecutePlanTransitionRpcResult>;
@@ -50,6 +51,13 @@ export interface PlanViewAdapter {
   discardDraft(): void;
   openRevisionComposer(): void;
   closeRevisionComposer(): void;
+  openCoursePicker(): void;
+  closeCoursePicker(): void;
+  chooseCourseFile(): void;
+  continueWithoutCourse(): void;
+  useCourseWithoutElevation(): void;
+  removeCourse(): void;
+  returnToCoach(): void;
   retry(): void;
   dispose(): void;
 }
@@ -100,6 +108,7 @@ export function createPlanViewAdapter(input: {
   readonly publishCoach: (next: ChatSurfaceState) => void;
   readonly publishDiscardConfirmation: (open: boolean) => void;
   readonly publishRevisionComposer: (open: boolean) => void;
+  readonly publishCoursePicker: (open: boolean) => void;
   readonly createCommandId?: () => string;
   readonly createMessageId?: () => string;
 }): PlanViewAdapter {
@@ -292,6 +301,27 @@ export function createPlanViewAdapter(input: {
     if (model === null) return null;
     const parsed = PlanCoachProjectionDataSchema.safeParse(model.data);
     return parsed.success ? parsed.data : null;
+  };
+
+  const attachCourse = (filePath: string, elevation: "require" | "allow-missing"): void => {
+    const data = currentCoachData();
+    if (data === null) return;
+    if (data.draft === null) {
+      void execute({
+        transitionId: "PL-T02",
+        commandId: createCommandId(),
+        conversationId: data.conversationId,
+        filePath,
+        elevation,
+      });
+      return;
+    }
+    void execute({
+      transitionId: "PL-T09",
+      commandId: createCommandId(),
+      draftId: data.draft.id,
+      course: { action: "attach", filePath, elevation },
+    });
   };
 
   const beginCoachSubmission = (message: string, includeUser: boolean): void => {
@@ -538,6 +568,65 @@ export function createPlanViewAdapter(input: {
     },
     closeRevisionComposer() {
       input.publishRevisionComposer(false);
+    },
+    openCoursePicker() {
+      input.publishCoursePicker(true);
+    },
+    closeCoursePicker() {
+      input.publishCoursePicker(false);
+    },
+    chooseCourseFile() {
+      if (active !== null) return;
+      void input.bridge
+        .choosePlanRaceCourseFile()
+        .then((filePath) => {
+          if (disposed || filePath === null) return;
+          input.publishCoursePicker(false);
+          attachCourse(filePath, "require");
+        })
+        .catch(() => undefined);
+    },
+    continueWithoutCourse() {
+      const data = currentCoachData();
+      if (data === null || active !== null) return;
+      input.publishCoursePicker(false);
+      if (data.draft === null) {
+        void execute({
+          transitionId: "PL-T03",
+          commandId: createCommandId(),
+          conversationId: data.conversationId,
+        });
+        return;
+      }
+      void execute({
+        transitionId: "PL-T09",
+        commandId: createCommandId(),
+        draftId: data.draft.id,
+        course: { action: "remove" },
+      });
+    },
+    useCourseWithoutElevation() {
+      if (active !== null || lastCommand === null) return;
+      if (lastCommand.transitionId === "PL-T02") {
+        attachCourse(lastCommand.filePath, "allow-missing");
+      } else if (lastCommand.transitionId === "PL-T09" && lastCommand.course.action === "attach") {
+        attachCourse(lastCommand.course.filePath, "allow-missing");
+      }
+    },
+    removeCourse() {
+      const data = currentCoachData();
+      if (data?.draft === null || data?.draft === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T09",
+        commandId: createCommandId(),
+        draftId: data.draft.id,
+        course: { action: "remove" },
+      });
+    },
+    returnToCoach() {
+      if (active !== null) return;
+      lastCommand = null;
+      void refresh(false);
     },
     retry() {
       if (lastCommand === null) {

@@ -9,6 +9,7 @@ import {
   type PlanFtpProjection,
   type PlanLifecycle,
   type PlanProjectionKind,
+  type PlanRaceCourseProjection,
   type PlanReadModel,
   type PlanScenarioId,
   type PlanTransitionGuard,
@@ -36,6 +37,15 @@ export interface BuildPlanLifecycleReadModelInput {
   readonly draft: PlanDraftProjection | null;
   readonly ftp?: PlanFtpProjection | null;
   readonly ftpScenario?: "PL-S057" | "PL-S058" | "PL-S059" | "PL-S060" | "PL-S061" | "PL-S062";
+  readonly course?: PlanRaceCourseProjection;
+  readonly courseScenario?:
+    | "PL-S064"
+    | "PL-S065"
+    | "PL-S067"
+    | "PL-S068"
+    | "PL-S069"
+    | "PL-S070"
+    | "PL-S104";
 }
 
 const EMPTY_ATTENTION: PlanAttention = Object.freeze({
@@ -122,6 +132,37 @@ function stateKind(input: BuildPlanLifecycleReadModelInput): {
         ? "The previous Draft stays available until this update is complete."
         : "Your Draft opens automatically when it is ready.",
       transitions: [],
+    };
+  }
+  if (input.courseScenario !== undefined) {
+    const copy = {
+      "PL-S064": ["Reading Race Course", "Checking route shape, distance, and elevation."],
+      "PL-S065": ["This file can’t be read", "Choose another GPX or FIT file."],
+      "PL-S067": ["Route found, elevation missing", "Use the route only or choose another file."],
+      "PL-S068": ["Recalculating Draft", "Your previous Draft stays available."],
+      "PL-S069": ["Draft recalculation failed", "Your previous Draft is unchanged."],
+      "PL-S070": ["Race Course added", "The Draft now uses this route."],
+      "PL-S104": [
+        "Couldn’t continue without a Race Course",
+        "Nothing changed. Try again or return to your coach.",
+      ],
+    } as const;
+    const draftVisible = draft?.status === "ready" || draft?.status === "failed";
+    return {
+      scenarioId: input.courseScenario,
+      lifecycle: draftVisible
+        ? replacement
+          ? "replacement-draft"
+          : "draft"
+        : replacement
+          ? "replacement-intake"
+          : "intake",
+      projection: draftVisible ? "draft" : "coach",
+      title: copy[input.courseScenario][0],
+      summary: copy[input.courseScenario][1],
+      transitions: draftVisible
+        ? [guard("PL-T07"), guard("PL-T08"), guard("PL-T09"), guard("PL-T10"), guard("PL-T11")]
+        : [guard("PL-T02"), guard("PL-T03"), guard("PL-T04"), guard("PL-T05")],
     };
   }
   if (draft?.status === "ready" || draft?.status === "failed") {
@@ -226,6 +267,7 @@ export function buildPlanLifecycleReadModel(
     decision: input.decision,
     draft: input.draft,
     ...(input.ftp === undefined ? {} : { ftp: input.ftp }),
+    ...(input.course === undefined ? {} : { course: input.course }),
   });
   return PlanReadModelSchema.parse({
     schemaVersion: 1,

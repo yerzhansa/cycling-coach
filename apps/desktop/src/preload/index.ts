@@ -4,6 +4,7 @@ import {
   ExecutePlanTransitionRpcResultSchema,
   GetPlanStateRpcResultSchema,
   PlanProgressEventSchema,
+  PlanRaceCourseFileSelectionSchema,
   PlatformAbsolutePathSchema,
   type PlanProgressEvent,
 } from "@enduragent/coach-contract";
@@ -19,6 +20,7 @@ import {
   DESKTOP_LIFECYCLE_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_PLAN_PROGRESS_CHANNEL,
+  DESKTOP_PLAN_COURSE_FILE_CHANNEL,
   DESKTOP_PLAN_STATE_CHANNEL,
   DESKTOP_PLAN_TRANSITION_CHANNEL,
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
@@ -1446,6 +1448,14 @@ contextBridge.exposeInMainWorld(
       requireZeroArguments(args);
       const parsed = GetPlanStateRpcResultSchema.safeParse(
         await ipcRenderer.invoke(DESKTOP_PLAN_STATE_CHANNEL),
+      );
+      if (!parsed.success) throw new TypeError();
+      return parsed.data;
+    },
+    choosePlanRaceCourseFile: async (...args: unknown[]) => {
+      requireZeroArguments(args);
+      const parsed = PlanRaceCourseFileSelectionSchema.safeParse(
+        await ipcRenderer.invoke(DESKTOP_PLAN_COURSE_FILE_CHANNEL),
       );
       if (!parsed.success) throw new TypeError();
       return parsed.data;

@@ -99,6 +99,59 @@ describe("Plan lifecycle projection", () => {
     expect(ready.transitions.map((transition) => transition.transitionId)).toContain("PL-T06");
   });
 
+  it("projects every Race Course recovery state without hiding a ready Draft", () => {
+    const summary = {
+      fileName: "almaty-gran-fondo.gpx",
+      format: "gpx" as const,
+      pointCount: 42,
+      distanceM: 120_000,
+      elevationGainM: 1_500,
+      elevationStatus: "available" as const,
+    };
+    const draft = {
+      id: "draft-1",
+      planId: "plan-1",
+      revision: 1,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    expect(
+      build({
+        draft,
+        courseScenario: "PL-S069",
+        course: {
+          status: "recalculation-failed",
+          accepted: summary,
+          candidate: { ...summary, fileName: "replacement.gpx" },
+          fileName: null,
+          detail: "Draft recalculation failed.",
+        },
+      }),
+    ).toMatchObject({
+      scenarioId: "PL-S069",
+      lifecycle: "draft",
+      projection: "draft",
+      revision: 1,
+      data: { course: { status: "recalculation-failed" } },
+    });
+    expect(
+      build({
+        courseScenario: "PL-S104",
+        course: {
+          status: "omission-failed",
+          accepted: null,
+          candidate: null,
+          fileName: null,
+          detail: "Nothing changed.",
+        },
+      }),
+    ).toMatchObject({
+      scenarioId: "PL-S104",
+      lifecycle: "intake",
+      projection: "coach",
+    });
+  });
+
   it("projects forming, revised, and discarded Draft states without losing the conversation", () => {
     expect(
       build({

@@ -80,7 +80,11 @@ export function openRaceCoursePicker<Draft>(input: {
   readonly acceptedCourse: RaceCourseSnapshot | null;
 }): RaceCoursePickerState<Draft> {
   if (input.planStatus !== "draft") throw new RaceCourseLifecycleError("course-frozen");
-  return frozen({ kind: "course-picker", draft: input.draft, acceptedCourse: input.acceptedCourse });
+  return frozen({
+    kind: "course-picker",
+    draft: input.draft,
+    acceptedCourse: input.acceptedCourse,
+  });
 }
 
 export function beginRaceCourseParsing<Draft>(
@@ -151,7 +155,10 @@ export function useRouteWithoutElevation<Draft>(
 }
 
 export function beginRaceCourseRemoval<Draft>(
-  state: RaceCoursePickerState<Draft> | RaceCourseInvalidState<Draft> | RaceCourseMissingElevationState<Draft>,
+  state:
+    | RaceCoursePickerState<Draft>
+    | RaceCourseInvalidState<Draft>
+    | RaceCourseMissingElevationState<Draft>,
 ): RaceCourseRecalculatingState<Draft> {
   return frozen({
     kind: "course-recalculating",
@@ -185,13 +192,13 @@ export function retryRaceCourseRecalculation<Draft>(
   });
 }
 
-export function completeRaceCourseRecalculation<Draft>(
+export function completeRaceCourseRecalculation<Draft, RecalculatedDraft>(
   state: RaceCourseRecalculatingState<Draft>,
   input: {
     readonly planStatus: PlanStatus;
-    readonly recalculatedDraft: Draft;
+    readonly recalculatedDraft: RecalculatedDraft;
   },
-): RaceCourseReadyState<Draft> {
+): RaceCourseReadyState<RecalculatedDraft> {
   if (state.kind !== "course-recalculating") {
     throw new RaceCourseLifecycleError("invalid-transition");
   }

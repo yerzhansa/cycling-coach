@@ -6,6 +6,7 @@ import {
   PlanConversationValidationError,
   createPlanConversationRepository,
   createPlanRepository,
+  createRaceCourseSnapshot,
   type PlanConversationRecord,
   type PlanConversationTurnRecord,
   type PlanDraftRevisionRecord,
@@ -53,6 +54,8 @@ function conversation(overrides: Partial<PlanConversationRecord> = {}): PlanConv
     id: CONVERSATION_ID,
     planId: null,
     replacesPlanId: null,
+    courseChoiceStatus: "undecided",
+    raceCourseJson: null,
     status: "open",
     endedAtMs: null,
     createdAtMs: 10,
@@ -89,6 +92,7 @@ function revision(overrides: Partial<PlanDraftRevisionRecord> = {}): PlanDraftRe
     parentRevisionId: null,
     status: "forming",
     snapshotJson: '{"completeWeeks":1}',
+    raceCourseJson: null,
     createdAtMs: 12,
     updatedAtMs: 12,
     deviceId: "device-1",
@@ -115,6 +119,31 @@ function sourceRequest(overrides: Partial<PlanSourceRequestRecord> = {}): PlanSo
   };
 }
 
+function raceCourseJson(): string {
+  return JSON.stringify(
+    createRaceCourseSnapshot({
+      fileName: "almaty-gran-fondo.gpx",
+      route: {
+        format: "gpx",
+        segments: [
+          {
+            points: [
+              { latitude: 43.2, longitude: 76.8, elevationM: 900 },
+              { latitude: 43.3, longitude: 76.9, elevationM: 960 },
+            ],
+          },
+        ],
+      },
+      preview: {
+        pointCount: 2,
+        distanceM: 14_000,
+        elevationGainM: 60,
+        elevationStatus: "available",
+      },
+    }),
+  );
+}
+
 describe("Plan conversation repository", () => {
   let store: SqlStore & MigratorStore;
 
@@ -134,8 +163,45 @@ describe("Plan conversation repository", () => {
     await expect(repository.readLatestOpenConversation()).resolves.toEqual(conversation());
     await expect(repository.readTurns(CONVERSATION_ID)).resolves.toEqual([]);
     await expect(repository.readSourceRequests(CONVERSATION_ID)).resolves.toEqual([]);
-    await expect(store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"))
-      .resolves.toBeUndefined();
+    await expect(
+      store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("persists validated Race Course choices on the conversation and Draft revision", async () => {
+    const plans = createPlanRepository(store);
+    const repository = createPlanConversationRepository(store);
+    const course = raceCourseJson();
+    await plans.replace(plan(), []);
+    const attached = conversation({
+      planId: PLAN_ID,
+      courseChoiceStatus: "attached",
+      raceCourseJson: course,
+    });
+    await repository.saveConversation(attached);
+    await repository.saveDraftRevision(revision({ status: "ready", raceCourseJson: course }));
+    await expect(repository.readConversation(CONVERSATION_ID)).resolves.toEqual(attached);
+    await expect(repository.readLatestDraftRevision(CONVERSATION_ID)).resolves.toMatchObject({
+      raceCourseJson: course,
+    });
+    await expect(
+      repository.saveConversation(
+        conversation({
+          courseChoiceStatus: "attached",
+          raceCourseJson: null,
+        }),
+      ),
+    ).rejects.toEqual(new PlanConversationValidationError("invalid-race-course"));
+    await expect(
+      repository.saveDraftRevision(
+        revision({
+          id: SECOND_REVISION_ID,
+          revision: 2,
+          parentRevisionId: REVISION_ID,
+          raceCourseJson: '{"invalid":true}',
+        }),
+      ),
+    ).rejects.toEqual(new PlanConversationValidationError("invalid-draft-revision"));
   });
 
   it("appends ordered turns idempotently and rejects gaps or changed retries", async () => {
@@ -143,12 +209,17 @@ describe("Plan conversation repository", () => {
     await repository.saveConversation(conversation());
     await expect(repository.appendTurn(turn())).resolves.toEqual(turn());
     await expect(repository.appendTurn(turn())).resolves.toEqual(turn());
-    await expect(repository.appendTurn(turn({ coachText: "Changed" })))
-      .rejects.toEqual(new PlanConversationValidationError("turn-conflict"));
-    await expect(repository.appendTurn(turn({
-      id: `${"0".repeat(25)}8`,
-      sequence: 3,
-    }))).rejects.toEqual(new PlanConversationValidationError("turn-conflict"));
+    await expect(repository.appendTurn(turn({ coachText: "Changed" }))).rejects.toEqual(
+      new PlanConversationValidationError("turn-conflict"),
+    );
+    await expect(
+      repository.appendTurn(
+        turn({
+          id: `${"0".repeat(25)}8`,
+          sequence: 3,
+        }),
+      ),
+    ).rejects.toEqual(new PlanConversationValidationError("turn-conflict"));
     const second = turn({
       id: `${"0".repeat(25)}8`,
       sequence: 2,
@@ -187,11 +258,15 @@ describe("Plan conversation repository", () => {
     await repository.saveDraftRevision(second);
     await expect(repository.readDraftRevisions(CONVERSATION_ID)).resolves.toEqual([ready, second]);
     await expect(repository.readLatestDraftRevision(CONVERSATION_ID)).resolves.toEqual(second);
-    await expect(repository.saveDraftRevision(revision({
-      id: `${"0".repeat(25)}9`,
-      revision: 2,
-      parentRevisionId: REVISION_ID,
-    }))).rejects.toEqual(new PlanConversationValidationError("draft-lineage-conflict"));
+    await expect(
+      repository.saveDraftRevision(
+        revision({
+          id: `${"0".repeat(25)}9`,
+          revision: 2,
+          parentRevisionId: REVISION_ID,
+        }),
+      ),
+    ).rejects.toEqual(new PlanConversationValidationError("draft-lineage-conflict"));
   });
 
   it("rejects a Draft parent from another Plan at the SQLite boundary", async () => {
@@ -200,18 +275,23 @@ describe("Plan conversation repository", () => {
     await plans.replace(plan(), []);
     await plans.replace(plan({ id: SECOND_PLAN_ID, name: "Second Plan" }), []);
     await repository.saveConversation(conversation({ planId: PLAN_ID }));
-    await repository.saveConversation(conversation({
-      id: SECOND_CONVERSATION_ID,
-      planId: SECOND_PLAN_ID,
-    }));
+    await repository.saveConversation(
+      conversation({
+        id: SECOND_CONVERSATION_ID,
+        planId: SECOND_PLAN_ID,
+      }),
+    );
     await repository.saveDraftRevision(revision());
-    await expect(store.run(`INSERT INTO plan_draft_revision (
+    await expect(
+      store.run(
+        `INSERT INTO plan_draft_revision (
   id, conversation_id, plan_id, revision, parent_revision_id, parent_revision, status,
   snapshot_json, created_at_ms, updated_at_ms, device_id, hlc_physical_ms, hlc_counter
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      `${"0".repeat(25)}C`,
-      SECOND_CONVERSATION_ID,
-      SECOND_PLAN_ID,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          `${"0".repeat(25)}C`,
+          SECOND_CONVERSATION_ID,
+          SECOND_PLAN_ID,
       2,
       REVISION_ID,
       1,
@@ -219,10 +299,12 @@ describe("Plan conversation repository", () => {
       '{"completeWeeks":12}',
       17,
       17,
-      "device-1",
-      17,
-      0,
-    ])).rejects.toThrow();
+          "device-1",
+          17,
+          0,
+        ],
+      ),
+    ).rejects.toThrow();
   });
 
   it("preserves the conversation and source link when its Draft is discarded", async () => {
@@ -232,14 +314,16 @@ describe("Plan conversation repository", () => {
     await repository.saveConversation(conversation({ planId: PLAN_ID }));
     await repository.appendTurn(turn());
     await repository.saveDraftRevision(revision());
-    await repository.saveDraftRevision(revision({
-      id: SECOND_REVISION_ID,
-      revision: 2,
-      parentRevisionId: REVISION_ID,
-      createdAtMs: 14,
-      updatedAtMs: 14,
-      hlcPhysicalMs: 14,
-    }));
+    await repository.saveDraftRevision(
+      revision({
+        id: SECOND_REVISION_ID,
+        revision: 2,
+        parentRevisionId: REVISION_ID,
+        createdAtMs: 14,
+        updatedAtMs: 14,
+        hlcPhysicalMs: 14,
+      }),
+    );
     await repository.createOrGetSourceRequest(sourceRequest());
 
     await plans.delete(PLAN_ID);
@@ -249,16 +333,23 @@ describe("Plan conversation repository", () => {
     );
     await expect(repository.readTurns(CONVERSATION_ID)).resolves.toEqual([turn()]);
     await expect(repository.readDraftRevisions(CONVERSATION_ID)).resolves.toEqual([]);
-    await expect(repository.readSourceRequests(CONVERSATION_ID)).resolves.toEqual([sourceRequest()]);
+    await expect(repository.readSourceRequests(CONVERSATION_ID)).resolves.toEqual([
+      sourceRequest(),
+    ]);
   });
 
   it("stores the exact source Conversation separately from the request identity", async () => {
     const repository = createPlanConversationRepository(store);
     await repository.saveConversation(conversation());
-    await expect(repository.createOrGetSourceRequest(sourceRequest())).resolves.toEqual(sourceRequest());
-    await expect(repository.createOrGetSourceRequest(sourceRequest())).resolves.toEqual(sourceRequest());
-    await expect(repository.createOrGetSourceRequest(sourceRequest({ sourceChatId: "other" })))
-      .rejects.toEqual(new PlanConversationValidationError("source-request-conflict"));
+    await expect(repository.createOrGetSourceRequest(sourceRequest())).resolves.toEqual(
+      sourceRequest(),
+    );
+    await expect(repository.createOrGetSourceRequest(sourceRequest())).resolves.toEqual(
+      sourceRequest(),
+    );
+    await expect(
+      repository.createOrGetSourceRequest(sourceRequest({ sourceChatId: "other" })),
+    ).rejects.toEqual(new PlanConversationValidationError("source-request-conflict"));
     await expect(repository.readSourceRequest(REQUEST_ID)).resolves.toEqual(sourceRequest());
   });
 
@@ -269,7 +360,9 @@ describe("Plan conversation repository", () => {
     await plans.replace(active, []);
     const replacement = conversation({ replacesPlanId: REPLACED_PLAN_ID });
     await repository.saveConversation(replacement);
-    await expect(repository.readLatestOpenReplacement(REPLACED_PLAN_ID)).resolves.toEqual(replacement);
+    await expect(repository.readLatestOpenReplacement(REPLACED_PLAN_ID)).resolves.toEqual(
+      replacement,
+    );
     await expect(plans.read(REPLACED_PLAN_ID)).resolves.toEqual(active);
   });
 
@@ -289,15 +382,18 @@ describe("Plan conversation repository", () => {
     await expect(repository.createOrGetSourceRequest(sourceRequest())).rejects.toEqual(
       new PlanConversationValidationError("conversation-ended"),
     );
-    await expect(repository.saveConversation(conversation({ updatedAtMs: 21, hlcPhysicalMs: 21 })))
-      .rejects.toEqual(new PlanConversationValidationError("conversation-conflict"));
+    await expect(
+      repository.saveConversation(conversation({ updatedAtMs: 21, hlcPhysicalMs: 21 })),
+    ).rejects.toEqual(new PlanConversationValidationError("conversation-conflict"));
     await expect(repository.saveConversation(ended)).resolves.toBeUndefined();
-    await expect(repository.saveConversation({
-      ...ended,
-      endedAtMs: 21,
-      updatedAtMs: 21,
-      hlcPhysicalMs: 21,
-    })).rejects.toEqual(new PlanConversationValidationError("conversation-conflict"));
+    await expect(
+      repository.saveConversation({
+        ...ended,
+        endedAtMs: 21,
+        updatedAtMs: 21,
+        hlcPhysicalMs: 21,
+      }),
+    ).rejects.toEqual(new PlanConversationValidationError("conversation-conflict"));
     await expect(repository.readConversation(CONVERSATION_ID)).resolves.toEqual(ended);
   });
 });

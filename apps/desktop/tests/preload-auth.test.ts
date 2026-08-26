@@ -90,6 +90,7 @@ interface AuthBridge {
   removeTelegramAllowedSender(input: unknown): Promise<unknown>;
   acknowledgeTelegramGapWarning(): Promise<unknown>;
   chooseImportFiles(): Promise<readonly string[]>;
+  choosePlanRaceCourseFile(): Promise<string | null>;
   exportTrainingFile(input: unknown): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
@@ -331,6 +332,7 @@ describe("desktop preload ChatGPT auth", () => {
         "chatgptLogin",
         "chatgptStatus",
         "chooseImportFiles",
+        "choosePlanRaceCourseFile",
         "claudeCliRecheck",
         "claudeCliStatus",
         "credentialStatuses",
@@ -517,6 +519,16 @@ describe("desktop preload ChatGPT auth", () => {
 
     await expect(bridge.chooseImportFiles()).resolves.toEqual(paths);
     expect(mocks.invoke).toHaveBeenCalledWith("enduragent:onboarding:choose-import-files");
+  });
+
+  it("accepts one platform-absolute Race Course path or cancellation", async () => {
+    mocks.invoke.mockResolvedValue("C:\\x\\course.GPX");
+    await expect(bridge.choosePlanRaceCourseFile()).resolves.toBe("C:\\x\\course.GPX");
+    expect(mocks.invoke).toHaveBeenCalledWith("desktop:plan:choose-course-file");
+    mocks.invoke.mockResolvedValue(null);
+    await expect(bridge.choosePlanRaceCourseFile()).resolves.toBeNull();
+    mocks.invoke.mockResolvedValue("relative/course.gpx");
+    await expect(bridge.choosePlanRaceCourseFile()).rejects.toBeInstanceOf(TypeError);
   });
 
   it.each([

@@ -7,6 +7,7 @@ import {
   PlanFtpProjectionSchema,
   PlanHydrationStateSchema,
   PlanProgressEventSchema,
+  PlanRaceCourseProjectionSchema,
   PlanScenarioIdSchema,
   PlanTransitionCommandSchema,
   type PlanTransitionCommand,
@@ -22,7 +23,13 @@ const eventId = "event-1";
 
 const commands = [
   { transitionId: "PL-T01", commandId, sourceConversationId: null },
-  { transitionId: "PL-T02", commandId, conversationId, filePath: "/tmp/course.gpx" },
+  {
+    transitionId: "PL-T02",
+    commandId,
+    conversationId,
+    filePath: "/tmp/course.gpx",
+    elevation: "require",
+  },
   { transitionId: "PL-T03", commandId, conversationId },
   { transitionId: "PL-T04", commandId, conversationId, source: "manual", watts: 282 },
   { transitionId: "PL-T05", commandId, conversationId, text: "Four days each week" },
@@ -33,7 +40,7 @@ const commands = [
     transitionId: "PL-T09",
     commandId,
     draftId,
-    course: { action: "attach", filePath: "/tmp/course.fit" },
+    course: { action: "attach", filePath: "/tmp/course.fit", elevation: "allow-missing" },
   },
   { transitionId: "PL-T10", commandId, draftId },
   { transitionId: "PL-T11", commandId, draftId, expectedRevision: 2 },
@@ -209,6 +216,52 @@ describe("planning contract", () => {
     ).toBe(true);
     expect(
       PlanFtpProjectionSchema.safeParse({ ...accepted, status: "accepted", error: {} }).success,
+    ).toBe(false);
+  });
+
+  it("keeps Race Course transition intent and projection states coherent", () => {
+    expect(
+      PlanTransitionCommandSchema.safeParse({
+        transitionId: "PL-T02",
+        commandId,
+        conversationId,
+        filePath: "/tmp/course.gpx",
+      }).success,
+    ).toBe(false);
+    const summary = {
+      fileName: "course.gpx",
+      format: "gpx" as const,
+      pointCount: 42,
+      distanceM: 120_000,
+      elevationGainM: null,
+      elevationStatus: "unavailable" as const,
+    };
+    expect(
+      PlanRaceCourseProjectionSchema.parse({
+        status: "missing-elevation",
+        accepted: null,
+        candidate: summary,
+        fileName: null,
+        detail: null,
+      }),
+    ).toMatchObject({ status: "missing-elevation", candidate: summary });
+    expect(
+      PlanRaceCourseProjectionSchema.safeParse({
+        status: "ready",
+        accepted: null,
+        candidate: summary,
+        fileName: null,
+        detail: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanRaceCourseProjectionSchema.safeParse({
+        status: "missing-elevation",
+        accepted: null,
+        candidate: { ...summary, elevationGainM: 900, elevationStatus: "available" },
+        fileName: null,
+        detail: null,
+      }).success,
     ).toBe(false);
   });
 

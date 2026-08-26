@@ -181,6 +181,7 @@ export function bootRenderer(): Disposer {
     publishCoach: (next) => store.getState().setPlanCoach(next),
     publishDiscardConfirmation: (open) => store.getState().setPlanDiscardConfirmation(open),
     publishRevisionComposer: (open) => store.getState().setPlanRevisionComposer(open),
+    publishCoursePicker: (open) => store.getState().setPlanCoursePicker(open),
   });
   store.getState().bindPlanActions({
     open: () => planAdapter.open(),
@@ -201,6 +202,13 @@ export function bootRenderer(): Disposer {
     discardDraft: () => planAdapter.discardDraft(),
     openRevisionComposer: () => planAdapter.openRevisionComposer(),
     closeRevisionComposer: () => planAdapter.closeRevisionComposer(),
+    openCoursePicker: () => planAdapter.openCoursePicker(),
+    closeCoursePicker: () => planAdapter.closeCoursePicker(),
+    chooseCourseFile: () => planAdapter.chooseCourseFile(),
+    continueWithoutCourse: () => planAdapter.continueWithoutCourse(),
+    useCourseWithoutElevation: () => planAdapter.useCourseWithoutElevation(),
+    removeCourse: () => planAdapter.removeCourse(),
+    returnToCoach: () => planAdapter.returnToCoach(),
     retry: () => planAdapter.retry(),
   });
   planAdapter.start();

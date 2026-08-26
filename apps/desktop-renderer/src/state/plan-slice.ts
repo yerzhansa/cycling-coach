@@ -38,6 +38,7 @@ export interface PlanSurfaceState {
   readonly coach: ChatSurfaceState;
   readonly discardConfirmation: boolean;
   readonly revisionComposer: boolean;
+  readonly coursePicker: boolean;
 }
 
 export interface PlanActions {
@@ -58,6 +59,13 @@ export interface PlanActions {
   discardDraft(): void;
   openRevisionComposer(): void;
   closeRevisionComposer(): void;
+  openCoursePicker(): void;
+  closeCoursePicker(): void;
+  chooseCourseFile(): void;
+  continueWithoutCourse(): void;
+  useCourseWithoutElevation(): void;
+  removeCourse(): void;
+  returnToCoach(): void;
   retry(): void;
 }
 
@@ -69,6 +77,7 @@ export interface PlanSlice {
   setPlanCoach: (next: ChatSurfaceState) => void;
   setPlanDiscardConfirmation: (open: boolean) => void;
   setPlanRevisionComposer: (open: boolean) => void;
+  setPlanCoursePicker: (open: boolean) => void;
   bindPlanActions: (actions: PlanActions | null) => void;
 }
 
@@ -79,6 +88,7 @@ export const EMPTY_PLAN_SURFACE: PlanSurfaceState = Object.freeze({
   coach: EMPTY_CHAT_SURFACE,
   discardConfirmation: false,
   revisionComposer: false,
+  coursePicker: false,
 });
 
 export function planReadModel(plan: PlanSurfaceState): PlanReadModel | null {
@@ -117,6 +127,9 @@ export const createPlanSlice: StateCreator<EnduragentState, [], [], PlanSlice> =
   },
   setPlanRevisionComposer(open) {
     set((current) => ({ plan: { ...current.plan, revisionComposer: open } }));
+  },
+  setPlanCoursePicker(open) {
+    set((current) => ({ plan: { ...current.plan, coursePicker: open } }));
   },
   bindPlanActions(actions) {
     set({ planActions: actions });

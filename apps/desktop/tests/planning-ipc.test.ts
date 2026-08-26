@@ -14,6 +14,7 @@ import {
 } from "../src/main/planning-ipc.js";
 import {
   DESKTOP_PLAN_PROGRESS_CHANNEL,
+  DESKTOP_PLAN_COURSE_FILE_CHANNEL,
   DESKTOP_PLAN_STATE_CHANNEL,
   DESKTOP_PLAN_TRANSITION_CHANNEL,
 } from "../src/main/constants.js";
@@ -79,8 +80,15 @@ function setup(
   const mainFrame = { url: RENDERER_URL };
   const webContents = { isDestroyed: () => false, mainFrame, send: vi.fn() };
   const window = { isDestroyed: () => false, webContents };
+  const dialog = {
+    showOpenDialog: vi.fn(async () => ({
+      canceled: false,
+      filePaths: ["/synthetic/almaty.gpx"],
+    })),
+  };
   const dispose = installDesktopPlanningIpc({
     ipcMain: ipcMain as never,
+    dialog,
     currentWindow: () => window as never,
     getPlanState,
     executePlanTransition: executePlanTransition as never,
@@ -91,6 +99,7 @@ function setup(
     ipcMain,
     getPlanState,
     executePlanTransition,
+    dialog,
     webContents,
     trusted: { sender: webContents, senderFrame: mainFrame },
   };
@@ -101,7 +110,9 @@ beforeEach(() => vi.clearAllMocks());
 describe("desktop Planning IPC", () => {
   it("forwards strict reads and transition commands from the trusted main frame", async () => {
     const subject = setup();
-    await expect(subject.handlers.get(DESKTOP_PLAN_STATE_CHANNEL)!(subject.trusted)).resolves.toEqual({
+    await expect(
+      subject.handlers.get(DESKTOP_PLAN_STATE_CHANNEL)!(subject.trusted),
+    ).resolves.toEqual({
       status: "ready",
       state,
     });
@@ -123,6 +134,9 @@ describe("desktop Planning IPC", () => {
       subject.handlers.get(DESKTOP_PLAN_TRANSITION_CHANNEL)!(untrusted, command),
     ).rejects.toThrow("untrusted desktop Planning request");
     await expect(
+      subject.handlers.get(DESKTOP_PLAN_COURSE_FILE_CHANNEL)!(untrusted),
+    ).rejects.toThrow("untrusted desktop Planning request");
+    await expect(
       subject.handlers.get(DESKTOP_PLAN_STATE_CHANNEL)!(subject.trusted, {}),
     ).rejects.toThrow("invalid desktop Planning request");
     await expect(
@@ -135,6 +149,31 @@ describe("desktop Planning IPC", () => {
     expect(subject.executePlanTransition).not.toHaveBeenCalled();
   });
 
+  it("returns one validated GPX or FIT Course path and keeps cancellation explicit", async () => {
+    const subject = setup();
+    await expect(
+      subject.handlers.get(DESKTOP_PLAN_COURSE_FILE_CHANNEL)!(subject.trusted),
+    ).resolves.toBe("/synthetic/almaty.gpx");
+    expect(subject.dialog.showOpenDialog).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        properties: ["openFile"],
+        filters: [{ name: "Race Course", extensions: ["gpx", "fit"] }],
+      }),
+    );
+    subject.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
+    await expect(
+      subject.handlers.get(DESKTOP_PLAN_COURSE_FILE_CHANNEL)!(subject.trusted),
+    ).resolves.toBeNull();
+    subject.dialog.showOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ["/synthetic/not-a-course.txt"],
+    });
+    await expect(
+      subject.handlers.get(DESKTOP_PLAN_COURSE_FILE_CHANNEL)!(subject.trusted),
+    ).rejects.toThrow("invalid Race Course selection");
+  });
+
   it("redacts malformed results and progress without publishing either", async () => {
     const subject = setup(
       vi.fn(async () => ({ status: "ready", state: { ...state, scenarioId: "PL-S999" } })) as never,
@@ -143,9 +182,9 @@ describe("desktop Planning IPC", () => {
         return { status: "completed" as const, state };
       }) as never,
     );
-    await expect(subject.handlers.get(DESKTOP_PLAN_STATE_CHANNEL)!(subject.trusted)).rejects.toThrow(
-      "desktop Planning unavailable",
-    );
+    await expect(
+      subject.handlers.get(DESKTOP_PLAN_STATE_CHANNEL)!(subject.trusted),
+    ).rejects.toThrow("desktop Planning unavailable");
     await expect(
       subject.handlers.get(DESKTOP_PLAN_TRANSITION_CHANNEL)!(subject.trusted, command),
     ).rejects.toThrow("desktop Planning unavailable");
@@ -187,7 +226,11 @@ describe("desktop Planning IPC", () => {
   it("removes every Planning handler during shutdown", () => {
     const subject = setup();
     subject.dispose();
-    for (const channel of [DESKTOP_PLAN_STATE_CHANNEL, DESKTOP_PLAN_TRANSITION_CHANNEL]) {
+    for (const channel of [
+      DESKTOP_PLAN_STATE_CHANNEL,
+      DESKTOP_PLAN_TRANSITION_CHANNEL,
+      DESKTOP_PLAN_COURSE_FILE_CHANNEL,
+    ]) {
       expect(subject.handlers.has(channel)).toBe(false);
       expect(subject.ipcMain.removeHandler).toHaveBeenCalledWith(channel);
     }

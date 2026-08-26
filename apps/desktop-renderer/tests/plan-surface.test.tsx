@@ -27,6 +27,13 @@ function actions(): PlanActions {
     discardDraft: vi.fn(),
     openRevisionComposer: vi.fn(),
     closeRevisionComposer: vi.fn(),
+    openCoursePicker: vi.fn(),
+    closeCoursePicker: vi.fn(),
+    chooseCourseFile: vi.fn(),
+    continueWithoutCourse: vi.fn(),
+    useCourseWithoutElevation: vi.fn(),
+    removeCourse: vi.fn(),
+    returnToCoach: vi.fn(),
     retry: vi.fn(),
   };
 }
@@ -156,6 +163,71 @@ describe("Plan surface", () => {
     expect(planActions.submitCoach).toHaveBeenCalledWith("Four days each week.");
     await user.click(screen.getByRole("button", { name: "Create draft" }));
     expect(planActions.createDraft).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Race Course selection and recovery inside the Plan surface", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const initial = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData({
+        course: {
+          status: "undecided",
+          accepted: null,
+          candidate: null,
+          fileName: null,
+          detail: null,
+        },
+      }),
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state: initial },
+        lastReady: initial,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    await user.click(screen.getByRole("button", { name: "Attach GPX/FIT" }));
+    expect(planActions.openCoursePicker).toHaveBeenCalledOnce();
+    act(() => useEnduragentStore.getState().setPlanCoursePicker(true));
+    expect(screen.getByRole("heading", { name: "Add Race Course" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+    await user.click(screen.getByRole("button", { name: "Choose file" }));
+    expect(planActions.chooseCourseFile).toHaveBeenCalledOnce();
+
+    const missingElevation = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S067",
+      projection: "coach",
+      data: planCoachData({
+        course: {
+          status: "missing-elevation",
+          accepted: null,
+          candidate: {
+            fileName: "route-only.gpx",
+            format: "gpx",
+            pointCount: 42,
+            distanceM: 120_000,
+            elevationGainM: null,
+            elevationStatus: "unavailable",
+          },
+          fileName: null,
+          detail: null,
+        },
+      }),
+    });
+    act(() => {
+      useEnduragentStore.getState().setPlanCoursePicker(false);
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: missingElevation });
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Route found, elevation missing");
+    await user.click(screen.getByRole("button", { name: "Use route only" }));
+    expect(planActions.useCourseWithoutElevation).toHaveBeenCalledOnce();
   });
 
   it("resolves FTP with one compact whole-watts control and an Intervals refresh", async () => {

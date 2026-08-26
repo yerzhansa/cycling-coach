@@ -93,6 +93,13 @@ function stubPlanActions(): PlanActions {
     discardDraft: vi.fn(),
     openRevisionComposer: vi.fn(),
     closeRevisionComposer: vi.fn(),
+    openCoursePicker: vi.fn(),
+    closeCoursePicker: vi.fn(),
+    chooseCourseFile: vi.fn(),
+    continueWithoutCourse: vi.fn(),
+    useCourseWithoutElevation: vi.fn(),
+    removeCourse: vi.fn(),
+    returnToCoach: vi.fn(),
     retry: vi.fn(),
   };
 }

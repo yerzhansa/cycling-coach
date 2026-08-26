@@ -182,6 +182,7 @@ describe("001_init migration", () => {
       { version: 12, name: "012_planning" },
       { version: 13, name: "013_plan_conversations" },
       { version: 14, name: "014_plan_reconciliation" },
+      { version: 15, name: "015_plan_race_course" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -801,8 +802,9 @@ describe("001_init migration", () => {
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_operation");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_failure");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("store_owner");
-    expect(DUMP_TABLES.map(({ table }) => String(table)))
-      .not.toContain("analytics_curve_refresh_failure");
+    expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain(
+      "analytics_curve_refresh_failure",
+    );
     for (const table of [
       "analytics_curve_current",
       "analytics_curve_evidence",
@@ -865,14 +867,18 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     );
     const columns = db.prepare("PRAGMA table_info(store_owner)").all();
     expect(columns).toContainEqual(expect.objectContaining({ name: "singleton", pk: 1 }));
-    expect(columns).toContainEqual(expect.objectContaining({ name: "account_fingerprint", notnull: 1 }));
+    expect(columns).toContainEqual(
+      expect.objectContaining({ name: "account_fingerprint", notnull: 1 }),
+    );
     expect(() =>
       db!
         .prepare("INSERT INTO store_owner(singleton,account_fingerprint) VALUES(1,?)")
         .run("a".repeat(64)),
     ).not.toThrow();
     expect(() => db!.prepare("INSERT INTO store_owner VALUES(2,?)").run("b".repeat(64))).toThrow();
-    expect(() => db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64))).toThrow();
+    expect(() =>
+      db!.prepare("UPDATE store_owner SET account_fingerprint=?").run("b".repeat(64)),
+    ).toThrow();
     expect(() => db!.prepare("DELETE FROM store_owner").run()).toThrow();
   });
 
@@ -881,9 +887,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(createHash("sha256").update(MIGRATIONS[8]!.sql).digest("hex")).toBe(
       "4fe2e7648bbb09ad62c60a86e26ac4a9e09f4c0e24882428e12ad8722f3d420c",
     );
-    expect(
-      db.prepare("PRAGMA index_info(idx_source_record_session_source)").all(),
-    ).toEqual([
+    expect(db.prepare("PRAGMA index_info(idx_source_record_session_source)").all()).toEqual([
       expect.objectContaining({ seqno: 0, name: "session_key" }),
       expect.objectContaining({ seqno: 1, name: "source" }),
       expect.objectContaining({ seqno: 2, name: "id" }),
@@ -919,23 +923,24 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     expect(createHash("sha256").update(MIGRATIONS[10]!.sql).digest("hex")).toBe(
       "b9c22b99343093655536059e68c1846b5deb8b77355a08e38013d807906e300e",
     );
-    const table = db.prepare("PRAGMA table_list").all().find(
-      (row) => (row as { name?: unknown }).name === "activity_analysis_projection",
-    ) as { strict: number; wr: number } | undefined;
+    const table = db
+      .prepare("PRAGMA table_list")
+      .all()
+      .find((row) => (row as { name?: unknown }).name === "activity_analysis_projection") as
+      | { strict: number; wr: number }
+      | undefined;
     expect(table).toMatchObject({ strict: 1, wr: 1 });
-    expect(db.prepare("PRAGMA foreign_key_list(activity_analysis_projection)").all())
-      .toContainEqual(expect.objectContaining({ table: "session", on_delete: "CASCADE" }));
-    expect(db.prepare("PRAGMA index_info(idx_activity_analysis_projection_lru)").all())
-      .toEqual([
-        expect.objectContaining({ seqno: 0, name: "accessed_epoch_s" }),
-        expect.objectContaining({ seqno: 1, name: "canonical_activity_id" }),
-        expect.objectContaining({ seqno: 2, name: "source_revision" }),
-        expect.objectContaining({ seqno: 3, name: "contract_version" }),
-        expect.objectContaining({ seqno: 4, name: "section" }),
-      ]);
-    expect(DUMP_TABLES.map(({ table: name }) => name)).toContain(
-      "activity_analysis_projection",
-    );
+    expect(
+      db.prepare("PRAGMA foreign_key_list(activity_analysis_projection)").all(),
+    ).toContainEqual(expect.objectContaining({ table: "session", on_delete: "CASCADE" }));
+    expect(db.prepare("PRAGMA index_info(idx_activity_analysis_projection_lru)").all()).toEqual([
+      expect.objectContaining({ seqno: 0, name: "accessed_epoch_s" }),
+      expect.objectContaining({ seqno: 1, name: "canonical_activity_id" }),
+      expect.objectContaining({ seqno: 2, name: "source_revision" }),
+      expect.objectContaining({ seqno: 3, name: "contract_version" }),
+      expect.objectContaining({ seqno: 4, name: "section" }),
+    ]);
+    expect(DUMP_TABLES.map(({ table: name }) => name)).toContain("activity_analysis_projection");
     expect(DERIVED_TABLES).not.toContain("activity_analysis_projection");
   });
 
@@ -947,8 +952,9 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     }>;
     expect(tables.find((row) => row.name === "plan")?.strict).toBe(1);
     expect(tables.find((row) => row.name === "plan_workout")?.strict).toBe(1);
-    expect(db.prepare("PRAGMA foreign_key_list(plan_workout)").all())
-      .toContainEqual(expect.objectContaining({ table: "plan", on_delete: "CASCADE" }));
+    expect(db.prepare("PRAGMA foreign_key_list(plan_workout)").all()).toContainEqual(
+      expect.objectContaining({ table: "plan", on_delete: "CASCADE" }),
+    );
     expect(db.prepare("PRAGMA index_info(idx_plan_workout_plan_date)").all()).toEqual([
       expect.objectContaining({ seqno: 0, name: "plan_id" }),
       expect.objectContaining({ seqno: 1, name: "date_key" }),
@@ -972,8 +978,9 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     ]) {
       expect(tables.find((row) => row.name === name)?.strict).toBe(1);
     }
-    expect(db.prepare("PRAGMA foreign_key_list(plan_conversation_turn)").all())
-      .toContainEqual(expect.objectContaining({ table: "plan_conversation", on_delete: "CASCADE" }));
+    expect(db.prepare("PRAGMA foreign_key_list(plan_conversation_turn)").all()).toContainEqual(
+      expect.objectContaining({ table: "plan_conversation", on_delete: "CASCADE" }),
+    );
     expect(db.prepare("PRAGMA foreign_key_list(plan_draft_revision)").all()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ table: "plan_conversation", on_delete: "CASCADE" }),
@@ -981,14 +988,17 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
         expect.objectContaining({ table: "plan_draft_revision", on_delete: "CASCADE" }),
       ]),
     );
-    expect(db.prepare("PRAGMA foreign_key_list(plan_source_request)").all())
-      .toContainEqual(expect.objectContaining({ table: "plan_conversation", on_delete: "CASCADE" }));
-    expect(PURE_AUTHORED_TABLES).toEqual(expect.arrayContaining([
-      "plan_conversation",
-      "plan_conversation_turn",
-      "plan_draft_revision",
-      "plan_source_request",
-    ]));
+    expect(db.prepare("PRAGMA foreign_key_list(plan_source_request)").all()).toContainEqual(
+      expect.objectContaining({ table: "plan_conversation", on_delete: "CASCADE" }),
+    );
+    expect(PURE_AUTHORED_TABLES).toEqual(
+      expect.arrayContaining([
+        "plan_conversation",
+        "plan_conversation_turn",
+        "plan_draft_revision",
+        "plan_source_request",
+      ]),
+    );
   });
 
   it("omits the unreleased prior bone-stress column from the baseline schema", () => {
