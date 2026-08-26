@@ -37,6 +37,7 @@ const safeWindowsReleaseUploadMessages = new Set([
   "app-update.yml path must be absolute",
   "app-update.yml is unreadable",
   "release is not the latest release",
+  "release lost latest status during upload; Windows assets removed",
   "Windows release asset digest mismatch",
   "upload record already exists",
   "upload record directory is missing",
@@ -98,15 +99,46 @@ function parseLatestRelease(stdout) {
   return release.tag_name;
 }
 
-async function requireLatestRelease(executeFile, repository, tag) {
+async function isLatestRelease(executeFile, repository, tag) {
   let result;
   try {
     result = await executeFile("gh-personal", ["api", `repos/${repository}/releases/latest`]);
   } catch {
+    return "unknown";
+  }
+  try {
+    return parseLatestRelease(result.stdout) === tag;
+  } catch {
+    return "unknown";
+  }
+}
+
+async function requireLatestRelease(executeFile, repository, tag) {
+  if ((await isLatestRelease(executeFile, repository, tag)) !== true) {
     throw new TypeError("release is not the latest release");
   }
-  if (parseLatestRelease(result.stdout) !== tag) {
-    throw new TypeError("release is not the latest release");
+}
+
+function requireAssetId(value) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError("Windows release upload is incomplete");
+  }
+  return value;
+}
+
+async function deleteReleaseAssets(executeFile, repository, assets, files) {
+  for (const file of files) {
+    const id = requireAssetId(assets.get(file.name)?.id);
+    try {
+      await executeFile("gh-personal", [
+        "api",
+        "-X",
+        "DELETE",
+        `repos/${repository}/releases/assets/${id}`,
+      ]);
+    } catch {
+      throw new TypeError("Windows release upload is incomplete");
+    }
   }
 }
 
@@ -152,6 +184,7 @@ async function reconcileAssetDigests(executeFile, repository, tag, files) {
       throw new TypeError("Windows release asset digest mismatch");
     }
   }
+  return assets;
 }
 
 function requireRepository(value) {
@@ -399,7 +432,18 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
     if (uploadedAssets === null || uploadedAssets.length !== expectedNames.length) {
       throw new TypeError("Windows release upload is incomplete");
     }
-    await reconcileAssetDigests(executeFile, repository, tag, files);
+    const assets = await reconcileAssetDigests(executeFile, repository, tag, files);
+    const stillLatest = await isLatestRelease(executeFile, repository, tag);
+    if (stillLatest === "unknown") throw new TypeError("Windows release upload is incomplete");
+    if (stillLatest === false) {
+      try {
+        await deleteReleaseAssets(executeFile, repository, assets, files);
+      } finally {
+        await reconcile();
+      }
+      if (uploaded !== false) throw new TypeError("Windows release upload is incomplete");
+      throw new TypeError("release lost latest status during upload; Windows assets removed");
+    }
     const record = Object.freeze({
       schemaVersion: 1,
       tag,

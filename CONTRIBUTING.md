@@ -197,6 +197,8 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 - Refuse the upload when any Windows envelope asset already exists on the release.
 - Upload owner-only, read-only copies of the verified bytes through `gh-personal release upload`. The original artifact paths are never uploaded.
 - Re-read the release after upload and fail unless all three assets are present and each GitHub asset `digest` and size equals the uploaded bytes.
+- Re-check `releases/latest` after the digest reconciliation. When the release stopped being latest during the upload, the uploader deletes its three assets and fails with `release lost latest status during upload; Windows assets removed`. Re-run the whole Windows release for the newer version.
+- Treat a failed record with `uploaded: true` after that rollback as an incomplete upload. Remove the listed assets by hand.
 - Read `uploadedAssets` in a failed record before retrying. A partial upload lists the assets that became public.
 - Trigger the separate verification workflow from the repository root:
 
@@ -205,15 +207,16 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
   ```
 
 - Leave `dry_run` at its `true` default to verify without editing the release.
-- Pass `dry_run=false` only when the release body must record the completed verification. The workflow refuses `dry_run=false` without `authenticode=verify` and a real `publisher_dn`.
+- Pass `dry_run=false` only when the completed verification must be recorded on the release. The workflow refuses `dry_run=false` without `authenticode=verify` and a real `publisher_dn`.
 - Keep `desktop-windows-release.yml` to its single `verify-windows-envelope` job on `windows-latest`. `Get-AuthenticodeSignature` and `signtool.exe` exist only on Windows.
 - Reject a non-stable SemVer or a missing, draft, prerelease, or non-latest `enduragent-desktop@<version>` release in `verify-windows-envelope`.
 - Require exactly `Enduragent-<version>-x64.exe`, `Enduragent-<version>-x64.exe.blockmap`, and `latest.yml` as the Windows envelope among the release assets.
 - Download only those three Windows assets in `verify-windows-envelope`.
 - Resolve the release tag to its commit and pass it as `--commit`.
 - Run `node apps/desktop/scripts/verify-windows-release.mjs <dir> --version <version> --commit <sha> --authenticode verify --publisher-dn <dn>` against the downloaded envelope.
-- Append `Windows assets verified: <installer sha256> (Authenticode verified)` to the release body only when `dry_run=false`.
-- Never create, move, or delete a release, tag, or asset in `desktop-windows-release.yml`.
+- Record the verification only when `dry_run=false`, as the release asset `Enduragent-<version>-x64-verification.json` (`schemaVersion`, `tag`, `version`, `commit`, `arch`, `authenticode`, `installerSha256`, `publisherDnSha256`). Never edit the release body: a body `PATCH` overwrites concurrent release-note edits.
+- Skip the upload when an identical evidence asset exists. Fail when an evidence asset with different bytes exists; remove it by hand before retrying.
+- Never create, move, or delete a release or tag in `desktop-windows-release.yml`. Never delete or replace an asset there. The evidence asset is the only asset the workflow creates.
 - Leave uploaded assets in place when verification fails.
 - Remove failed Windows assets by hand before retrying.
 - Build provenance: `windows-release-plan.mjs` seals `enduragent-release-commit:<sha> enduragent-updater-publisher-sha256:<sha256 of publisher DN>` into the installer's `LegalTrademarks` version string. Verification reads it from the signed installer and compares it with `--commit` and `--publisher-dn`.
