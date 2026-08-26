@@ -194,7 +194,7 @@ export type FtpHistoryPoint = z.infer<typeof FtpHistoryPointSchema>;
 
 /** Calendar event — planned workout for compliance/consistency metrics. */
 export const PLANNING_EVENT_CATEGORIES = ["WORKOUT", "RACE_A", "RACE_B", "RACE_C"] as const;
-export type PlanningEventCategory = typeof PLANNING_EVENT_CATEGORIES[number];
+export type PlanningEventCategory = (typeof PLANNING_EVENT_CATEGORIES)[number];
 
 const planningEventCategorySet = new Set<string>(PLANNING_EVENT_CATEGORIES);
 
@@ -223,8 +223,24 @@ export const PowerCurveEntrySchema = z.looseObject({
   id: z.string(),
   secs: z.array(z.number()),
   watts: z.array(z.number().nullable()),
+  activity_ids: z.array(z.string().nullable()).optional(),
+  start_indexes: z.array(z.number().int().nonnegative().nullable()).optional(),
 });
 export type PowerCurveEntry = z.infer<typeof PowerCurveEntrySchema>;
+
+export const PowerCurveActivitySchema = z.looseObject({
+  id: z.union([z.string(), z.number()]),
+  start_date_local: z.string(),
+  name: z.string().nullable().optional(),
+  type: z.string().nullable().optional(),
+  device_watts: z.boolean().nullable().optional(),
+  icu_ignore_power: z.boolean().nullable().optional(),
+  power_meter: z.string().nullable().optional(),
+  device_name: z.string().nullable().optional(),
+  missing_timestamps: z.boolean().nullable().optional(),
+  missing_power_samples: z.boolean().nullable().optional(),
+});
+export type PowerCurveActivity = z.infer<typeof PowerCurveActivitySchema>;
 
 /** One entry in an HR mean-max curve list. Same matching as power, but the
  *  value array is keyed `values` (HR bpm), not `watts`. */
@@ -239,6 +255,7 @@ export type HrCurveEntry = z.infer<typeof HrCurveEntrySchema>;
  *  reads via `data.get("list", [])`. */
 export const PowerCurveDataSchema = z.looseObject({
   list: z.array(PowerCurveEntrySchema),
+  activities: z.record(z.string(), PowerCurveActivitySchema).optional(),
 });
 export type PowerCurveData = z.infer<typeof PowerCurveDataSchema>;
 

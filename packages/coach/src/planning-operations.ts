@@ -413,6 +413,14 @@ function unavailableReadinessInput(
       changedAssumption: null,
       unavailableReason: "missing-course",
     },
+    estimatedCp: {
+      status: "unavailable",
+      watts: null,
+      calculatedOn: null,
+      lastSuccessfulSyncAtMs: null,
+      unavailableReason: "missing-effort",
+      efforts: [],
+    },
     evidence: {
       prescribedDurationS: 0,
       riddenDurationS: 0,

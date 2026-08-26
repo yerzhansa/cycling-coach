@@ -1728,6 +1728,31 @@ describe("Plan surface", () => {
           changedAssumption: null,
           unavailableReason: null,
         },
+        estimatedCp: {
+          status: "available",
+          watts: 287,
+          calculatedOn: "2026-08-22",
+          lastSuccessfulSyncAtMs: 1_777_000_000_000,
+          unavailableReason: null,
+          efforts: [
+            {
+              activityId: "ride-short",
+              ride: "Tuesday Hill Repeats",
+              date: "2026-08-18",
+              durationS: 180,
+              averagePowerW: 407,
+              device: "Favero Assioma Duo",
+            },
+            {
+              activityId: "ride-long",
+              ride: "Sunday Tempo Climb",
+              date: "2026-08-09",
+              durationS: 900,
+              averagePowerW: 311,
+              device: "Garmin Rally RS200",
+            },
+          ],
+        },
         evidence: {
           prescribedDurationS: 154_800,
           riddenDurationS: 142_800,
@@ -1778,6 +1803,59 @@ describe("Plan surface", () => {
     );
     expect(screen.getByText("+1 → +4 to +9")).toBeInTheDocument();
     expect(screen.getByText("4 h 48–5 h 12")).toBeInTheDocument();
+    expect(screen.getByText("287 W")).toBeInTheDocument();
+    expect(screen.getByText("Experimental")).toBeInTheDocument();
+
+    const cpInfo = screen.getByRole("button", { name: "About Estimated CP" });
+    await user.click(cpInfo);
+    expect(
+      screen.getByText(
+        "Based on your best short and long power efforts from the last 6 weeks. This does not change your FTP, zones, workouts, or Plan.",
+      ),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(cpInfo).toHaveFocus());
+
+    const effortsTrigger = screen.getByRole("button", { name: "View the 2 efforts used →" });
+    await user.click(effortsTrigger);
+    const effortsDrawer = screen.getByRole("dialog", { name: "Power efforts used" });
+    expect(within(effortsDrawer).getByText("3:00 at 407 W")).toBeInTheDocument();
+    expect(within(effortsDrawer).getByText("15:00 at 311 W")).toBeInTheDocument();
+    expect(within(effortsDrawer).getByText("Device · Favero Assioma Duo")).toBeInTheDocument();
+    expect(within(effortsDrawer).getByText("Device · Garmin Rally RS200")).toBeInTheDocument();
+    await user.click(within(effortsDrawer).getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(effortsTrigger).toHaveFocus());
+
+    const routeTrigger = screen.getByRole("button", { name: "View route assumptions →" });
+    await user.click(routeTrigger);
+    const routeDrawer = screen.getByRole("dialog", { name: "Route assumptions" });
+    expect(within(routeDrawer).getByText("Dry roads")).toBeInTheDocument();
+    expect(within(routeDrawer).getByText("Low wind")).toBeInTheDocument();
+    await user.click(within(routeDrawer).getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(routeTrigger).toHaveFocus());
+    expect(planActions.saveFtp).not.toHaveBeenCalled();
+    expect(planActions.updateDraft).not.toHaveBeenCalled();
+    expect(planActions.reconcilePlan).not.toHaveBeenCalled();
+
+    show("PL-S012", {
+      ...baseReadiness,
+      estimatedCp: {
+        status: "unavailable",
+        watts: null,
+        calculatedOn: null,
+        lastSuccessfulSyncAtMs: 1_777_000_000_000,
+        unavailableReason: "missing-effort",
+        efforts: [],
+      },
+    });
+    expect(screen.getByText("Not enough measured power yet.")).toBeInTheDocument();
+
+    show("PL-S012", {
+      ...baseReadiness,
+      estimatedCp: { ...baseReadiness.estimatedCp, status: "stale" },
+    });
+    expect(screen.getByText("Stale")).toBeInTheDocument();
+    expect(screen.getByText(/Last successful sync/u)).toBeInTheDocument();
 
     show("PL-S074", {
       ...baseReadiness,
@@ -1843,6 +1921,11 @@ describe("Plan surface", () => {
       },
     });
     expect(screen.getByText("5 h 00–5 h 28")).toBeInTheDocument();
+    const changedAssumptions = screen.getByRole("button", { name: "View assumptions →" });
+    await user.click(changedAssumptions);
+    expect(screen.getByRole("dialog", { name: "Route assumptions" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(changedAssumptions).toHaveFocus());
 
     show("PL-S078", {
       ...baseReadiness,

@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   History,
+  Info,
   LoaderCircle,
   MapPinned,
   RefreshCw,
@@ -2350,6 +2351,12 @@ function formRange(readiness: PlanReadinessProjection): string {
   return `${signed(range.min)} to ${signed(range.max)}`;
 }
 
+function effortDuration(durationS: number): string {
+  const minutes = Math.floor(durationS / 60);
+  const seconds = durationS % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 function ReadinessProjection(props: {
   readonly data: ReturnType<typeof PlanActiveProjectionDataSchema.parse>;
   readonly scenarioId: string;
@@ -2357,6 +2364,10 @@ function ReadinessProjection(props: {
   const actions = useEnduragentStore((state) => state.planActions);
   const transition = useEnduragentStore((state) => state.plan.transition);
   const readiness = props.data.readiness;
+  const [overlay, setOverlay] = useState<"cp-info" | "cp-efforts" | "route" | null>(null);
+  const cpInfoTrigger = useRef<HTMLButtonElement>(null);
+  const cpEffortsTrigger = useRef<HTMLButtonElement>(null);
+  const routeTrigger = useRef<HTMLButtonElement>(null);
   if (readiness === undefined) {
     return <StatusCard title="Race readiness" support="Readiness details are unavailable." />;
   }
@@ -2371,6 +2382,17 @@ function ReadinessProjection(props: {
           dateStyle: "medium",
           timeStyle: "short",
         }).format(new Date(readiness.form.lastSuccessfulRefreshAtMs));
+  const cp = readiness.estimatedCp;
+  const closeOverlay = (next: boolean): void => {
+    if (next) return;
+    const previous = overlay;
+    setOverlay(null);
+    requestAnimationFrame(() => {
+      if (previous === "cp-info") cpInfoTrigger.current?.focus();
+      if (previous === "cp-efforts") cpEffortsTrigger.current?.focus();
+      if (previous === "route") routeTrigger.current?.focus();
+    });
+  };
   const header = (
     <div className="flex flex-col gap-row sm:flex-row sm:items-start sm:justify-between">
       <div className={SUPPORT_PAIR}>
@@ -2471,36 +2493,69 @@ function ReadinessProjection(props: {
   }
   if (props.scenarioId === "PL-S077") {
     return (
-      <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
-        {header}
-        <div className="flex items-start gap-row border-t border-line pt-row">
-          <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
-          <div className={SUPPORT_PAIR}>
-            <h3 className="m-0 text-base font-semibold">Finish-time range changed</h3>
-            <p className="m-0 text-ink-2">
-              {readiness.courseEstimate.changedAssumption ?? "A route assumption changed."}
-            </p>
+      <>
+        <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
+          {header}
+          <div className="flex items-start gap-row border-t border-line pt-row">
+            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <h3 className="m-0 text-base font-semibold">Finish-time range changed</h3>
+              <p className="m-0 text-ink-2">
+                {readiness.courseEstimate.changedAssumption ?? "A route assumption changed."}
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="grid gap-inset rounded-card bg-sunk p-row sm:grid-cols-2">
-          <div className={SUPPORT_PAIR}>
-            <span className="text-sm text-ink-2">Previous</span>
-            <strong className="text-xl">
-              {readiness.courseEstimate.previousRangeMinutes === null
-                ? "Unavailable"
-                : finishRange(readiness.courseEstimate.previousRangeMinutes)}
-            </strong>
+          <div className="grid gap-inset rounded-card bg-sunk p-row sm:grid-cols-2">
+            <div className={SUPPORT_PAIR}>
+              <span className="text-sm text-ink-2">Previous</span>
+              <strong className="text-xl">
+                {readiness.courseEstimate.previousRangeMinutes === null
+                  ? "Unavailable"
+                  : finishRange(readiness.courseEstimate.previousRangeMinutes)}
+              </strong>
+            </div>
+            <div className={SUPPORT_PAIR}>
+              <span className="text-sm text-ink-2">Updated</span>
+              <strong className="text-xl">
+                {readiness.courseEstimate.rangeMinutes === null
+                  ? "Unavailable"
+                  : finishRange(readiness.courseEstimate.rangeMinutes)}
+              </strong>
+            </div>
           </div>
-          <div className={SUPPORT_PAIR}>
-            <span className="text-sm text-ink-2">Updated</span>
-            <strong className="text-xl">
-              {readiness.courseEstimate.rangeMinutes === null
-                ? "Unavailable"
-                : finishRange(readiness.courseEstimate.rangeMinutes)}
-            </strong>
+          <div className="flex justify-end">
+            <Button
+              ref={routeTrigger}
+              type="button"
+              variant="link"
+              className="h-auto p-0"
+              onClick={() => setOverlay("route")}
+            >
+              View assumptions →
+            </Button>
           </div>
-        </div>
-      </section>
+        </section>
+        <Dialog open={overlay === "route"} onOpenChange={closeOverlay}>
+          <DialogContent className="top-0 right-0 left-auto flex h-full max-h-none w-[min(440px,calc(100%-32px))] max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-none rounded-l-card border-y-0 border-r-0 p-0">
+            <DialogHeader className="grid gap-2 border-b border-line px-5 py-5 pr-16">
+              <DialogTitle>Route assumptions</DialogTitle>
+              <DialogDescription>
+                Inputs used for the course-based finish-time range.
+              </DialogDescription>
+            </DialogHeader>
+            <ul className="m-0 grid flex-1 content-start gap-row overflow-auto px-10 py-5 text-ink-2">
+              {readiness.courseEstimate.assumptions.map((assumption) => (
+                <li key={assumption}>{assumption}</li>
+              ))}
+            </ul>
+            <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+              <Button type="button" onClick={() => closeOverlay(false)}>
+                Done
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </>
     );
   }
   if (props.scenarioId === "PL-S074") {
@@ -2559,51 +2614,194 @@ function ReadinessProjection(props: {
     );
   }
   return (
-    <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
-      {header}
-      <div className="grid gap-row border-t border-line pt-row md:grid-cols-3">
-        <div className={SUPPORT_PAIR}>
-          <h3 className="m-0 text-sm font-semibold">Form trajectory to race day</h3>
-          <strong className="text-2xl">
-            {readiness.form.current === null ? "Unavailable" : signed(readiness.form.current)} →{" "}
-            {formRange(readiness)}
-          </strong>
-          <p className="m-0 text-sm text-ink-2">Modeled from planned Load and normal recovery.</p>
-        </div>
-        <div className={SUPPORT_PAIR}>
-          <h3 className="m-0 text-sm font-semibold">Goal feasibility</h3>
-          <span className="self-start rounded-full border border-ok px-3 py-1 text-sm text-ok">
-            On track · with assumptions
-          </span>
-          <p className="m-0 text-sm text-ink-2">{readiness.feasibility.recommendation}</p>
-        </div>
-        <div className={SUPPORT_PAIR}>
-          <h3 className="m-0 text-sm font-semibold">Course-based finish time</h3>
-          <strong className="text-2xl">
-            {readiness.courseEstimate.rangeMinutes === null
-              ? "Unavailable"
-              : finishRange(readiness.courseEstimate.rangeMinutes)}
-          </strong>
-          <p className="m-0 text-sm text-ink-2">
-            {readiness.courseEstimate.confidence === null
-              ? "No estimate"
-              : `${readiness.courseEstimate.confidence} confidence`}
-          </p>
-        </div>
-      </div>
-      <div className="grid gap-row rounded-card bg-sunk p-row sm:grid-cols-3">
-        {[
-          ["Prescribed", readiness.evidence.prescribedDurationS],
-          ["Ridden", readiness.evidence.riddenDurationS],
-          ["Adjusted", readiness.evidence.adjustedDurationS],
-        ].map(([label, value]) => (
-          <div key={String(label)} className={SUPPORT_PAIR}>
-            <span className="text-sm text-ink-2">{label}</span>
-            <strong className="text-xl tabular-nums">{clockTime(Number(value))}</strong>
+    <>
+      <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
+        {header}
+        <div className="grid gap-row border-t border-line pt-row md:grid-cols-2">
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-sm font-semibold">Form trajectory to race day</h3>
+            <strong className="text-2xl">
+              {readiness.form.current === null ? "Unavailable" : signed(readiness.form.current)} →{" "}
+              {formRange(readiness)}
+            </strong>
+            <p className="m-0 text-sm text-ink-2">Modeled from planned Load and normal recovery.</p>
           </div>
-        ))}
-      </div>
-    </section>
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-sm font-semibold">Goal feasibility</h3>
+            <span className="self-start rounded-full border border-ok px-3 py-1 text-sm text-ok">
+              On track · with assumptions
+            </span>
+            <p className="m-0 text-sm text-ink-2">{readiness.feasibility.recommendation}</p>
+          </div>
+          <div className={SUPPORT_PAIR}>
+            <div className="flex items-center justify-between gap-inset">
+              <h3 className="m-0 text-sm font-semibold">Estimated CP</h3>
+              <div className="flex items-center gap-inset">
+                <span className="rounded-full border border-warn px-2 py-0.5 text-xs text-warn">
+                  Experimental
+                </span>
+                <Button
+                  ref={cpInfoTrigger}
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="About Estimated CP"
+                  onClick={() => setOverlay("cp-info")}
+                >
+                  <Info aria-hidden="true" />
+                </Button>
+              </div>
+            </div>
+            {cp.status === "unavailable" ? (
+              <>
+                <strong className="text-xl">
+                  {cp.unavailableReason === "mathematically-invalid"
+                    ? "Estimated CP is unavailable from the current data."
+                    : "Not enough measured power yet."}
+                </strong>
+                {cp.unavailableReason === "missing-effort" ? (
+                  <p className="m-0 text-sm text-ink-2">
+                    A short and a long recorded effort are needed from the last 6 weeks.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-inset">
+                  <strong className="text-2xl">{cp.watts} W</strong>
+                  {cp.status === "stale" ? (
+                    <span className="rounded-full border border-warn px-2 py-0.5 text-xs text-warn">
+                      Stale
+                    </span>
+                  ) : null}
+                </div>
+                <p className="m-0 text-sm text-ink-2">
+                  {cp.status === "stale" && cp.lastSuccessfulSyncAtMs !== null
+                    ? `Last successful sync ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(cp.lastSuccessfulSyncAtMs))}`
+                    : cp.calculatedOn === null
+                      ? "Calculation date unavailable"
+                      : `Calculated ${formatCivilDate(cp.calculatedOn)}`}
+                </p>
+                <Button
+                  ref={cpEffortsTrigger}
+                  type="button"
+                  variant="link"
+                  className="h-auto justify-start p-0"
+                  onClick={() => setOverlay("cp-efforts")}
+                >
+                  View the 2 efforts used →
+                </Button>
+              </>
+            )}
+          </div>
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-sm font-semibold">Course-based finish time</h3>
+            <strong className="text-2xl">
+              {readiness.courseEstimate.rangeMinutes === null
+                ? "Unavailable"
+                : finishRange(readiness.courseEstimate.rangeMinutes)}
+            </strong>
+            <p className="m-0 text-sm text-ink-2">
+              {readiness.courseEstimate.confidence === null
+                ? "No estimate"
+                : `${readiness.courseEstimate.confidence} confidence`}
+            </p>
+            {readiness.courseEstimate.assumptions.length > 0 ? (
+              <Button
+                ref={routeTrigger}
+                type="button"
+                variant="link"
+                className="h-auto justify-start p-0"
+                onClick={() => setOverlay("route")}
+              >
+                View route assumptions →
+              </Button>
+            ) : null}
+          </div>
+        </div>
+        <div className="grid gap-row rounded-card bg-sunk p-row sm:grid-cols-3">
+          {[
+            ["Prescribed", readiness.evidence.prescribedDurationS],
+            ["Ridden", readiness.evidence.riddenDurationS],
+            ["Adjusted", readiness.evidence.adjustedDurationS],
+          ].map(([label, value]) => (
+            <div key={String(label)} className={SUPPORT_PAIR}>
+              <span className="text-sm text-ink-2">{label}</span>
+              <strong className="text-xl tabular-nums">{clockTime(Number(value))}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+      <Dialog open={overlay === "cp-info"} onOpenChange={closeOverlay}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Estimated CP</DialogTitle>
+            <DialogDescription>
+              Based on your best short and long power efforts from the last 6 weeks. This does not
+              change your FTP, zones, workouts, or Plan.
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={overlay === "cp-efforts"} onOpenChange={closeOverlay}>
+        <DialogContent className="top-0 right-0 left-auto flex h-full max-h-none w-[min(480px,calc(100%-32px))] max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-none rounded-l-card border-y-0 border-r-0 p-0">
+          <DialogHeader className="grid gap-2 border-b border-line px-5 py-5 pr-16">
+            <DialogTitle>Power efforts used</DialogTitle>
+            <DialogDescription>Estimated CP · {cp.watts ?? "Unavailable"} W</DialogDescription>
+          </DialogHeader>
+          <div className="grid flex-1 content-start gap-row overflow-auto px-5 py-5">
+            {cp.efforts.map((effort) => (
+              <section
+                key={`${effort.activityId}-${effort.durationS}`}
+                className="grid gap-inset rounded-card bg-sunk p-row"
+              >
+                <div className="flex items-start justify-between gap-row">
+                  <strong>
+                    {effort.ride} · {formatCivilDate(effort.date)}
+                  </strong>
+                  <strong className="tabular-nums">
+                    {effortDuration(effort.durationS)} at {effort.averagePowerW} W
+                  </strong>
+                </div>
+                <p className="m-0 text-sm text-ink-2">Device · {effort.device}</p>
+              </section>
+            ))}
+            {cp.status === "unavailable" ? (
+              <p className="m-0 text-ink-2">Estimated CP evidence is unavailable.</p>
+            ) : (
+              <p className="m-0 text-ink-2">
+                These two efforts produce an Estimated CP of {cp.watts} W.
+              </p>
+            )}
+          </div>
+          <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+            <Button type="button" onClick={() => closeOverlay(false)}>
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={overlay === "route"} onOpenChange={closeOverlay}>
+        <DialogContent className="top-0 right-0 left-auto flex h-full max-h-none w-[min(440px,calc(100%-32px))] max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-none rounded-l-card border-y-0 border-r-0 p-0">
+          <DialogHeader className="grid gap-2 border-b border-line px-5 py-5 pr-16">
+            <DialogTitle>Route assumptions</DialogTitle>
+            <DialogDescription>
+              Inputs used for the course-based finish-time range.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="m-0 grid flex-1 content-start gap-row overflow-auto px-10 py-5 text-ink-2">
+            {readiness.courseEstimate.assumptions.map((assumption) => (
+              <li key={assumption}>{assumption}</li>
+            ))}
+          </ul>
+          <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+            <Button type="button" onClick={() => closeOverlay(false)}>
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
