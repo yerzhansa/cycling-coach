@@ -99,6 +99,10 @@ function stubPlanActions(): PlanActions {
     continueWithoutCourse: vi.fn(),
     useCourseWithoutElevation: vi.fn(),
     removeCourse: vi.fn(),
+    openDatePicker: vi.fn(),
+    closeDatePicker: vi.fn(),
+    recalculateStartDate: vi.fn(),
+    approveDraft: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
   };

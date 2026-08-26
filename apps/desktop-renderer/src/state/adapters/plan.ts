@@ -57,6 +57,10 @@ export interface PlanViewAdapter {
   continueWithoutCourse(): void;
   useCourseWithoutElevation(): void;
   removeCourse(): void;
+  openDatePicker(): void;
+  closeDatePicker(): void;
+  recalculateStartDate(startDate: string): void;
+  approveDraft(): void;
   returnToCoach(): void;
   retry(): void;
   dispose(): void;
@@ -109,6 +113,7 @@ export function createPlanViewAdapter(input: {
   readonly publishDiscardConfirmation: (open: boolean) => void;
   readonly publishRevisionComposer: (open: boolean) => void;
   readonly publishCoursePicker: (open: boolean) => void;
+  readonly publishDatePicker: (open: boolean) => void;
   readonly createCommandId?: () => string;
   readonly createMessageId?: () => string;
 }): PlanViewAdapter {
@@ -621,6 +626,33 @@ export function createPlanViewAdapter(input: {
         commandId: createCommandId(),
         draftId: data.draft.id,
         course: { action: "remove" },
+      });
+    },
+    openDatePicker() {
+      input.publishDatePicker(true);
+    },
+    closeDatePicker() {
+      input.publishDatePicker(false);
+    },
+    recalculateStartDate(startDate) {
+      const data = currentCoachData();
+      if (data?.draft === null || data?.draft === undefined || active !== null) return;
+      input.publishDatePicker(false);
+      void execute({
+        transitionId: "PL-T08",
+        commandId: createCommandId(),
+        draftId: data.draft.id,
+        startDate,
+      });
+    },
+    approveDraft() {
+      const data = currentCoachData();
+      if (data?.draft === null || data?.draft === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T11",
+        commandId: createCommandId(),
+        draftId: data.draft.id,
+        expectedRevision: data.draft.revision,
       });
     },
     returnToCoach() {

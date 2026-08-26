@@ -6,10 +6,12 @@ import {
   type PlanAttention,
   type PlanCoachMessage,
   type PlanDraftProjection,
+  type PlanDraftPlanProjection,
   type PlanFtpProjection,
   type PlanLifecycle,
   type PlanProjectionKind,
   type PlanRaceCourseProjection,
+  type PlanStartDateProjection,
   type PlanReadModel,
   type PlanScenarioId,
   type PlanTransitionGuard,
@@ -35,6 +37,8 @@ export interface BuildPlanLifecycleReadModelInput {
   readonly queue: ChatQueueSnapshot;
   readonly decision: CoachDecisionReadModel | null;
   readonly draft: PlanDraftProjection | null;
+  readonly plan?: PlanDraftPlanProjection | null;
+  readonly startDate?: PlanStartDateProjection;
   readonly ftp?: PlanFtpProjection | null;
   readonly ftpScenario?: "PL-S057" | "PL-S058" | "PL-S059" | "PL-S060" | "PL-S061" | "PL-S062";
   readonly course?: PlanRaceCourseProjection;
@@ -46,6 +50,7 @@ export interface BuildPlanLifecycleReadModelInput {
     | "PL-S069"
     | "PL-S070"
     | "PL-S104";
+  readonly dateScenario?: "PL-S046" | "PL-S048" | "PL-S050";
 }
 
 const EMPTY_ATTENTION: PlanAttention = Object.freeze({
@@ -165,6 +170,27 @@ function stateKind(input: BuildPlanLifecycleReadModelInput): {
         : [guard("PL-T02"), guard("PL-T03"), guard("PL-T04"), guard("PL-T05")],
     };
   }
+  if (input.dateScenario !== undefined && draft !== null) {
+    const copy = {
+      "PL-S046": ["Choose another start date", "The current Draft is unchanged."],
+      "PL-S048": ["The Plan could not be recalculated", "Your current Draft is safe."],
+      "PL-S050": ["Start date updated", "Review the recalculated Draft before approval."],
+    } as const;
+    return {
+      scenarioId: input.dateScenario,
+      lifecycle: replacement ? "replacement-draft" : "draft",
+      projection: "draft",
+      title: copy[input.dateScenario][0],
+      summary: copy[input.dateScenario][1],
+      transitions: [
+        guard("PL-T07"),
+        guard("PL-T08"),
+        guard("PL-T09"),
+        guard("PL-T10"),
+        guard("PL-T11"),
+      ],
+    };
+  }
   if (draft?.status === "ready" || draft?.status === "failed") {
     const revision = draft.revision > 1;
     return {
@@ -266,6 +292,8 @@ export function buildPlanLifecycleReadModel(
     queue: input.queue,
     decision: input.decision,
     draft: input.draft,
+    ...(input.plan === undefined ? {} : { plan: input.plan }),
+    ...(input.startDate === undefined ? {} : { startDate: input.startDate }),
     ...(input.ftp === undefined ? {} : { ftp: input.ftp }),
     ...(input.course === undefined ? {} : { course: input.course }),
   });

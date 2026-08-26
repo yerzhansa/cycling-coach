@@ -33,6 +33,10 @@ function actions(): PlanActions {
     continueWithoutCourse: vi.fn(),
     useCourseWithoutElevation: vi.fn(),
     removeCourse: vi.fn(),
+    openDatePicker: vi.fn(),
+    closeDatePicker: vi.fn(),
+    recalculateStartDate: vi.fn(),
+    approveDraft: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
   };
@@ -371,6 +375,162 @@ describe("Plan surface", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
     await user.click(screen.getByRole("button", { name: "Discard Draft" }));
     expect(planActions.discardDraft).toHaveBeenCalledOnce();
+  });
+
+  it("uses a compact keyboard date picker and confirms a shorter valid block", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const draft = {
+      id: "00000000000000000000000002",
+      planId: "00000000000000000000000003",
+      revision: 1,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    const plan = {
+      id: draft.planId,
+      name: "Gran Fondo Plan",
+      primaryGoal: "Finish in the front half",
+      startDate: "2026-07-13",
+      targetDate: "2026-10-04",
+      kind: "full-plan" as const,
+      totalWeeks: 12,
+      weekStartDay: 1,
+      workoutCount: 58,
+      plannedDurationS: 309_600,
+    };
+    const startDate = {
+      status: "ready" as const,
+      selectedDate: "2026-07-13",
+      today: "2026-07-13",
+      targetDate: "2026-10-04",
+      kind: "full-plan" as const,
+      inclusiveDays: 84,
+      totalWeeks: 12,
+      raceWeekday: 0,
+      raceDayOfPlanWeek: 7,
+      error: null,
+    };
+    const state = planReadModel({
+      lifecycle: "draft",
+      scenarioId: "PL-S002",
+      projection: "draft",
+      planId: draft.planId,
+      revision: 1,
+      data: planCoachData({ draft, plan, startDate }),
+    });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(screen.getByText("58 workouts · 86 h · 12 weeks")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Change" }));
+    expect(planActions.openDatePicker).toHaveBeenCalledOnce();
+    act(() => useEnduragentStore.getState().setPlanDatePicker(true));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+    const day = document.querySelector<HTMLButtonElement>('[data-plan-date="2026-07-20"]');
+    expect(day).not.toBeNull();
+    expect(day).toHaveClass("size-10");
+    day?.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(document.querySelector('[data-plan-date="2026-07-21"]')).toHaveFocus();
+    await user.click(day!);
+    expect(
+      screen.getByRole("heading", { name: "Short race-preparation block" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Use short block" }));
+    expect(planActions.recalculateStartDate).toHaveBeenCalledWith("2026-07-20");
+  });
+
+  it("returns a revised Draft to review and exposes the approval command", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const draft = {
+      id: "00000000000000000000000002",
+      planId: "00000000000000000000000003",
+      revision: 2,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    const state = planReadModel({
+      lifecycle: "draft",
+      scenarioId: "PL-S031",
+      projection: "draft",
+      planId: draft.planId,
+      revision: draft.revision,
+      data: planCoachData({ draft }),
+    });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Draft updated");
+    await user.click(screen.getByRole("button", { name: "Approve Plan" }));
+    expect(planActions.approveDraft).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a failed start-date recalculation visible with both recovery choices", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const error = {
+      code: "provider-failed" as const,
+      message: "The Plan could not be recalculated. Your current Draft is safe.",
+      retryable: true,
+    };
+    const draft = {
+      id: "00000000000000000000000002",
+      planId: "00000000000000000000000003",
+      revision: 2,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    const state = planReadModel({
+      lifecycle: "draft",
+      scenarioId: "PL-S048",
+      projection: "draft",
+      planId: draft.planId,
+      revision: draft.revision,
+      data: planCoachData({
+        draft,
+        startDate: {
+          status: "failed",
+          selectedDate: "2026-07-20",
+          today: "2026-07-13",
+          targetDate: "2026-10-04",
+          kind: "short-race-preparation",
+          inclusiveDays: 77,
+          totalWeeks: 11,
+          raceWeekday: 0,
+          raceDayOfPlanWeek: 7,
+          error,
+        },
+      }),
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+        transition: {
+          status: "failed",
+          commandId: "command-date",
+          transitionId: "PL-T08",
+          error,
+        },
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("current Draft is safe");
+    await user.click(screen.getByRole("button", { name: "Choose another date" }));
+    expect(planActions.openDatePicker).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(planActions.retry).toHaveBeenCalledOnce();
   });
 
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {

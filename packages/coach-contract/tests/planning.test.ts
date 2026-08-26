@@ -4,10 +4,12 @@ import {
   GetPlanStateRpcResultSchema,
   PLAN_TRANSITION_IDS,
   PlanAttentionSchema,
+  PlanDraftPlanProjectionSchema,
   PlanFtpProjectionSchema,
   PlanHydrationStateSchema,
   PlanProgressEventSchema,
   PlanRaceCourseProjectionSchema,
+  PlanStartDateProjectionSchema,
   PlanScenarioIdSchema,
   PlanTransitionCommandSchema,
   type PlanTransitionCommand,
@@ -263,6 +265,39 @@ describe("planning contract", () => {
         detail: null,
       }).success,
     ).toBe(false);
+  });
+
+  it("keeps Draft plan and start-date consequences explicit", () => {
+    expect(
+      PlanDraftPlanProjectionSchema.parse({
+        id: planId,
+        name: "Gran Fondo Plan",
+        primaryGoal: "Finish in the front half",
+        startDate: "2026-07-13",
+        targetDate: "2026-10-04",
+        kind: "full-plan",
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 58,
+        plannedDurationS: 309_600,
+      }),
+    ).toMatchObject({ kind: "full-plan", totalWeeks: 12 });
+    const updated = {
+      status: "updated" as const,
+      selectedDate: "2026-07-20",
+      today: "2026-07-13",
+      targetDate: "2026-10-04",
+      kind: "short-race-preparation" as const,
+      inclusiveDays: 77,
+      totalWeeks: 11,
+      raceWeekday: 0,
+      raceDayOfPlanWeek: 7,
+      error: null,
+    };
+    expect(PlanStartDateProjectionSchema.parse(updated)).toEqual(updated);
+    expect(PlanStartDateProjectionSchema.safeParse({ ...updated, status: "invalid" }).success).toBe(
+      false,
+    );
   });
 
   it("encodes the approved attention count and destination rule", () => {

@@ -3,10 +3,12 @@ import type {
   CoachDecisionReadModel,
   PlanAttention,
   PlanDraftProjection,
+  PlanDraftPlanProjection,
   PlanError,
   PlanFtpProjection,
   PlanProjectionKind,
   PlanRaceCourseProjection,
+  PlanStartDateProjection,
   PlanReadModel,
 } from "@enduragent/coach-contract";
 
@@ -83,6 +85,8 @@ export function planCoachData(
     }[];
     readonly ftp?: PlanFtpProjection | null;
     readonly course?: PlanRaceCourseProjection;
+    readonly plan?: PlanDraftPlanProjection | null;
+    readonly startDate?: PlanStartDateProjection;
   } = {},
 ): PlanReadModel["data"] {
   return {
@@ -102,6 +106,8 @@ export function planCoachData(
     queue: input.queue ?? { schemaVersion: 1, revision: 0, items: [] },
     decision: input.decision ?? null,
     draft: input.draft ?? null,
+    ...(input.plan === undefined ? {} : { plan: input.plan }),
+    ...(input.startDate === undefined ? {} : { startDate: input.startDate }),
     ...(input.ftp === undefined ? {} : { ftp: input.ftp }),
     ...(input.course === undefined ? {} : { course: input.course }),
   };

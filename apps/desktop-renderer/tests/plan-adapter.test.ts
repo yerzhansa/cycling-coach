@@ -91,6 +91,9 @@ function harness(
     publishCoursePicker(open) {
       surface = { ...surface, coursePicker: open };
     },
+    publishDatePicker(open) {
+      surface = { ...surface, datePicker: open };
+    },
     createCommandId: () => ids.shift() ?? "unexpected-command",
     createMessageId: () => messageIds.shift() ?? "unexpected-message",
   });
@@ -788,6 +791,53 @@ describe("Plan view adapter", () => {
 
     expect(subject.executePlanTransition).not.toHaveBeenCalled();
     expect(subject.getPlanState).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps date selection local and dispatches recalculation and approval with Draft identity", async () => {
+    const draft = {
+      id: "00000000000000000000000002",
+      planId: "00000000000000000000000003",
+      revision: 4,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    const state = planReadModel({
+      lifecycle: "draft",
+      scenarioId: "PL-S002",
+      projection: "draft",
+      planId: draft.planId,
+      revision: draft.revision,
+      data: planCoachData({ draft }),
+    });
+    const subject = harness({
+      ids: ["date-command", "approve-command"],
+      getPlanState: async () => ({ status: "ready", state }),
+      executePlanTransition: async () => ({ status: "completed", state }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.openDatePicker();
+    expect(subject.surface.datePicker).toBe(true);
+    subject.adapter.closeDatePicker();
+    expect(subject.surface.datePicker).toBe(false);
+    subject.adapter.recalculateStartDate("2026-07-20");
+    await settle();
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(1, {
+      transitionId: "PL-T08",
+      commandId: "date-command",
+      draftId: draft.id,
+      startDate: "2026-07-20",
+    });
+
+    subject.adapter.approveDraft();
+    await settle();
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(2, {
+      transitionId: "PL-T11",
+      commandId: "approve-command",
+      draftId: draft.id,
+      expectedRevision: 4,
+    });
   });
 
   it("accepts progress only for the current command, transition, and operation", async () => {

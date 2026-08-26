@@ -254,7 +254,7 @@ describe("Plan operations", () => {
     };
     const operations = createPlanningOperations(
       { context, engine: coach, identity: authored },
-      { draftBuilder: builder, isReady: () => true },
+      { draftBuilder: builder, isReady: () => true, todayDateKey: () => 20260709 },
     );
     const started = await operations.executePlanTransition?.({
       transitionId: "PL-T01",
@@ -604,7 +604,12 @@ describe("Plan operations", () => {
     };
     const operations = createPlanningOperations(
       { context, engine: engine(), identity: identity() },
-      { course: adapter, draftBuilder: builder, isReady: () => true },
+      {
+        course: adapter,
+        draftBuilder: builder,
+        isReady: () => true,
+        todayDateKey: () => 20260709,
+      },
     );
     const started = await operations.executePlanTransition?.({
       transitionId: "PL-T01",
@@ -684,6 +689,130 @@ describe("Plan operations", () => {
         course: { action: "remove" },
       }),
     ).resolves.toMatchObject({ status: "rejected", error: { code: "unavailable" } });
+  });
+
+  it("recalculates a valid start date and keeps the previous Draft on invalid or failed dates", async () => {
+    let failDateRecalculation = false;
+    const builder: PlanDraftBuilder = {
+      async form() {
+        return {
+          plan: plan(`${"0".repeat(25)}W`, 400),
+          workouts: [],
+          snapshot: { startDate: "2026-07-09" },
+        };
+      },
+      async revise() {
+        throw new TypeError("not used");
+      },
+      async recalculateCourse() {
+        throw new TypeError("not used");
+      },
+      async recalculateStartDate({ preview }) {
+        if (failDateRecalculation) throw new Error("generation failed");
+        const current = plan(`${"0".repeat(25)}W`, 401);
+        return {
+          plan: {
+            ...current,
+            startDateKey: preview.startDateKey,
+            targetDateKey: preview.targetDateKey,
+            kind: preview.kind,
+            totalWeeks: preview.totalWeeks,
+            weekStartDay: preview.weekStartDay,
+          },
+          workouts: [],
+          snapshot: { startDate: preview.startDateKey },
+        };
+      },
+    };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { draftBuilder: builder, isReady: () => true, todayDateKey: () => 20260709 },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-1",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "command-2",
+      conversationId,
+    });
+    const formed = await operations.executePlanTransition?.({
+      transitionId: "PL-T06",
+      commandId: "command-3",
+      conversationId,
+    });
+    if (formed?.status !== "completed") throw new TypeError("Draft did not form.");
+    const firstDraftId = String((formed.state.data.draft as { id: string }).id);
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T08",
+        commandId: "command-4",
+        draftId: firstDraftId,
+        startDate: "2026-07-08",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "invalid-input" },
+      state: {
+        scenarioId: "PL-S046",
+        revision: 1,
+        data: { startDate: { status: "invalid", selectedDate: "2026-07-08" } },
+      },
+    });
+
+    const recalculated = await operations.executePlanTransition?.({
+      transitionId: "PL-T08",
+      commandId: "command-5",
+      draftId: firstDraftId,
+      startDate: "2026-07-20",
+    });
+    expect(recalculated).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S050",
+        revision: 2,
+        data: {
+          plan: {
+            startDate: "2026-07-20",
+            kind: "short-race-preparation",
+            totalWeeks: 11,
+          },
+          startDate: { status: "updated", selectedDate: "2026-07-20" },
+        },
+      },
+    });
+    if (recalculated?.status !== "completed") throw new TypeError("Draft did not recalculate.");
+    const secondDraftId = String((recalculated.state.data.draft as { id: string }).id);
+
+    failDateRecalculation = true;
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T08",
+        commandId: "command-6",
+        draftId: secondDraftId,
+        startDate: "2026-07-21",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "provider-failed", retryable: true },
+      state: {
+        scenarioId: "PL-S048",
+        revision: 2,
+        data: { startDate: { status: "failed", selectedDate: "2026-07-21" } },
+      },
+    });
+    await expect(createPlanRepository(store).read(`${"0".repeat(25)}W`)).resolves.toMatchObject({
+      startDateKey: 20260720,
+      kind: "short_race_preparation",
+    });
+    await expect(
+      createPlanConversationRepository(store).readLatestDraftRevision(conversationId),
+    ).resolves.toMatchObject({ revision: 2 });
   });
 
   it("retries an interrupted Plan queue claim and persists the recovered turn", async () => {
