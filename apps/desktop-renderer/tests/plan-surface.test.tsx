@@ -39,6 +39,10 @@ function actions(): PlanActions {
     approveDraft: vi.fn(),
     reconcilePlan: vi.fn(),
     verifyReconciliation: vi.fn(),
+    openWorkout: vi.fn(),
+    closeWorkout: vi.fn(),
+    resolveWorkoutMatch: vi.fn(),
+    openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
   };
@@ -600,6 +604,81 @@ describe("Plan surface", () => {
     await user.click(screen.getByRole("button", { name: "Verify again" }));
     expect(planActions.reconcilePlan).toHaveBeenCalledOnce();
     expect(planActions.verifyReconciliation).toHaveBeenCalledOnce();
+  });
+
+  it("highlights WorkoutMatch decisions and keeps drawer actions visible", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const workoutId = "00000000000000000000000004";
+    const activityId = "a".repeat(64);
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S021",
+      projection: "active",
+      planId: "00000000000000000000000003",
+      attentionCount: 1,
+      data: {
+        plan: {
+          id: "00000000000000000000000003",
+          name: "Gran Fondo Almaty",
+          primaryGoal: "Finish in the front half",
+          startDate: "2026-07-13",
+          targetDate: "2026-10-04",
+          kind: "full-plan",
+          totalWeeks: 12,
+          weekStartDay: 1,
+          workoutCount: 20,
+          plannedDurationS: 72_000,
+        },
+        today: "2026-08-18",
+        weekIndex: 6,
+        todayWorkout: null,
+        workouts: [
+          {
+            id: workoutId,
+            date: "2026-08-23",
+            sport: "cycling",
+            name: "Suggested endurance",
+            durationS: 1_800,
+            match: {
+              kind: "planned",
+              status: "decision-needed",
+              activityId,
+              matchId: "00000000000000000000000005",
+              actualDate: "2026-08-23",
+              actualDurationS: 1_900,
+              requiresConfirmation: true,
+            },
+          },
+        ],
+        matchSync: { lastSuccessfulSyncAtMs: 1_787_477_200_000, awaitingSync: false },
+        selectedWorkoutId: workoutId,
+      },
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(screen.getAllByText("Decision needed").length).toBeGreaterThan(0);
+    expect(screen.getByRole("dialog")).toHaveTextContent("Suggested endurance");
+    await user.click(screen.getByRole("button", { name: "Confirm match" }));
+    expect(planActions.resolveWorkoutMatch).toHaveBeenCalledWith(
+      workoutId,
+      activityId,
+      "confirm",
+    );
+    await user.click(screen.getByRole("button", { name: "Not this activity" }));
+    expect(planActions.resolveWorkoutMatch).toHaveBeenCalledWith(
+      workoutId,
+      activityId,
+      "reject",
+    );
   });
 
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {

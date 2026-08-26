@@ -239,12 +239,13 @@ describe("sync failure repository", () => {
     expect(dump).not.toContain("# sync_failure");
     expect(dump).toContain("# plan_reconciliation_job");
     expect(dump).toContain("# plan_reconciliation_item");
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 15 });
-    expect(DUMP_TABLES).toHaveLength(45);
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 16 });
+    expect(DUMP_TABLES).toHaveLength(46);
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(DUMP_TABLES.map(({ table }) => table)).not.toContain("sync_failure");
     expect(DUMP_TABLES.map(({ table }) => table)).toContain("plan_reconciliation_job");
     expect(DUMP_TABLES.map(({ table }) => table)).toContain("plan_reconciliation_item");
+    expect(DUMP_TABLES.map(({ table }) => table)).toContain("plan_workout_match");
     expect(DERIVED_TABLES).not.toContain("sync_failure");
   });
 });

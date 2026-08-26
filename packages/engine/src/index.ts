@@ -301,6 +301,20 @@ export {
   previewPlanStartDate,
   type PlanStartDatePreview,
 } from "./planning/start-date.js";
+export {
+  WORKOUT_MATCH_AS_PLANNED_MAX_SECONDS,
+  WORKOUT_MATCH_AS_PLANNED_MIN_SECONDS,
+  WORKOUT_MATCH_AS_PLANNED_RATIO,
+  WORKOUT_MATCH_DURATION_MAX_SECONDS,
+  WORKOUT_MATCH_DURATION_MIN_SECONDS,
+  WORKOUT_MATCH_DURATION_RATIO,
+  isRacePlanWorkout,
+  projectWorkoutMatches,
+  refreshPlanWorkoutMatches,
+  type ProjectedWorkoutMatch,
+  type WorkoutMatchDisplayStatus,
+  type WorkoutMatchIdentity,
+} from "./planning/workout-match.js";
 export { makeSummaryMessage, splitHistoryByBudget, SUMMARY_PREFIX } from "./agent/history-limit.js";
 export { truncateUtf16Safe } from "./text-truncate.js";
 export { warnOrphanSections, _resetOrphanWarnCacheForTesting } from "./sport/orphan-sections.js";

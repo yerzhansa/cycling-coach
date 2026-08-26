@@ -21,6 +21,9 @@ import {
 } from "@enduragent/coach-contract";
 
 export type ActivePlanScenario =
+  | "PL-S004"
+  | "PL-S013"
+  | "PL-S021"
   | "PL-S010"
   | "PL-S037"
   | "PL-S038"
@@ -335,6 +338,9 @@ export function buildActivePlanReadModel(input: {
   readonly reconciliation: PlanReconciliation;
 }): PlanReadModel {
   const copy = {
+    "PL-S004": ["Plan active", "This week reflects your Plan and completed activities."],
+    "PL-S013": ["Plan active", "Activity matches are shown as of the last successful sync."],
+    "PL-S021": ["Workout details", "Review how this workout matched an activity."],
     "PL-S010": ["Plan active", "Calendar update has not started."],
     "PL-S037": ["Plan active locally", "Intervals is ready to update."],
     "PL-S038": ["Updating Intervals", "Writing today plus the next six days."],
@@ -344,22 +350,32 @@ export function buildActivePlanReadModel(input: {
     "PL-S042": ["Resuming calendar update", "The interrupted update is continuing safely."],
     "PL-S043": ["Plan active", "Intervals is current for the next seven days."],
   } as const;
-  const athleteAction = input.scenarioId === "PL-S039" || input.scenarioId === "PL-S041";
-  const attention: PlanAttention = athleteAction
-    ? {
-        count: 1,
-        destination: "direct",
-        items: [
-          {
-            id: `reconciliation:${input.planId}`,
-            title: "Calendar update needs attention",
-            scenarioId: input.scenarioId,
-            priority: "dated",
-            affectedDate: input.data.today,
-          },
-        ],
-      }
-    : EMPTY_ATTENTION;
+  const attentionItems: PlanAttention["items"] = [];
+  if (input.scenarioId === "PL-S039" || input.scenarioId === "PL-S041") {
+    attentionItems.push({
+      id: `reconciliation:${input.planId}`,
+      title: "Calendar update needs attention",
+      scenarioId: input.scenarioId,
+      priority: "dated",
+      affectedDate: input.data.today,
+    });
+  }
+  for (const workout of input.data.workouts) {
+    if (workout.match?.requiresConfirmation !== true) continue;
+    attentionItems.push({
+      id: `workout-match:${workout.id}`,
+      title: `Confirm ${workout.name}`,
+      scenarioId: "PL-S021",
+      priority: "dated",
+      affectedDate: workout.date,
+    });
+  }
+  const attention: PlanAttention = {
+    count: attentionItems.length,
+    destination:
+      attentionItems.length === 0 ? "none" : attentionItems.length === 1 ? "direct" : "list",
+    items: attentionItems,
+  };
   return PlanReadModelSchema.parse({
     schemaVersion: 1,
     scenarioId: input.scenarioId,
@@ -369,7 +385,7 @@ export function buildActivePlanReadModel(input: {
     title: copy[input.scenarioId][0],
     summary: copy[input.scenarioId][1],
     projection: "active",
-    transitions: [guard("PL-T12")],
+    transitions: [guard("PL-T12"), guard("PL-T13"), guard("PL-T14")],
     reconciliation: input.reconciliation,
     attention,
     activeOperation: null,

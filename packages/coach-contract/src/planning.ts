@@ -291,6 +291,27 @@ export const PlanActiveWorkoutProjectionSchema = z
     sport: z.string().min(1),
     name: z.string().min(1),
     durationS: z.number().int().positive().nullable(),
+    match: z
+      .object({
+        kind: z.enum(["planned", "extra"]),
+        status: z.enum([
+          "as-planned",
+          "adjusted",
+          "moved",
+          "missed",
+          "extra",
+          "decision-needed",
+          "awaiting-sync",
+          "upcoming",
+        ]),
+        activityId: z.string().min(1).nullable(),
+        matchId: z.string().min(1).nullable(),
+        actualDate: TrainingExportCivilDateSchema.nullable(),
+        actualDurationS: z.number().int().positive().nullable(),
+        requiresConfirmation: z.boolean(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type PlanActiveWorkoutProjection = z.infer<typeof PlanActiveWorkoutProjectionSchema>;
@@ -302,6 +323,14 @@ export const PlanActiveProjectionDataSchema = z
     weekIndex: z.number().int().positive(),
     todayWorkout: PlanActiveWorkoutProjectionSchema.nullable(),
     workouts: z.array(PlanActiveWorkoutProjectionSchema),
+    matchSync: z
+      .object({
+        lastSuccessfulSyncAtMs: z.number().int().nonnegative().nullable(),
+        awaitingSync: z.boolean(),
+      })
+      .strict()
+      .optional(),
+    selectedWorkoutId: z.string().min(1).nullable().optional(),
   })
   .strict();
 export type PlanActiveProjectionData = z.infer<typeof PlanActiveProjectionDataSchema>;
@@ -715,6 +744,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       planId: EntityIdSchema,
       workoutId: EntityIdSchema,
       activityId: EntityIdSchema,
+      decision: z.enum(["confirm", "reject"]).optional(),
     })
     .strict(),
   z

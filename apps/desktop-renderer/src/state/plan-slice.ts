@@ -72,6 +72,14 @@ export interface PlanActions {
   approveDraft(): void;
   reconcilePlan(): void;
   verifyReconciliation(): void;
+  openWorkout(workoutId: string): void;
+  closeWorkout(): void;
+  resolveWorkoutMatch(
+    workoutId: string,
+    activityId: string,
+    decision: "confirm" | "reject",
+  ): void;
+  openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
 }

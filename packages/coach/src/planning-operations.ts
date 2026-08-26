@@ -10,6 +10,7 @@ import {
   PlanRaceCourseProjectionSchema,
   PlanStartDateProjectionSchema,
   PlanProgressEventSchema,
+  PlanReadModelSchema,
   type ChatQueueRunResult,
   type ChatQueueSnapshot,
   type CoachEngine,
@@ -43,6 +44,9 @@ import {
   rejectRaceCourseFile,
   useRouteWithoutElevation,
   verifyPlanMirror,
+  projectWorkoutMatches,
+  refreshPlanWorkoutMatches,
+  type ProjectedWorkoutMatch,
   type PlanMirrorCalendarPort,
   type PlanReconciliationProjection,
   type PlanFtpAdapter,
@@ -60,6 +64,7 @@ import {
   createPlanConversationRepository,
   createPlanReconciliationRepository,
   createPlanRepository,
+  createPlanWorkoutMatchRepository,
   planWeekIndex,
   PlanConversationValidationError,
   type PlanConversationRecord,
@@ -70,6 +75,7 @@ import {
   type PlanReconciliationRepository,
   type PlanRepository,
   type PlanWorkoutRecord,
+  type PlanWorkoutMatchRepository,
   parseRaceCourseSnapshot,
   type RaceCourseSnapshot,
 } from "@enduragent/kernel/planning";
@@ -204,6 +210,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly course?: PlanRaceCourseAdapter;
   readonly reconciliations?: PlanReconciliationRepository;
   readonly calendar?: PlanMirrorCalendarPort;
+  readonly workoutMatches?: PlanWorkoutMatchRepository;
   readonly todayDateKey?: () => number;
 }
 
@@ -300,30 +307,96 @@ function activePlanData(input: {
   readonly plan: PlanRecord;
   readonly workouts: readonly PlanWorkoutRecord[];
   readonly todayDateKey: number;
+  readonly matchRows: readonly ProjectedWorkoutMatch[];
+  readonly matchSync: {
+    readonly lastSuccessfulSyncAtMs: number | null;
+    readonly awaitingSync: boolean;
+  };
+  readonly selectedWorkoutId?: string | null;
 }): PlanActiveProjectionData {
   const plan = draftPlanProjection(input.plan, input.workouts);
   if (plan === null) throw new TypeError("An active Plan projection requires a Plan.");
   const week = planWeekIndex(input.plan, input.todayDateKey);
   const weekIndex =
     week.kind === "inside" ? week.weekIndex : week.side === "before" ? 1 : input.plan.totalWeeks;
-  const windowEndDateKey = addCivilDays(input.todayDateKey, 6);
+  const weekStartDateKey =
+    week.kind === "inside"
+      ? addCivilDays(input.plan.startDateKey, (weekIndex - 1) * 7)
+      : week.side === "before"
+        ? input.plan.startDateKey
+        : addCivilDays(input.plan.startDateKey, (input.plan.totalWeeks - 1) * 7);
+  const windowEndDateKey = addCivilDays(weekStartDateKey, 6);
+  const matchByWorkout = new Map(
+    input.matchRows
+      .filter((row): row is ProjectedWorkoutMatch & { readonly workoutId: string } =>
+        row.workoutId !== null,
+      )
+      .map((row) => [row.workoutId, row]),
+  );
   const workouts = input.workouts
     .filter(
-      (workout) => workout.dateKey >= input.todayDateKey && workout.dateKey <= windowEndDateKey,
+      (workout) => workout.dateKey >= weekStartDateKey && workout.dateKey <= windowEndDateKey,
     )
-    .map((workout) => ({
-      id: workout.id,
-      date: dateText(workout.dateKey),
-      sport: workout.sport,
-      name: workout.name,
-      durationS: workout.durationS,
+    .map((workout) => {
+      const match = matchByWorkout.get(workout.id);
+      return {
+        id: workout.id,
+        date: dateText(workout.dateKey),
+        sport: workout.sport,
+        name: workout.name,
+        durationS: workout.durationS,
+        ...(match === undefined
+          ? {}
+          : {
+              match: {
+                kind: "planned" as const,
+                status: match.status,
+                activityId: match.activityId,
+                matchId: match.matchId,
+                actualDate:
+                  match.actualDateKey === null ? null : dateText(match.actualDateKey),
+                actualDurationS: match.actualDurationS,
+                requiresConfirmation: match.requiresConfirmation,
+              },
+            }),
+      };
+    });
+  const extra = input.matchRows
+    .filter(
+      (row): row is ProjectedWorkoutMatch & {
+        readonly workoutId: null;
+        readonly activityId: string;
+        readonly actualDateKey: number;
+      } => row.workoutId === null && row.activityId !== null && row.actualDateKey !== null,
+    )
+    .map((row) => ({
+      id: row.activityId,
+      date: dateText(row.actualDateKey),
+      sport: row.actualSport ?? "activity",
+      name: row.actualSport === "cycling" ? "Extra ride" : "Extra activity",
+      durationS: row.actualDurationS,
+      match: {
+        kind: "extra" as const,
+        status: "extra" as const,
+        activityId: row.activityId,
+        matchId: null,
+        actualDate: dateText(row.actualDateKey),
+        actualDurationS: row.actualDurationS,
+        requiresConfirmation: false,
+      },
     }));
+  const allWorkouts = [...workouts, ...extra].sort(
+    (left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id),
+  );
   return PlanActiveProjectionDataSchema.parse({
     plan,
     today: dateText(input.todayDateKey),
     weekIndex,
-    todayWorkout: workouts.find((workout) => workout.date === dateText(input.todayDateKey)) ?? null,
-    workouts,
+    todayWorkout:
+      workouts.find((workout) => workout.date === dateText(input.todayDateKey)) ?? null,
+    workouts: allWorkouts,
+    matchSync: input.matchSync,
+    selectedWorkoutId: input.selectedWorkoutId ?? null,
   });
 }
 
@@ -332,9 +405,9 @@ function activeScenario(
   override: ActivePlanScenario | undefined,
 ): ActivePlanScenario {
   if (override !== undefined) return override;
-  if (projection === null) return "PL-S010";
+  if (projection === null) return "PL-S004";
   if (projection.job.status === "pending") return "PL-S037";
-  if (projection.job.status === "verified") return "PL-S043";
+  if (projection.job.status === "verified") return "PL-S004";
   if (projection.job.status === "running" || projection.job.status === "retrying") {
     return "PL-S042";
   }
@@ -478,6 +551,7 @@ interface ReadOverrides {
   readonly dateScenario?: "PL-S046" | "PL-S048" | "PL-S050";
   readonly startDate?: PlanStartDateProjection;
   readonly activeScenario?: ActivePlanScenario;
+  readonly selectedWorkoutId?: string | null;
 }
 
 function queueText(queue: ChatQueueSnapshot): string {
@@ -511,6 +585,8 @@ export function createPlanningOperations(
   const plans = dependencies.plans ?? createPlanRepository(input.context.store);
   const reconciliations =
     dependencies.reconciliations ?? createPlanReconciliationRepository(input.context.store);
+  const workoutMatches =
+    dependencies.workoutMatches ?? createPlanWorkoutMatchRepository(input.context.store);
   const enqueue = createSerializedLane();
 
   const readActive = async (
@@ -525,7 +601,38 @@ export function createPlanningOperations(
     ]);
     const projection =
       job === undefined ? null : await projectPlanReconciliation(reconciliations, job);
-    const scenarioId = activeScenario(projection, overrides.activeScenario);
+    const week = planWeekIndex(plan, todayDateKey);
+    const weekIndex =
+      week.kind === "inside" ? week.weekIndex : week.side === "before" ? 1 : plan.totalWeeks;
+    const weekStartDateKey = addCivilDays(plan.startDateKey, (weekIndex - 1) * 7);
+    const matchSync = await workoutMatches.readSyncStatus();
+    const refreshed = await refreshPlanWorkoutMatches({
+      planId: plan.id,
+      workouts,
+      startDateKey: weekStartDateKey,
+      endDateKey: addCivilDays(weekStartDateKey, 6),
+      repository: workoutMatches,
+      identity: {
+        newId: () => input.identity.newUlid(),
+        deviceId: () => input.identity.deviceId(),
+        stamp: () => input.identity.hlcStamp(),
+      },
+    });
+    const matchRows = projectWorkoutMatches({
+      workouts: workouts.filter(
+        (workout) =>
+          workout.dateKey >= weekStartDateKey &&
+          workout.dateKey <= addCivilDays(weekStartDateKey, 6),
+      ),
+      activities: refreshed.activities,
+      matches: refreshed.matches,
+      todayDateKey,
+      awaitingSync: matchSync.awaitingSync,
+    });
+    const baseScenario = activeScenario(projection, undefined);
+    const scenarioId =
+      overrides.activeScenario ??
+      (matchSync.awaitingSync && baseScenario === "PL-S004" ? "PL-S013" : baseScenario);
     const status =
       projection === null || projection.job.status === "pending"
         ? "not-started"
@@ -539,7 +646,14 @@ export function createPlanningOperations(
       scenarioId,
       planId: plan.id,
       revision,
-      data: activePlanData({ plan, workouts, todayDateKey }),
+      data: activePlanData({
+        plan,
+        workouts,
+        todayDateKey,
+        matchRows,
+        matchSync,
+        selectedWorkoutId: overrides.selectedWorkoutId,
+      }),
       reconciliation: {
         status,
         created: projection?.created ?? 0,
@@ -1526,7 +1640,7 @@ export function createPlanningOperations(
             });
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
-              state: await read(),
+              state: await read({ activeScenario: "PL-S043" }),
             });
           } catch {
             deliver(onEvent, {
@@ -1539,6 +1653,103 @@ export function createPlanningOperations(
             });
             return reject(CALENDAR_UPDATE_FAILED);
           }
+        }
+        if (command.transitionId === "PL-T13") {
+          const [plan, workout] = await Promise.all([
+            plans.read(command.planId),
+            plans.readWorkouts(command.planId).then((workouts) =>
+              workouts.find((candidate) => candidate.id === command.workoutId),
+            ),
+          ]);
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          if (workout === undefined) {
+            const current = await read();
+            const data = PlanActiveProjectionDataSchema.safeParse(current.data);
+            if (
+              !data.success ||
+              !data.data.workouts.some((candidate) => candidate.id === command.workoutId)
+            ) {
+              return reject(UNAVAILABLE);
+            }
+          }
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await read({
+              activeScenario: "PL-S021",
+              selectedWorkoutId: command.workoutId,
+            }),
+          });
+        }
+        if (command.transitionId === "PL-T14") {
+          const plan = await plans.read(command.planId);
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          const candidate = (await workoutMatches.readForWorkout(command.workoutId)).find(
+            (match) => match.activityId === command.activityId && match.decision === "suggested",
+          );
+          if (candidate === undefined) return reject(UNAVAILABLE);
+          try {
+            const stamp = input.identity.hlcStamp();
+            await workoutMatches.decide({
+              id: candidate.id,
+              decision: command.decision === "reject" ? "rejected" : "confirmed",
+              decidedAtMs: stamp.physicalMs,
+              deviceId: await input.identity.deviceId(),
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: "PL-S004", selectedWorkoutId: null }),
+            });
+          } catch {
+            return reject(PERSISTENCE_FAILED, {
+              activeScenario: "PL-S021",
+              selectedWorkoutId: command.workoutId,
+            });
+          }
+        }
+        if (command.transitionId === "PL-T33") {
+          const state = await read();
+          if (state.planId !== command.planId || state.attention.count === 0) {
+            return reject(UNAVAILABLE);
+          }
+          if (state.attention.destination === "direct") {
+            const item = state.attention.items[0]!;
+            if (item.id.startsWith("workout-match:")) {
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: await read({
+                  activeScenario: "PL-S021",
+                  selectedWorkoutId: item.id.slice("workout-match:".length),
+                }),
+              });
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({ status: "completed", state });
+          }
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: PlanReadModelSchema.parse({
+              ...state,
+              scenarioId: "PL-S028",
+              projection: "attention",
+              title: "Plan attention",
+              summary: `${state.attention.count} items need your decision.`,
+            }),
+          });
+        }
+        if (command.transitionId === "PL-T34") {
+          if (!command.attentionId.startsWith("workout-match:")) return reject(UNAVAILABLE);
+          const plan = await plans.readLatest();
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          const workoutId = command.attentionId.slice("workout-match:".length);
+          const workout = (await plans.readWorkouts(plan.id)).find(
+            (candidate) => candidate.id === workoutId,
+          );
+          if (workout === undefined) return reject(UNAVAILABLE);
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await read({ activeScenario: "PL-S021", selectedWorkoutId: workoutId }),
+          });
         }
         return reject(UNAVAILABLE);
       });
