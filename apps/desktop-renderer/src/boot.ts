@@ -182,6 +182,7 @@ export function bootRenderer(): Disposer {
     publishDiscardConfirmation: (open) => store.getState().setPlanDiscardConfirmation(open),
     publishRevisionComposer: (open) => store.getState().setPlanRevisionComposer(open),
     publishCoursePicker: (open) => store.getState().setPlanCoursePicker(open),
+    publishDatePicker: (open) => store.getState().setPlanDatePicker(open),
   });
   store.getState().bindPlanActions({
     open: () => planAdapter.open(),
@@ -208,6 +209,10 @@ export function bootRenderer(): Disposer {
     continueWithoutCourse: () => planAdapter.continueWithoutCourse(),
     useCourseWithoutElevation: () => planAdapter.useCourseWithoutElevation(),
     removeCourse: () => planAdapter.removeCourse(),
+    openDatePicker: () => planAdapter.openDatePicker(),
+    closeDatePicker: () => planAdapter.closeDatePicker(),
+    recalculateStartDate: (startDate) => planAdapter.recalculateStartDate(startDate),
+    approveDraft: () => planAdapter.approveDraft(),
     returnToCoach: () => planAdapter.returnToCoach(),
     retry: () => planAdapter.retry(),
   });

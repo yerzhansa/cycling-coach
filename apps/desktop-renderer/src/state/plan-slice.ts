@@ -39,6 +39,7 @@ export interface PlanSurfaceState {
   readonly discardConfirmation: boolean;
   readonly revisionComposer: boolean;
   readonly coursePicker: boolean;
+  readonly datePicker: boolean;
 }
 
 export interface PlanActions {
@@ -65,6 +66,10 @@ export interface PlanActions {
   continueWithoutCourse(): void;
   useCourseWithoutElevation(): void;
   removeCourse(): void;
+  openDatePicker(): void;
+  closeDatePicker(): void;
+  recalculateStartDate(startDate: string): void;
+  approveDraft(): void;
   returnToCoach(): void;
   retry(): void;
 }
@@ -78,6 +83,7 @@ export interface PlanSlice {
   setPlanDiscardConfirmation: (open: boolean) => void;
   setPlanRevisionComposer: (open: boolean) => void;
   setPlanCoursePicker: (open: boolean) => void;
+  setPlanDatePicker: (open: boolean) => void;
   bindPlanActions: (actions: PlanActions | null) => void;
 }
 
@@ -89,6 +95,7 @@ export const EMPTY_PLAN_SURFACE: PlanSurfaceState = Object.freeze({
   discardConfirmation: false,
   revisionComposer: false,
   coursePicker: false,
+  datePicker: false,
 });
 
 export function planReadModel(plan: PlanSurfaceState): PlanReadModel | null {
@@ -130,6 +137,9 @@ export const createPlanSlice: StateCreator<EnduragentState, [], [], PlanSlice> =
   },
   setPlanCoursePicker(open) {
     set((current) => ({ plan: { ...current.plan, coursePicker: open } }));
+  },
+  setPlanDatePicker(open) {
+    set((current) => ({ plan: { ...current.plan, datePicker: open } }));
   },
   bindPlanActions(actions) {
     set({ planActions: actions });

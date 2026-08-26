@@ -1,11 +1,23 @@
-import { CheckCircle2, LoaderCircle, MapPinned, RefreshCw, TriangleAlert } from "lucide-react";
-import { useRef, useState, type FormEvent, type ReactElement } from "react";
 import {
+  CalendarDays,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  LoaderCircle,
+  MapPinned,
+  RefreshCw,
+  TriangleAlert,
+} from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
+import {
+  PLAN_MIN_FULL_DAYS,
   PlanCoachProjectionDataSchema,
+  type PlanDraftPlanProjection,
   type PlanFtpProjection,
   type PlanFtpSourceValue,
   type PlanRaceCourseProjection,
   type PlanRaceCourseSummary,
+  type PlanStartDateProjection,
 } from "@enduragent/coach-contract";
 import { Button } from "../../components/ui/button.js";
 import {
@@ -25,6 +37,44 @@ import { ConversationTranscript } from "../chat/Transcript.js";
 import { Page } from "../shared/Page.js";
 
 const SUPPORT_PAIR = "grid gap-[calc(var(--inset)/2)]";
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+
+function civilDate(value: string): Date {
+  return new Date(`${value}T00:00:00.000Z`);
+}
+
+function civilText(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function addCivilDate(value: string, days: number): string {
+  const date = civilDate(value);
+  date.setUTCDate(date.getUTCDate() + days);
+  return civilText(date);
+}
+
+function civilDays(start: string, end: string): number {
+  return Math.round((civilDate(end).getTime() - civilDate(start).getTime()) / 86_400_000) + 1;
+}
+
+function weekdayIndex(value: string): number {
+  return civilDate(value).getUTCDay();
+}
+
+function formatCivilDate(value: string, options?: Intl.DateTimeFormatOptions): string {
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: "UTC",
+    dateStyle: options === undefined ? "medium" : undefined,
+    ...options,
+  }).format(civilDate(value));
+}
+
+function plannedTime(durationS: number): string {
+  const hours = Math.floor(durationS / 3_600);
+  const minutes = Math.round((durationS % 3_600) / 60);
+  if (hours === 0) return `${minutes} min`;
+  return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
+}
 
 function RetryButton(): ReactElement | null {
   const actions = useEnduragentStore((state) => state.planActions);
@@ -780,39 +830,378 @@ function DiscardDraftDialog(): ReactElement {
   );
 }
 
+interface DatePreview {
+  readonly kind: "full-plan" | "short-race-preparation";
+  readonly inclusiveDays: number;
+  readonly totalWeeks: number;
+  readonly raceWeekday: number;
+  readonly raceDayOfPlanWeek: number;
+}
+
+function localDatePreview(startDate: string, targetDate: string): DatePreview {
+  const inclusiveDays = civilDays(startDate, targetDate);
+  return {
+    kind: inclusiveDays >= PLAN_MIN_FULL_DAYS ? "full-plan" : "short-race-preparation",
+    inclusiveDays,
+    totalWeeks: Math.ceil(inclusiveDays / 7),
+    raceWeekday: weekdayIndex(targetDate),
+    raceDayOfPlanWeek: ((inclusiveDays - 1) % 7) + 1,
+  };
+}
+
+function DatePickerDialog(props: {
+  readonly plan: PlanDraftPlanProjection | null;
+  readonly startDate: PlanStartDateProjection | undefined;
+}): ReactElement {
+  const open = useEnduragentStore((state) => state.plan.datePicker);
+  const actions = useEnduragentStore((state) => state.planActions);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const initialDate = props.startDate?.selectedDate ?? props.plan?.startDate ?? "";
+  const [selected, setSelected] = useState(initialDate);
+  const initial = initialDate.length === 0 ? new Date() : civilDate(initialDate);
+  const [visibleMonth, setVisibleMonth] = useState(() => ({
+    year: initial.getUTCFullYear(),
+    month: initial.getUTCMonth(),
+  }));
+
+  useEffect(() => {
+    if (!open || initialDate.length === 0) return;
+    const date = civilDate(initialDate);
+    setSelected(initialDate);
+    setVisibleMonth({ year: date.getUTCFullYear(), month: date.getUTCMonth() });
+  }, [initialDate, open]);
+
+  const today = props.startDate?.today;
+  const targetDate = props.startDate?.targetDate ?? props.plan?.targetDate ?? undefined;
+  const preview =
+    selected.length === 0 || targetDate === undefined
+      ? null
+      : localDatePreview(selected, targetDate);
+  const scenario =
+    preview?.kind === "short-race-preparation"
+      ? "PL-S044"
+      : preview !== null && preview.raceWeekday !== 0
+        ? "PL-S045"
+        : "PL-S015";
+  const first = new Date(Date.UTC(visibleMonth.year, visibleMonth.month, 1));
+  const mondayOffset = (first.getUTCDay() + 6) % 7;
+  const gridStart = new Date(first);
+  gridStart.setUTCDate(first.getUTCDate() - mondayOffset);
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(gridStart);
+    date.setUTCDate(gridStart.getUTCDate() + index);
+    return {
+      value: civilText(date),
+      label: date.getUTCDate(),
+      currentMonth: date.getUTCMonth() === visibleMonth.month,
+    };
+  });
+  const monthLabel = new Intl.DateTimeFormat(undefined, {
+    timeZone: "UTC",
+    month: "long",
+    year: "numeric",
+  }).format(first);
+  const moveMonth = (offset: number): void => {
+    const next = new Date(Date.UTC(visibleMonth.year, visibleMonth.month + offset, 1));
+    setVisibleMonth({ year: next.getUTCFullYear(), month: next.getUTCMonth() });
+  };
+  const valid = (value: string): boolean =>
+    today !== undefined && targetDate !== undefined && value >= today && value <= targetDate;
+  const selectAndFocus = (value: string): void => {
+    if (!valid(value)) return;
+    setSelected(value);
+    const date = civilDate(value);
+    if (date.getUTCMonth() !== visibleMonth.month || date.getUTCFullYear() !== visibleMonth.year) {
+      setVisibleMonth({ year: date.getUTCFullYear(), month: date.getUTCMonth() });
+    }
+    queueMicrotask(() => {
+      document.querySelector<HTMLButtonElement>(`[data-plan-date="${value}"]`)?.focus();
+    });
+  };
+
+  const primaryLabel =
+    preview?.kind === "short-race-preparation"
+      ? "Use short block"
+      : preview !== null && preview.raceWeekday !== 0
+        ? "Use this date"
+        : "Recalculate Plan";
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) actions?.closeDatePicker();
+      }}
+    >
+      <DialogContent
+        className="w-[min(600px,calc(100vw-32px))] max-w-none gap-0 p-6 shadow-elev-4 sm:max-w-none"
+        showCloseButton={false}
+        initialFocus={cancel}
+        data-plan-scenario={scenario}
+      >
+        <DialogHeader className="gap-2.5">
+          <DialogTitle className="m-0 text-xl">Choose a start date</DialogTitle>
+          <DialogDescription className="m-0 leading-[1.5]">
+            Past dates are unavailable. Shorter blocks stay valid; weekly preferences keep their
+            weekdays.
+          </DialogDescription>
+        </DialogHeader>
+        <section className="mt-5" aria-label="Plan start date calendar">
+          <div className="grid grid-cols-[40px_1fr_40px] items-center gap-inset">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              aria-label="Previous month"
+              onClick={() => moveMonth(-1)}
+            >
+              <ChevronLeft aria-hidden="true" />
+            </Button>
+            <h3 className="m-0 text-center text-base font-semibold">{monthLabel}</h3>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              aria-label="Next month"
+              onClick={() => moveMonth(1)}
+            >
+              <ChevronRight aria-hidden="true" />
+            </Button>
+          </div>
+          <div className="mt-inset grid grid-cols-7 gap-1" aria-hidden="true">
+            {WEEKDAYS.map((weekday) => (
+              <span key={weekday} className="py-1 text-center text-xs text-ink-2">
+                {weekday}
+              </span>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-1" role="group" aria-label={monthLabel}>
+            {days.map((day) => {
+              const disabled = !valid(day.value);
+              const active = day.value === selected;
+              return (
+                <button
+                  key={day.value}
+                  type="button"
+                  data-plan-date={day.value}
+                  aria-label={formatCivilDate(day.value, {
+                    weekday: "long",
+                    month: "long",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
+                  aria-pressed={active}
+                  disabled={disabled}
+                  tabIndex={active ? 0 : -1}
+                  className={`grid size-10 place-items-center justify-self-center rounded-ctl text-sm outline-none transition-colors focus:ring-3 focus:ring-ring/25 ${
+                    active
+                      ? "bg-primary text-primary-foreground"
+                      : disabled
+                        ? "cursor-not-allowed bg-sunk text-ink-3 opacity-55"
+                        : day.currentMonth
+                          ? "bg-surface text-ink shadow-[inset_0_0_0_1px_var(--line-2)] hover:bg-sunk"
+                          : "bg-sunk text-ink-2 hover:text-ink"
+                  }`}
+                  onClick={() => selectAndFocus(day.value)}
+                  onKeyDown={(event) => {
+                    const offset =
+                      event.key === "ArrowLeft"
+                        ? -1
+                        : event.key === "ArrowRight"
+                          ? 1
+                          : event.key === "ArrowUp"
+                            ? -7
+                            : event.key === "ArrowDown"
+                              ? 7
+                              : 0;
+                    if (offset === 0) return;
+                    event.preventDefault();
+                    selectAndFocus(addCivilDate(day.value, offset));
+                  }}
+                >
+                  {day.label}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+        {preview === null || targetDate === undefined ? null : (
+          <section className="mt-5 grid gap-row rounded-card bg-sunk p-4" aria-live="polite">
+            <div className={SUPPORT_PAIR}>
+              <h3 className="m-0 text-sm font-semibold">
+                {preview.kind === "full-plan" ? "Full Plan" : "Short race-preparation block"}
+              </h3>
+              <p className="m-0 text-ink-2">
+                {formatCivilDate(selected)} to {formatCivilDate(targetDate)} · {preview.totalWeeks}{" "}
+                {preview.totalWeeks === 1 ? "week" : "weeks"} · {preview.inclusiveDays} inclusive
+                days
+              </p>
+            </div>
+            {preview.raceWeekday === 0 ? null : (
+              <p className="m-0 text-sm text-ink-2">
+                Race day stays {formatCivilDate(targetDate, { weekday: "long" })}; the Plan week
+                follows the selected start weekday.
+              </p>
+            )}
+          </section>
+        )}
+        <DialogFooter className="mx-0 mt-[22px] mb-0 flex-row justify-end border-0 bg-transparent p-0">
+          <DialogClose render={<Button ref={cancel} variant="outline" size="lg" />}>
+            Cancel
+          </DialogClose>
+          <Button
+            type="button"
+            size="lg"
+            disabled={
+              actions === null ||
+              preview === null ||
+              selected === props.plan?.startDate ||
+              !valid(selected)
+            }
+            onClick={() => actions?.recalculateStartDate(selected)}
+          >
+            {primaryLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function DraftProjection(): ReactElement {
   const actions = useEnduragentStore((state) => state.planActions);
   const model = useEnduragentStore((state) => planReadModel(state.plan));
+  const transition = useEnduragentStore((state) => state.plan.transition);
   const revisionComposer = useEnduragentStore((state) => state.plan.revisionComposer);
   const [instruction, setInstruction] = useState("");
   const parsed = model === null ? null : PlanCoachProjectionDataSchema.safeParse(model.data);
-  const draft = parsed?.success === true ? parsed.data.draft : null;
+  const data = parsed?.success === true ? parsed.data : null;
+  const plan = data?.plan ?? null;
+  const startDate = data?.startDate;
+  const dateRunning = transition.status === "running" && transition.transitionId === "PL-T08";
+  const retryingDate = dateRunning && model?.scenarioId === "PL-S048";
+  const approving =
+    (transition.status === "submitting" || transition.status === "running") &&
+    transition.transitionId === "PL-T11";
+  const busy = dateRunning || approving;
+  const displayScenario = retryingDate ? "PL-S049" : dateRunning ? "PL-S047" : model?.scenarioId;
   const submit = (event: FormEvent): void => {
     event.preventDefault();
     if (/\S/u.test(instruction)) actions?.updateDraft(instruction);
   };
   return (
-    <div className="grid gap-6" data-plan-scenario={model?.scenarioId}>
-      <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
-        <div className={SUPPORT_PAIR}>
-          <h2 className="m-0 text-lg font-semibold">{model?.title ?? "Draft Plan"}</h2>
-          <p className="m-0 text-ink-2">{model?.summary}</p>
-        </div>
-        <div className="grid grid-cols-2 gap-inset rounded-card bg-sunk p-4">
+    <div className="grid gap-6" data-plan-scenario={displayScenario}>
+      {dateRunning ? (
+        <section
+          className="flex items-start gap-row rounded-card bg-surface p-5 shadow-elev-1"
+          aria-live="polite"
+        >
+          <LoaderCircle
+            className="mt-0.5 size-5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+            aria-hidden="true"
+          />
           <div className={SUPPORT_PAIR}>
-            <span className="text-xs text-ink-2">Revision</span>
-            <strong>{draft?.revision ?? model?.revision ?? 1}</strong>
+            <h2 className="m-0 text-base font-semibold">Recalculating the Plan</h2>
+            <p className="m-0 text-ink-2">
+              Race day and weekly availability stay fixed. Your previous Draft remains safe.
+            </p>
           </div>
+        </section>
+      ) : null}
+      <section className="grid gap-5 rounded-card bg-surface p-5 shadow-elev-1">
+        {model?.scenarioId === "PL-S031" ? (
+          <div className="flex items-start gap-row text-ok" role="status">
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <h2 className="m-0 text-sm font-semibold text-ink">Draft updated</h2>
+              <p className="m-0 text-ink-2">The coach applied your requested change.</p>
+            </div>
+          </div>
+        ) : null}
+        {model?.scenarioId === "PL-S050" ? (
+          <div className="flex items-start gap-row text-ok" role="status">
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <h2 className="m-0 text-sm font-semibold text-ink">Start date updated</h2>
+              <p className="m-0 text-ink-2">Review the recalculated Draft before approval.</p>
+            </div>
+          </div>
+        ) : null}
+        {model?.scenarioId === "PL-S046" || model?.scenarioId === "PL-S048" ? (
+          <div
+            className="grid gap-row rounded-ctl bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] p-3"
+            role="alert"
+          >
+            <div className="flex items-start gap-row">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden="true" />
+              <div className={SUPPORT_PAIR}>
+                <h2 className="m-0 text-sm font-semibold">
+                  {model.scenarioId === "PL-S046"
+                    ? "Choose another start date"
+                    : "The Plan could not be recalculated"}
+                </h2>
+                <p className="m-0 text-ink-2">Your current Draft is safe.</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-inset">
+              <Button type="button" variant="outline" onClick={() => actions?.openDatePicker()}>
+                Choose another date
+              </Button>
+              {model.scenarioId === "PL-S048" ? (
+                <Button type="button" onClick={() => actions?.retry()}>
+                  Retry
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        {transition.status === "failed" && transition.transitionId === "PL-T11" ? (
+          <StaleNotice message="The Plan could not be activated. Your Draft is unchanged." />
+        ) : null}
+        <div className="flex items-start justify-between gap-row">
           <div className={SUPPORT_PAIR}>
-            <span className="text-xs text-ink-2">Status</span>
-            <strong>Ready for review</strong>
+            <h2 className="m-0 text-lg font-semibold">
+              {plan?.name ?? model?.title ?? "Draft Plan"}
+            </h2>
+            <p className="m-0 text-ink-2">
+              {plan === null
+                ? model?.summary
+                : `${plan.workoutCount} workouts · ${plannedTime(plan.plannedDurationS)} · ${plan.totalWeeks} ${plan.totalWeeks === 1 ? "week" : "weeks"}`}
+            </p>
+            <p className="m-0 text-sm text-ink-2">Calendar not started.</p>
           </div>
+          <span className="rounded-chip bg-sunk px-3 py-1 text-sm text-primary">Draft</span>
         </div>
-        {parsed?.success === true && parsed.data.course !== undefined ? (
-          <RaceCoursePanel course={parsed.data.course} draft />
+        {data?.course !== undefined ? (
+          <div className="grid gap-inset border-t border-line pt-5">
+            <h3 className="m-0 text-sm font-semibold">Race Course</h3>
+            <RaceCoursePanel course={data.course} draft />
+          </div>
+        ) : null}
+        {plan !== null && startDate !== undefined ? (
+          <div className="flex items-center justify-between gap-row border-t border-line pt-5">
+            <div className="flex min-w-0 items-start gap-row">
+              <CalendarDays className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+              <div className={SUPPORT_PAIR}>
+                <h3 className="m-0 text-sm font-semibold">Start date</h3>
+                <p className="m-0 text-ink-2">
+                  {formatCivilDate(plan.startDate)} ·{" "}
+                  {plan.kind === "full-plan" ? "Full Plan" : "Short race-preparation block"}
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={actions === null || busy}
+              onClick={() => actions?.openDatePicker()}
+            >
+              Change
+            </Button>
+          </div>
         ) : null}
         {revisionComposer ? (
-          <form className="grid gap-inset pt-row" onSubmit={submit}>
+          <form className="grid gap-inset border-t border-line pt-5" onSubmit={submit}>
             <label className="text-sm font-medium" htmlFor="plan-draft-revision">
               What should the coach change?
             </label>
@@ -838,21 +1227,48 @@ function DraftProjection(): ReactElement {
             </div>
           </form>
         ) : (
-          <div className="flex flex-wrap justify-end gap-inset pt-row">
-            <Button type="button" variant="outline" onClick={() => actions?.openRevisionComposer()}>
-              Back to coach
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={() => actions?.openDiscardConfirmation()}
-            >
-              Discard draft
-            </Button>
+          <div className="grid gap-row border-t border-line pt-5">
+            <div className="flex flex-wrap items-center justify-between gap-row">
+              <p className="m-0 text-sm text-ink-2">
+                Approval activates the Plan, then updates today plus the next six days in Intervals.
+              </p>
+              <div className="flex flex-wrap justify-end gap-inset">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={actions === null || busy}
+                  onClick={() => actions?.openRevisionComposer()}
+                >
+                  Back to coach
+                </Button>
+                <Button
+                  type="button"
+                  disabled={actions === null || busy}
+                  aria-busy={approving ? "true" : undefined}
+                  onClick={() => actions?.approveDraft()}
+                >
+                  {approving ? "Activating…" : "Approve Plan"}
+                </Button>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-row border-t border-line pt-5">
+              <p className="m-0 text-sm text-ink-2">
+                Discard removes only this Draft. Your Plan conversation stays.
+              </p>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={actions === null || busy}
+                onClick={() => actions?.openDiscardConfirmation()}
+              >
+                Discard draft
+              </Button>
+            </div>
           </div>
         )}
       </section>
       <DiscardDraftDialog />
+      <DatePickerDialog plan={plan} startDate={startDate} />
     </div>
   );
 }

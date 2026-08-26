@@ -47,6 +47,8 @@ export const PLAN_TRANSITION_IDS = [
   "PL-T39",
 ] as const;
 
+export const PLAN_MIN_FULL_DAYS = 84 as const;
+
 export const PlanTransitionIdSchema = z.enum(PLAN_TRANSITION_IDS);
 export type PlanTransitionId = z.infer<typeof PlanTransitionIdSchema>;
 
@@ -266,6 +268,60 @@ export const PlanDraftProjectionSchema = z
   .strict();
 export type PlanDraftProjection = z.infer<typeof PlanDraftProjectionSchema>;
 
+export const PlanDraftPlanProjectionSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string(),
+    primaryGoal: z.string(),
+    startDate: TrainingExportCivilDateSchema,
+    targetDate: TrainingExportCivilDateSchema.nullable(),
+    kind: z.enum(["full-plan", "short-race-preparation"]),
+    totalWeeks: z.number().int().positive(),
+    weekStartDay: z.number().int().min(0).max(6),
+    workoutCount: z.number().int().nonnegative(),
+    plannedDurationS: z.number().int().nonnegative(),
+  })
+  .strict();
+export type PlanDraftPlanProjection = z.infer<typeof PlanDraftPlanProjectionSchema>;
+
+export const PlanStartDateProjectionSchema = z
+  .object({
+    status: z.enum(["ready", "invalid", "recalculating", "failed", "updated"]),
+    selectedDate: TrainingExportCivilDateSchema,
+    today: TrainingExportCivilDateSchema,
+    targetDate: TrainingExportCivilDateSchema,
+    kind: z.enum(["full-plan", "short-race-preparation"]).nullable(),
+    inclusiveDays: z.number().int().positive().nullable(),
+    totalWeeks: z.number().int().positive().nullable(),
+    raceWeekday: z.number().int().min(0).max(6).nullable(),
+    raceDayOfPlanWeek: z.number().int().min(1).max(7).nullable(),
+    error: PlanErrorSchema.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const hasPreview =
+      value.kind !== null &&
+      value.inclusiveDays !== null &&
+      value.totalWeeks !== null &&
+      value.raceWeekday !== null &&
+      value.raceDayOfPlanWeek !== null;
+    if ((value.status === "invalid") === hasPreview) {
+      context.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "invalid dates forbid a preview and valid dates require one",
+      });
+    }
+    if ((value.status === "invalid" || value.status === "failed") !== (value.error !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["error"],
+        message: "invalid or failed start dates require an error",
+      });
+    }
+  });
+export type PlanStartDateProjection = z.infer<typeof PlanStartDateProjectionSchema>;
+
 export const PlanRaceCourseSummarySchema = z
   .object({
     fileName: z.string().min(1),
@@ -436,6 +492,8 @@ export const PlanCoachProjectionDataSchema = z
     queue: ChatQueueSnapshotSchema,
     decision: CoachDecisionReadModelSchema.nullable(),
     draft: PlanDraftProjectionSchema.nullable(),
+    plan: PlanDraftPlanProjectionSchema.nullable().optional(),
+    startDate: PlanStartDateProjectionSchema.optional(),
     ftp: PlanFtpProjectionSchema.nullable().optional(),
     course: PlanRaceCourseProjectionSchema.optional(),
   })

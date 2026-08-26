@@ -1568,7 +1568,7 @@ export async function createLocalCoachComposition(
         engine: reconfigurable.engine,
         identity: planningIdentity,
       },
-      { ftp, course: createNodePlanRaceCourseAdapter() },
+      { ftp, course: createNodePlanRaceCourseAdapter(), todayDateKey: planningDateKey },
     );
     const operations = {
       ...coachOperations,

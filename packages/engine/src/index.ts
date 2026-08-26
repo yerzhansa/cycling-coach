@@ -289,6 +289,12 @@ export {
   type PlanFtpSourceValue,
   type PlanFtpTransitionInput,
 } from "./planning/ftp.js";
+export {
+  PlanStartDateError,
+  applyPlanStartDatePreview,
+  previewPlanStartDate,
+  type PlanStartDatePreview,
+} from "./planning/start-date.js";
 export { makeSummaryMessage, splitHistoryByBudget, SUMMARY_PREFIX } from "./agent/history-limit.js";
 export { truncateUtf16Safe } from "./text-truncate.js";
 export { warnOrphanSections, _resetOrphanWarnCacheForTesting } from "./sport/orphan-sections.js";

@@ -3,9 +3,11 @@ import {
   ExecutePlanTransitionRpcResultSchema,
   GetPlanStateRpcParamsSchema,
   GetPlanStateRpcResultSchema,
+  PlanDraftPlanProjectionSchema,
   PlanDraftProjectionSchema,
   PlanFtpProjectionSchema,
   PlanRaceCourseProjectionSchema,
+  PlanStartDateProjectionSchema,
   PlanProgressEventSchema,
   type ChatQueueRunResult,
   type ChatQueueSnapshot,
@@ -13,11 +15,13 @@ import {
   type ExecutePlanTransitionRpcParams,
   type ExecutePlanTransitionRpcResult,
   type PlanDraftProjection,
+  type PlanDraftPlanProjection,
   type PlanError,
   type PlanFtpProjection,
   type PlanProgressEvent,
   type PlanRaceCourseProjection,
   type PlanRaceCourseSummary,
+  type PlanStartDateProjection,
   type PlanReadModel,
   type PlanningOperations,
   type TurnEvent,
@@ -30,10 +34,12 @@ import {
   executePlanFtpTransition,
   failRaceCourseRecalculation,
   openRaceCoursePicker,
+  previewPlanStartDate,
   rejectRaceCourseFile,
   useRouteWithoutElevation,
   type PlanFtpAdapter,
   type PlanFtpSnapshot,
+  type PlanStartDatePreview,
   type RaceCourseRecalculatingState,
 } from "@enduragent/engine";
 import { buildPlanLifecycleReadModel } from "./planning-lifecycle.js";
@@ -102,6 +108,18 @@ const COURSE_RECALCULATION_FAILED: PlanError = Object.freeze({
   retryable: true,
 });
 
+const START_DATE_INVALID: PlanError = Object.freeze({
+  code: "invalid-input",
+  message: "Choose a start date from today through the Goal Event.",
+  retryable: true,
+});
+
+const START_DATE_RECALCULATION_FAILED: PlanError = Object.freeze({
+  code: "provider-failed",
+  message: "The Plan could not be recalculated. Your current Draft is safe.",
+  retryable: true,
+});
+
 export interface PlanDraftBuild {
   readonly plan: PlanRecord;
   readonly workouts: readonly PlanWorkoutRecord[];
@@ -127,6 +145,13 @@ export interface PlanDraftBuilder {
     readonly previous: PlanDraftRevisionRecord;
     readonly course: RaceCourseSnapshot | null;
   }): Promise<PlanDraftBuild>;
+  recalculateStartDate?(input: {
+    readonly conversation: PlanConversationRecord;
+    readonly turns: readonly PlanConversationTurnRecord[];
+    readonly previous: PlanDraftRevisionRecord;
+    readonly preview: PlanStartDatePreview;
+    readonly course: RaceCourseSnapshot | null;
+  }): Promise<PlanDraftBuild>;
 }
 
 export interface PlanReadinessInput {
@@ -142,6 +167,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly isReady?: (input: PlanReadinessInput) => boolean | Promise<boolean>;
   readonly ftp?: PlanFtpAdapter;
   readonly course?: PlanRaceCourseAdapter;
+  readonly todayDateKey?: () => number;
 }
 
 function createSerializedLane(): <T>(operation: () => Promise<T>) => Promise<T> {
@@ -158,6 +184,79 @@ function createSerializedLane(): <T>(operation: () => Promise<T>) => Promise<T> 
 
 function snapshot(value: string): unknown {
   return JSON.parse(value) as unknown;
+}
+
+function dateText(dateKey: number): string {
+  const value = String(dateKey).padStart(8, "0");
+  return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+}
+
+function utcTodayDateKey(): number {
+  const now = new Date();
+  return now.getUTCFullYear() * 10_000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+}
+
+function draftPlanProjection(
+  plan: PlanRecord | undefined,
+  workouts: readonly PlanWorkoutRecord[],
+): PlanDraftPlanProjection | null {
+  if (plan === undefined) return null;
+  return PlanDraftPlanProjectionSchema.parse({
+    id: plan.id,
+    name: plan.name,
+    primaryGoal: plan.primaryGoal,
+    startDate: dateText(plan.startDateKey),
+    targetDate: plan.targetDateKey === null ? null : dateText(plan.targetDateKey),
+    kind: plan.kind === "full_plan" ? "full-plan" : "short-race-preparation",
+    totalWeeks: plan.totalWeeks,
+    weekStartDay: plan.weekStartDay,
+    workoutCount: workouts.length,
+    plannedDurationS: workouts.reduce((total, workout) => total + (workout.durationS ?? 0), 0),
+  });
+}
+
+function startDateProjection(input: {
+  readonly plan: PlanRecord;
+  readonly todayDateKey: number;
+  readonly status?: PlanStartDateProjection["status"];
+  readonly selectedDate?: string;
+  readonly error?: PlanError | null;
+}): PlanStartDateProjection | undefined {
+  if (input.plan.targetDateKey === null) return undefined;
+  const selectedDate = input.selectedDate ?? dateText(input.plan.startDateKey);
+  try {
+    const preview = previewPlanStartDate({
+      planStatus: input.plan.status,
+      startDate: selectedDate,
+      today: dateText(input.todayDateKey),
+      targetDate: dateText(input.plan.targetDateKey),
+    });
+    return PlanStartDateProjectionSchema.parse({
+      status: input.status ?? "ready",
+      selectedDate,
+      today: dateText(input.todayDateKey),
+      targetDate: dateText(input.plan.targetDateKey),
+      kind: preview.kind === "full_plan" ? "full-plan" : "short-race-preparation",
+      inclusiveDays: preview.inclusiveDays,
+      totalWeeks: preview.totalWeeks,
+      raceWeekday: preview.raceWeekday,
+      raceDayOfPlanWeek: preview.raceDayOfPlanWeek,
+      error: input.error ?? null,
+    });
+  } catch {
+    return PlanStartDateProjectionSchema.parse({
+      status: "invalid",
+      selectedDate,
+      today: dateText(input.todayDateKey),
+      targetDate: dateText(input.plan.targetDateKey),
+      kind: null,
+      inclusiveDays: null,
+      totalWeeks: null,
+      raceWeekday: null,
+      raceDayOfPlanWeek: null,
+      error: input.error ?? START_DATE_INVALID,
+    });
+  }
 }
 
 function draftProjection(value: PlanDraftRevisionRecord | undefined): PlanDraftProjection | null {
@@ -294,6 +393,8 @@ interface ReadOverrides {
   readonly ftpError?: PlanError | null;
   readonly courseScenario?: CourseScenario;
   readonly course?: PlanRaceCourseProjection;
+  readonly dateScenario?: "PL-S046" | "PL-S048" | "PL-S050";
+  readonly startDate?: PlanStartDateProjection;
 }
 
 function queueText(queue: ChatQueueSnapshot): string {
@@ -350,6 +451,16 @@ export function createPlanningOperations(
         .catch(() => null),
       dependencies.ftp?.read(),
     ]);
+    const draftPlan = draft === undefined ? undefined : await plans.read(draft.planId);
+    const draftWorkouts = draftPlan === undefined ? [] : await plans.readWorkouts(draftPlan.id);
+    const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+    const projectedStartDate =
+      overrides.startDate ??
+      (draftPlan === undefined
+        ? undefined
+        : startDateProjection({ plan: draftPlan, todayDateKey }));
+    const dateScenario =
+      overrides.dateScenario ?? (projectedStartDate?.status === "invalid" ? "PL-S046" : undefined);
     const ready =
       conversation.courseChoiceStatus !== "undecided" &&
       (await (dependencies.isReady?.({ conversation, turns, draft }) ?? Promise.resolve(false)));
@@ -365,6 +476,8 @@ export function createPlanningOperations(
       queue,
       decision,
       draft: draftProjection(draft),
+      plan: draftPlanProjection(draftPlan, draftWorkouts),
+      startDate: projectedStartDate,
       ...(ftp === undefined
         ? {}
         : { ftp: ftpProjection(ftp, overrides.ftpScenario, overrides.ftpError ?? null) }),
@@ -373,6 +486,7 @@ export function createPlanningOperations(
       ...(overrides.courseScenario === undefined
         ? {}
         : { courseScenario: overrides.courseScenario }),
+      ...(dateScenario === undefined ? {} : { dateScenario }),
     });
   };
 
@@ -897,6 +1011,120 @@ export function createPlanningOperations(
               total: 1,
             });
             return reject(PERSISTENCE_FAILED);
+          }
+        }
+        if (command.transitionId === "PL-T08") {
+          if (dependencies.draftBuilder?.recalculateStartDate === undefined) {
+            return reject(UNAVAILABLE);
+          }
+          const current = await conversations.readDraftRevision(command.draftId);
+          if (current === undefined || current.status !== "ready") return reject(UNAVAILABLE);
+          const [latest, conversation, currentPlan] = await Promise.all([
+            conversations.readLatestDraftRevision(current.conversationId),
+            conversations.readConversation(current.conversationId),
+            plans.read(current.planId),
+          ]);
+          if (
+            latest?.id !== current.id ||
+            conversation === undefined ||
+            conversation.status !== "open" ||
+            currentPlan === undefined ||
+            currentPlan.status !== "draft" ||
+            currentPlan.targetDateKey === null
+          ) {
+            return reject(UNAVAILABLE);
+          }
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          let preview: PlanStartDatePreview;
+          try {
+            preview = previewPlanStartDate({
+              planStatus: currentPlan.status,
+              startDate: command.startDate,
+              today: dateText(todayDateKey),
+              targetDate: dateText(currentPlan.targetDateKey),
+            });
+          } catch {
+            return reject(START_DATE_INVALID, {
+              dateScenario: "PL-S046",
+              startDate: startDateProjection({
+                plan: currentPlan,
+                todayDateKey,
+                selectedDate: command.startDate,
+                error: START_DATE_INVALID,
+              }),
+            });
+          }
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total: 1,
+          });
+          const currentWorkouts = await plans.readWorkouts(currentPlan.id);
+          const turns = await conversations.readTurns(conversation.id);
+          const course = courseFromJson(current.raceCourseJson);
+          try {
+            const build = await dependencies.draftBuilder.recalculateStartDate({
+              conversation,
+              turns,
+              previous: current,
+              preview,
+              course,
+            });
+            if (
+              build.plan.id !== currentPlan.id ||
+              build.plan.status !== "draft" ||
+              build.plan.targetDateKey !== preview.targetDateKey ||
+              build.plan.startDateKey !== preview.startDateKey ||
+              build.plan.kind !== preview.kind ||
+              build.plan.totalWeeks !== preview.totalWeeks ||
+              build.plan.weekStartDay !== preview.weekStartDay
+            ) {
+              throw new TypeError("Start-date recalculation returned an inconsistent Draft.");
+            }
+            await saveDraft(conversation, current, build, course);
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: 1,
+              total: 1,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                dateScenario: "PL-S050",
+                startDate: startDateProjection({
+                  plan: build.plan,
+                  todayDateKey,
+                  status: "updated",
+                }),
+              }),
+            });
+          } catch {
+            await plans.replace(currentPlan, currentWorkouts).catch(() => undefined);
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total: 1,
+            });
+            return reject(START_DATE_RECALCULATION_FAILED, {
+              dateScenario: "PL-S048",
+              startDate: startDateProjection({
+                plan: currentPlan,
+                todayDateKey,
+                selectedDate: command.startDate,
+                status: "failed",
+                error: START_DATE_RECALCULATION_FAILED,
+              }),
+            });
           }
         }
         if (command.transitionId === "PL-T09") {
