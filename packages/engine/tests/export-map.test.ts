@@ -113,6 +113,7 @@ describe("engine public export surface", () => {
       "projectPlanHistoryEligibility",
       "projectPlanProposalDiff",
       "projectPlanReconciliation",
+      "projectPlanSeason",
       "projectWorkoutMatches",
       "provenanceForSourceBearingData",
       "provenanceOfMessages",

@@ -25,6 +25,8 @@ import {
 export type ActivePlanScenario =
   | "PL-S004"
   | "PL-S005"
+  | "PL-S006"
+  | "PL-S009"
   | "PL-S007"
   | "PL-S008"
   | "PL-S013"
@@ -387,6 +389,8 @@ export function buildActivePlanReadModel(input: {
   const copy = {
     "PL-S004": ["Plan active", "This week reflects your Plan and completed activities."],
     "PL-S005": ["Plan history", "Plan changes are immutable and ordered newest first."],
+    "PL-S006": ["Season", "Every Plan week, phase, status, purpose, and planned time."],
+    "PL-S009": ["Race week", "The complete final Plan week and fixed goal race."],
     "PL-S007": [
       "Plan change needs review",
       "Review the proposed change before it affects your Plan.",
@@ -538,6 +542,7 @@ export function buildActivePlanReadModel(input: {
       guard("PL-T22"),
       guard("PL-T23"),
       guard("PL-T25"),
+      guard("PL-T31"),
       ...(input.scenarioId === "PL-S083" ? [guard("PL-T27")] : []),
       ...(input.scenarioId === "PL-S085" ? [guard("PL-T28")] : []),
       guard("PL-T39"),

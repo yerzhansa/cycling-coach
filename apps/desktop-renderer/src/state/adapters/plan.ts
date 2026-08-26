@@ -71,6 +71,10 @@ export interface PlanViewAdapter {
   openReplacementActivePlan(): void;
   reconcilePlan(): void;
   verifyReconciliation(): void;
+  openSeason(): void;
+  closeSeason(): void;
+  openRaceWeek(): void;
+  closeRaceWeek(): void;
   openWorkout(workoutId: string): void;
   closeWorkout(): void;
   resolveWorkoutMatch(workoutId: string, activityId: string, decision: "confirm" | "reject"): void;
@@ -867,6 +871,51 @@ export function createPlanViewAdapter(input: {
         mode: "verify",
       });
     },
+    openSeason() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T31",
+        commandId: createCommandId(),
+        planId: model.planId,
+      });
+    },
+    closeSeason() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "back",
+        sourceScenarioId: "PL-S006",
+        destinationScenarioId: "PL-S004",
+        returnFocusId: "plan-season-trigger",
+      });
+    },
+    openRaceWeek() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "open",
+        sourceScenarioId: "PL-S006",
+        destinationScenarioId: "PL-S009",
+        returnFocusId: "plan-race-week-trigger",
+      });
+    },
+    closeRaceWeek() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "back",
+        sourceScenarioId: "PL-S009",
+        destinationScenarioId: "PL-S006",
+        returnFocusId: "plan-race-week-trigger",
+      });
+    },
     openWorkout(workoutId) {
       const model = planReadModel(input.read());
       if (model?.planId === null || model?.planId === undefined || active !== null) return;
@@ -875,10 +924,29 @@ export function createPlanViewAdapter(input: {
         commandId: createCommandId(),
         planId: model.planId,
         workoutId,
+        sourceScenarioId: model.scenarioId,
       });
     },
     closeWorkout() {
       if (active !== null) return;
+      const model = planReadModel(input.read());
+      const parsed = model === null ? null : PlanActiveProjectionDataSchema.safeParse(model.data);
+      if (
+        model?.planId !== null &&
+        model?.planId !== undefined &&
+        parsed?.success === true &&
+        parsed.data.selectedWorkoutSourceScenarioId === "PL-S009"
+      ) {
+        void execute({
+          transitionId: "PL-T39",
+          commandId: createCommandId(),
+          action: "back",
+          sourceScenarioId: "PL-S021",
+          destinationScenarioId: "PL-S009",
+          returnFocusId: `race-week-workout-${parsed.data.selectedWorkoutId ?? ""}`,
+        });
+        return;
+      }
       void refresh(false);
     },
     resolveWorkoutMatch(workoutId, activityId, decision) {

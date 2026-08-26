@@ -9,6 +9,7 @@ import {
   PlanHydrationStateSchema,
   PlanProgressEventSchema,
   PlanRaceCourseProjectionSchema,
+  PlanSeasonProjectionSchema,
   PlanSettingsProjectionSchema,
   PlanStartDateProjectionSchema,
   PlanScenarioIdSchema,
@@ -358,6 +359,56 @@ describe("planning contract", () => {
     ).toBe(true);
     expect(
       PlanAttentionSchema.safeParse({ count: 1, destination: "list", items: [item] }).success,
+    ).toBe(false);
+  });
+
+  it("keeps Season weeks contiguous and race accounting exact", () => {
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((weekday, index) => ({
+      date: `1998-08-${17 + index}`,
+      weekday,
+      workoutId: index === 6 ? "race-1" : null,
+      name: index === 6 ? "Goal race" : "Rest",
+      durationS: index === 6 ? 18_000 : null,
+      purpose: index === 6 ? "Race" : "Absorb",
+      kind: index === 6 ? "race" : "rest",
+    }));
+    const season = {
+      priority: "A",
+      distanceKm: 120,
+      weeks: [
+        {
+          weekIndex: 1,
+          startDate: "1998-08-17",
+          endDate: "1998-08-23",
+          phase: "Race",
+          purpose: "Goal race",
+          status: "current",
+          plannedDurationS: 18_000,
+        },
+      ],
+      constraint: null,
+      raceWeek: {
+        startDate: "1998-08-17",
+        endDate: "1998-08-23",
+        raceDate: "1998-08-23",
+        trainingDurationS: 0,
+        raceDurationS: 18_000,
+        totalDurationS: 18_000,
+        days,
+      },
+    };
+    expect(PlanSeasonProjectionSchema.safeParse(season).success).toBe(true);
+    expect(
+      PlanSeasonProjectionSchema.safeParse({
+        ...season,
+        raceWeek: { ...season.raceWeek, totalDurationS: 17_000 },
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanSeasonProjectionSchema.safeParse({
+        ...season,
+        weeks: [{ ...season.weeks[0], weekIndex: 2 }],
+      }).success,
     ).toBe(false);
   });
 

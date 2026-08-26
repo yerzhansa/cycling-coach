@@ -82,7 +82,9 @@ import {
   PlanUndoError,
   validatePlanAutoApply,
   approvePlanReplacement,
+  projectPlanSeason,
 } from "@enduragent/engine";
+import { projectCyclingSeasonMetadata } from "@enduragent/sport-cycling";
 import {
   buildActivePlanReadModel,
   buildEndedPlanReadModel,
@@ -520,6 +522,8 @@ function activePlanData(input: {
     readonly awaitingSync: boolean;
   };
   readonly selectedWorkoutId?: string | null;
+  readonly selectedWorkoutSourceScenarioId?: string | null;
+  readonly returnFocusId?: string | null;
   readonly drifts: readonly PlanWorkoutDriftRecord[];
   readonly driftError?: PlanError | null;
   readonly proposals: readonly PlanProposalProjection[];
@@ -531,6 +535,7 @@ function activePlanData(input: {
   readonly selectedSetting?: PlanSetting | null;
   readonly settingsError?: PlanError | null;
   readonly replacement?: PlanActiveProjectionData["replacement"];
+  readonly seasonMetadata: ReturnType<typeof projectCyclingSeasonMetadata>;
 }): PlanActiveProjectionData {
   const plan = draftPlanProjection(input.plan, input.workouts);
   if (plan === null) throw new TypeError("An active Plan projection requires a Plan.");
@@ -629,12 +634,63 @@ function activePlanData(input: {
   const allWorkouts = [...workouts, ...extra].sort(
     (left, right) => left.date.localeCompare(right.date) || left.id.localeCompare(right.id),
   );
+  const seasonWorkouts = input.workouts.map((workout) => ({
+    id: workout.id,
+    date: dateText(workout.dateKey),
+    sport: workout.sport,
+    name: workout.name,
+    durationS: workout.durationS,
+  }));
+  const selectedSource =
+    input.selectedWorkoutId === undefined || input.selectedWorkoutId === null
+      ? undefined
+      : input.workouts.find((workout) => workout.id === input.selectedWorkoutId);
+  const selectedDrift =
+    selectedSource === undefined ? undefined : driftByWorkout.get(selectedSource.id);
+  const selectedWorkout =
+    input.selectedWorkoutId === undefined || input.selectedWorkoutId === null
+      ? null
+      : (allWorkouts.find((workout) => workout.id === input.selectedWorkoutId) ??
+        (selectedSource === undefined
+          ? null
+          : {
+              id: selectedSource.id,
+              date: dateText(selectedSource.dateKey),
+              sport: selectedSource.sport,
+              name: selectedSource.name,
+              durationS: selectedSource.durationS,
+              ...(selectedDrift === undefined
+                ? {}
+                : {
+                    drift: {
+                      status: "detected" as const,
+                      eventId: String(selectedDrift.providerEventId),
+                      plan: {
+                        date: dateText(parsedDriftSnapshot(selectedDrift.planSnapshotJson).dateKey),
+                        name: parsedDriftSnapshot(selectedDrift.planSnapshotJson).name,
+                        durationS: parsedDriftSnapshot(selectedDrift.planSnapshotJson).durationS,
+                      },
+                      provider: {
+                        date: dateText(
+                          parsedDriftSnapshot(selectedDrift.providerSnapshotJson).dateKey,
+                        ),
+                        name: parsedDriftSnapshot(selectedDrift.providerSnapshotJson).name,
+                        durationS: parsedDriftSnapshot(selectedDrift.providerSnapshotJson)
+                          .durationS,
+                      },
+                      error: input.driftError ?? null,
+                    },
+                  }),
+            }));
   return PlanActiveProjectionDataSchema.parse({
     plan,
     today: dateText(input.todayDateKey),
     weekIndex,
     todayWorkout: workouts.find((workout) => workout.date === dateText(input.todayDateKey)) ?? null,
     workouts: allWorkouts,
+    selectedWorkout,
+    selectedWorkoutSourceScenarioId: input.selectedWorkoutSourceScenarioId ?? null,
+    returnFocusId: input.returnFocusId ?? null,
     matchSync: input.matchSync,
     selectedWorkoutId: input.selectedWorkoutId ?? null,
     proposals: input.proposals,
@@ -649,6 +705,12 @@ function activePlanData(input: {
       selectedSetting: input.selectedSetting ?? null,
       error: input.settingsError ?? null,
     },
+    season: projectPlanSeason({
+      plan,
+      today: dateText(input.todayDateKey),
+      workouts: seasonWorkouts,
+      metadata: input.seasonMetadata,
+    }),
     ...(input.replacement === undefined ? {} : { replacement: input.replacement }),
   });
 }
@@ -806,6 +868,8 @@ interface ReadOverrides {
   readonly activeScenario?: ActivePlanScenario;
   readonly endedScenario?: EndedPlanScenario;
   readonly selectedWorkoutId?: string | null;
+  readonly selectedWorkoutSourceScenarioId?: string | null;
+  readonly returnFocusId?: string | null;
   readonly driftError?: PlanError | null;
   readonly selectedProposalId?: string | null;
   readonly proposalRevisionText?: string | null;
@@ -1097,6 +1161,8 @@ export function createPlanningOperations(
         matchRows,
         matchSync,
         selectedWorkoutId: overrides.selectedWorkoutId,
+        selectedWorkoutSourceScenarioId: overrides.selectedWorkoutSourceScenarioId,
+        returnFocusId: overrides.returnFocusId,
         drifts,
         driftError: overrides.driftError,
         proposals: mergedProposalProjections,
@@ -1108,6 +1174,7 @@ export function createPlanningOperations(
         selectedSetting: overrides.selectedSetting,
         settingsError: overrides.settingsError,
         replacement: replacementData,
+        seasonMetadata: projectCyclingSeasonMetadata(snapshot(plan.structureJson), plan.totalWeeks),
       }),
       reconciliation: {
         status,
@@ -2290,7 +2357,16 @@ export function createPlanningOperations(
             state: await read({
               activeScenario: drift === undefined ? "PL-S021" : "PL-S032",
               selectedWorkoutId: command.workoutId,
+              selectedWorkoutSourceScenarioId: command.sourceScenarioId ?? null,
             }),
+          });
+        }
+        if (command.transitionId === "PL-T31") {
+          const plan = await plans.read(command.planId);
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await read({ activeScenario: "PL-S006" }),
           });
         }
         if (command.transitionId === "PL-T14") {
@@ -3286,9 +3362,21 @@ export function createPlanningOperations(
                 "PL-S101",
               ].includes(command.sourceScenarioId)) ||
             (command.destinationScenarioId === "PL-S004" &&
-              ["PL-S005", "PL-S026", "PL-S027", "PL-S051", "PL-S101"].includes(
-                command.sourceScenarioId,
-              )) ||
+              [
+                "PL-S005",
+                "PL-S006",
+                "PL-S009",
+                "PL-S026",
+                "PL-S027",
+                "PL-S051",
+                "PL-S101",
+              ].includes(command.sourceScenarioId)) ||
+            (command.sourceScenarioId === "PL-S006" &&
+              command.destinationScenarioId === "PL-S009") ||
+            (command.sourceScenarioId === "PL-S009" &&
+              command.destinationScenarioId === "PL-S006") ||
+            (command.sourceScenarioId === "PL-S021" &&
+              command.destinationScenarioId === "PL-S009") ||
             (command.sourceScenarioId === "PL-S005" &&
               command.destinationScenarioId === "PL-S090") ||
             (command.sourceScenarioId === "PL-S087" && command.destinationScenarioId === "PL-S088");
@@ -3297,6 +3385,7 @@ export function createPlanningOperations(
             status: "completed",
             state: await read({
               activeScenario: command.destinationScenarioId as ActivePlanScenario,
+              returnFocusId: command.returnFocusId,
             }),
           });
         }

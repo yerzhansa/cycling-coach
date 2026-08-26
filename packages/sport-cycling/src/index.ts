@@ -21,6 +21,12 @@ export { getSampleWeek } from "./templates.js";
 export type { SampleWorkout, WorkoutType } from "./templates.js";
 
 export { buildPlanSkeleton } from "./plan-builder.js";
+export { projectCyclingSeasonMetadata } from "./season.js";
+export type {
+  CyclingSeasonConstraintMetadata,
+  CyclingSeasonMetadata,
+  CyclingSeasonWeekMetadata,
+} from "./season.js";
 
 export {
   serializeIntervalsWorkout,

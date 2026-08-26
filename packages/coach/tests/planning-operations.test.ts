@@ -1789,6 +1789,118 @@ describe("Plan operations", () => {
     ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S005" } });
   });
 
+  it("opens Season and Race week without mutating persisted Plan facts", async () => {
+    const planId = `${"0".repeat(25)}A`;
+    const raceWorkoutId = `${"0".repeat(25)}B`;
+    const activePlan: PlanRecord = {
+      ...plan(planId, 10),
+      status: "active",
+      structureJson: JSON.stringify({
+        seasonWeeks: Array.from({ length: 12 }, (_, index) => ({
+          phase: index === 11 ? "Race" : "Build",
+          purpose: index === 11 ? "Goal race" : "Follow the approved week",
+        })),
+        racePriority: "A",
+        raceDistanceKm: 120,
+        seasonConstraint: {
+          weekIndex: 8,
+          title: "FTP refresh required",
+          detail: "Power targets wait for refreshed FTP.",
+        },
+      }),
+    };
+    const raceWorkout: PlanWorkoutRecord = {
+      id: raceWorkoutId,
+      planId,
+      dateKey: 20260930,
+      sport: "cycling",
+      name: "Gran Fondo Plan",
+      durationS: 18_000,
+      structureJson: "{}",
+      origin: "coach",
+      deviceId: "device-1",
+      hlcPhysicalMs: 10,
+      hlcCounter: 0,
+    };
+    const plans = createPlanRepository(store);
+    await plans.replace(activePlan, [raceWorkout]);
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { plans, todayDateKey: () => 20260818 },
+    );
+    const beforePlan = await plans.read(planId);
+    const beforeWorkouts = await plans.readWorkouts(planId);
+
+    const season = await operations.executePlanTransition?.({
+      transitionId: "PL-T31",
+      commandId: "command-season-open",
+      planId,
+    });
+    expect(season).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S006",
+        data: {
+          season: {
+            priority: "A",
+            distanceKm: 120,
+            weeks: expect.arrayContaining([
+              expect.objectContaining({ weekIndex: 8, status: "blocked" }),
+              expect.objectContaining({ weekIndex: 12, phase: "Race" }),
+            ]),
+            raceWeek: {
+              raceDate: "2026-09-30",
+              trainingDurationS: 0,
+              raceDurationS: 18_000,
+              totalDurationS: 18_000,
+              days: expect.arrayContaining([
+                expect.objectContaining({
+                  date: "2026-09-30",
+                  workoutId: raceWorkoutId,
+                  kind: "race",
+                }),
+              ]),
+            },
+          },
+        },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-race-week-open",
+        action: "open",
+        sourceScenarioId: "PL-S006",
+        destinationScenarioId: "PL-S009",
+        returnFocusId: "plan-race-week-trigger",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S009",
+        data: { returnFocusId: "plan-race-week-trigger" },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-race-week-back",
+        action: "back",
+        sourceScenarioId: "PL-S009",
+        destinationScenarioId: "PL-S006",
+        returnFocusId: "plan-race-week-trigger",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S006",
+        data: { returnFocusId: "plan-race-week-trigger" },
+      },
+    });
+    await expect(plans.read(planId)).resolves.toEqual(beforePlan);
+    await expect(plans.readWorkouts(planId)).resolves.toEqual(beforeWorkouts);
+  });
+
   it("saves each active Plan setting immediately and restores the persisted value on failure", async () => {
     const planId = `${"0".repeat(25)}A`;
     const activePlan = {

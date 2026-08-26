@@ -338,6 +338,95 @@ export const PlanActiveWorkoutProjectionSchema = z
   .strict();
 export type PlanActiveWorkoutProjection = z.infer<typeof PlanActiveWorkoutProjectionSchema>;
 
+export const PlanSeasonWeekProjectionSchema = z
+  .object({
+    weekIndex: z.number().int().positive(),
+    startDate: TrainingExportCivilDateSchema,
+    endDate: TrainingExportCivilDateSchema,
+    phase: z.string().min(1),
+    purpose: z.string().min(1),
+    status: z.enum(["completed", "current", "planned", "blocked"]),
+    plannedDurationS: z.number().int().nonnegative(),
+  })
+  .strict();
+export type PlanSeasonWeekProjection = z.infer<typeof PlanSeasonWeekProjectionSchema>;
+
+export const PlanRaceWeekDayProjectionSchema = z
+  .object({
+    date: TrainingExportCivilDateSchema,
+    weekday: z.enum(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]),
+    workoutId: z.string().min(1).nullable(),
+    name: z.string().min(1),
+    durationS: z.number().int().positive().nullable(),
+    purpose: z.string().min(1),
+    kind: z.enum(["training", "rest", "race"]),
+  })
+  .strict();
+export type PlanRaceWeekDayProjection = z.infer<typeof PlanRaceWeekDayProjectionSchema>;
+
+export const PlanRaceWeekProjectionSchema = z
+  .object({
+    startDate: TrainingExportCivilDateSchema,
+    endDate: TrainingExportCivilDateSchema,
+    raceDate: TrainingExportCivilDateSchema,
+    trainingDurationS: z.number().int().nonnegative(),
+    raceDurationS: z.number().int().nonnegative(),
+    totalDurationS: z.number().int().nonnegative(),
+    days: z.array(PlanRaceWeekDayProjectionSchema).length(7),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.totalDurationS !== value.trainingDurationS + value.raceDurationS) {
+      context.addIssue({
+        code: "custom",
+        path: ["totalDurationS"],
+        message: "race-week total must equal training plus race duration",
+      });
+    }
+    if (value.days.filter((day) => day.kind === "race").length !== 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["days"],
+        message: "race week requires exactly one fixed race day",
+      });
+    }
+  });
+export type PlanRaceWeekProjection = z.infer<typeof PlanRaceWeekProjectionSchema>;
+
+export const PlanSeasonProjectionSchema = z
+  .object({
+    priority: z.enum(["A", "B", "C"]).nullable(),
+    distanceKm: z.number().positive().nullable(),
+    weeks: z.array(PlanSeasonWeekProjectionSchema).min(1),
+    constraint: z
+      .object({
+        weekIndex: z.number().int().positive(),
+        title: z.string().min(1),
+        detail: z.string().min(1),
+      })
+      .strict()
+      .nullable(),
+    raceWeek: PlanRaceWeekProjectionSchema.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.weeks.some((week, index) => week.weekIndex !== index + 1)) {
+      context.addIssue({
+        code: "custom",
+        path: ["weeks"],
+        message: "season week indexes must be contiguous",
+      });
+    }
+    if (value.constraint !== null && value.constraint.weekIndex > value.weeks.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["constraint", "weekIndex"],
+        message: "season constraint must target a visible week",
+      });
+    }
+  });
+export type PlanSeasonProjection = z.infer<typeof PlanSeasonProjectionSchema>;
+
 export const PlanProposalProjectionSchema = z
   .object({
     id: z.string().min(1),
@@ -435,6 +524,9 @@ export const PlanActiveProjectionDataSchema = z
     weekIndex: z.number().int().positive(),
     todayWorkout: PlanActiveWorkoutProjectionSchema.nullable(),
     workouts: z.array(PlanActiveWorkoutProjectionSchema),
+    selectedWorkout: PlanActiveWorkoutProjectionSchema.nullable().optional(),
+    selectedWorkoutSourceScenarioId: PlanScenarioIdSchema.nullable().optional(),
+    returnFocusId: z.string().min(1).nullable().optional(),
     matchSync: z
       .object({
         lastSuccessfulSyncAtMs: z.number().int().nonnegative().nullable(),
@@ -449,6 +541,7 @@ export const PlanActiveProjectionDataSchema = z
     history: z.array(PlanHistoryEntrySchema).optional(),
     selectedHistoryId: z.string().min(1).nullable().optional(),
     settings: PlanSettingsProjectionSchema.optional(),
+    season: PlanSeasonProjectionSchema.optional(),
     replacement: z
       .object({
         id: z.string().min(1),
@@ -892,6 +985,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       commandId: CommandIdSchema,
       planId: EntityIdSchema,
       workoutId: EntityIdSchema,
+      sourceScenarioId: PlanScenarioIdSchema.optional(),
     })
     .strict(),
   z
