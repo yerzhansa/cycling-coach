@@ -76,6 +76,7 @@ import {
   projectPlanHistoryEligibility,
   validatePlanUndo,
   PlanUndoError,
+  validatePlanAutoApply,
 } from "@enduragent/engine";
 import {
   buildActivePlanReadModel,
@@ -91,6 +92,7 @@ import {
   createPlanWorkoutDriftRepository,
   createPlanProposalRepository,
   createPlanAdaptationLedgerRepository,
+  createPlanSettingsRepository,
   planWeekIndex,
   PlanConversationValidationError,
   type PlanConversationRecord,
@@ -109,6 +111,9 @@ import {
   type PlanProposalRepository,
   type PlanAdaptationLedgerRecord,
   type PlanAdaptationLedgerRepository,
+  type PlanSetting,
+  type PlanSettingsRecord,
+  type PlanSettingsRepository,
   parsePlanAdaptationWorkoutSnapshot,
   PlanAdaptationLedgerValidationError,
   PlanProposalValidationError,
@@ -308,6 +313,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly workoutDrifts?: PlanWorkoutDriftRepository;
   readonly proposals?: PlanProposalRepository;
   readonly history?: PlanAdaptationLedgerRepository;
+  readonly settings?: PlanSettingsRepository;
   readonly proposalReviser?: PlanProposalReviser;
   readonly proposalPremiseReader?: PlanProposalPremiseReader;
   readonly proposalLoadCalculator?: PlanProposalLoadCalculator;
@@ -498,6 +504,9 @@ function activePlanData(input: {
   readonly proposalRevisionText?: string | null;
   readonly history: readonly PlanHistoryEntry[];
   readonly selectedHistoryId?: string | null;
+  readonly settings: PlanSettingsRecord;
+  readonly selectedSetting?: PlanSetting | null;
+  readonly settingsError?: PlanError | null;
 }): PlanActiveProjectionData {
   const plan = draftPlanProjection(input.plan, input.workouts);
   if (plan === null) throw new TypeError("An active Plan projection requires a Plan.");
@@ -609,6 +618,13 @@ function activePlanData(input: {
     proposalRevisionText: input.proposalRevisionText ?? null,
     history: input.history,
     selectedHistoryId: input.selectedHistoryId ?? null,
+    settings: {
+      autoApply: input.settings.autoApply,
+      weeklyReview: input.settings.weeklyReview,
+      updatedAtMs: input.settings.updatedAtMs,
+      selectedSetting: input.selectedSetting ?? null,
+      error: input.settingsError ?? null,
+    },
   });
 }
 
@@ -769,6 +785,8 @@ interface ReadOverrides {
   readonly proposalRevisionText?: string | null;
   readonly proposalOverride?: PlanProposalProjection;
   readonly selectedHistoryId?: string | null;
+  readonly selectedSetting?: PlanSetting | null;
+  readonly settingsError?: PlanError | null;
 }
 
 function queueText(queue: ChatQueueSnapshot): string {
@@ -810,6 +828,8 @@ export function createPlanningOperations(
     dependencies.proposals ?? createPlanProposalRepository(input.context.store);
   const historyRepository =
     dependencies.history ?? createPlanAdaptationLedgerRepository(input.context.store);
+  const settingsRepository =
+    dependencies.settings ?? createPlanSettingsRepository(input.context.store);
   const enqueue = createSerializedLane();
   const refuseProposal = async (
     proposal: PlanProposalRecord,
@@ -844,11 +864,13 @@ export function createPlanningOperations(
     overrides: ReadOverrides,
   ): Promise<PlanReadModel> => {
     const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
-    const [workouts, job, historyRows] = await Promise.all([
+    const [workouts, job, historyRows, settings] = await Promise.all([
       plans.readWorkouts(plan.id),
       reconciliations.readLatestJob(plan.id, "mirror"),
       historyRepository.readForPlan(plan.id),
+      settingsRepository.read(plan.id),
     ]);
+    if (settings === undefined) throw new TypeError("An active Plan requires Plan settings.");
     const projection =
       job === undefined ? null : await projectPlanReconciliation(reconciliations, job);
     const week = planWeekIndex(plan, todayDateKey);
@@ -994,6 +1016,9 @@ export function createPlanningOperations(
         proposalRevisionText: overrides.proposalRevisionText,
         history: historyProjection({ plan, workouts, history: historyRows, todayDateKey }),
         selectedHistoryId: overrides.selectedHistoryId,
+        settings,
+        selectedSetting: overrides.selectedSetting,
+        settingsError: overrides.settingsError,
       }),
       reconciliation: {
         status,
@@ -2193,10 +2218,12 @@ export function createPlanningOperations(
           ) {
             return reject(UNAVAILABLE);
           }
-          const [workouts, premises] = await Promise.all([
+          const [workouts, premises, settings] = await Promise.all([
             plans.readWorkouts(plan.id),
             proposalRepository.readPremises(proposal.id),
+            settingsRepository.read(plan.id),
           ]);
+          if (settings === undefined) return reject(UNAVAILABLE);
           try {
             const validated = validatePlanProposal({
               proposal,
@@ -2206,6 +2233,79 @@ export function createPlanningOperations(
               todayDateKey: dependencies.todayDateKey?.() ?? utcTodayDateKey(),
               calculateWeekLoad: dependencies.proposalLoadCalculator,
             });
+            const autoApply = validatePlanAutoApply({
+              enabled: settings.autoApply,
+              plan,
+              proposal: validated,
+            });
+            if (
+              autoApply.status === "eligible" &&
+              dependencies.proposalPremiseReader !== undefined
+            ) {
+              const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+              const ledgerId = input.identity.newUlid();
+              try {
+                await revalidatePlanProposalPremises(premises, dependencies.proposalPremiseReader);
+                const current = validatePlanProposal({
+                  proposal,
+                  premises,
+                  plan,
+                  workouts,
+                  todayDateKey,
+                  calculateWeekLoad: dependencies.proposalLoadCalculator,
+                });
+                const currentEligibility = validatePlanAutoApply({
+                  enabled: settings.autoApply,
+                  plan,
+                  proposal: current,
+                });
+                if (currentEligibility.status !== "eligible") {
+                  throw new PlanProposalError("stale-base");
+                }
+                const stamp = input.identity.hlcStamp();
+                await applyValidatedPlanProposal(current, {
+                  repository: proposalRepository,
+                  plan,
+                  ledgerId,
+                  resolvedAtMs: stamp.physicalMs,
+                  deviceId: await input.identity.deviceId(),
+                  hlcPhysicalMs: stamp.physicalMs,
+                  hlcCounter: stamp.counter,
+                  mirrorJob: {
+                    id: input.identity.newUlid(),
+                    windowStartDateKey: todayDateKey,
+                    windowEndDateKey: addCivilDays(todayDateKey, 6),
+                    createdAtMs: stamp.physicalMs,
+                  },
+                });
+              } catch (error) {
+                if (isProposalStale(error)) {
+                  const projected = proposalProjection({
+                    proposal,
+                    premises,
+                    mutation: validated.mutation,
+                    stale: true,
+                    error: PROPOSAL_STALE,
+                  });
+                  return ExecutePlanTransitionRpcResultSchema.parse({
+                    status: "completed",
+                    state: await read({
+                      activeScenario: "PL-S025",
+                      selectedProposalId: proposal.id,
+                      proposalOverride: projected,
+                    }),
+                  });
+                }
+                return reject(PERSISTENCE_FAILED, {
+                  activeScenario: "PL-S007",
+                  selectedProposalId: proposal.id,
+                });
+              }
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: await read({ activeScenario: "PL-S101", selectedHistoryId: ledgerId }),
+              });
+            }
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
               state: await read({
@@ -2549,12 +2649,58 @@ export function createPlanningOperations(
             state: await read({ activeScenario: "PL-S027", selectedHistoryId: undoId }),
           });
         }
+        if (command.transitionId === "PL-T22") {
+          const [plan, current] = await Promise.all([
+            plans.read(command.planId),
+            settingsRepository.read(command.planId),
+          ]);
+          if (plan?.status !== "active" || current === undefined) return reject(UNAVAILABLE);
+          const stamp = input.identity.hlcStamp();
+          try {
+            await settingsRepository.save({
+              planId: plan.id,
+              setting: command.setting,
+              value: command.value,
+              expectedUpdatedAtMs: current.updatedAtMs,
+              expectedHlcPhysicalMs: current.hlcPhysicalMs,
+              expectedHlcCounter: current.hlcCounter,
+              updatedAtMs: stamp.physicalMs,
+              deviceId: await input.identity.deviceId(),
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+            });
+          } catch {
+            return reject(PERSISTENCE_FAILED, {
+              activeScenario: "PL-S093",
+              selectedSetting: command.setting,
+              settingsError: PERSISTENCE_FAILED,
+            });
+          }
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await read({
+              activeScenario: "PL-S092",
+              selectedSetting: command.setting,
+            }),
+          });
+        }
         if (command.transitionId === "PL-T39") {
           const allowed =
             (command.destinationScenarioId === "PL-S005" &&
-              ["PL-S004", "PL-S008", "PL-S026", "PL-S027"].includes(command.sourceScenarioId)) ||
+              [
+                "PL-S004",
+                "PL-S008",
+                "PL-S026",
+                "PL-S027",
+                "PL-S090",
+                "PL-S091",
+                "PL-S092",
+                "PL-S093",
+                "PL-S101",
+              ].includes(command.sourceScenarioId)) ||
             (command.destinationScenarioId === "PL-S004" &&
-              ["PL-S005", "PL-S026", "PL-S027"].includes(command.sourceScenarioId));
+              ["PL-S005", "PL-S026", "PL-S027", "PL-S101"].includes(command.sourceScenarioId)) ||
+            (command.sourceScenarioId === "PL-S005" && command.destinationScenarioId === "PL-S090");
           if (!allowed) return reject(UNAVAILABLE);
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",

@@ -46,7 +46,12 @@ export type ActivePlanScenario =
   | "PL-S041"
   | "PL-S042"
   | "PL-S043"
-  | "PL-S097";
+  | "PL-S090"
+  | "PL-S091"
+  | "PL-S092"
+  | "PL-S093"
+  | "PL-S097"
+  | "PL-S101";
 
 export interface PlanConversationProjection {
   readonly id: string;
@@ -398,7 +403,12 @@ export function buildActivePlanReadModel(input: {
     "PL-S041": ["Calendar update still needs attention", "Retry or verify the provider again."],
     "PL-S042": ["Resuming calendar update", "The interrupted update is continuing safely."],
     "PL-S043": ["Plan active", "Intervals is current for the next seven days."],
+    "PL-S090": ["Plan settings", "Changes save immediately."],
+    "PL-S091": ["Plan settings", "Saving this setting."],
+    "PL-S092": ["Plan settings", "This setting is saved."],
+    "PL-S093": ["Plan settings", "The previous value was restored."],
     "PL-S097": ["Proposal rejected", "The active Plan did not change."],
+    "PL-S101": ["Plan updated", "An eligible future Workout reduction was applied automatically."],
   } as const;
   const attentionItems: PlanAttention["items"] = [];
   if (input.scenarioId === "PL-S039" || input.scenarioId === "PL-S041") {
@@ -477,6 +487,7 @@ export function buildActivePlanReadModel(input: {
       ...(canApproveProposal ? [guard("PL-T19")] : []),
       guard("PL-T20"),
       ...(canUndo ? [guard("PL-T21")] : []),
+      guard("PL-T22"),
       guard("PL-T39"),
     ],
     reconciliation: input.reconciliation,

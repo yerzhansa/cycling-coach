@@ -417,6 +417,17 @@ export const PlanHistoryEntrySchema = z
   .strict();
 export type PlanHistoryEntry = z.infer<typeof PlanHistoryEntrySchema>;
 
+export const PlanSettingsProjectionSchema = z
+  .object({
+    autoApply: z.boolean(),
+    weeklyReview: z.boolean(),
+    updatedAtMs: z.number().int().nonnegative(),
+    selectedSetting: z.enum(["auto-apply", "weekly-review"]).nullable(),
+    error: PlanErrorSchema.nullable(),
+  })
+  .strict();
+export type PlanSettingsProjection = z.infer<typeof PlanSettingsProjectionSchema>;
+
 export const PlanActiveProjectionDataSchema = z
   .object({
     plan: PlanDraftPlanProjectionSchema,
@@ -437,6 +448,7 @@ export const PlanActiveProjectionDataSchema = z
     proposalRevisionText: z.string().nullable().optional(),
     history: z.array(PlanHistoryEntrySchema).optional(),
     selectedHistoryId: z.string().min(1).nullable().optional(),
+    settings: PlanSettingsProjectionSchema.optional(),
   })
   .strict();
 export type PlanActiveProjectionData = z.infer<typeof PlanActiveProjectionDataSchema>;

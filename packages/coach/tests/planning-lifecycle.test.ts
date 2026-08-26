@@ -265,6 +265,81 @@ describe("Plan lifecycle projection", () => {
     ).not.toContain("PL-T21");
   });
 
+  it("projects immediate Plan settings and the automatic-application result", () => {
+    const history = {
+      id: "history-1",
+      kind: "proposal-applied" as const,
+      label: "Sunday duration reduced",
+      occurredAtMs: 20,
+      targetWorkoutId: "workout-1",
+      before: { date: "2026-08-30", name: "Endurance", durationS: 5_400 },
+      after: { date: "2026-08-30", name: "Endurance", durationS: 2_700 },
+      weekLoadBefore: null,
+      weekLoadAfter: null,
+      undoStatus: "eligible" as const,
+      undoReason: null,
+    };
+    const data = {
+      plan: {
+        id: "plan-1",
+        name: "Gran Fondo",
+        primaryGoal: "Finish",
+        startDate: "2026-07-13",
+        targetDate: "2026-10-04",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 1,
+        plannedDurationS: 2_700,
+      },
+      today: "2026-08-26",
+      weekIndex: 7,
+      todayWorkout: null,
+      workouts: [],
+      history: [history],
+      selectedHistoryId: history.id,
+      settings: {
+        autoApply: true,
+        weeklyReview: true,
+        updatedAtMs: 20,
+        selectedSetting: "auto-apply" as const,
+        error: null,
+      },
+    };
+    const base = {
+      planId: "plan-1",
+      revision: 1,
+      data,
+      reconciliation: {
+        status: "not-applicable" as const,
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: null,
+        error: null,
+      },
+    };
+    const settings = buildActivePlanReadModel({ ...base, scenarioId: "PL-S090" });
+    expect(settings).toMatchObject({
+      title: "Plan settings",
+      data: { settings: { autoApply: true, weeklyReview: true } },
+    });
+    expect(settings.transitions.map((transition) => transition.transitionId)).toEqual(
+      expect.arrayContaining(["PL-T22", "PL-T39"]),
+    );
+
+    const automatic = buildActivePlanReadModel({ ...base, scenarioId: "PL-S101" });
+    expect(automatic).toMatchObject({
+      title: "Plan updated",
+      data: {
+        selectedHistoryId: history.id,
+        history: [expect.objectContaining({ id: history.id })],
+      },
+    });
+    expect(automatic.transitions.map((transition) => transition.transitionId)).toContain("PL-T21");
+  });
+
   it("blocks Draft creation until an FTP source is available", () => {
     const ftp = {
       status: "required" as const,

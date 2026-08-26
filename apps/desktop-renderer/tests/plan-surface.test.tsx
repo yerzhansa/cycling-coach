@@ -51,6 +51,9 @@ function actions(): PlanActions {
     openHistory: vi.fn(),
     closeHistory: vi.fn(),
     undoPlanChange: vi.fn(),
+    openPlanSettings: vi.fn(),
+    closePlanSettings: vi.fn(),
+    setPlanSetting: vi.fn(),
     openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
@@ -1145,6 +1148,145 @@ describe("Plan surface", () => {
     expect(screen.getByText(/Endurance · 1:30 is restored/u)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Back to Plan" }));
     expect(planActions.closeHistory).toHaveBeenCalledOnce();
+  });
+
+  it("saves Plan settings per control and shows an automatic reduction as one result", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const ledgerId = "00000000000000000000000005";
+    const baseData = {
+      plan: {
+        id: planId,
+        name: "Gran Fondo Almaty",
+        primaryGoal: "Finish in the front half",
+        startDate: "2026-07-13",
+        targetDate: "2026-10-04",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 1,
+        plannedDurationS: 2_700,
+      },
+      today: "2026-08-26",
+      weekIndex: 7,
+      todayWorkout: null,
+      workouts: [],
+      history: [
+        {
+          id: ledgerId,
+          kind: "proposal-applied" as const,
+          label: "Sunday duration reduced",
+          occurredAtMs: 1_787_477_200_000,
+          targetWorkoutId: "00000000000000000000000004",
+          before: { date: "2026-08-30", name: "Endurance", durationS: 5_400 },
+          after: { date: "2026-08-30", name: "Endurance", durationS: 2_700 },
+          weekLoadBefore: null,
+          weekLoadAfter: null,
+          undoStatus: "eligible" as const,
+          undoReason: null,
+        },
+      ],
+      selectedHistoryId: ledgerId,
+      settings: {
+        autoApply: false,
+        weeklyReview: true,
+        updatedAtMs: 10,
+        selectedSetting: null,
+        error: null,
+      },
+    };
+    const settingsState = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S090",
+      projection: "active",
+      planId,
+      data: baseData,
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state: settingsState },
+        lastReady: settingsState,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    const autoApply = screen.getByRole("switch", { name: "Auto-apply" });
+    const weeklyReview = screen.getByRole("switch", { name: "Weekly review" });
+    expect(autoApply).not.toBeChecked();
+    expect(weeklyReview).toBeChecked();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    await user.click(autoApply);
+    expect(planActions.setPlanSetting).toHaveBeenCalledWith("auto-apply", true);
+
+    act(() => {
+      useEnduragentStore.getState().setPlanSettingPending({ setting: "auto-apply", value: true });
+      useEnduragentStore.getState().setPlanTransition({
+        status: "submitting",
+        commandId: "setting-save",
+        transitionId: "PL-T22",
+      });
+    });
+    expect(autoApply).toBeChecked();
+    expect(autoApply).toBeDisabled();
+    expect(weeklyReview).toBeDisabled();
+    expect(screen.getByText("Saving…")).toBeInTheDocument();
+
+    const failedState = {
+      ...settingsState,
+      scenarioId: "PL-S093" as const,
+      data: {
+        ...baseData,
+        settings: {
+          ...baseData.settings,
+          selectedSetting: "auto-apply" as const,
+          error: {
+            code: "persistence-failed" as const,
+            message: "Could not save.",
+            retryable: true,
+          },
+        },
+      },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: failedState });
+      useEnduragentStore.getState().setPlanSettingPending(null);
+      useEnduragentStore.getState().setPlanTransition({
+        status: "failed",
+        commandId: "setting-save",
+        transitionId: "PL-T22",
+        error: failedState.data.settings.error,
+      });
+    });
+    expect(autoApply).not.toBeChecked();
+    expect(screen.getByText("Couldn’t save · previous value restored")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(planActions.retry).toHaveBeenCalledOnce();
+
+    const appliedState = {
+      ...settingsState,
+      scenarioId: "PL-S101" as const,
+      data: {
+        ...baseData,
+        settings: { ...baseData.settings, autoApply: true, updatedAtMs: 11 },
+      },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: appliedState });
+      useEnduragentStore.getState().setPlanTransition({ status: "idle" });
+    });
+    const resultHeading = await screen.findByRole("heading", {
+      name: "Endurance applied automatically",
+    });
+    await waitFor(() => expect(resultHeading).toHaveFocus());
+    const result = resultHeading.closest("section");
+    if (result === null) throw new TypeError("Automatic application result missing.");
+    expect(within(result).getByText("Endurance · 1:30")).toBeInTheDocument();
+    expect(within(result).getByText("Endurance · 0:45")).toBeInTheDocument();
+    expect(within(result).getByRole("button", { name: "Undo" })).toBeInTheDocument();
+    expect(within(result).getByRole("button", { name: "Back to Plan" })).toBeInTheDocument();
   });
 
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {

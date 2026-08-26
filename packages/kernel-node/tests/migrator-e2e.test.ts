@@ -31,9 +31,9 @@ describe("migrator end-to-end over node:sqlite", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("applies the full migration list and advances user_version to 19", async () => {
+  it("applies the full migration list and advances user_version to 20", async () => {
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 19 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 20 });
 
     const tables = await store.all("SELECT name FROM sqlite_master WHERE type='table'");
     const names = new Set(tables.map((r) => r.name as string));
@@ -53,7 +53,7 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(await store.get("PRAGMA journal_mode")).toEqual({ journal_mode: "wal" });
     expect(await store.get("PRAGMA foreign_keys")).toEqual({ foreign_keys: 1 });
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 19 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 20 });
   });
 
   it("produces a deterministic INV-2 dump of a fixed state", async () => {
@@ -82,11 +82,11 @@ describe("migrator end-to-end over node:sqlite", () => {
     expect(await dumpStore(store)).toBe(dump);
   });
 
-  it("upgrades a version-1-on-disk store to version 19", async () => {
+  it("upgrades a version-1-on-disk store to version 20", async () => {
     await runMigrations(store, [MIGRATIONS[0]!]);
     expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 1 });
     await runMigrations(store, MIGRATIONS);
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 19 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 20 });
     expect(await store.get("SELECT singleton,ingest_version FROM ingest_metadata")).toEqual({
       singleton: 1,
       ingest_version: 0,
@@ -108,10 +108,10 @@ describe("migrator end-to-end over node:sqlite", () => {
     const result = await runMigrations(store, MIGRATIONS);
     expect(result).toEqual({
       fromVersion: 4,
-      toVersion: 19,
-      applied: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+      toVersion: 20,
+      applied: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     });
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 19 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 20 });
     expect(
       await store.get("SELECT revision_id,source_record_id FROM source_record_revision"),
     ).toEqual({
@@ -164,21 +164,21 @@ describe("migrator end-to-end over node:sqlite", () => {
     const result = await runMigrations(store, MIGRATIONS);
     expect(result).toEqual({
       fromVersion: 6,
-      toVersion: 19,
-      applied: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+      toVersion: 20,
+      applied: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
     });
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 19 });
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 20 });
     expect(
       await store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_failure'"),
     ).toEqual({ name: "sync_failure" });
     await expect(runMigrations(store, MIGRATIONS)).resolves.toEqual({
-      fromVersion: 19,
-      toVersion: 19,
+      fromVersion: 20,
+      toVersion: 20,
       applied: [],
     });
   });
 
-  it("upgrades version 11 through 19 while preserving existing rows", async () => {
+  it("upgrades version 11 through 20 while preserving existing rows", async () => {
     await runMigrations(store, MIGRATIONS.slice(0, 11));
     await store.run("INSERT INTO repair_fixer_settings(fixer,enabled) VALUES(?,?)", [
       "chronoBridge",
@@ -187,8 +187,8 @@ describe("migrator end-to-end over node:sqlite", () => {
 
     await expect(runMigrations(store, MIGRATIONS)).resolves.toEqual({
       fromVersion: 11,
-      toVersion: 19,
-      applied: [12, 13, 14, 15, 16, 17, 18, 19],
+      toVersion: 20,
+      applied: [12, 13, 14, 15, 16, 17, 18, 19, 20],
     });
     await expect(store.get("SELECT fixer,enabled FROM repair_fixer_settings")).resolves.toEqual({
       fixer: "chronoBridge",
@@ -197,7 +197,7 @@ describe("migrator end-to-end over node:sqlite", () => {
     await expect(store.get("SELECT count(*) AS count FROM repair_fixer_settings")).resolves.toEqual(
       { count: 1 },
     );
-    await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 19 });
+    await expect(store.get("PRAGMA user_version")).resolves.toEqual({ user_version: 20 });
   });
 
   it("rolls back a failed migration 12 without partial Planning tables", async () => {
