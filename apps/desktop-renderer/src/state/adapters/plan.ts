@@ -63,6 +63,14 @@ export interface PlanViewAdapter {
   approveDraft(): void;
   reconcilePlan(): void;
   verifyReconciliation(): void;
+  openWorkout(workoutId: string): void;
+  closeWorkout(): void;
+  resolveWorkoutMatch(
+    workoutId: string,
+    activityId: string,
+    decision: "confirm" | "reject",
+  ): void;
+  openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
   dispose(): void;
@@ -696,6 +704,40 @@ export function createPlanViewAdapter(input: {
         commandId: createCommandId(),
         planId: model.planId,
         mode: "verify",
+      });
+    },
+    openWorkout(workoutId) {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T13",
+        commandId: createCommandId(),
+        planId: model.planId,
+        workoutId,
+      });
+    },
+    closeWorkout() {
+      if (active !== null) return;
+      void refresh(false);
+    },
+    resolveWorkoutMatch(workoutId, activityId, decision) {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T14",
+        commandId: createCommandId(),
+        planId: model.planId,
+        workoutId,
+        activityId,
+        decision,
+      });
+    },
+    openAttention(attentionId) {
+      if (active !== null) return;
+      void execute({
+        transitionId: "PL-T34",
+        commandId: createCommandId(),
+        attentionId,
       });
     },
     returnToCoach() {

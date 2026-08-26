@@ -874,6 +874,46 @@ describe("Plan view adapter", () => {
     });
   });
 
+  it("opens a workout and resolves a heuristic match through PL-T13 and PL-T14", async () => {
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId: "00000000000000000000000003",
+    });
+    const subject = harness({
+      ids: ["open-command", "confirm-command"],
+      getPlanState: async () => ({ status: "ready", state }),
+      executePlanTransition: async () => ({ status: "completed", state }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.openWorkout("00000000000000000000000004");
+    await settle();
+    subject.adapter.resolveWorkoutMatch(
+      "00000000000000000000000004",
+      "activity-1",
+      "confirm",
+    );
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(1, {
+      transitionId: "PL-T13",
+      commandId: "open-command",
+      planId: "00000000000000000000000003",
+      workoutId: "00000000000000000000000004",
+    });
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(2, {
+      transitionId: "PL-T14",
+      commandId: "confirm-command",
+      planId: "00000000000000000000000003",
+      workoutId: "00000000000000000000000004",
+      activityId: "activity-1",
+      decision: "confirm",
+    });
+  });
+
   it("resumes an interrupted reconciliation once after hydration", async () => {
     const state = planReadModel({
       lifecycle: "active",

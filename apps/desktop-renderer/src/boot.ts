@@ -215,6 +215,11 @@ export function bootRenderer(): Disposer {
     approveDraft: () => planAdapter.approveDraft(),
     reconcilePlan: () => planAdapter.reconcilePlan(),
     verifyReconciliation: () => planAdapter.verifyReconciliation(),
+    openWorkout: (workoutId) => planAdapter.openWorkout(workoutId),
+    closeWorkout: () => planAdapter.closeWorkout(),
+    resolveWorkoutMatch: (workoutId, activityId, decision) =>
+      planAdapter.resolveWorkoutMatch(workoutId, activityId, decision),
+    openAttention: (attentionId) => planAdapter.openAttention(attentionId),
     returnToCoach: () => planAdapter.returnToCoach(),
     retry: () => planAdapter.retry(),
   });

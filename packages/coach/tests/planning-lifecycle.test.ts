@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPlanLifecycleReadModel } from "../src/planning-lifecycle.js";
+import { buildActivePlanReadModel, buildPlanLifecycleReadModel } from "../src/planning-lifecycle.js";
 
 const queue = { schemaVersion: 1 as const, revision: 0, items: [] };
 const conversation = {
@@ -22,6 +22,66 @@ function build(input: Partial<Parameters<typeof buildPlanLifecycleReadModel>[0]>
 }
 
 describe("Plan lifecycle projection", () => {
+  it("counts every unresolved WorkoutMatch decision and opens one directly or several as a list", () => {
+    const data = {
+      plan: {
+        id: "plan-1",
+        name: "Gran Fondo",
+        primaryGoal: "Finish",
+        startDate: "2026-08-17",
+        targetDate: null,
+        kind: "short-race-preparation" as const,
+        totalWeeks: 4,
+        weekStartDay: 1,
+        workoutCount: 2,
+        plannedDurationS: 7_200,
+      },
+      today: "2026-08-18",
+      weekIndex: 1,
+      todayWorkout: null,
+      workouts: ["workout-1", "workout-2"].map((id, index) => ({
+        id,
+        date: `2026-08-${18 + index}`,
+        sport: "cycling",
+        name: `Workout ${index + 1}`,
+        durationS: 3_600,
+        match: {
+          kind: "planned" as const,
+          status: "decision-needed" as const,
+          activityId: `activity-${index + 1}`,
+          matchId: `match-${index + 1}`,
+          actualDate: `2026-08-${18 + index}`,
+          actualDurationS: 3_500,
+          requiresConfirmation: true,
+        },
+      })),
+    };
+    const multiple = buildActivePlanReadModel({
+      scenarioId: "PL-S004",
+      planId: "plan-1",
+      revision: 0,
+      data,
+      reconciliation: {
+        status: "not-applicable",
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: null,
+        error: null,
+      },
+    });
+    expect(multiple.attention).toMatchObject({ count: 2, destination: "list" });
+    const single = buildActivePlanReadModel({
+      scenarioId: "PL-S004",
+      planId: "plan-1",
+      revision: 0,
+      data: { ...data, workouts: data.workouts.slice(0, 1) },
+      reconciliation: multiple.reconciliation,
+    });
+    expect(single.attention).toMatchObject({ count: 1, destination: "direct" });
+  });
+
   it("blocks Draft creation until an FTP source is available", () => {
     const ftp = {
       status: "required" as const,

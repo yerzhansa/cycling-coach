@@ -78,6 +78,24 @@ function plannedTime(durationS: number): string {
   return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
 }
 
+const MATCH_STATUS_COPY = {
+  "as-planned": "As planned",
+  adjusted: "Adjusted",
+  moved: "Moved",
+  missed: "Missed",
+  extra: "Extra",
+  "decision-needed": "Decision needed",
+  "awaiting-sync": "Awaiting sync",
+  upcoming: "Planned",
+} as const;
+
+function matchStatusClass(status: keyof typeof MATCH_STATUS_COPY): string {
+  if (status === "as-planned") return "text-ok";
+  if (status === "adjusted" || status === "decision-needed") return "text-warn";
+  if (status === "missed") return "text-danger";
+  return "text-ink-2";
+}
+
 function RetryButton(): ReactElement | null {
   const actions = useEnduragentStore((state) => state.planActions);
   if (actions === null) return null;
@@ -1277,6 +1295,7 @@ function DraftProjection(): ReactElement {
 
 function AttentionProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
+  const actions = useEnduragentStore((state) => state.planActions);
   if (model === null) return <StatusCard title="Plan attention" support="Refreshing your Plan…" />;
   return (
     <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
@@ -1289,9 +1308,15 @@ function AttentionProjection(): ReactElement {
       </div>
       <div className="grid divide-y divide-line">
         {model.attention.items.map((item) => (
-          <p key={item.id} className="m-0 py-3 text-sm">
-            {item.title}
-          </p>
+          <button
+            key={item.id}
+            type="button"
+            className="flex w-full items-center justify-between gap-inset bg-transparent py-3 text-left text-sm hover:text-primary"
+            onClick={() => actions?.openAttention(item.id)}
+          >
+            <span>{item.title}</span>
+            <ChevronRight className="size-4 text-ink-2" aria-hidden="true" />
+          </button>
         ))}
       </div>
     </section>
@@ -1329,6 +1354,10 @@ function ActiveProjection(): ReactElement {
             ? "Intervals still needs attention"
             : "Intervals update needs attention"
           : "Update Intervals for the next seven days";
+  const selectedWorkout =
+    data.selectedWorkoutId === undefined || data.selectedWorkoutId === null
+      ? null
+      : (data.workouts.find((workout) => workout.id === data.selectedWorkoutId) ?? null);
   return (
     <div className="grid gap-6">
       <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
@@ -1429,6 +1458,152 @@ function ActiveProjection(): ReactElement {
           </div>
         ) : null}
       </section>
+
+      <section className="overflow-hidden rounded-card bg-surface shadow-elev-1">
+        <div className="flex items-start justify-between gap-row px-5 py-row">
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-base font-semibold">This week</h2>
+            <p className="m-0 text-sm text-ink-2">
+              {data.matchSync?.awaitingSync === true
+                ? "Awaiting sync · previous matches remain visible."
+                : data.matchSync?.lastSuccessfulSyncAtMs == null
+                  ? "Workout matches appear after activity sync."
+                  : `As of last sync · ${new Intl.DateTimeFormat(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(data.matchSync.lastSuccessfulSyncAtMs))}`}
+            </p>
+          </div>
+        </div>
+        <div className="divide-y divide-line border-t border-line">
+          {data.workouts.map((workout) => {
+            const status = workout.match?.status ?? "upcoming";
+            const decision = status === "decision-needed";
+            return (
+              <button
+                key={workout.id}
+                id={`workout-row-${workout.id}`}
+                type="button"
+                className="grid w-full grid-cols-[minmax(7rem,0.8fr)_minmax(12rem,2fr)_minmax(5rem,0.6fr)_minmax(9rem,1fr)_auto] items-center gap-inset bg-transparent px-5 py-row text-left text-sm hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary"
+                onClick={() => actions?.openWorkout(workout.id)}
+              >
+                <span className="text-ink-2">
+                  {formatCivilDate(workout.date, { weekday: "short", day: "numeric" })}
+                </span>
+                <span className="font-medium text-ink-1">{workout.name}</span>
+                <span className="text-ink-2">
+                  {workout.durationS === null ? "—" : plannedTime(workout.durationS)}
+                </span>
+                {decision ? (
+                  <span className="justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn">
+                    Decision needed
+                  </span>
+                ) : (
+                  <span className={matchStatusClass(status)}>{MATCH_STATUS_COPY[status]}</span>
+                )}
+                <ChevronRight className="size-4 text-ink-2" aria-hidden="true" />
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <Dialog
+        open={selectedWorkout !== null}
+        onOpenChange={(open) => {
+          if (!open) actions?.closeWorkout();
+        }}
+      >
+        <DialogContent className="top-0 right-0 left-auto flex h-full max-h-none w-[min(440px,calc(100%-32px))] max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-none rounded-l-card border-y-0 border-r-0 p-0">
+          {selectedWorkout === null ? null : (
+            <>
+              <DialogHeader className="grid gap-2 border-b border-line px-5 py-5 pr-16">
+                <DialogTitle className="m-0 text-xl">{selectedWorkout.name}</DialogTitle>
+                <DialogDescription className="m-0 text-ink-2">
+                  {formatCivilDate(selectedWorkout.date)} · {selectedWorkout.sport} ·{" "}
+                  {selectedWorkout.durationS === null
+                    ? "No planned duration"
+                    : plannedTime(selectedWorkout.durationS)}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid flex-1 content-start gap-row overflow-auto px-5 py-5">
+                <div className={SUPPORT_PAIR}>
+                  <h3 className="m-0 text-sm font-medium">WorkoutMatch</h3>
+                  <p
+                    className={`m-0 text-base ${matchStatusClass(
+                      selectedWorkout.match?.status ?? "upcoming",
+                    )}`}
+                  >
+                    {MATCH_STATUS_COPY[selectedWorkout.match?.status ?? "upcoming"]}
+                  </p>
+                </div>
+                {selectedWorkout.match?.activityId !== null &&
+                selectedWorkout.match?.activityId !== undefined ? (
+                  <div className="grid gap-inset rounded-card bg-sunk p-row">
+                    <p className="m-0 text-sm font-medium">Observed activity</p>
+                    <p className="m-0 text-sm text-ink-2">
+                      {selectedWorkout.match.actualDate === null
+                        ? "Date unavailable"
+                        : formatCivilDate(selectedWorkout.match.actualDate)}
+                      {selectedWorkout.match.actualDurationS === null
+                        ? ""
+                        : ` · ${plannedTime(selectedWorkout.match.actualDurationS)}`}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="m-0 text-sm text-ink-2">
+                    No completed activity is matched to this workout.
+                  </p>
+                )}
+                {selectedWorkout.match?.requiresConfirmation === true ? (
+                  <p className="m-0 text-sm text-ink-2">
+                    The date, sport, and duration look similar. Confirm before it counts as the
+                    planned workout.
+                  </p>
+                ) : null}
+              </div>
+              <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+                {selectedWorkout.match?.requiresConfirmation === true &&
+                selectedWorkout.match.activityId !== null ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={actions === null || transition.status !== "idle"}
+                      onClick={() =>
+                        actions?.resolveWorkoutMatch(
+                          selectedWorkout.id,
+                          selectedWorkout.match!.activityId!,
+                          "reject",
+                        )
+                      }
+                    >
+                      Not this activity
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={actions === null || transition.status !== "idle"}
+                      onClick={() =>
+                        actions?.resolveWorkoutMatch(
+                          selectedWorkout.id,
+                          selectedWorkout.match!.activityId!,
+                          "confirm",
+                        )
+                      }
+                    >
+                      Confirm match
+                    </Button>
+                  </>
+                ) : (
+                  <Button type="button" variant="outline" onClick={() => actions?.closeWorkout()}>
+                    Close
+                  </Button>
+                )}
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

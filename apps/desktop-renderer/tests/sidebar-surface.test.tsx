@@ -70,6 +70,10 @@ function stubPlanActions(): PlanActions {
     approveDraft: vi.fn(),
     reconcilePlan: vi.fn(),
     verifyReconciliation: vi.fn(),
+    openWorkout: vi.fn(),
+    closeWorkout: vi.fn(),
+    resolveWorkoutMatch: vi.fn(),
+    openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
   };

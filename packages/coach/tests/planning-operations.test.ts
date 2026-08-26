@@ -9,6 +9,7 @@ import {
   createPlanConversationRepository,
   createPlanReconciliationRepository,
   createPlanRepository,
+  createPlanWorkoutMatchRepository,
   createRaceCourseSnapshot,
   type PlanRecord,
   type PlanWorkoutRecord,
@@ -964,8 +965,100 @@ describe("Plan operations", () => {
     );
     await expect(restored.getPlanState?.({})).resolves.toMatchObject({
       status: "ready",
-      state: { scenarioId: "PL-S043", lifecycle: "active" },
+      state: { scenarioId: "PL-S004", lifecycle: "active" },
     });
+  });
+
+  it("opens a WorkoutMatch decision and persists athlete confirmation without Intervals mutation", async () => {
+    const authored = identity();
+    const activePlan = plan(`${"0".repeat(25)}W`, 40);
+    const workouts = await activationBuilder().form({} as never).then((build) => build.workouts);
+    await createPlanRepository(store).replace({ ...activePlan, status: "active" }, workouts);
+    const activityId = "a".repeat(64);
+    const matchId = `${"0".repeat(25)}V`;
+    const matchRepository = createPlanWorkoutMatchRepository(store);
+    await matchRepository.observe({
+      id: matchId,
+      planId: activePlan.id,
+      planWorkoutId: workouts[0]!.id,
+      activityId,
+      providerActivityId: "i123",
+      providerEventId: null,
+      source: "heuristic",
+      decision: "suggested",
+      activityDateKey: workouts[0]!.dateKey,
+      activitySport: "cycling",
+      activityDurationS: workouts[0]!.durationS,
+      observedAtMs: 90,
+      decidedAtMs: null,
+      deviceId: "device-1",
+      hlcPhysicalMs: 90,
+      hlcCounter: 0,
+    });
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { todayDateKey: () => 20260709 },
+    );
+    const initial = await operations.getPlanState?.({});
+    expect(initial).toMatchObject({
+      status: "ready",
+      state: {
+        scenarioId: "PL-S004",
+        attention: { count: 1, destination: "direct" },
+      },
+    });
+    if (initial?.status !== "ready") throw new TypeError("Active Plan missing.");
+    expect(initial.state.data.workouts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: workouts[0]!.id,
+        match: expect.objectContaining({
+          status: "decision-needed",
+          requiresConfirmation: true,
+        }),
+      }),
+    ]));
+    await expect(operations.executePlanTransition?.({
+      transitionId: "PL-T33",
+      commandId: "command-attention",
+      planId: activePlan.id,
+    })).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S021", data: { selectedWorkoutId: workouts[0]!.id } },
+    });
+    await expect(operations.executePlanTransition?.({
+      transitionId: "PL-T13",
+      commandId: "command-open",
+      planId: activePlan.id,
+      workoutId: workouts[0]!.id,
+    })).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S021", data: { selectedWorkoutId: workouts[0]!.id } },
+    });
+    const confirmed = await operations.executePlanTransition?.({
+      transitionId: "PL-T14",
+      commandId: "command-confirm",
+      planId: activePlan.id,
+      workoutId: workouts[0]!.id,
+      activityId,
+      decision: "confirm",
+    });
+    expect(confirmed).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S004",
+        attention: { count: 0 },
+      },
+    });
+    if (confirmed?.status !== "completed") throw new TypeError("Match was not confirmed.");
+    expect(confirmed.state.data.workouts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: workouts[0]!.id,
+        match: expect.objectContaining({ status: "as-planned" }),
+      }),
+    ]));
+    await expect(matchRepository.readForWorkout(workouts[0]!.id)).resolves.toEqual([
+      expect.objectContaining({ decision: "confirmed" }),
+    ]);
   });
 
   it("hydrates an interrupted reconciliation as crash-resume work without attention", async () => {
