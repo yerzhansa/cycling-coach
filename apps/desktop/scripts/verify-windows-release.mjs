@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
@@ -14,6 +15,10 @@ import { requireStableSemVer } from "./macos-release-plan.mjs";
 import { createWindowsAuthenticodeVerifyMode } from "./verify-windows-authenticode.mjs";
 
 export const WINDOWS_UPDATER_METADATA_MAX_BYTES = 16_384;
+const BLOCKMAP_CHECKSUM_BYTES = 18;
+const scriptRequire = createRequire(import.meta.url);
+const electronBuilderRequire = createRequire(scriptRequire.resolve("electron-builder"));
+const { blake2b } = electronBuilderRequire("@noble/hashes/blake2.js");
 
 class WindowsReleaseVerificationError extends Error {
   constructor(message) {
@@ -38,6 +43,14 @@ function hasExactKeys(value, keys) {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function validBase64(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length % 4 !== 0) return false;
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
+    return false;
+  }
+  return Buffer.from(value, "base64").toString("base64") === value;
 }
 
 async function readRegularFile(path, label, dependencies, maximumBytes) {
@@ -126,7 +139,7 @@ function installerMetadataMatches(metadata, version, installerName, sha512, size
   );
 }
 
-function verifyBlockmap(bytes, installer, installerName) {
+function verifyBlockmap(bytes, installer) {
   if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) {
     fail("installer blockmap is invalid");
   }
@@ -149,6 +162,7 @@ function verifyBlockmap(bytes, installer, installerName) {
   }
   const file = blockmap.files[0];
   if (
+    file.name !== "file" ||
     file.offset !== 0 ||
     !Array.isArray(file.checksums) ||
     !Array.isArray(file.sizes) ||
@@ -156,19 +170,26 @@ function verifyBlockmap(bytes, installer, installerName) {
     file.checksums.length !== file.sizes.length ||
     !file.checksums.every(
       (checksum) =>
-        typeof checksum === "string" &&
-        /^[A-Za-z0-9+/]+={0,2}$/u.test(checksum) &&
-        Buffer.from(checksum, "base64").length === 64,
+        validBase64(checksum) &&
+        Buffer.from(checksum, "base64").length === BLOCKMAP_CHECKSUM_BYTES,
     ) ||
     !file.sizes.every((size) => Number.isSafeInteger(size) && size > 0)
   ) {
     fail("installer blockmap is invalid");
   }
-  if (
-    file.name !== installerName ||
-    file.sizes.reduce((total, size) => total + size, 0) !== installer.length
-  ) {
+  if (file.sizes.reduce((total, size) => total + size, 0) !== installer.length) {
     fail("installer blockmap does not match the Windows installer");
+  }
+  let offset = file.offset;
+  for (let index = 0; index < file.sizes.length; index += 1) {
+    const size = file.sizes[index];
+    const expectedChecksum = Buffer.from(
+      blake2b(installer.subarray(offset, offset + size), { dkLen: BLOCKMAP_CHECKSUM_BYTES }),
+    ).toString("base64");
+    if (file.checksums[index] !== expectedChecksum) {
+      fail("installer blockmap does not match the Windows installer");
+    }
+    offset += size;
   }
 }
 
@@ -247,7 +268,7 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
   ) {
     fail("latest.yml does not match the Windows installer");
   }
-  verifyBlockmap(blockmap, installer, names.installer);
+  verifyBlockmap(blockmap, installer);
   if (options.appUpdateMetadata !== undefined) {
     try {
       parseWindowsReleaseUpdaterMetadata(

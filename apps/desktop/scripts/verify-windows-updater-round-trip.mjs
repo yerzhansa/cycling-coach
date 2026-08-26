@@ -9,6 +9,7 @@ import { requireGenericFeedUrl, requireStableSemVer } from "./macos-release-plan
 import { WINDOWS_UPDATER_METADATA_MAX_BYTES } from "./verify-windows-release.mjs";
 
 const maximumPublisherNameCharacters = 512;
+const blockmapChecksumBytes = 18;
 const invalidMetadataMessage = `${WINDOWS_RELEASE_METADATA_NAME} is invalid`;
 
 class WindowsUpdaterRoundTripError extends Error {
@@ -157,8 +158,7 @@ function verifyBlockmap(value) {
   }
   const file = blockmap.files[0];
   if (
-    typeof file.name !== "string" ||
-    file.name.length === 0 ||
+    file.name !== "file" ||
     file.offset !== 0 ||
     !Array.isArray(file.checksums) ||
     !Array.isArray(file.sizes) ||
@@ -166,9 +166,8 @@ function verifyBlockmap(value) {
     file.checksums.length !== file.sizes.length ||
     !file.checksums.every(
       (checksum) =>
-        typeof checksum === "string" &&
-        /^[A-Za-z0-9+/]+={0,2}$/u.test(checksum) &&
-        Buffer.from(checksum, "base64").length === 64,
+        validBase64(checksum) &&
+        Buffer.from(checksum, "base64").length === blockmapChecksumBytes,
     ) ||
     !file.sizes.every((size) => Number.isSafeInteger(size) && size > 0)
   ) {

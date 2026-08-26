@@ -21,7 +21,7 @@ const blockmap = gzipSync(
       {
         name: "file",
         offset: 0,
-        checksums: [createHash("sha512").update("blockmap").digest("base64")],
+        checksums: [Buffer.alloc(18, 0xab).toString("base64")],
         sizes: [1],
       },
     ],

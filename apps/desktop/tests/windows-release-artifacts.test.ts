@@ -75,19 +75,6 @@ beforeEach(async () => {
   await writeFile(installerPath, installer);
   const blockmapPath = join(directory, names.blockmap);
   await buildBlockMap(installerPath, "gzip", blockmapPath);
-  const blockmap = JSON.parse(
-    gunzipSync(await readFile(blockmapPath)).toString("utf8"),
-  ) as BlockmapFixture;
-  blockmap.files[0].name = names.installer;
-  let offset = 0;
-  blockmap.files[0].checksums = blockmap.files[0].sizes.map((size) => {
-    const checksum = createHash("sha512")
-      .update(installer.subarray(offset, offset + size))
-      .digest("base64");
-    offset += size;
-    return checksum;
-  });
-  await writeFile(blockmapPath, gzipSync(JSON.stringify(blockmap)));
   await writeMetadata();
 });
 
@@ -209,7 +196,7 @@ describe("Windows release artifact verification", () => {
     });
     await expect(
       verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
-    ).rejects.toThrow("installer blockmap does not match the Windows installer");
+    ).rejects.toThrow("installer blockmap is invalid");
   });
 
   it("rejects a version 1 blockmap", async () => {
@@ -228,6 +215,26 @@ describe("Windows release artifact verification", () => {
     await expect(
       verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
     ).rejects.toThrow("installer blockmap is invalid");
+  });
+
+  it("rejects a blockmap with a checksum of the wrong length", async () => {
+    await updateBlockmap((value) => {
+      value.files[0].checksums[0] = Buffer.alloc(17).toString("base64");
+    });
+    await expect(
+      verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
+    ).rejects.toThrow("installer blockmap is invalid");
+  });
+
+  it("rejects an installer whose bytes do not match the blockmap", async () => {
+    installer = Buffer.from(installer);
+    installer[0] ^= 0xff;
+    const names = windowsReleaseArtifactNames(version);
+    await writeFile(join(directory, names.installer), installer);
+    await writeMetadata();
+    await expect(
+      verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
+    ).rejects.toThrow("installer blockmap does not match the Windows installer");
   });
 
   it("runs the pending CLI and rejects unsupported Authenticode modes", async () => {
