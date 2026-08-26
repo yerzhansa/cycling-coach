@@ -55,7 +55,10 @@ function summary(
     digestAlgorithm: "sha256",
     rfc3161: true,
     signtool: { path: "C:\\signtool.exe", exitCode: 0, output: "verified" },
-    versionInfo: { productVersion: version, legalTrademarks: `enduragent-release-commit:${commit}` },
+    versionInfo: {
+      productVersion: version,
+      legalTrademarks: `enduragent-release-commit:${commit} enduragent-updater-publisher-sha256:${createHash("sha256").update(publisherDn).digest("hex")}`,
+    },
     allowSelfSignedTest: false,
     checks: [
       { name: "file", ok: true, detail: "regular-executable" },
@@ -184,6 +187,28 @@ describe("Windows Authenticode decisions", () => {
       decideWindowsAuthenticode(summary(), { ...decisionOptions(), expectedVersion: "0.1.6" }),
     ).toThrow("Authenticode provenance mismatch");
     expect(() =>
+      decideWindowsAuthenticode(
+        summary({
+          versionInfo: {
+            productVersion: version,
+            legalTrademarks: `enduragent-release-commit:${commit} enduragent-updater-publisher-sha256:${"0".repeat(64)}`,
+          },
+        }),
+        { ...decisionOptions(), expectedCommit: commit },
+      ),
+    ).toThrow("Authenticode provenance mismatch");
+    expect(() =>
+      decideWindowsAuthenticode(
+        summary({
+          versionInfo: {
+            productVersion: version,
+            legalTrademarks: `enduragent-release-commit:${commit}`,
+          },
+        }),
+        { ...decisionOptions(), expectedCommit: commit },
+      ),
+    ).toThrow("Authenticode provenance mismatch");
+    expect(() =>
       decideWindowsAuthenticode({ ...summary(), versionInfo: undefined } as never, decisionOptions()),
     ).toThrow("Authenticode summary is invalid");
   });
@@ -269,7 +294,7 @@ describe("Windows Authenticode decisions", () => {
         "-File",
         scriptPath,
         "-InstallerPath",
-        installerPath,
+        expect.not.stringMatching(new RegExp(`^${directory.replaceAll("\\", "\\\\")}`, "u")),
         "-ExpectedPublisherDn",
         publisherDn,
       ]),

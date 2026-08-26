@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { stringify } from "yaml";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +21,12 @@ const script = resolve(
 );
 const temporaryRoots: string[] = [];
 let directory: string;
+let appUpdateMetadataPath: string;
 let verified: VerifiedWindowsReleaseAssets;
+
+function digestOf(bytes: Uint8Array) {
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -42,10 +48,22 @@ beforeEach(async () => {
     blockmap: join(directory, names.blockmap),
     metadata: join(directory, names.metadata),
   };
+  appUpdateMetadataPath = join(directory, "..", `app-update-${process.pid}.yml`);
+  temporaryRoots.push(appUpdateMetadataPath);
   await Promise.all([
     writeFile(paths.installer, contents.installer),
     writeFile(paths.blockmap, contents.blockmap),
     writeFile(paths.metadata, contents.metadata),
+    writeFile(
+      appUpdateMetadataPath,
+      stringify({
+        provider: "generic",
+        url: "https://github.com/yerzhansa/enduragent/releases/latest/download/",
+        channel: "latest",
+        updaterCacheDirName: "@enduragentdesktop-updater",
+        publisherName: [publisherDn],
+      }),
+    ),
   ]);
   verified = {
     version,
@@ -60,8 +78,26 @@ beforeEach(async () => {
     installerSha512: createHash("sha512").update(contents.installer).digest("base64"),
     installerSha256: createHash("sha256").update(contents.installer).digest("hex"),
     authenticode: "verified",
+    bytes: contents,
   };
 });
+
+function releaseAssetsApi(names: readonly string[] = Object.values(verified.names)) {
+  const byName = new Map(
+    [
+      [verified.names.installer, verified.bytes.installer],
+      [verified.names.blockmap, verified.bytes.blockmap],
+      [verified.names.metadata, verified.bytes.metadata],
+    ] as const,
+  );
+  return JSON.stringify({
+    tag_name: tag,
+    assets: names.map((name) => {
+      const bytes = byName.get(name) ?? Buffer.from("other");
+      return { name, size: bytes.length, digest: digestOf(bytes) };
+    }),
+  });
+}
 
 function release(assets: readonly string[] = [], overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
@@ -79,6 +115,9 @@ function successfulExecutor(
     readonly initialAssets?: readonly string[];
     readonly reference?: { readonly type: "commit" | "tag"; readonly sha: string };
     readonly peeled?: { readonly type: "commit" | "tag"; readonly sha: string };
+    readonly latestTag?: string;
+    readonly assetsApi?: string;
+    readonly onUpload?: (paths: readonly string[]) => Promise<void> | void;
   } = {},
 ) {
   let views = 0;
@@ -91,6 +130,16 @@ function successfulExecutor(
             ? release(options.initialAssets ?? [`Enduragent-${version}-arm64.dmg`])
             : release(Object.values(verified.names)),
       };
+    }
+    if (arguments_[0] === "release" && arguments_[1] === "upload") {
+      await options.onUpload?.(arguments_.slice(5));
+      return { stdout: "" };
+    }
+    if (arguments_[0] === "api" && arguments_[1]?.endsWith("/releases/latest")) {
+      return { stdout: JSON.stringify({ tag_name: options.latestTag ?? tag }) };
+    }
+    if (arguments_[0] === "api" && arguments_[1]?.includes("/releases/tags/")) {
+      return { stdout: options.assetsApi ?? releaseAssetsApi() };
     }
     if (arguments_[0] === "api" && arguments_[1]?.includes("/git/ref/tags/")) {
       return { stdout: JSON.stringify({ object: options.reference ?? { type: "commit", sha: commit } }) };
@@ -109,21 +158,41 @@ function input(overrides: Record<string, unknown> = {}) {
     commit,
     authenticode: "verify" as const,
     publisherDn,
+    appUpdateMetadata: appUpdateMetadataPath,
     ...overrides,
   };
 }
 
 describe("Windows release upload", () => {
   it("verifies locally, views the release, and uploads installer, blockmap, then metadata", async () => {
-    const executeFile = successfulExecutor();
+    const uploadedBytes: Buffer[] = [];
+    let uploadedPaths: readonly string[] = [];
+    const executeFile = successfulExecutor({
+      onUpload: async (paths) => {
+        uploadedPaths = paths;
+        for (const path of paths) uploadedBytes.push(await readFile(path));
+      },
+    });
     const verifyAssets = vi.fn(async () => verified);
     await runWindowsReleaseUpload(input(), { executeFile, verifyAssets });
     expect(verifyAssets).toHaveBeenCalledWith(directory, {
       version,
       commit,
       expectedPublisherName: publisherDn,
+      appUpdateMetadata: await readFile(appUpdateMetadataPath),
       authenticode: expect.objectContaining({ mode: "verify", expectedPublisherDn: publisherDn }),
     });
+    expect(uploadedPaths).toHaveLength(3);
+    expect(uploadedPaths.every((path) => !path.startsWith(directory))).toBe(true);
+    expect(uploadedPaths.map((path) => path.split(/[\\/]/u).at(-1))).toEqual(
+      Object.values(verified.names),
+    );
+    expect(uploadedBytes).toEqual([
+      verified.bytes.installer,
+      verified.bytes.blockmap,
+      verified.bytes.metadata,
+    ]);
+    await expect(stat(uploadedPaths[0]!)).rejects.toThrow();
     const viewArguments = [
       "release",
       "view",
@@ -136,23 +205,87 @@ describe("Windows release upload", () => {
     expect(executeFile.mock.calls[0]).toEqual(["gh-personal", viewArguments]);
     expect(executeFile.mock.calls[1]).toEqual([
       "gh-personal",
-      ["api", `repos/${repository}/git/ref/tags/${tag}`],
+      ["api", `repos/${repository}/releases/latest`],
     ]);
     expect(executeFile.mock.calls[2]).toEqual([
       "gh-personal",
-      [
-        "release",
-        "upload",
-        tag,
-        "--repo",
-        repository,
-        verified.paths.installer,
-        verified.paths.blockmap,
-        verified.paths.metadata,
-      ],
+      ["api", `repos/${repository}/git/ref/tags/${tag}`],
     ]);
-    expect(executeFile.mock.calls[3]).toEqual(["gh-personal", viewArguments]);
+    expect(executeFile.mock.calls[3]).toEqual([
+      "gh-personal",
+      ["release", "upload", tag, "--repo", repository, ...uploadedPaths],
+    ]);
+    expect(executeFile.mock.calls[4]).toEqual(["gh-personal", viewArguments]);
+    expect(executeFile.mock.calls[5]).toEqual([
+      "gh-personal",
+      ["api", `repos/${repository}/releases/tags/${tag}`],
+    ]);
     expect(executeFile.mock.calls.flat(2)).not.toContain("--clobber");
+    expect(executeFile.mock.calls.flat(2)).not.toContain(verified.paths.installer);
+  });
+
+  it("uploads the verified bytes even when the artifact file changes after verification", async () => {
+    const uploadedBytes: Buffer[] = [];
+    const executeFile = successfulExecutor({
+      onUpload: async (paths) => {
+        for (const path of paths) uploadedBytes.push(await readFile(path));
+      },
+    });
+    const verifyAssets = vi.fn(async () => {
+      await writeFile(verified.paths.installer, Buffer.from("TAMPERED installer"));
+      return verified;
+    });
+    await runWindowsReleaseUpload(input(), { executeFile, verifyAssets });
+    expect(uploadedBytes[0]).toEqual(verified.bytes.installer);
+    expect(await readFile(verified.paths.installer)).toEqual(Buffer.from("TAMPERED installer"));
+  });
+
+  it("refuses an upload to a release that is not the repository's latest", async () => {
+    const executeFile = successfulExecutor({ latestTag: "enduragent-desktop@0.1.6" });
+    await expect(
+      runWindowsReleaseUpload(input(), { executeFile, verifyAssets: vi.fn(async () => verified) }),
+    ).rejects.toThrow("release is not the latest release");
+    expect(executeFile.mock.calls.flat(2)).not.toContain("upload");
+  });
+
+  it("fails when a GitHub asset digest or size differs from the uploaded bytes", async () => {
+    const wrong = JSON.parse(releaseAssetsApi()) as {
+      assets: { name: string; size: number; digest: string }[];
+    };
+    wrong.assets[1]!.digest = digestOf(Buffer.from("other blockmap"));
+    const recordPath = join(directory, "..", `upload-record-digest-${process.pid}.json`);
+    temporaryRoots.push(recordPath);
+    await expect(
+      runWindowsReleaseUpload(input({ record: recordPath }), {
+        executeFile: successfulExecutor({ assetsApi: JSON.stringify(wrong) }),
+        verifyAssets: vi.fn(async () => verified),
+      }),
+    ).rejects.toThrow("Windows release asset digest mismatch");
+    expect(JSON.parse(await readFile(recordPath, "utf8"))).toMatchObject({
+      status: "failed",
+      error: "Windows release asset digest mismatch",
+      uploaded: true,
+      uploadedAssets: Object.values(verified.names),
+    });
+  });
+
+  it("requires a readable absolute app-update.yml path before verification", async () => {
+    const executeFile = successfulExecutor();
+    const verifyAssets = vi.fn(async () => verified);
+    await expect(
+      runWindowsReleaseUpload(input({ appUpdateMetadata: "relative/app-update.yml" }), {
+        executeFile,
+        verifyAssets,
+      }),
+    ).rejects.toThrow("app-update.yml path must be absolute");
+    await expect(
+      runWindowsReleaseUpload(input({ appUpdateMetadata: join(directory, "..", "missing.yml") }), {
+        executeFile,
+        verifyAssets,
+      }),
+    ).rejects.toThrow("app-update.yml is unreadable");
+    expect(verifyAssets).not.toHaveBeenCalled();
+    expect(executeFile).not.toHaveBeenCalled();
   });
 
   it("binds a matching lightweight release tag to the commit", async () => {
@@ -174,7 +307,7 @@ describe("Windows release upload", () => {
       verifyAssets: vi.fn(async () => verified),
     });
     expect(result.tagCommit).toBe(commit);
-    expect(executeFile.mock.calls[2]).toEqual([
+    expect(executeFile.mock.calls[3]).toEqual([
       "gh-personal",
       ["api", `repos/${repository}/git/tags/${tagObject}`],
     ]);
@@ -297,6 +430,9 @@ describe("Windows release upload", () => {
           stdout: views === 1 ? release([]) : release([verified.names.installer, verified.names.blockmap]),
         };
       }
+      if (arguments_[0] === "api" && arguments_[1]?.endsWith("/releases/latest")) {
+        return { stdout: JSON.stringify({ tag_name: tag }) };
+      }
       if (arguments_[0] === "api") {
         return { stdout: JSON.stringify({ object: { type: "commit", sha: commit } }) };
       }
@@ -325,6 +461,9 @@ describe("Windows release upload", () => {
         views += 1;
         if (views === 1) return { stdout: release([]) };
         throw new Error("network");
+      }
+      if (arguments_[0] === "api" && arguments_[1]?.endsWith("/releases/latest")) {
+        return { stdout: JSON.stringify({ tag_name: tag }) };
       }
       if (arguments_[0] === "api") {
         return { stdout: JSON.stringify({ object: { type: "commit", sha: commit } }) };

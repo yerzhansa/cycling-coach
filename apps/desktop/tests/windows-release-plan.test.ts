@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
@@ -101,6 +102,18 @@ describe("Windows release plan", () => {
     expect(() =>
       parseWindowsReleaseUpdaterMetadata(stringify({ ...base, unexpected: true })),
     ).toThrow("release updater metadata is invalid");
+    expect(
+      parseWindowsReleaseUpdaterMetadata(
+        stringify({ ...base, publisherName: [WINDOWS_PUBLISHER_DN_PLACEHOLDER] }),
+        { expectedPublisherName: WINDOWS_PUBLISHER_DN_PLACEHOLDER },
+      ).publisherName,
+    ).toBe(WINDOWS_PUBLISHER_DN_PLACEHOLDER);
+    expect(() =>
+      parseWindowsReleaseUpdaterMetadata(stringify({ ...base, publisherName: ["a", "b"] })),
+    ).toThrow("release updater metadata is invalid");
+    expect(() =>
+      parseWindowsReleaseUpdaterMetadata(stringify({ ...base, publisherName: [] })),
+    ).toThrow("release updater metadata is invalid");
   });
 
   it("creates the signed NSIS builder contract with differential packaging", () => {
@@ -126,7 +139,7 @@ describe("Windows release plan", () => {
       signtoolOptions: { publisherName: [WINDOWS_PUBLISHER_DN_PLACEHOLDER] },
       signExecutable: true,
       verifyUpdateCodeSignature: true,
-      legalTrademarks: `enduragent-release-commit:${commit}`,
+      legalTrademarks: `enduragent-release-commit:${commit} enduragent-updater-publisher-sha256:${createHash("sha256").update(WINDOWS_PUBLISHER_DN_PLACEHOLDER).digest("hex")}`,
       target: [{ target: "nsis", arch: ["x64"] }],
     });
     expect(plan.updaterMetadata.publisherName).toBe(WINDOWS_PUBLISHER_DN_PLACEHOLDER);

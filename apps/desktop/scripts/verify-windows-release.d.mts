@@ -1,4 +1,4 @@
-import type { Stats } from "node:fs";
+import type { ObjectEncodingOptions, OpenMode, RmOptions, Stats } from "node:fs";
 import type { WindowsReleaseArtifactNames } from "./windows-release-plan.mjs";
 
 export type WindowsAuthenticodeMode =
@@ -28,6 +28,14 @@ export interface VerifyWindowsReleaseDependencies {
   readonly lstat?: (path: string) => Promise<Stats>;
   readonly readdir?: (path: string) => Promise<string[]>;
   readonly readFile?: (path: string) => Promise<Buffer>;
+  readonly mkdtemp?: (prefix: string) => Promise<string>;
+  readonly chmod?: (path: string, mode: number) => Promise<void>;
+  readonly writeFile?: (
+    path: string,
+    data: Uint8Array,
+    options: ObjectEncodingOptions & { readonly mode?: OpenMode; readonly flag?: OpenMode },
+  ) => Promise<void>;
+  readonly rm?: (path: string, options: RmOptions) => Promise<void>;
   readonly notice?: (message: string) => void;
 }
 
@@ -48,6 +56,11 @@ export interface VerifiedWindowsReleaseAssets {
   readonly installerSha512: string;
   readonly installerSha256: string;
   readonly authenticode: "pending-w19" | "verified";
+  readonly bytes: {
+    readonly installer: Buffer;
+    readonly blockmap: Buffer;
+    readonly metadata: Buffer;
+  };
 }
 
 export const WINDOWS_UPDATER_METADATA_MAX_BYTES: 16_384;

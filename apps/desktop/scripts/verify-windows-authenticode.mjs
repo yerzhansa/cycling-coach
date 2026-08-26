@@ -2,7 +2,11 @@ import { execFile } from "node:child_process";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { parseWindowsReleaseProvenance, requireReleaseCommit } from "./windows-release-plan.mjs";
+import {
+  parseWindowsReleaseProvenance,
+  requireReleaseCommit,
+  windowsUpdaterPublisherDigest,
+} from "./windows-release-plan.mjs";
 
 export const WINDOWS_AUTHENTICODE_SUMMARY_SCHEMA = "windows-authenticode-verification/2";
 export const WINDOWS_AUTHENTICODE_REQUIRED_CHECKS = Object.freeze([
@@ -170,9 +174,14 @@ function validExpectedValues(expectedPublisherDn, expectedThumbprint, expectedCo
   );
 }
 
-function provenanceMatches(summary, expectedCommit, expectedVersion) {
+function provenanceMatches(summary, expectedCommit, expectedVersion, expectedPublisherDn) {
   if (expectedCommit !== undefined) {
-    if (parseWindowsReleaseProvenance(summary.versionInfo.legalTrademarks) !== expectedCommit) {
+    const provenance = parseWindowsReleaseProvenance(summary.versionInfo.legalTrademarks);
+    if (
+      provenance === null ||
+      provenance.commit !== expectedCommit ||
+      provenance.publisherSha256 !== windowsUpdaterPublisherDigest(expectedPublisherDn)
+    ) {
       return false;
     }
   }
@@ -239,7 +248,7 @@ export function decideWindowsAuthenticode(
     fail("Authenticode chain is untrusted");
   }
   if (!checks.get("signtool").ok) fail("signtool verification failed");
-  if (!provenanceMatches(summary, expectedCommit, expectedVersion)) {
+  if (!provenanceMatches(summary, expectedCommit, expectedVersion, expectedPublisherDn)) {
     fail("Authenticode provenance mismatch");
   }
   if (!checks.get("status").ok || !summary.ok || summary.checks.some((check) => !check.ok)) {

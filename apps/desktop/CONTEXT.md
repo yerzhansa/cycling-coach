@@ -87,7 +87,7 @@ _Avoid_: Windows bundle, release files
 _Avoid_: Unsigned mode, signing bypass
 
 **Windows release provenance**:
-The `enduragent-release-commit:<sha>` string that `windows-release-plan.mjs` seals into the installer's `LegalTrademarks` version field; `verify-windows-authenticode.ps1` reads it back and `--commit` must match.
+The `enduragent-release-commit:<sha> enduragent-updater-publisher-sha256:<hex>` string that `windows-release-plan.mjs` seals into the installer's `LegalTrademarks` version field; `verify-windows-authenticode.ps1` reads it back and `--commit` plus the SHA-256 of `--publisher-dn` must match.
 _Avoid_: Build stamp, commit marker
 
 **Windows package inventory**:
@@ -116,7 +116,8 @@ _Avoid_: Install directory, application directory
 - The **Release marker** admits a packaged build to `isDesktopUpdateReleaseEligible`; **Platform activation** independently decides whether update checks run on the current platform.
 - A **Windows release envelope** is produced, verified, uploaded, and round-trip-checked by its named scripts.
 - **Authenticode pending mode** does not authorise an unsigned installer for a GitHub release or the website.
-- **Windows release provenance** binds a verified installer to the release tag commit before upload.
+- **Windows release provenance** binds a verified installer to the release tag commit and the updater publisher before upload.
+- `upload-windows-release.mjs` uploads read-only copies of the verified bytes, only to the latest release, and reconciles GitHub asset digests against those bytes.
 - The **Windows package inventory** fixes the application, resource, and asar contents accepted by package verification.
 - The athlete removes the **Windows user data directory** by hand when retained data must be erased after uninstall.
 

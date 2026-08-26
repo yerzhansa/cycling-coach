@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
@@ -33,6 +34,10 @@ const safeWindowsReleaseUploadMessages = new Set([
   "artifact directory must be absolute",
   "upload record path must be absolute",
   "upload record must be outside the artifact directory",
+  "app-update.yml path must be absolute",
+  "app-update.yml is unreadable",
+  "release is not the latest release",
+  "Windows release asset digest mismatch",
   "upload record already exists",
   "upload record directory is missing",
   "release repository is invalid",
@@ -78,6 +83,75 @@ function requireThumbprint(value) {
 function recordInsideDirectory(record, directory) {
   const path = relative(resolve(directory), resolve(record));
   return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+function parseLatestRelease(stdout) {
+  let release;
+  try {
+    release = JSON.parse(stdout);
+  } catch {
+    throw new TypeError("release is not the latest release");
+  }
+  if (!release || typeof release !== "object" || typeof release.tag_name !== "string") {
+    throw new TypeError("release is not the latest release");
+  }
+  return release.tag_name;
+}
+
+async function requireLatestRelease(executeFile, repository, tag) {
+  let result;
+  try {
+    result = await executeFile("gh-personal", ["api", `repos/${repository}/releases/latest`]);
+  } catch {
+    throw new TypeError("release is not the latest release");
+  }
+  if (parseLatestRelease(result.stdout) !== tag) {
+    throw new TypeError("release is not the latest release");
+  }
+}
+
+function parseReleaseAssets(stdout, tag) {
+  let release;
+  try {
+    release = JSON.parse(stdout);
+  } catch {
+    throw new TypeError("Windows release asset digest mismatch");
+  }
+  if (
+    !release ||
+    typeof release !== "object" ||
+    release.tag_name !== tag ||
+    !Array.isArray(release.assets)
+  ) {
+    throw new TypeError("Windows release asset digest mismatch");
+  }
+  return new Map(
+    release.assets.flatMap((asset) =>
+      asset !== null && typeof asset === "object" && typeof asset.name === "string"
+        ? [[asset.name, asset]]
+        : [],
+    ),
+  );
+}
+
+async function reconcileAssetDigests(executeFile, repository, tag, files) {
+  let result;
+  try {
+    result = await executeFile("gh-personal", ["api", `repos/${repository}/releases/tags/${tag}`]);
+  } catch {
+    throw new TypeError("Windows release asset digest mismatch");
+  }
+  const assets = parseReleaseAssets(result.stdout, tag);
+  for (const file of files) {
+    const asset = assets.get(file.name);
+    if (
+      asset === undefined ||
+      asset.size !== file.size ||
+      asset.digest !== `sha256:${file.sha256}`
+    ) {
+      throw new TypeError("Windows release asset digest mismatch");
+    }
+  }
 }
 
 function requireRepository(value) {
@@ -184,16 +258,17 @@ async function resolveTagCommit(executeFile, repository, tag) {
   return peeled.sha;
 }
 
-async function releaseFileRecords(verified, dependencies) {
+function releaseFileRecords(verified) {
   const entries = [
-    [verified.names.installer, verified.paths.installer, verified.sizes.installer],
-    [verified.names.blockmap, verified.paths.blockmap, verified.sizes.blockmap],
-    [verified.names.metadata, verified.paths.metadata, verified.sizes.metadata],
+    [verified.names.installer, verified.bytes.installer, verified.sizes.installer],
+    [verified.names.blockmap, verified.bytes.blockmap, verified.sizes.blockmap],
+    [verified.names.metadata, verified.bytes.metadata, verified.sizes.metadata],
   ];
-  return Promise.all(
-    entries.map(async ([name, path, size]) => {
-      const bytes = await dependencies.readFile(path);
-      if (bytes.length !== size) throw new TypeError("Windows release upload is incomplete");
+  return Object.freeze(
+    entries.map(([name, bytes, size]) => {
+      if (!Buffer.isBuffer(bytes) || bytes.length !== size) {
+        throw new TypeError("Windows release upload is incomplete");
+      }
       return Object.freeze({
         name,
         size,
@@ -201,6 +276,18 @@ async function releaseFileRecords(verified, dependencies) {
       });
     }),
   );
+}
+
+async function stageVerifiedBytes(verified, dependencies) {
+  const directory = await dependencies.mkdtemp(join(tmpdir(), "enduragent-windows-release-"));
+  await dependencies.chmod(directory, 0o700);
+  const paths = {};
+  for (const key of ["installer", "blockmap", "metadata"]) {
+    const path = join(directory, verified.names[key]);
+    await dependencies.writeFile(path, verified.bytes[key], { flag: "wx", mode: 0o400 });
+    paths[key] = path;
+  }
+  return Object.freeze({ directory, paths: Object.freeze(paths) });
 }
 
 export async function runWindowsReleaseUpload(input, dependencies = {}) {
@@ -225,11 +312,17 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
   if (input.record !== undefined && recordInsideDirectory(input.record, input.directory)) {
     throw new TypeError("upload record must be outside the artifact directory");
   }
+  if (typeof input.appUpdateMetadata !== "string" || !isAbsolute(input.appUpdateMetadata)) {
+    throw new TypeError("app-update.yml path must be absolute");
+  }
   const executeFile = dependencies.executeFile ?? executeSystemFile;
   const verifyAssets = dependencies.verifyAssets ?? verifyWindowsReleaseAssets;
   const fileDependencies = {
     readFile: dependencies.readFile ?? readFile,
     writeFile: dependencies.writeFile ?? writeFile,
+    mkdtemp: dependencies.mkdtemp ?? mkdtemp,
+    chmod: dependencies.chmod ?? chmod,
+    rm: dependencies.rm ?? rm,
   };
   const tag = `enduragent-desktop@${version}`;
   const expectedNames = Object.values(windowsReleaseArtifactNames(version));
@@ -244,6 +337,7 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
   }
   let uploaded = false;
   let uploadedAssets = [];
+  let staging;
   const reconcile = async () => {
     try {
       const current = await viewRelease(executeFile, tag, repository);
@@ -256,17 +350,26 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
     }
   };
   try {
+    let appUpdateMetadata;
+    try {
+      appUpdateMetadata = await fileDependencies.readFile(input.appUpdateMetadata);
+    } catch {
+      throw new TypeError("app-update.yml is unreadable");
+    }
     const verified = await verifyAssets(input.directory, {
       version,
       commit,
       expectedPublisherName: publisherDn,
+      appUpdateMetadata,
       authenticode: authenticodeMode,
     });
     if (verified.authenticode !== "verified") {
       throw new TypeError("unsigned Windows installer refused");
     }
-    const files = Object.freeze(await releaseFileRecords(verified, fileDependencies));
+    const files = releaseFileRecords(verified);
+    staging = await stageVerifiedBytes(verified, fileDependencies);
     const release = await viewRelease(executeFile, tag, repository);
+    await requireLatestRelease(executeFile, repository, tag);
     const tagCommit = await resolveTagCommit(executeFile, repository, tag);
     if (tagCommit !== commit) throw new TypeError("release commit mismatch");
     const existingNames = new Set(releaseAssetNames(release));
@@ -282,9 +385,9 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
         tag,
         "--repo",
         repository,
-        verified.paths.installer,
-        verified.paths.blockmap,
-        verified.paths.metadata,
+        staging.paths.installer,
+        staging.paths.blockmap,
+        staging.paths.metadata,
       ]);
     } catch (error) {
       await reconcile();
@@ -296,6 +399,7 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
     if (uploadedAssets === null || uploadedAssets.length !== expectedNames.length) {
       throw new TypeError("Windows release upload is incomplete");
     }
+    await reconcileAssetDigests(executeFile, repository, tag, files);
     const record = Object.freeze({
       schemaVersion: 1,
       tag,
@@ -340,6 +444,12 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
       } catch {}
     }
     throw error;
+  } finally {
+    if (staging !== undefined) {
+      try {
+        await fileDependencies.rm(staging.directory, { recursive: true, force: true });
+      } catch {}
+    }
   }
 }
 
@@ -350,6 +460,7 @@ const commandOptions = Object.freeze({
   authenticode: "authenticode",
   "publisher-dn": "publisherDn",
   thumbprint: "thumbprint",
+  "app-update-metadata": "appUpdateMetadata",
   repo: "repo",
   record: "record",
 });
