@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import type { VerifyWindowsReleaseOptions } from "../scripts/verify-windows-release.mjs";
@@ -20,6 +21,19 @@ const script = resolve(
 const temporaryRoots: string[] = [];
 let directory: string;
 let installer: Buffer;
+
+type BlockmapFixture = {
+  version: string;
+  files: [{ name: string; offset: number; checksums: string[]; sizes: number[] }];
+};
+
+const require = createRequire(import.meta.url);
+const electronBuilderRequire = createRequire(require.resolve("electron-builder"));
+const { buildBlockMap } = electronBuilderRequire(
+  "app-builder-lib/out/targets/blockmap/blockmap",
+) as {
+  buildBlockMap: (inputPath: string, compression: "gzip", outputPath: string) => Promise<unknown>;
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -44,23 +58,36 @@ async function writeMetadata(value = metadata()) {
   await writeFile(join(directory, "latest.yml"), stringify(value));
 }
 
+async function updateBlockmap(mutator: (value: BlockmapFixture) => void) {
+  const names = windowsReleaseArtifactNames(version);
+  const path = join(directory, names.blockmap);
+  const value = JSON.parse(gunzipSync(await readFile(path)).toString("utf8")) as BlockmapFixture;
+  mutator(value);
+  await writeFile(path, gzipSync(JSON.stringify(value)));
+}
+
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "windows-release-envelope-"));
   temporaryRoots.push(directory);
   installer = Buffer.from("synthetic signed Windows installer\n");
   const names = windowsReleaseArtifactNames(version);
-  await Promise.all([
-    writeFile(join(directory, names.installer), installer),
-    writeFile(
-      join(directory, names.blockmap),
-      gzipSync(
-        JSON.stringify({
-          version: "2",
-          files: [{ name: "file", offset: 0, checksums: ["x"], sizes: [1] }],
-        }),
-      ),
-    ),
-  ]);
+  const installerPath = join(directory, names.installer);
+  await writeFile(installerPath, installer);
+  const blockmapPath = join(directory, names.blockmap);
+  await buildBlockMap(installerPath, "gzip", blockmapPath);
+  const blockmap = JSON.parse(
+    gunzipSync(await readFile(blockmapPath)).toString("utf8"),
+  ) as BlockmapFixture;
+  blockmap.files[0].name = names.installer;
+  let offset = 0;
+  blockmap.files[0].checksums = blockmap.files[0].sizes.map((size) => {
+    const checksum = createHash("sha512")
+      .update(installer.subarray(offset, offset + size))
+      .digest("base64");
+    offset += size;
+    return checksum;
+  });
+  await writeFile(blockmapPath, gzipSync(JSON.stringify(blockmap)));
   await writeMetadata();
 });
 
@@ -153,6 +180,51 @@ describe("Windows release artifact verification", () => {
   it("rejects a non-gzip installer blockmap", async () => {
     const names = windowsReleaseArtifactNames(version);
     await writeFile(join(directory, names.blockmap), "not gzip");
+    await expect(
+      verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
+    ).rejects.toThrow("installer blockmap is invalid");
+  });
+
+  it("rejects a blockmap with the wrong total size", async () => {
+    await updateBlockmap((value) => {
+      value.files[0].sizes[0] = value.files[0].sizes[0]! + 1;
+    });
+    await expect(
+      verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
+    ).rejects.toThrow("installer blockmap does not match the Windows installer");
+  });
+
+  it("rejects a blockmap with mismatched checksum and size counts", async () => {
+    await updateBlockmap((value) => {
+      value.files[0].checksums.push(value.files[0].checksums[0]!);
+    });
+    await expect(
+      verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
+    ).rejects.toThrow("installer blockmap is invalid");
+  });
+
+  it("rejects a blockmap for a different installer name", async () => {
+    await updateBlockmap((value) => {
+      value.files[0].name = "different.exe";
+    });
+    await expect(
+      verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
+    ).rejects.toThrow("installer blockmap does not match the Windows installer");
+  });
+
+  it("rejects a version 1 blockmap", async () => {
+    await updateBlockmap((value) => {
+      value.version = "1";
+    });
+    await expect(
+      verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
+    ).rejects.toThrow("installer blockmap is invalid");
+  });
+
+  it("rejects a blockmap with a non-base64 checksum", async () => {
+    await updateBlockmap((value) => {
+      value.files[0].checksums[0] = "!";
+    });
     await expect(
       verifyWindowsReleaseAssets(directory, { version, authenticode: "pending-w19" }),
     ).rejects.toThrow("installer blockmap is invalid");

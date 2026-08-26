@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import { parse } from "yaml";
 import {
   WINDOWS_RELEASE_METADATA_NAME,
@@ -134,6 +135,42 @@ function verifyBlockmap(value) {
     value.length < 2 ||
     value[0] !== 0x1f ||
     value[1] !== 0x8b
+  ) {
+    fail("installer blockmap is invalid");
+  }
+  let blockmap;
+  try {
+    blockmap = JSON.parse(gunzipSync(value).toString("utf8"));
+  } catch {
+    fail("installer blockmap is invalid");
+  }
+  if (
+    !exactObject(blockmap) ||
+    !hasExactKeys(blockmap, ["version", "files"]) ||
+    blockmap.version !== "2" ||
+    !Array.isArray(blockmap.files) ||
+    blockmap.files.length !== 1 ||
+    !exactObject(blockmap.files[0]) ||
+    !hasExactKeys(blockmap.files[0], ["name", "offset", "checksums", "sizes"])
+  ) {
+    fail("installer blockmap is invalid");
+  }
+  const file = blockmap.files[0];
+  if (
+    typeof file.name !== "string" ||
+    file.name.length === 0 ||
+    file.offset !== 0 ||
+    !Array.isArray(file.checksums) ||
+    !Array.isArray(file.sizes) ||
+    file.checksums.length === 0 ||
+    file.checksums.length !== file.sizes.length ||
+    !file.checksums.every(
+      (checksum) =>
+        typeof checksum === "string" &&
+        /^[A-Za-z0-9+/]+={0,2}$/u.test(checksum) &&
+        Buffer.from(checksum, "base64").length === 64,
+    ) ||
+    !file.sizes.every((size) => Number.isSafeInteger(size) && size > 0)
   ) {
     fail("installer blockmap is invalid");
   }

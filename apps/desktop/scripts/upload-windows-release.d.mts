@@ -16,7 +16,9 @@ export interface WindowsReleaseUploadRecord {
   readonly tag: string;
   readonly version: string;
   readonly commit: string;
+  readonly tagCommit: string;
   readonly arch: "x64";
+  readonly status: "uploaded";
   readonly authenticode: "pending-w19" | "verified";
   readonly files: readonly {
     readonly name: string;

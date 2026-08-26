@@ -64,7 +64,10 @@ function freezeBuilderOptions(desktopRoot, version, feedUrl, publisherDn) {
     extraMetadata: Object.freeze({ version, enduragentDesktopRelease: true }),
     publish,
     win: Object.freeze({
-      publisherName: Object.freeze([publisherDn]),
+      signtoolOptions: Object.freeze({
+        publisherName: Object.freeze([publisherDn]),
+      }),
+      signExecutable: true,
       verifyUpdateCodeSignature: true,
       target,
     }),
