@@ -168,7 +168,8 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 - Never make `desktop-release.yml` wait for Windows.
 - Use one GitHub release per desktop version.
 - Append Windows assets after the macOS release.
-- Allow Windows to lag or skip a desktop version.
+- Append Windows assets only while `enduragent-desktop@<x.y.z>` is the repository's latest release. The updater feed is `/releases/latest/download/`, so Windows clients cannot discover assets on an older release.
+- Skip Windows for a version once a newer desktop release exists. Ship it with the next version instead.
 - State which platforms shipped in the release notes.
 - Build and sign in one `electron-builder` run on the operator's Windows VM inside an open SimplySign session.
 - Approve the single signing OTP with one phone tap.
@@ -181,20 +182,21 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 - Upload only `Enduragent-<x.y.z>-x64.exe`, `Enduragent-<x.y.z>-x64.exe.blockmap`, and `latest.yml` from the repository root on the signing host, using absolute paths:
 
   ```bash
-  node apps/desktop/scripts/upload-windows-release.mjs --version <x.y.z> --directory <absolute-artifact-dir> --commit <release-commit-sha> --authenticode verify --publisher-dn "<PUBLISHER_DN>" --record <absolute-path>/windows-release-<x.y.z>.json
+  node apps/desktop/scripts/upload-windows-release.mjs --version <x.y.z> --directory <absolute-artifact-dir> --commit <release-commit-sha> --authenticode verify --publisher-dn "<PUBLISHER_DN>" --app-update-metadata <absolute-dist-dir>/win-unpacked/resources/app-update.yml --record <absolute-path>/windows-release-<x.y.z>.json
   ```
 
 - Pass `--authenticode verify` and the exact certificate subject as `--publisher-dn`. The uploader rejects every other mode and the placeholder DN.
 - Pass `--thumbprint <40-hex>` to pin the signing certificate. Omit it to accept any trusted certificate with the expected subject.
 - Run the upload on a Windows host with PowerShell 7 and `signtool.exe`. Local Authenticode verification runs before any release mutation.
+- Pass `--app-update-metadata` pointing at the packaged `win-unpacked/resources/app-update.yml` from the same build. The uploader refuses it unless `publisherName` equals `--publisher-dn`.
 - Keep `--record` outside `--directory`. The uploader refuses a record path inside the artifact directory.
 - Omit `--record` only when no local JSON record is required.
 - Leave `--repo` unset to use `yerzhansa/enduragent`.
 - Let `upload-windows-release.mjs` run `verify-windows-release.mjs` locally, including Authenticode and provenance verification.
-- Stop the upload when `enduragent-desktop@<x.y.z>` is missing or still a draft.
+- Stop the upload when `enduragent-desktop@<x.y.z>` is missing, still a draft, a prerelease, or not the latest release.
 - Refuse the upload when any Windows envelope asset already exists on the release.
-- Upload the verified envelope through `gh-personal release upload`.
-- Re-read the release after upload and fail unless all three assets are present.
+- Upload owner-only, read-only copies of the verified bytes through `gh-personal release upload`. The original artifact paths are never uploaded.
+- Re-read the release after upload and fail unless all three assets are present and each GitHub asset `digest` and size equals the uploaded bytes.
 - Read `uploadedAssets` in a failed record before retrying. A partial upload lists the assets that became public.
 - Trigger the separate verification workflow from the repository root:
 
@@ -205,7 +207,7 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 - Leave `dry_run` at its `true` default to verify without editing the release.
 - Pass `dry_run=false` only when the release body must record the completed verification. The workflow refuses `dry_run=false` without `authenticode=verify` and a real `publisher_dn`.
 - Keep `desktop-windows-release.yml` to its single `verify-windows-envelope` job on `windows-latest`. `Get-AuthenticodeSignature` and `signtool.exe` exist only on Windows.
-- Reject a non-stable SemVer or a missing, draft, or prerelease `enduragent-desktop@<version>` release in `verify-windows-envelope`.
+- Reject a non-stable SemVer or a missing, draft, prerelease, or non-latest `enduragent-desktop@<version>` release in `verify-windows-envelope`.
 - Require exactly `Enduragent-<version>-x64.exe`, `Enduragent-<version>-x64.exe.blockmap`, and `latest.yml` as the Windows envelope among the release assets.
 - Download only those three Windows assets in `verify-windows-envelope`.
 - Resolve the release tag to its commit and pass it as `--commit`.
@@ -214,4 +216,4 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 - Never create, move, or delete a release, tag, or asset in `desktop-windows-release.yml`.
 - Leave uploaded assets in place when verification fails.
 - Remove failed Windows assets by hand before retrying.
-- Build provenance: `windows-release-plan.mjs` seals `enduragent-release-commit:<sha>` into the installer's `LegalTrademarks` version string. Verification reads it from the signed installer and compares it with `--commit`.
+- Build provenance: `windows-release-plan.mjs` seals `enduragent-release-commit:<sha> enduragent-updater-publisher-sha256:<sha256 of publisher DN>` into the installer's `LegalTrademarks` version string. Verification reads it from the signed installer and compares it with `--commit` and `--publisher-dn`.

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -239,6 +240,10 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
     lstat: overrides.lstat ?? lstat,
     readdir: overrides.readdir ?? readdir,
     readFile: overrides.readFile ?? readFile,
+    mkdtemp: overrides.mkdtemp ?? mkdtemp,
+    chmod: overrides.chmod ?? chmod,
+    writeFile: overrides.writeFile ?? writeFile,
+    rm: overrides.rm ?? rm,
     notice: overrides.notice,
   };
   let directoryStat;
@@ -301,14 +306,25 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
     dependencies.notice?.("Authenticode verification is pending W19; signature not verified");
     authenticode = WINDOWS_AUTHENTICODE_PENDING;
   } else {
+    let staging;
     try {
-      await authenticodeMode.verify(paths.installer, {
+      staging = await dependencies.mkdtemp(join(tmpdir(), "enduragent-windows-verify-"));
+      await dependencies.chmod(staging, 0o700);
+      const stagedInstaller = join(staging, names.installer);
+      await dependencies.writeFile(stagedInstaller, installer, { flag: "wx", mode: 0o400 });
+      await authenticodeMode.verify(stagedInstaller, {
         version,
         commit,
         publisherName: options.expectedPublisherName,
       });
     } catch {
       fail("Windows installer Authenticode verification failed");
+    } finally {
+      if (staging !== undefined) {
+        try {
+          await dependencies.rm(staging, { recursive: true, force: true });
+        } catch {}
+      }
     }
     authenticode = "verified";
   }
@@ -325,6 +341,7 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
     installerSha512,
     installerSha256,
     authenticode,
+    bytes: Object.freeze({ installer, blockmap, metadata: metadataBytes }),
   });
 }
 

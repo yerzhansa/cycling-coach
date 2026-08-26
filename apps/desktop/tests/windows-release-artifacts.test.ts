@@ -101,19 +101,31 @@ describe("Windows release artifact verification", () => {
   });
 
   it("calls an injected Authenticode verifier and fails closed on rejection", async () => {
-    const verify = vi.fn(async () => {});
+    let stagedPath = "";
+    let stagedBytes: Buffer | undefined;
+    const verify = vi.fn(async (installerPath: string) => {
+      stagedPath = installerPath;
+      stagedBytes = await readFile(installerPath);
+      await writeFile(join(directory, `Enduragent-${version}-x64.exe`), "TAMPERED");
+    });
     const result = await verifyWindowsReleaseAssets(directory, {
       version,
       commit,
       expectedPublisherName: "CN=Enduragent Test",
       authenticode: { verify },
     });
-    expect(verify).toHaveBeenCalledWith(join(directory, `Enduragent-${version}-x64.exe`), {
+    expect(verify).toHaveBeenCalledWith(expect.any(String), {
       version,
       commit,
       publisherName: "CN=Enduragent Test",
     });
+    expect(stagedPath.startsWith(directory)).toBe(false);
+    expect(stagedPath.endsWith(`Enduragent-${version}-x64.exe`)).toBe(true);
+    expect(stagedBytes).toEqual(installer);
+    await expect(readFile(stagedPath)).rejects.toThrow();
     expect(result.authenticode).toBe("verified");
+    expect(result.bytes.installer).toEqual(installer);
+    await writeFile(join(directory, `Enduragent-${version}-x64.exe`), installer);
     await expect(
       verifyWindowsReleaseAssets(directory, {
         version,

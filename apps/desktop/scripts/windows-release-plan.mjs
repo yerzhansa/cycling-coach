@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,6 +32,7 @@ export const WINDOWS_AUTHENTICODE_PENDING = "pending-w19";
 export const WINDOWS_PUBLISHER_DN_PLACEHOLDER =
   "CN=ENDURAGENT PUBLISHER DN PLACEHOLDER, O=PLACEHOLDER";
 export const WINDOWS_RELEASE_PROVENANCE_PREFIX = "enduragent-release-commit:";
+export const WINDOWS_UPDATER_PUBLISHER_PREFIX = "enduragent-updater-publisher-sha256:";
 
 function exactObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -70,7 +72,7 @@ function freezeBuilderOptions(desktopRoot, version, commit, feedUrl, publisherDn
       }),
       signExecutable: true,
       verifyUpdateCodeSignature: true,
-      legalTrademarks: windowsReleaseProvenance(commit),
+      legalTrademarks: windowsReleaseProvenance(commit, publisherDn),
       target,
     }),
     nsis: Object.freeze({
@@ -101,16 +103,31 @@ export function requireReleaseCommit(value) {
   return value;
 }
 
-export function windowsReleaseProvenance(commit) {
-  return `${WINDOWS_RELEASE_PROVENANCE_PREFIX}${requireReleaseCommit(commit)}`;
+export function windowsUpdaterPublisherDigest(publisherDn) {
+  if (typeof publisherDn !== "string" || publisherDn.length === 0) {
+    throw new TypeError("Windows publisher DN is invalid");
+  }
+  return createHash("sha256").update(publisherDn, "utf8").digest("hex");
+}
+
+export function windowsReleaseProvenance(commit, publisherDn) {
+  return `${WINDOWS_RELEASE_PROVENANCE_PREFIX}${requireReleaseCommit(commit)} ${WINDOWS_UPDATER_PUBLISHER_PREFIX}${windowsUpdaterPublisherDigest(publisherDn)}`;
 }
 
 export function parseWindowsReleaseProvenance(value) {
-  if (typeof value !== "string" || !value.startsWith(WINDOWS_RELEASE_PROVENANCE_PREFIX)) {
+  if (typeof value !== "string") return null;
+  const tokens = value.split(" ");
+  if (
+    tokens.length !== 2 ||
+    !tokens[0].startsWith(WINDOWS_RELEASE_PROVENANCE_PREFIX) ||
+    !tokens[1].startsWith(WINDOWS_UPDATER_PUBLISHER_PREFIX)
+  ) {
     return null;
   }
-  const commit = value.slice(WINDOWS_RELEASE_PROVENANCE_PREFIX.length);
-  return /^[0-9a-f]{40}$/u.test(commit) ? commit : null;
+  const commit = tokens[0].slice(WINDOWS_RELEASE_PROVENANCE_PREFIX.length);
+  const publisherSha256 = tokens[1].slice(WINDOWS_UPDATER_PUBLISHER_PREFIX.length);
+  if (!/^[0-9a-f]{40}$/u.test(commit) || !/^[0-9a-f]{64}$/u.test(publisherSha256)) return null;
+  return Object.freeze({ commit, publisherSha256 });
 }
 
 export function windowsReleaseArtifactNames(version) {
@@ -159,6 +176,13 @@ export function parseWindowsReleaseUpdaterMetadata(bytes, options = {}) {
   }
   const keys = ["provider", "url", "channel", "updaterCacheDirName"];
   if (exactObject(metadata) && Object.hasOwn(metadata, "publisherName")) keys.push("publisherName");
+  let publisherName;
+  if (exactObject(metadata) && Object.hasOwn(metadata, "publisherName")) {
+    publisherName =
+      Array.isArray(metadata.publisherName) && metadata.publisherName.length === 1
+        ? metadata.publisherName[0]
+        : metadata.publisherName;
+  }
   if (
     !exactObject(metadata) ||
     !hasExactKeys(metadata, keys) ||
@@ -166,9 +190,9 @@ export function parseWindowsReleaseUpdaterMetadata(bytes, options = {}) {
     metadata.channel !== "latest" ||
     metadata.updaterCacheDirName !== DESKTOP_UPDATER_CACHE_DIRECTORY ||
     (Object.hasOwn(metadata, "publisherName") &&
-      (typeof metadata.publisherName !== "string" ||
-        metadata.publisherName.length === 0 ||
-        metadata.publisherName !== metadata.publisherName.trim()))
+      (typeof publisherName !== "string" ||
+        publisherName.length === 0 ||
+        publisherName !== publisherName.trim()))
   ) {
     throw new TypeError("release updater metadata is invalid");
   }
@@ -180,7 +204,7 @@ export function parseWindowsReleaseUpdaterMetadata(bytes, options = {}) {
   }
   if (
     Object.hasOwn(options, "expectedPublisherName") &&
-    options.expectedPublisherName !== metadata.publisherName
+    options.expectedPublisherName !== publisherName
   ) {
     throw new TypeError("release updater publisher name mismatch");
   }
@@ -190,7 +214,7 @@ export function parseWindowsReleaseUpdaterMetadata(bytes, options = {}) {
     channel: "latest",
     updaterCacheDirName: DESKTOP_UPDATER_CACHE_DIRECTORY,
   };
-  if (Object.hasOwn(metadata, "publisherName")) result.publisherName = metadata.publisherName;
+  if (publisherName !== undefined) result.publisherName = publisherName;
   return Object.freeze(result);
 }
 

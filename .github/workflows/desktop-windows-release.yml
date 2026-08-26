@@ -82,6 +82,11 @@ jobs:
             echo '::error::Windows release assets are incomplete'
             exit 1
           fi
+          LATEST_TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" | jq -er '.tag_name')
+          if [ "$LATEST_TAG" != "enduragent-desktop@$VERSION" ]; then
+            echo '::error::Desktop release is not the latest release'
+            exit 1
+          fi
           RELEASE_ID=$(printf '%s' "$RELEASE" | jq -er '.id')
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
           REF=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/enduragent-desktop@$VERSION")
