@@ -68,6 +68,7 @@ describe("engine scaffold", () => {
       "applyPlanStartDatePreview",
       "applyValidatedPlanProposal",
       "applyValidatedPlanUndo",
+      "approvePlanReplacement",
       "beginRaceCourseParsing",
       "beginRaceCourseRemoval",
       "bindToolResult",

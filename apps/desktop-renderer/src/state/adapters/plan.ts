@@ -1,4 +1,5 @@
 import {
+  PlanActiveProjectionDataSchema,
   PlanCoachProjectionDataSchema,
   type CoachDecisionAnswer,
   type CoachDecisionReadModel,
@@ -61,6 +62,13 @@ export interface PlanViewAdapter {
   closeDatePicker(): void;
   recalculateStartDate(startDate: string): void;
   approveDraft(): void;
+  openReplacement(): void;
+  closeReplacementConfirmation(): void;
+  confirmReplacement(): void;
+  retryReplacementCleanup(): void;
+  verifyReplacementCleanup(): void;
+  writeReplacementMirror(): void;
+  openReplacementActivePlan(): void;
   reconcilePlan(): void;
   verifyReconciliation(): void;
   openWorkout(workoutId: string): void;
@@ -156,6 +164,7 @@ export function createPlanViewAdapter(input: {
   let recoveringDecisionId: string | null = null;
   let autoResumingPlanId: string | null = null;
   let autoResumingCleanupPlanId: string | null = null;
+  let autoResumingReplacementId: string | null = null;
   let active: {
     readonly commandId: string;
     readonly transitionId: PlanTransitionId;
@@ -259,6 +268,23 @@ export function createPlanViewAdapter(input: {
             mode: "cleanup",
           });
         });
+      }
+      if (next.state.scenarioId === "PL-S082" && next.state.planId !== null) {
+        const parsed = PlanActiveProjectionDataSchema.safeParse(next.state.data);
+        const replacement = parsed.success ? parsed.data.replacement : undefined;
+        if (replacement !== undefined && autoResumingReplacementId !== replacement.id) {
+          autoResumingReplacementId = replacement.id;
+          queueMicrotask(() => {
+            if (disposed || active !== null) return;
+            void execute({
+              transitionId: "PL-T27",
+              commandId: createCommandId(),
+              planId: replacement.previousPlan.id,
+              replacementPlanId: next.state.planId!,
+              mode: "cleanup",
+            });
+          });
+        }
       }
     }
   };
@@ -715,11 +741,110 @@ export function createPlanViewAdapter(input: {
     approveDraft() {
       const data = currentCoachData();
       if (data?.draft === null || data?.draft === undefined || active !== null) return;
+      if (data.replacement && data.replacesPlanId !== null) {
+        void execute({
+          transitionId: "PL-T26",
+          commandId: createCommandId(),
+          activePlanId: data.replacesPlanId,
+          draftId: data.draft.id,
+          expectedRevision: data.draft.revision,
+        });
+        return;
+      }
       void execute({
         transitionId: "PL-T11",
         commandId: createCommandId(),
         draftId: data.draft.id,
         expectedRevision: data.draft.revision,
+      });
+    },
+    openReplacement() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T25",
+        commandId: createCommandId(),
+        planId: model.planId,
+      });
+    },
+    closeReplacementConfirmation() {
+      const data = currentCoachData();
+      if (data?.draft === null || data?.draft === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "back",
+        sourceScenarioId: "PL-S081",
+        destinationScenarioId: "PL-S080",
+        returnFocusId: "plan-approve-replacement",
+      });
+    },
+    confirmReplacement() {
+      const data = currentCoachData();
+      if (
+        data?.draft === null ||
+        data?.draft === undefined ||
+        data.replacesPlanId === null ||
+        active !== null
+      ) {
+        return;
+      }
+      void execute({
+        transitionId: "PL-T26",
+        commandId: createCommandId(),
+        activePlanId: data.replacesPlanId,
+        draftId: data.draft.id,
+        expectedRevision: data.draft.revision,
+        confirm: true,
+      });
+    },
+    retryReplacementCleanup() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      const parsed = PlanActiveProjectionDataSchema.safeParse(model.data);
+      const replacement = parsed.success ? parsed.data.replacement : undefined;
+      if (replacement === undefined) return;
+      void execute({
+        transitionId: "PL-T27",
+        commandId: createCommandId(),
+        planId: replacement.previousPlan.id,
+        replacementPlanId: model.planId,
+        mode: "cleanup",
+      });
+    },
+    verifyReplacementCleanup() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      const parsed = PlanActiveProjectionDataSchema.safeParse(model.data);
+      const replacement = parsed.success ? parsed.data.replacement : undefined;
+      if (replacement === undefined) return;
+      void execute({
+        transitionId: "PL-T27",
+        commandId: createCommandId(),
+        planId: replacement.previousPlan.id,
+        replacementPlanId: model.planId,
+        mode: "verify",
+      });
+    },
+    writeReplacementMirror() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T28",
+        commandId: createCommandId(),
+        planId: model.planId,
+      });
+    },
+    openReplacementActivePlan() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "open",
+        sourceScenarioId: "PL-S087",
+        destinationScenarioId: "PL-S088",
+        returnFocusId: model.planId,
       });
     },
     reconcilePlan() {

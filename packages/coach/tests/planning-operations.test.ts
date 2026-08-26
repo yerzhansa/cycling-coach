@@ -13,6 +13,7 @@ import {
   createPlanWorkoutMatchRepository,
   createPlanProposalRepository,
   createRaceCourseSnapshot,
+  createPlanReplacementRepository,
   type PlanRecord,
   type PlanWorkoutRecord,
   type RaceCourseSnapshot,
@@ -2139,6 +2140,254 @@ describe("Plan operations", () => {
     await expect(operations.getPlanState?.({})).resolves.toMatchObject({
       status: "ready",
       state: { lifecycle: "ended", scenarioId: "PL-S089" },
+    });
+  });
+
+  it("keeps the current Plan active until an atomic replacement and blocks new writes until cleanup", async () => {
+    const previousPlanId = `${"0".repeat(25)}M`;
+    const replacementPlanId = `${"0".repeat(25)}N`;
+    const replacementWorkoutId = `${"0".repeat(25)}P`;
+    const draftId = `${"0".repeat(25)}Q`;
+    const plans = createPlanRepository(store);
+    const conversations = createPlanConversationRepository(store);
+    await plans.replace({ ...plan(previousPlanId, 10), status: "active" }, []);
+
+    const ownToday = planMirrorExternalId(previousPlanId, `${"0".repeat(25)}R`);
+    const ownTomorrow = planMirrorExternalId(previousPlanId, `${"0".repeat(25)}S`);
+    const events = [
+      { id: 1, dateKey: 20260826, externalId: ownToday },
+      { id: 2, dateKey: 20260827, externalId: ownTomorrow },
+      { id: 3, dateKey: 20260827, externalId: null },
+    ];
+    const deleted: number[] = [];
+    const created: string[] = [];
+    let failCleanupOnce = true;
+    let todayDateKey = 20260826;
+    const calendar: PlanMirrorCalendarPort = {
+      async listEvents({ startDateKey, endDateKey }) {
+        if (failCleanupOnce) {
+          failCleanupOnce = false;
+          throw new Error("provider unavailable");
+        }
+        return events.filter(
+          (event) => event.dateKey >= startDateKey && event.dateKey <= endDateKey,
+        );
+      },
+      async createEvent(value) {
+        created.push(value.externalId);
+        events.push({
+          id: events.length + 10,
+          dateKey: value.dateKey,
+          externalId: value.externalId,
+        });
+      },
+      async updateEvent() {},
+      async deleteEvent({ eventId }) {
+        deleted.push(eventId);
+        const index = events.findIndex((event) => event.id === eventId);
+        if (index >= 0) events.splice(index, 1);
+      },
+    };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { plans, calendar, todayDateKey: () => todayDateKey },
+    );
+
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T25",
+      commandId: "replacement-start",
+      planId: previousPlanId,
+    });
+    expect(started).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S079",
+        lifecycle: "replacement-intake",
+        data: { replacement: true, replacesPlanId: previousPlanId },
+      },
+    });
+    await expect(plans.read(previousPlanId)).resolves.toMatchObject({ status: "active" });
+    const replacementConversation = await conversations.readLatestOpenReplacement(previousPlanId);
+    if (replacementConversation === undefined) throw new TypeError("Replacement intake missing.");
+    await plans.replace(
+      {
+        ...plan(replacementPlanId, 20),
+        startDateKey: 20260827,
+        targetDateKey: 20261118,
+        status: "draft",
+      },
+      [
+        {
+          id: replacementWorkoutId,
+          planId: replacementPlanId,
+          dateKey: 20260827,
+          sport: "cycling",
+          name: "Replacement endurance",
+          durationS: 3_600,
+          structureJson: "{}",
+          origin: "coach",
+          deviceId: "device-1",
+          hlcPhysicalMs: 20,
+          hlcCounter: 0,
+        },
+      ],
+    );
+    await conversations.saveConversation({
+      ...replacementConversation,
+      planId: replacementPlanId,
+      courseChoiceStatus: "omitted",
+      updatedAtMs: replacementConversation.updatedAtMs + 1,
+      hlcPhysicalMs: replacementConversation.hlcPhysicalMs + 1,
+    });
+    const draftTimestamp = replacementConversation.updatedAtMs + 2;
+    await conversations.saveDraftRevision({
+      id: draftId,
+      conversationId: replacementConversation.id,
+      planId: replacementPlanId,
+      revision: 1,
+      parentRevisionId: null,
+      status: "ready",
+      snapshotJson: '{"weeks":12}',
+      raceCourseJson: null,
+      createdAtMs: draftTimestamp,
+      updatedAtMs: draftTimestamp,
+      deviceId: "device-1",
+      hlcPhysicalMs: draftTimestamp,
+      hlcCounter: 0,
+    });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T26",
+        commandId: "replacement-open-confirmation",
+        activePlanId: previousPlanId,
+        draftId,
+        expectedRevision: 1,
+        confirm: false,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S081", data: { replacesPlanId: previousPlanId } },
+    });
+    await expect(plans.read(previousPlanId)).resolves.toMatchObject({ status: "active" });
+
+    const approved = await operations.executePlanTransition?.({
+      transitionId: "PL-T26",
+      commandId: "replacement-confirm",
+      activePlanId: previousPlanId,
+      draftId,
+      expectedRevision: 1,
+      confirm: true,
+    });
+    expect(approved).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S082",
+        lifecycle: "active",
+        planId: replacementPlanId,
+        data: {
+          replacement: { previousPlan: { id: previousPlanId }, cleanupItems: [] },
+          settings: { autoApply: false, weeklyReview: true },
+        },
+      },
+    });
+    await expect(plans.read(previousPlanId)).resolves.toMatchObject({ status: "ended" });
+    await expect(plans.read(replacementPlanId)).resolves.toMatchObject({ status: "active" });
+    await expect(
+      createPlanReplacementRepository(store).readByReplacementPlanId(replacementPlanId),
+    ).resolves.toMatchObject({ previousPlanId, draftRevisionId: draftId });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T26",
+        commandId: "replacement-confirm-repeat",
+        activePlanId: previousPlanId,
+        draftId,
+        expectedRevision: 1,
+        confirm: true,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S082", planId: replacementPlanId },
+    });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T28",
+        commandId: "replacement-write-too-early",
+        planId: replacementPlanId,
+      }),
+    ).resolves.toMatchObject({ status: "rejected", state: { scenarioId: "PL-S082" } });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T27",
+        commandId: "replacement-cleanup-fails",
+        planId: previousPlanId,
+        replacementPlanId,
+        mode: "cleanup",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      state: { scenarioId: "PL-S083", planId: replacementPlanId },
+    });
+    await expect(plans.read(replacementPlanId)).resolves.toMatchObject({ status: "active" });
+    expect(deleted).toEqual([]);
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T27",
+        commandId: "replacement-cleanup-verify",
+        planId: previousPlanId,
+        replacementPlanId,
+        mode: "verify",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      state: { scenarioId: "PL-S083", planId: replacementPlanId },
+    });
+    expect(deleted).toEqual([]);
+    todayDateKey = 20260827;
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T27",
+        commandId: "replacement-cleanup-retry",
+        planId: previousPlanId,
+        replacementPlanId,
+        mode: "cleanup",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S085", planId: replacementPlanId },
+    });
+    expect(deleted).toEqual([2]);
+    expect(events).toEqual([
+      { id: 1, dateKey: 20260826, externalId: ownToday },
+      { id: 3, dateKey: 20260827, externalId: null },
+    ]);
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T28",
+        commandId: "replacement-write",
+        planId: replacementPlanId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S087", planId: replacementPlanId },
+    });
+    expect(created).toEqual([planMirrorExternalId(replacementPlanId, replacementWorkoutId)]);
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "replacement-open-active",
+        action: "open",
+        sourceScenarioId: "PL-S087",
+        destinationScenarioId: "PL-S088",
+        returnFocusId: replacementPlanId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S088", planId: replacementPlanId },
     });
   });
 });

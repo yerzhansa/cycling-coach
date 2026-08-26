@@ -1153,7 +1153,9 @@ function PlanCoach(): ReactElement {
 
 function DraftFormation(): ReactElement {
   const transition = useEnduragentStore((state) => state.plan.transition);
+  const model = useEnduragentStore((state) => planReadModel(state.plan));
   const revision = transition.status === "running" && transition.transitionId === "PL-T07";
+  const replacement = model?.lifecycle === "replacement-draft-forming";
   return (
     <section
       className="grid place-items-center gap-row rounded-card bg-surface p-8 text-center shadow-elev-1"
@@ -1166,12 +1168,18 @@ function DraftFormation(): ReactElement {
       />
       <div className={SUPPORT_PAIR}>
         <h2 className="m-0 text-lg font-semibold">
-          {revision ? "Updating your Draft" : "Building your Draft"}
+          {revision
+            ? "Updating your Draft"
+            : replacement
+              ? "Building the replacement Draft"
+              : "Building your Draft"}
         </h2>
         <p className="m-0 text-ink-2">
           {revision
             ? "Your previous Draft stays available until this update is complete."
-            : "Your Draft opens automatically when it is ready."}
+            : replacement
+              ? "Your current Plan stays active. The replacement Draft opens automatically."
+              : "Your Draft opens automatically when it is ready."}
         </p>
       </div>
     </section>
@@ -1462,15 +1470,17 @@ function DraftProjection(): ReactElement {
   const transition = useEnduragentStore((state) => state.plan.transition);
   const revisionComposer = useEnduragentStore((state) => state.plan.revisionComposer);
   const [instruction, setInstruction] = useState("");
+  const replacementCancel = useRef<HTMLButtonElement>(null);
   const parsed = model === null ? null : PlanCoachProjectionDataSchema.safeParse(model.data);
   const data = parsed?.success === true ? parsed.data : null;
   const plan = data?.plan ?? null;
   const startDate = data?.startDate;
   const dateRunning = transition.status === "running" && transition.transitionId === "PL-T08";
   const retryingDate = dateRunning && model?.scenarioId === "PL-S048";
+  const replacement = data?.replacement === true;
   const approving =
     (transition.status === "submitting" || transition.status === "running") &&
-    transition.transitionId === "PL-T11";
+    (transition.transitionId === "PL-T11" || transition.transitionId === "PL-T26");
   const busy = dateRunning || approving;
   const displayScenario = retryingDate ? "PL-S049" : dateRunning ? "PL-S047" : model?.scenarioId;
   const submit = (event: FormEvent): void => {
@@ -1497,6 +1507,17 @@ function DraftProjection(): ReactElement {
         </section>
       ) : null}
       <section className="grid gap-5 rounded-card bg-surface p-5 shadow-elev-1">
+        {replacement ? (
+          <div className="flex items-start gap-row rounded-ctl bg-sunk p-3">
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-ok" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <h2 className="m-0 text-sm font-semibold">Current Plan stays active</h2>
+              <p className="m-0 text-ink-2">
+                It changes only after you approve this replacement Draft.
+              </p>
+            </div>
+          </div>
+        ) : null}
         {model?.scenarioId === "PL-S031" ? (
           <div className="flex items-start gap-row text-ok" role="status">
             <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -1543,7 +1564,8 @@ function DraftProjection(): ReactElement {
             </div>
           </div>
         ) : null}
-        {transition.status === "failed" && transition.transitionId === "PL-T11" ? (
+        {transition.status === "failed" &&
+        (transition.transitionId === "PL-T11" || transition.transitionId === "PL-T26") ? (
           <StaleNotice message="The Plan could not be activated. Your Draft is unchanged." />
         ) : null}
         <div className="flex items-start justify-between gap-row">
@@ -1618,10 +1640,13 @@ function DraftProjection(): ReactElement {
           <div className="grid gap-row border-t border-line pt-5">
             <div className="flex flex-wrap items-center justify-between gap-row">
               <p className="m-0 text-sm text-ink-2">
-                Approval activates the Plan, then updates today plus the next six days in Intervals.
+                {replacement
+                  ? "Approval swaps Plans locally. New calendar writing waits for old cleanup verification."
+                  : "Approval activates the Plan, then updates today plus the next six days in Intervals."}
               </p>
               <div className="flex flex-wrap justify-end gap-inset">
                 <Button
+                  id={replacement ? "plan-approve-replacement" : undefined}
                   type="button"
                   variant="outline"
                   disabled={actions === null || busy}
@@ -1635,7 +1660,13 @@ function DraftProjection(): ReactElement {
                   aria-busy={approving ? "true" : undefined}
                   onClick={() => actions?.approveDraft()}
                 >
-                  {approving ? "Activating…" : "Approve Plan"}
+                  {approving
+                    ? replacement
+                      ? "Checking…"
+                      : "Activating…"
+                    : replacement
+                      ? "Approve replacement"
+                      : "Approve Plan"}
                 </Button>
               </div>
             </div>
@@ -1657,6 +1688,35 @@ function DraftProjection(): ReactElement {
       </section>
       <DiscardDraftDialog />
       <DatePickerDialog plan={plan} startDate={startDate} />
+      <Dialog
+        open={model?.scenarioId === "PL-S081"}
+        onOpenChange={(open) => {
+          if (!open) actions?.closeReplacementConfirmation();
+        }}
+      >
+        <DialogContent initialFocus={replacementCancel} showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Replace the active Plan?</DialogTitle>
+            <DialogDescription>
+              The old Plan ends and the replacement activates locally together. Today's workout
+              stays. New calendar writing waits for old cleanup verification.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              ref={replacementCancel}
+              type="button"
+              variant="outline"
+              onClick={() => actions?.closeReplacementConfirmation()}
+            >
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => actions?.confirmReplacement()}>
+              Replace Plan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1830,6 +1890,154 @@ function WorkoutDriftProjection(props: {
   );
 }
 
+function ReplacementLifecycleProjection(props: {
+  readonly data: ReturnType<typeof PlanActiveProjectionDataSchema.parse>;
+  readonly scenarioId: string;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const replacement = props.data.replacement;
+  if (replacement === undefined) {
+    return <StatusCard title="Replacement Plan" support="Refreshing replacement history…" />;
+  }
+  const cleanupBusy =
+    (transition.status === "submitting" || transition.status === "running") &&
+    transition.transitionId === "PL-T27";
+  const mirrorBusy =
+    (transition.status === "submitting" || transition.status === "running") &&
+    transition.transitionId === "PL-T28";
+  const failed = props.scenarioId === "PL-S083" && !cleanupBusy;
+  const verified = props.scenarioId === "PL-S085" && !mirrorBusy;
+  const history = props.scenarioId === "PL-S087";
+  const remaining = replacement.cleanupItems.filter((item) => item.status !== "verified");
+  const headline = history
+    ? "Replacement complete"
+    : mirrorBusy || props.scenarioId === "PL-S086"
+      ? "Writing today plus the next six days"
+      : verified
+        ? "Old cleanup verified"
+        : failed
+          ? "Old Plan cleanup needs attention"
+          : cleanupBusy || props.scenarioId === "PL-S084"
+            ? "Retrying old Plan cleanup"
+            : "Replacement active locally";
+  const support = history
+    ? "The old cleanup verified before the replacement mirror was written."
+    : mirrorBusy || props.scenarioId === "PL-S086"
+      ? "The replacement is active while its rolling Intervals mirror is verified."
+      : verified
+        ? "No tomorrow-onward old Plan workouts remain. The replacement mirror can now write."
+        : failed
+          ? "The replacement stays active locally. Calendar writing is blocked until old cleanup is verified."
+          : "The old Plan ended. Today stays while tomorrow-onward old workouts are removed and verified.";
+
+  return (
+    <section
+      className="overflow-hidden rounded-card bg-surface shadow-elev-1"
+      aria-live="polite"
+      data-plan-scenario={props.scenarioId}
+    >
+      <div className="grid gap-5 p-5">
+        <div className="flex items-start gap-row">
+          {failed ? (
+            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+          ) : verified || history ? (
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+          ) : (
+            <LoaderCircle
+              className="mt-0.5 size-5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+          )}
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-lg font-semibold">{headline}</h2>
+            <p className="m-0 text-ink-2">{support}</p>
+          </div>
+        </div>
+        <div className="grid gap-inset border-t border-line pt-row text-sm">
+          <div className="flex justify-between gap-row">
+            <span>Active Plan</span>
+            <strong>{props.data.plan.name}</strong>
+          </div>
+          <div className="flex justify-between gap-row">
+            <span>Previous Plan</span>
+            <strong>{replacement.previousPlan.name} · ended</strong>
+          </div>
+          <div className="flex justify-between gap-row">
+            <span>Today</span>
+            <strong>Preserved</strong>
+          </div>
+        </div>
+        {failed && remaining.length > 0 ? (
+          <div className="divide-y divide-line border-y border-line">
+            {remaining.map((item) => (
+              <div key={item.id} className="flex justify-between gap-row py-inset text-sm">
+                <span>{formatCivilDate(item.date)}</span>
+                <span className="text-warn">Still in Intervals</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {history ? (
+          <div className="grid gap-row border-t border-line pt-row text-sm">
+            <div className={SUPPORT_PAIR}>
+              <strong>{props.data.plan.name} activated</strong>
+              <span className="text-ink-2">Local replacement committed</span>
+            </div>
+            <div className={SUPPORT_PAIR}>
+              <strong>{replacement.previousPlan.name} cleanup verified</strong>
+              <span className="text-ink-2">
+                Today preserved; tomorrow-onward old workouts removed
+              </span>
+            </div>
+            <div className={SUPPORT_PAIR}>
+              <strong>Replacement mirror current</strong>
+              <span className="text-ink-2">Today plus the next six civil dates</span>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap justify-end gap-inset border-t border-line px-5 py-row">
+        {failed ? (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={actions === null || cleanupBusy}
+              onClick={() => actions?.verifyReplacementCleanup()}
+            >
+              Verify again
+            </Button>
+            <Button
+              type="button"
+              disabled={actions === null || cleanupBusy}
+              onClick={() => actions?.retryReplacementCleanup()}
+            >
+              Retry cleanup
+            </Button>
+          </>
+        ) : verified ? (
+          <Button
+            type="button"
+            disabled={actions === null || mirrorBusy}
+            onClick={() => actions?.writeReplacementMirror()}
+          >
+            Write next 7 days
+          </Button>
+        ) : history ? (
+          <Button
+            type="button"
+            disabled={actions === null}
+            onClick={() => actions?.openReplacementActivePlan()}
+          >
+            Open active Plan
+          </Button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function ActiveProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
   const transition = useEnduragentStore((state) => state.plan.transition);
@@ -1872,6 +2080,11 @@ function ActiveProjection(): ReactElement {
   const parsed = PlanActiveProjectionDataSchema.safeParse(model.data);
   if (!parsed.success) return <StatusCard title={model.title} support={model.summary} />;
   const data = parsed.data;
+  if (
+    ["PL-S082", "PL-S083", "PL-S084", "PL-S085", "PL-S086", "PL-S087"].includes(model.scenarioId)
+  ) {
+    return <ReplacementLifecycleProjection data={data} scenarioId={model.scenarioId} />;
+  }
   const selectedHistoryEntry =
     data.selectedHistoryId === undefined || data.selectedHistoryId === null
       ? null
@@ -2128,17 +2341,28 @@ function ActiveProjection(): ReactElement {
 
       <section className="flex flex-col gap-row rounded-card bg-surface p-5 shadow-elev-1 sm:flex-row sm:items-center sm:justify-between">
         <p className="m-0 text-sm text-ink-2">
-          End this Plan. Today's workout stays; tomorrow-onward Enduragent workouts are removed.
+          Replace or end future Plan management. Today's workout stays.
         </p>
-        <Button
-          id="plan-end-trigger"
-          type="button"
-          variant="destructive"
-          disabled={actions === null || transition.status !== "idle"}
-          onClick={() => actions?.openEndConfirmation()}
-        >
-          End Plan
-        </Button>
+        <div className="flex flex-wrap justify-end gap-inset">
+          <Button
+            id="plan-replace-trigger"
+            type="button"
+            variant="outline"
+            disabled={actions === null || transition.status !== "idle"}
+            onClick={() => actions?.openReplacement()}
+          >
+            Replace Plan
+          </Button>
+          <Button
+            id="plan-end-trigger"
+            type="button"
+            variant="destructive"
+            disabled={actions === null || transition.status !== "idle"}
+            onClick={() => actions?.openEndConfirmation()}
+          >
+            End Plan
+          </Button>
+        </div>
       </section>
 
       <Dialog

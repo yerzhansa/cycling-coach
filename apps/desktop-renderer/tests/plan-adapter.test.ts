@@ -843,6 +843,169 @@ describe("Plan view adapter", () => {
     });
   });
 
+  it("dispatches replacement intake, confirmation, cleanup recovery, and gated mirror actions", async () => {
+    const previousPlanId = "00000000000000000000000003";
+    const replacementPlanId = "00000000000000000000000004";
+    const draft = {
+      id: "00000000000000000000000005",
+      planId: replacementPlanId,
+      revision: 2,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    const replacementDraft = planReadModel({
+      lifecycle: "replacement-draft",
+      scenarioId: "PL-S080",
+      projection: "draft",
+      planId: replacementPlanId,
+      revision: 2,
+      data: planCoachData({ replacement: true, replacesPlanId: previousPlanId, draft }),
+    });
+    const activeData = {
+      plan: {
+        id: replacementPlanId,
+        name: "Replacement Plan",
+        primaryGoal: "Finish",
+        startDate: "2026-08-27",
+        targetDate: "2026-11-18",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 4,
+        workoutCount: 1,
+        plannedDurationS: 3_600,
+      },
+      today: "2026-08-26",
+      weekIndex: 1,
+      todayWorkout: null,
+      workouts: [],
+      replacement: {
+        id: "00000000000000000000000006",
+        previousPlan: {
+          id: previousPlanId,
+          name: "Previous Plan",
+          primaryGoal: "Finish",
+          startDate: "2026-07-09",
+          targetDate: "2026-09-30",
+          kind: "full-plan" as const,
+          totalWeeks: 12,
+          weekStartDay: 4,
+          workoutCount: 0,
+          plannedDurationS: 0,
+        },
+        activatedAtMs: 100,
+        cleanupItems: [],
+      },
+    };
+    const failedCleanup = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S083",
+      projection: "active",
+      planId: replacementPlanId,
+      data: activeData,
+    });
+    const currentActive = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId: previousPlanId,
+    });
+    const intake = harness({
+      ids: ["start-replacement"],
+      getPlanState: async () => ({ status: "ready", state: currentActive }),
+      executePlanTransition: async () => ({ status: "completed", state: currentActive }),
+    });
+    intake.adapter.start();
+    await settle();
+    intake.adapter.openReplacement();
+    await settle();
+
+    const draftSubject = harness({
+      ids: ["open-confirmation", "close-confirmation", "confirm-replacement"],
+      getPlanState: async () => ({ status: "ready", state: replacementDraft }),
+      executePlanTransition: async () => ({ status: "completed", state: replacementDraft }),
+    });
+    draftSubject.adapter.start();
+    await settle();
+    draftSubject.adapter.approveDraft();
+    await settle();
+    draftSubject.adapter.closeReplacementConfirmation();
+    await settle();
+    draftSubject.adapter.confirmReplacement();
+    await settle();
+
+    const recovery = harness({
+      ids: ["retry-cleanup", "verify-cleanup", "write-mirror", "open-active"],
+      getPlanState: async () => ({ status: "ready", state: failedCleanup }),
+      executePlanTransition: async () => ({ status: "completed", state: failedCleanup }),
+    });
+    recovery.adapter.start();
+    await settle();
+    recovery.adapter.retryReplacementCleanup();
+    await settle();
+    recovery.adapter.verifyReplacementCleanup();
+    await settle();
+    recovery.adapter.writeReplacementMirror();
+    await settle();
+    recovery.adapter.openReplacementActivePlan();
+    await settle();
+
+    expect(intake.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T25",
+      commandId: "start-replacement",
+      planId: previousPlanId,
+    });
+    expect(draftSubject.executePlanTransition.mock.calls.map(([command]) => command)).toEqual([
+      {
+        transitionId: "PL-T26",
+        commandId: "open-confirmation",
+        activePlanId: previousPlanId,
+        draftId: draft.id,
+        expectedRevision: 2,
+      },
+      {
+        transitionId: "PL-T39",
+        commandId: "close-confirmation",
+        action: "back",
+        sourceScenarioId: "PL-S081",
+        destinationScenarioId: "PL-S080",
+        returnFocusId: "plan-approve-replacement",
+      },
+      {
+        transitionId: "PL-T26",
+        commandId: "confirm-replacement",
+        activePlanId: previousPlanId,
+        draftId: draft.id,
+        expectedRevision: 2,
+        confirm: true,
+      },
+    ]);
+    expect(recovery.executePlanTransition.mock.calls.map(([command]) => command)).toEqual([
+      {
+        transitionId: "PL-T27",
+        commandId: "retry-cleanup",
+        planId: previousPlanId,
+        replacementPlanId,
+        mode: "cleanup",
+      },
+      {
+        transitionId: "PL-T27",
+        commandId: "verify-cleanup",
+        planId: previousPlanId,
+        replacementPlanId,
+        mode: "verify",
+      },
+      { transitionId: "PL-T28", commandId: "write-mirror", planId: replacementPlanId },
+      {
+        transitionId: "PL-T39",
+        commandId: "open-active",
+        action: "open",
+        sourceScenarioId: "PL-S087",
+        destinationScenarioId: "PL-S088",
+        returnFocusId: replacementPlanId,
+      },
+    ]);
+  });
+
   it("dispatches retry and provider-only verification for the active Plan", async () => {
     const state = planReadModel({
       lifecycle: "active",
@@ -1057,6 +1220,70 @@ describe("Plan view adapter", () => {
       transitionId: "PL-T24",
       commandId: "resume-cleanup",
       planId,
+      mode: "cleanup",
+    });
+  });
+
+  it("resumes replacement cleanup once after the atomic local swap", async () => {
+    const previousPlanId = "00000000000000000000000003";
+    const replacementPlanId = "00000000000000000000000004";
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S082",
+      projection: "active",
+      planId: replacementPlanId,
+      data: {
+        plan: {
+          id: replacementPlanId,
+          name: "Replacement Plan",
+          primaryGoal: "Finish",
+          startDate: "2026-08-27",
+          targetDate: "2026-11-18",
+          kind: "full-plan",
+          totalWeeks: 12,
+          weekStartDay: 4,
+          workoutCount: 1,
+          plannedDurationS: 3_600,
+        },
+        today: "2026-08-26",
+        weekIndex: 1,
+        todayWorkout: null,
+        workouts: [],
+        replacement: {
+          id: "00000000000000000000000005",
+          previousPlan: {
+            id: previousPlanId,
+            name: "Previous Plan",
+            primaryGoal: "Finish",
+            startDate: "2026-07-09",
+            targetDate: "2026-09-30",
+            kind: "full-plan",
+            totalWeeks: 12,
+            weekStartDay: 4,
+            workoutCount: 0,
+            plannedDurationS: 0,
+          },
+          activatedAtMs: 100,
+          cleanupItems: [],
+        },
+      },
+    });
+    const subject = harness({
+      ids: ["resume-replacement-cleanup"],
+      getPlanState: async () => ({ status: "ready", state }),
+      executePlanTransition: async () => ({ status: "completed", state }),
+    });
+
+    subject.adapter.start();
+    await settle();
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenCalledOnce();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T27",
+      commandId: "resume-replacement-cleanup",
+      planId: previousPlanId,
+      replacementPlanId,
       mode: "cleanup",
     });
   });

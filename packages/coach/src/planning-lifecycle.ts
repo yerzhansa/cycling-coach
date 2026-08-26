@@ -54,7 +54,14 @@ export type ActivePlanScenario =
   | "PL-S092"
   | "PL-S093"
   | "PL-S097"
-  | "PL-S101";
+  | "PL-S101"
+  | "PL-S082"
+  | "PL-S083"
+  | "PL-S084"
+  | "PL-S085"
+  | "PL-S086"
+  | "PL-S087"
+  | "PL-S088";
 
 export interface PlanConversationProjection {
   readonly id: string;
@@ -90,6 +97,7 @@ export interface BuildPlanLifecycleReadModelInput {
     | "PL-S070"
     | "PL-S104";
   readonly dateScenario?: "PL-S046" | "PL-S048" | "PL-S050";
+  readonly replacementConfirmation?: boolean;
 }
 
 const EMPTY_ATTENTION: PlanAttention = Object.freeze({
@@ -232,6 +240,16 @@ function stateKind(input: BuildPlanLifecycleReadModelInput): {
   }
   if (draft?.status === "ready" || draft?.status === "failed") {
     const revision = draft.revision > 1;
+    if (replacement && input.replacementConfirmation === true) {
+      return {
+        scenarioId: "PL-S081",
+        lifecycle: "replacement-draft",
+        projection: "draft",
+        title: "Replace the active Plan?",
+        summary: "The old Plan ends and the replacement activates locally together. Today stays.",
+        transitions: [guard("PL-T26"), guard("PL-T39")],
+      };
+    }
     return {
       scenarioId: replacement ? "PL-S080" : revision ? "PL-S031" : "PL-S002",
       lifecycle: replacement ? "replacement-draft" : "draft",
@@ -326,6 +344,7 @@ export function buildPlanLifecycleReadModel(
     chatId: `plan:${conversation.id}`,
     sourceConversationId: conversation.sourceConversationId,
     replacement: conversation.replacesPlanId !== null,
+    replacesPlanId: conversation.replacesPlanId,
     readyToCreateDraft: input.readyToCreateDraft,
     messages: messages(conversation.id, input.turns),
     queue: input.queue,
@@ -416,6 +435,19 @@ export function buildActivePlanReadModel(input: {
     "PL-S093": ["Plan settings", "The previous value was restored."],
     "PL-S097": ["Proposal rejected", "The active Plan did not change."],
     "PL-S101": ["Plan updated", "An eligible future Workout reduction was applied automatically."],
+    "PL-S082": [
+      "Replacement active locally",
+      "Old Plan cleanup must verify before replacement calendar writing starts.",
+    ],
+    "PL-S083": [
+      "Old Plan cleanup needs attention",
+      "The replacement stays active locally while calendar writing is blocked.",
+    ],
+    "PL-S084": ["Retrying old Plan cleanup", "Replacement calendar writing remains blocked."],
+    "PL-S085": ["Old cleanup verified", "The replacement rolling window is ready to write."],
+    "PL-S086": ["Writing replacement calendar", "Writing today plus the next six days."],
+    "PL-S087": ["Replacement complete", "Plan history records the local swap and verified mirror."],
+    "PL-S088": ["Plan active", "The replacement Plan and its seven-day mirror are current."],
   } as const;
   const attentionItems: PlanAttention["items"] = [];
   if (input.scenarioId === "PL-S039" || input.scenarioId === "PL-S041") {
@@ -425,6 +457,15 @@ export function buildActivePlanReadModel(input: {
       scenarioId: input.scenarioId,
       priority: "dated",
       affectedDate: input.data.today,
+    });
+  }
+  if (input.scenarioId === "PL-S083") {
+    attentionItems.push({
+      id: `replacement-cleanup:${input.planId}`,
+      title: "Old Plan cleanup needs attention",
+      scenarioId: "PL-S083",
+      priority: "blocker",
+      affectedDate: null,
     });
   }
   for (const workout of input.data.workouts) {
@@ -496,6 +537,9 @@ export function buildActivePlanReadModel(input: {
       ...(canUndo ? [guard("PL-T21")] : []),
       guard("PL-T22"),
       guard("PL-T23"),
+      guard("PL-T25"),
+      ...(input.scenarioId === "PL-S083" ? [guard("PL-T27")] : []),
+      ...(input.scenarioId === "PL-S085" ? [guard("PL-T28")] : []),
       guard("PL-T39"),
     ],
     reconciliation: input.reconciliation,

@@ -56,6 +56,7 @@ describe("engine public export surface", () => {
       "applyPlanStartDatePreview",
       "applyValidatedPlanProposal",
       "applyValidatedPlanUndo",
+      "approvePlanReplacement",
       "beginRaceCourseParsing",
       "beginRaceCourseRemoval",
       "bindToolResult",
