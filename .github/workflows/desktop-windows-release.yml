@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: Verify only; never edit the release
+        description: Verify only; never add the evidence asset
         type: boolean
         default: true
       authenticode:
@@ -106,7 +106,7 @@ jobs:
       - name: Refuse to mark assets while Authenticode is pending
         if: ${{ inputs.dry_run == false && inputs.authenticode != 'verify' }}
         run: |
-          echo '::error::Authenticode verification is not enabled; refusing to mark assets'
+          echo '::error::Authenticode verification is not enabled; refusing to record verification evidence'
           exit 1
       - name: Download Windows assets
         env:
@@ -146,29 +146,44 @@ jobs:
           INSTALLER_SHA256=$(awk '/^Windows release envelope verified [0-9a-f]{64}$/{sha=$NF} END{if (sha == "") exit 1; print sha}' "$WORK/../verify.out")
           echo "installer_sha256=$INSTALLER_SHA256" >> "$GITHUB_OUTPUT"
           echo "authenticode=$AUTHENTICODE" >> "$GITHUB_OUTPUT"
-      - name: Mark Windows assets verified
+      - name: Record Windows verification evidence
         if: ${{ inputs.dry_run == false && inputs.authenticode == 'verify' && steps.verify.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+          PUBLISHER_DN: ${{ inputs.publisher_dn }}
           INSTALLER_SHA256: ${{ steps.verify.outputs.installer_sha256 }}
         run: |
           set -euo pipefail
-          TEMP="$(cygpath -u "$RUNNER_TEMP")"
-          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$TEMP/release.json"
-          jq -j '.body // ""' "$TEMP/release.json" > "$TEMP/release-body.txt"
-          MARKER="Windows assets verified: $INSTALLER_SHA256 (Authenticode verified)"
-          if grep -Fxq "$MARKER" "$TEMP/release-body.txt"; then
-            exit 0
+          TEMP="$(cygpath -u "$RUNNER_TEMP")/windows-evidence"
+          mkdir -p "$TEMP"
+          TAG="enduragent-desktop@$VERSION"
+          EVIDENCE="Enduragent-$VERSION-x64-verification.json"
+          PUBLISHER_SHA256=$(printf '%s' "$PUBLISHER_DN" | sha256sum | awk '{print $1}')
+          jq -nS \
+            --arg tag "$TAG" \
+            --arg version "$VERSION" \
+            --arg commit "$COMMIT" \
+            --arg installerSha256 "$INSTALLER_SHA256" \
+            --arg publisherDnSha256 "$PUBLISHER_SHA256" \
+            '{schemaVersion: 1, tag: $tag, version: $version, commit: $commit, arch: "x64", authenticode: "verified", installerSha256: $installerSha256, publisherDnSha256: $publisherDnSha256}' \
+            > "$TEMP/$EVIDENCE"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$TEMP/release.json"
+          if [ "$(jq -r --arg name "$EVIDENCE" '[.assets[] | select(.name == $name)] | length' "$TEMP/release.json")" != '0' ]; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$TEMP/existing" --pattern "$EVIDENCE"
+            if cmp -s "$TEMP/$EVIDENCE" "$TEMP/existing/$EVIDENCE"; then
+              echo "::notice::Windows verification evidence already recorded"
+              exit 0
+            fi
+            echo '::error::Existing Windows verification evidence conflicts with this run; remove it by hand before retrying'
+            exit 1
           fi
-          printf '\n\n%s' "$MARKER" >> "$TEMP/release-body.txt"
-          jq -n --rawfile body "$TEMP/release-body.txt" '{body: $body}' > "$TEMP/release-patch.json"
-          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            --input "$TEMP/release-patch.json" >/dev/null
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "$TEMP/$EVIDENCE"
       - name: Dry run summary
         if: ${{ inputs.dry_run == true }}
         env:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          echo "::notice::dry_run=true; release enduragent-desktop@$VERSION was verified but not marked"
+          echo "::notice::dry_run=true; release enduragent-desktop@$VERSION was verified; no evidence asset was recorded"

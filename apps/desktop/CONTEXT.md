@@ -117,7 +117,8 @@ _Avoid_: Install directory, application directory
 - A **Windows release envelope** is produced, verified, uploaded, and round-trip-checked by its named scripts.
 - **Authenticode pending mode** does not authorise an unsigned installer for a GitHub release or the website.
 - **Windows release provenance** binds a verified installer to the release tag commit and the updater publisher before upload.
-- `upload-windows-release.mjs` uploads read-only copies of the verified bytes, only to the latest release, and reconciles GitHub asset digests against those bytes.
+- `upload-windows-release.mjs` uploads read-only copies of the verified bytes, only to the latest release, reconciles GitHub asset digests against those bytes, and removes its assets when the release stops being latest during the upload.
+- `desktop-windows-release.yml` records a completed verification as the `Enduragent-<version>-x64-verification.json` release asset and never edits the release body.
 - The **Windows package inventory** fixes the application, resource, and asar contents accepted by package verification.
 - The athlete removes the **Windows user data directory** by hand when retained data must be erased after uninstall.
 

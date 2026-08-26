@@ -92,9 +92,9 @@ function releaseAssetsApi(names: readonly string[] = Object.values(verified.name
   );
   return JSON.stringify({
     tag_name: tag,
-    assets: names.map((name) => {
+    assets: names.map((name, index) => {
       const bytes = byName.get(name) ?? Buffer.from("other");
-      return { name, size: bytes.length, digest: digestOf(bytes) };
+      return { id: 1000 + index, name, size: bytes.length, digest: digestOf(bytes) };
     }),
   });
 }
@@ -116,27 +116,45 @@ function successfulExecutor(
     readonly reference?: { readonly type: "commit" | "tag"; readonly sha: string };
     readonly peeled?: { readonly type: "commit" | "tag"; readonly sha: string };
     readonly latestTag?: string;
+    readonly latestTagAfterUpload?: string;
     readonly assetsApi?: string;
     readonly onUpload?: (paths: readonly string[]) => Promise<void> | void;
+    readonly onDelete?: (id: string) => Promise<void> | void;
   } = {},
 ) {
   let views = 0;
+  let uploads = 0;
+  const deleted: string[] = [];
   return vi.fn(async (_executable: string, arguments_: readonly string[]) => {
     if (arguments_[0] === "release" && arguments_[1] === "view") {
       views += 1;
+      const uploadedNames = Object.values(verified.names).filter(
+        (_name, index) => !deleted.includes(String(1000 + index)),
+      );
       return {
         stdout:
           views === 1
             ? release(options.initialAssets ?? [`Enduragent-${version}-arm64.dmg`])
-            : release(Object.values(verified.names)),
+            : release(uploadedNames),
       };
     }
     if (arguments_[0] === "release" && arguments_[1] === "upload") {
+      uploads += 1;
       await options.onUpload?.(arguments_.slice(5));
       return { stdout: "" };
     }
+    if (arguments_[0] === "api" && arguments_[1] === "-X" && arguments_[2] === "DELETE") {
+      const id = arguments_[3]?.split("/").at(-1) ?? "";
+      await options.onDelete?.(id);
+      deleted.push(id);
+      return { stdout: "" };
+    }
     if (arguments_[0] === "api" && arguments_[1]?.endsWith("/releases/latest")) {
-      return { stdout: JSON.stringify({ tag_name: options.latestTag ?? tag }) };
+      const latestTag =
+        uploads > 0
+          ? (options.latestTagAfterUpload ?? options.latestTag ?? tag)
+          : (options.latestTag ?? tag);
+      return { stdout: JSON.stringify({ tag_name: latestTag }) };
     }
     if (arguments_[0] === "api" && arguments_[1]?.includes("/releases/tags/")) {
       return { stdout: options.assetsApi ?? releaseAssetsApi() };
@@ -220,8 +238,81 @@ describe("Windows release upload", () => {
       "gh-personal",
       ["api", `repos/${repository}/releases/tags/${tag}`],
     ]);
+    expect(executeFile.mock.calls[6]).toEqual([
+      "gh-personal",
+      ["api", `repos/${repository}/releases/latest`],
+    ]);
+    expect(executeFile.mock.calls).toHaveLength(7);
     expect(executeFile.mock.calls.flat(2)).not.toContain("--clobber");
     expect(executeFile.mock.calls.flat(2)).not.toContain(verified.paths.installer);
+  });
+
+  it("removes the uploaded assets when the release stops being latest during the upload", async () => {
+    const record = join(directory, "..", `upload-record-rollback-${process.pid}.json`);
+    temporaryRoots.push(record);
+    const verifyAssets = vi.fn(async () => verified);
+    const executeFile = successfulExecutor({ latestTagAfterUpload: "enduragent-desktop@0.1.7" });
+    await expect(
+      runWindowsReleaseUpload(input({ record }), { executeFile, verifyAssets }),
+    ).rejects.toThrow("release lost latest status during upload; Windows assets removed");
+    const deletes = executeFile.mock.calls
+      .filter(([, arguments_]) => arguments_[1] === "-X" && arguments_[2] === "DELETE")
+      .map(([, arguments_]) => arguments_[3]);
+    expect(deletes).toEqual([
+      `repos/${repository}/releases/assets/1000`,
+      `repos/${repository}/releases/assets/1001`,
+      `repos/${repository}/releases/assets/1002`,
+    ]);
+    const written = JSON.parse(await readFile(record, "utf8"));
+    expect(written.status).toBe("failed");
+    expect(written.uploaded).toBe(false);
+    expect(written.uploadedAssets).toEqual([]);
+    expect(written.error).toBe("release lost latest status during upload; Windows assets removed");
+  });
+
+  it("reports an incomplete upload when the rollback of a non-latest release fails", async () => {
+    const record = join(directory, "..", `upload-record-rollback-fail-${process.pid}.json`);
+    temporaryRoots.push(record);
+    const verifyAssets = vi.fn(async () => verified);
+    const executeFile = successfulExecutor({
+      latestTagAfterUpload: "enduragent-desktop@0.1.7",
+      onDelete: (id) => {
+        if (id === "1001") throw new Error("boom");
+      },
+    });
+    await expect(
+      runWindowsReleaseUpload(input({ record }), { executeFile, verifyAssets }),
+    ).rejects.toThrow("Windows release upload is incomplete");
+    const written = JSON.parse(await readFile(record, "utf8"));
+    expect(written.uploaded).toBe(true);
+    expect(written.uploadedAssets).toEqual([verified.names.blockmap, verified.names.metadata]);
+  });
+
+  it("refuses to delete when a GitHub asset has no numeric id", async () => {
+    const withoutIds = JSON.parse(releaseAssetsApi()) as { assets: { id?: number }[] };
+    for (const asset of withoutIds.assets) delete asset.id;
+    const executeFile = successfulExecutor({
+      latestTagAfterUpload: "enduragent-desktop@0.1.7",
+      assetsApi: JSON.stringify(withoutIds),
+    });
+    await expect(
+      runWindowsReleaseUpload(input(), { executeFile, verifyAssets: vi.fn(async () => verified) }),
+    ).rejects.toThrow("Windows release upload is incomplete");
+    expect(executeFile.mock.calls.flat(2)).not.toContain("DELETE");
+  });
+
+  it("reports an incomplete upload when the post-upload latest check is unavailable", async () => {
+    const base = successfulExecutor();
+    let uploads = 0;
+    const executeFile = vi.fn(async (executable: string, arguments_: readonly string[]) => {
+      if (arguments_[0] === "release" && arguments_[1] === "upload") uploads += 1;
+      if (uploads > 0 && arguments_[1]?.endsWith("/releases/latest")) throw new Error("offline");
+      return base(executable, arguments_);
+    });
+    await expect(
+      runWindowsReleaseUpload(input(), { executeFile, verifyAssets: vi.fn(async () => verified) }),
+    ).rejects.toThrow("Windows release upload is incomplete");
+    expect(executeFile.mock.calls.flat(2)).not.toContain("DELETE");
   });
 
   it("uploads the verified bytes even when the artifact file changes after verification", async () => {
