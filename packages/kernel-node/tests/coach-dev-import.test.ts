@@ -592,7 +592,7 @@ describe("coach-dev import --report", () => {
     expect(await exists(databasePath)).toBe(true);
     const store = openSqliteStorage(databasePath);
     try {
-      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 14 });
+      expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 15 });
       expect(await store.get("SELECT count(*) AS c FROM raw_file")).toEqual({ c: 1 });
       expect(await store.get("SELECT count(*) AS c FROM source_record")).toEqual({ c: 0 });
       expect(
