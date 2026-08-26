@@ -32,6 +32,7 @@ describe("Plan Intervals calendar adapter", () => {
         id: 42,
         dateKey: 20260825,
         externalId: "cycling-coach:plan:plan:workout",
+        category: "WORKOUT",
       },
     ]);
     await calendar.createEvent({

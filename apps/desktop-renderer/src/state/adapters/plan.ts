@@ -65,11 +65,8 @@ export interface PlanViewAdapter {
   verifyReconciliation(): void;
   openWorkout(workoutId: string): void;
   closeWorkout(): void;
-  resolveWorkoutMatch(
-    workoutId: string,
-    activityId: string,
-    decision: "confirm" | "reject",
-  ): void;
+  resolveWorkoutMatch(workoutId: string, activityId: string, decision: "confirm" | "reject"): void;
+  resolveWorkoutDrift(workoutId: string, eventId: string, decision: "adopt" | "restore"): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
@@ -730,6 +727,17 @@ export function createPlanViewAdapter(input: {
         workoutId,
         activityId,
         decision,
+      });
+    },
+    resolveWorkoutDrift(workoutId, eventId, decision) {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: decision === "adopt" ? "PL-T15" : "PL-T16",
+        commandId: createCommandId(),
+        planId: model.planId,
+        workoutId,
+        eventId,
       });
     },
     openAttention(attentionId) {

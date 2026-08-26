@@ -1563,6 +1563,12 @@ export async function createLocalCoachComposition(
         await coachOperations.sync({});
       },
     });
+    const planCalendar = createPlanMirrorCalendarAdapter(() => {
+      const intervals = approvedConfig().intervals;
+      return intervals.apiKey.length === 0
+        ? null
+        : makeChatClient({ apiKey: intervals.apiKey, athleteId: intervals.athleteId });
+    });
     const planningOperations = createPlanningOperations(
       {
         context: input.context,
@@ -1573,12 +1579,8 @@ export async function createLocalCoachComposition(
         ftp,
         course: createNodePlanRaceCourseAdapter(),
         todayDateKey: planningDateKey,
-        calendar: createPlanMirrorCalendarAdapter(() => {
-          const intervals = approvedConfig().intervals;
-          return intervals.apiKey.length === 0
-            ? null
-            : makeChatClient({ apiKey: intervals.apiKey, athleteId: intervals.athleteId });
-        }),
+        calendar: planCalendar,
+        workoutDriftCalendar: planCalendar,
       },
     );
     const operations = {

@@ -312,6 +312,28 @@ export const PlanActiveWorkoutProjectionSchema = z
       })
       .strict()
       .optional(),
+    drift: z
+      .object({
+        status: z.literal("detected"),
+        eventId: z.string().min(1),
+        plan: z
+          .object({
+            date: TrainingExportCivilDateSchema,
+            name: z.string().min(1),
+            durationS: z.number().int().positive().nullable(),
+          })
+          .strict(),
+        provider: z
+          .object({
+            date: TrainingExportCivilDateSchema,
+            name: z.string().min(1),
+            durationS: z.number().int().positive().nullable(),
+          })
+          .strict(),
+        error: PlanErrorSchema.nullable(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type PlanActiveWorkoutProjection = z.infer<typeof PlanActiveWorkoutProjectionSchema>;

@@ -1,5 +1,9 @@
 import type { EventInput, IntervalsClient } from "intervals-icu-api";
-import type { PlanMirrorCalendarPort, PlanMirrorCreateInput } from "@enduragent/engine";
+import type {
+  PlanMirrorCalendarPort,
+  PlanMirrorEvent,
+  PlanMirrorUpdateInput,
+} from "@enduragent/engine";
 
 function clientValue<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
   if (!result.ok) throw new Error("Intervals calendar request failed.", { cause: result.error });
@@ -25,11 +29,9 @@ function eventType(sport: string): NonNullable<EventInput["type"]> {
   return "Workout";
 }
 
-function eventContent(
-  input: PlanMirrorCreateInput,
-): Pick<EventInput, "description" | "workoutDoc"> {
+function eventContent(structureJson: string): Pick<EventInput, "description" | "workoutDoc"> {
   try {
-    const value = JSON.parse(input.structureJson) as Record<string, unknown>;
+    const value = JSON.parse(structureJson) as Record<string, unknown>;
     return {
       ...(typeof value.description === "string" ? { description: value.description } : {}),
       ...(typeof value.workoutDoc === "object" && value.workoutDoc !== null
@@ -39,6 +41,49 @@ function eventContent(
   } catch {
     return {};
   }
+}
+
+function mappedEvent(event: {
+  readonly id: number;
+  readonly startDateLocal: string;
+  readonly uid?: string | null;
+  readonly category?: string | null;
+  readonly name?: string | null;
+  readonly movingTime?: number | null;
+  readonly description?: string | null;
+  readonly workoutDoc?: unknown;
+  readonly [key: string]: unknown;
+}): PlanMirrorEvent {
+  return {
+    id: event.id,
+    dateKey: dateKey(event.startDateLocal),
+    externalId: event.uid ?? null,
+    ...(event.category === undefined ? {} : { category: event.category }),
+    ...(event.name === undefined ? {} : { name: event.name }),
+    ...(event.movingTime === undefined ? {} : { durationS: event.movingTime }),
+    ...(event.description === undefined ? {} : { description: event.description }),
+    ...(event.workoutDoc === undefined
+      ? {}
+      : {
+          workoutDoc:
+            event.workoutDoc !== null &&
+            typeof event.workoutDoc === "object" &&
+            !Array.isArray(event.workoutDoc)
+              ? (event.workoutDoc as Readonly<Record<string, unknown>>)
+              : null,
+        }),
+    ...(typeof event.updated === "string" ? { updated: event.updated } : {}),
+  };
+}
+
+function updateBody(input: PlanMirrorUpdateInput): EventInput {
+  return {
+    startDateLocal: `${dateText(input.dateKey)}T00:00:00`,
+    category: "WORKOUT",
+    name: input.name,
+    ...(input.durationS === null ? {} : { movingTime: input.durationS }),
+    ...eventContent(input.structureJson),
+  };
 }
 
 export function createPlanMirrorCalendarAdapter(
@@ -58,11 +103,7 @@ export function createPlanMirrorCalendarAdapter(
           category: ["WORKOUT"],
         }),
       );
-      return events.map((event) => ({
-        id: event.id,
-        dateKey: dateKey(event.startDateLocal),
-        externalId: event.uid ?? null,
-      }));
+      return events.map((event) => mappedEvent(event));
     },
     async createEvent(input) {
       return clientValue(
@@ -74,7 +115,7 @@ export function createPlanMirrorCalendarAdapter(
             type: eventType(input.sport),
             uid: input.externalId,
             ...(input.durationS === null ? {} : { movingTime: input.durationS }),
-            ...eventContent(input),
+            ...eventContent(input.structureJson),
           },
           { upsertOnUid: true },
         ),
@@ -82,6 +123,12 @@ export function createPlanMirrorCalendarAdapter(
     },
     async deleteEvent(input) {
       return clientValue(await requiredClient().events.delete(input.eventId));
+    },
+    async readEvent(input) {
+      return mappedEvent(clientValue(await requiredClient().events.get(input.eventId)));
+    },
+    async updateEvent(input) {
+      return clientValue(await requiredClient().events.update(input.eventId, updateBody(input)));
     },
   };
   return Object.freeze(adapter);

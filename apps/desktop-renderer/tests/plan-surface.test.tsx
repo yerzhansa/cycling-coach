@@ -42,6 +42,7 @@ function actions(): PlanActions {
     openWorkout: vi.fn(),
     closeWorkout: vi.fn(),
     resolveWorkoutMatch: vi.fn(),
+    resolveWorkoutDrift: vi.fn(),
     openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
@@ -668,17 +669,80 @@ describe("Plan surface", () => {
     expect(screen.getAllByText("Decision needed").length).toBeGreaterThan(0);
     expect(screen.getByRole("dialog")).toHaveTextContent("Suggested endurance");
     await user.click(screen.getByRole("button", { name: "Confirm match" }));
-    expect(planActions.resolveWorkoutMatch).toHaveBeenCalledWith(
-      workoutId,
-      activityId,
-      "confirm",
-    );
+    expect(planActions.resolveWorkoutMatch).toHaveBeenCalledWith(workoutId, activityId, "confirm");
     await user.click(screen.getByRole("button", { name: "Not this activity" }));
-    expect(planActions.resolveWorkoutMatch).toHaveBeenCalledWith(
-      workoutId,
-      activityId,
-      "reject",
-    );
+    expect(planActions.resolveWorkoutMatch).toHaveBeenCalledWith(workoutId, activityId, "reject");
+  });
+
+  it("shows the outside-edit comparison and exposes explicit adopt or restore choices", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const workoutId = "00000000000000000000000004";
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S032",
+      projection: "active",
+      planId: "00000000000000000000000003",
+      attentionCount: 1,
+      data: {
+        plan: {
+          id: "00000000000000000000000003",
+          name: "Gran Fondo Almaty",
+          primaryGoal: "Finish in the front half",
+          startDate: "2026-07-13",
+          targetDate: "2026-10-04",
+          kind: "full-plan",
+          totalWeeks: 12,
+          weekStartDay: 1,
+          workoutCount: 20,
+          plannedDurationS: 72_000,
+        },
+        today: "2026-08-18",
+        weekIndex: 6,
+        todayWorkout: null,
+        workouts: [
+          {
+            id: workoutId,
+            date: "2026-08-19",
+            sport: "cycling",
+            name: "Threshold 4×8",
+            durationS: 4_800,
+            drift: {
+              status: "detected",
+              eventId: "42",
+              plan: { date: "2026-08-19", name: "Threshold 4×8", durationS: 4_800 },
+              provider: {
+                date: "2026-08-19",
+                name: "Threshold 4×8",
+                durationS: 3_300,
+              },
+              error: null,
+            },
+          },
+        ],
+        selectedWorkoutId: workoutId,
+      },
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(
+      screen.getByRole("heading", { name: "Wednesday changed in Intervals" }),
+    ).toBeInTheDocument();
+    const comparisons = screen.getAllByText("Threshold 4×8");
+    expect(comparisons[0]?.parentElement).toHaveTextContent("1 h 20 min");
+    expect(comparisons[1]?.parentElement).toHaveTextContent("55 min");
+    await user.click(screen.getByRole("button", { name: "Adopt Intervals edit" }));
+    expect(planActions.resolveWorkoutDrift).toHaveBeenCalledWith(workoutId, "42", "adopt");
+    await user.click(screen.getByRole("button", { name: "Restore Plan workout" }));
+    expect(planActions.resolveWorkoutDrift).toHaveBeenCalledWith(workoutId, "42", "restore");
   });
 
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {

@@ -108,6 +108,7 @@ function stubPlanActions(): PlanActions {
     openWorkout: vi.fn(),
     closeWorkout: vi.fn(),
     resolveWorkoutMatch: vi.fn(),
+    resolveWorkoutDrift: vi.fn(),
     openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),

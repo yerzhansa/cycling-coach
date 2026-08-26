@@ -109,7 +109,9 @@ function validJson(value: unknown): value is string {
   }
 }
 
-function expectedKind(plan: Pick<PlanRecord, "startDateKey" | "targetDateKey" | "totalWeeks">): PlanKind {
+function expectedKind(
+  plan: Pick<PlanRecord, "startDateKey" | "targetDateKey" | "totalWeeks">,
+): PlanKind {
   if (plan.targetDateKey !== null) {
     const days = inclusiveCivilDays(plan.startDateKey, plan.targetDateKey);
     if (days <= 0) throw new PlanValidationError("invalid-target-date");
@@ -144,19 +146,19 @@ function validatePlan(plan: PlanRecord): void {
   if (plan.kind !== expectedKind(plan)) throw new PlanValidationError("inconsistent-kind");
   if (!validJson(plan.structureJson)) throw new PlanValidationError("invalid-json");
   if (
-    !Number.isSafeInteger(plan.createdAtMs)
-    || plan.createdAtMs < 0
-    || !Number.isSafeInteger(plan.updatedAtMs)
-    || plan.updatedAtMs < plan.createdAtMs
+    !Number.isSafeInteger(plan.createdAtMs) ||
+    plan.createdAtMs < 0 ||
+    !Number.isSafeInteger(plan.updatedAtMs) ||
+    plan.updatedAtMs < plan.createdAtMs
   ) {
     throw new PlanValidationError("invalid-timestamp");
   }
   if (!DEVICE_ID.test(plan.deviceId)) throw new PlanValidationError("invalid-device-id");
   if (
-    !Number.isSafeInteger(plan.hlcPhysicalMs)
-    || plan.hlcPhysicalMs < 0
-    || !Number.isSafeInteger(plan.hlcCounter)
-    || plan.hlcCounter < 0
+    !Number.isSafeInteger(plan.hlcPhysicalMs) ||
+    plan.hlcPhysicalMs < 0 ||
+    !Number.isSafeInteger(plan.hlcCounter) ||
+    plan.hlcCounter < 0
   ) {
     throw new PlanValidationError("invalid-hlc");
   }
@@ -164,21 +166,21 @@ function validatePlan(plan: PlanRecord): void {
 
 function validateWorkout(plan: PlanRecord, workout: PlanWorkoutRecord): void {
   if (
-    !ULID.test(workout.id)
-    || workout.planId !== plan.id
-    || typeof workout.sport !== "string"
-    || workout.sport.length === 0
-    || typeof workout.name !== "string"
-    || workout.name.length === 0
-    || (workout.durationS !== null
-      && (!Number.isSafeInteger(workout.durationS) || workout.durationS <= 0))
-    || !validJson(workout.structureJson)
-    || !ORIGIN.has(workout.origin)
-    || !DEVICE_ID.test(workout.deviceId)
-    || !Number.isSafeInteger(workout.hlcPhysicalMs)
-    || workout.hlcPhysicalMs < 0
-    || !Number.isSafeInteger(workout.hlcCounter)
-    || workout.hlcCounter < 0
+    !ULID.test(workout.id) ||
+    workout.planId !== plan.id ||
+    typeof workout.sport !== "string" ||
+    workout.sport.length === 0 ||
+    typeof workout.name !== "string" ||
+    workout.name.length === 0 ||
+    (workout.durationS !== null &&
+      (!Number.isSafeInteger(workout.durationS) || workout.durationS <= 0)) ||
+    !validJson(workout.structureJson) ||
+    !ORIGIN.has(workout.origin) ||
+    !DEVICE_ID.test(workout.deviceId) ||
+    !Number.isSafeInteger(workout.hlcPhysicalMs) ||
+    workout.hlcPhysicalMs < 0 ||
+    !Number.isSafeInteger(workout.hlcCounter) ||
+    workout.hlcCounter < 0
   ) {
     throw new PlanValidationError("invalid-workout");
   }
@@ -255,11 +257,15 @@ function workoutFromRow(row: Row): PlanWorkoutRecord {
 }
 
 export function createPlanRepository(store: PlanningStore): PlanRepository {
-  const replace = async (plan: PlanRecord, workouts: readonly PlanWorkoutRecord[]): Promise<void> => {
+  const replace = async (
+    plan: PlanRecord,
+    workouts: readonly PlanWorkoutRecord[],
+  ): Promise<void> => {
     validatePlan(plan);
     for (const workout of workouts) validateWorkout(plan, workout);
     await store.transaction(async () => {
-      await store.run(`INSERT INTO plan (
+      await store.run(
+        `INSERT INTO plan (
   id, origin_id, name, primary_goal, start_date_key, target_date_key, status, kind,
   total_weeks, week_start_day, structure_json, created_at_ms, updated_at_ms,
   device_id, hlc_physical_ms, hlc_counter
@@ -278,42 +284,47 @@ ON CONFLICT (id) DO UPDATE SET
   updated_at_ms = excluded.updated_at_ms,
   device_id = excluded.device_id,
   hlc_physical_ms = excluded.hlc_physical_ms,
-  hlc_counter = excluded.hlc_counter`, [
-        plan.id,
-        plan.originId,
-        plan.name,
-        plan.primaryGoal,
-        plan.startDateKey,
-        plan.targetDateKey,
-        plan.status,
-        plan.kind,
-        plan.totalWeeks,
-        plan.weekStartDay,
-        plan.structureJson,
-        plan.createdAtMs,
-        plan.updatedAtMs,
-        plan.deviceId,
-        plan.hlcPhysicalMs,
-        plan.hlcCounter,
-      ]);
+  hlc_counter = excluded.hlc_counter`,
+        [
+          plan.id,
+          plan.originId,
+          plan.name,
+          plan.primaryGoal,
+          plan.startDateKey,
+          plan.targetDateKey,
+          plan.status,
+          plan.kind,
+          plan.totalWeeks,
+          plan.weekStartDay,
+          plan.structureJson,
+          plan.createdAtMs,
+          plan.updatedAtMs,
+          plan.deviceId,
+          plan.hlcPhysicalMs,
+          plan.hlcCounter,
+        ],
+      );
       await store.run("DELETE FROM plan_workout WHERE plan_id = ?", [plan.id]);
       for (const workout of workouts) {
-        await store.run(`INSERT INTO plan_workout (
+        await store.run(
+          `INSERT INTO plan_workout (
   id, plan_id, date_key, sport, name, duration_s, structure_json, origin,
   device_id, hlc_physical_ms, hlc_counter
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-          workout.id,
-          workout.planId,
-          workout.dateKey,
-          workout.sport,
-          workout.name,
-          workout.durationS,
-          workout.structureJson,
-          workout.origin,
-          workout.deviceId,
-          workout.hlcPhysicalMs,
-          workout.hlcCounter,
-        ]);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            workout.id,
+            workout.planId,
+            workout.dateKey,
+            workout.sport,
+            workout.name,
+            workout.durationS,
+            workout.structureJson,
+            workout.origin,
+            workout.deviceId,
+            workout.hlcPhysicalMs,
+            workout.hlcCounter,
+          ],
+        );
       }
     });
   };
@@ -348,10 +359,11 @@ ON CONFLICT (id) DO UPDATE SET
     },
     async readWorkouts(planId: string) {
       if (!ULID.test(planId)) throw new PlanValidationError("invalid-id");
-      return (await store.all(
-        "SELECT * FROM plan_workout WHERE plan_id = ? ORDER BY date_key, id",
-        [planId],
-      )).map(workoutFromRow);
+      return (
+        await store.all("SELECT * FROM plan_workout WHERE plan_id = ? ORDER BY date_key, id", [
+          planId,
+        ])
+      ).map(workoutFromRow);
     },
     async count() {
       const row = await store.get("SELECT count(*) AS count FROM plan");

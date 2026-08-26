@@ -1323,6 +1323,145 @@ function AttentionProjection(): ReactElement {
   );
 }
 
+function WorkoutDriftProjection(props: {
+  readonly data: ReturnType<typeof PlanActiveProjectionDataSchema.parse>;
+  readonly scenarioId: string;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const selected =
+    props.data.selectedWorkoutId === undefined || props.data.selectedWorkoutId === null
+      ? null
+      : (props.data.workouts.find((workout) => workout.id === props.data.selectedWorkoutId) ??
+        null);
+  if (selected === null) {
+    return <StatusCard title="Workout changed in Intervals" support="Refreshing this workout…" />;
+  }
+  const resolving =
+    (transition.status === "submitting" || transition.status === "running") &&
+    (transition.transitionId === "PL-T15" || transition.transitionId === "PL-T16");
+  const adopted = props.scenarioId === "PL-S034";
+  const restored = props.scenarioId === "PL-S036";
+  const drift = selected.drift;
+  const heading = resolving
+    ? transition.transitionId === "PL-T15"
+      ? "Updating the Plan"
+      : "Restoring Plan workout"
+    : adopted
+      ? "Intervals edit adopted"
+      : restored
+        ? "Plan workout restored"
+        : `${formatCivilDate(selected.date, { weekday: "long" })} changed in Intervals`;
+  const support = resolving
+    ? transition.transitionId === "PL-T15"
+      ? `Keeping the Intervals workout and recording the adopted edit in Plan history.`
+      : `Writing the Plan workout back to Intervals and verifying the match.`
+    : adopted
+      ? `${selected.name} is now ${
+          selected.durationS === null ? "updated" : plannedTime(selected.durationS)
+        } in both the Plan and Intervals.`
+      : restored
+        ? `${selected.name} matches the Plan again in Intervals.`
+        : "Choose which version becomes authoritative.";
+  return (
+    <div className="grid gap-6">
+      <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
+        <div className="flex items-start gap-row">
+          <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-base font-semibold">
+              Plan active · week {props.data.weekIndex} of {props.data.plan.totalWeeks}
+            </h2>
+            <p className="m-0 text-ink-2">
+              {props.data.plan.name} · starts {formatCivilDate(props.data.plan.startDate)}
+            </p>
+          </div>
+        </div>
+      </section>
+      <section
+        className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1"
+        aria-live="polite"
+      >
+        <div className="flex items-start gap-row">
+          {resolving ? (
+            <LoaderCircle
+              className="mt-0.5 size-5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+          ) : adopted || restored ? (
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+          ) : (
+            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+          )}
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-base font-semibold">{heading}</h2>
+            <p className="m-0 text-ink-2">{support}</p>
+          </div>
+        </div>
+        {!resolving && !adopted && !restored && drift !== undefined ? (
+          <>
+            <div className="grid gap-inset rounded-card bg-sunk p-row sm:grid-cols-2">
+              <div className={SUPPORT_PAIR}>
+                <p className="m-0 text-sm text-ink-2">Plan</p>
+                <p className="m-0 font-medium">{drift.plan.name}</p>
+                <p className="m-0 text-sm text-ink-2">
+                  {formatCivilDate(drift.plan.date)} ·{" "}
+                  {drift.plan.durationS === null
+                    ? "No duration"
+                    : plannedTime(drift.plan.durationS)}
+                </p>
+              </div>
+              <div className={SUPPORT_PAIR}>
+                <p className="m-0 text-sm text-ink-2">Intervals</p>
+                <p className="m-0 font-medium">{drift.provider.name}</p>
+                <p className="m-0 text-sm text-ink-2">
+                  {formatCivilDate(drift.provider.date)} ·{" "}
+                  {drift.provider.durationS === null
+                    ? "No duration"
+                    : plannedTime(drift.provider.durationS)}
+                </p>
+              </div>
+            </div>
+            {drift.error === null ? null : (
+              <div
+                className="flex items-start gap-row rounded-ctl bg-[color-mix(in_srgb,var(--danger)_8%,var(--surface))] p-3"
+                role="alert"
+              >
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-danger" aria-hidden="true" />
+                <p className="m-0 text-sm text-ink-2">{drift.error.message}</p>
+              </div>
+            )}
+            <div className="flex flex-wrap justify-end gap-inset">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={actions === null || resolving}
+                onClick={() => actions?.resolveWorkoutDrift(selected.id, drift.eventId, "adopt")}
+              >
+                Adopt Intervals edit
+              </Button>
+              <Button
+                type="button"
+                disabled={actions === null || resolving}
+                onClick={() => actions?.resolveWorkoutDrift(selected.id, drift.eventId, "restore")}
+              >
+                Restore Plan workout
+              </Button>
+            </div>
+          </>
+        ) : null}
+        {!resolving && (adopted || restored) ? (
+          <div className="flex justify-end">
+            <Button type="button" onClick={() => actions?.closeWorkout()}>
+              Back to Plan
+            </Button>
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
 function ActiveProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
   const transition = useEnduragentStore((state) => state.plan.transition);
@@ -1358,6 +1497,9 @@ function ActiveProjection(): ReactElement {
     data.selectedWorkoutId === undefined || data.selectedWorkoutId === null
       ? null
       : (data.workouts.find((workout) => workout.id === data.selectedWorkoutId) ?? null);
+  if (["PL-S032", "PL-S033", "PL-S034", "PL-S035", "PL-S036"].includes(model.scenarioId)) {
+    return <WorkoutDriftProjection data={data} scenarioId={model.scenarioId} />;
+  }
   return (
     <div className="grid gap-6">
       <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
@@ -1479,6 +1621,7 @@ function ActiveProjection(): ReactElement {
           {data.workouts.map((workout) => {
             const status = workout.match?.status ?? "upcoming";
             const decision = status === "decision-needed";
+            const drift = workout.drift !== undefined;
             return (
               <button
                 key={workout.id}
@@ -1494,7 +1637,11 @@ function ActiveProjection(): ReactElement {
                 <span className="text-ink-2">
                   {workout.durationS === null ? "—" : plannedTime(workout.durationS)}
                 </span>
-                {decision ? (
+                {drift ? (
+                  <span className="justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn">
+                    Changed in Intervals
+                  </span>
+                ) : decision ? (
                   <span className="justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn">
                     Decision needed
                   </span>
