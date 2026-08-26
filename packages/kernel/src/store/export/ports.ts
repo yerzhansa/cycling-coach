@@ -48,7 +48,10 @@ export interface ExportSource {
   /** Rows of one authored-class table. For a mixed table, opts.manualOnly
    *  is true and the source MUST return only provenance='manual' rows. Rows
    *  MUST be JSON-serializable (the adapter normalizes any bigint columns). */
-  readAuthoredTable(table: string, opts: { readonly manualOnly: boolean }): Promise<readonly AuthoredRow[]>;
+  readAuthoredTable(
+    table: string,
+    opts: { readonly manualOnly: boolean },
+  ): Promise<readonly AuthoredRow[]>;
 }
 
 export interface ArchiveManifestReader {
@@ -88,6 +91,7 @@ export const PURE_AUTHORED_TABLES = [
   "plan_draft_revision",
   "plan_source_request",
   "plan_workout",
+  "plan_workout_drift",
   "plan_workout_match",
 ] as const;
 

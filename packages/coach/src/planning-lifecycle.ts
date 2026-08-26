@@ -24,6 +24,11 @@ export type ActivePlanScenario =
   | "PL-S004"
   | "PL-S013"
   | "PL-S021"
+  | "PL-S032"
+  | "PL-S033"
+  | "PL-S034"
+  | "PL-S035"
+  | "PL-S036"
   | "PL-S010"
   | "PL-S037"
   | "PL-S038"
@@ -341,6 +346,17 @@ export function buildActivePlanReadModel(input: {
     "PL-S004": ["Plan active", "This week reflects your Plan and completed activities."],
     "PL-S013": ["Plan active", "Activity matches are shown as of the last successful sync."],
     "PL-S021": ["Workout details", "Review how this workout matched an activity."],
+    "PL-S032": ["Workout changed in Intervals", "Choose which version becomes authoritative."],
+    "PL-S033": [
+      "Updating the Plan",
+      "Keeping the Intervals edit and recording it in Plan history.",
+    ],
+    "PL-S034": ["Intervals edit adopted", "The Plan now uses the workout from Intervals."],
+    "PL-S035": [
+      "Restoring Plan workout",
+      "Writing the Plan workout back to Intervals and verifying it.",
+    ],
+    "PL-S036": ["Plan workout restored", "Intervals now matches the Plan again."],
     "PL-S010": ["Plan active", "Calendar update has not started."],
     "PL-S037": ["Plan active locally", "Intervals is ready to update."],
     "PL-S038": ["Updating Intervals", "Writing today plus the next six days."],
@@ -361,6 +377,15 @@ export function buildActivePlanReadModel(input: {
     });
   }
   for (const workout of input.data.workouts) {
+    if (workout.drift !== undefined) {
+      attentionItems.push({
+        id: `workout-drift:${workout.id}`,
+        title: `${workout.name} changed in Intervals`,
+        scenarioId: "PL-S032",
+        priority: "dated",
+        affectedDate: workout.date,
+      });
+    }
     if (workout.match?.requiresConfirmation !== true) continue;
     attentionItems.push({
       id: `workout-match:${workout.id}`,
@@ -385,7 +410,13 @@ export function buildActivePlanReadModel(input: {
     title: copy[input.scenarioId][0],
     summary: copy[input.scenarioId][1],
     projection: "active",
-    transitions: [guard("PL-T12"), guard("PL-T13"), guard("PL-T14")],
+    transitions: [
+      guard("PL-T12"),
+      guard("PL-T13"),
+      guard("PL-T14"),
+      guard("PL-T15"),
+      guard("PL-T16"),
+    ],
     reconciliation: input.reconciliation,
     attention,
     activeOperation: null,

@@ -46,6 +46,10 @@ import {
   verifyPlanMirror,
   projectWorkoutMatches,
   refreshPlanWorkoutMatches,
+  adoptProviderWorkoutEdit,
+  refreshPlanWorkoutDrifts,
+  restorePlanWorkout,
+  PlanWorkoutDriftError,
   type ProjectedWorkoutMatch,
   type PlanMirrorCalendarPort,
   type PlanReconciliationProjection,
@@ -53,6 +57,7 @@ import {
   type PlanFtpSnapshot,
   type PlanStartDatePreview,
   type RaceCourseRecalculatingState,
+  type PlanWorkoutDriftSnapshot,
 } from "@enduragent/engine";
 import {
   buildActivePlanReadModel,
@@ -65,6 +70,7 @@ import {
   createPlanReconciliationRepository,
   createPlanRepository,
   createPlanWorkoutMatchRepository,
+  createPlanWorkoutDriftRepository,
   planWeekIndex,
   PlanConversationValidationError,
   type PlanConversationRecord,
@@ -76,6 +82,8 @@ import {
   type PlanRepository,
   type PlanWorkoutRecord,
   type PlanWorkoutMatchRepository,
+  type PlanWorkoutDriftRecord,
+  type PlanWorkoutDriftRepository,
   parseRaceCourseSnapshot,
   type RaceCourseSnapshot,
 } from "@enduragent/kernel/planning";
@@ -104,6 +112,18 @@ const PROVIDER_FAILED: PlanError = Object.freeze({
 const PERSISTENCE_FAILED: PlanError = Object.freeze({
   code: "persistence-failed",
   message: "The Plan couldn’t save that change. Try again.",
+  retryable: true,
+});
+
+const WORKOUT_DRIFT_PROVIDER_FAILED: PlanError = Object.freeze({
+  code: "provider-failed",
+  message: "Couldn’t update this workout. Nothing was changed; try again.",
+  retryable: true,
+});
+
+const WORKOUT_DRIFT_CHANGED: PlanError = Object.freeze({
+  code: "conflict",
+  message: "This workout changed again in Intervals. Review the latest version before choosing.",
   retryable: true,
 });
 
@@ -211,6 +231,8 @@ export interface CreatePlanningOperationsDependencies {
   readonly reconciliations?: PlanReconciliationRepository;
   readonly calendar?: PlanMirrorCalendarPort;
   readonly workoutMatches?: PlanWorkoutMatchRepository;
+  readonly workoutDrifts?: PlanWorkoutDriftRepository;
+  readonly workoutDriftCalendar?: PlanMirrorCalendarPort;
   readonly todayDateKey?: () => number;
 }
 
@@ -313,6 +335,8 @@ function activePlanData(input: {
     readonly awaitingSync: boolean;
   };
   readonly selectedWorkoutId?: string | null;
+  readonly drifts: readonly PlanWorkoutDriftRecord[];
+  readonly driftError?: PlanError | null;
 }): PlanActiveProjectionData {
   const plan = draftPlanProjection(input.plan, input.workouts);
   if (plan === null) throw new TypeError("An active Plan projection requires a Plan.");
@@ -328,17 +352,20 @@ function activePlanData(input: {
   const windowEndDateKey = addCivilDays(weekStartDateKey, 6);
   const matchByWorkout = new Map(
     input.matchRows
-      .filter((row): row is ProjectedWorkoutMatch & { readonly workoutId: string } =>
-        row.workoutId !== null,
+      .filter(
+        (row): row is ProjectedWorkoutMatch & { readonly workoutId: string } =>
+          row.workoutId !== null,
       )
       .map((row) => [row.workoutId, row]),
   );
+  const driftByWorkout = new Map(input.drifts.map((drift) => [drift.planWorkoutId, drift]));
+  const parsedDriftSnapshot = (value: string): PlanWorkoutDriftSnapshot =>
+    JSON.parse(value) as PlanWorkoutDriftSnapshot;
   const workouts = input.workouts
-    .filter(
-      (workout) => workout.dateKey >= weekStartDateKey && workout.dateKey <= windowEndDateKey,
-    )
+    .filter((workout) => workout.dateKey >= weekStartDateKey && workout.dateKey <= windowEndDateKey)
     .map((workout) => {
       const match = matchByWorkout.get(workout.id);
+      const drift = driftByWorkout.get(workout.id);
       return {
         id: workout.id,
         date: dateText(workout.dateKey),
@@ -353,17 +380,37 @@ function activePlanData(input: {
                 status: match.status,
                 activityId: match.activityId,
                 matchId: match.matchId,
-                actualDate:
-                  match.actualDateKey === null ? null : dateText(match.actualDateKey),
+                actualDate: match.actualDateKey === null ? null : dateText(match.actualDateKey),
                 actualDurationS: match.actualDurationS,
                 requiresConfirmation: match.requiresConfirmation,
+              },
+            }),
+        ...(drift === undefined
+          ? {}
+          : {
+              drift: {
+                status: "detected" as const,
+                eventId: String(drift.providerEventId),
+                plan: {
+                  date: dateText(parsedDriftSnapshot(drift.planSnapshotJson).dateKey),
+                  name: parsedDriftSnapshot(drift.planSnapshotJson).name,
+                  durationS: parsedDriftSnapshot(drift.planSnapshotJson).durationS,
+                },
+                provider: {
+                  date: dateText(parsedDriftSnapshot(drift.providerSnapshotJson).dateKey),
+                  name: parsedDriftSnapshot(drift.providerSnapshotJson).name,
+                  durationS: parsedDriftSnapshot(drift.providerSnapshotJson).durationS,
+                },
+                error: input.selectedWorkoutId === workout.id ? (input.driftError ?? null) : null,
               },
             }),
       };
     });
   const extra = input.matchRows
     .filter(
-      (row): row is ProjectedWorkoutMatch & {
+      (
+        row,
+      ): row is ProjectedWorkoutMatch & {
         readonly workoutId: null;
         readonly activityId: string;
         readonly actualDateKey: number;
@@ -392,8 +439,7 @@ function activePlanData(input: {
     plan,
     today: dateText(input.todayDateKey),
     weekIndex,
-    todayWorkout:
-      workouts.find((workout) => workout.date === dateText(input.todayDateKey)) ?? null,
+    todayWorkout: workouts.find((workout) => workout.date === dateText(input.todayDateKey)) ?? null,
     workouts: allWorkouts,
     matchSync: input.matchSync,
     selectedWorkoutId: input.selectedWorkoutId ?? null,
@@ -552,6 +598,7 @@ interface ReadOverrides {
   readonly startDate?: PlanStartDateProjection;
   readonly activeScenario?: ActivePlanScenario;
   readonly selectedWorkoutId?: string | null;
+  readonly driftError?: PlanError | null;
 }
 
 function queueText(queue: ChatQueueSnapshot): string {
@@ -587,6 +634,8 @@ export function createPlanningOperations(
     dependencies.reconciliations ?? createPlanReconciliationRepository(input.context.store);
   const workoutMatches =
     dependencies.workoutMatches ?? createPlanWorkoutMatchRepository(input.context.store);
+  const workoutDrifts =
+    dependencies.workoutDrifts ?? createPlanWorkoutDriftRepository(input.context.store);
   const enqueue = createSerializedLane();
 
   const readActive = async (
@@ -629,6 +678,30 @@ export function createPlanningOperations(
       todayDateKey,
       awaitingSync: matchSync.awaitingSync,
     });
+    let drifts = await workoutDrifts.readOpenForPlan(plan.id);
+    if (dependencies.workoutDriftCalendar !== undefined) {
+      try {
+        const windowEndDateKey = addCivilDays(todayDateKey, 6);
+        const events = await dependencies.workoutDriftCalendar.listEvents({
+          startDateKey: todayDateKey,
+          endDateKey: windowEndDateKey,
+        });
+        drifts = await refreshPlanWorkoutDrifts(
+          { plan, workouts, events, todayDateKey, windowEndDateKey },
+          {
+            repository: workoutDrifts,
+            identity: {
+              newId: () => input.identity.newUlid(),
+              deviceId: () => input.identity.deviceId(),
+              stamp: () => input.identity.hlcStamp(),
+            },
+            now: () => input.identity.hlcStamp().physicalMs,
+          },
+        );
+      } catch {
+        // Provider reads are best effort; an already-detected decision stays durable and visible.
+      }
+    }
     const baseScenario = activeScenario(projection, undefined);
     const scenarioId =
       overrides.activeScenario ??
@@ -653,6 +726,8 @@ export function createPlanningOperations(
         matchRows,
         matchSync,
         selectedWorkoutId: overrides.selectedWorkoutId,
+        drifts,
+        driftError: overrides.driftError,
       }),
       reconciliation: {
         status,
@@ -1657,9 +1732,9 @@ export function createPlanningOperations(
         if (command.transitionId === "PL-T13") {
           const [plan, workout] = await Promise.all([
             plans.read(command.planId),
-            plans.readWorkouts(command.planId).then((workouts) =>
-              workouts.find((candidate) => candidate.id === command.workoutId),
-            ),
+            plans
+              .readWorkouts(command.planId)
+              .then((workouts) => workouts.find((candidate) => candidate.id === command.workoutId)),
           ]);
           if (plan?.status !== "active") return reject(UNAVAILABLE);
           if (workout === undefined) {
@@ -1672,10 +1747,14 @@ export function createPlanningOperations(
               return reject(UNAVAILABLE);
             }
           }
+          const drift =
+            workout === undefined
+              ? undefined
+              : await workoutDrifts.readOpenForWorkout(command.workoutId);
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",
             state: await read({
-              activeScenario: "PL-S021",
+              activeScenario: drift === undefined ? "PL-S021" : "PL-S032",
               selectedWorkoutId: command.workoutId,
             }),
           });
@@ -1708,6 +1787,67 @@ export function createPlanningOperations(
             });
           }
         }
+        if (command.transitionId === "PL-T15" || command.transitionId === "PL-T16") {
+          const eventId = Number(command.eventId);
+          if (
+            dependencies.workoutDriftCalendar === undefined ||
+            !Number.isSafeInteger(eventId) ||
+            eventId <= 0
+          )
+            return reject(UNAVAILABLE);
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          const driftDependencies = {
+            repository: workoutDrifts,
+            plans,
+            calendar: dependencies.workoutDriftCalendar,
+            identity: {
+              newId: () => input.identity.newUlid(),
+              deviceId: () => input.identity.deviceId(),
+              stamp: () => input.identity.hlcStamp(),
+            },
+            now: () => input.identity.hlcStamp().physicalMs,
+          };
+          try {
+            if (command.transitionId === "PL-T15") {
+              await adoptProviderWorkoutEdit(
+                {
+                  planId: command.planId,
+                  workoutId: command.workoutId,
+                  eventId,
+                  todayDateKey,
+                },
+                driftDependencies,
+              );
+            } else {
+              await restorePlanWorkout(
+                {
+                  planId: command.planId,
+                  workoutId: command.workoutId,
+                  eventId,
+                  todayDateKey,
+                },
+                driftDependencies,
+              );
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                activeScenario: command.transitionId === "PL-T15" ? "PL-S034" : "PL-S036",
+                selectedWorkoutId: command.workoutId,
+              }),
+            });
+          } catch (error) {
+            const driftError =
+              error instanceof PlanWorkoutDriftError && error.code === "invalid-provider-event"
+                ? WORKOUT_DRIFT_CHANGED
+                : WORKOUT_DRIFT_PROVIDER_FAILED;
+            return reject(driftError, {
+              activeScenario: "PL-S032",
+              selectedWorkoutId: command.workoutId,
+              driftError,
+            });
+          }
+        }
         if (command.transitionId === "PL-T33") {
           const state = await read();
           if (state.planId !== command.planId || state.attention.count === 0) {
@@ -1721,6 +1861,15 @@ export function createPlanningOperations(
                 state: await read({
                   activeScenario: "PL-S021",
                   selectedWorkoutId: item.id.slice("workout-match:".length),
+                }),
+              });
+            }
+            if (item.id.startsWith("workout-drift:")) {
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: await read({
+                  activeScenario: "PL-S032",
+                  selectedWorkoutId: item.id.slice("workout-drift:".length),
                 }),
               });
             }
@@ -1738,17 +1887,24 @@ export function createPlanningOperations(
           });
         }
         if (command.transitionId === "PL-T34") {
-          if (!command.attentionId.startsWith("workout-match:")) return reject(UNAVAILABLE);
+          const isMatch = command.attentionId.startsWith("workout-match:");
+          const isDrift = command.attentionId.startsWith("workout-drift:");
+          if (!isMatch && !isDrift) return reject(UNAVAILABLE);
           const plan = await plans.readLatest();
           if (plan?.status !== "active") return reject(UNAVAILABLE);
-          const workoutId = command.attentionId.slice("workout-match:".length);
+          const workoutId = command.attentionId.slice(
+            isMatch ? "workout-match:".length : "workout-drift:".length,
+          );
           const workout = (await plans.readWorkouts(plan.id)).find(
             (candidate) => candidate.id === workoutId,
           );
           if (workout === undefined) return reject(UNAVAILABLE);
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",
-            state: await read({ activeScenario: "PL-S021", selectedWorkoutId: workoutId }),
+            state: await read({
+              activeScenario: isMatch ? "PL-S021" : "PL-S032",
+              selectedWorkoutId: workoutId,
+            }),
           });
         }
         return reject(UNAVAILABLE);

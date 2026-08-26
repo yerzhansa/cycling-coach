@@ -16,6 +16,20 @@ export interface PlanMirrorEvent {
   readonly id: number;
   readonly dateKey: number;
   readonly externalId: string | null;
+  readonly category?: string | null;
+  readonly name?: string | null;
+  readonly durationS?: number | null;
+  readonly description?: string | null;
+  readonly workoutDoc?: Readonly<Record<string, unknown>> | null;
+  readonly updated?: string | null;
+}
+
+export interface PlanMirrorUpdateInput {
+  readonly eventId: number;
+  readonly dateKey: number;
+  readonly name: string;
+  readonly durationS: number | null;
+  readonly structureJson: string;
 }
 
 export interface PlanMirrorCreateInput {
@@ -36,6 +50,8 @@ export interface PlanMirrorCalendarPort {
   }): Promise<readonly PlanMirrorEvent[]>;
   createEvent(input: PlanMirrorCreateInput): Promise<unknown>;
   deleteEvent(input: { readonly eventId: number }): Promise<unknown>;
+  readEvent?(input: { readonly eventId: number }): Promise<PlanMirrorEvent>;
+  updateEvent?(input: PlanMirrorUpdateInput): Promise<unknown>;
 }
 
 export interface PlanReconcilerIdentity {

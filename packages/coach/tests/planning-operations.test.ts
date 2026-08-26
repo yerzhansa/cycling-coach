@@ -19,7 +19,12 @@ import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/ke
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
-import type { PlanFtpAdapter, PlanFtpSnapshot, PlanMirrorCalendarPort } from "@enduragent/engine";
+import {
+  planMirrorExternalId,
+  type PlanFtpAdapter,
+  type PlanFtpSnapshot,
+  type PlanMirrorCalendarPort,
+} from "@enduragent/engine";
 import { createPlanningOperations, type PlanDraftBuilder } from "../src/planning-operations.js";
 import type { PlanRaceCourseAdapter } from "../src/planning-race-course.js";
 import type { CoachStoreWriterContext } from "../src/runtime.js";
@@ -972,7 +977,9 @@ describe("Plan operations", () => {
   it("opens a WorkoutMatch decision and persists athlete confirmation without Intervals mutation", async () => {
     const authored = identity();
     const activePlan = plan(`${"0".repeat(25)}W`, 40);
-    const workouts = await activationBuilder().form({} as never).then((build) => build.workouts);
+    const workouts = await activationBuilder()
+      .form({} as never)
+      .then((build) => build.workouts);
     await createPlanRepository(store).replace({ ...activePlan, status: "active" }, workouts);
     const activityId = "a".repeat(64);
     const matchId = `${"0".repeat(25)}V`;
@@ -1008,29 +1015,35 @@ describe("Plan operations", () => {
       },
     });
     if (initial?.status !== "ready") throw new TypeError("Active Plan missing.");
-    expect(initial.state.data.workouts).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: workouts[0]!.id,
-        match: expect.objectContaining({
-          status: "decision-needed",
-          requiresConfirmation: true,
+    expect(initial.state.data.workouts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: workouts[0]!.id,
+          match: expect.objectContaining({
+            status: "decision-needed",
+            requiresConfirmation: true,
+          }),
         }),
+      ]),
+    );
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T33",
+        commandId: "command-attention",
+        planId: activePlan.id,
       }),
-    ]));
-    await expect(operations.executePlanTransition?.({
-      transitionId: "PL-T33",
-      commandId: "command-attention",
-      planId: activePlan.id,
-    })).resolves.toMatchObject({
+    ).resolves.toMatchObject({
       status: "completed",
       state: { scenarioId: "PL-S021", data: { selectedWorkoutId: workouts[0]!.id } },
     });
-    await expect(operations.executePlanTransition?.({
-      transitionId: "PL-T13",
-      commandId: "command-open",
-      planId: activePlan.id,
-      workoutId: workouts[0]!.id,
-    })).resolves.toMatchObject({
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T13",
+        commandId: "command-open",
+        planId: activePlan.id,
+        workoutId: workouts[0]!.id,
+      }),
+    ).resolves.toMatchObject({
       status: "completed",
       state: { scenarioId: "PL-S021", data: { selectedWorkoutId: workouts[0]!.id } },
     });
@@ -1050,15 +1063,95 @@ describe("Plan operations", () => {
       },
     });
     if (confirmed?.status !== "completed") throw new TypeError("Match was not confirmed.");
-    expect(confirmed.state.data.workouts).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: workouts[0]!.id,
-        match: expect.objectContaining({ status: "as-planned" }),
-      }),
-    ]));
+    expect(confirmed.state.data.workouts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: workouts[0]!.id,
+          match: expect.objectContaining({ status: "as-planned" }),
+        }),
+      ]),
+    );
     await expect(matchRepository.readForWorkout(workouts[0]!.id)).resolves.toEqual([
       expect.objectContaining({ decision: "confirmed" }),
     ]);
+  });
+
+  it("surfaces an outside Intervals edit and adopts it only after athlete confirmation", async () => {
+    const authored = identity();
+    const activePlan = plan(`${"0".repeat(25)}W`, 40);
+    const workouts = await activationBuilder()
+      .form({} as never)
+      .then((build) => build.workouts);
+    const target = workouts[0]!;
+    await createPlanRepository(store).replace({ ...activePlan, status: "active" }, workouts);
+    const providerEvent = {
+      id: 42,
+      dateKey: target.dateKey,
+      externalId: planMirrorExternalId(activePlan.id, target.id),
+      category: "WORKOUT",
+      name: target.name,
+      durationS: 3_300,
+      description: "Shortened in Intervals",
+      workoutDoc: null,
+      updated: "2026-07-09T10:00:00Z",
+    } as const;
+    const updateEvent = vi.fn();
+    const calendar: PlanMirrorCalendarPort = {
+      listEvents: vi.fn(async () => [providerEvent]),
+      createEvent: vi.fn(),
+      deleteEvent: vi.fn(),
+      readEvent: vi.fn(async () => providerEvent),
+      updateEvent,
+    };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { todayDateKey: () => target.dateKey, workoutDriftCalendar: calendar },
+    );
+
+    const initial = await operations.getPlanState?.({});
+    expect(initial).toMatchObject({
+      status: "ready",
+      state: {
+        attention: { count: 1, destination: "direct" },
+        data: {
+          workouts: expect.arrayContaining([
+            expect.objectContaining({
+              id: target.id,
+              drift: expect.objectContaining({
+                eventId: "42",
+                provider: expect.objectContaining({ durationS: 3_300 }),
+              }),
+            }),
+          ]),
+        },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T33",
+        commandId: "command-attention",
+        planId: activePlan.id,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S032", data: { selectedWorkoutId: target.id } },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T15",
+        commandId: "command-adopt",
+        planId: activePlan.id,
+        workoutId: target.id,
+        eventId: "42",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S034", attention: { count: 0 } },
+    });
+    expect(updateEvent).not.toHaveBeenCalled();
+    await expect(createPlanRepository(store).readWorkouts(activePlan.id)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: target.id, durationS: 3_300 })]),
+    );
   });
 
   it("hydrates an interrupted reconciliation as crash-resume work without attention", async () => {

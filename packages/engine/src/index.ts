@@ -256,11 +256,23 @@ export {
   type PlanMirrorCalendarPort,
   type PlanMirrorCreateInput,
   type PlanMirrorEvent,
+  type PlanMirrorUpdateInput,
   type PlanReconciliationDomainState,
   type PlanReconciliationProjection,
   type PlanReconcilerDeps,
   type PlanReconcilerIdentity,
 } from "./planning/reconciler.js";
+export {
+  PlanWorkoutDriftError,
+  adoptProviderWorkoutEdit,
+  planWorkoutDriftSnapshot,
+  providerWorkoutDriftSnapshot,
+  refreshPlanWorkoutDrifts,
+  restorePlanWorkout,
+  type PlanWorkoutDriftDeps,
+  type PlanWorkoutDriftIdentity,
+  type PlanWorkoutDriftSnapshot,
+} from "./planning/workout-drift.js";
 export {
   activatePlanDraft,
   type ActivatePlanDraftInput,
