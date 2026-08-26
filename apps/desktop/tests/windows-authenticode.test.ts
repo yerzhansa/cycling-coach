@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import {
@@ -26,6 +26,14 @@ const scriptPath = resolve(
 const temporaryRoots: string[] = [];
 let directory: string;
 let installerPath: string;
+
+const require = createRequire(import.meta.url);
+const electronBuilderRequire = createRequire(require.resolve("electron-builder"));
+const { buildBlockMap } = electronBuilderRequire(
+  "app-builder-lib/out/targets/blockmap/blockmap",
+) as {
+  buildBlockMap: (inputPath: string, compression: "gzip", outputPath: string) => Promise<unknown>;
+};
 
 function summary(
   overrides: Partial<WindowsAuthenticodeSummary> = {},
@@ -78,28 +86,18 @@ beforeEach(async () => {
   const names = windowsReleaseArtifactNames(version);
   installerPath = join(directory, names.installer);
   const sha512 = createHash("sha512").update(installer).digest("base64");
-  await Promise.all([
-    writeFile(installerPath, installer),
-    writeFile(
-      join(directory, names.blockmap),
-      gzipSync(
-        JSON.stringify({
-          version: "2",
-          files: [{ name: "file", offset: 0, checksums: ["x"], sizes: [1] }],
-        }),
-      ),
-    ),
-    writeFile(
-      join(directory, names.metadata),
-      stringify({
-        version,
-        files: [{ url: names.installer, sha512, size: installer.length }],
-        path: names.installer,
-        sha512,
-        releaseDate: "2026-08-25T00:00:00.000Z",
-      }),
-    ),
-  ]);
+  await writeFile(installerPath, installer);
+  await buildBlockMap(installerPath, "gzip", join(directory, names.blockmap));
+  await writeFile(
+    join(directory, names.metadata),
+    stringify({
+      version,
+      files: [{ url: names.installer, sha512, size: installer.length }],
+      path: names.installer,
+      sha512,
+      releaseDate: "2026-08-25T00:00:00.000Z",
+    }),
+  );
 });
 
 describe("Windows Authenticode decisions", () => {
