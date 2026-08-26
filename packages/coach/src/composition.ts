@@ -90,7 +90,11 @@ import {
   type VerifyIntervalsCredentialRpcParams,
   type VerifyIntervalsCredentialRpcResult,
 } from "@enduragent/coach-contract";
-import { createCyclingPlanFtpAdapter, cyclingSport } from "@enduragent/sport-cycling";
+import {
+  createCyclingPlanFtpAdapter,
+  cyclingSport,
+  projectCyclingReadinessInput,
+} from "@enduragent/sport-cycling";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import { createPowerProgressStateSource } from "./power-progress.js";
 import { createRecentRidesSource } from "./recent-rides.js";
@@ -647,6 +651,16 @@ function readReferenceState(dataDir: string): ReferenceStateSnapshot {
     ),
     latest: read(join(referenceDir, "latest.json"), (value) => LatestJsonSchema.safeParse(value)),
   };
+}
+
+function readLatestReference(dataDir: string) {
+  try {
+    const value = JSON.parse(readFileSync(join(dataDir, "data", "latest.json"), "utf8")) as unknown;
+    const result = LatestJsonSchema.safeParse(value);
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
 }
 
 function credential(value: unknown): OAuthCredential {
@@ -1569,6 +1583,45 @@ export async function createLocalCoachComposition(
         ? null
         : makeChatClient({ apiKey: intervals.apiKey, athleteId: intervals.athleteId });
     });
+    const readiness = {
+      async read({
+        plan,
+        workouts,
+        todayDateKey,
+      }: {
+        readonly plan: { readonly targetDateKey: number | null };
+        readonly workouts: readonly {
+          readonly dateKey: number;
+          readonly name: string;
+          readonly durationS: number | null;
+          readonly structureJson: string;
+        }[];
+        readonly todayDateKey: number;
+      }) {
+        const latest = readLatestReference(input.home.root);
+        const civil = (dateKey: number): string => {
+          const value = String(dateKey).padStart(8, "0");
+          return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+        };
+        const refreshedAtMs = Date.parse(latest?.metadata.last_updated ?? "");
+        return projectCyclingReadinessInput({
+          today: civil(todayDateKey),
+          raceDate: plan.targetDateKey === null ? null : civil(plan.targetDateKey),
+          wellness: latest?.wellness_data ?? null,
+          currentStatus: latest?.current_status ?? null,
+          lastSuccessfulRefreshAtMs: Number.isFinite(refreshedAtMs) ? refreshedAtMs : null,
+          workouts: workouts.map((workout) => ({
+            date: civil(workout.dateKey),
+            name: workout.name,
+            durationS: workout.durationS,
+            structureJson: workout.structureJson,
+          })),
+        });
+      },
+      async refresh() {
+        await coachOperations.sync({});
+      },
+    };
     const planningOperations = createPlanningOperations(
       {
         context: input.context,
@@ -1581,6 +1634,7 @@ export async function createLocalCoachComposition(
         todayDateKey: planningDateKey,
         calendar: planCalendar,
         workoutDriftCalendar: planCalendar,
+        readiness,
       },
     );
     const operations = {

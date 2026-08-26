@@ -1238,6 +1238,57 @@ describe("Plan view adapter", () => {
     ]);
   });
 
+  it("opens, refreshes, and closes Race readiness with exact commands", async () => {
+    const planId = "00000000000000000000000003";
+    const active = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId,
+    });
+    const readiness = { ...active, scenarioId: "PL-S012" as const };
+    const subject = harness({
+      ids: ["readiness-open", "readiness-refresh", "readiness-close"],
+      getPlanState: async () => ({ status: "ready", state: active }),
+      executePlanTransition: async (command) => ({
+        status: "completed",
+        state: command.transitionId === "PL-T39" ? active : readiness,
+      }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.openReadiness();
+    await settle();
+    subject.adapter.refreshReadiness();
+    await settle();
+    subject.adapter.closeReadiness();
+    await settle();
+
+    expect(subject.executePlanTransition.mock.calls.map(([command]) => command)).toEqual([
+      {
+        transitionId: "PL-T32",
+        commandId: "readiness-open",
+        planId,
+        mode: "open",
+      },
+      {
+        transitionId: "PL-T32",
+        commandId: "readiness-refresh",
+        planId,
+        mode: "refresh",
+      },
+      {
+        transitionId: "PL-T39",
+        commandId: "readiness-close",
+        action: "back",
+        sourceScenarioId: "PL-S012",
+        destinationScenarioId: "PL-S004",
+        returnFocusId: "plan-readiness-trigger",
+      },
+    ]);
+  });
+
   it("resumes an interrupted reconciliation once after hydration", async () => {
     const state = planReadModel({
       lifecycle: "active",

@@ -87,6 +87,9 @@ export interface PlanActions {
   closeSeason(): void;
   openRaceWeek(): void;
   closeRaceWeek(): void;
+  openReadiness(): void;
+  closeReadiness(): void;
+  refreshReadiness(): void;
   openWorkout(workoutId: string): void;
   closeWorkout(): void;
   resolveWorkoutMatch(workoutId: string, activityId: string, decision: "confirm" | "reject"): void;

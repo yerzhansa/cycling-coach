@@ -1901,6 +1901,122 @@ describe("Plan operations", () => {
     await expect(plans.readWorkouts(planId)).resolves.toEqual(beforeWorkouts);
   });
 
+  it("opens and refreshes Race readiness without persisting modeled Form", async () => {
+    const planId = `${"0".repeat(25)}A`;
+    const activePlan = { ...plan(planId, 10), status: "active" as const };
+    const plans = createPlanRepository(store);
+    await plans.replace(activePlan, []);
+    const input = {
+      today: "2026-08-26",
+      raceDate: "2026-08-28",
+      platformSeed: {
+        asOf: "2026-08-26",
+        fitness: 60,
+        fatigue: 59,
+        lastSuccessfulRefreshAtMs: 1_777_000_000_000,
+      },
+      dailyLoadRanges: [
+        { date: "2026-08-27", min: 0, max: 0 },
+        { date: "2026-08-28", min: 20, max: 30 },
+      ],
+      supportedDistanceKm: { min: 135, max: 145 },
+      missedKeyWorkouts: 0,
+      fatigue: "normal" as const,
+      courseEstimate: {
+        status: "available" as const,
+        rangeMinutes: { min: 288, max: 312 },
+        previousRangeMinutes: null,
+        confidence: "moderate" as const,
+        assumptions: ["Dry roads", "Low wind"],
+        changedAssumption: null,
+        unavailableReason: null,
+      },
+      evidence: {
+        prescribedDurationS: 154_800,
+        riddenDurationS: 142_800,
+        adjustedDurationS: 7_800,
+      },
+    };
+    const readiness = { read: vi.fn(async () => input), refresh: vi.fn(async () => undefined) };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { plans, readiness, todayDateKey: () => 20260826 },
+    );
+    const beforePlan = await plans.read(planId);
+    const beforeWorkouts = await plans.readWorkouts(planId);
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T32",
+        commandId: "command-readiness-open",
+        planId,
+        mode: "open",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S012",
+        data: {
+          readiness: {
+            form: { status: "available", current: 1 },
+            courseEstimate: { rangeMinutes: { min: 288, max: 312 } },
+          },
+        },
+      },
+    });
+    const progress: PlanProgressEvent[] = [];
+    await expect(
+      operations.executePlanTransition?.(
+        {
+          transitionId: "PL-T32",
+          commandId: "command-readiness-refresh",
+          planId,
+          mode: "refresh",
+        },
+        (event) => progress.push(event),
+      ),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S012" } });
+    expect(progress.map((event) => event.phase)).toEqual(["running", "completed"]);
+    expect(readiness.refresh).toHaveBeenCalledOnce();
+    await expect(plans.read(planId)).resolves.toEqual(beforePlan);
+    await expect(plans.readWorkouts(planId)).resolves.toEqual(beforeWorkouts);
+
+    const failing = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        readiness: {
+          read: async () => input,
+          refresh: vi.fn(async () => {
+            throw new Error("provider unavailable");
+          }),
+        },
+        todayDateKey: () => 20260826,
+      },
+    );
+    await expect(
+      failing.executePlanTransition?.({
+        transitionId: "PL-T32",
+        commandId: "command-readiness-failed",
+        planId,
+        mode: "refresh",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "provider-failed", retryable: true },
+      state: {
+        scenarioId: "PL-S076",
+        data: {
+          readiness: {
+            form: { status: "unavailable", unavailableReason: "refresh-failed" },
+            courseEstimate: { rangeMinutes: { min: 288, max: 312 } },
+          },
+        },
+      },
+    });
+    await expect(plans.read(planId)).resolves.toEqual(beforePlan);
+  });
+
   it("saves each active Plan setting immediately and restores the persisted value on failure", async () => {
     const planId = `${"0".repeat(25)}A`;
     const activePlan = {
@@ -1992,6 +2108,132 @@ describe("Plan operations", () => {
         },
       },
     });
+  });
+
+  it("refuses a hard-work increase during taper without changing the active Plan", async () => {
+    const planId = `${"0".repeat(25)}A`;
+    const workoutId = `${"0".repeat(25)}B`;
+    const proposalId = `${"0".repeat(25)}C`;
+    const activePlan: PlanRecord = {
+      ...plan(planId, 10),
+      status: "active",
+      structureJson: JSON.stringify({
+        phases: [
+          { focus: "base", durationWeeks: 4 },
+          { focus: "build", durationWeeks: 6 },
+          { focus: "taper", durationWeeks: 2 },
+        ],
+      }),
+    };
+    const workout: PlanWorkoutRecord = {
+      id: workoutId,
+      planId,
+      dateKey: 20260925,
+      sport: "cycling",
+      name: "Race opener",
+      durationS: 1_800,
+      structureJson: "{}",
+      origin: "coach",
+      deviceId: "device-1",
+      hlcPhysicalMs: 10,
+      hlcCounter: 0,
+    };
+    const plans = createPlanRepository(store);
+    const proposals = createPlanProposalRepository(store);
+    await plans.replace(activePlan, [workout]);
+    await proposals.save(
+      {
+        id: proposalId,
+        planId,
+        parentProposalId: null,
+        revision: 1,
+        status: "proposed",
+        title: "Add missed threshold work",
+        rationale: "The athlete requested a hard session.",
+        confidence: "High",
+        mutationJson: encodePlanProposalMutation({
+          schemaVersion: 1,
+          changes: [
+            {
+              workoutId,
+              before: {
+                dateKey: workout.dateKey,
+                sport: workout.sport,
+                name: workout.name,
+                durationS: workout.durationS,
+                structureJson: workout.structureJson,
+              },
+              after: {
+                dateKey: workout.dateKey,
+                sport: workout.sport,
+                name: "Threshold 4×8",
+                durationS: 4_800,
+                structureJson: workout.structureJson,
+              },
+            },
+          ],
+          weekLoad: null,
+        }),
+        baseSnapshotJson: encodePlanProposalBase(capturePlanProposalBase(activePlan, [workout])),
+        refusalReason: null,
+        createdAtMs: 20,
+        updatedAtMs: 20,
+        resolvedAtMs: null,
+        deviceId: "device-1",
+        hlcPhysicalMs: 20,
+        hlcCounter: 0,
+      },
+      [
+        {
+          id: `${"0".repeat(25)}D`,
+          proposalId,
+          sourceType: "wellness",
+          sourceId: "wellness-race-week",
+          sourceLabel: "Race-week recovery",
+          sourceDateKey: 20260924,
+          confidence: "High",
+          snapshotJson: "{}",
+          createdAtMs: 20,
+          deviceId: "device-1",
+          hlcPhysicalMs: 20,
+          hlcCounter: 0,
+        },
+      ],
+    );
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { plans, proposals, todayDateKey: () => 20260826 },
+    );
+    const beforePlan = await plans.read(planId);
+    const beforeWorkouts = await plans.readWorkouts(planId);
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T17",
+        commandId: "command-taper-refusal",
+        planId,
+        proposalId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S078",
+        data: {
+          readiness: {
+            taperRefusal: {
+              requested: "Threshold 4×8 · 1:20",
+              kept: "Race opener · 0:30",
+            },
+          },
+        },
+      },
+    });
+    await expect(proposals.read(proposalId)).resolves.toMatchObject({
+      status: "refused",
+      refusalReason: "Adding missed work during taper would reduce freshness before the race.",
+    });
+    await expect(plans.read(planId)).resolves.toEqual(beforePlan);
+    await expect(plans.readWorkouts(planId)).resolves.toEqual(beforeWorkouts);
   });
 
   it("automatically applies only an enabled eligible reduction and records its atomic result", async () => {

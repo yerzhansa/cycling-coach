@@ -23,6 +23,7 @@ import {
   type PlanHistoryEntry,
   type PlanRaceCourseProjection,
   type PlanRaceCourseSummary,
+  type PlanReadinessProjection,
   type PlanStartDateProjection,
 } from "@enduragent/coach-contract";
 import { Button } from "../../components/ui/button.js";
@@ -86,6 +87,15 @@ function clockTime(durationS: number): string {
   const hours = Math.floor(durationS / 3_600);
   const minutes = Math.round((durationS % 3_600) / 60);
   return `${hours}:${String(minutes).padStart(2, "0")}`;
+}
+
+function finishRange(value: { readonly min: number; readonly max: number }): string {
+  const format = (minutes: number): string => {
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return `${hours} h ${String(rest).padStart(2, "0")}`;
+  };
+  return `${format(value.min)}–${format(value.max)}`;
 }
 
 function decimalHours(durationS: number): string {
@@ -2330,6 +2340,273 @@ function RaceWeekProjection(props: {
   );
 }
 
+function signed(value: number): string {
+  return value > 0 ? `+${value}` : String(value).replace("-", "−");
+}
+
+function formRange(readiness: PlanReadinessProjection): string {
+  const range = readiness.form.raceRange;
+  if (range === null) return "Unavailable";
+  return `${signed(range.min)} to ${signed(range.max)}`;
+}
+
+function ReadinessProjection(props: {
+  readonly data: ReturnType<typeof PlanActiveProjectionDataSchema.parse>;
+  readonly scenarioId: string;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const readiness = props.data.readiness;
+  if (readiness === undefined) {
+    return <StatusCard title="Race readiness" support="Readiness details are unavailable." />;
+  }
+  const refreshing =
+    props.scenarioId === "PL-S098" ||
+    ((transition.status === "submitting" || transition.status === "running") &&
+      transition.transitionId === "PL-T32");
+  const lastRefresh =
+    readiness.form.lastSuccessfulRefreshAtMs === null
+      ? "No successful refresh yet"
+      : new Intl.DateTimeFormat(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }).format(new Date(readiness.form.lastSuccessfulRefreshAtMs));
+  const header = (
+    <div className="flex flex-col gap-row sm:flex-row sm:items-start sm:justify-between">
+      <div className={SUPPORT_PAIR}>
+        <h2
+          id="plan-readiness-heading"
+          tabIndex={-1}
+          className="m-0 text-xl font-semibold outline-none"
+        >
+          Race readiness
+        </h2>
+        <p className="m-0 text-ink-2">{props.data.plan.name} · modeled ranges and evidence</p>
+      </div>
+      <Button type="button" variant="outline" onClick={() => actions?.closeReadiness()}>
+        Back to Plan
+      </Button>
+    </div>
+  );
+  if (refreshing) {
+    return (
+      <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1" aria-live="polite">
+        {header}
+        <div className="flex items-start gap-row border-t border-line pt-row">
+          <LoaderCircle
+            className="mt-0.5 size-5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-base font-semibold">Refreshing training load</h3>
+            <p className="m-0 text-ink-2">
+              Checking recent training before recalculating the Form range. The last available
+              readiness view stays safe.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+  if (props.scenarioId === "PL-S078" && readiness.taperRefusal !== null) {
+    return (
+      <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
+        {header}
+        <div className="flex items-start gap-row border-t border-line pt-row">
+          <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-base font-semibold">Hard Workout not added</h3>
+            <p className="m-0 text-ink-2">{readiness.taperRefusal.reason}</p>
+          </div>
+        </div>
+        <div className="grid gap-inset rounded-card bg-sunk p-row">
+          <div className="flex items-start justify-between gap-row">
+            <span className="text-ink-2">Requested</span>
+            <strong className="text-right">{readiness.taperRefusal.requested}</strong>
+          </div>
+          <div className="flex items-start justify-between gap-row">
+            <span className="text-ink-2">Kept in Plan</span>
+            <strong className="text-right">{readiness.taperRefusal.kept}</strong>
+          </div>
+        </div>
+        <p className="m-0 text-ink-2">The race-week Plan stays unchanged.</p>
+      </section>
+    );
+  }
+  if (props.scenarioId === "PL-S076") {
+    return (
+      <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1" role="alert">
+        {header}
+        <div className="flex items-start gap-row border-t border-line pt-row">
+          <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-base font-semibold">Form is unavailable</h3>
+            <p className="m-0 text-ink-2">
+              {readiness.error?.message ??
+                "Recent training load is incomplete, so a race-day Form range cannot be shown."}
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-inset rounded-card bg-sunk p-row sm:grid-cols-2">
+          <div className={SUPPORT_PAIR}>
+            <span className="text-sm text-ink-2">Last successful refresh</span>
+            <strong>{lastRefresh}</strong>
+          </div>
+          <div className={SUPPORT_PAIR}>
+            <span className="text-sm text-ink-2">Course estimate</span>
+            <strong>
+              {readiness.courseEstimate.rangeMinutes === null
+                ? "Unavailable"
+                : finishRange(readiness.courseEstimate.rangeMinutes)}
+            </strong>
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <Button type="button" onClick={() => actions?.refreshReadiness()}>
+            Retry refresh
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  if (props.scenarioId === "PL-S077") {
+    return (
+      <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
+        {header}
+        <div className="flex items-start gap-row border-t border-line pt-row">
+          <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-base font-semibold">Finish-time range changed</h3>
+            <p className="m-0 text-ink-2">
+              {readiness.courseEstimate.changedAssumption ?? "A route assumption changed."}
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-inset rounded-card bg-sunk p-row sm:grid-cols-2">
+          <div className={SUPPORT_PAIR}>
+            <span className="text-sm text-ink-2">Previous</span>
+            <strong className="text-xl">
+              {readiness.courseEstimate.previousRangeMinutes === null
+                ? "Unavailable"
+                : finishRange(readiness.courseEstimate.previousRangeMinutes)}
+            </strong>
+          </div>
+          <div className={SUPPORT_PAIR}>
+            <span className="text-sm text-ink-2">Updated</span>
+            <strong className="text-xl">
+              {readiness.courseEstimate.rangeMinutes === null
+                ? "Unavailable"
+                : finishRange(readiness.courseEstimate.rangeMinutes)}
+            </strong>
+          </div>
+        </div>
+      </section>
+    );
+  }
+  if (props.scenarioId === "PL-S074") {
+    return (
+      <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
+        {header}
+        <div className="grid gap-inset border-t border-line pt-row">
+          <div className="flex items-center justify-between gap-row">
+            <h3 className="m-0 text-base font-semibold">Goal feasibility</h3>
+            <span className="rounded-full border border-danger px-3 py-1 text-sm text-danger">
+              At risk
+            </span>
+          </div>
+          <strong className="text-2xl">Form {formRange(readiness)}</strong>
+          <ul className="m-0 grid gap-inset pl-5 text-ink-2">
+            {readiness.feasibility.reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+        <div className="flex items-start justify-between gap-row rounded-card bg-sunk p-row">
+          <span className="text-ink-2">Recommendation</span>
+          <strong className="text-right">{readiness.feasibility.recommendation}</strong>
+        </div>
+      </section>
+    );
+  }
+  if (props.scenarioId === "PL-S075") {
+    return (
+      <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
+        {header}
+        <div className="flex items-start gap-row border-t border-line pt-row">
+          <MapPinned className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-base font-semibold">Finish-time estimate unavailable</h3>
+            <p className="m-0 text-ink-2">
+              A course with distance and elevation is required for this estimate.
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-inset rounded-card bg-sunk p-row">
+          <div className="flex justify-between gap-row">
+            <span>Form trajectory</span>
+            <strong>{formRange(readiness)}</strong>
+          </div>
+          <div className="flex justify-between gap-row">
+            <span>Goal feasibility</span>
+            <strong>Available</strong>
+          </div>
+          <div className="flex justify-between gap-row">
+            <span>Course estimate</span>
+            <strong>Unavailable</strong>
+          </div>
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
+      {header}
+      <div className="grid gap-row border-t border-line pt-row md:grid-cols-3">
+        <div className={SUPPORT_PAIR}>
+          <h3 className="m-0 text-sm font-semibold">Form trajectory to race day</h3>
+          <strong className="text-2xl">
+            {readiness.form.current === null ? "Unavailable" : signed(readiness.form.current)} →{" "}
+            {formRange(readiness)}
+          </strong>
+          <p className="m-0 text-sm text-ink-2">Modeled from planned Load and normal recovery.</p>
+        </div>
+        <div className={SUPPORT_PAIR}>
+          <h3 className="m-0 text-sm font-semibold">Goal feasibility</h3>
+          <span className="self-start rounded-full border border-ok px-3 py-1 text-sm text-ok">
+            On track · with assumptions
+          </span>
+          <p className="m-0 text-sm text-ink-2">{readiness.feasibility.recommendation}</p>
+        </div>
+        <div className={SUPPORT_PAIR}>
+          <h3 className="m-0 text-sm font-semibold">Course-based finish time</h3>
+          <strong className="text-2xl">
+            {readiness.courseEstimate.rangeMinutes === null
+              ? "Unavailable"
+              : finishRange(readiness.courseEstimate.rangeMinutes)}
+          </strong>
+          <p className="m-0 text-sm text-ink-2">
+            {readiness.courseEstimate.confidence === null
+              ? "No estimate"
+              : `${readiness.courseEstimate.confidence} confidence`}
+          </p>
+        </div>
+      </div>
+      <div className="grid gap-row rounded-card bg-sunk p-row sm:grid-cols-3">
+        {[
+          ["Prescribed", readiness.evidence.prescribedDurationS],
+          ["Ridden", readiness.evidence.riddenDurationS],
+          ["Adjusted", readiness.evidence.adjustedDurationS],
+        ].map(([label, value]) => (
+          <div key={String(label)} className={SUPPORT_PAIR}>
+            <span className="text-sm text-ink-2">{label}</span>
+            <strong className="text-xl tabular-nums">{clockTime(Number(value))}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ActiveProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
   const transition = useEnduragentStore((state) => state.plan.transition);
@@ -2374,7 +2651,18 @@ function ActiveProjection(): ReactElement {
                 ? "plan-history-result-heading"
                 : current !== null && ["PL-S090", "PL-S091", "PL-S092", "PL-S093"].includes(current)
                   ? "plan-settings-heading"
-                  : null;
+                  : current !== null &&
+                      [
+                        "PL-S012",
+                        "PL-S074",
+                        "PL-S075",
+                        "PL-S076",
+                        "PL-S077",
+                        "PL-S078",
+                        "PL-S098",
+                      ].includes(current)
+                    ? "plan-readiness-heading"
+                    : null;
     if (focusId === null && returnFocusId === null) return;
     requestAnimationFrame(() => {
       const requested = returnFocusId === null ? null : document.getElementById(returnFocusId);
@@ -2390,6 +2678,13 @@ function ActiveProjection(): ReactElement {
   }
   if (model.scenarioId === "PL-S009") {
     return <RaceWeekProjection data={data} />;
+  }
+  if (
+    ["PL-S012", "PL-S074", "PL-S075", "PL-S076", "PL-S077", "PL-S078", "PL-S098"].includes(
+      model.scenarioId,
+    )
+  ) {
+    return <ReadinessProjection data={data} scenarioId={model.scenarioId} />;
   }
   if (
     ["PL-S082", "PL-S083", "PL-S084", "PL-S085", "PL-S086", "PL-S087"].includes(model.scenarioId)
@@ -2489,6 +2784,15 @@ function ActiveProjection(): ReactElement {
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-inset">
+            <Button
+              id="plan-readiness-trigger"
+              type="button"
+              variant="outline"
+              onClick={() => actions?.openReadiness()}
+            >
+              <Activity className="size-4" aria-hidden="true" />
+              Race readiness
+            </Button>
             <Button
               id="plan-season-trigger"
               type="button"

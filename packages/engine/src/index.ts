@@ -19,6 +19,7 @@ export * from "./planning/history.js";
 export * from "./planning/auto-apply.js";
 export * from "./planning/replacement.js";
 export * from "./planning/season.js";
+export * from "./planning/readiness.js";
 export type {
   AthleteDataReaderPort,
   AthleteReadResult,

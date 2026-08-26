@@ -27,6 +27,8 @@ export type {
   CyclingSeasonMetadata,
   CyclingSeasonWeekMetadata,
 } from "./season.js";
+export { cyclingTaperRefusal, projectCyclingReadinessInput } from "./readiness.js";
+export type { CyclingReadinessSourceInput, CyclingReadinessWorkoutInput } from "./readiness.js";
 
 export {
   serializeIntervalsWorkout,
