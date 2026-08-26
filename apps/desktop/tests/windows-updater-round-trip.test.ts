@@ -14,7 +14,19 @@ type RoundTripInput = Parameters<typeof verifyWindowsUpdaterRoundTrip>[0];
 
 const baselineInstaller = Buffer.from("synthetic Windows installer 0.1.5\n");
 const candidateInstaller = Buffer.from("synthetic Windows installer 0.1.6\n");
-const blockmap = gzipSync(JSON.stringify({ version: "2", files: [{ name: "file" }] }));
+const blockmap = gzipSync(
+  JSON.stringify({
+    version: "2",
+    files: [
+      {
+        name: "file",
+        offset: 0,
+        checksums: [Buffer.alloc(18, 0xab).toString("base64")],
+        sizes: [1],
+      },
+    ],
+  }),
+);
 const releaseDate = "2026-08-25T00:00:00.000Z";
 const preflight: WindowsUpdaterPreflight = {
   feedUrl: "https://github.com/yerzhansa/enduragent/releases/latest/download/",

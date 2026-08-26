@@ -19,13 +19,17 @@ const execFileAsync = promisify(execFile);
 const defaultRepository = "yerzhansa/enduragent";
 const safeWindowsReleaseUploadMessages = new Set([
   "release tag mismatch",
+  "release tag is unresolvable",
+  "release commit mismatch",
   "Windows release upload is incomplete",
   "Authenticode verification mode is required",
   "upload record path must be absolute",
+  "upload record already exists",
+  "upload record directory is missing",
   "release repository is invalid",
 ]);
 const safeReleaseStateMessagePattern =
-  /^(?:release does not exist|release is still a draft): enduragent-desktop@[-A-Za-z0-9@._]+$/u;
+  /^(?:release does not exist|release is still a draft|release is a prerelease): enduragent-desktop@[-A-Za-z0-9@._]+$/u;
 const safeExistingAssetMessagePattern = /^Windows release asset already exists: [-A-Za-z0-9@._]+$/u;
 
 async function executeSystemFile(executable, arguments_) {
@@ -62,11 +66,13 @@ function parseRelease(stdout, tag) {
     Array.isArray(release) ||
     typeof release.tagName !== "string" ||
     typeof release.isDraft !== "boolean" ||
+    typeof release.isPrerelease !== "boolean" ||
     !Array.isArray(release.assets)
   ) {
     throw new TypeError(`release does not exist: ${tag}`);
   }
   if (release.isDraft) throw new TypeError(`release is still a draft: ${tag}`);
+  if (release.isPrerelease) throw new TypeError(`release is a prerelease: ${tag}`);
   if (release.tagName !== tag) throw new TypeError("release tag mismatch");
   return release;
 }
@@ -95,6 +101,53 @@ function releaseAssetNames(release) {
       ? [asset.name]
       : [],
   );
+}
+
+function parseGitObject(stdout) {
+  let response;
+  try {
+    response = JSON.parse(stdout);
+  } catch {
+    throw new TypeError("release tag is unresolvable");
+  }
+  const object = response?.object;
+  if (
+    object === null ||
+    typeof object !== "object" ||
+    Array.isArray(object) ||
+    (object.type !== "commit" && object.type !== "tag") ||
+    typeof object.sha !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(object.sha)
+  ) {
+    throw new TypeError("release tag is unresolvable");
+  }
+  return object;
+}
+
+async function resolveTagCommit(executeFile, repository, tag) {
+  let reference;
+  try {
+    const result = await executeFile("gh-personal", [
+      "api",
+      `repos/${repository}/git/ref/tags/${tag}`,
+    ]);
+    reference = parseGitObject(result.stdout);
+  } catch {
+    throw new TypeError("release tag is unresolvable");
+  }
+  if (reference.type === "commit") return reference.sha;
+  let peeled;
+  try {
+    const result = await executeFile("gh-personal", [
+      "api",
+      `repos/${repository}/git/tags/${reference.sha}`,
+    ]);
+    peeled = parseGitObject(result.stdout);
+  } catch {
+    throw new TypeError("release tag is unresolvable");
+  }
+  if (peeled.type !== "commit") throw new TypeError("release tag is unresolvable");
+  return peeled.sha;
 }
 
 async function releaseFileRecords(verified, dependencies) {
@@ -133,52 +186,93 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
     readFile: dependencies.readFile ?? readFile,
     writeFile: dependencies.writeFile ?? writeFile,
   };
-  const verified = await verifyAssets(input.directory, {
-    version,
-    commit,
-    authenticode: input.authenticode,
-  });
   const tag = `enduragent-desktop@${version}`;
   const expectedNames = Object.values(windowsReleaseArtifactNames(version));
-  const release = await viewRelease(executeFile, tag, repository);
-  const existingNames = new Set(releaseAssetNames(release));
-  for (const name of expectedNames) {
-    if (existingNames.has(name)) {
-      throw new TypeError(`Windows release asset already exists: ${name}`);
+  if (input.record !== undefined) {
+    try {
+      await fileDependencies.writeFile(input.record, "", { flag: "wx", mode: 0o600 });
+    } catch (error) {
+      if (error?.code === "EEXIST") throw new TypeError("upload record already exists");
+      if (error?.code === "ENOENT") throw new TypeError("upload record directory is missing");
+      throw error;
     }
   }
-  await executeFile("gh-personal", [
-    "release",
-    "upload",
-    tag,
-    "--repo",
-    repository,
-    verified.paths.installer,
-    verified.paths.blockmap,
-    verified.paths.metadata,
-  ]);
-  const uploadedRelease = await viewRelease(executeFile, tag, repository);
-  const uploadedNames = new Set(releaseAssetNames(uploadedRelease));
-  if (expectedNames.some((name) => !uploadedNames.has(name))) {
-    throw new TypeError("Windows release upload is incomplete");
-  }
-  const files = Object.freeze(await releaseFileRecords(verified, fileDependencies));
-  const record = Object.freeze({
-    schemaVersion: 1,
-    tag,
-    version,
-    commit,
-    arch: "x64",
-    authenticode: verified.authenticode,
-    files,
-  });
-  if (input.record !== undefined) {
-    await fileDependencies.writeFile(input.record, `${JSON.stringify(record, null, 2)}\n`, {
-      flag: "wx",
-      mode: 0o600,
+  let uploaded = false;
+  try {
+    const verified = await verifyAssets(input.directory, {
+      version,
+      commit,
+      authenticode: input.authenticode,
     });
+    const files = Object.freeze(await releaseFileRecords(verified, fileDependencies));
+    const release = await viewRelease(executeFile, tag, repository);
+    const tagCommit = await resolveTagCommit(executeFile, repository, tag);
+    if (tagCommit !== commit) throw new TypeError("release commit mismatch");
+    const existingNames = new Set(releaseAssetNames(release));
+    for (const name of expectedNames) {
+      if (existingNames.has(name)) {
+        throw new TypeError(`Windows release asset already exists: ${name}`);
+      }
+    }
+    await executeFile("gh-personal", [
+      "release",
+      "upload",
+      tag,
+      "--repo",
+      repository,
+      verified.paths.installer,
+      verified.paths.blockmap,
+      verified.paths.metadata,
+    ]);
+    uploaded = true;
+    const uploadedRelease = await viewRelease(executeFile, tag, repository);
+    const uploadedNames = new Set(releaseAssetNames(uploadedRelease));
+    if (expectedNames.some((name) => !uploadedNames.has(name))) {
+      throw new TypeError("Windows release upload is incomplete");
+    }
+    const record = Object.freeze({
+      schemaVersion: 1,
+      tag,
+      version,
+      commit,
+      tagCommit,
+      arch: "x64",
+      status: "uploaded",
+      authenticode: verified.authenticode,
+      files,
+    });
+    if (input.record !== undefined) {
+      await fileDependencies.writeFile(input.record, `${JSON.stringify(record, null, 2)}\n`, {
+        flag: "w",
+        mode: 0o600,
+      });
+    }
+    return record;
+  } catch (error) {
+    if (input.record !== undefined) {
+      const failureRecord = {
+        schemaVersion: 1,
+        tag,
+        version,
+        commit,
+        arch: "x64",
+        status: "failed",
+        error:
+          safeWindowsReleaseUploadMessage(error) ??
+          safeWindowsReleaseVerificationMessage(error) ??
+          "Windows release upload failed",
+        uploaded,
+      };
+      try {
+        await fileDependencies.writeFile(
+          input.record,
+          `${JSON.stringify(failureRecord, null, 2)}\n`,
+          { flag: "w", mode: 0o600 },
+        );
+      } catch {}
+    }
+    throw error;
   }
-  return record;
 }
 
 function parseArguments(arguments_) {

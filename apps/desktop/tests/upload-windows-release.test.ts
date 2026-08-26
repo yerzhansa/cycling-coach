@@ -73,7 +73,13 @@ function release(assets: readonly string[] = [], overrides: Record<string, unkno
   });
 }
 
-function successfulExecutor() {
+function successfulExecutor(
+  options: {
+    readonly initialAssets?: readonly string[];
+    readonly reference?: { readonly type: "commit" | "tag"; readonly sha: string };
+    readonly peeled?: { readonly type: "commit" | "tag"; readonly sha: string };
+  } = {},
+) {
   let views = 0;
   return vi.fn(async (_executable: string, arguments_: readonly string[]) => {
     if (arguments_[0] === "release" && arguments_[1] === "view") {
@@ -81,9 +87,15 @@ function successfulExecutor() {
       return {
         stdout:
           views === 1
-            ? release([`Enduragent-${version}-arm64.dmg`])
+            ? release(options.initialAssets ?? [`Enduragent-${version}-arm64.dmg`])
             : release(Object.values(verified.names)),
       };
+    }
+    if (arguments_[0] === "api" && arguments_[1]?.includes("/git/ref/tags/")) {
+      return { stdout: JSON.stringify({ object: options.reference ?? { type: "commit", sha: commit } }) };
+    }
+    if (arguments_[0] === "api" && arguments_[1]?.includes("/git/tags/")) {
+      return { stdout: JSON.stringify({ object: options.peeled ?? { type: "commit", sha: commit } }) };
     }
     return { stdout: "" };
   });
@@ -121,6 +133,10 @@ describe("Windows release upload", () => {
     expect(executeFile.mock.calls[0]).toEqual(["gh-personal", viewArguments]);
     expect(executeFile.mock.calls[1]).toEqual([
       "gh-personal",
+      ["api", `repos/${repository}/git/ref/tags/${tag}`],
+    ]);
+    expect(executeFile.mock.calls[2]).toEqual([
+      "gh-personal",
       [
         "release",
         "upload",
@@ -132,8 +148,59 @@ describe("Windows release upload", () => {
         verified.paths.metadata,
       ],
     ]);
-    expect(executeFile.mock.calls[2]).toEqual(["gh-personal", viewArguments]);
+    expect(executeFile.mock.calls[3]).toEqual(["gh-personal", viewArguments]);
     expect(executeFile.mock.calls.flat(2)).not.toContain("--clobber");
+  });
+
+  it("binds a matching lightweight release tag to the commit", async () => {
+    const result = await runWindowsReleaseUpload(input(), {
+      executeFile: successfulExecutor(),
+      verifyAssets: vi.fn(async () => verified),
+    });
+    expect(result.tagCommit).toBe(commit);
+  });
+
+  it("peels a matching annotated release tag to the commit", async () => {
+    const tagObject = "b".repeat(40);
+    const executeFile = successfulExecutor({
+      reference: { type: "tag", sha: tagObject },
+      peeled: { type: "commit", sha: commit },
+    });
+    const result = await runWindowsReleaseUpload(input(), {
+      executeFile,
+      verifyAssets: vi.fn(async () => verified),
+    });
+    expect(result.tagCommit).toBe(commit);
+    expect(executeFile.mock.calls[2]).toEqual([
+      "gh-personal",
+      ["api", `repos/${repository}/git/tags/${tagObject}`],
+    ]);
+  });
+
+  it("refuses a release tag commit mismatch before upload", async () => {
+    const executeFile = successfulExecutor({
+      reference: { type: "commit", sha: "b".repeat(40) },
+    });
+    await expect(
+      runWindowsReleaseUpload(input(), {
+        executeFile,
+        verifyAssets: vi.fn(async () => verified),
+      }),
+    ).rejects.toThrow("release commit mismatch");
+    expect(executeFile.mock.calls.flat(2)).not.toContain("upload");
+  });
+
+  it("refuses an unresolvable release tag before upload", async () => {
+    const executeFile = successfulExecutor({
+      reference: { type: "commit", sha: "short" },
+    });
+    await expect(
+      runWindowsReleaseUpload(input(), {
+        executeFile,
+        verifyAssets: vi.fn(async () => verified),
+      }),
+    ).rejects.toThrow("release tag is unresolvable");
+    expect(executeFile.mock.calls.flat(2)).not.toContain("upload");
   });
 
   it("refuses a missing or unparsable release", async () => {
@@ -154,17 +221,63 @@ describe("Windows release upload", () => {
         verifyAssets: vi.fn(async () => verified),
       }),
     ).rejects.toThrow(`release is still a draft: ${tag}`);
+    expect(executeFile.mock.calls.flat(2)).not.toContain("upload");
+  });
+
+  it("refuses a prerelease release", async () => {
+    const executeFile = vi.fn(async () => ({ stdout: release([], { isPrerelease: true }) }));
+    await expect(
+      runWindowsReleaseUpload(input(), {
+        executeFile,
+        verifyAssets: vi.fn(async () => verified),
+      }),
+    ).rejects.toThrow(`release is a prerelease: ${tag}`);
+    expect(executeFile.mock.calls.flat(2)).not.toContain("upload");
   });
 
   it("refuses pre-existing Windows assets", async () => {
     const existing = verified.names.blockmap;
-    const executeFile = vi.fn(async () => ({ stdout: release([existing]) }));
+    const executeFile = successfulExecutor({ initialAssets: [existing] });
     await expect(
       runWindowsReleaseUpload(input(), {
         executeFile,
         verifyAssets: vi.fn(async () => verified),
       }),
     ).rejects.toThrow(`Windows release asset already exists: ${existing}`);
+  });
+
+  it("refuses a pre-existing upload record before verification or GitHub access", async () => {
+    const recordPath = join(directory, "upload-record.json");
+    await writeFile(recordPath, "existing");
+    const executeFile = successfulExecutor();
+    const verifyAssets = vi.fn(async () => verified);
+    await expect(
+      runWindowsReleaseUpload(input({ record: recordPath }), { executeFile, verifyAssets }),
+    ).rejects.toThrow("upload record already exists");
+    expect(verifyAssets).not.toHaveBeenCalled();
+    expect(executeFile).not.toHaveBeenCalled();
+  });
+
+  it("writes a safe failed record when release lookup fails", async () => {
+    const recordPath = join(directory, "upload-record.json");
+    const executeFile = vi.fn(async () => Promise.reject(new Error("not found")));
+    await expect(
+      runWindowsReleaseUpload(input({ record: recordPath }), {
+        executeFile,
+        verifyAssets: vi.fn(async () => verified),
+      }),
+    ).rejects.toThrow(`release does not exist: ${tag}`);
+    expect(JSON.parse(await readFile(recordPath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      tag,
+      version,
+      commit,
+      arch: "x64",
+      status: "failed",
+      error: `release does not exist: ${tag}`,
+      uploaded: false,
+    });
+    expect(executeFile.mock.calls.flat(2)).not.toContain("upload");
   });
 
   it("refuses unsupported Authenticode modes before verification or upload", async () => {
@@ -214,7 +327,9 @@ describe("Windows release upload", () => {
       tag,
       version,
       commit,
+      tagCommit: commit,
       arch: "x64",
+      status: "uploaded",
       authenticode: "pending-w19",
     });
     expect(recorded.files.map((file: { name: string }) => file.name)).toEqual([

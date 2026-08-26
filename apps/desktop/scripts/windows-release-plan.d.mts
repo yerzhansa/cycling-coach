@@ -41,7 +41,8 @@ export interface WindowsReleaseBuilderOptions {
       { readonly provider: "generic"; readonly url: string; readonly channel: "latest" },
     ];
     readonly win: {
-      readonly publisherName: readonly [string];
+      readonly signtoolOptions: { readonly publisherName: readonly [string] };
+      readonly signExecutable: true;
       readonly verifyUpdateCodeSignature: true;
       readonly target: readonly [{ readonly target: "nsis"; readonly arch: readonly ["x64"] }];
     };

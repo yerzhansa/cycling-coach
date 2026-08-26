@@ -11,6 +11,18 @@ on:
         description: Verify only; never edit the release
         type: boolean
         default: true
+      authenticode:
+        description: Authenticode verification mode
+        type: choice
+        options:
+          - pending-w19
+          - verify
+        default: pending-w19
+      publisher_dn:
+        description: Exact Authenticode publisher distinguished name
+        required: false
+        type: string
+        default: ""
 
 permissions: { contents: read }
 
@@ -69,6 +81,11 @@ jobs:
           fi
           RELEASE_ID=$(printf '%s' "$RELEASE" | jq -er '.id')
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+      - name: Refuse to mark assets while Authenticode is pending
+        if: ${{ inputs.dry_run == false && inputs.authenticode != 'verify' }}
+        run: |
+          echo '::error::Authenticode verification is not enabled; refusing to mark assets'
+          exit 1
       - name: Download Windows assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -87,17 +104,24 @@ jobs:
         id: verify
         env:
           VERSION: ${{ inputs.version }}
+          AUTHENTICODE: ${{ inputs.authenticode }}
+          PUBLISHER_DN: ${{ inputs.publisher_dn }}
         run: |
           set -euo pipefail
-          node apps/desktop/scripts/verify-windows-release.mjs "$RUNNER_TEMP/windows-release" --version "$VERSION" --authenticode pending-w19 | tee "$RUNNER_TEMP/verify.out"
+          if [ "$AUTHENTICODE" = 'verify' ]; then
+            if [ -z "$PUBLISHER_DN" ] || [ "$PUBLISHER_DN" = 'CN=ENDURAGENT PUBLISHER DN PLACEHOLDER, O=PLACEHOLDER' ]; then
+              echo '::error::publisher_dn is required'
+              exit 1
+            fi
+            node apps/desktop/scripts/verify-windows-release.mjs "$RUNNER_TEMP/windows-release" --version "$VERSION" --authenticode verify --publisher-dn "$PUBLISHER_DN" | tee "$RUNNER_TEMP/verify.out"
+          else
+            node apps/desktop/scripts/verify-windows-release.mjs "$RUNNER_TEMP/windows-release" --version "$VERSION" --authenticode pending-w19 | tee "$RUNNER_TEMP/verify.out"
+          fi
           INSTALLER_SHA256=$(awk '/^Windows release envelope verified [0-9a-f]{64}$/{sha=$NF} END{if (sha == "") exit 1; print sha}' "$RUNNER_TEMP/verify.out")
           echo "installer_sha256=$INSTALLER_SHA256" >> "$GITHUB_OUTPUT"
-      - name: Verify Authenticode (pending W19)
-        run: |
-          set -euo pipefail
-          echo "::notice::Authenticode verification pending W19 (apps/desktop/scripts/verify-windows-authenticode.ps1 does not exist yet); the installer signature was NOT verified"
+          echo "authenticode=$AUTHENTICODE" >> "$GITHUB_OUTPUT"
       - name: Mark Windows assets verified
-        if: ${{ inputs.dry_run == false }}
+        if: ${{ inputs.dry_run == false && inputs.authenticode == 'verify' && steps.verify.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.release.outputs.release_id }}
@@ -106,7 +130,7 @@ jobs:
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/release.json"
           jq -j '.body // ""' "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/release-body.txt"
-          MARKER="Windows assets verified: $INSTALLER_SHA256 (Authenticode verification pending W19)"
+          MARKER="Windows assets verified: $INSTALLER_SHA256 (Authenticode verified)"
           if grep -Fxq "$MARKER" "$RUNNER_TEMP/release-body.txt"; then
             exit 0
           fi

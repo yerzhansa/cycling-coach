@@ -1,5 +1,11 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { stringify } from "yaml";
+import { parse, stringify } from "yaml";
+import { createWindowsDevelopmentPackagePlan } from "../scripts/windows-development-package-plan.mjs";
+import { createWindowsPackagePlan } from "../scripts/windows-package-plan.mjs";
 import {
   WINDOWS_AUTHENTICODE_PENDING,
   WINDOWS_PUBLISHER_DN_PLACEHOLDER,
@@ -13,6 +19,7 @@ import {
 
 const feedUrl = "https://github.com/yerzhansa/enduragent/releases/latest/download/";
 const commit = "a".repeat(40);
+const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function planInput(overrides: Record<string, unknown> = {}) {
   return {
@@ -116,7 +123,8 @@ describe("Windows release plan", () => {
     ]);
     expect(plan.builderOptions.publish).toBe("never");
     expect(plan.builderOptions.config.win).toEqual({
-      publisherName: [WINDOWS_PUBLISHER_DN_PLACEHOLDER],
+      signtoolOptions: { publisherName: [WINDOWS_PUBLISHER_DN_PLACEHOLDER] },
+      signExecutable: true,
       verifyUpdateCodeSignature: true,
       target: [{ target: "nsis", arch: ["x64"] }],
     });
@@ -125,12 +133,64 @@ describe("Windows release plan", () => {
     const customPlan = createWindowsReleasePlan(planInput({ publisherDn: customPublisherDn }));
     expect(customPlan.publisherDn).toBe(customPublisherDn);
     expect(customPlan.publisherDnIsPlaceholder).toBe(false);
-    expect(customPlan.builderOptions.config.win.publisherName).toEqual([customPublisherDn]);
+    expect(customPlan.builderOptions.config.win.signtoolOptions.publisherName).toEqual([
+      customPublisherDn,
+    ]);
     expect(customPlan.updaterMetadata.publisherName).toBe(customPublisherDn);
     expect(() => createWindowsReleasePlan(planInput({ publisherDn: "  " }))).toThrow(
       "Windows publisher DN is invalid",
     );
     expect(Object.isFrozen(plan)).toBe(true);
+  });
+
+  it("release config passes the electron-builder 26.15.3 schema", () => {
+    const plan = createWindowsReleasePlan(planInput());
+    const { extends: _extends, ...config } = plan.builderOptions.config;
+    const require = createRequire(import.meta.url);
+    const electronBuilderRequire = createRequire(require.resolve("electron-builder"));
+    const schema = JSON.parse(
+      readFileSync(electronBuilderRequire.resolve("app-builder-lib/scheme.json"), "utf8"),
+    );
+    try {
+      const appBuilderRequire = createRequire(
+        electronBuilderRequire.resolve("app-builder-lib/package.json"),
+      );
+      const AjvModule = appBuilderRequire("ajv");
+      const Ajv = AjvModule.default ?? AjvModule;
+      const ajv = new Ajv({ strict: false, allErrors: true });
+      const validate = ajv.compile(schema);
+      expect(validate(config), JSON.stringify(validate.errors)).toBe(true);
+    } catch (error) {
+      if (error instanceof Error && !/Cannot find module/u.test(error.message)) throw error;
+      expect(config.win).not.toHaveProperty("publisherName");
+      expect(config.win.signtoolOptions.publisherName).toEqual([
+        WINDOWS_PUBLISHER_DN_PLACEHOLDER,
+      ]);
+      expect(Object.keys(config.win).every((key) => key in schema.definitions.WindowsConfiguration.properties)).toBe(true);
+    }
+    const base = parse(readFileSync(resolve(desktopRoot, "electron-builder.yml"), "utf8"));
+    const merged = {
+      ...base,
+      ...plan.builderOptions.config,
+      win: { ...base.win, ...plan.builderOptions.config.win },
+      nsis: { ...base.nsis, ...plan.builderOptions.config.nsis },
+    };
+    expect(merged.win.signExecutable).toBe(true);
+  });
+
+  it("forceCodeSigning implies signExecutable", async () => {
+    const release = createWindowsReleasePlan(planInput());
+    expect(release.builderOptions.config.forceCodeSigning).toBe(true);
+    expect(release.builderOptions.config.win.signExecutable).toBe(true);
+    const packagePlan = await createWindowsPackagePlan(
+      { desktopRoot: "/synthetic/repository/apps/desktop" },
+      { readFile: async () => JSON.stringify({ version: "0.1.5" }) },
+    );
+    const developmentPlan = createWindowsDevelopmentPackagePlan({
+      desktopRoot: "/synthetic/repository/apps/desktop",
+    });
+    expect(packagePlan.builderOptions.config.forceCodeSigning).toBe(false);
+    expect(developmentPlan.builderOptions.config.forceCodeSigning).toBe(false);
   });
 
   it("exposes only safe planner failures", () => {
