@@ -89,6 +89,18 @@ jobs:
           fi
           RELEASE_ID=$(printf '%s' "$RELEASE" | jq -er '.id')
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          WINDOWS_ASSETS=$(printf '%s' "$RELEASE" | jq -ceS --arg version "$VERSION" '
+            [.assets[]
+              | select(.name == "Enduragent-\($version)-x64.exe" or .name == "Enduragent-\($version)-x64.exe.blockmap" or .name == "latest.yml")
+              | {id, name, state, size, digest}]
+            | sort_by(.name)
+            | if length == 3 and all(.[];
+                (.id | (type == "number" and . > 0)) and
+                .state == "uploaded" and
+                (.size | (type == "number" and . > 0)) and
+                (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$")))
+              then . else error("Windows release asset identity is invalid") end')
+          echo "windows_assets=$WINDOWS_ASSETS" >> "$GITHUB_OUTPUT"
           REF=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/enduragent-desktop@$VERSION")
           OBJECT_TYPE=$(printf '%s' "$REF" | jq -er '.object.type')
           OBJECT_SHA=$(printf '%s' "$REF" | jq -er '.object.sha')
@@ -143,8 +155,15 @@ jobs:
           else
             node apps/desktop/scripts/verify-windows-release.mjs "$WORK_WIN" --version "$VERSION" --commit "$COMMIT" --authenticode pending-w19 | tee "$WORK/../verify.out"
           fi
-          INSTALLER_SHA256=$(awk '/^Windows release envelope verified [0-9a-f]{64}$/{sha=$NF} END{if (sha == "") exit 1; print sha}' "$WORK/../verify.out")
-          echo "installer_sha256=$INSTALLER_SHA256" >> "$GITHUB_OUTPUT"
+          VERIFIED_FILES=$(sed -n 's/^Windows release evidence files //p' "$WORK/../verify.out" | tail -n 1)
+          printf '%s' "$VERIFIED_FILES" | jq -e --arg version "$VERSION" '
+            length == 3 and
+            ([.[].name] | sort) == (["Enduragent-\($version)-x64.exe", "Enduragent-\($version)-x64.exe.blockmap", "latest.yml"] | sort) and
+            all(.[];
+              (keys | sort) == (["name", "sha256", "size"] | sort) and
+              (.size | (type == "number" and . > 0)) and
+              (.sha256 | type == "string" and test("^[0-9a-f]{64}$")))' > /dev/null
+          echo "verified_files=$VERIFIED_FILES" >> "$GITHUB_OUTPUT"
           echo "authenticode=$AUTHENTICODE" >> "$GITHUB_OUTPUT"
       - name: Record Windows verification evidence
         if: ${{ inputs.dry_run == false && inputs.authenticode == 'verify' && steps.verify.outcome == 'success' }}
@@ -152,8 +171,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           COMMIT: ${{ steps.release.outputs.commit }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+          RELEASE_ASSETS: ${{ steps.release.outputs.windows_assets }}
           PUBLISHER_DN: ${{ inputs.publisher_dn }}
-          INSTALLER_SHA256: ${{ steps.verify.outputs.installer_sha256 }}
+          VERIFIED_FILES: ${{ steps.verify.outputs.verified_files }}
         run: |
           set -euo pipefail
           TEMP="$(cygpath -u "$RUNNER_TEMP")/windows-evidence"
@@ -161,25 +182,32 @@ jobs:
           TAG="enduragent-desktop@$VERSION"
           EVIDENCE="Enduragent-$VERSION-x64-verification.json"
           PUBLISHER_SHA256=$(printf '%s' "$PUBLISHER_DN" | sha256sum | awk '{print $1}')
+          FILES=$(jq -cenS --argjson verified "$VERIFIED_FILES" --argjson release "$RELEASE_ASSETS" '
+            [$verified[] as $verifiedFile
+              | $release[]
+              | select(.name == $verifiedFile.name)
+              | select(.state == "uploaded")
+              | select(.size == $verifiedFile.size)
+              | select(.digest == ("sha256:" + $verifiedFile.sha256))
+              | {id, name, size, sha256: $verifiedFile.sha256}]
+            | sort_by(.name)
+            | if length == 3 then . else error("Verified files do not match the resolved release assets") end')
+          INSTALLER_SHA256=$(printf '%s' "$FILES" | jq -er --arg name "Enduragent-$VERSION-x64.exe" '.[] | select(.name == $name) | .sha256')
           jq -nS \
             --arg tag "$TAG" \
             --arg version "$VERSION" \
             --arg commit "$COMMIT" \
             --arg installerSha256 "$INSTALLER_SHA256" \
             --arg publisherDnSha256 "$PUBLISHER_SHA256" \
-            '{schemaVersion: 1, tag: $tag, version: $version, commit: $commit, arch: "x64", authenticode: "verified", installerSha256: $installerSha256, publisherDnSha256: $publisherDnSha256}' \
+            --argjson files "$FILES" \
+            '{schemaVersion: 2, tag: $tag, version: $version, commit: $commit, arch: "x64", authenticode: "verified", installerSha256: $installerSha256, publisherDnSha256: $publisherDnSha256, files: $files}' \
             > "$TEMP/$EVIDENCE"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$TEMP/release.json"
-          if [ "$(jq -r --arg name "$EVIDENCE" '[.assets[] | select(.name == $name)] | length' "$TEMP/release.json")" != '0' ]; then
-            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$TEMP/existing" --pattern "$EVIDENCE"
-            if cmp -s "$TEMP/$EVIDENCE" "$TEMP/existing/$EVIDENCE"; then
-              echo "::notice::Windows verification evidence already recorded"
-              exit 0
-            fi
-            echo '::error::Existing Windows verification evidence conflicts with this run; remove it by hand before retrying'
-            exit 1
-          fi
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "$TEMP/$EVIDENCE"
+          node apps/desktop/scripts/upload-windows-verification-evidence.mjs \
+            --version "$VERSION" \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-id "$RELEASE_ID" \
+            --commit "$COMMIT" \
+            --evidence "$TEMP/$EVIDENCE"
       - name: Dry run summary
         if: ${{ inputs.dry_run == true }}
         env:

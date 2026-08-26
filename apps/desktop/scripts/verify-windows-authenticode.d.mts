@@ -40,6 +40,7 @@ export interface WindowsAuthenticodeOptions {
   readonly expectedThumbprint?: string;
   readonly expectedCommit?: string;
   readonly expectedVersion?: string;
+  readonly expectedUpdaterMetadataSha256?: string;
   readonly allowSelfSignedTest?: boolean;
   readonly allowMissingSigntool?: boolean;
 }
@@ -69,6 +70,7 @@ export interface WindowsAuthenticodeVerifyMode {
       readonly version: string;
       readonly commit: string;
       readonly publisherName?: string;
+      readonly updaterMetadataSha256?: string;
     },
   ) => Promise<void>;
 }
@@ -88,7 +90,12 @@ export function decideWindowsAuthenticode(
   summary: WindowsAuthenticodeSummary,
   options: Pick<
     WindowsAuthenticodeOptions,
-    "expectedPublisherDn" | "expectedThumbprint" | "expectedCommit" | "expectedVersion" | "allowSelfSignedTest"
+    | "expectedPublisherDn"
+    | "expectedThumbprint"
+    | "expectedCommit"
+    | "expectedVersion"
+    | "expectedUpdaterMetadataSha256"
+    | "allowSelfSignedTest"
   >,
 ): VerifiedWindowsAuthenticode;
 export function verifyWindowsAuthenticode(

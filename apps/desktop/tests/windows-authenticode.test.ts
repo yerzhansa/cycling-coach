@@ -14,12 +14,20 @@ import {
   type WindowsAuthenticodeSummary,
 } from "../scripts/verify-windows-authenticode.mjs";
 import { verifyWindowsReleaseAssets } from "../scripts/verify-windows-release.mjs";
-import { windowsReleaseArtifactNames } from "../scripts/windows-release-plan.mjs";
+import {
+  serializeWindowsReleaseUpdaterMetadata,
+  windowsReleaseArtifactNames,
+  windowsReleaseProvenance,
+  windowsUpdaterMetadataDigest,
+} from "../scripts/windows-release-plan.mjs";
 
 const version = "0.1.5";
 const publisherDn = "CN=Enduragent Test Publisher, O=Enduragent Test";
 const thumbprint = "a".repeat(40);
 const commit = "c".repeat(40);
+const feedUrl = "https://github.com/yerzhansa/enduragent/releases/latest/download/";
+const updaterMetadata = serializeWindowsReleaseUpdaterMetadata(feedUrl, publisherDn);
+const updaterMetadataSha256 = windowsUpdaterMetadataDigest(updaterMetadata);
 const scriptPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../scripts/verify-windows-authenticode.ps1",
@@ -57,7 +65,11 @@ function summary(
     signtool: { path: "C:\\signtool.exe", exitCode: 0, output: "verified" },
     versionInfo: {
       productVersion: version,
-      legalTrademarks: `enduragent-release-commit:${commit} enduragent-updater-publisher-sha256:${createHash("sha256").update(publisherDn).digest("hex")}`,
+      legalTrademarks: windowsReleaseProvenance(
+        commit,
+        publisherDn,
+        updaterMetadataSha256,
+      ),
     },
     allowSelfSignedTest: false,
     checks: [
@@ -169,6 +181,7 @@ describe("Windows Authenticode decisions", () => {
         ...decisionOptions(),
         expectedCommit: commit,
         expectedVersion: version,
+        expectedUpdaterMetadataSha256: updaterMetadataSha256,
       }).ok,
     ).toBe(true);
     expect(() =>
@@ -191,11 +204,24 @@ describe("Windows Authenticode decisions", () => {
         summary({
           versionInfo: {
             productVersion: version,
-            legalTrademarks: `enduragent-release-commit:${commit} enduragent-updater-publisher-sha256:${"0".repeat(64)}`,
+            legalTrademarks: `enduragent-release-commit:${commit} enduragent-updater-publisher-sha256:${"0".repeat(64)} enduragent-updater-metadata-sha256:${updaterMetadataSha256}`,
           },
         }),
         { ...decisionOptions(), expectedCommit: commit },
       ),
+    ).toThrow("Authenticode provenance mismatch");
+    expect(() =>
+      decideWindowsAuthenticode(summary(), {
+        ...decisionOptions(),
+        expectedCommit: commit,
+        expectedUpdaterMetadataSha256: "0".repeat(64),
+      }),
+    ).toThrow("Authenticode provenance mismatch");
+    expect(() =>
+      decideWindowsAuthenticode(summary(), {
+        ...decisionOptions(),
+        expectedUpdaterMetadataSha256: "0".repeat(64),
+      }),
     ).toThrow("Authenticode provenance mismatch");
     expect(() =>
       decideWindowsAuthenticode(
@@ -277,6 +303,7 @@ describe("Windows Authenticode decisions", () => {
       version,
       commit,
       expectedPublisherName: publisherDn,
+      appUpdateMetadata: updaterMetadata,
       authenticode,
     });
     expect(result.authenticode).toBe("verified");
@@ -285,6 +312,7 @@ describe("Windows Authenticode decisions", () => {
         version,
         commit: "d".repeat(40),
         expectedPublisherName: publisherDn,
+        appUpdateMetadata: updaterMetadata,
         authenticode,
       }),
     ).rejects.toThrow("Windows installer Authenticode verification failed");
@@ -300,5 +328,32 @@ describe("Windows Authenticode decisions", () => {
       ]),
       { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
     );
+  });
+
+  it("rejects a substituted canonical app-update.yml not sealed by the signed installer", async () => {
+    const authenticode = createWindowsAuthenticodeVerifyMode(
+      { expectedPublisherDn: publisherDn, expectedThumbprint: thumbprint },
+      {
+        executeFile: vi.fn(async () => ({
+          stdout: JSON.stringify(summary({ installerPath })),
+          exitCode: 0,
+        })),
+        scriptPath,
+      },
+    );
+    const substituted = serializeWindowsReleaseUpdaterMetadata(
+      "https://updates.example.test/",
+      publisherDn,
+    );
+    expect(windowsUpdaterMetadataDigest(substituted)).not.toBe(updaterMetadataSha256);
+    await expect(
+      verifyWindowsReleaseAssets(directory, {
+        version,
+        commit,
+        expectedPublisherName: publisherDn,
+        appUpdateMetadata: substituted,
+        authenticode,
+      }),
+    ).rejects.toThrow("Windows installer Authenticode verification failed");
   });
 });

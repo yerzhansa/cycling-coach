@@ -9,10 +9,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import type { VerifyWindowsReleaseOptions } from "../scripts/verify-windows-release.mjs";
 import { verifyWindowsReleaseAssets } from "../scripts/verify-windows-release.mjs";
-import { windowsReleaseArtifactNames } from "../scripts/windows-release-plan.mjs";
+import {
+  serializeWindowsReleaseUpdaterMetadata,
+  windowsReleaseArtifactNames,
+  windowsUpdaterMetadataDigest,
+} from "../scripts/windows-release-plan.mjs";
 
 const version = "0.1.5";
 const commit = "a".repeat(40);
+const publisherDn = "CN=Enduragent Test";
+const feedUrl = "https://github.com/yerzhansa/enduragent/releases/latest/download/";
 const releaseDate = "2026-08-25T00:00:00.000Z";
 const script = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -108,22 +114,26 @@ describe("Windows release artifact verification", () => {
       stagedBytes = await readFile(installerPath);
       await writeFile(join(directory, `Enduragent-${version}-x64.exe`), "TAMPERED");
     });
+    const appUpdateMetadata = serializeWindowsReleaseUpdaterMetadata(feedUrl, publisherDn);
     const result = await verifyWindowsReleaseAssets(directory, {
       version,
       commit,
-      expectedPublisherName: "CN=Enduragent Test",
+      expectedPublisherName: publisherDn,
+      appUpdateMetadata,
       authenticode: { verify },
     });
     expect(verify).toHaveBeenCalledWith(expect.any(String), {
       version,
       commit,
-      publisherName: "CN=Enduragent Test",
+      publisherName: publisherDn,
+      updaterMetadataSha256: windowsUpdaterMetadataDigest(appUpdateMetadata),
     });
     expect(stagedPath.startsWith(directory)).toBe(false);
     expect(stagedPath.endsWith(`Enduragent-${version}-x64.exe`)).toBe(true);
     expect(stagedBytes).toEqual(installer);
     await expect(readFile(stagedPath)).rejects.toThrow();
     expect(result.authenticode).toBe("verified");
+    expect(result.updaterMetadataSha256).toBe(windowsUpdaterMetadataDigest(appUpdateMetadata));
     expect(result.bytes.installer).toEqual(installer);
     await writeFile(join(directory, `Enduragent-${version}-x64.exe`), installer);
     await expect(
@@ -133,6 +143,32 @@ describe("Windows release artifact verification", () => {
         authenticode: { verify: vi.fn(async () => Promise.reject(new Error("signature"))) },
       }),
     ).rejects.toThrow("Windows installer Authenticode verification failed");
+  });
+
+  it("requires byte-exact electron-builder updater metadata serialization", async () => {
+    const canonical = serializeWindowsReleaseUpdaterMetadata(feedUrl, publisherDn);
+    const verify = vi.fn(async () => {});
+    await expect(
+      verifyWindowsReleaseAssets(directory, {
+        version,
+        commit,
+        expectedPublisherName: publisherDn,
+        appUpdateMetadata: canonical,
+        authenticode: { verify },
+      }),
+    ).resolves.toMatchObject({
+      updaterMetadataSha256: windowsUpdaterMetadataDigest(canonical),
+    });
+
+    await expect(
+      verifyWindowsReleaseAssets(directory, {
+        version,
+        commit,
+        expectedPublisherName: publisherDn,
+        appUpdateMetadata: Buffer.concat([canonical, Buffer.from("\n")]),
+        authenticode: { verify },
+      }),
+    ).rejects.toThrow("release updater metadata is not canonical");
   });
 
   it("requires the release commit before running an Authenticode verifier", async () => {
@@ -268,7 +304,29 @@ describe("Windows release artifact verification", () => {
       { encoding: "utf8" },
     );
     expect(success.status).toBe(0);
-    expect(success.stdout).toMatch(/^Windows release envelope verified [0-9a-f]{64}\n$/u);
+    const lines = success.stdout.trimEnd().split("\n");
+    const names = windowsReleaseArtifactNames(version);
+    const blockmapBytes = await readFile(join(directory, names.blockmap));
+    const metadataBytes = await readFile(join(directory, names.metadata));
+    expect(lines[0]).toMatch(/^Windows release envelope verified [0-9a-f]{64}$/u);
+    expect(lines[1]).toMatch(/^Windows release evidence files /u);
+    expect(JSON.parse(lines[1]!.slice("Windows release evidence files ".length))).toEqual([
+      {
+        name: `Enduragent-${version}-x64.exe`,
+        size: installer.length,
+        sha256: createHash("sha256").update(installer).digest("hex"),
+      },
+      {
+        name: `Enduragent-${version}-x64.exe.blockmap`,
+        size: blockmapBytes.length,
+        sha256: createHash("sha256").update(blockmapBytes).digest("hex"),
+      },
+      {
+        name: "latest.yml",
+        size: metadataBytes.length,
+        sha256: createHash("sha256").update(metadataBytes).digest("hex"),
+      },
+    ]);
     expect(success.stderr).toBe(
       "Authenticode verification is pending W19; signature not verified\n",
     );

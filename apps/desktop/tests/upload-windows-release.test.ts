@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { stringify } from "yaml";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VerifiedWindowsReleaseAssets } from "../scripts/verify-windows-release.mjs";
 import { runWindowsReleaseUpload } from "../scripts/upload-windows-release.mjs";
-import { windowsReleaseArtifactNames } from "../scripts/windows-release-plan.mjs";
+import {
+  serializeWindowsReleaseUpdaterMetadata,
+  windowsReleaseArtifactNames,
+  windowsUpdaterMetadataDigest,
+} from "../scripts/windows-release-plan.mjs";
 
 const version = "0.1.5";
 const commit = "a".repeat(40);
@@ -43,6 +46,10 @@ beforeEach(async () => {
     blockmap: Buffer.from("blockmap"),
     metadata: Buffer.from("metadata"),
   };
+  const appUpdateMetadata = serializeWindowsReleaseUpdaterMetadata(
+    "https://github.com/yerzhansa/enduragent/releases/latest/download/",
+    publisherDn,
+  );
   const paths = {
     installer: join(directory, names.installer),
     blockmap: join(directory, names.blockmap),
@@ -54,16 +61,7 @@ beforeEach(async () => {
     writeFile(paths.installer, contents.installer),
     writeFile(paths.blockmap, contents.blockmap),
     writeFile(paths.metadata, contents.metadata),
-    writeFile(
-      appUpdateMetadataPath,
-      stringify({
-        provider: "generic",
-        url: "https://github.com/yerzhansa/enduragent/releases/latest/download/",
-        channel: "latest",
-        updaterCacheDirName: "@enduragentdesktop-updater",
-        publisherName: [publisherDn],
-      }),
-    ),
+    writeFile(appUpdateMetadataPath, appUpdateMetadata),
   ]);
   verified = {
     version,
@@ -77,19 +75,35 @@ beforeEach(async () => {
     },
     installerSha512: createHash("sha512").update(contents.installer).digest("base64"),
     installerSha256: createHash("sha256").update(contents.installer).digest("hex"),
+    files: [
+      {
+        name: names.installer,
+        size: contents.installer.length,
+        sha256: createHash("sha256").update(contents.installer).digest("hex"),
+      },
+      {
+        name: names.blockmap,
+        size: contents.blockmap.length,
+        sha256: createHash("sha256").update(contents.blockmap).digest("hex"),
+      },
+      {
+        name: names.metadata,
+        size: contents.metadata.length,
+        sha256: createHash("sha256").update(contents.metadata).digest("hex"),
+      },
+    ],
+    updaterMetadataSha256: windowsUpdaterMetadataDigest(appUpdateMetadata),
     authenticode: "verified",
     bytes: contents,
   };
 });
 
 function releaseAssetsApi(names: readonly string[] = Object.values(verified.names)) {
-  const byName = new Map(
-    [
-      [verified.names.installer, verified.bytes.installer],
-      [verified.names.blockmap, verified.bytes.blockmap],
-      [verified.names.metadata, verified.bytes.metadata],
-    ] as const,
-  );
+  const byName = new Map([
+    [verified.names.installer, verified.bytes.installer],
+    [verified.names.blockmap, verified.bytes.blockmap],
+    [verified.names.metadata, verified.bytes.metadata],
+  ] as const);
   return JSON.stringify({
     tag_name: tag,
     assets: names.map((name, index) => {
@@ -160,10 +174,14 @@ function successfulExecutor(
       return { stdout: options.assetsApi ?? releaseAssetsApi() };
     }
     if (arguments_[0] === "api" && arguments_[1]?.includes("/git/ref/tags/")) {
-      return { stdout: JSON.stringify({ object: options.reference ?? { type: "commit", sha: commit } }) };
+      return {
+        stdout: JSON.stringify({ object: options.reference ?? { type: "commit", sha: commit } }),
+      };
     }
     if (arguments_[0] === "api" && arguments_[1]?.includes("/git/tags/")) {
-      return { stdout: JSON.stringify({ object: options.peeled ?? { type: "commit", sha: commit } }) };
+      return {
+        stdout: JSON.stringify({ object: options.peeled ?? { type: "commit", sha: commit } }),
+      };
     }
     return { stdout: "" };
   });
@@ -379,6 +397,24 @@ describe("Windows release upload", () => {
     expect(executeFile).not.toHaveBeenCalled();
   });
 
+  it("refuses app-update.yml bytes that do not match the digest sealed by verification", async () => {
+    const substituted = serializeWindowsReleaseUpdaterMetadata(
+      "https://updates.example.test/",
+      publisherDn,
+    );
+    await writeFile(appUpdateMetadataPath, substituted);
+    const executeFile = successfulExecutor();
+    const verifyAssets = vi.fn(async () => verified);
+    await expect(runWindowsReleaseUpload(input(), { executeFile, verifyAssets })).rejects.toThrow(
+      "app-update.yml does not match the signed installer",
+    );
+    expect(verifyAssets).toHaveBeenCalledWith(
+      directory,
+      expect.objectContaining({ appUpdateMetadata: substituted }),
+    );
+    expect(executeFile).not.toHaveBeenCalled();
+  });
+
   it("binds a matching lightweight release tag to the commit", async () => {
     const result = await runWindowsReleaseUpload(input(), {
       executeFile: successfulExecutor(),
@@ -518,7 +554,10 @@ describe("Windows release upload", () => {
       if (arguments_[0] === "release" && arguments_[1] === "view") {
         views += 1;
         return {
-          stdout: views === 1 ? release([]) : release([verified.names.installer, verified.names.blockmap]),
+          stdout:
+            views === 1
+              ? release([])
+              : release([verified.names.installer, verified.names.blockmap]),
         };
       }
       if (arguments_[0] === "api" && arguments_[1]?.endsWith("/releases/latest")) {
@@ -577,7 +616,10 @@ describe("Windows release upload", () => {
   it("refuses an upload record inside the artifact directory before touching it", async () => {
     const executeFile = successfulExecutor();
     const verifyAssets = vi.fn(async () => verified);
-    for (const recordPath of [join(directory, "upload-record.json"), join(directory, "..record.json")]) {
+    for (const recordPath of [
+      join(directory, "upload-record.json"),
+      join(directory, "..record.json"),
+    ]) {
       await expect(
         runWindowsReleaseUpload(input({ record: recordPath }), { executeFile, verifyAssets }),
       ).rejects.toThrow("upload record must be outside the artifact directory");

@@ -87,7 +87,7 @@ _Avoid_: Windows bundle, release files
 _Avoid_: Unsigned mode, signing bypass
 
 **Windows release provenance**:
-The `enduragent-release-commit:<sha> enduragent-updater-publisher-sha256:<hex>` string that `windows-release-plan.mjs` seals into the installer's `LegalTrademarks` version field; `verify-windows-authenticode.ps1` reads it back and `--commit` plus the SHA-256 of `--publisher-dn` must match.
+The three-token `enduragent-release-commit:<sha> enduragent-updater-publisher-sha256:<hex> enduragent-updater-metadata-sha256:<hex>` string that `windows-release-plan.mjs` seals into the installer's `LegalTrademarks` version field. `verify-windows-authenticode.ps1` reads it back; the release commit, updater publisher digest, and exact electron-builder-serialized `app-update.yml` digest must match before upload.
 _Avoid_: Build stamp, commit marker
 
 **Windows package inventory**:
@@ -116,9 +116,9 @@ _Avoid_: Install directory, application directory
 - The **Release marker** admits a packaged build to `isDesktopUpdateReleaseEligible`; **Platform activation** independently decides whether update checks run on the current platform.
 - A **Windows release envelope** is produced, verified, uploaded, and round-trip-checked by its named scripts.
 - **Authenticode pending mode** does not authorise an unsigned installer for a GitHub release or the website.
-- **Windows release provenance** binds a verified installer to the release tag commit and the updater publisher before upload.
+- **Windows release provenance** binds a verified installer to the release tag commit, updater publisher, and canonical packaged updater metadata before upload; the uploader compares the supplied `app-update.yml` bytes with the digest sealed in the signed installer.
 - `upload-windows-release.mjs` uploads read-only copies of the verified bytes, only to the latest release, reconciles GitHub asset digests against those bytes, and removes its assets when the release stops being latest during the upload.
-- `desktop-windows-release.yml` records a completed verification as the `Enduragent-<version>-x64-verification.json` release asset and never edits the release body.
+- `desktop-windows-release.yml` records a completed verification as the `Enduragent-<version>-x64-verification.json` release asset through an upload transaction bound to the release identity and the exact installer, blockmap, and updater-metadata asset IDs and digests; it never edits the release body.
 - The **Windows package inventory** fixes the application, resource, and asar contents accepted by package verification.
 - The athlete removes the **Windows user data directory** by hand when retained data must be erased after uninstall.
 

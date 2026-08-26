@@ -561,15 +561,16 @@ describe("windows release assets", () => {
     };
   }
 
-  it("returns the exact Windows release triple", () => {
+  it("returns the exact Windows release assets including verification evidence", () => {
     expect(windowsReleaseFileNames("0.1.7")).toEqual([
       "Enduragent-0.1.7-x64.exe",
       "Enduragent-0.1.7-x64.exe.blockmap",
       "latest.yml",
+      "Enduragent-0.1.7-x64-verification.json",
     ]);
   });
 
-  it("allows the exact same-version Windows triple and still rejects stale assets", async () => {
+  it("allows the exact same-version Windows assets and still rejects stale assets", async () => {
     writeEnvelope();
     const manifest = await sealDesktopRelease(directory, binding);
     const macos = manifest.files.map((file) => ({ name: file.name }));
@@ -586,13 +587,14 @@ describe("windows release assets", () => {
     ).toThrow("stale");
   });
 
-  it("strips exactly the same-version Windows triple from macOS-owned assets", () => {
+  it("strips exactly the same-version Windows assets from macOS-owned assets", () => {
     const macos = releaseFileNames(desktopVersion).map(asset);
     const windows = windowsReleaseFileNames(desktopVersion).map(asset);
     const otherWindows = windowsReleaseFileNames("0.1.6").map(asset);
     expect(macosOwnedAssets([...macos, ...windows, ...otherWindows], desktopVersion)).toEqual([
       ...macos,
       ...otherWindows.slice(0, 2),
+      otherWindows[3],
     ]);
   });
 
@@ -600,6 +602,7 @@ describe("windows release assets", () => {
     ["no", 0],
     ["a partial set of", 1],
     ["a complete set of", 3],
+    ["a complete set plus verification evidence", 4],
   ] as const)("resolves a complete macOS release with %s Windows assets", (_label, count) => {
     const macos = releaseFileNames(desktopVersion).map(asset);
     const windows = windowsReleaseFileNames(desktopVersion).map(asset);
@@ -608,7 +611,7 @@ describe("windows release assets", () => {
     );
   });
 
-  it("rejects a foreign Windows triple", () => {
+  it("rejects foreign Windows assets including verification evidence", () => {
     const macos = releaseFileNames(desktopVersion).map(asset);
     const otherWindows = windowsReleaseFileNames("0.1.6").map(asset);
     expect(resolveDesktopReleaseVersion(release([...macos, ...otherWindows]))).toBeNull();

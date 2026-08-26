@@ -100,9 +100,12 @@ function validSummary(summary) {
     summary.signer !== null &&
     (!exactObject(summary.signer) ||
       !hasExactKeys(summary.signer, ["subject", "thumbprint", "issuer", "notAfter"]) ||
-      ![summary.signer.subject, summary.signer.thumbprint, summary.signer.issuer, summary.signer.notAfter].every(
-        (value) => typeof value === "string",
-      ))
+      ![
+        summary.signer.subject,
+        summary.signer.thumbprint,
+        summary.signer.issuer,
+        summary.signer.notAfter,
+      ].every((value) => typeof value === "string"))
   ) {
     return false;
   }
@@ -164,23 +167,38 @@ function checkMap(summary) {
   return new Map(summary.checks.map((check) => [check.name, check]));
 }
 
-function validExpectedValues(expectedPublisherDn, expectedThumbprint, expectedCommit) {
+function validExpectedValues(
+  expectedPublisherDn,
+  expectedThumbprint,
+  expectedCommit,
+  expectedUpdaterMetadataSha256,
+) {
   return (
     typeof expectedPublisherDn === "string" &&
     expectedPublisherDn.length > 0 &&
     expectedPublisherDn === expectedPublisherDn.trim() &&
     (expectedThumbprint === undefined || /^[0-9a-f]{40}$/iu.test(expectedThumbprint)) &&
-    (expectedCommit === undefined || /^[0-9a-f]{40}$/u.test(expectedCommit))
+    (expectedCommit === undefined || /^[0-9a-f]{40}$/u.test(expectedCommit)) &&
+    (expectedUpdaterMetadataSha256 === undefined ||
+      /^[0-9a-f]{64}$/u.test(expectedUpdaterMetadataSha256))
   );
 }
 
-function provenanceMatches(summary, expectedCommit, expectedVersion, expectedPublisherDn) {
-  if (expectedCommit !== undefined) {
+function provenanceMatches(
+  summary,
+  expectedCommit,
+  expectedVersion,
+  expectedPublisherDn,
+  expectedUpdaterMetadataSha256,
+) {
+  if (expectedCommit !== undefined || expectedUpdaterMetadataSha256 !== undefined) {
     const provenance = parseWindowsReleaseProvenance(summary.versionInfo.legalTrademarks);
     if (
       provenance === null ||
-      provenance.commit !== expectedCommit ||
-      provenance.publisherSha256 !== windowsUpdaterPublisherDigest(expectedPublisherDn)
+      provenance.publisherSha256 !== windowsUpdaterPublisherDigest(expectedPublisherDn) ||
+      (expectedCommit !== undefined && provenance.commit !== expectedCommit) ||
+      (expectedUpdaterMetadataSha256 !== undefined &&
+        provenance.updaterMetadataSha256 !== expectedUpdaterMetadataSha256)
     ) {
       return false;
     }
@@ -193,11 +211,23 @@ function provenanceMatches(summary, expectedCommit, expectedVersion, expectedPub
 
 export function decideWindowsAuthenticode(
   summary,
-  { expectedPublisherDn, expectedThumbprint, expectedCommit, expectedVersion, allowSelfSignedTest = false },
+  {
+    expectedPublisherDn,
+    expectedThumbprint,
+    expectedCommit,
+    expectedVersion,
+    expectedUpdaterMetadataSha256,
+    allowSelfSignedTest = false,
+  },
 ) {
   if (
     !validSummary(summary) ||
-    !validExpectedValues(expectedPublisherDn, expectedThumbprint, expectedCommit) ||
+    !validExpectedValues(
+      expectedPublisherDn,
+      expectedThumbprint,
+      expectedCommit,
+      expectedUpdaterMetadataSha256,
+    ) ||
     (expectedVersion !== undefined && typeof expectedVersion !== "string") ||
     typeof allowSelfSignedTest !== "boolean" ||
     summary.allowSelfSignedTest !== allowSelfSignedTest
@@ -248,7 +278,15 @@ export function decideWindowsAuthenticode(
     fail("Authenticode chain is untrusted");
   }
   if (!checks.get("signtool").ok) fail("signtool verification failed");
-  if (!provenanceMatches(summary, expectedCommit, expectedVersion, expectedPublisherDn)) {
+  if (
+    !provenanceMatches(
+      summary,
+      expectedCommit,
+      expectedVersion,
+      expectedPublisherDn,
+      expectedUpdaterMetadataSha256,
+    )
+  ) {
     fail("Authenticode provenance mismatch");
   }
   if (!checks.get("status").ok || !summary.ok || summary.checks.some((check) => !check.ok)) {
@@ -279,6 +317,7 @@ async function runWindowsAuthenticode(options, dependencies = {}) {
       options.expectedPublisherDn,
       options.expectedThumbprint,
       options.expectedCommit,
+      options.expectedUpdaterMetadataSha256,
     )
   ) {
     fail("Authenticode summary is invalid");
@@ -319,7 +358,11 @@ async function runWindowsAuthenticode(options, dependencies = {}) {
       fail("Authenticode summary is invalid");
     }
   }
-  if (exactObject(result) && Object.hasOwn(result, "exitCode") && ![0, 1].includes(result.exitCode)) {
+  if (
+    exactObject(result) &&
+    Object.hasOwn(result, "exitCode") &&
+    ![0, 1].includes(result.exitCode)
+  ) {
     fail("Authenticode summary is invalid");
   }
   return parseWindowsAuthenticodeSummary(outputStream(result, "stdout"));
@@ -332,6 +375,7 @@ export async function verifyWindowsAuthenticode(options, dependencies = {}) {
     expectedThumbprint: options.expectedThumbprint,
     expectedCommit: options.expectedCommit,
     expectedVersion: options.expectedVersion,
+    expectedUpdaterMetadataSha256: options.expectedUpdaterMetadataSha256,
     allowSelfSignedTest: options.allowSelfSignedTest ?? false,
   });
 }
@@ -348,10 +392,7 @@ export function createWindowsAuthenticodeVerifyMode(options, dependencies = {}) 
     mode: "verify",
     expectedPublisherDn,
     async verify(installerPath, context) {
-      if (
-        context?.publisherName !== undefined &&
-        context.publisherName !== expectedPublisherDn
-      ) {
+      if (context?.publisherName !== undefined && context.publisherName !== expectedPublisherDn) {
         fail("Authenticode publisher mismatch");
       }
       let expectedCommit;
@@ -367,6 +408,7 @@ export function createWindowsAuthenticodeVerifyMode(options, dependencies = {}) 
           expectedThumbprint: options.expectedThumbprint,
           expectedCommit,
           expectedVersion: context.version,
+          expectedUpdaterMetadataSha256: context.updaterMetadataSha256,
           allowSelfSignedTest: options.allowSelfSignedTest,
           allowMissingSigntool: options.allowMissingSigntool,
         },
@@ -430,7 +472,9 @@ async function main() {
   try {
     decideWindowsAuthenticode(summary, options);
   } catch (error) {
-    process.stderr.write(`${safeWindowsAuthenticodeMessage(error) ?? "Authenticode verification failed"}\n`);
+    process.stderr.write(
+      `${safeWindowsAuthenticodeMessage(error) ?? "Authenticode verification failed"}\n`,
+    );
     process.exitCode = 1;
   }
 }
@@ -439,7 +483,9 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
   try {
     await main();
   } catch (error) {
-    process.stderr.write(`${safeWindowsAuthenticodeMessage(error) ?? "Authenticode verification failed"}\n`);
+    process.stderr.write(
+      `${safeWindowsAuthenticodeMessage(error) ?? "Authenticode verification failed"}\n`,
+    );
     process.exitCode = 1;
   }
 }

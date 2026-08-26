@@ -23,6 +23,7 @@ export interface WindowsReleaseUploadRecord {
   readonly arch: "x64";
   readonly status: "uploaded";
   readonly authenticode: "verified";
+  readonly updaterMetadataSha256: string;
   readonly files: readonly {
     readonly name: string;
     readonly size: number;

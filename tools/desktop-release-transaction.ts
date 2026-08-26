@@ -241,10 +241,17 @@ export function releaseFileNames(version: string): readonly [string, string, str
   return [`${base}.dmg`, `${base}.zip`, `${base}.zip.blockmap`, "latest-mac.yml"];
 }
 
-export function windowsReleaseFileNames(version: string): readonly [string, string, string] {
+export function windowsReleaseFileNames(
+  version: string,
+): readonly [string, string, string, string] {
   const stableVersion = requireDesktopVersion(version);
   const installer = `Enduragent-${stableVersion}-x64.exe`;
-  return [installer, `${installer}.blockmap`, WINDOWS_DESKTOP_METADATA_NAME];
+  return [
+    installer,
+    `${installer}.blockmap`,
+    WINDOWS_DESKTOP_METADATA_NAME,
+    `Enduragent-${stableVersion}-x64-verification.json`,
+  ];
 }
 
 export function macosOwnedAssets<T extends Pick<GithubAsset, "name">>(

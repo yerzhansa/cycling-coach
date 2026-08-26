@@ -68,6 +68,7 @@ export interface WindowsReleasePlan {
   readonly artifactNames: WindowsReleaseArtifactNames;
   readonly assetNames: readonly string[];
   readonly updaterMetadata: WindowsReleaseUpdaterMetadata;
+  readonly updaterMetadataSha256: string;
   readonly authenticode: "pending-w19";
   readonly builderOptions: WindowsReleaseBuilderOptions;
 }
@@ -79,12 +80,23 @@ export const WINDOWS_AUTHENTICODE_PENDING: "pending-w19";
 export const WINDOWS_PUBLISHER_DN_PLACEHOLDER: "CN=ENDURAGENT PUBLISHER DN PLACEHOLDER, O=PLACEHOLDER";
 export const WINDOWS_RELEASE_PROVENANCE_PREFIX: "enduragent-release-commit:";
 export const WINDOWS_UPDATER_PUBLISHER_PREFIX: "enduragent-updater-publisher-sha256:";
+export const WINDOWS_UPDATER_METADATA_PREFIX: "enduragent-updater-metadata-sha256:";
 export interface WindowsReleaseProvenance {
   readonly commit: string;
   readonly publisherSha256: string;
+  readonly updaterMetadataSha256: string;
 }
 export function windowsUpdaterPublisherDigest(publisherDn: string): string;
-export function windowsReleaseProvenance(commit: string, publisherDn: string): string;
+export function serializeWindowsReleaseUpdaterMetadata(
+  feedUrl: string,
+  publisherDn: string,
+): Buffer;
+export function windowsUpdaterMetadataDigest(bytes: string | Uint8Array): string;
+export function windowsReleaseProvenance(
+  commit: string,
+  publisherDn: string,
+  updaterMetadataSha256: string,
+): string;
 export function parseWindowsReleaseProvenance(value: unknown): WindowsReleaseProvenance | null;
 export function safeWindowsReleasePlanMessage(error: unknown): string | undefined;
 export function requireReleaseCommit(value: unknown): string;

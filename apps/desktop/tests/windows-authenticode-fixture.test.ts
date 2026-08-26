@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,12 +10,15 @@ import { verifyWindowsAuthenticode } from "../scripts/verify-windows-authenticod
 const execFileAsync = promisify(execFile);
 const scriptDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "../scripts");
 let temporaryDirectory: string | undefined;
-let fixture: {
-  readonly fixturePath: string;
-  readonly subject: string;
-  readonly thumbprint: string;
-  readonly timestamped: boolean;
-} | undefined;
+let fixture:
+  | {
+      readonly fixturePath: string;
+      readonly subject: string;
+      readonly thumbprint: string;
+      readonly timestamped: boolean;
+      readonly rfc3161: boolean;
+    }
+  | undefined;
 
 if (process.platform === "win32") {
   temporaryDirectory = await mkdtemp(join(tmpdir(), "windows-authenticode-fixture-"));
@@ -32,7 +35,7 @@ if (process.platform === "win32") {
   fixture = JSON.parse(result.stdout);
 }
 
-const fixtureTest = fixture !== undefined && !fixture.timestamped ? it.skip : it;
+const fixtureTest = fixture !== undefined && !fixture.rfc3161 ? it.skip : it;
 
 afterAll(async () => {
   if (temporaryDirectory !== undefined) {
@@ -40,8 +43,16 @@ afterAll(async () => {
   }
 });
 
+describe("Windows signing fixture contract", () => {
+  it("requests an RFC 3161 SHA-256 timestamp with signtool", async () => {
+    const source = await readFile(join(scriptDirectory, "make-test-signing-cert.ps1"), "utf8");
+    expect(source).toContain('"/tr", $TimestampUrl, "/td", "SHA256"');
+    expect(source).not.toContain("-TimestampServer $TimestampServer");
+  });
+});
+
 describe.skipIf(process.platform !== "win32")(
-  "Windows-only: needs pwsh, New-SelfSignedCertificate, and a reachable RFC 3161 TSA",
+  "Windows-only: needs pwsh, signtool, New-SelfSignedCertificate, and a reachable RFC 3161 TSA",
   () => {
     fixtureTest("verifies the generated self-signed and timestamped PE", async () => {
       if (fixture === undefined) throw new TypeError("Windows fixture is unavailable");
@@ -54,7 +65,10 @@ describe.skipIf(process.platform !== "win32")(
       };
       await expect(verifyWindowsAuthenticode(options)).resolves.toMatchObject({ ok: true });
       await expect(
-        verifyWindowsAuthenticode({ ...options, expectedPublisherDn: "CN=Different Test Publisher" }),
+        verifyWindowsAuthenticode({
+          ...options,
+          expectedPublisherDn: "CN=Different Test Publisher",
+        }),
       ).rejects.toThrow("Authenticode publisher mismatch");
       await expect(
         verifyWindowsAuthenticode({ ...options, allowSelfSignedTest: false }),

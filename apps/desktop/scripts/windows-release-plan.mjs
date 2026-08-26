@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
@@ -11,6 +12,9 @@ import {
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const canonicalRepositoryRoot = resolve(scriptDirectory, "../../..");
+const scriptRequire = createRequire(import.meta.url);
+const electronBuilderRequire = createRequire(scriptRequire.resolve("electron-builder"));
+const { serializeToYaml } = electronBuilderRequire("builder-util");
 const safeWindowsReleaseAssetMessagePattern =
   /^(?:duplicate|unknown|missing) Windows release asset: [-A-Za-z0-9@._]+$/u;
 const safeWindowsReleasePlanMessages = new Set([
@@ -33,6 +37,7 @@ export const WINDOWS_PUBLISHER_DN_PLACEHOLDER =
   "CN=ENDURAGENT PUBLISHER DN PLACEHOLDER, O=PLACEHOLDER";
 export const WINDOWS_RELEASE_PROVENANCE_PREFIX = "enduragent-release-commit:";
 export const WINDOWS_UPDATER_PUBLISHER_PREFIX = "enduragent-updater-publisher-sha256:";
+export const WINDOWS_UPDATER_METADATA_PREFIX = "enduragent-updater-metadata-sha256:";
 
 function exactObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -53,7 +58,14 @@ function compareStableVersions(left, right) {
   return 0;
 }
 
-function freezeBuilderOptions(desktopRoot, version, commit, feedUrl, publisherDn) {
+function freezeBuilderOptions(
+  desktopRoot,
+  version,
+  commit,
+  feedUrl,
+  publisherDn,
+  updaterMetadataSha256,
+) {
   const publish = Object.freeze([
     Object.freeze({ provider: "generic", url: feedUrl, channel: "latest" }),
   ]);
@@ -72,7 +84,7 @@ function freezeBuilderOptions(desktopRoot, version, commit, feedUrl, publisherDn
       }),
       signExecutable: true,
       verifyUpdateCodeSignature: true,
-      legalTrademarks: windowsReleaseProvenance(commit, publisherDn),
+      legalTrademarks: windowsReleaseProvenance(commit, publisherDn, updaterMetadataSha256),
       target,
     }),
     nsis: Object.freeze({
@@ -110,24 +122,67 @@ export function windowsUpdaterPublisherDigest(publisherDn) {
   return createHash("sha256").update(publisherDn, "utf8").digest("hex");
 }
 
-export function windowsReleaseProvenance(commit, publisherDn) {
-  return `${WINDOWS_RELEASE_PROVENANCE_PREFIX}${requireReleaseCommit(commit)} ${WINDOWS_UPDATER_PUBLISHER_PREFIX}${windowsUpdaterPublisherDigest(publisherDn)}`;
+export function serializeWindowsReleaseUpdaterMetadata(feedUrl, publisherDn) {
+  const url = requireGenericFeedUrl(feedUrl);
+  if (
+    typeof publisherDn !== "string" ||
+    publisherDn.length === 0 ||
+    publisherDn !== publisherDn.trim()
+  ) {
+    throw new TypeError("Windows publisher DN is invalid");
+  }
+  return Buffer.from(
+    serializeToYaml({
+      provider: "generic",
+      url,
+      channel: "latest",
+      updaterCacheDirName: DESKTOP_UPDATER_CACHE_DIRECTORY,
+      publisherName: [publisherDn],
+    }),
+    "utf8",
+  );
+}
+
+export function windowsUpdaterMetadataDigest(bytes) {
+  if (typeof bytes !== "string" && !(bytes instanceof Uint8Array)) {
+    throw new TypeError("release updater metadata is invalid");
+  }
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function requireSha256(value) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new TypeError("release updater metadata is invalid");
+  }
+  return value;
+}
+
+export function windowsReleaseProvenance(commit, publisherDn, updaterMetadataSha256) {
+  return `${WINDOWS_RELEASE_PROVENANCE_PREFIX}${requireReleaseCommit(commit)} ${WINDOWS_UPDATER_PUBLISHER_PREFIX}${windowsUpdaterPublisherDigest(publisherDn)} ${WINDOWS_UPDATER_METADATA_PREFIX}${requireSha256(updaterMetadataSha256)}`;
 }
 
 export function parseWindowsReleaseProvenance(value) {
   if (typeof value !== "string") return null;
   const tokens = value.split(" ");
   if (
-    tokens.length !== 2 ||
+    tokens.length !== 3 ||
     !tokens[0].startsWith(WINDOWS_RELEASE_PROVENANCE_PREFIX) ||
-    !tokens[1].startsWith(WINDOWS_UPDATER_PUBLISHER_PREFIX)
+    !tokens[1].startsWith(WINDOWS_UPDATER_PUBLISHER_PREFIX) ||
+    !tokens[2].startsWith(WINDOWS_UPDATER_METADATA_PREFIX)
   ) {
     return null;
   }
   const commit = tokens[0].slice(WINDOWS_RELEASE_PROVENANCE_PREFIX.length);
   const publisherSha256 = tokens[1].slice(WINDOWS_UPDATER_PUBLISHER_PREFIX.length);
-  if (!/^[0-9a-f]{40}$/u.test(commit) || !/^[0-9a-f]{64}$/u.test(publisherSha256)) return null;
-  return Object.freeze({ commit, publisherSha256 });
+  const updaterMetadataSha256 = tokens[2].slice(WINDOWS_UPDATER_METADATA_PREFIX.length);
+  if (
+    !/^[0-9a-f]{40}$/u.test(commit) ||
+    !/^[0-9a-f]{64}$/u.test(publisherSha256) ||
+    !/^[0-9a-f]{64}$/u.test(updaterMetadataSha256)
+  ) {
+    return null;
+  }
+  return Object.freeze({ commit, publisherSha256, updaterMetadataSha256 });
 }
 
 export function windowsReleaseArtifactNames(version) {
@@ -276,6 +331,9 @@ export function createWindowsReleasePlan(input) {
     updaterCacheDirName: DESKTOP_UPDATER_CACHE_DIRECTORY,
     publisherName: publisherDn,
   });
+  const updaterMetadataSha256 = windowsUpdaterMetadataDigest(
+    serializeWindowsReleaseUpdaterMetadata(feedUrl, publisherDn),
+  );
   return Object.freeze({
     version,
     commit,
@@ -290,7 +348,15 @@ export function createWindowsReleasePlan(input) {
     artifactNames,
     assetNames,
     updaterMetadata,
+    updaterMetadataSha256,
     authenticode: WINDOWS_AUTHENTICODE_PENDING,
-    builderOptions: freezeBuilderOptions(desktopRoot, version, commit, feedUrl, publisherDn),
+    builderOptions: freezeBuilderOptions(
+      desktopRoot,
+      version,
+      commit,
+      feedUrl,
+      publisherDn,
+      updaterMetadataSha256,
+    ),
   });
 }

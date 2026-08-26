@@ -12,6 +12,7 @@ export type WindowsAuthenticodeMode =
           readonly version: string;
           readonly commit: string;
           readonly publisherName?: string;
+          readonly updaterMetadataSha256?: string;
         },
       ) => Promise<void>;
     };
@@ -55,6 +56,12 @@ export interface VerifiedWindowsReleaseAssets {
   };
   readonly installerSha512: string;
   readonly installerSha256: string;
+  readonly files: readonly {
+    readonly name: string;
+    readonly size: number;
+    readonly sha256: string;
+  }[];
+  readonly updaterMetadataSha256: string | null;
   readonly authenticode: "pending-w19" | "verified";
   readonly bytes: {
     readonly installer: Buffer;

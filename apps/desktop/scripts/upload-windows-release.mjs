@@ -9,6 +9,7 @@ import {
   WINDOWS_PUBLISHER_DN_PLACEHOLDER,
   requireReleaseCommit,
   windowsReleaseArtifactNames,
+  windowsUpdaterMetadataDigest,
 } from "./windows-release-plan.mjs";
 import {
   safeWindowsReleaseVerificationMessage,
@@ -36,6 +37,8 @@ const safeWindowsReleaseUploadMessages = new Set([
   "upload record must be outside the artifact directory",
   "app-update.yml path must be absolute",
   "app-update.yml is unreadable",
+  "signed updater metadata binding is missing",
+  "app-update.yml does not match the signed installer",
   "release is not the latest release",
   "release lost latest status during upload; Windows assets removed",
   "Windows release asset digest mismatch",
@@ -399,6 +402,15 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
     if (verified.authenticode !== "verified") {
       throw new TypeError("unsigned Windows installer refused");
     }
+    if (
+      typeof verified.updaterMetadataSha256 !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(verified.updaterMetadataSha256)
+    ) {
+      throw new TypeError("signed updater metadata binding is missing");
+    }
+    if (verified.updaterMetadataSha256 !== windowsUpdaterMetadataDigest(appUpdateMetadata)) {
+      throw new TypeError("app-update.yml does not match the signed installer");
+    }
     const files = releaseFileRecords(verified);
     staging = await stageVerifiedBytes(verified, fileDependencies);
     const release = await viewRelease(executeFile, tag, repository);
@@ -453,6 +465,7 @@ export async function runWindowsReleaseUpload(input, dependencies = {}) {
       arch: "x64",
       status: "uploaded",
       authenticode: verified.authenticode,
+      updaterMetadataSha256: verified.updaterMetadataSha256,
       files,
     });
     if (input.record !== undefined) {

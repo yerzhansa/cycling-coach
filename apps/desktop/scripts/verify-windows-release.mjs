@@ -10,7 +10,9 @@ import {
   WINDOWS_AUTHENTICODE_PENDING,
   parseWindowsReleaseUpdaterMetadata,
   requireReleaseCommit,
+  serializeWindowsReleaseUpdaterMetadata,
   windowsReleaseArtifactNames,
+  windowsUpdaterMetadataDigest,
 } from "./windows-release-plan.mjs";
 import { requireStableSemVer } from "./macos-release-plan.mjs";
 import { createWindowsAuthenticodeVerifyMode } from "./verify-windows-authenticode.mjs";
@@ -177,8 +179,7 @@ export function checkWindowsInstallerBlockmap(bytes, installer) {
     file.checksums.length !== file.sizes.length ||
     !file.checksums.every(
       (checksum) =>
-        validBase64(checksum) &&
-        Buffer.from(checksum, "base64").length === BLOCKMAP_CHECKSUM_BYTES,
+        validBase64(checksum) && Buffer.from(checksum, "base64").length === BLOCKMAP_CHECKSUM_BYTES,
     ) ||
     !file.sizes.every((size) => Number.isSafeInteger(size) && size > 0)
   ) {
@@ -289,15 +290,32 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
     fail("latest.yml does not match the Windows installer");
   }
   verifyBlockmap(blockmap, installer);
+  let updaterMetadataSha256 = null;
   if (options.appUpdateMetadata !== undefined) {
     try {
-      parseWindowsReleaseUpdaterMetadata(
-        options.appUpdateMetadata,
+      const updaterMetadataBytes =
+        typeof options.appUpdateMetadata === "string"
+          ? Buffer.from(options.appUpdateMetadata, "utf8")
+          : Buffer.from(options.appUpdateMetadata);
+      const updaterMetadata = parseWindowsReleaseUpdaterMetadata(
+        updaterMetadataBytes,
         options.expectedPublisherName === undefined
           ? {}
           : { expectedPublisherName: options.expectedPublisherName },
       );
+      if (updaterMetadata.publisherName === undefined) {
+        throw new TypeError("release updater metadata is invalid");
+      }
+      const canonicalBytes = serializeWindowsReleaseUpdaterMetadata(
+        updaterMetadata.url,
+        updaterMetadata.publisherName,
+      );
+      if (!canonicalBytes.equals(updaterMetadataBytes)) {
+        fail("release updater metadata is not canonical");
+      }
+      updaterMetadataSha256 = windowsUpdaterMetadataDigest(updaterMetadataBytes);
     } catch (error) {
+      if (error instanceof WindowsReleaseVerificationError) throw error;
       fail(error instanceof TypeError ? error.message : "release updater metadata is invalid");
     }
   }
@@ -316,6 +334,7 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
         version,
         commit,
         publisherName: options.expectedPublisherName,
+        updaterMetadataSha256: updaterMetadataSha256 ?? undefined,
       });
     } catch {
       fail("Windows installer Authenticode verification failed");
@@ -340,6 +359,20 @@ export async function verifyWindowsReleaseAssets(artifactDirectory, options, ove
     }),
     installerSha512,
     installerSha256,
+    files: Object.freeze(
+      [
+        [names.installer, installer],
+        [names.blockmap, blockmap],
+        [names.metadata, metadataBytes],
+      ].map(([name, bytes]) =>
+        Object.freeze({
+          name,
+          size: bytes.length,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        }),
+      ),
+    ),
+    updaterMetadataSha256,
     authenticode,
     bytes: Object.freeze({ installer, blockmap, metadata: metadataBytes }),
   });
@@ -410,6 +443,7 @@ async function main() {
     { notice: (message) => process.stderr.write(`${message}\n`) },
   );
   process.stdout.write(`Windows release envelope verified ${result.installerSha256}\n`);
+  process.stdout.write(`Windows release evidence files ${JSON.stringify(result.files)}\n`);
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

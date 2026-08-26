@@ -14,8 +14,10 @@ import {
   createWindowsReleasePlan,
   parseWindowsReleaseUpdaterMetadata,
   safeWindowsReleasePlanMessage,
+  serializeWindowsReleaseUpdaterMetadata,
   windowsReleaseArtifactNames,
   windowsReleaseAssetNames,
+  windowsUpdaterMetadataDigest,
 } from "../scripts/windows-release-plan.mjs";
 
 const feedUrl = "https://github.com/yerzhansa/enduragent/releases/latest/download/";
@@ -139,8 +141,22 @@ describe("Windows release plan", () => {
       signtoolOptions: { publisherName: [WINDOWS_PUBLISHER_DN_PLACEHOLDER] },
       signExecutable: true,
       verifyUpdateCodeSignature: true,
-      legalTrademarks: `enduragent-release-commit:${commit} enduragent-updater-publisher-sha256:${createHash("sha256").update(WINDOWS_PUBLISHER_DN_PLACEHOLDER).digest("hex")}`,
+      legalTrademarks: `enduragent-release-commit:${commit} enduragent-updater-publisher-sha256:${createHash("sha256").update(WINDOWS_PUBLISHER_DN_PLACEHOLDER).digest("hex")} enduragent-updater-metadata-sha256:${plan.updaterMetadataSha256}`,
       target: [{ target: "nsis", arch: ["x64"] }],
+    });
+    const canonicalUpdaterMetadata = serializeWindowsReleaseUpdaterMetadata(
+      feedUrl,
+      WINDOWS_PUBLISHER_DN_PLACEHOLDER,
+    );
+    expect(plan.updaterMetadataSha256).toBe(
+      windowsUpdaterMetadataDigest(canonicalUpdaterMetadata),
+    );
+    expect(parse(canonicalUpdaterMetadata.toString("utf8"))).toEqual({
+      provider: "generic",
+      url: feedUrl,
+      channel: "latest",
+      updaterCacheDirName: "@enduragentdesktop-updater",
+      publisherName: [WINDOWS_PUBLISHER_DN_PLACEHOLDER],
     });
     expect(plan.updaterMetadata.publisherName).toBe(WINDOWS_PUBLISHER_DN_PLACEHOLDER);
     const customPublisherDn = "CN=Enduragent Test Publisher, O=Enduragent Test";
