@@ -339,7 +339,15 @@ async function launch(initial: "reached" | "complete" = "reached") {
     if (document.querySelector("[data-setup-host]") !== null) {
       throw new Error("ready fixture unexpectedly requires setup");
     }
-    const composer = document.querySelector("textarea#message");
+    const composerDeadline = Date.now() + 10000;
+    let composer = document.querySelector("textarea#message");
+    while (
+      (!(composer instanceof HTMLTextAreaElement) || composer.disabled) &&
+      Date.now() < composerDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      composer = document.querySelector("textarea#message");
+    }
     if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) {
       throw new Error("ready fixture did not enable chat");
     }
@@ -456,6 +464,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "chooseImportFiles",
       "claudeCliRecheck",
       "claudeCliStatus",
+      "credentialRecoveryStatus",
       "credentialStatuses",
       "deleteCredential",
       "disableTelegram",
@@ -481,7 +490,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "removeTelegram",
       "removeTelegramAllowedSender",
       "removeTelegramWebhook",
+      "resetAllCredentials",
       "restartToUpdate",
+      "retryCredentialRecovery",
       "retryFailedCredentials",
       "setAppearance",
       "telegramStatus",

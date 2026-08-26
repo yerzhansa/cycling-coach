@@ -354,6 +354,9 @@ export function bootRenderer(): Disposer {
     clients,
     loadStatuses: () => window.enduragentAuth.credentialStatuses(),
     loadChatGptStatus: () => window.enduragentAuth.chatgptStatus(),
+    loadRecoveryStatus: () => window.enduragentAuth.credentialRecoveryStatus(),
+    retryCredentialRecovery: () => window.enduragentAuth.retryCredentialRecovery(),
+    resetAllCredentials: () => window.enduragentAuth.resetAllCredentials(),
     loadClaudeCliStatus: () => window.enduragentAuth.claudeCliStatus(),
     deleteCredential: (value) => window.enduragentAuth.deleteCredential(value),
     openSetup: openSetupFromSettings,
@@ -396,6 +399,8 @@ export function bootRenderer(): Disposer {
         window.enduragentAuth.removeTelegramAllowedSender({ senderId }),
     },
     beginMutation: () => store.getState().beginSettingsMutation("telegram"),
+    credentialMutationsBlocked: () =>
+      credentialChangesBlocked(store.getState().settings.credentials, false),
     view: telegramAdapter.view,
   });
   store.getState().bindSettingsPorts({

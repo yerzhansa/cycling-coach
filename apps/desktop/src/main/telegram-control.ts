@@ -22,6 +22,7 @@ import type {
   TelegramProfileRePromptReason,
   TelegramProfileStatus,
 } from "./telegram-credential-vault.js";
+import type { SerializeCredentialMutation } from "./credential-envelope-lock.js";
 import {
   emitTelegramSecureStorageFailure,
   type TelegramSecureStorageObserver,
@@ -136,6 +137,7 @@ export interface TelegramControlCoordinator {
   stopPolling(): Promise<DesktopTelegramSnapshot>;
   resumePolling(): Promise<DesktopTelegramSnapshot>;
   remove(): Promise<DesktopTelegramMutationResult>;
+  resetRuntimeForCredentialReset(): Promise<boolean>;
   removeWebhook(): Promise<DesktopTelegramMutationResult>;
   status(): Promise<DesktopTelegramSnapshot>;
   reconcile(): Promise<DesktopTelegramMutationResult>;
@@ -158,12 +160,14 @@ export interface CreateTelegramControlCoordinatorInput {
     | "profileStatus"
     | "replaceProfile"
     | "applyStoredProfile"
+    | "preauthorizeProfileRemoval"
     | "deleteProfile"
     | "desiredState"
     | "setDesiredState"
   >;
   readonly daemon: TelegramDaemonAuthorityPort;
   readonly observeSecureStorageFailure?: TelegramSecureStorageObserver;
+  readonly serializeCredentialMutation?: SerializeCredentialMutation;
   readonly pairingLease?: {
     readonly now: () => number;
     readonly schedule: (callback: () => void, delayMs: number) => unknown;
@@ -341,6 +345,8 @@ function reconciliationFailureSnapshot(
 export function createTelegramControlCoordinator(
   input: CreateTelegramControlCoordinatorInput,
 ): TelegramControlCoordinator {
+  const serializeCredentialMutation: SerializeCredentialMutation =
+    input.serializeCredentialMutation ?? ((operation) => operation());
   let pending: Promise<void> = Promise.resolve();
   let accepting = true;
   let closePromise: Promise<void> | undefined;
@@ -563,15 +569,17 @@ export function createTelegramControlCoordinator(
   const runMutation = (
     operation: () => Promise<DesktopTelegramMutationResult>,
   ): Promise<DesktopTelegramMutationResult> =>
-    serialize(async () => {
-      try {
-        const result = await operation();
-        if (result.outcome === "applied") reconciliationFailure = undefined;
-        return result;
-      } catch {
-        return uncertain("control-uncertain");
-      }
-    });
+    serializeCredentialMutation(() =>
+      serialize(async () => {
+        try {
+          const result = await operation();
+          if (result.outcome === "applied") reconciliationFailure = undefined;
+          return result;
+        } catch {
+          return uncertain("control-uncertain");
+        }
+      }),
+    );
 
   const rememberReconciliation = (
     result: DesktopTelegramMutationResult,
@@ -1273,6 +1281,29 @@ export function createTelegramControlCoordinator(
     return (restored.channel.desiredState === "enabled") === enabled ? restored : undefined;
   };
 
+  const compensateFailedRemoval = async (
+    active: TelegramDaemonBinding,
+    priorProfile: TelegramProfileRecord | undefined,
+    priorDesired: boolean,
+  ): Promise<boolean> => {
+    let credentialRestored = false;
+    if (priorProfile !== undefined && isCurrent(active)) {
+      try {
+        const configured = parseMutation(
+          await active.configureTelegram({ token: priorProfile.token }),
+        );
+        credentialRestored =
+          isCurrent(active) &&
+          configured?.outcome === "applied" &&
+          isReadyForProfile(configured.current, priorProfile);
+      } catch {}
+    }
+    const desiredRestored = (await restoreDesired(priorDesired)) === "restored";
+    const runtimeRestored =
+      (await restoreDaemonDesired(active, priorDesired)) !== undefined;
+    return credentialRestored && desiredRestored && runtimeRestored;
+  };
+
   const clearPairingLease = (): void => {
     if (pairingLease === undefined) return;
     if (pairingLease.handle !== undefined) leaseClock.cancel(pairingLease.handle);
@@ -1632,8 +1663,18 @@ export function createTelegramControlCoordinator(
         if ("result" in checked) return checked.result;
         const prior = await captureProfile(checked.active);
         if (prior.state === "uncertain") return uncertain();
-        if (prior.state === "refused") return refused(prior.reason);
-        if (prior.state !== "configured") return refused("invalid-state");
+        const authorization = await input.vault.preauthorizeProfileRemoval();
+        if (authorization.outcome === "uncertain") return uncertain();
+        if (authorization.outcome === "refused") {
+          return refused(
+            authorization.reason === "not-found"
+              ? "invalid-state"
+              : isSecureStorageRefusal(authorization.reason)
+              ? authorization.reason
+              : "storage-failed",
+          );
+        }
+        const priorProfile = prior.state === "configured" ? prior.profile : undefined;
         const previousDesired = checked.desiredState === "enabled";
         const disabled = await guardedSnapshotCall(checked.active, () =>
           checked.active.disableTelegram({}),
@@ -1663,11 +1704,34 @@ export function createTelegramControlCoordinator(
         }
         const deleted = await input.vault.deleteProfile();
         if (deleted.outcome !== "applied") {
-          await restoreDesired(previousDesired);
-          return uncertain();
+          await compensateFailedRemoval(checked.active, priorProfile, previousDesired);
+          return uncertain("control-uncertain");
         }
         return applied(await project(forgotten, checked.active));
       });
+    },
+
+    resetRuntimeForCredentialReset() {
+      return serialize(async () => {
+        const active = binding();
+        if (active !== undefined) {
+          const disabled = await guardedSnapshotCall(active, () => active.disableTelegram({}));
+          if (disabled?.channel.state !== "disabled") return false;
+          const reset = await guardedSnapshotCall(active, () => active.resetTelegramAccess({}));
+          if (reset?.channel.state !== "disabled" || reset.pairing.state !== "unpaired") {
+            return false;
+          }
+          const forgotten = await guardedSnapshotCall(active, () =>
+            active.forgetTelegramCredential({}),
+          );
+          if (forgotten?.channel.state !== "disabled" || forgotten.bot.state !== "unconfigured") {
+            return false;
+          }
+        }
+        if ((await persistDesired(false)) !== "applied") return false;
+        clearPairingLease();
+        return true;
+      }).catch(() => false);
     },
 
     removeWebhook() {

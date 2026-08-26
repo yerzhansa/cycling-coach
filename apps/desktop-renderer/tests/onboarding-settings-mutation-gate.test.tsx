@@ -87,6 +87,23 @@ describe("onboarding settings mutation gate", () => {
     wizard.controller.dispose();
   });
 
+  it("blocks onboarding credential mutations while a global reset is uncertain", async () => {
+    useEnduragentStore.setState((state) => ({
+      settings: {
+        ...state.settings,
+        credentials: { status: "closed", resetUncertain: true },
+      },
+    }));
+
+    expect(onboardingCredentialMutationsBlocked(useEnduragentStore.getState())).toBe(true);
+    const wizard = mountWizard({ bridge: readyBridge() });
+    await wizard.open();
+
+    expect(setupTrigger("ai")).toBeDisabled();
+    expect(setupTrigger("training")).toBeDisabled();
+    wizard.controller.dispose();
+  });
+
   it("still blocks setup completion when another settings mutation is active", async () => {
     const bridge = readyBridge();
     const onComplete = vi.fn();

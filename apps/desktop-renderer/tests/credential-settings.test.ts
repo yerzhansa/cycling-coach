@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeConfigSnapshot } from "@enduragent/coach-contract";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
-import type { CredentialDeleteResult, DesktopCredentialId } from "../src/onboarding/bridge.js";
+import type {
+  CredentialDeleteResult,
+  CredentialRecoveryStatus,
+  CredentialResetResult,
+  DesktopCredentialId,
+} from "../src/onboarding/bridge.js";
 import type {
   ChatGptStatus,
   ClaudeCliStatus,
   CredentialSlotStatus,
 } from "../src/onboarding/machine.js";
 import {
+  credentialChangesBlocked,
   createCredentialSettingsController,
   type CredentialSettingsState,
   type CredentialSettingsView,
@@ -51,6 +57,7 @@ function fakeView() {
     | {
         readonly onRetry: () => void;
         readonly onRequestDelete: (credential: DesktopCredentialId) => void;
+        readonly onRequestReset: () => void;
         readonly onCancelDelete: () => void;
         readonly onConfirmDelete: () => void;
         readonly onSetupOpened: () => void;
@@ -68,6 +75,7 @@ function fakeView() {
     view,
     retry: () => handlers?.onRetry(),
     requestDelete: (credential: DesktopCredentialId) => handlers?.onRequestDelete(credential),
+    requestReset: () => handlers?.onRequestReset(),
     cancelDelete: () => handlers?.onCancelDelete(),
     confirmDelete: () => handlers?.onConfirmDelete(),
     setupOpened: () => handlers?.onSetupOpened(),
@@ -77,7 +85,9 @@ function fakeView() {
 
 function createSubject(input: {
   readonly runtime?: RuntimeConfigSnapshot;
+  readonly loadRuntime?: () => Promise<RuntimeConfigSnapshot>;
   readonly statuses?: readonly CredentialSlotStatus[];
+  readonly loadStatuses?: () => Promise<readonly CredentialSlotStatus[]>;
   readonly chatGpt?: ChatGptStatus;
   readonly deletion?: CredentialDeleteResult;
   readonly deleteCredential?: (input: {
@@ -88,6 +98,10 @@ function createSubject(input: {
   readonly onDeleted?: () => Promise<void> | void;
   readonly onReconciled?: () => Promise<void> | void;
   readonly credentialMutationsBlocked?: () => boolean;
+  readonly recovery?: CredentialRecoveryStatus;
+  readonly loadRecoveryStatus?: () => Promise<CredentialRecoveryStatus>;
+  readonly retryRecovery?: () => Promise<CredentialRecoveryStatus>;
+  readonly reset?: () => Promise<CredentialResetResult>;
 }) {
   let activeRuntime = input.runtime ?? runtime();
   let statuses =
@@ -96,10 +110,12 @@ function createSubject(input: {
       { slot: "anthropic", state: "configured", runtimeState: "active" },
       { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
     ] satisfies readonly CredentialSlotStatus[]);
-  const chatGpt = input.chatGpt ?? { state: "configured", runtimeReady: false };
+  let chatGpt = input.chatGpt ?? { state: "configured", runtimeReady: false };
+  let recovery: CredentialRecoveryStatus =
+    input.recovery ?? ({ state: "ready", unverifiedEnvelopes: 0 } as const);
   const subject = fakeView();
   const client = {
-    call: vi.fn(async () => activeRuntime),
+    call: vi.fn(async () => (await input.loadRuntime?.()) ?? activeRuntime),
   };
   const clients = {
     getClient: vi.fn(async () => client),
@@ -133,10 +149,31 @@ function createSubject(input: {
     }
     return result;
   });
+  const resetAllCredentials = vi.fn(async () => {
+    const result =
+      (await input.reset?.()) ?? ({ status: "reset", keyCleanupPending: false } as const);
+    if (result.status === "reset") {
+      statuses = [];
+      chatGpt = { state: "absent", runtimeReady: false };
+      recovery = { state: "ready", unverifiedEnvelopes: 0 };
+      activeRuntime = runtime(
+        { ...activeRuntime.llm, credential_configured: false },
+        { ...activeRuntime.intervals, credential_configured: false },
+      );
+    }
+    return result;
+  });
+  const releaseMutation = vi.fn();
   const controller = createCredentialSettingsController({
     clients,
-    loadStatuses: async () => statuses,
+    loadStatuses: async () => (await input.loadStatuses?.()) ?? statuses,
     loadChatGptStatus: async () => chatGpt,
+    loadRecoveryStatus: async () => (await input.loadRecoveryStatus?.()) ?? recovery,
+    retryCredentialRecovery: async () => {
+      recovery = (await input.retryRecovery?.()) ?? recovery;
+      return recovery;
+    },
+    resetAllCredentials,
     ...(input.claudeCli === undefined ? {} : { loadClaudeCliStatus: input.claudeCli }),
     deleteCredential,
     openSetup: input.openSetup ?? vi.fn(),
@@ -145,10 +182,10 @@ function createSubject(input: {
     ...(input.credentialMutationsBlocked === undefined
       ? {}
       : { credentialMutationsBlocked: input.credentialMutationsBlocked }),
-    beginMutation: () => vi.fn(),
+    beginMutation: () => releaseMutation,
     view: subject.view,
   });
-  return { controller, subject, deleteCredential };
+  return { controller, subject, deleteCredential, resetAllCredentials, releaseMutation };
 }
 
 function content(state: CredentialSettingsState) {
@@ -165,6 +202,728 @@ function content(state: CredentialSettingsState) {
 }
 
 describe("credential settings controller", () => {
+  it("marks only unverified slots for inline credential re-entry", async () => {
+    const { controller } = createSubject({
+      recovery: { state: "ready", unverifiedEnvelopes: 1 },
+      statuses: [
+        { slot: "anthropic", state: "re-prompt", runtimeState: null },
+        { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+      ],
+      chatGpt: { state: "absent", runtimeReady: false },
+    });
+
+    await controller.activate();
+
+    expect(content(controller.state())).toMatchObject({
+      announcement:
+        "Enduragent can’t open some saved credentials safely. Enter each affected credential again.",
+      recovery: { state: "ready", unverifiedEnvelopes: 1 },
+    });
+    expect(content(controller.state()).entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ credential: "anthropic", runtimeState: "failed" }),
+        expect.objectContaining({ credential: "openrouter", runtimeState: "stored-inactive" }),
+      ]),
+    );
+  });
+
+  it("refreshes the recovery warning when settings reopen", async () => {
+    const loadRecoveryStatus = vi
+      .fn<() => Promise<CredentialRecoveryStatus>>()
+      .mockResolvedValueOnce({ state: "ready", unverifiedEnvelopes: 1 })
+      .mockResolvedValue({ state: "ready", unverifiedEnvelopes: 0 });
+    const { controller } = createSubject({ loadRecoveryStatus });
+
+    await controller.activate();
+    expect(content(controller.state()).recovery).toEqual({
+      state: "ready",
+      unverifiedEnvelopes: 1,
+    });
+
+    controller.close();
+    await controller.activate();
+    expect(content(controller.state()).recovery).toEqual({
+      state: "ready",
+      unverifiedEnvelopes: 0,
+    });
+    expect(content(controller.state()).announcement).toBe("");
+    expect(loadRecoveryStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a locked Keychain from the inline recovery message", async () => {
+    const retryRecovery = vi.fn(async () => ({ state: "ready", unverifiedEnvelopes: 0 }) as const);
+    const { controller, subject } = createSubject({
+      recovery: { state: "locked" },
+      retryRecovery,
+    });
+    await controller.activate();
+
+    expect(content(controller.state()).announcement).toBe(
+      "Unlock your login Keychain outside Enduragent, then Retry.",
+    );
+    subject.retry();
+    await vi.waitFor(() => expect(retryRecovery).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(content(controller.state()).recovery).toEqual({
+        state: "ready",
+        unverifiedEnvelopes: 0,
+      }),
+    );
+  });
+
+  it("retries a missing Keychain item from the inline recovery message", async () => {
+    const retryRecovery = vi.fn(async () => ({ state: "ready", unverifiedEnvelopes: 0 }) as const);
+    const { controller, subject } = createSubject({
+      recovery: { state: "missing" },
+      retryRecovery,
+    });
+    await controller.activate();
+
+    subject.retry();
+    await vi.waitFor(() => expect(retryRecovery).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(content(controller.state()).recovery).toEqual({
+        state: "ready",
+        unverifiedEnvelopes: 0,
+      }),
+    );
+  });
+
+  it.each([{ state: "locked" }, { state: "missing" }, { state: "unavailable" }] as const)(
+    "blocks individual deletion during $state recovery but keeps full reset available",
+    async (recovery) => {
+      const { controller, subject } = createSubject({ recovery });
+      await controller.activate();
+
+      subject.requestDelete("anthropic");
+      expect(controller.state()).toMatchObject({ status: "ready", confirmation: null });
+
+      subject.requestReset();
+      expect(controller.state()).toMatchObject({ status: "confirming", confirmation: "all" });
+    },
+  );
+
+  it("confirmation-gates the inline missing-key reset and focuses Cancel first", async () => {
+    const { controller, subject, resetAllCredentials } = createSubject({
+      recovery: { state: "missing" },
+    });
+    await controller.activate();
+
+    expect(content(controller.state()).announcement).toBe(
+      "The credential encryption key is missing. Restore it if possible, then Retry, or remove all credentials and start again.",
+    );
+    subject.requestReset();
+    expect(controller.state()).toMatchObject({
+      status: "confirming",
+      confirmation: "all",
+      focus: { target: "confirmation-cancel" },
+    });
+    subject.cancelDelete();
+    expect(controller.state()).toMatchObject({
+      status: "ready",
+      confirmation: null,
+      announcement: "Credential removal cancelled.",
+    });
+
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("deleted"));
+    expect(resetAllCredentials).toHaveBeenCalledOnce();
+    expect(controller.state()).toMatchObject({
+      entries: [],
+      confirmation: null,
+      announcement: "All credentials were removed. Set them up again when you’re ready.",
+      focus: { target: "setup-open" },
+    });
+  });
+
+  it.each(
+    (["reset", "refused"] as const).flatMap((resultStatus) =>
+      [true, false].flatMap((reloadSucceeds) =>
+        [true, false].map((callbackSucceeds) => ({
+          resultStatus,
+          reloadSucceeds,
+          callbackSucceeds,
+        })),
+      ),
+    ),
+  )(
+    "tracks reset uncertainty for $resultStatus with reload=$reloadSucceeds and callback=$callbackSucceeds",
+    async ({ resultStatus, reloadSucceeds, callbackSucceeds }) => {
+      let loadCount = 0;
+      const loadStatuses = vi.fn(async () => {
+        loadCount += 1;
+        if (loadCount === 2 && !reloadSucceeds) {
+          throw new Error("synthetic reset reload failure");
+        }
+        return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+      });
+      const callback = vi.fn(async () => {
+        if (!callbackSucceeds) throw new Error("synthetic reset callback failure");
+      });
+      const { controller, subject } = createSubject({
+        loadStatuses,
+        ...(resultStatus === "reset" ? { onDeleted: callback } : { onReconciled: callback }),
+        reset: async () =>
+          resultStatus === "reset"
+            ? { status: "reset", keyCleanupPending: false }
+            : { status: "refused", reason: "storage-failed" },
+      });
+      await controller.activate();
+
+      subject.requestReset();
+      subject.confirmDelete();
+      const uncertain = !reloadSucceeds || !callbackSucceeds;
+      await vi.waitFor(() =>
+        expect(controller.state().status).toBe(
+          uncertain ? "error" : resultStatus === "reset" ? "deleted" : "ready",
+        ),
+      );
+
+      expect(callback).toHaveBeenCalledTimes(reloadSucceeds ? 1 : 0);
+      expect(controller.state().resetUncertain).toBe(uncertain ? true : undefined);
+      expect(credentialChangesBlocked(controller.state(), false)).toBe(uncertain);
+    },
+  );
+
+  it("reloads authoritative credential state when reset refuses after a partial mutation", async () => {
+    let backingStatuses: readonly CredentialSlotStatus[] = [
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+    ];
+    let backingRuntime = runtime();
+    let backingRecovery: CredentialRecoveryStatus = {
+      state: "ready",
+      unverifiedEnvelopes: 0,
+    };
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject } = createSubject({
+      chatGpt: { state: "absent", runtimeReady: false },
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      },
+      loadStatuses: async () => backingStatuses,
+      loadRuntime: async () => backingRuntime,
+      loadRecoveryStatus: async () => backingRecovery,
+      claudeCli: async () => ({
+        state: "ready",
+        email: "athlete@example.test",
+        plan: "Max",
+      }),
+      onReconciled,
+      reset: async () => {
+        backingStatuses = [
+          { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+        ];
+        backingRuntime = runtime(
+          {
+            provider: "claude-cli",
+            model: "sonnet",
+            credential_configured: true,
+          },
+          {
+            athlete_id: "synthetic-athlete",
+            credential_configured: false,
+            managedByEnvironment: { athleteId: false },
+          },
+        );
+        backingRecovery = { state: "unavailable" };
+        return { status: "refused", reason: "storage-failed" };
+      },
+    });
+    await controller.activate();
+    expect(content(controller.state()).entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ credential: "anthropic" })]),
+    );
+
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() =>
+      expect(controller.state()).toMatchObject({
+        status: "error",
+        repairCredential: "anthropic",
+      }),
+    );
+
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(controller.state()).toMatchObject({
+      status: "ready",
+      entries: [expect.objectContaining({ credential: "openrouter" })],
+      providerStatuses: [expect.objectContaining({ provider: "claude-cli", state: "ready" })],
+      recovery: { state: "unavailable" },
+      repairCredential: null,
+      recoveryAvailable: false,
+      announcement: "Enduragent could not remove every stored credential. Retry.",
+      focus: { target: "feedback" },
+    });
+  });
+
+  it("enters the repair-safe load error when refused reset state cannot reload", async () => {
+    const loadStatuses = vi
+      .fn<() => Promise<readonly CredentialSlotStatus[]>>()
+      .mockResolvedValueOnce([{ slot: "anthropic", state: "configured", runtimeState: "active" }])
+      .mockRejectedValueOnce(new Error("synthetic reload failure"));
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    expect(onReconciled).not.toHaveBeenCalled();
+    expect(controller.state()).toEqual({
+      status: "error",
+      kind: "load",
+      announcement:
+        "Credential removal could not be verified because Settings could not reload. Reconnect and reload.",
+      repairCredential: null,
+      resetUncertain: true,
+      recoveryAvailable: true,
+      focus: { target: "feedback" },
+    });
+  });
+
+  it("retains repair debt when refused reset reconciliation fails after reload", async () => {
+    const onReconciled = vi.fn(async () => {
+      throw new Error("synthetic reconciliation failure");
+    });
+    const { controller, subject, releaseMutation } = createSubject({
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      },
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() =>
+      expect(controller.state()).toMatchObject({
+        status: "error",
+        repairCredential: "anthropic",
+      }),
+    );
+    releaseMutation.mockClear();
+
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(controller.state()).toEqual({
+      status: "error",
+      kind: "load",
+      announcement:
+        "Credential removal could not be verified because Settings could not reload. Reconnect and reload.",
+      repairCredential: "anthropic",
+      resetUncertain: true,
+      recoveryAvailable: true,
+      focus: { target: "feedback" },
+    });
+    expect(releaseMutation).toHaveBeenCalled();
+  });
+
+  it("retains reset uncertainty across failed reload, failed reconciliation, and a successful retry", async () => {
+    let loadCount = 0;
+    const loadStatuses = vi.fn(async () => {
+      loadCount += 1;
+      if (loadCount === 2 || loadCount === 3) {
+        throw new Error("synthetic authoritative reload failure");
+      }
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onReconciled = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("synthetic reconciliation failure"))
+      .mockResolvedValueOnce();
+    const { controller, subject, resetAllCredentials } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: async () => ({ status: "reset", keyCleanupPending: false }),
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    subject.requestDelete("anthropic");
+    subject.requestReset();
+    subject.confirmDelete();
+    expect(resetAllCredentials).toHaveBeenCalledOnce();
+
+    subject.retry();
+    await vi.waitFor(() => expect(loadStatuses).toHaveBeenCalledTimes(3));
+    expect(controller.state()).toMatchObject({
+      status: "error",
+      kind: "load",
+      resetUncertain: true,
+    });
+    expect(onReconciled).not.toHaveBeenCalled();
+
+    subject.retry();
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
+    expect(controller.state()).toMatchObject({
+      status: "error",
+      kind: "load",
+      resetUncertain: true,
+    });
+
+    subject.retry();
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
+    expect(controller.state().resetUncertain).toBeUndefined();
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(false);
+  });
+
+  it("preserves reset uncertainty through close and reopen until reconciliation succeeds", async () => {
+    let loadCount = 0;
+    const loadStatuses = vi.fn(async () => {
+      loadCount += 1;
+      if (loadCount === 2) throw new Error("synthetic reset reload failure");
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+
+    await controller.activate();
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(controller.state().status).toBe("ready");
+    expect(controller.state().resetUncertain).toBeUndefined();
+  });
+
+  it("reconciles a successful reset after closing while the reset RPC is pending", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    const loadStatuses = vi.fn(async () => {
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onDeleted = vi.fn(async () => {});
+    const openSetup = vi.fn();
+    const { controller, subject, resetAllCredentials, releaseMutation } = createSubject({
+      loadStatuses,
+      loadRuntime: async () => runtime(),
+      onDeleted,
+      openSetup,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReset({ status: "reset", keyCleanupPending: false });
+
+    await vi.waitFor(() => {
+      expect(loadStatuses).toHaveBeenCalledTimes(2);
+      expect(onDeleted).toHaveBeenCalledOnce();
+      expect(releaseMutation).toHaveBeenCalledOnce();
+      expect(controller.state()).toEqual({ status: "closed" });
+    });
+
+    await controller.activate();
+    expect(loadStatuses).toHaveBeenCalledTimes(3);
+    expect(onDeleted).toHaveBeenCalledOnce();
+    expect(controller.state().status).toBe("ready");
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(false);
+
+    subject.requestDelete("anthropic");
+    expect(controller.state()).toMatchObject({ status: "confirming", confirmation: "anthropic" });
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("deleted"));
+    await Promise.resolve();
+    subject.openSetup();
+    expect(openSetup).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles a refused reset after closing while the reset RPC is pending", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    const loadStatuses = vi.fn(async () => {
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject, resetAllCredentials, releaseMutation } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReset({ status: "refused", reason: "storage-failed" });
+
+    await vi.waitFor(() => {
+      expect(loadStatuses).toHaveBeenCalledTimes(2);
+      expect(onReconciled).toHaveBeenCalledOnce();
+      expect(releaseMutation).toHaveBeenCalledOnce();
+      expect(controller.state()).toEqual({ status: "closed" });
+    });
+
+    await controller.activate();
+    expect(loadStatuses).toHaveBeenCalledTimes(3);
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(controller.state().status).toBe("ready");
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(false);
+  });
+
+  it("clears existing repair debt after a closed refused reset reconciles", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    const onReconciled = vi.fn(async () => {});
+    const { controller, subject, resetAllCredentials } = createSubject({
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      },
+      onReconciled,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() =>
+      expect(controller.state()).toMatchObject({
+        status: "error",
+        repairCredential: "anthropic",
+      }),
+    );
+
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    controller.close();
+    expect(controller.state()).toEqual({
+      status: "closed",
+      repairCredential: "anthropic",
+      resetUncertain: true,
+    });
+    resolveReset({ status: "refused", reason: "storage-failed" });
+
+    await vi.waitFor(() => {
+      expect(onReconciled).toHaveBeenCalledOnce();
+      expect(controller.state()).toEqual({ status: "closed" });
+    });
+
+    await controller.activate();
+    expect(controller.state().status).toBe("ready");
+    expect(onReconciled).toHaveBeenCalledOnce();
+  });
+
+  it("keeps reset uncertainty when a closed reset cannot reload authoritative state", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    let loadCount = 0;
+    const loadStatuses = vi.fn(async () => {
+      loadCount += 1;
+      if (loadCount === 2) throw new Error("synthetic authoritative reload failure");
+      return [{ slot: "anthropic", state: "configured", runtimeState: "active" }] as const;
+    });
+    const onDeleted = vi.fn(async () => {});
+    const { controller, subject, resetAllCredentials, releaseMutation } = createSubject({
+      loadStatuses,
+      onDeleted,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReset({ status: "reset", keyCleanupPending: false });
+
+    await vi.waitFor(() => {
+      expect(loadStatuses).toHaveBeenCalledTimes(2);
+      expect(releaseMutation).toHaveBeenCalledOnce();
+    });
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(true);
+  });
+
+  it("preserves reset uncertainty when closed while the reset is pending", async () => {
+    let resolveReset!: (result: CredentialResetResult) => void;
+    const reset = new Promise<CredentialResetResult>((resolve) => {
+      resolveReset = resolve;
+    });
+    let resolveReconciliation!: () => void;
+    const reconciliation = new Promise<void>((resolve) => {
+      resolveReconciliation = resolve;
+    });
+    const onReconciled = vi.fn(() => reconciliation);
+    const { controller, subject, resetAllCredentials, releaseMutation } = createSubject({
+      onReconciled,
+      reset: () => reset,
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(resetAllCredentials).toHaveBeenCalledOnce());
+
+    expect(controller.state()).toMatchObject({ status: "deleting", resetUncertain: true });
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    const reopening = controller.activate();
+    expect(onReconciled).not.toHaveBeenCalled();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+
+    resolveReset({ status: "refused", reason: "storage-failed" });
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReconciliation();
+    await reopening;
+    expect(releaseMutation).toHaveBeenCalled();
+    expect(controller.state().status).toBe("ready");
+    expect(controller.state().resetUncertain).toBeUndefined();
+  });
+
+  it("preserves reset uncertainty when closed while the authoritative reload is pending", async () => {
+    let resolveReload!: (statuses: readonly CredentialSlotStatus[]) => void;
+    const reload = new Promise<readonly CredentialSlotStatus[]>((resolve) => {
+      resolveReload = resolve;
+    });
+    let loadCount = 0;
+    const loadStatuses = vi.fn(() => {
+      loadCount += 1;
+      return loadCount === 2
+        ? reload
+        : Promise.resolve([
+            { slot: "anthropic", state: "configured", runtimeState: "active" },
+          ] as const);
+    });
+    let resolveReconciliation!: () => void;
+    const reconciliation = new Promise<void>((resolve) => {
+      resolveReconciliation = resolve;
+    });
+    const onReconciled = vi.fn(() => reconciliation);
+    const { controller, subject, releaseMutation } = createSubject({
+      loadStatuses,
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(loadStatuses).toHaveBeenCalledTimes(2));
+
+    expect(controller.state()).toMatchObject({ status: "deleting", resetUncertain: true });
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    const reopening = controller.activate();
+    expect(onReconciled).not.toHaveBeenCalled();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+
+    resolveReload([{ slot: "anthropic", state: "configured", runtimeState: "active" }]);
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    resolveReconciliation();
+    await reopening;
+    expect(releaseMutation).toHaveBeenCalled();
+    expect(controller.state().status).toBe("ready");
+    expect(controller.state().resetUncertain).toBeUndefined();
+  });
+
+  it("preserves reset uncertainty when closed while reconciliation is pending", async () => {
+    let resolveFirstReconciliation!: () => void;
+    const firstReconciliation = new Promise<void>((resolve) => {
+      resolveFirstReconciliation = resolve;
+    });
+    const onReconciled = vi.fn<() => Promise<void>>(() => firstReconciliation);
+    const { controller, subject, releaseMutation } = createSubject({
+      onReconciled,
+      reset: async () => ({ status: "refused", reason: "storage-failed" }),
+    });
+    await controller.activate();
+    subject.requestReset();
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(onReconciled).toHaveBeenCalledOnce());
+
+    expect(controller.state()).toMatchObject({ status: "deleting", resetUncertain: true });
+    controller.close();
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+    const reopening = controller.activate();
+    let reopened = false;
+    void reopening.then(() => {
+      reopened = true;
+    });
+    await Promise.resolve();
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(reopened).toBe(false);
+    expect(controller.state()).toEqual({ status: "closed", resetUncertain: true });
+
+    resolveFirstReconciliation();
+    await reopening;
+    expect(reopened).toBe(true);
+    expect(onReconciled).toHaveBeenCalledOnce();
+    expect(releaseMutation).toHaveBeenCalled();
+    expect(controller.state().status).toBe("ready");
+    expect(controller.state().resetUncertain).toBeUndefined();
+  });
+
+  it("keeps ordinary load errors mutable when no reset was attempted", async () => {
+    const onReconciled = vi.fn(async () => {});
+    const { controller } = createSubject({
+      loadStatuses: async () => {
+        throw new Error("synthetic initial load failure");
+      },
+      onReconciled,
+    });
+
+    await controller.activate();
+
+    expect(controller.state()).toEqual({
+      status: "error",
+      kind: "load",
+      announcement: "Saved credentials aren’t available. Reconnect and reload.",
+      repairCredential: null,
+      recoveryAvailable: false,
+      focus: null,
+    });
+    expect(onReconciled).not.toHaveBeenCalled();
+    expect(credentialChangesBlocked(controller.state(), false)).toBe(false);
+  });
+
   it("builds a provider, kind, and coarse-state-only list for every stored credential kind", async () => {
     const { controller } = createSubject({});
 
@@ -424,6 +1183,37 @@ describe("credential settings controller", () => {
     });
   });
 
+  it("retains the credential and recovery state when its encryption key cannot be confirmed", async () => {
+    let recovery: CredentialRecoveryStatus = { state: "ready", unverifiedEnvelopes: 0 };
+    const { controller, subject } = createSubject({
+      loadRecoveryStatus: async () => recovery,
+      deleteCredential: async () => {
+        recovery = { state: "unavailable" };
+        return {
+          credential: "anthropic",
+          status: "refused",
+          reason: "encryption-unavailable",
+        };
+      },
+    });
+    await controller.activate();
+
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() => expect(controller.state().status).toBe("error"));
+
+    expect(controller.state()).toMatchObject({
+      status: "error",
+      kind: "delete",
+      reason: "encryption-unavailable",
+      entries: expect.arrayContaining([expect.objectContaining({ credential: "anthropic" })]),
+      announcement:
+        "The credential was retained because secure storage could not confirm its encryption key.",
+      recovery: { state: "unavailable" },
+      repairCredential: null,
+    });
+  });
+
   it("requires authoritative repair when saved and active runtime state diverge", async () => {
     const onReconciled = vi.fn(async () => {});
     const { controller, subject } = createSubject({
@@ -494,6 +1284,43 @@ describe("credential settings controller", () => {
     subject.retry();
     await vi.waitFor(() => expect(controller.state().status).toBe("ready"));
     expect(content(controller.state()).repairCredential).toBeNull();
+  });
+
+  it("allows confirmed removal of all credentials while a per-slot deletion needs repair", async () => {
+    const { controller, subject, resetAllCredentials } = createSubject({
+      deletion: {
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      },
+    });
+    await controller.activate();
+
+    subject.requestDelete("anthropic");
+    subject.confirmDelete();
+    await vi.waitFor(() =>
+      expect(controller.state()).toMatchObject({
+        status: "error",
+        repairCredential: "anthropic",
+      }),
+    );
+
+    subject.requestReset();
+    expect(controller.state()).toMatchObject({
+      status: "confirming",
+      confirmation: "all",
+      repairCredential: "anthropic",
+    });
+    subject.confirmDelete();
+
+    await vi.waitFor(() => expect(controller.state().status).toBe("deleted"));
+    expect(resetAllCredentials).toHaveBeenCalledOnce();
+    expect(controller.state()).toMatchObject({
+      status: "deleted",
+      entries: [],
+      confirmation: null,
+      repairCredential: null,
+    });
   });
 
   it("treats a rejected delete request as an unknown outcome that requires repair", async () => {

@@ -3,9 +3,12 @@ import type { RuntimeConfigSnapshot, SpendSummary } from "@enduragent/coach-cont
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Shell } from "../src/app/Shell.js";
 import type { DesktopCoachClientProvider } from "../src/coach-client.js";
 import type {
   CredentialDeleteResult,
+  CredentialRecoveryStatus,
+  CredentialResetResult,
   OnboardingLlmConfiguration,
   OnboardingLlmSelection,
   OnboardingLlmSelectionResult,
@@ -22,7 +25,10 @@ import {
   type OnboardingController,
 } from "../src/onboarding/controller.js";
 import { createAthleteSettingsController } from "../src/settings/athlete-controller.js";
-import { createCredentialSettingsController } from "../src/settings/credential-controller.js";
+import {
+  credentialChangesBlocked,
+  createCredentialSettingsController,
+} from "../src/settings/credential-controller.js";
 import { createProviderModelSettingsController } from "../src/settings/provider-model-controller.js";
 import { createSessionSettingsController } from "../src/settings/session-controller.js";
 import {
@@ -172,6 +178,9 @@ interface HarnessOptions {
   readonly chatGptStatus?: ChatGptStatus;
   readonly claudeCliStatus?: () => Promise<ClaudeCliStatus>;
   readonly deleteCredential?: () => Promise<CredentialDeleteResult>;
+  readonly credentialRecoveryStatus?: () => Promise<CredentialRecoveryStatus>;
+  readonly retryCredentialRecovery?: () => Promise<CredentialRecoveryStatus>;
+  readonly resetAllCredentials?: () => Promise<CredentialResetResult>;
   readonly onDeleted?: () => Promise<void> | void;
   readonly onReconciled?: () => Promise<void> | void;
   readonly updateState?: DesktopUpdateState;
@@ -232,6 +241,20 @@ function createHarness(options: HarnessOptions = {}) {
         cleanupPending: false,
       })),
   );
+  const resetAllCredentials = vi.fn(
+    options.resetAllCredentials ??
+      (async (): Promise<CredentialResetResult> => ({
+        status: "reset",
+        keyCleanupPending: false,
+      })),
+  );
+  const retryCredentialRecovery = vi.fn(
+    options.retryCredentialRecovery ??
+      (async (): Promise<CredentialRecoveryStatus> => ({
+        state: "ready",
+        unverifiedEnvelopes: 0,
+      })),
+  );
   const openSetup = vi.fn();
   const onDeleted = vi.fn(options.onDeleted ?? (async () => {}));
   const onReconciled = vi.fn(options.onReconciled ?? (async () => {}));
@@ -275,6 +298,14 @@ function createHarness(options: HarnessOptions = {}) {
         ]),
     loadChatGptStatus: async () =>
       options.chatGptStatus ?? { state: "absent", runtimeReady: false },
+    loadRecoveryStatus:
+      options.credentialRecoveryStatus ??
+      (async (): Promise<CredentialRecoveryStatus> => ({
+        state: "ready",
+        unverifiedEnvelopes: 0,
+      })),
+    retryCredentialRecovery,
+    resetAllCredentials,
     ...(options.claudeCliStatus === undefined
       ? {}
       : { loadClaudeCliStatus: options.claudeCliStatus }),
@@ -391,6 +422,8 @@ function createHarness(options: HarnessOptions = {}) {
     calls,
     applyLlmSelection,
     deleteCredential,
+    resetAllCredentials,
+    retryCredentialRecovery,
     restartToUpdate,
     checkForUpdates,
     openSetup,
@@ -400,6 +433,7 @@ function createHarness(options: HarnessOptions = {}) {
     loadTelegramStatus,
     scheduleTelegramPoll,
     cancelTelegramPoll,
+    credentialController,
     telegramController,
     spendController,
     startUpdate: () => updateController.start(),
@@ -864,6 +898,163 @@ describe("conversation settings", () => {
 });
 
 describe("settings lifecycle", () => {
+  it("unlocks fresh credential setup after a successful reset unmounts Settings", async () => {
+    const user = userEvent.setup();
+    const resetContinuation = deferred<void>();
+    const refreshedStatuses = deferred<readonly CredentialSlotStatus[]>();
+    const configuredStatuses = [
+      { slot: "anthropic", state: "configured", runtimeState: "active" },
+      { slot: "intervals-icu", state: "configured", runtimeState: "active" },
+    ] as const;
+    const reconfiguredStatuses = [
+      { slot: "openrouter", state: "configured", runtimeState: "stored-inactive" },
+    ] as const;
+    let resetCompleted = false;
+    let setupCompleted = false;
+    const loadCredentialStatuses = vi.fn(() => {
+      if (!resetCompleted) return Promise.resolve(configuredStatuses);
+      return setupCompleted ? refreshedStatuses.promise : Promise.resolve([]);
+    });
+    const bridge = testBridge(async () => ({ status: "configured", runtimeReady: true }));
+    bridge.credentialStatuses.mockImplementation(loadCredentialStatuses);
+    bridge.chatGptStatus.mockResolvedValue({ state: "absent", runtimeReady: false });
+    bridge.llmConfiguration.mockImplementation(async () => llmConfiguration());
+    bridge.getSetupStatus = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      intake: {
+        swim_skill_floor: null,
+        continuous_distance_capable: null,
+        open_water_comfort: null,
+        prior_bsi: false,
+        clinician_cleared: null,
+        injury_status: "none" as const,
+      },
+      durableTrainingData: true,
+    }));
+    const onboardingView = createOnboardingViewAdapter({
+      publish: (next) => useEnduragentStore.getState().setOnboarding(next),
+    });
+    const onboarding = createOnboardingController({
+      bridge,
+      credentials: credentialDrafts,
+      view: onboardingView.view,
+      focusOpener: vi.fn(),
+      onComplete: vi.fn(),
+      credentialMutationsBlocked: () =>
+        credentialChangesBlocked(useEnduragentStore.getState().settings.credentials, false),
+    });
+    useEnduragentStore.getState().bindOnboardingActions(onboarding);
+
+    try {
+      await act(async () => onboarding.open());
+      expect(setupReady(useEnduragentStore.getState())).toBe(true);
+      harness = createHarness({
+        runtime: () =>
+          snapshot({
+            llm: {
+              provider: "anthropic",
+              model: "synthetic-model",
+              credential_configured: !resetCompleted,
+            },
+            intervals: {
+              athlete_id: "i1",
+              credential_configured: !resetCompleted,
+              managedByEnvironment: { athleteId: false },
+            },
+          }),
+        loadCredentialStatuses,
+        credentialRecoveryStatus: async () => ({
+          state: "ready",
+          unverifiedEnvelopes: resetCompleted ? 0 : 1,
+        }),
+        resetAllCredentials: async () => {
+          resetCompleted = true;
+          return { status: "reset", keyCleanupPending: false };
+        },
+        onDeleted: async () => {
+          await onboarding.refresh();
+          await resetContinuation.promise;
+        },
+      });
+      render(<Shell onReady={() => {}} />);
+      await screen.findByRole("button", { name: "Save coach route" });
+
+      await user.click(screen.getByRole("button", { name: "Remove all credentials" }));
+      const confirmation = screen.getByRole("group", { name: "Remove all credentials?" });
+      await user.click(
+        within(confirmation).getByRole("button", { name: "Remove all credentials" }),
+      );
+
+      await waitFor(() => {
+        expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
+        expect(useEnduragentStore.getState().onboarding.completionRequired).toBe(true);
+        expect(harness?.credentialController.state()).toEqual({
+          status: "closed",
+          resetUncertain: true,
+        });
+      });
+      expect(
+        credentialChangesBlocked(useEnduragentStore.getState().settings.credentials, false),
+      ).toBe(true);
+      const aiSetup = document.querySelector<HTMLButtonElement>('[data-setup-trigger="ai"]');
+      expect(aiSetup).toBeDisabled();
+
+      act(() => resetContinuation.resolve(undefined));
+
+      await waitFor(() => {
+        expect(
+          credentialChangesBlocked(useEnduragentStore.getState().settings.credentials, false),
+        ).toBe(false);
+        expect(harness?.credentialController.state()).toEqual({ status: "closed" });
+        expect(useEnduragentStore.getState().settings.credentials).toEqual({ status: "closed" });
+        expect(aiSetup).toBeEnabled();
+      });
+      expect(document.querySelector('[data-setup-host="gate"]')).not.toBeNull();
+      await user.click(aiSetup!);
+      await waitFor(() => expect(document.querySelector('[data-setup-menu="ai"]')).not.toBeNull());
+
+      const loadsBeforeSettingsReopens = loadCredentialStatuses.mock.calls.length;
+      act(() => {
+        setupCompleted = true;
+        useEnduragentStore.setState((state) => ({
+          onboarding: { ...state.onboarding, completionRequired: false },
+        }));
+      });
+
+      await waitFor(() => {
+        expect(loadCredentialStatuses).toHaveBeenCalledTimes(loadsBeforeSettingsReopens + 1);
+        expect(harness?.credentialController.state()).toMatchObject({
+          status: "loading",
+          announcement: "",
+        });
+        expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+          status: "loading",
+          announcement: "",
+        });
+      });
+      expect(screen.queryByText(/All credentials were removed/u)).not.toBeInTheDocument();
+
+      act(() => refreshedStatuses.resolve(reconfiguredStatuses));
+      await waitFor(() => {
+        expect(harness?.credentialController.state()).toMatchObject({
+          status: "ready",
+          entries: [expect.objectContaining({ credential: "openrouter" })],
+        });
+        expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+          status: "ready",
+          entries: [expect.objectContaining({ credential: "openrouter" })],
+        });
+      });
+      expect(screen.queryByText(/All credentials were removed/u)).not.toBeInTheDocument();
+    } finally {
+      resetContinuation.resolve(undefined);
+      refreshedStatuses.resolve(reconfiguredStatuses);
+      onboarding.dispose();
+      onboardingView.dispose();
+      useEnduragentStore.getState().bindOnboardingActions(null);
+    }
+  });
+
   it("keeps the resident Telegram controller active when Settings unmounts and remounts", async () => {
     harness = createHarness();
     const view = render(<SettingsView />);
@@ -911,6 +1102,120 @@ describe("settings lifecycle", () => {
 });
 
 describe("credential deletion", () => {
+  it("does not offer full reset for verified credentials without repair", async () => {
+    await renderSettings();
+
+    expect(screen.queryByRole("button", { name: "Remove all credentials" })).toBeNull();
+  });
+
+  it("offers inline removal when saved credentials are unverified", async () => {
+    const user = userEvent.setup();
+    const subject = await renderSettings({
+      credentialRecoveryStatus: async () => ({ state: "ready", unverifiedEnvelopes: 1 }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Remove all credentials" }));
+
+    const confirmation = screen.getByRole("group", { name: "Remove all credentials?" });
+    await waitFor(() =>
+      expect(within(confirmation).getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    expect(subject.resetAllCredentials).not.toHaveBeenCalled();
+
+    await user.click(within(confirmation).getByRole("button", { name: "Remove all credentials" }));
+    await waitFor(() => expect(subject.resetAllCredentials).toHaveBeenCalledOnce());
+  });
+
+  it("offers Retry when a missing Keychain item may have been restored", async () => {
+    const user = userEvent.setup();
+    let recovery: CredentialRecoveryStatus = { state: "missing" };
+    const subject = await renderSettings({
+      credentialRecoveryStatus: async () => recovery,
+      retryCredentialRecovery: async () => {
+        recovery = { state: "ready", unverifiedEnvelopes: 0 };
+        return recovery;
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(subject.retryCredentialRecovery).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
+  });
+
+  it("offers explicit full reset after an uncertain per-slot deletion", async () => {
+    const user = userEvent.setup();
+    const subject = await renderSettings({
+      deleteCredential: async () => ({
+        slot: "openrouter",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm deletion of the OpenRouter credential" }),
+    );
+    await screen.findByText(
+      "Credential deletion could not be confirmed because secure storage could not be verified. Restart Enduragent and reload before trying again.",
+    );
+
+    expect(screen.getByRole("button", { name: "Delete the Anthropic credential" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Delete the Intervals.icu connection" }),
+    ).toBeDisabled();
+    const reset = screen.getByRole("button", { name: "Remove all credentials" });
+    expect(reset).toBeEnabled();
+
+    await user.click(reset);
+    const confirmation = screen.getByRole("group", { name: "Remove all credentials?" });
+    await waitFor(() =>
+      expect(within(confirmation).getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    await user.click(within(confirmation).getByRole("button", { name: "Remove all credentials" }));
+
+    await waitFor(() => expect(subject.resetAllCredentials).toHaveBeenCalledOnce());
+  });
+
+  it("shows an inline recovery path when secure storage refuses credential deletion", async () => {
+    const user = userEvent.setup();
+    let recovery: CredentialRecoveryStatus = { state: "ready", unverifiedEnvelopes: 0 };
+    await renderSettings({
+      credentialRecoveryStatus: async () => recovery,
+      deleteCredential: async () => {
+        recovery = { state: "unavailable" };
+        return {
+          credential: "openrouter",
+          status: "refused",
+          reason: "encryption-unavailable",
+        };
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Delete the OpenRouter credential" }));
+    await user.click(
+      screen.getByRole("button", { name: "Confirm deletion of the OpenRouter credential" }),
+    );
+
+    const feedback = await screen.findByText(
+      "The credential was retained because secure storage could not confirm its encryption key.",
+    );
+    expect(feedback).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Remove all credentials" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete the OpenRouter credential" })).toBeDisabled();
+    expect(useEnduragentStore.getState().settings.credentials).toMatchObject({
+      status: "error",
+      kind: "delete",
+      reason: "encryption-unavailable",
+      recovery: { state: "unavailable" },
+      repairCredential: null,
+    });
+  });
+
   it("cross-locks setup changes while deletion is confirmed and pending", async () => {
     const user = userEvent.setup();
     const deletion = deferred<CredentialDeleteResult>();

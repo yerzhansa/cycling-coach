@@ -645,9 +645,33 @@ async function launch(input: {
     if (document.querySelector("[data-setup-host]") !== null) {
       throw new Error("ready fixture unexpectedly requires setup");
     }
-    const composer = document.querySelector("textarea#message");
+    const composerDeadline = Date.now() + 10000;
+    let composer = document.querySelector("textarea#message");
+    while (
+      (!(composer instanceof HTMLTextAreaElement) || composer.disabled) &&
+      Date.now() < composerDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      composer = document.querySelector("textarea#message");
+    }
     if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) {
-      throw new Error("ready fixture did not enable chat");
+      throw new Error(
+        "ready fixture did not enable chat: " + JSON.stringify({
+          composerFound: composer instanceof HTMLTextAreaElement,
+          composerDisabled:
+            composer instanceof HTMLTextAreaElement ? composer.disabled : null,
+          rpc: document.documentElement.dataset.rpc ?? null,
+          newConversationDisabled:
+            document.querySelector("button.new-conversation-button")?.hasAttribute("disabled") ??
+            null,
+          alerts: Array.from(document.querySelectorAll('[role="alert"]')).map((node) =>
+            node.textContent?.trim(),
+          ),
+          statuses: Array.from(document.querySelectorAll('[role="status"]')).map((node) =>
+            node.textContent?.trim(),
+          ),
+        }),
+      );
     }
   `);
   return { fixture, calls };
@@ -1153,6 +1177,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "chooseImportFiles",
         "claudeCliRecheck",
         "claudeCliStatus",
+        "credentialRecoveryStatus",
         "credentialStatuses",
         "deleteCredential",
         "disableTelegram",
@@ -1178,7 +1203,9 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         "removeTelegram",
         "removeTelegramAllowedSender",
         "removeTelegramWebhook",
+        "resetAllCredentials",
         "restartToUpdate",
+        "retryCredentialRecovery",
         "retryFailedCredentials",
         "setAppearance",
         "telegramStatus",

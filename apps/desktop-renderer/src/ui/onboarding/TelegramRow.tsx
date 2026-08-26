@@ -5,6 +5,7 @@ import type {
   TelegramSettingsFeedback,
   TelegramSettingsState,
 } from "../../settings/telegram-controller.js";
+import { credentialChangesBlocked } from "../../settings/credential-controller.js";
 import { PLATFORM_COPY } from "../../platform-copy.js";
 import { settingsMutationActive, type TelegramSettingsPort } from "../../state/settings-slice.js";
 import { useEnduragentStore } from "../../state/store.js";
@@ -190,6 +191,7 @@ export function TelegramRow(): ReactElement {
   const identityUnknown = currentIdentity.kind === "unknown";
   const loading = state.status === "closed" || state.status === "loading";
   const busy = loading || settingsMutationActive(settings) || state.status === "working";
+  const credentialMutationBlocked = credentialChangesBlocked(settings.credentials, false);
   const activeAttempt = attempt !== null && attempt.phase !== "settled";
   const connecting = activeAttempt && attempt.action === "paste-token";
   const removing = activeAttempt && attempt.action === "remove";
@@ -325,7 +327,9 @@ export function TelegramRow(): ReactElement {
   }, [attempt, currentIdentity.kind, feedback, panel, port, state]);
 
   const begin = (action: TelegramAction): void => {
-    if (port === null || busy || activeAttempt || mutationUnsafe) return;
+    if (port === null || busy || credentialMutationBlocked || activeAttempt || mutationUnsafe) {
+      return;
+    }
     setPanelFeedback(null);
     const nextAttempt = persistAttempt(port, {
       action,
@@ -469,7 +473,11 @@ export function TelegramRow(): ReactElement {
               variant="destructive"
               size="sm"
               data-setup-delete="telegram"
-              disabled={busy || (authoritativeCheckRequired && attempt?.action === "paste-token")}
+              disabled={
+                busy ||
+                credentialMutationBlocked ||
+                (authoritativeCheckRequired && attempt?.action === "paste-token")
+              }
               aria-expanded={panel === "delete"}
               aria-label="Delete the Telegram connection"
               onClick={openDeletePanel}
@@ -483,7 +491,7 @@ export function TelegramRow(): ReactElement {
               variant="outline"
               size="sm"
               data-setup-trigger="telegram"
-              disabled={busy}
+              disabled={busy || credentialMutationBlocked}
               aria-expanded={panel === "token"}
               aria-label="Create Telegram bot"
               {...(panel === "closed" ? {} : { "aria-controls": panelId })}
@@ -553,7 +561,7 @@ export function TelegramRow(): ReactElement {
                 variant="default"
                 size="sm"
                 data-telegram-action="use-token"
-                disabled={busy || mutationUnsafe}
+                disabled={busy || credentialMutationBlocked || mutationUnsafe}
                 onClick={() => begin("paste-token")}
               >
                 {connecting ? "Connecting…" : "Use copied token"}
@@ -596,7 +604,7 @@ export function TelegramRow(): ReactElement {
             confirmLabel="Delete connection"
             focusTarget={confirmationFocus}
             cancelDisabled={busy}
-            confirmDisabled={busy || mutationUnsafe}
+            confirmDisabled={busy || credentialMutationBlocked || mutationUnsafe}
             confirmBusy={removing}
             onCancel={cancelDeletePanel}
             onConfirm={() => begin("remove")}

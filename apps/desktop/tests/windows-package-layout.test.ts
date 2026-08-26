@@ -6,6 +6,7 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { afterEach, describe, expect, it } from "vitest";
+import { KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN } from "../scripts/package-inventory.mjs";
 import {
   WINDOWS_PACKAGE_GUID,
   windowsPackageArtifactName,
@@ -171,6 +172,14 @@ function builderYaml(): string {
     "appId: icu.enduragent.desktop",
     "productName: Enduragent",
     "asar: true",
+    "asarUnpack:",
+    `  - ${KEYCHAIN_BINDING_ASAR_UNPACK_PATTERN}`,
+    "electronFuses:",
+    "  runAsNode: false",
+    "  enableNodeOptionsEnvironmentVariable: false",
+    "  enableNodeCliInspectArguments: false",
+    "  enableEmbeddedAsarIntegrityValidation: true",
+    "  onlyLoadAppFromAsar: true",
     "electronLanguages:",
     "  - en-US",
     "directories:",
