@@ -78,6 +78,7 @@ function historicalTimeline(
             delivery: "complete",
             historical: true,
             text: entry.athleteText,
+            ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
           },
         },
         {

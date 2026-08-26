@@ -26,7 +26,10 @@ describe("managed Chat attachment operations", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  function createOperations(ids: readonly string[]) {
+  function createOperations(
+    ids: readonly string[],
+    observe?: Parameters<typeof createManagedChatAttachmentOperations>[0]["observe"],
+  ) {
     let index = 0;
     const repository = createChatAttachmentRepository(store);
     const objects = createManagedChatAttachmentStore({
@@ -47,6 +50,7 @@ describe("managed Chat attachment operations", () => {
         runExclusive: (work) => work(),
         now: () => 100,
         randomId: () => ids[index++]!,
+        ...(observe === undefined ? {} : { observe }),
       }),
     };
   }
@@ -265,12 +269,11 @@ describe("managed Chat attachment operations", () => {
     const secondPath = join(root, "second.txt");
     await writeFile(firstPath, "first");
     await writeFile(secondPath, "second");
-    const { operations, repository } = createOperations([
-      "object-1",
-      "attachment-1",
-      "object-2",
-      "attachment-2",
-    ]);
+    const observations: unknown[] = [];
+    const { operations, repository } = createOperations(
+      ["object-1", "attachment-1", "object-2", "attachment-2"],
+      (value) => observations.push(value),
+    );
     await operations.admit({
       chatId: "desktop",
       selectionId: "s1",
@@ -291,5 +294,22 @@ describe("managed Chat attachment operations", () => {
     await operations.cleanupConversation("desktop");
     await operations.cleanupConversation("desktop");
     await expect(repository.listObjects()).resolves.toEqual([]);
+    expect(observations).toEqual([
+      {
+        operation: "cleanup",
+        kind: "unknown",
+        result: "succeeded",
+        count: 1,
+        durationMs: 0,
+      },
+      {
+        operation: "cleanup",
+        kind: "unknown",
+        result: "succeeded",
+        count: 0,
+        durationMs: 0,
+      },
+    ]);
+    expect(JSON.stringify(observations)).not.toContain("desktop");
   });
 });

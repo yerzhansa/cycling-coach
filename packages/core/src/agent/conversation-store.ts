@@ -48,6 +48,10 @@ export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPo
   requireChatQueueRetry(chatId: string, claimId: string): ChatQueueSnapshot;
   retryChatQueueClaim(chatId: string, claimId: string, turnId: string): ChatQueueSnapshot;
   clearChatQueue(chatId: string): ChatQueueSnapshot;
+  getCompletedChatQueueClaim(chatId: string): {
+    readonly turnId: string;
+    readonly messageIds: readonly string[];
+  } | null;
   appendDecisionRequested(input: TranscriptDecisionRequestedInput): CoachDecisionReadModel;
   answerDecision(input: TranscriptDecisionAnsweredInput): CoachDecisionReadModel;
   skipDecision(input: TranscriptDecisionSkippedInput): CoachDecisionReadModel;
@@ -283,6 +287,14 @@ export class ConversationStore implements ConversationStorePort {
 
   reconcileChatQueue(chatId: string): ChatQueueSnapshot {
     return this.queueStore().reconcile(chatId, this.transcriptStore.getTerminalTurnIds(chatId));
+  }
+
+  getCompletedChatQueueClaim(chatId: string) {
+    this.recoverBeforeAccess(chatId);
+    return this.queueStore().getCompletedClaim(
+      chatId,
+      this.transcriptStore.getTerminalTurnIds(chatId),
+    );
   }
 
   private queueStore(): ChatQueueStore {

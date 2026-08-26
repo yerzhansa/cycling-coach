@@ -26,6 +26,7 @@ import type {
   TranscriptWriterPort,
 } from "@enduragent/engine";
 import {
+  ChatAttachmentReferenceSchema,
   CoachDecisionAnswerSchema,
   CoachDecisionReadModelSchema,
   type CoachDecisionAnswer,
@@ -450,23 +451,18 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
   if (value === null || value.version !== TRANSCRIPT_SCHEMA_VERSION) return null;
 
   if (value.kind === "turn-completed" || value.kind === "turn-interrupted") {
+    const keys = ["version", "kind", "chatId", "turnId", "completedAt", "athleteText", "coachText"];
     if (
-      !hasExactKeys(value, [
-        "version",
-        "kind",
-        "chatId",
-        "turnId",
-        "completedAt",
-        "athleteText",
-        "coachText",
-      ]) ||
+      (!hasExactKeys(value, keys) && !hasExactKeys(value, [...keys, "attachments"])) ||
       typeof value.chatId !== "string" ||
       typeof value.turnId !== "string" ||
       value.turnId.length === 0 ||
       typeof value.completedAt !== "string" ||
       !isIsoTimestamp(value.completedAt) ||
       typeof value.athleteText !== "string" ||
-      typeof value.coachText !== "string"
+      typeof value.coachText !== "string" ||
+      (value.attachments !== undefined &&
+        !ChatAttachmentReferenceSchema.array().max(5).safeParse(value.attachments).success)
     ) {
       return null;
     }
@@ -638,7 +634,9 @@ function completedTurnRecord(input: TranscriptCompletedTurnInput): TranscriptCom
     typeof input.completedAt !== "string" ||
     !isIsoTimestamp(input.completedAt) ||
     typeof input.athleteText !== "string" ||
-    typeof input.coachText !== "string"
+    typeof input.coachText !== "string" ||
+    (input.attachments !== undefined &&
+      !ChatAttachmentReferenceSchema.array().max(5).safeParse(input.attachments).success)
   ) {
     throw new TypeError("Completed transcript turn is invalid.");
   }
@@ -650,6 +648,7 @@ function completedTurnRecord(input: TranscriptCompletedTurnInput): TranscriptCom
     completedAt: input.completedAt,
     athleteText: input.athleteText,
     coachText: input.coachText,
+    ...(input.attachments === undefined ? {} : { attachments: [...input.attachments] }),
   };
 }
 
@@ -906,6 +905,7 @@ function transcriptPageTurn(record: TranscriptTurnRecord): TranscriptPageTurn {
     completedAt: record.completedAt,
     athleteText: record.athleteText,
     coachText: record.coachText,
+    ...(record.attachments === undefined ? {} : { attachments: record.attachments }),
     ...(record.kind === "turn-interrupted" ? { delivery: "interrupted" as const } : {}),
   };
 }

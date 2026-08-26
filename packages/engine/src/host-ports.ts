@@ -1,6 +1,7 @@
 import type {
   AttachmentCapabilitiesReadModel,
   AthleteState,
+  ChatAttachmentReference,
   ChatQueueSnapshot,
   CoachDecisionAnswer,
   CoachDecisionContinuationLineage,
@@ -171,6 +172,10 @@ export interface ChatStorePort {
   requireChatQueueRetry?(chatId: string, claimId: string): ChatQueueSnapshot;
   retryChatQueueClaim?(chatId: string, claimId: string, turnId: string): ChatQueueSnapshot;
   clearChatQueue?(chatId: string): ChatQueueSnapshot;
+  getCompletedChatQueueClaim?(chatId: string): {
+    readonly turnId: string;
+    readonly messageIds: readonly string[];
+  } | null;
 }
 
 export interface ChatAttachmentActivitySummary {
@@ -197,6 +202,7 @@ export interface ChatNativeMediaInput {
 
 export interface ChatAttachmentTurnPreparation {
   readonly activities: readonly ChatAttachmentActivitySummary[];
+  readonly attachments?: readonly ChatAttachmentReference[];
   readonly attachmentContext?: string;
   readonly untrustedAttachmentText?: string;
   readonly nativeMedia?: readonly ChatNativeMediaInput[];
@@ -240,6 +246,7 @@ export interface TranscriptCompletedTurnInput {
   readonly completedAt: string;
   readonly athleteText: string;
   readonly coachText: string;
+  readonly attachments?: readonly ChatAttachmentReference[];
 }
 
 export type TranscriptInterruptedTurnInput = TranscriptCompletedTurnInput;

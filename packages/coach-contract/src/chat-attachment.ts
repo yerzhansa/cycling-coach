@@ -183,6 +183,16 @@ export const ChatAttachmentExtensionSchema = z.union([
 ]);
 export type ChatAttachmentExtension = z.infer<typeof ChatAttachmentExtensionSchema>;
 
+export const ChatAttachmentReferenceSchema = z
+  .object({
+    attachmentId: z.string().min(1).max(128),
+    displayName: z.string().min(1).max(512),
+    kind: ChatAttachmentKindSchema,
+    extension: ChatAttachmentExtensionSchema,
+  })
+  .strict();
+export type ChatAttachmentReference = z.infer<typeof ChatAttachmentReferenceSchema>;
+
 const ChatAttachmentComposerBaseSchema = z
   .object({
     schemaVersion: z.literal(1),

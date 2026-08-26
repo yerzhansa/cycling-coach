@@ -12,6 +12,7 @@ import {
   chatAttachmentRelativePath,
   type ManagedChatAttachmentStore,
 } from "@enduragent/kernel-node/chat-attachments";
+import type { AttachmentObservation } from "./attachment-observability.js";
 
 function displayNameFromPath(sourcePath: string): string {
   const segments = sourcePath.split(/[\\/]/u);
@@ -56,6 +57,7 @@ export interface ManagedChatAttachmentOperationsInput {
     readonly attachment: ChatAttachmentRow;
     readonly object: ChatAttachmentObjectRow;
   }) => Promise<void>;
+  readonly observe?: (input: AttachmentObservation) => void;
 }
 
 const CAPACITY_LIMITS = {
@@ -333,16 +335,56 @@ export function createManagedChatAttachmentOperations(
     },
 
     async cleanupConversation(conversationId) {
-      await input.runExclusive(async () => {
-        const objects = await input.repository.cleanupConversation(conversationId);
-        for (const object of objects) await input.objects.removeObject(object.relative_path);
-      });
+      const startedAt = now();
+      try {
+        const count = await input.runExclusive(async () => {
+          const objects = await input.repository.cleanupConversation(conversationId);
+          for (const object of objects) await input.objects.removeObject(object.relative_path);
+          return objects.length;
+        });
+        input.observe?.({
+          operation: "cleanup",
+          kind: "unknown",
+          result: "succeeded",
+          count,
+          durationMs: now() - startedAt,
+        });
+      } catch (error) {
+        input.observe?.({
+          operation: "cleanup",
+          kind: "unknown",
+          result: "failed",
+          durationMs: now() - startedAt,
+        });
+        throw error;
+      }
     },
 
     async reconcile() {
-      await input.runExclusive(async () => {
-        await input.objects.reconcile(input.repository, CHAT_ATTACHMENT_LIMITS.orphanGraceMs);
-      });
+      const startedAt = now();
+      try {
+        const result = await input.runExclusive(() =>
+          input.objects.reconcile(input.repository, CHAT_ATTACHMENT_LIMITS.orphanGraceMs),
+        );
+        const count = result.missing + result.interruptedReservations + result.orphansRemoved;
+        if (count > 0) {
+          input.observe?.({
+            operation: "reconcile",
+            kind: "unknown",
+            result: "succeeded",
+            count,
+            durationMs: now() - startedAt,
+          });
+        }
+      } catch (error) {
+        input.observe?.({
+          operation: "reconcile",
+          kind: "unknown",
+          result: "failed",
+          durationMs: now() - startedAt,
+        });
+        throw error;
+      }
     },
   };
   return operations;

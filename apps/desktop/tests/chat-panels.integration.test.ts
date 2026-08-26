@@ -491,6 +491,14 @@ ${"nonwrapping".repeat(36)}
                     completedAt: "2001-01-03T00:00:00.000Z",
                     athleteText: "Persisted athlete 3",
                     coachText: "**Persisted coach 3**",
+                    attachments: [
+                      {
+                        attachmentId: "attachment-persisted-3",
+                        displayName: "training-notes.txt",
+                        kind: "document",
+                        extension: "txt",
+                      },
+                    ],
                   },
                   {
                     turnId: "persisted-turn-4",
@@ -671,6 +679,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       readonly athleteLiteral: boolean;
       readonly coachMarkdown: boolean;
       readonly loadEarlierHidden: boolean;
+      readonly sentAttachmentRestored: boolean;
     }>(`
       const conversation = document.querySelector(".conversation");
       const textarea = document.querySelector("#message");
@@ -709,10 +718,13 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
         focusPreserved: document.activeElement === textarea,
         historySilent: allRows.every((row) => row.getAttribute("aria-live") === "off"),
         athleteLiteral:
-          allRows[4].querySelectorAll("strong").length === 0 &&
+          allRows[4].querySelector(".chat-message__text")?.querySelectorAll("strong").length === 0 &&
           allRows[4].querySelector(".chat-message__text").textContent === "Persisted athlete 3",
         coachMarkdown:
           allRows[5].querySelector("strong")?.textContent === "Persisted coach 3",
+        sentAttachmentRestored:
+          allRows[4].textContent.includes("training-notes.txt") &&
+          allRows[4].textContent.includes("TXT"),
         loadEarlierHidden: loadEarlier.hidden,
       };
     `);
@@ -727,6 +739,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop chat pan
       historySilent: true,
       athleteLiteral: true,
       coachMarkdown: true,
+      sentAttachmentRestored: true,
       loadEarlierHidden: true,
     });
     expect(calls.filter((call) => call.method === "getTranscriptPage")).toEqual([

@@ -175,6 +175,21 @@ describe("ChatQueueStore", () => {
     ).toMatchObject({
       claimId: "claim-2",
     });
+
+    const retry = store();
+    retry.value.enqueue("desktop", "submission-3", "First", "message-3", "athlete-message-3");
+    retry.value.claim("desktop", {
+      claimId: "claim-3",
+      turnId: "turn-3",
+      queuedMessageIds: ["message-3"],
+    });
+    retry.value.requireRetry("desktop", "claim-3");
+    const restored = new ChatQueueStore(retry.root);
+    expect(restored.getCompletedClaim("desktop", new Set(["turn-3"]))).toEqual({
+      turnId: "turn-3",
+      messageIds: ["athlete-message-3"],
+    });
+    expect(restored.reconcile("desktop", new Set(["turn-3"])).items).toEqual([]);
   });
 
   it("fails closed on corrupt or non-private queue snapshots", () => {
