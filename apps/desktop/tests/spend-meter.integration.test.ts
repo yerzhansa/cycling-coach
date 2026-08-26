@@ -472,6 +472,7 @@ describe.skipIf(process.platform !== "darwin" || !hasLoopback)("desktop spend me
       "exportTrainingFile",
       "getArchivedTranscriptPage",
       "getDaemonConnection",
+      "getPlanningReadModel",
       "getTranscriptPage",
       "getUpdateState",
       "initialSetupStatusSettled",

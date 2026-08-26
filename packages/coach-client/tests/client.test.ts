@@ -99,6 +99,7 @@ const rpcDeadlineCases = [
   ["listArchivedConversations", {}, 30_000],
   ["getArchivedTranscriptPage", { boundaryRef: "a".repeat(64), cursor: null, limit: 25 }, 30_000],
   ["getAthleteState", {}, 30_000],
+  ["getPlanningReadModel", {}, 30_000],
   [
     "getActivityAnalysis",
     { canonicalActivityId: "a".repeat(64), sections: ["aerobic-drift"] },
@@ -920,6 +921,12 @@ describe("RPC receive and observers", () => {
           recentActivities: [],
           plannedWorkouts: [],
           wellness: {},
+        },
+        getPlanningReadModel: {
+          schemaVersion: 1,
+          status: "no-plan",
+          asOfDateKey: 20260826,
+          plan: null,
         },
         getActivityAnalysis: {
           schemaVersion: 1,

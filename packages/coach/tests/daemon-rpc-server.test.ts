@@ -32,6 +32,7 @@ import {
   type CoachDecisionReadModel,
   type CoachEngine,
   type CoachOperations,
+  type PlanningReadOperations,
   type SpendSummary,
   type TelegramControlSnapshot,
   type TurnEvent,
@@ -106,7 +107,7 @@ const completedDecision = {
   },
 } satisfies CoachDecisionReadModel;
 
-const operations: CoachOperations = {
+const operations: CoachOperations & PlanningReadOperations = {
   exportTrainingFile: async () => ({
     status: "exported",
     byteLength: 4_096,
@@ -172,6 +173,12 @@ const operations: CoachOperations = {
     status: "page",
     turns: [],
     nextCursor: null,
+  }),
+  getPlanningReadModel: async () => ({
+    schemaVersion: 1,
+    status: "no-plan",
+    asOfDateKey: 20260826,
+    plan: null,
   }),
   configureRuntime: async ({ llm, intervals, session }) => ({
     schemaVersion: 3,
@@ -806,6 +813,10 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       }),
       operations: {
         ...operations,
+        getPlanningReadModel: async () => {
+          calls.push("getPlanningReadModel");
+          return { schemaVersion: 1, status: "no-plan", asOfDateKey: 20260826, plan: null };
+        },
         exportTrainingFile: async (request, signal) => {
           calls.push("exportTrainingFile");
           return operations.exportTrainingFile!(request, signal);
@@ -891,6 +902,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       },
       { id: 40, method: "retryQueuedTurn", params: { chatId: "chat", claimId: "claim-1" } },
       { id: 4, method: "getAthleteState", params: {} },
+      { id: 41, method: "getPlanningReadModel", params: {} },
       {
         id: 5,
         method: "getActivityAnalysis",
@@ -927,6 +939,7 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       "runQueuedCommand:chat",
       "retryQueuedTurn:chat",
       "getAthleteState",
+      "getPlanningReadModel",
       "getActivityAnalysis",
       "exportTrainingFile",
     ]);

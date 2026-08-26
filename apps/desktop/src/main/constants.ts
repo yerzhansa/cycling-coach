@@ -13,6 +13,7 @@ export const DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL =
   "desktop:list-archived-conversations" as const;
 export const DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL =
   "desktop:get-archived-transcript-page" as const;
+export const DESKTOP_PLANNING_READ_CHANNEL = "desktop:planning:read" as const;
 export const DESKTOP_TRAINING_EXPORT_CHANNEL = "desktop:training:export" as const;
 export const DESKTOP_CHAT_ATTACHMENT_PICK_CHANNEL = "desktop:chat-attachment:pick" as const;
 export const DESKTOP_CHAT_ATTACHMENT_DROP_CHANNEL = "desktop:chat-attachment:drop" as const;

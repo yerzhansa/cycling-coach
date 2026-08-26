@@ -110,6 +110,11 @@ import {
   RetryQueuedTurnRequestSchema,
   RunQueuedCommandRequestSchema,
 } from "./chat-queue.js";
+import {
+  GetPlanningReadModelRpcParamsSchema,
+  GetPlanningReadModelRpcResultSchema,
+  type PlanningReadOperations,
+} from "./planning-read.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -228,6 +233,7 @@ export const COACH_RPC_METHOD_NAMES = [
   "listArchivedConversations",
   "getArchivedTranscriptPage",
   "getAthleteState",
+  "getPlanningReadModel",
   "getActivityAnalysis",
   "exportTrainingFile",
   "importFiles",
@@ -1241,6 +1247,7 @@ export interface TelegramControlOperations {
 
 export type CoachRpcService = CoachEngine &
   CoachOperations &
+  PlanningReadOperations &
   SpendOperations &
   CoachSelfTestOperations &
   TelegramControlOperations;
@@ -1452,6 +1459,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("getAthleteState"),
       params: EmptyRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getPlanningReadModel"),
+      params: GetPlanningReadModelRpcParamsSchema,
     })
     .strict(),
   z
@@ -1956,6 +1971,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "getAthleteState",
     requestSchema: EmptyRpcParamsSchema,
     responseSchema: AthleteStateSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getPlanningReadModel: {
+    wireName: "getPlanningReadModel",
+    requestSchema: GetPlanningReadModelRpcParamsSchema,
+    responseSchema: GetPlanningReadModelRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
   getActivityAnalysis: {

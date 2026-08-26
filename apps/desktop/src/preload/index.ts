@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   AttachmentAdmissionReadModelSchema,
   CHAT_ATTACHMENT_LIMITS,
+  GetPlanningReadModelRpcResultSchema,
   PlatformAbsolutePathSchema,
   type AttachmentAdmissionReadModel,
 } from "@enduragent/coach-contract";
@@ -18,6 +19,7 @@ import {
   DESKTOP_INITIAL_SETUP_STATUS_SETTLED_CHANNEL,
   DESKTOP_INTERVALS_PASTE_CREDENTIAL_CHANNEL,
   DESKTOP_LIFECYCLE_CHANNEL,
+  DESKTOP_PLANNING_READ_CHANNEL,
   DESKTOP_OPEN_EXTERNAL_CHANNEL,
   DESKTOP_ARCHIVED_CONVERSATIONS_CHANNEL,
   DESKTOP_ARCHIVED_TRANSCRIPT_PAGE_CHANNEL,
@@ -1072,6 +1074,12 @@ function parseAttachmentAdmissions(value: unknown): readonly AttachmentAdmission
   return value.map((item) => AttachmentAdmissionReadModelSchema.parse(item));
 }
 
+function parsePlanningReadModel(value: unknown): unknown {
+  const parsed = GetPlanningReadModelRpcResultSchema.safeParse(value);
+  if (!parsed.success) throw new TypeError();
+  return parsed.data;
+}
+
 function telegramUsername(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(value);
 }
@@ -1519,6 +1527,8 @@ contextBridge.exposeInMainWorld(
         archivedTranscriptCursor,
       );
     },
+    getPlanningReadModel: async () =>
+      parsePlanningReadModel(await ipcRenderer.invoke(DESKTOP_PLANNING_READ_CHANNEL)),
     credentialStatuses: async () =>
       parseStatuses(await ipcRenderer.invoke(DESKTOP_CREDENTIAL_STATUS_CHANNEL)),
     retryFailedCredentials: async () =>

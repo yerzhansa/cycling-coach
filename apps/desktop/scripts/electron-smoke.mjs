@@ -309,6 +309,7 @@ async function security() {
             "exportTrainingFile",
             "getArchivedTranscriptPage",
             "getDaemonConnection",
+            "getPlanningReadModel",
             "getTranscriptPage",
             "getUpdateState",
             "initialSetupStatusSettled",

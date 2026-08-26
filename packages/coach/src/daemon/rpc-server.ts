@@ -34,6 +34,7 @@ import {
   serializeCoachRpcEnvelope,
   type CoachEngine,
   type CoachOperations,
+  type PlanningReadOperations,
   type CoachRpcMethodName,
   type CoachSelfTestOperations,
   type DaemonOwner,
@@ -293,7 +294,7 @@ export async function ensureDaemonToken(
 
 export interface CoachRpcServerInput {
   readonly engine: CoachEngine;
-  readonly operations: CoachOperations;
+  readonly operations: CoachOperations & PlanningReadOperations;
   readonly spend: SpendRpcHandlers;
   readonly selfTestOperations: CoachSelfTestOperations;
   readonly telegram: DesktopTelegramController;
@@ -516,6 +517,7 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "listArchivedConversations",
   "getArchivedTranscriptPage",
   "getAthleteState",
+  "getPlanningReadModel",
   "getActivityAnalysis",
   "importFiles",
   "sync",
@@ -1282,6 +1284,19 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
             try {
               COACH_RPC_METHOD_REGISTRY.getAthleteState.requestSchema.parse(generic.data.params);
               result = await input.engine.getAthleteState();
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getPlanningReadModel":
+            try {
+              const request = COACH_RPC_METHOD_REGISTRY.getPlanningReadModel.requestSchema.parse(
+                generic.data.params,
+              );
+              if (input.operations.getPlanningReadModel === undefined) {
+                throw new TypeError("Planning read operation is unavailable.");
+              }
+              result = await input.operations.getPlanningReadModel(request);
             } catch (error) {
               invocationFailure = { error };
             }
