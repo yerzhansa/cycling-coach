@@ -278,8 +278,8 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       return decision === undefined ? { text } : { text, decision };
     },
     stopChat: async (request) => ({ stopped: agent.stopChat(request.chatId, request.turnId) }),
-    enqueueChatMessage: async (request) =>
-      queuePort("enqueueChatMessage").call(
+    enqueueChatMessage: async (request) => {
+      const queued = queuePort("enqueueChatMessage").call(
         input.ports.chatStore,
         request.chatId,
         request.submissionId,
@@ -287,7 +287,27 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
         input.ports.randomId(),
         input.ports.randomId(),
         request.attachmentIds,
-      ),
+      );
+      const item = queued.items.find(
+        (candidate) => candidate.submissionId === request.submissionId,
+      );
+      if (item === undefined || item.attachmentIds.length === 0) return queued;
+      try {
+        await input.ports.chatAttachments?.acceptQueuedMessage?.({
+          chatId: request.chatId,
+          messageId: item.messageId,
+          attachmentIds: item.attachmentIds,
+        });
+      } catch (error) {
+        queuePort("removeQueuedChatMessage").call(
+          input.ports.chatStore,
+          request.chatId,
+          item.queuedMessageId,
+        );
+        throw error;
+      }
+      return queued;
+    },
     getChatQueue: async (request) => snapshot(request.chatId),
     removeQueuedChatMessage: async (request) =>
       queuePort("removeQueuedChatMessage").call(

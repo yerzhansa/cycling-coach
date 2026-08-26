@@ -95,6 +95,10 @@ describe("chat view adapter", () => {
       decisionError: null,
       decisionLoadError: null,
       queueMutationError: null,
+      attachments: null,
+      attachmentAdmissions: [],
+      attachmentBusy: false,
+      attachmentError: null,
       timeline: [
         {
           kind: "message",

@@ -166,6 +166,10 @@ export function bootRenderer(): Disposer {
     refreshSpend: () => spendController.refresh(),
     readTranscriptPage: (request) => window.enduragentAuth.getTranscriptPage(request),
     canChat: () => setupReady(store.getState()),
+    nativeAttachments: {
+      choose: () => window.enduragentAuth.chooseChatAttachments(),
+      paste: () => window.enduragentAuth.pasteChatAttachment(),
+    },
   });
   const disposeSetupReadiness = store.subscribe((state, previousState) => {
     if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
@@ -195,7 +199,15 @@ export function bootRenderer(): Disposer {
     }).render,
   });
   store.getState().bindChatActions({
-    submit: (message) => chatController.submit(message),
+    submit: (message, attachmentIds) => chatController.submit(message, attachmentIds),
+    chooseAttachments: () => chatController.chooseAttachments(),
+    pasteAttachment: () => chatController.pasteAttachment(),
+    receiveAttachmentAdmissions: (results) => chatController.receiveAttachmentAdmissions(results),
+    saveAttachmentDraftText: (text) => chatController.saveAttachmentDraftText(text),
+    removeAttachment: (attachmentId) => chatController.removeAttachment(attachmentId),
+    retryAttachment: (attachmentId) => chatController.retryAttachment(attachmentId),
+    selectAttachmentWorkout: (attachmentId, workoutId) =>
+      chatController.selectAttachmentWorkout(attachmentId, workoutId),
     stop: () => chatController.stop(),
     removeQueued: (id) => chatController.removeQueued(id),
     runQueuedCommand: (id) => void chatController.runQueuedCommand(id),
@@ -415,6 +427,9 @@ export function bootRenderer(): Disposer {
       importDroppedFiles: (paths) => void rideImports.importPaths("resident", paths),
     },
   });
+  const disposeDroppedChatAttachments = window.enduragentAuth.onDroppedChatAttachments((results) =>
+    chatController.receiveAttachmentAdmissions(results),
+  );
 
   void trainingContextController.start();
   spendController.start();
@@ -460,6 +475,7 @@ export function bootRenderer(): Disposer {
     sessionSettingsController.dispose();
     telegramSettingsController.dispose();
     disposeDroppedRideImports();
+    disposeDroppedChatAttachments();
     onboarding.dispose();
     onboardingAdapter.dispose();
     rideImportAdapter.dispose();

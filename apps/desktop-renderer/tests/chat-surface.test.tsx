@@ -2,7 +2,11 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { CoachDecisionReadModel } from "@enduragent/coach-contract";
+import type {
+  AttachmentCapabilitiesReadModel,
+  ChatAttachmentComposerReadModel,
+  CoachDecisionReadModel,
+} from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Shell } from "../src/app/Shell.js";
@@ -22,6 +26,13 @@ import { ChatView } from "../src/ui/chat/ChatView.js";
 function stubActions(): ChatActions {
   return {
     submit: vi.fn(async () => true),
+    chooseAttachments: vi.fn(),
+    pasteAttachment: vi.fn(),
+    receiveAttachmentAdmissions: vi.fn(),
+    saveAttachmentDraftText: vi.fn(),
+    removeAttachment: vi.fn(),
+    retryAttachment: vi.fn(),
+    selectAttachmentWorkout: vi.fn(),
     stop: vi.fn(),
     removeQueued: vi.fn(),
     runQueuedCommand: vi.fn(),
@@ -53,6 +64,40 @@ function composer(): HTMLTextAreaElement {
   const element = document.querySelector("textarea#message");
   if (!(element instanceof HTMLTextAreaElement)) throw new TypeError("composer missing");
   return element;
+}
+
+const ATTACHMENT_CAPABILITIES: AttachmentCapabilitiesReadModel = {
+  schemaVersion: 1,
+  active: { provider: "test", model: "vision", transport: "test" },
+  documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+  completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+  plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+  images: {
+    enabled: true,
+    mediaTypes: ["image/png", "image/jpeg", "image/webp"],
+    reason: "supported",
+    source: "maintained_catalogue",
+    checkedAt: "2026-08-26T00:00:00.000Z",
+  },
+};
+
+function attachmentSurface(
+  attachment: NonNullable<ChatAttachmentComposerReadModel["draft"]>["attachments"][number],
+  text = "Review this",
+  state: "active" | "restored" = "active",
+): ChatAttachmentComposerReadModel {
+  return {
+    schemaVersion: 1,
+    capabilities: ATTACHMENT_CAPABILITIES,
+    draft: {
+      schemaVersion: 1,
+      chatId: "desktop",
+      text,
+      state,
+      updatedAt: "2026-08-26T00:00:00.000Z",
+      attachments: [attachment],
+    },
+  };
 }
 
 function unansweredDecision(): Extract<CoachDecisionReadModel, { status: "unanswered" }> {
@@ -632,6 +677,188 @@ describe("chat surface", () => {
       render(<Harness />);
       expect(screen.queryByRole("group", { name: "Coaching shortcuts" })).toBeNull();
       expect(screen.queryByRole("button", { name: /command$/u })).toBeNull();
+    });
+  });
+
+  describe("attachments", () => {
+    it("restores document text and sends the stable attachment without requiring message text", async () => {
+      const user = userEvent.setup();
+      setChat({
+        attachments: attachmentSurface(
+          {
+            schemaVersion: 1,
+            attachmentId: "attachment-doc",
+            displayName: "training-notes.pdf",
+            kind: "document",
+            extension: "pdf",
+            byteSize: 1_800_000,
+            status: "ready",
+            preview: { kind: "document", extractedTextChars: 12_000, visualPageCount: 0 },
+          },
+          "",
+          "restored",
+        ),
+      });
+      render(<Harness />);
+
+      expect(screen.getByLabelText("training-notes.pdf attachment")).toBeVisible();
+      expect(screen.getByText("Stored locally")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Send message" }));
+      expect(actions.saveAttachmentDraftText).toHaveBeenCalledWith("");
+      expect(actions.submit).toHaveBeenCalledWith("", ["attachment-doc"]);
+    });
+
+    it("previews a completed activity and keeps Remove scoped to that attachment", async () => {
+      const user = userEvent.setup();
+      setChat({
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-fit",
+          displayName: "sunday-endurance.fit",
+          kind: "activity",
+          extension: "fit",
+          byteSize: 842_000,
+          status: "ready",
+          preview: {
+            kind: "activity",
+            sourceFormat: "fit",
+            sessions: [
+              {
+                sport: "cycling",
+                startUtc: 1_777_000_000,
+                durationSeconds: 8_040,
+                distanceMeters: 68_400,
+              },
+            ],
+          },
+        }),
+      });
+      render(<Harness />);
+
+      expect(screen.getByText("Will add to Training when sent")).toBeVisible();
+      expect(screen.getByText("68.4 km")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Remove" }));
+      expect(actions.removeAttachment).toHaveBeenCalledWith("attachment-fit");
+    });
+
+    it("requires and records one planned-Workout selection", async () => {
+      const user = userEvent.setup();
+      setChat({
+        sendDisabled: true,
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-workout",
+          displayName: "workouts.zwo",
+          kind: "workout",
+          extension: "zwo",
+          byteSize: 2_400,
+          status: "ready",
+          preview: {
+            kind: "workout",
+            sourceFormat: "zwo",
+            selectedWorkoutId: null,
+            workouts: [
+              {
+                workoutId: "vo2",
+                title: "VO₂ step builder",
+                durationSeconds: 3_300,
+                target: "105–120% FTP",
+                purpose: "Build aerobic power",
+              },
+              {
+                workoutId: "tempo",
+                title: "Tempo 3 × 12",
+                durationSeconds: 3_840,
+                target: "88–92% FTP",
+                purpose: "Sustainable power",
+              },
+            ],
+          },
+        }),
+      });
+      render(<Harness />);
+
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      await user.click(screen.getByRole("button", { name: /Tempo 3 × 12/u }));
+      expect(actions.selectAttachmentWorkout).toHaveBeenCalledWith("attachment-workout", "tempo");
+    });
+
+    it("shows model-incompatible image recovery and retryable parser failure", async () => {
+      const user = userEvent.setup();
+      setChat({
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-image",
+          displayName: "bike-position.jpg",
+          kind: "image",
+          extension: "jpg",
+          byteSize: 2_400_000,
+          status: "blocked",
+          reason: "model_incompatible",
+        }),
+      });
+      render(<Harness />);
+      expect(screen.getByText("This model can’t view this file")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Open Settings" }));
+      expect(useEnduragentStore.getState().activeView).toBe("settings");
+
+      setChat({
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-failed",
+          displayName: "broken.csv",
+          kind: "document",
+          extension: "csv",
+          byteSize: 2_000,
+          status: "failed",
+          stage: "parsing",
+          failureCode: "csv_invalid",
+          retryable: true,
+        }),
+      });
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+      expect(actions.retryAttachment).toHaveBeenCalledWith("attachment-failed");
+    });
+
+    it("explains an unknown format without losing or sending the restored draft", async () => {
+      setChat({
+        sendDisabled: true,
+        attachments: {
+          schemaVersion: 1,
+          capabilities: ATTACHMENT_CAPABILITIES,
+          draft: {
+            schemaVersion: 1,
+            chatId: "desktop",
+            text: "Keep my question",
+            state: "restored",
+            updatedAt: "2026-08-26T00:00:00.000Z",
+            attachments: [],
+          },
+        },
+        attachmentAdmissions: [
+          {
+            selectionId: "selection-unknown",
+            displayName: "ride-data.xyz",
+            status: "rejected",
+            reason: "format_unsupported",
+          },
+        ],
+      });
+      render(<Harness />);
+      await waitFor(() => expect(composer()).toHaveValue("Keep my question"));
+      expect(screen.getByText("This file type isn’t supported")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      expect(actions.submit).not.toHaveBeenCalled();
+    });
+
+    it("opens the native picker from the centered Composer attachment control", async () => {
+      const user = userEvent.setup();
+      setChat({
+        attachments: { schemaVersion: 1, capabilities: ATTACHMENT_CAPABILITIES, draft: null },
+      });
+      render(<Harness />);
+      await user.click(screen.getByRole("button", { name: "Attach files" }));
+      expect(actions.chooseAttachments).toHaveBeenCalledOnce();
     });
   });
 

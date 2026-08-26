@@ -12,7 +12,7 @@ export const QueuedChatMessageSchema = z
     queuedMessageId: z.string().min(1),
     messageId: z.string().min(1),
     submissionId: z.string().min(1),
-    text: z.string().refine((value) => /\S/u.test(value)),
+    text: z.string(),
     kind: z.enum(["ordinary", "slash-command"]),
     attachmentIds: AttachmentIdsSchema,
     position: z.number().int().nonnegative(),
@@ -20,6 +20,13 @@ export const QueuedChatMessageSchema = z
   })
   .strict()
   .superRefine((value, context) => {
+    if (!/\S/u.test(value.text) && value.attachmentIds.length === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["text"],
+        message: "queued message cannot be empty",
+      });
+    }
     if (value.kind === "slash-command" && value.attachmentIds.length !== 0) {
       context.addIssue({
         code: "custom",
@@ -107,11 +114,18 @@ export const EnqueueChatMessageRequestSchema = z
   .object({
     chatId: z.string().min(1),
     submissionId: z.string().min(1),
-    text: z.string().refine((value) => /\S/u.test(value)),
+    text: z.string(),
     attachmentIds: AttachmentIdsSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
+    if (!/\S/u.test(value.text) && (value.attachmentIds?.length ?? 0) === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["text"],
+        message: "Chat Send cannot be empty",
+      });
+    }
     if (/^\s*\//u.test(value.text) && (value.attachmentIds?.length ?? 0) !== 0) {
       context.addIssue({
         code: "custom",

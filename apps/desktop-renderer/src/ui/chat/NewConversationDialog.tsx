@@ -16,6 +16,8 @@ import { useEnduragentStore } from "../../state/store.js";
 const BASE_COPY =
   "Your visible conversation will be cleared. Your training data and saved coach memory will remain.";
 const HYDRATED_COPY = `Your visible conversation and the earlier messages restored on ${PLATFORM_COPY.computer} will be cleared. Your training data and saved coach memory will remain.`;
+const ATTACHMENT_DRAFT_COPY =
+  "Your visible conversation and unsent attachment draft will be cleared. Your training data and saved coach memory will remain.";
 
 export function NewConversationDialog(props: {
   readonly onComposerReset: () => void;
@@ -23,6 +25,7 @@ export function NewConversationDialog(props: {
   const resetPhase = useEnduragentStore((state) => state.chat.resetPhase);
   const resetCount = useEnduragentStore((state) => state.chat.resetCount);
   const hasHydratedHistory = useEnduragentStore((state) => state.chat.hasHydratedHistory);
+  const hasAttachmentDraft = useEnduragentStore((state) => state.chat.attachments?.draft != null);
   const actions = useEnduragentStore((state) => state.chatActions);
   const cancel = useRef<HTMLButtonElement>(null);
   const renderedResetCount = useRef(resetCount);
@@ -61,7 +64,11 @@ export function NewConversationDialog(props: {
             Start a new conversation?
           </DialogTitle>
           <DialogDescription id="new-conversation-description" className="m-0 leading-[1.5]">
-            {hasHydratedHistory ? HYDRATED_COPY : BASE_COPY}
+            {hasAttachmentDraft
+              ? ATTACHMENT_DRAFT_COPY
+              : hasHydratedHistory
+                ? HYDRATED_COPY
+                : BASE_COPY}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="new-conversation-dialog__actions mx-0 mt-[22px] mb-0 flex-row justify-end border-0 bg-transparent p-0">

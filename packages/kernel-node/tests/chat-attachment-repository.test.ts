@@ -203,6 +203,7 @@ describe("chat attachment repository", () => {
       { id: "attachment-1", object_id: "object-1", message_id: "message-1" },
       { id: "attachment-2", object_id: "object-2", message_id: "message-1" },
     ]);
+    await expect(repository.readDraft("chat-a")).resolves.toBeUndefined();
   });
 
   it("moves attachments through strict replay-safe durable states", async () => {

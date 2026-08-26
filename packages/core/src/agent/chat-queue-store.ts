@@ -42,12 +42,20 @@ const LegacyStoredItemSchema = z
   })
   .strict();
 
-const StoredItemSchema = LegacyStoredItemSchema.extend({
-  messageId: z.string().min(1),
-  attachmentIds: z.array(z.string().min(1)).max(CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage),
-})
+const StoredItemSchema = z
+  .object({
+    queuedMessageId: z.string().min(1),
+    submissionId: z.string().min(1),
+    messageId: z.string().min(1),
+    text: z.string(),
+    kind: z.enum(["ordinary", "slash-command"]),
+    attachmentIds: z.array(z.string().min(1)).max(CHAT_ATTACHMENT_LIMITS.attachmentsPerMessage),
+  })
   .strict()
   .superRefine((value, context) => {
+    if (!/\S/u.test(value.text) && value.attachmentIds.length === 0) {
+      context.addIssue({ code: "custom", path: ["text"], message: "queued item is empty" });
+    }
     if (new Set(value.attachmentIds).size !== value.attachmentIds.length) {
       context.addIssue({
         code: "custom",

@@ -75,6 +75,47 @@ describe("engine durable chat queue", () => {
     ).rejects.toThrow(/text-only/u);
   });
 
+  it("links admitted attachments to the stable queued Message or rolls the queue item back", async () => {
+    const acceptQueuedMessage = vi.fn(async () => {});
+    const linked = setup(undefined, undefined, {
+      acceptQueuedMessage,
+      prepareQueuedTurn: async () => ({ activities: [] }),
+      completeQueuedTurn: async () => {},
+    });
+    await expect(
+      linked.engine.enqueueChatMessage!({
+        chatId: "desktop",
+        submissionId: "submission-linked",
+        text: "",
+        attachmentIds: ["attachment-1"],
+      }),
+    ).resolves.toMatchObject({ items: [{ messageId: "id-2", attachmentIds: ["attachment-1"] }] });
+    expect(acceptQueuedMessage).toHaveBeenCalledWith({
+      chatId: "desktop",
+      messageId: "id-2",
+      attachmentIds: ["attachment-1"],
+    });
+
+    const failed = setup(undefined, undefined, {
+      acceptQueuedMessage: async () => {
+        throw new Error("link failed");
+      },
+      prepareQueuedTurn: async () => ({ activities: [] }),
+      completeQueuedTurn: async () => {},
+    });
+    await expect(
+      failed.engine.enqueueChatMessage!({
+        chatId: "desktop",
+        submissionId: "submission-failed",
+        text: "Review",
+        attachmentIds: ["attachment-1"],
+      }),
+    ).rejects.toThrow("link failed");
+    await expect(failed.engine.getChatQueue!({ chatId: "desktop" })).resolves.toMatchObject({
+      items: [],
+    });
+  });
+
   it("imports queued attachments before Coach and exposes only normalized canonical activity fields", async () => {
     const order: string[] = [];
     const prepareQueuedTurn = vi.fn(async () => {

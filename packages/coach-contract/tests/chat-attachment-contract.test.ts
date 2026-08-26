@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   AdmitChatAttachmentRequestSchema,
+  AdmitPastedChatAttachmentRequestSchema,
   AttachmentAdmissionReadModelSchema,
   CHAT_ATTACHMENT_LIMITS,
+  ChatAttachmentComposerReadModelSchema,
 } from "../src/index.js";
 
 describe("chat attachment contract", () => {
@@ -48,5 +50,81 @@ describe("chat attachment contract", () => {
       retryable: false,
     });
     expect(result).not.toHaveProperty("attachmentId");
+  });
+
+  it("accepts pasted image bytes only through the privileged bounded request", () => {
+    expect(
+      AdmitPastedChatAttachmentRequestSchema.parse({
+        chatId: "desktop",
+        selectionId: "selection-1",
+        displayName: "Pasted image.png",
+        dataBase64: "iVBORw0KGgo=",
+      }),
+    ).toMatchObject({ displayName: "Pasted image.png" });
+    expect(() =>
+      AdmitPastedChatAttachmentRequestSchema.parse({
+        chatId: "desktop",
+        selectionId: "selection-1",
+        displayName: "Pasted image.png",
+        bytes: [137, 80, 78, 71],
+      }),
+    ).toThrow();
+  });
+
+  it("projects a strict path-free restored Composer draft", () => {
+    const value = ChatAttachmentComposerReadModelSchema.parse({
+      schemaVersion: 1,
+      capabilities: {
+        schemaVersion: 1,
+        active: { provider: "openai", model: "gpt-5.6-sol", transport: "ai-sdk" },
+        documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+        completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+        plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+        images: {
+          enabled: true,
+          mediaTypes: ["image/png", "image/jpeg", "image/webp"],
+          reason: "supported",
+          source: "maintained_catalogue",
+          checkedAt: "2026-08-26T00:00:00.000Z",
+        },
+      },
+      draft: {
+        schemaVersion: 1,
+        chatId: "desktop",
+        text: "Review this ride",
+        state: "restored",
+        updatedAt: "2026-08-26T00:00:00.000Z",
+        attachments: [
+          {
+            schemaVersion: 1,
+            attachmentId: "attachment-1",
+            displayName: "ride.fit",
+            kind: "activity",
+            extension: "fit",
+            byteSize: 42,
+            status: "ready",
+            preview: {
+              kind: "activity",
+              sourceFormat: "fit",
+              sessions: [
+                {
+                  sport: "cycling",
+                  startUtc: 1_777_000_000,
+                  durationSeconds: 3_600,
+                  distanceMeters: 31_000,
+                },
+              ],
+            },
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(value)).not.toContain("sourcePath");
+    expect(() =>
+      ChatAttachmentComposerReadModelSchema.parse({
+        ...value,
+        draft: { ...value.draft, sourcePath: "/private/ride.fit" },
+      }),
+    ).toThrow();
   });
 });

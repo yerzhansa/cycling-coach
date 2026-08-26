@@ -197,9 +197,7 @@ describe("document and native-media attachment operations", () => {
       status: "blocked",
       state_json: '{"reason":"model_incompatible"}',
     });
-    await expect(value.repository.readDraft("chat-media")).resolves.toMatchObject({
-      attachmentIds: [value.attachmentId],
-    });
+    await expect(value.repository.readDraft("chat-media")).resolves.toBeUndefined();
     await value.store.close();
   });
 

@@ -14,10 +14,24 @@ import {
 import { TurnEventSchema, type TurnEvent } from "./turn-event.js";
 import { PlatformAbsolutePathSchema } from "./platform-path.js";
 import {
+  AdmitPastedChatAttachmentRequestSchema,
   AdmitChatAttachmentRequestSchema,
   AttachmentAdmissionReadModelSchema,
+  ChatAttachmentComposerReadModelSchema,
+  ChatAttachmentMutationRequestSchema,
+  ClearChatAttachmentDraftRequestSchema,
+  GetChatAttachmentComposerRequestSchema,
+  SaveChatAttachmentDraftTextRequestSchema,
+  SelectChatAttachmentWorkoutRequestSchema,
+  type AdmitPastedChatAttachmentRequest,
   type AdmitChatAttachmentRequest,
   type AttachmentAdmissionReadModel,
+  type ChatAttachmentComposerReadModel,
+  type ChatAttachmentMutationRequest,
+  type ClearChatAttachmentDraftRequest,
+  type GetChatAttachmentComposerRequest,
+  type SaveChatAttachmentDraftTextRequest,
+  type SelectChatAttachmentWorkoutRequest,
 } from "./chat-attachment.js";
 import {
   AnswerCoachDecisionRpcParamsSchema,
@@ -190,6 +204,13 @@ export const COACH_RPC_METHOD_NAMES = [
   "chat",
   "stopChat",
   "admitChatAttachment",
+  "admitPastedChatAttachment",
+  "getChatAttachmentComposer",
+  "saveChatAttachmentDraftText",
+  "removeChatAttachment",
+  "retryChatAttachment",
+  "selectChatAttachmentWorkout",
+  "clearChatAttachmentDraft",
   "enqueueChatMessage",
   "getChatQueue",
   "removeQueuedChatMessage",
@@ -1114,6 +1135,27 @@ export type OperationProgressEvent = z.infer<typeof OperationProgressEventSchema
 
 export interface CoachOperations {
   admitChatAttachment?(request: AdmitChatAttachmentRequest): Promise<AttachmentAdmissionReadModel>;
+  admitPastedChatAttachment?(
+    request: AdmitPastedChatAttachmentRequest,
+  ): Promise<AttachmentAdmissionReadModel>;
+  getChatAttachmentComposer?(
+    request: GetChatAttachmentComposerRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  saveChatAttachmentDraftText?(
+    request: SaveChatAttachmentDraftTextRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  removeChatAttachment?(
+    request: ChatAttachmentMutationRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  retryChatAttachment?(
+    request: ChatAttachmentMutationRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  selectChatAttachmentWorkout?(
+    request: SelectChatAttachmentWorkoutRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
+  clearChatAttachmentDraft?(
+    request: ClearChatAttachmentDraftRequest,
+  ): Promise<ChatAttachmentComposerReadModel>;
   getActivityAnalysis?(
     request: ActivityAnalysisRequest,
     signal?: AbortSignal,
@@ -1224,6 +1266,62 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("admitChatAttachment"),
       params: AdmitChatAttachmentRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("admitPastedChatAttachment"),
+      params: AdmitPastedChatAttachmentRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getChatAttachmentComposer"),
+      params: GetChatAttachmentComposerRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("saveChatAttachmentDraftText"),
+      params: SaveChatAttachmentDraftTextRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("removeChatAttachment"),
+      params: ChatAttachmentMutationRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("retryChatAttachment"),
+      params: ChatAttachmentMutationRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("selectChatAttachmentWorkout"),
+      params: SelectChatAttachmentWorkoutRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("clearChatAttachmentDraft"),
+      params: ClearChatAttachmentDraftRequestSchema,
     })
     .strict(),
   z
@@ -1718,6 +1816,48 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "admitChatAttachment",
     requestSchema: AdmitChatAttachmentRequestSchema,
     responseSchema: AttachmentAdmissionReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  admitPastedChatAttachment: {
+    wireName: "admitPastedChatAttachment",
+    requestSchema: AdmitPastedChatAttachmentRequestSchema,
+    responseSchema: AttachmentAdmissionReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getChatAttachmentComposer: {
+    wireName: "getChatAttachmentComposer",
+    requestSchema: GetChatAttachmentComposerRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  saveChatAttachmentDraftText: {
+    wireName: "saveChatAttachmentDraftText",
+    requestSchema: SaveChatAttachmentDraftTextRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  removeChatAttachment: {
+    wireName: "removeChatAttachment",
+    requestSchema: ChatAttachmentMutationRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  retryChatAttachment: {
+    wireName: "retryChatAttachment",
+    requestSchema: ChatAttachmentMutationRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  selectChatAttachmentWorkout: {
+    wireName: "selectChatAttachmentWorkout",
+    requestSchema: SelectChatAttachmentWorkoutRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  clearChatAttachmentDraft: {
+    wireName: "clearChatAttachmentDraft",
+    requestSchema: ClearChatAttachmentDraftRequestSchema,
+    responseSchema: ChatAttachmentComposerReadModelSchema,
     eventSchema: NoRpcEventSchema,
   },
   enqueueChatMessage: {

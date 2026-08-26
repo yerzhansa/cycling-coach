@@ -7,8 +7,8 @@ import {
 } from "../src/index.js";
 
 describe("chat queue contract", () => {
-  it("ships protocol 24 and rejects blank enqueue text", () => {
-    expect(PROTOCOL_VERSION).toBe(24);
+  it("ships protocol 25 and rejects a blank enqueue without attachments", () => {
+    expect(PROTOCOL_VERSION).toBe(25);
     expect(() =>
       EnqueueChatMessageRequestSchema.parse({
         chatId: "desktop",
@@ -80,6 +80,14 @@ describe("chat queue contract", () => {
   });
 
   it("keeps slash commands text-only and ordinary attachment ids unique", () => {
+    expect(
+      EnqueueChatMessageRequestSchema.parse({
+        chatId: "desktop",
+        submissionId: "submission-attachment-only",
+        text: "",
+        attachmentIds: ["attachment-1"],
+      }),
+    ).toMatchObject({ text: "", attachmentIds: ["attachment-1"] });
     expect(() =>
       EnqueueChatMessageRequestSchema.parse({
         chatId: "desktop",

@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog.js";
 import { Composer, type ComposerHandle } from "./Composer.js";
+import { AttachmentPanel } from "./AttachmentPanel.js";
 import { CoachDecisionPanel } from "./CoachDecisionPanel.js";
 import { FirstSyncCard } from "./FirstSyncCard.js";
 import { NewConversationDialog } from "./NewConversationDialog.js";
@@ -173,6 +174,7 @@ export function ChatView(): ReactElement {
               <CoachDecisionPanel onCustomOpenChange={setCustomDecisionOpen} />
             </div>
             <QueuedMessages />
+            <AttachmentPanel />
             <Composer handle={composer} hidden={decisionCustomOpen} />
             <p className="mt-inset mb-0 text-center text-xs text-ink-3">{CHAT_DISCLAIMER}</p>
           </div>

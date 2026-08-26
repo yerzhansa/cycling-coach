@@ -87,6 +87,9 @@ interface AuthBridge {
   removeTelegramAllowedSender(input: unknown): Promise<unknown>;
   acknowledgeTelegramGapWarning(): Promise<unknown>;
   chooseImportFiles(): Promise<readonly string[]>;
+  chooseChatAttachments(): Promise<readonly unknown[]>;
+  pasteChatAttachment(): Promise<readonly unknown[]>;
+  onDroppedChatAttachments(listener: (results: readonly unknown[]) => void): () => void;
   exportTrainingFile(input: unknown): Promise<unknown>;
   getUpdateState(): Promise<unknown>;
   checkForUpdates(): Promise<unknown>;
@@ -327,6 +330,7 @@ describe("desktop preload ChatGPT auth", () => {
         "cancelChatgptLogin",
         "chatgptLogin",
         "chatgptStatus",
+        "chooseChatAttachments",
         "chooseImportFiles",
         "claudeCliRecheck",
         "claudeCliStatus",
@@ -344,9 +348,11 @@ describe("desktop preload ChatGPT auth", () => {
         "getArchivedTranscriptPage",
         "llmConfiguration",
         "checkForUpdates",
-        "onDroppedImportFiles",
         "onChatgptLoginProgress",
+        "onDroppedChatAttachments",
+        "onDroppedImportFiles",
         "onUpdateState",
+        "pasteChatAttachment",
         "pasteIntervalsApiKeyFromClipboard",
         "pasteTelegramTokenFromClipboard",
         "platform",

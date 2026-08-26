@@ -32,7 +32,16 @@ export function unavailableChatAttachmentAdmission(
 
 export interface ManagedChatAttachmentOperations {
   admit(request: AdmitChatAttachmentRequest): Promise<AttachmentAdmissionReadModel>;
+  admitPasted(input: {
+    readonly chatId: string;
+    readonly selectionId: string;
+    readonly displayName: string;
+    readonly bytes: Uint8Array;
+  }): Promise<AttachmentAdmissionReadModel>;
   removeDraftAttachment(conversationId: string, attachmentId: string): Promise<void>;
+  saveDraftText(conversationId: string, text: string): Promise<void>;
+  retryDraftAttachment(conversationId: string, attachmentId: string): Promise<void>;
+  clearDraft(conversationId: string): Promise<void>;
   cleanupConversation(conversationId: string): Promise<void>;
   reconcile(): Promise<void>;
 }
@@ -79,7 +88,7 @@ export function createManagedChatAttachmentOperations(
   const now = input.now ?? Date.now;
   const randomId = input.randomId ?? randomUUID;
 
-  return {
+  const operations: ManagedChatAttachmentOperations = {
     async admit(request) {
       const fallbackName = displayNameFromPath(request.candidate.sourcePath);
       let source: Awaited<ReturnType<ManagedChatAttachmentStore["inspectNativeSource"]>>;
@@ -215,6 +224,39 @@ export function createManagedChatAttachmentOperations(
       });
     },
 
+    async admitPasted({ chatId, selectionId, displayName, bytes }) {
+      let staged: Awaited<ReturnType<ManagedChatAttachmentStore["stagePrivateBytes"]>>;
+      try {
+        staged = await input.objects.stagePrivateBytes({ displayName, bytes });
+      } catch (error) {
+        if (error instanceof ManagedAttachmentSourceError) {
+          return AttachmentAdmissionReadModelSchema.parse({
+            selectionId,
+            displayName,
+            status: "rejected",
+            reason: error.reason,
+          });
+        }
+        return AttachmentAdmissionReadModelSchema.parse({
+          selectionId,
+          displayName,
+          status: "storage_failed",
+          failureCode: "storage_failed",
+          retryable: true,
+        });
+      }
+      try {
+        return await operations.admit({
+          chatId,
+          selectionId,
+          source: "picker",
+          candidate: { kind: "native-path", sourcePath: staged.sourcePath },
+        });
+      } finally {
+        await input.objects.removeStagedSource(staged.sourcePath).catch(() => {});
+      }
+    },
+
     async removeDraftAttachment(conversationId, attachmentId) {
       await input.runExclusive(async () => {
         const result = await input.repository.removeDraftAttachment({
@@ -224,6 +266,69 @@ export function createManagedChatAttachmentOperations(
         if (result.unreferencedObject !== undefined) {
           await input.objects.removeObject(result.unreferencedObject.relative_path);
         }
+      });
+    },
+
+    async saveDraftText(conversationId, text) {
+      await input.runExclusive(async () => {
+        await input.repository.saveDraftText({
+          conversationId,
+          text,
+          state: "active",
+          updatedAtMs: now(),
+        });
+      });
+    },
+
+    async retryDraftAttachment(conversationId, attachmentId) {
+      await input.runExclusive(async () => {
+        const draft = await input.repository.readDraft(conversationId);
+        if (draft === undefined || !draft.attachmentIds.includes(attachmentId)) {
+          throw new Error("attachment draft item is unavailable");
+        }
+        const attachment = await input.repository.readAttachment(attachmentId);
+        if (
+          attachment === undefined ||
+          attachment.conversation_id !== conversationId ||
+          (attachment.status !== "failed" && attachment.status !== "blocked")
+        ) {
+          throw new Error("attachment draft item cannot be retried");
+        }
+        const preprocessing = await input.repository.transitionAttachment({
+          conversationId,
+          attachmentId,
+          from: [attachment.status],
+          to: "preprocessing",
+          stateJson: null,
+          messageId: null,
+          updatedAtMs: now(),
+        });
+        const object = await input.repository.readObject(preprocessing.object_id);
+        if (object === undefined || object.status !== "durable") {
+          throw new Error("attachment object is unavailable");
+        }
+        await input.onAdmitted?.({ attachment: preprocessing, object });
+      });
+    },
+
+    async clearDraft(conversationId) {
+      await input.runExclusive(async () => {
+        const draft = await input.repository.readDraft(conversationId);
+        for (const attachmentId of draft?.attachmentIds ?? []) {
+          const result = await input.repository.removeDraftAttachment({
+            conversationId,
+            attachmentId,
+          });
+          if (result.unreferencedObject !== undefined) {
+            await input.objects.removeObject(result.unreferencedObject.relative_path);
+          }
+        }
+        await input.repository.saveDraftText({
+          conversationId,
+          text: "",
+          state: "clearing",
+          updatedAtMs: now(),
+        });
       });
     },
 
@@ -240,4 +345,5 @@ export function createManagedChatAttachmentOperations(
       });
     },
   };
+  return operations;
 }

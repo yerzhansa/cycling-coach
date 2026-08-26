@@ -55,6 +55,26 @@ const rpcDeadlineCases = [
     },
     120_000,
   ],
+  [
+    "admitPastedChatAttachment",
+    {
+      chatId: "desktop",
+      selectionId: "selection-paste-1",
+      displayName: "clipboard.png",
+      dataBase64: "AA==",
+    },
+    120_000,
+  ],
+  ["getChatAttachmentComposer", { chatId: "desktop" }, 120_000],
+  ["saveChatAttachmentDraftText", { chatId: "desktop", text: "Review this" }, 30_000],
+  ["removeChatAttachment", { chatId: "desktop", attachmentId: "attachment-1" }, 30_000],
+  ["retryChatAttachment", { chatId: "desktop", attachmentId: "attachment-1" }, 120_000],
+  [
+    "selectChatAttachmentWorkout",
+    { chatId: "desktop", attachmentId: "attachment-1", workoutId: "workout-1" },
+    120_000,
+  ],
+  ["clearChatAttachmentDraft", { chatId: "desktop" }, 120_000],
   ["enqueueChatMessage", { chatId: "chat-1", submissionId: "submission-1", text: "Hello" }, 30_000],
   ["getChatQueue", { chatId: "chat-1" }, 30_000],
   ["removeQueuedChatMessage", { chatId: "chat-1", queuedMessageId: "queued-1" }, 30_000],
@@ -814,6 +834,24 @@ describe("RPC receive and observers", () => {
         coachText: "Keep tomorrow easy.",
       },
     };
+    const attachmentComposer = {
+      schemaVersion: 1,
+      capabilities: {
+        schemaVersion: 1,
+        active: { provider: "test", model: "text-only", transport: "test" },
+        documents: { enabled: true, extensions: ["pdf", "txt", "csv", "docx"] },
+        completedActivities: { enabled: true, extensions: ["fit", "tcx", "gpx"] },
+        plannedWorkouts: { enabled: true, extensions: ["zwo", "erg", "mrc"] },
+        images: {
+          enabled: false,
+          mediaTypes: [],
+          reason: "model_incompatible",
+          source: "maintained_catalogue",
+          checkedAt: "2026-08-26T00:00:00.000Z",
+        },
+      },
+      draft: null,
+    };
     socket.sendHook = (text) => {
       const request = parseCoachRpcEnvelope(text);
       received.push(request);
@@ -828,6 +866,19 @@ describe("RPC receive and observers", () => {
           failureCode: "admission_unavailable",
           retryable: false,
         },
+        admitPastedChatAttachment: {
+          selectionId: "selection-paste-1",
+          displayName: "clipboard.png",
+          status: "storage_failed",
+          failureCode: "admission_unavailable",
+          retryable: false,
+        },
+        getChatAttachmentComposer: attachmentComposer,
+        saveChatAttachmentDraftText: attachmentComposer,
+        removeChatAttachment: attachmentComposer,
+        retryChatAttachment: attachmentComposer,
+        selectChatAttachmentWorkout: attachmentComposer,
+        clearChatAttachmentDraft: attachmentComposer,
         enqueueChatMessage: { schemaVersion: 1, revision: 1, items: [] },
         getChatQueue: { schemaVersion: 1, revision: 1, items: [] },
         removeQueuedChatMessage: { schemaVersion: 1, revision: 2, items: [] },
