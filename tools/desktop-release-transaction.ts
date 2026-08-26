@@ -11,6 +11,7 @@ export const DESKTOP_MANIFEST = "desktop-release-manifest.json";
 export const DESKTOP_RELEASE_SCHEMA_VERSION = 3 as const;
 export const DESKTOP_PROVISIONAL_RELEASE_BODY =
   "Desktop update validation is in progress. This release is not yet generally available.";
+export const WINDOWS_DESKTOP_METADATA_NAME = "latest.yml";
 
 type RetainedDesktopReleaseMode = "steady" | "genesis";
 
@@ -238,6 +239,27 @@ export function releaseFileNames(version: string): readonly [string, string, str
   const stableVersion = requireDesktopVersion(version);
   const base = `Enduragent-${stableVersion}-arm64`;
   return [`${base}.dmg`, `${base}.zip`, `${base}.zip.blockmap`, "latest-mac.yml"];
+}
+
+export function windowsReleaseFileNames(
+  version: string,
+): readonly [string, string, string, string] {
+  const stableVersion = requireDesktopVersion(version);
+  const installer = `Enduragent-${stableVersion}-x64.exe`;
+  return [
+    installer,
+    `${installer}.blockmap`,
+    WINDOWS_DESKTOP_METADATA_NAME,
+    `Enduragent-${stableVersion}-x64-verification.json`,
+  ];
+}
+
+export function macosOwnedAssets<T extends Pick<GithubAsset, "name">>(
+  assets: readonly T[],
+  version: string,
+): readonly T[] {
+  const windowsNames = new Set(windowsReleaseFileNames(version));
+  return assets.filter((asset) => !windowsNames.has(asset.name));
 }
 
 function requireBinding(input: {
@@ -739,7 +761,10 @@ export function assertPublishableAssets(
   existing: readonly Pick<GithubAsset, "name">[],
   manifest: DesktopReleaseManifest,
 ): void {
-  const allowed = new Set(manifest.files.map((file) => file.name));
+  const allowed = new Set([
+    ...manifest.files.map((file) => file.name),
+    ...windowsReleaseFileNames(manifest.desktopVersion),
+  ]);
   const duplicate = existing.find(
     (asset, index) => existing.findIndex((other) => other.name === asset.name) !== index,
   );
@@ -1243,7 +1268,10 @@ export class GithubClient {
   }
 }
 
-function desktopReleaseVersion(release: GithubRelease, excludingTag?: string): string | null {
+export function resolveDesktopReleaseVersion(
+  release: GithubRelease,
+  excludingTag?: string,
+): string | null {
   if (release.draft || release.prerelease || release.tag_name === excludingTag) return null;
   const tagVersion =
     release.tag_name === legacyDesktopBaselineTag
@@ -1256,8 +1284,9 @@ function desktopReleaseVersion(release: GithubRelease, excludingTag?: string): s
   });
   if (versions.length !== 1 || versions[0] !== tagVersion) return null;
   const version = versions[0];
+  const macosAssets = macosOwnedAssets(release.assets, version);
   const expected = [...releaseFileNames(version)].sort();
-  const actual = release.assets
+  const actual = macosAssets
     .filter((asset) => asset.name !== DESKTOP_STABLE_DMG_NAME)
     .map((asset) => asset.name)
     .sort();
@@ -1284,7 +1313,7 @@ async function newestDesktopRelease(
 ): Promise<{ release: GithubRelease; version: string; commit: string } | null> {
   let selected: { release: GithubRelease; version: string; commit: string } | null = null;
   for (const release of releases) {
-    const version = desktopReleaseVersion(release, excludingTag);
+    const version = resolveDesktopReleaseVersion(release, excludingTag);
     if (!version) continue;
     const commit = await client.tagCommit(release.tag_name, deadlineAt);
     if (!selected || compareVersions(version, selected.version) > 0) {
@@ -1300,7 +1329,7 @@ async function exactDesktopRelease(
   tag: string,
 ): Promise<{ release: GithubRelease; version: string; commit: string } | null> {
   if (!release || release.tag_name !== tag) return null;
-  const version = desktopReleaseVersion(release);
+  const version = resolveDesktopReleaseVersion(release);
   if (!version) return null;
   return { release, version, commit: await client.tagCommit(tag) };
 }
@@ -1473,7 +1502,7 @@ async function stageExactAssets(
   }
   const staged = await verifyReleaseBinding(client, manifest);
   assertPublishableAssets(staged.assets, manifest);
-  if (staged.assets.length !== manifest.files.length)
+  if (macosOwnedAssets(staged.assets, manifest.desktopVersion).length !== manifest.files.length)
     throw new TypeError("staged release asset set is incomplete");
   for (const file of manifest.files) {
     const asset = staged.assets.find((candidate) => candidate.name === file.name);
@@ -1492,7 +1521,7 @@ async function assertCompleteReleaseAssets(
   deadlineAt?: number,
 ): Promise<void> {
   assertPublishableAssets(release.assets, manifest);
-  if (release.assets.length !== manifest.files.length) {
+  if (macosOwnedAssets(release.assets, manifest.desktopVersion).length !== manifest.files.length) {
     throw new TypeError(`${label} asset set is incomplete`);
   }
   for (const file of manifest.files) {
@@ -1656,7 +1685,9 @@ export async function promoteDesktopLatest(
     );
     assertPromotionLatestCas(manifest.desktopVersion, observed, current, previous?.version ?? null);
     assertPublishableAssets(candidate.assets, manifest);
-    if (candidate.assets.length !== manifest.files.length) {
+    if (
+      macosOwnedAssets(candidate.assets, manifest.desktopVersion).length !== manifest.files.length
+    ) {
       throw new TypeError("promotion candidate asset set is incomplete");
     }
     const releasePropagationDeadline = preflightDeadlineAt;
@@ -1772,7 +1803,9 @@ export async function reconcileDesktopLatest(
     throw new TypeError("desktop latest reconciliation candidate binding mismatch");
   }
   assertPublishableAssets(candidate.assets, manifest);
-  if (candidate.assets.length !== manifest.files.length) {
+  if (
+    macosOwnedAssets(candidate.assets, manifest.desktopVersion).length !== manifest.files.length
+  ) {
     throw new TypeError("desktop latest reconciliation asset set is incomplete");
   }
   const metadata = manifest.files.find((file) => file.name === "latest-mac.yml");
@@ -2006,7 +2039,9 @@ export async function activateDesktopRelease(
     throw new TypeError("desktop activation candidate binding mismatch");
   }
   assertPublishableAssets(candidate.assets, manifest);
-  if (candidate.assets.length !== manifest.files.length) {
+  if (
+    macosOwnedAssets(candidate.assets, manifest.desktopVersion).length !== manifest.files.length
+  ) {
     throw new TypeError("desktop activation asset set is incomplete");
   }
   for (const file of manifest.files) {
@@ -2050,7 +2085,8 @@ export async function activateDesktopRelease(
   }
   assertPublishableAssets(mutationCandidate.assets, manifest);
   if (
-    mutationCandidate.assets.length !== manifest.files.length ||
+    macosOwnedAssets(mutationCandidate.assets, manifest.desktopVersion).length !==
+      manifest.files.length ||
     !sameLatest(expectedLatest, await client.latest())
   ) {
     throw new TypeError("desktop activation candidate changed at the mutation boundary");
@@ -2166,7 +2202,9 @@ export async function compensateDesktopRelease(
     throw new TypeError("desktop compensation candidate changed at the mutation boundary");
   }
   assertPublishableAssets(candidate.assets, manifest);
-  if (candidate.assets.length !== manifest.files.length) {
+  if (
+    macosOwnedAssets(candidate.assets, manifest.desktopVersion).length !== manifest.files.length
+  ) {
     throw new TypeError("desktop compensation candidate changed at the mutation boundary");
   }
   if (!sameLatest(candidateLatest, await client.latest())) {
@@ -2196,7 +2234,9 @@ export async function compensateDesktopRelease(
     throw new TypeError("desktop compensation candidate changed before withdrawal");
   }
   assertPublishableAssets(candidate.assets, manifest);
-  if (candidate.assets.length !== manifest.files.length) {
+  if (
+    macosOwnedAssets(candidate.assets, manifest.desktopVersion).length !== manifest.files.length
+  ) {
     throw new TypeError("desktop compensation candidate changed before withdrawal");
   }
   await client.request(`/repos/${client.repository()}/releases/${candidate.id}`, {

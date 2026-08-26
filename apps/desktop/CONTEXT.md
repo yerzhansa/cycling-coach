@@ -61,12 +61,42 @@ The in-app process by which an athlete replaces an unverified envelope with a ne
 _Avoid_: Keychain recovery, password reset
 
 **Credential reset**:
-The explicit in-app process that removes every Enduragent-managed credential, every credential envelope, and the shared encryption key when recovery is impossible or unwanted. It leaves Electron's old `safeStorage` support item untouched.
+The explicit in-app process that removes every Enduragent-managed credential, every credential envelope, and the shared encryption key when recovery cannot succeed or is unwanted. It leaves Electron's old `safeStorage` support item untouched.
 _Avoid_: Keychain reset, reset to defaults
 
 **Recovery status**:
 The current cross-vault account of encryption availability and slots that require credential recovery. It describes live credential state, not a startup snapshot.
 _Avoid_: Recovery snapshot, startup status
+
+## Windows release and updater
+
+**Release marker**:
+`enduragentDesktopRelease: true` in the packaged `package.json`; required by `isDesktopUpdateReleaseEligible`.
+_Avoid_: Release flag, Windows marker
+
+**Platform activation**:
+`DESKTOP_UPDATE_PLATFORM_ACTIVATION` (`darwin: true`, `win32: false`); the only switch that turns Windows update checks on. `DESKTOP_UPDATE_SUPPORTED_PLATFORMS` lists the platforms the updater knows.
+_Avoid_: Platform support, supported-platform switch
+
+**Windows release envelope**:
+The installer `.exe`, its `.blockmap`, and `latest.yml`; produced by `windows-release-plan.mjs`, verified by `verify-windows-release.mjs`, uploaded by `upload-windows-release.mjs`, and round-trip-checked by `verify-windows-updater-round-trip.mjs`.
+_Avoid_: Windows bundle, release files
+
+**Authenticode pending mode**:
+`WINDOWS_AUTHENTICODE_PENDING` = `pending-w19`, a dry-run-only `--authenticode` value for `verify-windows-release.mjs`; `upload-windows-release.mjs` accepts only `verify`.
+_Avoid_: Unsigned mode, signing bypass
+
+**Windows release provenance**:
+The three-token `enduragent-release-commit:<sha> enduragent-updater-publisher-sha256:<hex> enduragent-updater-metadata-sha256:<hex>` string that `windows-release-plan.mjs` seals into the installer's `LegalTrademarks` version field. `verify-windows-authenticode.ps1` reads it back; the release commit, updater publisher digest, and exact electron-builder-serialized `app-update.yml` digest must match before upload.
+_Avoid_: Build stamp, commit marker
+
+**Windows package inventory**:
+The exact application, resource, and asar inventories checked by `verify-windows-package.mjs`.
+_Avoid_: Package contents, file list
+
+**Windows user data directory**:
+`WINDOWS_USER_DATA_DIRECTORY_NAME` under `%LOCALAPPDATA%`; it resolves to `%LOCALAPPDATA%\Enduragent` and survives uninstall.
+_Avoid_: Install directory, application directory
 
 ## Relationships
 
@@ -83,6 +113,14 @@ _Avoid_: Recovery snapshot, startup status
 - When the encryption key is missing and only unverified envelopes survive, **Credential recovery** may replace one slot while preserving every other artifact.
 - An **Orphan encryption key** may be removed without losing a credential.
 - **Recovery status** is derived from both vaults whenever it is requested.
+- The **Release marker** admits a packaged build to `isDesktopUpdateReleaseEligible`; **Platform activation** independently decides whether update checks run on the current platform.
+- A **Windows release envelope** is produced, verified, uploaded, and round-trip-checked by its named scripts.
+- **Authenticode pending mode** does not authorise an unsigned installer for a GitHub release or the website.
+- **Windows release provenance** binds a verified installer to the release tag commit, updater publisher, and canonical packaged updater metadata before upload; the uploader compares the supplied `app-update.yml` bytes with the digest sealed in the signed installer.
+- `upload-windows-release.mjs` uploads read-only copies of the verified bytes, only to the latest release, reconciles GitHub asset digests against those bytes, and removes its assets when the release stops being latest during the upload.
+- `desktop-windows-release.yml` records a completed verification as the `Enduragent-<version>-x64-verification.json` release asset through an upload transaction bound to the release identity and the exact installer, blockmap, and updater-metadata asset IDs and digests; it never edits the release body.
+- The **Windows package inventory** fixes the application, resource, and asar contents accepted by package verification.
+- The athlete removes the **Windows user data directory** by hand when retained data must be erased after uninstall.
 
 ## Example dialogue
 
