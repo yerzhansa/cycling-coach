@@ -898,6 +898,7 @@ describe("Plan surface", () => {
               actualDate: "2026-08-23",
               actualDurationS: 1_900,
               requiresConfirmation: true,
+              createdAtMs: 1_787_477_200_000,
             },
           },
         ],
@@ -972,6 +973,7 @@ describe("Plan surface", () => {
               confidence: "High",
               targetWorkoutId: workoutId,
               affectedDate: "2026-08-23",
+              createdAtMs: 1_787_477_200_000,
               stale: false,
               diff: [
                 { field: "duration", label: "Duration", before: "1:30", after: "0:30" },
@@ -1187,6 +1189,7 @@ describe("Plan surface", () => {
             durationS: 4_800,
             drift: {
               status: "detected",
+              detectedAtMs: 1_787_477_200_000,
               eventId: "42",
               plan: { date: "2026-08-19", name: "Threshold 4×8", durationS: 4_800 },
               provider: {
@@ -1950,6 +1953,61 @@ describe("Plan surface", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Race readiness" })).toHaveFocus(),
     );
+  });
+
+  it("shows the delivered Weekly review inside Plan without a response composer", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S100",
+      projection: "active",
+      planId,
+      data: {
+        plan: {
+          id: planId,
+          name: "Gran Fondo Almaty",
+          primaryGoal: "Finish in the front half",
+          startDate: "2026-07-13",
+          targetDate: "2026-10-04",
+          kind: "full-plan",
+          totalWeeks: 12,
+          weekStartDay: 1,
+          workoutCount: 0,
+          plannedDurationS: 0,
+        },
+        today: "2026-08-26",
+        weekIndex: 7,
+        todayWorkout: null,
+        workouts: [],
+        weeklyReview: {
+          status: "delivered",
+          id: "00000000000000000000000004",
+          weekStart: "2026-08-17",
+          weekEnd: "2026-08-23",
+          deliveredAtMs: 1,
+          counts: { asPlanned: 3, adjusted: 1, moved: 0, missed: 1, extra: 1 },
+          summary: "Last week: 3 as planned, 1 adjusted, 0 moved, 1 missed, 1 extra.",
+        },
+      },
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+      },
+      planActions,
+    });
+
+    render(<PlanView />);
+
+    expect(screen.getByRole("heading", { name: "Weekly review" })).toBeInTheDocument();
+    expect(screen.getByText("No response is needed.")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to Plan" }));
+    expect(planActions.closeWorkout).toHaveBeenCalledOnce();
   });
 
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {

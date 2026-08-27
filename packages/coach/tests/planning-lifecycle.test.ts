@@ -148,6 +148,7 @@ describe("Plan lifecycle projection", () => {
           actualDate: `2026-08-${18 + index}`,
           actualDurationS: 3_500,
           requiresConfirmation: true,
+          createdAtMs: index + 1,
         },
       })),
     };
@@ -215,6 +216,7 @@ describe("Plan lifecycle projection", () => {
           confidence: "High" as const,
           targetWorkoutId: "workout-1",
           affectedDate: "2026-08-18",
+          createdAtMs: 1,
           stale: false,
           diff: [{ field: "week-load" as const, label: "Week load", before: "420", after: "360" }],
           premises: [],

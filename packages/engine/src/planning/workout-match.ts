@@ -33,6 +33,7 @@ export interface ProjectedWorkoutMatch {
   readonly actualDurationS: number | null;
   readonly actualSport: string | null;
   readonly requiresConfirmation: boolean;
+  readonly createdAtMs: number;
 }
 
 export interface WorkoutMatchIdentity {
@@ -125,14 +126,10 @@ export async function refreshPlanWorkoutMatches(input: {
   );
   const workoutById = new Map(eligibleWorkouts.map((workout) => [workout.id, workout]));
   const usedWorkoutIds = new Set(
-    existing
-      .filter((match) => match.decision === "confirmed")
-      .map((match) => match.planWorkoutId),
+    existing.filter((match) => match.decision === "confirmed").map((match) => match.planWorkoutId),
   );
   const usedActivityIds = new Set(
-    existing
-      .filter((match) => match.decision === "confirmed")
-      .map((match) => match.activityId),
+    existing.filter((match) => match.decision === "confirmed").map((match) => match.activityId),
   );
   const deviceId = await input.identity.deviceId();
 
@@ -171,8 +168,7 @@ export async function refreshPlanWorkoutMatches(input: {
     .flatMap((workout) =>
       activities
         .filter(
-          (activity) =>
-            !usedActivityIds.has(activity.activityId) && qualified(workout, activity),
+          (activity) => !usedActivityIds.has(activity.activityId) && qualified(workout, activity),
         )
         .map((activity) => ({
           workout,
@@ -253,6 +249,7 @@ export function projectWorkoutMatches(input: {
         actualDurationS: match.activityDurationS,
         actualSport: match.activitySport,
         requiresConfirmation: true,
+        createdAtMs: match.observedAtMs,
       });
       continue;
     }
@@ -280,6 +277,7 @@ export function projectWorkoutMatches(input: {
         actualDurationS,
         actualSport: activity?.sport ?? match.activitySport,
         requiresConfirmation: false,
+        createdAtMs: match.observedAtMs,
       });
       continue;
     }
@@ -299,6 +297,7 @@ export function projectWorkoutMatches(input: {
       actualDurationS: null,
       actualSport: null,
       requiresConfirmation: false,
+      createdAtMs: 0,
     });
   }
   for (const activity of input.activities) {
@@ -314,6 +313,7 @@ export function projectWorkoutMatches(input: {
       actualDurationS: activity.durationS,
       actualSport: activity.sport,
       requiresConfirmation: false,
+      createdAtMs: 0,
     });
   }
   return rows.sort(

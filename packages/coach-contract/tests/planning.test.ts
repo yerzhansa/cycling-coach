@@ -354,6 +354,7 @@ describe("planning contract", () => {
       scenarioId: "PL-S028",
       priority: "dated",
       affectedDate: "1998-08-23",
+      createdAtMs: 1,
     };
     expect(
       PlanAttentionSchema.safeParse({ count: 1, destination: "direct", items: [item] }).success,

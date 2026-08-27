@@ -172,6 +172,7 @@ export function createPlanViewAdapter(input: {
   let autoResumingPlanId: string | null = null;
   let autoResumingCleanupPlanId: string | null = null;
   let autoResumingReplacementId: string | null = null;
+  let attemptedWeeklyReviewSyncAtMs: number | null = null;
   let active: {
     readonly commandId: string;
     readonly transitionId: PlanTransitionId;
@@ -289,6 +290,25 @@ export function createPlanViewAdapter(input: {
               planId: replacement.previousPlan.id,
               replacementPlanId: next.state.planId!,
               mode: "cleanup",
+            });
+          });
+        }
+      }
+      if (next.state.planId !== null && active === null) {
+        const parsed = PlanActiveProjectionDataSchema.safeParse(next.state.data);
+        const review = parsed.success ? parsed.data.weeklyReview : undefined;
+        if (
+          review?.status === "due" &&
+          attemptedWeeklyReviewSyncAtMs !== review.lastSuccessfulSyncAtMs
+        ) {
+          attemptedWeeklyReviewSyncAtMs = review.lastSuccessfulSyncAtMs;
+          queueMicrotask(() => {
+            if (disposed || active !== null) return;
+            void execute({
+              transitionId: "PL-T35",
+              commandId: createCommandId(),
+              planId: next.state.planId!,
+              weekStart: review.weekStart,
             });
           });
         }

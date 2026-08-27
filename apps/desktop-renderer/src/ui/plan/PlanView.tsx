@@ -2805,6 +2805,39 @@ function ReadinessProjection(props: {
   );
 }
 
+function WeeklyReviewProjection(props: {
+  readonly data: ReturnType<typeof PlanActiveProjectionDataSchema.parse>;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const review = props.data.weeklyReview;
+  if (review?.status !== "delivered") {
+    return <StatusCard title="Weekly review" support="Preparing last week’s review…" />;
+  }
+  return (
+    <section
+      className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1"
+      data-plan-scenario="PL-S100"
+    >
+      <div className="flex items-start justify-between gap-row">
+        <div className={SUPPORT_PAIR}>
+          <p className="m-0 text-sm font-medium text-ink-2">Coach</p>
+          <h2 className="m-0 text-lg font-semibold">Weekly review</h2>
+          <p className="m-0 text-sm text-ink-2">
+            {formatCivilDate(review.weekStart)}–{formatCivilDate(review.weekEnd)}
+          </p>
+        </div>
+        <Button type="button" variant="outline" onClick={() => actions?.closeWorkout()}>
+          Back to Plan
+        </Button>
+      </div>
+      <div className="grid gap-inset rounded-card bg-sunk p-row">
+        <p className="m-0 text-base">{review.summary}</p>
+        <p className="m-0 text-sm text-ink-2">No response is needed.</p>
+      </div>
+    </section>
+  );
+}
+
 function ActiveProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
   const transition = useEnduragentStore((state) => state.plan.transition);
@@ -2904,6 +2937,9 @@ function ActiveProjection(): ReactElement {
   }
   if (model.scenarioId === "PL-S101") {
     return <AppliedHistoryProjection entry={selectedHistoryEntry} autoApplied />;
+  }
+  if (model.scenarioId === "PL-S100") {
+    return <WeeklyReviewProjection data={data} />;
   }
   if (model.scenarioId === "PL-S026" || model.scenarioId === "PL-S027") {
     return <HistoryResultProjection scenarioId={model.scenarioId} entry={selectedHistoryEntry} />;

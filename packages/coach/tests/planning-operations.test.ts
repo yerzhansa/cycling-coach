@@ -10,11 +10,15 @@ import {
   createPlanReconciliationRepository,
   createPlanRepository,
   createPlanSettingsRepository,
+  createPlanWeeklyReviewRepository,
   createPlanWorkoutMatchRepository,
   createPlanProposalRepository,
   createRaceCourseSnapshot,
   createPlanReplacementRepository,
+  type PlanActivityObservation,
   type PlanRecord,
+  type PlanWorkoutMatchRecord,
+  type PlanWorkoutMatchRepository,
   type PlanWorkoutRecord,
   type RaceCourseSnapshot,
 } from "@enduragent/kernel/planning";
@@ -123,6 +127,59 @@ function activationBuilder(): PlanDraftBuilder {
     async recalculateCourse() {
       return { plan: plan(planId, 40), workouts, snapshot: { weeks: 12 } };
     },
+  };
+}
+
+function weeklyReviewMatches(input: {
+  readonly planId: string;
+  readonly workoutId: string;
+  readonly syncAtMs: number;
+}): PlanWorkoutMatchRepository {
+  const activity: PlanActivityObservation = {
+    activityId: "activity-1",
+    providerActivityId: "provider-activity-1",
+    dateKey: 20260817,
+    sport: "cycling",
+    durationS: 3_600,
+    pairedEventId: null,
+  };
+  const extra: PlanActivityObservation = {
+    activityId: "activity-extra",
+    providerActivityId: "provider-activity-extra",
+    dateKey: 20260822,
+    sport: "cycling",
+    durationS: 2_700,
+    pairedEventId: null,
+  };
+  const match: PlanWorkoutMatchRecord = {
+    id: `${"0".repeat(25)}M`,
+    planId: input.planId,
+    planWorkoutId: input.workoutId,
+    activityId: activity.activityId,
+    providerActivityId: activity.providerActivityId,
+    providerEventId: null,
+    source: "heuristic",
+    decision: "confirmed",
+    activityDateKey: activity.dateKey,
+    activitySport: activity.sport,
+    activityDurationS: activity.durationS,
+    observedAtMs: 90,
+    decidedAtMs: 90,
+    deviceId: "device-1",
+    hlcPhysicalMs: 90,
+    hlcCounter: 0,
+  };
+  return {
+    observe: async (record) => record,
+    readForPlan: async () => [match],
+    readForWorkout: async () => [match],
+    decide: async () => match,
+    listActivities: async () => [activity, extra],
+    readProviderIdentities: async () => [],
+    readSyncStatus: async () => ({
+      lastSuccessfulSyncAtMs: input.syncAtMs,
+      awaitingSync: false,
+    }),
   };
 }
 
@@ -2115,6 +2172,211 @@ describe("Plan operations", () => {
           },
         },
       },
+    });
+  });
+
+  it("delivers one durable Weekly review and reopens the same result idempotently", async () => {
+    const planId = `${"0".repeat(25)}A`;
+    const workoutId = `${"0".repeat(25)}B`;
+    const missedWorkoutId = `${"0".repeat(25)}C`;
+    const plans = createPlanRepository(store);
+    await plans.replace({ ...plan(planId, 10), status: "active" }, [
+      {
+        id: workoutId,
+        planId,
+        dateKey: 20260817,
+        sport: "cycling",
+        name: "Endurance",
+        durationS: 3_600,
+        structureJson: "{}",
+        origin: "coach",
+        deviceId: "device-1",
+        hlcPhysicalMs: 10,
+        hlcCounter: 0,
+      },
+      {
+        id: missedWorkoutId,
+        planId,
+        dateKey: 20260819,
+        sport: "cycling",
+        name: "Recovery",
+        durationS: 2_700,
+        structureJson: "{}",
+        origin: "coach",
+        deviceId: "device-1",
+        hlcPhysicalMs: 10,
+        hlcCounter: 0,
+      },
+    ]);
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        workoutMatches: weeklyReviewMatches({
+          planId,
+          workoutId,
+          syncAtMs: 1_787_702_400_000,
+        }),
+        todayDateKey: () => 20260826,
+      },
+    );
+    const command = {
+      transitionId: "PL-T35" as const,
+      commandId: "weekly-review",
+      planId,
+      weekStart: "2026-08-17",
+    };
+
+    const delivered = await operations.executePlanTransition?.(command);
+    expect(delivered).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S100",
+        data: {
+          weeklyReview: {
+            status: "delivered",
+            counts: { asPlanned: 1, adjusted: 0, moved: 0, missed: 1, extra: 1 },
+          },
+        },
+      },
+    });
+    const reviewId = (await createPlanWeeklyReviewRepository(store).readLatestDelivered(planId))
+      ?.id;
+    expect(reviewId).not.toBeNull();
+
+    await expect(
+      operations.executePlanTransition?.({ ...command, commandId: "weekly-review-repeat" }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S100", data: { weeklyReview: { id: reviewId } } },
+    });
+  });
+
+  it("pauses Weekly review delivery when disabled or the latest sync is stale", async () => {
+    const planId = `${"0".repeat(25)}A`;
+    const workoutId = `${"0".repeat(25)}B`;
+    const plans = createPlanRepository(store);
+    await plans.replace({ ...plan(planId, 10), status: "active" }, []);
+    const command = {
+      transitionId: "PL-T35" as const,
+      commandId: "weekly-review",
+      planId,
+      weekStart: "2026-08-17",
+    };
+    const disabled = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        settings: {
+          read: async () => ({
+            planId,
+            autoApply: false,
+            weeklyReview: false,
+            updatedAtMs: 10,
+            deviceId: "device-1",
+            hlcPhysicalMs: 10,
+            hlcCounter: 0,
+          }),
+          save: async () => {
+            throw new TypeError("unused");
+          },
+        },
+        workoutMatches: weeklyReviewMatches({
+          planId,
+          workoutId,
+          syncAtMs: 1_787_702_400_000,
+        }),
+        todayDateKey: () => 20260826,
+      },
+    );
+    await expect(disabled.executePlanTransition?.(command)).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "unavailable" },
+    });
+
+    const stale = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        workoutMatches: weeklyReviewMatches({
+          planId,
+          workoutId,
+          syncAtMs: 1_787_443_200_000,
+        }),
+        todayDateKey: () => 20260826,
+      },
+    );
+    await expect(stale.executePlanTransition?.(command)).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "unavailable" },
+    });
+  });
+
+  it("retries a failed Weekly review only after a newer successful sync", async () => {
+    const planId = `${"0".repeat(25)}A`;
+    const workoutId = `${"0".repeat(25)}B`;
+    const plans = createPlanRepository(store);
+    await plans.replace({ ...plan(planId, 10), status: "active" }, [
+      {
+        id: workoutId,
+        planId,
+        dateKey: 20260817,
+        sport: "cycling",
+        name: "Endurance",
+        durationS: 3_600,
+        structureJson: "{}",
+        origin: "coach",
+        deviceId: "device-1",
+        hlcPhysicalMs: 10,
+        hlcCounter: 0,
+      },
+    ]);
+    let syncAtMs = 1_787_702_400_000;
+    const matches = weeklyReviewMatches({ planId, workoutId, syncAtMs });
+    const weeklyReviews = createPlanWeeklyReviewRepository(store);
+    let failCompletion = true;
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        workoutMatches: {
+          ...matches,
+          readSyncStatus: async () => ({ lastSuccessfulSyncAtMs: syncAtMs, awaitingSync: false }),
+        },
+        weeklyReviews: {
+          ...weeklyReviews,
+          complete: async (input) => {
+            if (failCompletion) {
+              failCompletion = false;
+              throw new TypeError("disk full");
+            }
+            return weeklyReviews.complete(input);
+          },
+        },
+        todayDateKey: () => 20260826,
+      },
+    );
+    const command = {
+      transitionId: "PL-T35" as const,
+      commandId: "weekly-review-failure",
+      planId,
+      weekStart: "2026-08-17",
+    };
+
+    await expect(operations.executePlanTransition?.(command)).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "persistence-failed", retryable: true },
+    });
+    await expect(
+      operations.executePlanTransition?.({ ...command, commandId: "same-sync" }),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "unavailable" } });
+
+    syncAtMs += 1_000;
+    await expect(
+      operations.executePlanTransition?.({ ...command, commandId: "newer-sync" }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S100", data: { weeklyReview: { status: "delivered" } } },
     });
   });
 

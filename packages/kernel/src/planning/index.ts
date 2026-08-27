@@ -10,3 +10,4 @@ export * from "./workout-drift-repository.js";
 export * from "./proposal-repository.js";
 export * from "./adaptation-ledger-repository.js";
 export * from "./settings-repository.js";
+export * from "./weekly-review-repository.js";

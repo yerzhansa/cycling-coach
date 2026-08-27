@@ -25,6 +25,7 @@ export function planAttention(count = 0): PlanAttention {
     scenarioId: "PL-S021" as const,
     priority: index === 0 ? ("blocker" as const) : ("recent" as const),
     affectedDate: null,
+    createdAtMs: index + 1,
   }));
   return {
     count,
