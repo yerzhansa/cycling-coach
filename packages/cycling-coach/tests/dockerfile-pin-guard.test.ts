@@ -97,6 +97,45 @@ describe("Docker image supply-chain guards", () => {
     }
   });
 
+  it("uses lockfile-derived modern deploy with synchronized workspace injections", () => {
+    const dockerfile = readFileSync(resolve(repoRoot, "packages/cycling-coach/Dockerfile"), "utf8");
+    const workspace = YAML.parse(
+      readFileSync(resolve(repoRoot, "pnpm-workspace.yaml"), "utf8"),
+    ) as {
+      injectWorkspacePackages?: boolean;
+      syncInjectedDepsAfterScripts?: string[];
+    };
+
+    expect(dockerfile).toContain(
+      "RUN pnpm --filter cycling-coach --prod deploy /app/runtime-bundle",
+    );
+    expect(dockerfile).toContain(
+      "cp packages/cycling-coach/package.json /app/runtime-bundle/package.json",
+    );
+    expect(dockerfile).not.toContain("--legacy");
+    expect(dockerfile).not.toContain("delete m.pnpm.patchedDependencies");
+    expect(workspace.injectWorkspacePackages).toBe(true);
+    expect(workspace.syncInjectedDepsAfterScripts).toContain("build");
+  });
+
+  it("installs a checksum-verified pnpm tarball without Corepack", () => {
+    const dockerfile = readFileSync(resolve(repoRoot, "packages/cycling-coach/Dockerfile"), "utf8");
+    const rootManifest = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")) as {
+      packageManager: string;
+    };
+    const pnpmVersion = /^pnpm@([^+]+)/u.exec(rootManifest.packageManager)?.[1];
+    const pnpmSha512 = /\+sha512\.([a-f0-9]{128})$/u.exec(rootManifest.packageManager)?.[1];
+
+    expect(pnpmVersion).toBeDefined();
+    expect(pnpmSha512).toBeDefined();
+    expect(dockerfile).toContain(`ARG PNPM_VERSION=${pnpmVersion}`);
+    expect(dockerfile).toContain(`ARG PNPM_TARBALL_SHA512=${pnpmSha512}`);
+    expect(dockerfile).toContain("https://registry.npmjs.org/pnpm/-/pnpm-${PNPM_VERSION}.tgz");
+    expect(dockerfile).toContain("sha512sum -c -");
+    expect(dockerfile).toContain("npm install --global --ignore-scripts /tmp/pnpm.tgz");
+    expect(dockerfile.toLowerCase()).not.toContain("corepack");
+  });
+
   it("keeps desktop-only pushes from republishing the bot image", () => {
     const workflow = YAML.parse(
       readFileSync(resolve(repoRoot, ".github/workflows/publish-image.yml"), "utf8"),
