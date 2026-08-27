@@ -97,6 +97,8 @@ export interface PlanViewAdapter {
   confirmEndPlan(): void;
   retryPlanCleanup(): void;
   verifyPlanCleanup(): void;
+  openRaceOutcome(): void;
+  recordRaceOutcome(outcome: "completed" | "not-completed"): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
@@ -108,6 +110,12 @@ const UNAVAILABLE_ERROR: PlanError = Object.freeze({
   message: "Plan could not connect. Try again.",
   retryable: true,
 });
+
+function addCivilDate(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
 
 function hydrationFromResult(result: GetPlanStateRpcResult): PlanHydrationState {
   return result;
@@ -173,6 +181,7 @@ export function createPlanViewAdapter(input: {
   let autoResumingCleanupPlanId: string | null = null;
   let autoResumingReplacementId: string | null = null;
   let attemptedWeeklyReviewSyncAtMs: number | null = null;
+  let autoCompletingPlanId: string | null = null;
   let active: {
     readonly commandId: string;
     readonly transitionId: PlanTransitionId;
@@ -241,6 +250,33 @@ export function createPlanViewAdapter(input: {
     input.publishHydration(next);
     if (next.status === "ready" || next.status === "stale") {
       syncCoach(next.state);
+      const activeData = PlanActiveProjectionDataSchema.safeParse(next.state.data);
+      const finalPlanDate = activeData.success
+        ? (activeData.data.plan.targetDate ??
+          addCivilDate(activeData.data.plan.startDate, activeData.data.plan.totalWeeks * 7 - 1))
+        : null;
+      if (
+        next.state.lifecycle === "active" &&
+        next.state.planId !== null &&
+        activeData.success &&
+        finalPlanDate !== null &&
+        activeData.data.today > finalPlanDate &&
+        autoCompletingPlanId !== next.state.planId &&
+        active === null
+      ) {
+        const planId = next.state.planId;
+        autoCompletingPlanId = planId;
+        queueMicrotask(() => {
+          if (disposed || active !== null) return;
+          void execute({
+            transitionId: "PL-T29",
+            commandId: createCommandId(),
+            planId,
+            asOf: activeData.data.today,
+          });
+        });
+        return;
+      }
       if (
         next.state.scenarioId === "PL-S042" &&
         next.state.planId !== null &&
@@ -260,7 +296,9 @@ export function createPlanViewAdapter(input: {
         });
       }
       if (
-        next.state.scenarioId === "PL-S052" &&
+        (next.state.scenarioId === "PL-S052" ||
+          (next.state.scenarioId === "PL-S094" &&
+            next.state.reconciliation.status !== "verified")) &&
         next.state.planId !== null &&
         autoResumingCleanupPlanId !== next.state.planId &&
         active === null
@@ -391,6 +429,26 @@ export function createPlanViewAdapter(input: {
       active = null;
       if (command.transitionId === "PL-T22") input.publishSettingPending(null);
       input.publishTransition({ status: "idle" });
+      if (
+        command.transitionId === "PL-T29" &&
+        result.state.scenarioId === "PL-S094" &&
+        result.state.planId !== null
+      ) {
+        const planId = result.state.planId;
+        autoResumingCleanupPlanId = planId;
+        queueMicrotask(() => {
+          if (disposed || active !== null) return;
+          void execute({
+            transitionId: "PL-T24",
+            commandId: createCommandId(),
+            planId,
+            mode: "cleanup",
+          });
+        });
+      }
+      if (command.transitionId === "PL-T24" && result.state.scenarioId === "PL-S056") {
+        queueMicrotask(() => void refresh(false));
+      }
       if (
         command.transitionId === "PL-T04" &&
         (result.state.scenarioId === "PL-S060" || result.state.scenarioId === "PL-S062")
@@ -1182,6 +1240,35 @@ export function createPlanViewAdapter(input: {
         commandId: createCommandId(),
         planId: model.planId,
         mode: "verify",
+      });
+    },
+    openRaceOutcome() {
+      const model = planReadModel(input.read());
+      if (
+        model?.planId === null ||
+        model?.planId === undefined ||
+        model.scenarioId !== "PL-S094" ||
+        active !== null
+      ) {
+        return;
+      }
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "open",
+        sourceScenarioId: "PL-S094",
+        destinationScenarioId: "PL-S095",
+        returnFocusId: model.planId,
+      });
+    },
+    recordRaceOutcome(outcome) {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T30",
+        commandId: createCommandId(),
+        planId: model.planId,
+        outcome,
       });
     },
     openAttention(attentionId) {

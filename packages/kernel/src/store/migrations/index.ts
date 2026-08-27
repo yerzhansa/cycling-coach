@@ -20,6 +20,7 @@ import planAdaptationLedger019 from "./019_plan_adaptation_ledger.sql";
 import planSettings020 from "./020_plan_settings.sql";
 import planReplacement021 from "./021_plan_replacement.sql";
 import planWeeklyReview022 from "./022_plan_weekly_review.sql";
+import planRaceOutcome023 from "./023_plan_race_outcome.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -57,4 +58,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 20, name: "020_plan_settings", sql: planSettings020 },
   { version: 21, name: "021_plan_replacement", sql: planReplacement021 },
   { version: 22, name: "022_plan_weekly_review", sql: planWeeklyReview022 },
+  { version: 23, name: "023_plan_race_outcome", sql: planRaceOutcome023 },
 ];

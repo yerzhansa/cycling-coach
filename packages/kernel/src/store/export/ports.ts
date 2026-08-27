@@ -92,11 +92,14 @@ export const PURE_AUTHORED_TABLES = [
   "plan_draft_revision",
   "plan_proposal",
   "plan_proposal_premise",
+  "plan_race_outcome",
+  "plan_replacement",
   "plan_settings",
   "plan_source_request",
   "plan_workout",
   "plan_workout_drift",
   "plan_workout_match",
+  "plan_weekly_review",
 ] as const;
 
 /** Mixed source|authored tables — ONLY provenance='manual' rows are authored. */

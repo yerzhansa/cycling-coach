@@ -252,6 +252,8 @@ export function bootRenderer(): Disposer {
     confirmEndPlan: () => planAdapter.confirmEndPlan(),
     retryPlanCleanup: () => planAdapter.retryPlanCleanup(),
     verifyPlanCleanup: () => planAdapter.verifyPlanCleanup(),
+    openRaceOutcome: () => planAdapter.openRaceOutcome(),
+    recordRaceOutcome: (outcome) => planAdapter.recordRaceOutcome(outcome),
     openAttention: (attentionId) => planAdapter.openAttention(attentionId),
     returnToCoach: () => planAdapter.returnToCoach(),
     retry: () => planAdapter.retry(),

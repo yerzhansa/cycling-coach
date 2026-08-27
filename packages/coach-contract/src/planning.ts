@@ -787,6 +787,8 @@ export const PlanEndedProjectionDataSchema = z
   .object({
     plan: PlanDraftPlanProjectionSchema,
     endedAtMs: z.number().int().nonnegative(),
+    raceOutcome: z.enum(["completed", "not-completed"]).nullable().optional(),
+    outcomeAvailable: z.boolean().optional(),
     cleanupItems: z.array(
       z
         .object({

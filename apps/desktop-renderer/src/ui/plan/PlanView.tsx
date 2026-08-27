@@ -3588,6 +3588,49 @@ function EndedProjection(): ReactElement {
   const failed = model.reconciliation.status === "failed";
   const verified = model.reconciliation.status === "verified";
   const remaining = data.cleanupItems.filter((item) => item.status !== "verified");
+  const outcomeBusy =
+    (transition.status === "submitting" || transition.status === "running") &&
+    transition.transitionId === "PL-T30";
+  if (model.scenarioId === "PL-S095") {
+    return (
+      <section className="overflow-hidden rounded-card bg-surface shadow-elev-1" aria-live="polite">
+        <div className="grid gap-6 p-5">
+          <div className="flex items-start gap-row">
+            <Activity className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <h2 className="m-0 text-base font-semibold">Did you complete {data.plan.name}?</h2>
+              <p className="m-0 text-ink-2">
+                This records the race outcome. The ended Plan and its history stay unchanged.
+              </p>
+            </div>
+          </div>
+          {transition.status === "failed" && transition.transitionId === "PL-T30" ? (
+            <div className="flex items-start gap-row rounded-ctl bg-warn/10 p-row" role="alert">
+              <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+              <p className="m-0 text-sm text-ink-2">{transition.error.message}</p>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap justify-end gap-inset px-5 py-row">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={outcomeBusy || actions === null}
+            onClick={() => actions?.recordRaceOutcome("not-completed")}
+          >
+            Not completed
+          </Button>
+          <Button
+            type="button"
+            disabled={outcomeBusy || actions === null}
+            onClick={() => actions?.recordRaceOutcome("completed")}
+          >
+            {outcomeBusy ? "Saving…" : "Completed"}
+          </Button>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="overflow-hidden rounded-card bg-surface shadow-elev-1" aria-live="polite">
       <div className="grid gap-6 p-5">
@@ -3603,8 +3646,18 @@ function EndedProjection(): ReactElement {
             />
           )}
           <div className={SUPPORT_PAIR}>
-            <h2 className="m-0 text-base font-semibold">{data.plan.name} Plan ended</h2>
-            <p className="m-0 text-ink-2">The Plan no longer changes future training.</p>
+            <h2 className="m-0 text-base font-semibold">
+              {model.scenarioId === "PL-S096"
+                ? `${data.plan.name} · Not completed`
+                : `${data.plan.name} Plan ended`}
+            </h2>
+            <p className="m-0 text-ink-2">
+              {model.scenarioId === "PL-S094" && data.plan.targetDate !== null
+                ? `The Plan ended automatically after ${formatCivilDate(data.plan.targetDate)}.`
+                : model.scenarioId === "PL-S096"
+                  ? "The race outcome is saved separately from the ended Plan."
+                  : "The Plan no longer changes future training."}
+            </p>
           </div>
         </div>
         <div className="border-t border-line pt-row">
@@ -3653,6 +3706,12 @@ function EndedProjection(): ReactElement {
           ) : null}
         </div>
         <div className="grid gap-inset border-t border-line pt-row text-sm">
+          {data.raceOutcome === null || data.raceOutcome === undefined ? null : (
+            <div className="flex justify-between gap-row">
+              <span>Race outcome</span>
+              <strong>{data.raceOutcome === "completed" ? "Completed" : "Not completed"}</strong>
+            </div>
+          )}
           <div className="flex justify-between gap-row">
             <span>Plan history</span>
             <strong>Saved</strong>
@@ -3664,7 +3723,20 @@ function EndedProjection(): ReactElement {
         </div>
       </div>
       <div className="flex flex-wrap justify-end gap-inset border-t border-line px-5 py-row">
-        {failed ? (
+        {model.scenarioId === "PL-S094" ? (
+          <>
+            <Button type="button" variant="outline" onClick={() => actions?.startPlan()}>
+              Start a new Plan
+            </Button>
+            <Button
+              type="button"
+              disabled={busy || actions === null || data.outcomeAvailable !== true}
+              onClick={() => actions?.openRaceOutcome()}
+            >
+              Record outcome
+            </Button>
+          </>
+        ) : failed ? (
           <>
             <Button
               type="button"
@@ -3682,9 +3754,9 @@ function EndedProjection(): ReactElement {
               {busy ? "Working…" : "Retry"}
             </Button>
           </>
-        ) : verified ? (
+        ) : verified || data.raceOutcome !== null ? (
           <Button type="button" disabled={actions === null} onClick={() => actions?.startPlan()}>
-            Start new Plan
+            Start a new Plan
           </Button>
         ) : null}
       </div>

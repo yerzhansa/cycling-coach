@@ -15,6 +15,7 @@ import {
   createPlanProposalRepository,
   createRaceCourseSnapshot,
   createPlanReplacementRepository,
+  createPlanRaceOutcomeRepository,
   type PlanActivityObservation,
   type PlanRecord,
   type PlanWorkoutMatchRecord,
@@ -2764,6 +2765,189 @@ describe("Plan operations", () => {
     await expect(operations.getPlanState?.({})).resolves.toMatchObject({
       status: "ready",
       state: { lifecycle: "ended", scenarioId: "PL-S089" },
+    });
+  });
+
+  it("ends naturally after the target date and persists a separate completed race outcome", async () => {
+    const planId = `${"0".repeat(25)}R`;
+    const plans = createPlanRepository(store);
+    await plans.replace(
+      {
+        id: planId,
+        originId: null,
+        name: "Gran Fondo Plan",
+        primaryGoal: "Finish",
+        startDateKey: 19980713,
+        targetDateKey: 19981004,
+        status: "active",
+        kind: "full_plan",
+        totalWeeks: 12,
+        weekStartDay: 1,
+        structureJson: "{}",
+        createdAtMs: 1,
+        updatedAtMs: 10,
+        deviceId: "device-1",
+        hlcPhysicalMs: 10,
+        hlcCounter: 0,
+      },
+      [],
+    );
+    let todayDateKey = 19981004;
+    const workoutMatches = weeklyReviewMatches({
+      planId,
+      workoutId: `${"0".repeat(25)}S`,
+      syncAtMs: 80,
+    });
+    const calendar: PlanMirrorCalendarPort = {
+      listEvents: async () => [],
+      createEvent: async () => undefined,
+      updateEvent: async () => undefined,
+      deleteEvent: async () => undefined,
+    };
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { plans, workoutMatches, calendar, todayDateKey: () => todayDateKey },
+    );
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T29",
+        commandId: "natural-too-early",
+        planId,
+        asOf: "1998-10-04",
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
+    await expect(plans.read(planId)).resolves.toMatchObject({ status: "active" });
+
+    todayDateKey = 19981005;
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T29",
+        commandId: "natural-completion",
+        planId,
+        asOf: "1998-10-05",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S094", lifecycle: "ended" },
+    });
+    await expect(plans.read(planId)).resolves.toMatchObject({ status: "ended" });
+    await expect(
+      createPlanReconciliationRepository(store).readLatestJob(planId, "cleanup"),
+    ).resolves.toMatchObject({ status: "pending", windowStartDateKey: 19981006 });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T24",
+        commandId: "natural-cleanup",
+        planId,
+        mode: "cleanup",
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S056" } });
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: { scenarioId: "PL-S095", data: { outcomeAvailable: true } },
+    });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T30",
+        commandId: "race-completed",
+        planId,
+        outcome: "completed",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S014", data: { raceOutcome: "completed" } },
+    });
+    await expect(createPlanRaceOutcomeRepository(store).read(planId)).resolves.toMatchObject({
+      outcome: "completed",
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T30",
+        commandId: "race-completed-repeat",
+        planId,
+        outcome: "completed",
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S014" } });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T30",
+        commandId: "race-outcome-conflict",
+        planId,
+        outcome: "not-completed",
+      }),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "conflict" } });
+  });
+
+  it("keeps the outcome prompt for retry and persists Not completed without calendar writes", async () => {
+    const planId = `${"0".repeat(25)}T`;
+    const plans = createPlanRepository(store);
+    await plans.replace(
+      {
+        id: planId,
+        originId: null,
+        name: "Gran Fondo Plan",
+        primaryGoal: "Finish",
+        startDateKey: 19980713,
+        targetDateKey: 19981004,
+        status: "ended",
+        kind: "full_plan",
+        totalWeeks: 12,
+        weekStartDay: 1,
+        structureJson: "{}",
+        createdAtMs: 1,
+        updatedAtMs: 10,
+        deviceId: "device-1",
+        hlcPhysicalMs: 10,
+        hlcCounter: 0,
+      },
+      [],
+    );
+    const stored = createPlanRaceOutcomeRepository(store);
+    let fail = true;
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        todayDateKey: () => 19981005,
+        workoutMatches: weeklyReviewMatches({
+          planId,
+          workoutId: `${"0".repeat(25)}V`,
+          syncAtMs: 80,
+        }),
+        raceOutcomes: {
+          read: (id) => stored.read(id),
+          async record(value) {
+            if (fail) {
+              fail = false;
+              throw new Error("write failed");
+            }
+            return stored.record(value);
+          },
+        },
+      },
+    );
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T30",
+        commandId: "outcome-fails",
+        planId,
+        outcome: "not-completed",
+      }),
+    ).resolves.toMatchObject({ status: "rejected", state: { scenarioId: "PL-S095" } });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T30",
+        commandId: "outcome-retry",
+        planId,
+        outcome: "not-completed",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S096", data: { raceOutcome: "not-completed" } },
     });
   });
 

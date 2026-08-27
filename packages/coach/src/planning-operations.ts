@@ -91,6 +91,9 @@ import {
   type PlanReadinessInput as EnginePlanReadinessInput,
   composeWeeklyReview,
   selectWeeklyReviewWindow,
+  naturalPlanCompletionDue,
+  planFinalCivilDateKey,
+  raceOutcomeDue,
 } from "@enduragent/engine";
 import { cyclingTaperRefusal, projectCyclingSeasonMetadata } from "@enduragent/sport-cycling";
 import {
@@ -112,6 +115,8 @@ import {
   createPlanSettingsRepository,
   createPlanReplacementRepository,
   createPlanWeeklyReviewRepository,
+  createPlanRaceOutcomeRepository,
+  dateKeyFromText,
   planWeekIndex,
   PlanConversationValidationError,
   type PlanConversationRecord,
@@ -136,6 +141,7 @@ import {
   type PlanReplacementRepository,
   type PlanWeeklyReviewRecord,
   type PlanWeeklyReviewRepository,
+  type PlanRaceOutcomeRepository,
   parsePlanAdaptationWorkoutSnapshot,
   PlanAdaptationLedgerValidationError,
   PlanProposalValidationError,
@@ -169,6 +175,12 @@ const PERSISTENCE_FAILED: PlanError = Object.freeze({
   code: "persistence-failed",
   message: "The Plan couldn’t save that change. Try again.",
   retryable: true,
+});
+
+const RACE_OUTCOME_CONFLICT: PlanError = Object.freeze({
+  code: "conflict",
+  message: "A different race outcome is already saved.",
+  retryable: false,
 });
 
 const WORKOUT_DRIFT_PROVIDER_FAILED: PlanError = Object.freeze({
@@ -366,6 +378,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly settings?: PlanSettingsRepository;
   readonly replacements?: PlanReplacementRepository;
   readonly weeklyReviews?: PlanWeeklyReviewRepository;
+  readonly raceOutcomes?: PlanRaceOutcomeRepository;
   readonly proposalReviser?: PlanProposalReviser;
   readonly proposalPremiseReader?: PlanProposalPremiseReader;
   readonly proposalLoadCalculator?: PlanProposalLoadCalculator;
@@ -1031,6 +1044,8 @@ export function createPlanningOperations(
     dependencies.replacements ?? createPlanReplacementRepository(input.context.store);
   const weeklyReviewRepository =
     dependencies.weeklyReviews ?? createPlanWeeklyReviewRepository(input.context.store);
+  const raceOutcomeRepository =
+    dependencies.raceOutcomes ?? createPlanRaceOutcomeRepository(input.context.store);
   const enqueue = createSerializedLane();
   const refuseProposal = async (
     proposal: PlanProposalRecord,
@@ -1360,26 +1375,41 @@ export function createPlanningOperations(
     revision: number,
     overrides: ReadOverrides,
   ): Promise<PlanReadModel> => {
-    const [workouts, job] = await Promise.all([
+    const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+    const [workouts, job, raceOutcome, matchSync] = await Promise.all([
       plans.readWorkouts(plan.id),
       reconciliations.readLatestJob(plan.id, "cleanup"),
+      raceOutcomeRepository.read(plan.id),
+      workoutMatches.readSyncStatus(),
     ]);
     const projectedPlan = draftPlanProjection(plan, workouts);
     if (projectedPlan === null) throw new TypeError("An ended Plan projection requires a Plan.");
     const projection =
       job === undefined ? null : await projectPlanReconciliation(reconciliations, job);
     const items = job === undefined ? [] : await reconciliations.readItems(job.id);
+    const outcomeAvailable = raceOutcomeDue({
+      plan,
+      todayDateKey,
+      awaitingSync: matchSync.awaitingSync,
+      outcome: raceOutcome,
+    });
     const scenarioId: EndedPlanScenario =
       overrides.endedScenario ??
-      (job === undefined
-        ? "PL-S014"
-        : job.status === "verified"
-          ? "PL-S089"
-          : job.status === "failed"
-            ? "PL-S053"
-            : job.status === "retrying"
-              ? "PL-S055"
-              : "PL-S052");
+      (job !== undefined && job.status !== "verified"
+        ? job.status === "failed"
+          ? "PL-S053"
+          : job.status === "retrying"
+            ? "PL-S055"
+            : "PL-S052"
+        : raceOutcome?.outcome === "completed"
+          ? "PL-S014"
+          : raceOutcome?.outcome === "not-completed"
+            ? "PL-S096"
+            : outcomeAvailable
+              ? "PL-S095"
+              : job?.status === "verified"
+                ? "PL-S089"
+                : "PL-S014");
     const status =
       job === undefined
         ? ("not-applicable" as const)
@@ -1394,6 +1424,8 @@ export function createPlanningOperations(
     const data: PlanEndedProjectionData = PlanEndedProjectionDataSchema.parse({
       plan: projectedPlan,
       endedAtMs: plan.updatedAtMs,
+      raceOutcome: raceOutcome?.outcome ?? null,
+      outcomeAvailable,
       cleanupItems: items.map((item) => ({
         id: item.id,
         date: dateText(item.dateKey),
@@ -3606,6 +3638,83 @@ export function createPlanningOperations(
             return reject(CALENDAR_UPDATE_FAILED, { activeScenario: "PL-S039" });
           }
         }
+        if (command.transitionId === "PL-T29") {
+          const plan = await plans.read(command.planId);
+          if (plan?.status === "ended") {
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read(),
+            });
+          }
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          const asOfDateKey = dateKeyFromText(command.asOf);
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          if (asOfDateKey !== todayDateKey || !naturalPlanCompletionDue(plan, asOfDateKey)) {
+            return reject(UNAVAILABLE);
+          }
+          const windowStartDateKey = addCivilDays(asOfDateKey, 1);
+          const windowEndDateKey = Math.max(windowStartDateKey, planFinalCivilDateKey(plan));
+          const stamp = input.identity.hlcStamp();
+          try {
+            await plans.endActive({
+              planId: plan.id,
+              cleanupJobId: input.identity.newUlid(),
+              windowStartDateKey,
+              windowEndDateKey,
+              updatedAtMs: stamp.physicalMs,
+              deviceId: await input.identity.deviceId(),
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ endedScenario: "PL-S094" }),
+            });
+          } catch {
+            return reject(PERSISTENCE_FAILED);
+          }
+        }
+        if (command.transitionId === "PL-T30") {
+          const plan = await plans.read(command.planId);
+          if (plan?.status !== "ended") return reject(UNAVAILABLE);
+          const [sync, stored] = await Promise.all([
+            workoutMatches.readSyncStatus(),
+            raceOutcomeRepository.read(plan.id),
+          ]);
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          if (
+            stored === undefined &&
+            !raceOutcomeDue({
+              plan,
+              todayDateKey,
+              awaitingSync: sync.awaitingSync,
+              outcome: stored,
+            })
+          ) {
+            return reject(UNAVAILABLE);
+          }
+          if (stored !== undefined && stored.outcome !== command.outcome) {
+            return reject(RACE_OUTCOME_CONFLICT);
+          }
+          const stamp = input.identity.hlcStamp();
+          try {
+            await raceOutcomeRepository.record({
+              planId: plan.id,
+              outcome: command.outcome,
+              recordedAtMs: stamp.physicalMs,
+              updatedAtMs: stamp.physicalMs,
+              deviceId: await input.identity.deviceId(),
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read(),
+            });
+          } catch {
+            return reject(PERSISTENCE_FAILED, { endedScenario: "PL-S095" });
+          }
+        }
         if (command.transitionId === "PL-T35") {
           const plan = await plans.read(command.planId);
           if (plan?.status !== "active") return reject(UNAVAILABLE);
@@ -3714,6 +3823,32 @@ export function createPlanningOperations(
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
               state: await read({ replacementConfirmation: false }),
+            });
+          }
+          if (
+            command.sourceScenarioId === "PL-S094" &&
+            command.destinationScenarioId === "PL-S095"
+          ) {
+            const plan = await plans.readLatest();
+            if (plan?.status !== "ended") return reject(UNAVAILABLE);
+            const [sync, outcome] = await Promise.all([
+              workoutMatches.readSyncStatus(),
+              raceOutcomeRepository.read(plan.id),
+            ]);
+            const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+            if (
+              !raceOutcomeDue({
+                plan,
+                todayDateKey,
+                awaitingSync: sync.awaitingSync,
+                outcome,
+              })
+            ) {
+              return reject(UNAVAILABLE);
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ endedScenario: "PL-S095" }),
             });
           }
           const allowed =

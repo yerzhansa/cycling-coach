@@ -73,6 +73,8 @@ function actions(): PlanActions {
     confirmEndPlan: vi.fn(),
     retryPlanCleanup: vi.fn(),
     verifyPlanCleanup: vi.fn(),
+    openRaceOutcome: vi.fn(),
+    recordRaceOutcome: vi.fn(),
     openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
@@ -723,6 +725,102 @@ describe("Plan surface", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(planActions.verifyPlanCleanup).toHaveBeenCalledOnce();
     expect(planActions.retryPlanCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("shows natural completion, records the race outcome, and preserves the ended Plan", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const plan = {
+      id: planId,
+      name: "Gran Fondo Almaty",
+      primaryGoal: "Finish in the front half",
+      startDate: "1998-07-13",
+      targetDate: "1998-10-04",
+      kind: "full-plan" as const,
+      totalWeeks: 12,
+      weekStartDay: 1,
+      workoutCount: 20,
+      plannedDurationS: 72_000,
+    };
+    const reconciliation = {
+      status: "verified" as const,
+      created: 0,
+      pending: 0,
+      failed: 0,
+      total: 0,
+      currentThrough: "1998-10-06",
+      error: null,
+    };
+    const natural = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S094",
+      projection: "ended",
+      planId,
+      reconciliation,
+      data: {
+        plan,
+        endedAtMs: 20,
+        raceOutcome: null,
+        outcomeAvailable: true,
+        cleanupItems: [],
+      },
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state: natural },
+        lastReady: natural,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(screen.getByText(/ended automatically after/u)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Record outcome" }));
+    expect(planActions.openRaceOutcome).toHaveBeenCalledOnce();
+
+    const choice = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S095",
+      projection: "ended",
+      planId,
+      reconciliation,
+      data: {
+        plan,
+        endedAtMs: 20,
+        raceOutcome: null,
+        outcomeAvailable: true,
+        cleanupItems: [],
+      },
+    });
+    act(() => useEnduragentStore.getState().setPlanHydration({ status: "ready", state: choice }));
+    expect(
+      screen.getByRole("heading", { name: "Did you complete Gran Fondo Almaty?" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Not completed" }));
+    expect(planActions.recordRaceOutcome).toHaveBeenCalledWith("not-completed");
+
+    const notCompleted = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S096",
+      projection: "ended",
+      planId,
+      reconciliation,
+      data: {
+        plan,
+        endedAtMs: 20,
+        raceOutcome: "not-completed",
+        outcomeAvailable: false,
+        cleanupItems: [],
+      },
+    });
+    act(() =>
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: notCompleted }),
+    );
+    expect(screen.getByText("Not completed", { selector: "strong" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start a new Plan" }));
+    expect(planActions.startPlan).toHaveBeenCalledOnce();
   });
 
   it("keeps replacement confirmation safe and cleanup recovery explicit", async () => {
