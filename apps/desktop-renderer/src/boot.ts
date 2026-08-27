@@ -223,6 +223,10 @@ export function bootRenderer(): Disposer {
     openReplacementActivePlan: () => planAdapter.openReplacementActivePlan(),
     reconcilePlan: () => planAdapter.reconcilePlan(),
     verifyReconciliation: () => planAdapter.verifyReconciliation(),
+    openSeason: () => planAdapter.openSeason(),
+    closeSeason: () => planAdapter.closeSeason(),
+    openRaceWeek: () => planAdapter.openRaceWeek(),
+    closeRaceWeek: () => planAdapter.closeRaceWeek(),
     openWorkout: (workoutId) => planAdapter.openWorkout(workoutId),
     closeWorkout: () => planAdapter.closeWorkout(),
     resolveWorkoutMatch: (workoutId, activityId, decision) =>

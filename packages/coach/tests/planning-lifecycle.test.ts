@@ -25,6 +25,98 @@ function build(input: Partial<Parameters<typeof buildPlanLifecycleReadModel>[0]>
 }
 
 describe("Plan lifecycle projection", () => {
+  it("exposes read-only Season and race-week Scenarios from an active Plan", () => {
+    const data = {
+      plan: {
+        id: "plan-1",
+        name: "Gran Fondo",
+        primaryGoal: "Finish",
+        startDate: "2026-08-17",
+        targetDate: "2026-08-30",
+        kind: "full-plan" as const,
+        totalWeeks: 2,
+        weekStartDay: 1,
+        workoutCount: 1,
+        plannedDurationS: 18_000,
+      },
+      today: "2026-08-18",
+      weekIndex: 1,
+      todayWorkout: null,
+      workouts: [],
+      season: {
+        priority: "A" as const,
+        distanceKm: 120,
+        weeks: [
+          {
+            weekIndex: 1,
+            startDate: "2026-08-17",
+            endDate: "2026-08-23",
+            phase: "Build",
+            purpose: "Develop threshold",
+            status: "current" as const,
+            plannedDurationS: 0,
+          },
+          {
+            weekIndex: 2,
+            startDate: "2026-08-24",
+            endDate: "2026-08-30",
+            phase: "Race",
+            purpose: "Goal race",
+            status: "planned" as const,
+            plannedDurationS: 18_000,
+          },
+        ],
+        constraint: null,
+        raceWeek: {
+          startDate: "2026-08-24",
+          endDate: "2026-08-30",
+          raceDate: "2026-08-30",
+          trainingDurationS: 0,
+          raceDurationS: 18_000,
+          totalDurationS: 18_000,
+          days: (["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const).map(
+            (weekday, index) => ({
+              date: `2026-08-${24 + index}`,
+              weekday,
+              workoutId: index === 6 ? "workout-1" : null,
+              name: index === 6 ? "Gran Fondo" : "Rest",
+              durationS: index === 6 ? 18_000 : null,
+              purpose: index === 6 ? "Race" : "Absorb",
+              kind: index === 6 ? ("race" as const) : ("rest" as const),
+            }),
+          ),
+        },
+      },
+    };
+    const reconciliation = {
+      status: "not-applicable" as const,
+      created: 0,
+      pending: 0,
+      failed: 0,
+      total: 0,
+      currentThrough: null,
+      error: null,
+    };
+    const season = buildActivePlanReadModel({
+      scenarioId: "PL-S006",
+      planId: "plan-1",
+      revision: 1,
+      data,
+      reconciliation,
+    });
+    expect(season).toMatchObject({ scenarioId: "PL-S006", title: "Season", projection: "active" });
+    expect(season.transitions.map((transition) => transition.transitionId)).toContain("PL-T31");
+    expect(
+      buildActivePlanReadModel({
+        scenarioId: "PL-S009",
+        planId: "plan-1",
+        revision: 1,
+        data,
+        reconciliation,
+      }),
+    ).toMatchObject({ scenarioId: "PL-S009", title: "Race week", projection: "active" });
+  });
+
   it("counts every unresolved WorkoutMatch decision and opens one directly or several as a list", () => {
     const data = {
       plan: {

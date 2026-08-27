@@ -82,6 +82,16 @@ function plannedTime(durationS: number): string {
   return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
 }
 
+function clockTime(durationS: number): string {
+  const hours = Math.floor(durationS / 3_600);
+  const minutes = Math.round((durationS % 3_600) / 60);
+  return `${hours}:${String(minutes).padStart(2, "0")}`;
+}
+
+function decimalHours(durationS: number): string {
+  return `${(durationS / 3_600).toFixed(1)} h`;
+}
+
 function historyDuration(durationS: number | null): string {
   if (durationS === null) return "—";
   const hours = Math.floor(durationS / 3_600);
@@ -1760,7 +1770,8 @@ function WorkoutDriftProjection(props: {
   const selected =
     props.data.selectedWorkoutId === undefined || props.data.selectedWorkoutId === null
       ? null
-      : (props.data.workouts.find((workout) => workout.id === props.data.selectedWorkoutId) ??
+      : (props.data.selectedWorkout ??
+        props.data.workouts.find((workout) => workout.id === props.data.selectedWorkoutId) ??
         null);
   if (selected === null) {
     return <StatusCard title="Workout changed in Intervals" support="Refreshing this workout…" />;
@@ -2038,6 +2049,287 @@ function ReplacementLifecycleProjection(props: {
   );
 }
 
+function SeasonProjection(props: {
+  readonly data: ReturnType<typeof PlanActiveProjectionDataSchema.parse>;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const season = props.data.season;
+  if (season === undefined) {
+    return (
+      <StatusCard
+        title="Season"
+        support="Season details are unavailable. Return to Plan and try again."
+      />
+    );
+  }
+  const raceWeekAvailable = season.raceWeek !== null;
+  return (
+    <section className="grid overflow-hidden rounded-card bg-surface shadow-elev-1">
+      <div className="grid gap-row p-5">
+        <div className="flex flex-col gap-row sm:flex-row sm:items-start sm:justify-between">
+          <div className={SUPPORT_PAIR}>
+            <h2
+              id="plan-season-heading"
+              tabIndex={-1}
+              className="m-0 text-xl font-semibold outline-none"
+            >
+              Season
+            </h2>
+            <p className="m-0 text-ink-2">
+              {props.data.plan.totalWeeks} weeks · {formatCivilDate(props.data.plan.startDate)}
+              {props.data.plan.targetDate === null
+                ? ""
+                : `–${formatCivilDate(props.data.plan.targetDate)}`}
+            </p>
+          </div>
+          <div className="flex flex-wrap justify-end gap-inset">
+            {raceWeekAvailable ? (
+              <Button
+                id="plan-race-week-trigger"
+                type="button"
+                variant="outline"
+                onClick={() => actions?.openRaceWeek()}
+              >
+                Race week
+              </Button>
+            ) : null}
+            <Button type="button" variant="outline" onClick={() => actions?.closeSeason()}>
+              Back to Plan
+            </Button>
+          </div>
+        </div>
+        <div className="flex flex-col gap-row border-t border-line pt-row sm:flex-row sm:items-start sm:justify-between">
+          <div className={SUPPORT_PAIR}>
+            <h3 className="m-0 text-base font-semibold">{props.data.plan.name}</h3>
+            <p className="m-0 text-sm text-ink-2">
+              {props.data.plan.targetDate === null
+                ? props.data.plan.primaryGoal
+                : `${formatCivilDate(props.data.plan.targetDate, { weekday: "short", day: "numeric", month: "short" })} · ${props.data.plan.primaryGoal}`}
+              {season.distanceKm === null ? "" : ` · ${season.distanceKm} km`}
+            </p>
+          </div>
+          {season.priority === null ? null : (
+            <span className="self-start rounded-full border border-warn px-3 py-1 text-sm text-warn">
+              {season.priority} priority
+            </span>
+          )}
+        </div>
+        {season.constraint === null ? null : (
+          <div
+            className="flex items-start gap-row rounded-ctl bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] p-3"
+            role="status"
+          >
+            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <p className="m-0 font-medium">Constraint · {season.constraint.title}</p>
+              <p className="m-0 text-sm text-ink-2">{season.constraint.detail}</p>
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="max-w-full overflow-x-auto border-t border-line">
+        <table className="w-full min-w-[720px] border-collapse text-left text-sm">
+          <thead className="bg-sunk text-ink-2">
+            <tr>
+              <th scope="col" className="px-5 py-3 font-medium">
+                Week
+              </th>
+              <th scope="col" className="px-5 py-3 font-medium">
+                Dates
+              </th>
+              <th scope="col" className="px-5 py-3 font-medium">
+                Phase
+              </th>
+              <th scope="col" className="px-5 py-3 font-medium">
+                Plan
+              </th>
+              <th scope="col" className="px-5 py-3 text-right font-medium">
+                Hours
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {season.weeks.map((week) => {
+              const status =
+                week.status === "completed"
+                  ? "Completed"
+                  : week.status === "current"
+                    ? "This week"
+                    : week.status === "blocked"
+                      ? "Blocked"
+                      : "Planned";
+              return (
+                <tr
+                  key={week.weekIndex}
+                  aria-current={week.status === "current" ? "true" : undefined}
+                  className={
+                    week.status === "current"
+                      ? "bg-[color-mix(in_srgb,var(--brand)_10%,var(--surface))]"
+                      : "bg-surface"
+                  }
+                >
+                  <th scope="row" className="px-5 py-row font-medium">
+                    Wk {week.weekIndex}
+                  </th>
+                  <td className="px-5 py-row text-ink-2">
+                    {formatCivilDate(week.startDate, { day: "numeric", month: "short" })}–
+                    {formatCivilDate(week.endDate, { day: "numeric", month: "short" })}
+                  </td>
+                  <td className="px-5 py-row">{week.phase}</td>
+                  <td
+                    className={
+                      week.status === "blocked" ? "px-5 py-row text-warn" : "px-5 py-row text-ink-2"
+                    }
+                  >
+                    {status} · {week.purpose}
+                  </td>
+                  <td className="px-5 py-row text-right tabular-nums">
+                    {decimalHours(week.plannedDurationS)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function RaceWeekProjection(props: {
+  readonly data: ReturnType<typeof PlanActiveProjectionDataSchema.parse>;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const season = props.data.season;
+  const raceWeek = season?.raceWeek;
+  if (season === undefined || raceWeek === null || raceWeek === undefined) {
+    return <StatusCard title="Race week" support="This Plan has no goal-race week." />;
+  }
+  return (
+    <section className="grid overflow-hidden rounded-card bg-surface shadow-elev-1">
+      <div className="grid gap-row p-5">
+        <div className="flex flex-col gap-row sm:flex-row sm:items-start sm:justify-between">
+          <div className={SUPPORT_PAIR}>
+            <h2
+              id="plan-race-week-heading"
+              tabIndex={-1}
+              className="m-0 text-xl font-semibold outline-none"
+            >
+              Race week
+            </h2>
+            <p className="m-0 text-ink-2">Final seven Plan days</p>
+          </div>
+          <Button type="button" variant="outline" onClick={() => actions?.closeRaceWeek()}>
+            Back to Season
+          </Button>
+        </div>
+        <div className="flex flex-col gap-row border-t border-line pt-row sm:flex-row sm:items-start sm:justify-between">
+          <div className={SUPPORT_PAIR}>
+            <p className="m-0 text-sm font-medium uppercase tracking-wide text-warn">
+              Race day ·{" "}
+              {formatCivilDate(raceWeek.raceDate, {
+                weekday: "short",
+                day: "numeric",
+                month: "short",
+              })}
+            </p>
+            <h3 className="m-0 text-lg font-semibold">{props.data.plan.name}</h3>
+            <p className="m-0 text-sm text-ink-2">Goal: {props.data.plan.primaryGoal}</p>
+          </div>
+          {season.priority === null ? null : (
+            <span className="self-start rounded-full border border-warn px-3 py-1 text-sm text-warn">
+              {season.priority} priority
+            </span>
+          )}
+        </div>
+        <div className="grid gap-row border-t border-line pt-row sm:grid-cols-3">
+          {[
+            ["Training", raceWeek.trainingDurationS],
+            ["Race", raceWeek.raceDurationS],
+            ["Total", raceWeek.totalDurationS],
+          ].map(([label, value]) => (
+            <div key={String(label)} className={SUPPORT_PAIR}>
+              <span className="text-sm text-ink-2">{label}</span>
+              <strong className="text-2xl tabular-nums">{clockTime(Number(value))}</strong>
+            </div>
+          ))}
+        </div>
+        {props.data.matchSync?.awaitingSync === true ? (
+          <div
+            className="flex items-start gap-row rounded-ctl bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] p-3"
+            role="status"
+          >
+            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <p className="m-0 font-medium">Intervals sync is down</p>
+              <p className="m-0 text-sm text-ink-2">
+                Some race-week workouts may be missing in Intervals; the Plan below is
+                authoritative.
+              </p>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <div className="max-w-full overflow-x-auto border-t border-line">
+        <table className="w-full min-w-[640px] border-collapse text-left text-sm">
+          <thead className="bg-sunk text-ink-2">
+            <tr>
+              <th scope="col" className="px-5 py-3 font-medium">
+                Day
+              </th>
+              <th scope="col" className="px-5 py-3 font-medium">
+                Workout
+              </th>
+              <th scope="col" className="px-5 py-3 font-medium">
+                Time
+              </th>
+              <th scope="col" className="px-5 py-3 font-medium">
+                Purpose
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {raceWeek.days.map((day) => {
+              return (
+                <tr
+                  key={day.date}
+                  className={day.workoutId === null ? undefined : "hover:bg-surface-2"}
+                >
+                  <td className="px-5 py-row text-ink-2">{day.weekday}</td>
+                  <td className="px-5 py-row font-medium">
+                    {day.workoutId === null ? (
+                      day.name
+                    ) : (
+                      <button
+                        id={`race-week-workout-${day.workoutId}`}
+                        type="button"
+                        className="bg-transparent p-0 text-left font-medium text-ink underline-offset-4 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                        onClick={() => actions?.openWorkout(day.workoutId!)}
+                      >
+                        {day.name}
+                      </button>
+                    )}
+                  </td>
+                  <td className="px-5 py-row tabular-nums text-ink-2">
+                    {day.durationS === null ? "—" : clockTime(day.durationS)}
+                  </td>
+                  <td
+                    className={
+                      day.kind === "race" ? "px-5 py-row text-warn" : "px-5 py-row text-ink-2"
+                    }
+                  >
+                    {day.purpose}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function ActiveProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
   const transition = useEnduragentStore((state) => state.plan.transition);
@@ -2046,11 +2338,13 @@ function ActiveProjection(): ReactElement {
   const [revisionText, setRevisionText] = useState("");
   const evidenceTrigger = useRef<HTMLButtonElement>(null);
   const endCancel = useRef<HTMLButtonElement>(null);
-  const previousScenario = useRef(model?.scenarioId ?? null);
+  const previousScenario = useRef<string | null>(null);
   const selectedProposalKey =
     typeof model?.data.selectedProposalId === "string" ? model.data.selectedProposalId : null;
   const failedRevisionText =
     typeof model?.data.proposalRevisionText === "string" ? model.data.proposalRevisionText : "";
+  const focusData = PlanActiveProjectionDataSchema.safeParse(model?.data);
+  const returnFocusId = focusData.success ? (focusData.data.returnFocusId ?? null) : null;
   useEffect(() => {
     setProposalMode(model?.scenarioId === "PL-S022" ? "edit" : "proposal");
     setRevisionText(model?.scenarioId === "PL-S022" ? failedRevisionText : "");
@@ -2059,27 +2353,44 @@ function ActiveProjection(): ReactElement {
     const current = model?.scenarioId ?? null;
     const previous = previousScenario.current;
     previousScenario.current = current;
-    if (current === previous || previous === null) return;
+    if (
+      current === previous ||
+      (previous === null && current !== "PL-S006" && current !== "PL-S009")
+    )
+      return;
     const focusId =
       current === "PL-S004"
         ? "plan-history-trigger"
         : current === "PL-S005"
           ? "plan-history-heading"
-          : current === "PL-S008" ||
-              current === "PL-S026" ||
-              current === "PL-S027" ||
-              current === "PL-S101"
-            ? "plan-history-result-heading"
-            : current !== null && ["PL-S090", "PL-S091", "PL-S092", "PL-S093"].includes(current)
-              ? "plan-settings-heading"
-              : null;
-    if (focusId === null) return;
-    requestAnimationFrame(() => document.getElementById(focusId)?.focus());
-  }, [model?.scenarioId]);
+          : current === "PL-S006"
+            ? "plan-season-heading"
+            : current === "PL-S009"
+              ? "plan-race-week-heading"
+              : current === "PL-S008" ||
+                  current === "PL-S026" ||
+                  current === "PL-S027" ||
+                  current === "PL-S101"
+                ? "plan-history-result-heading"
+                : current !== null && ["PL-S090", "PL-S091", "PL-S092", "PL-S093"].includes(current)
+                  ? "plan-settings-heading"
+                  : null;
+    if (focusId === null && returnFocusId === null) return;
+    requestAnimationFrame(() => {
+      const requested = returnFocusId === null ? null : document.getElementById(returnFocusId);
+      (requested ?? (focusId === null ? null : document.getElementById(focusId)))?.focus();
+    });
+  }, [model?.scenarioId, returnFocusId]);
   if (model === null) return <StatusCard title="Plan" support="Refreshing your Plan…" />;
   const parsed = PlanActiveProjectionDataSchema.safeParse(model.data);
   if (!parsed.success) return <StatusCard title={model.title} support={model.summary} />;
   const data = parsed.data;
+  if (model.scenarioId === "PL-S006") {
+    return <SeasonProjection data={data} />;
+  }
+  if (model.scenarioId === "PL-S009") {
+    return <RaceWeekProjection data={data} />;
+  }
   if (
     ["PL-S082", "PL-S083", "PL-S084", "PL-S085", "PL-S086", "PL-S087"].includes(model.scenarioId)
   ) {
@@ -2130,7 +2441,9 @@ function ActiveProjection(): ReactElement {
   const selectedWorkout =
     data.selectedWorkoutId === undefined || data.selectedWorkoutId === null
       ? null
-      : (data.workouts.find((workout) => workout.id === data.selectedWorkoutId) ?? null);
+      : (data.selectedWorkout ??
+        data.workouts.find((workout) => workout.id === data.selectedWorkoutId) ??
+        null);
   const selectedProposal =
     data.selectedProposalId === undefined || data.selectedProposalId === null
       ? null
@@ -2175,15 +2488,26 @@ function ActiveProjection(): ReactElement {
               </p>
             </div>
           </div>
-          <Button
-            id="plan-history-trigger"
-            type="button"
-            variant="outline"
-            onClick={() => actions?.openHistory()}
-          >
-            <History className="size-4" aria-hidden="true" />
-            Plan history
-          </Button>
+          <div className="flex flex-wrap justify-end gap-inset">
+            <Button
+              id="plan-season-trigger"
+              type="button"
+              variant="outline"
+              onClick={() => actions?.openSeason()}
+            >
+              <CalendarDays className="size-4" aria-hidden="true" />
+              View season
+            </Button>
+            <Button
+              id="plan-history-trigger"
+              type="button"
+              variant="outline"
+              onClick={() => actions?.openHistory()}
+            >
+              <History className="size-4" aria-hidden="true" />
+              Plan history
+            </Button>
+          </div>
         </div>
         <div className="flex items-start gap-row border-t border-line pt-row">
           <Activity className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />

@@ -47,6 +47,10 @@ function actions(): PlanActions {
     openReplacementActivePlan: vi.fn(),
     reconcilePlan: vi.fn(),
     verifyReconciliation: vi.fn(),
+    openSeason: vi.fn(),
+    closeSeason: vi.fn(),
+    openRaceWeek: vi.fn(),
+    closeRaceWeek: vi.fn(),
     openWorkout: vi.fn(),
     closeWorkout: vi.fn(),
     resolveWorkoutMatch: vi.fn(),
@@ -1520,6 +1524,161 @@ describe("Plan surface", () => {
     expect(within(result).getByRole("button", { name: "Back to Plan" })).toBeInTheDocument();
   });
 
+  it("renders the complete Season and authoritative Race week at compact-safe widths", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const raceWorkoutId = "00000000000000000000000004";
+    const weeks = Array.from({ length: 12 }, (_, index) => {
+      const start = new Date(Date.UTC(2026, 6, 13 + index * 7));
+      const end = new Date(Date.UTC(2026, 6, 19 + index * 7));
+      return {
+        weekIndex: index + 1,
+        startDate: start.toISOString().slice(0, 10),
+        endDate: end.toISOString().slice(0, 10),
+        phase: index === 11 ? "Race" : index >= 10 ? "Taper" : "Build",
+        purpose: index === 11 ? "Goal race" : "Follow the approved week",
+        status:
+          index === 5
+            ? ("current" as const)
+            : index < 5
+              ? ("completed" as const)
+              : ("planned" as const),
+        plannedDurationS: index === 11 ? 29_100 : 32_400,
+      };
+    });
+    const raceDays = [
+      ["2026-09-28", "Mon", null, "Rest", null, "Absorb", "rest"],
+      ["2026-09-29", "Tue", "openers", "Openers · 3×1 min", 2_700, "Sharpen", "training"],
+      ["2026-09-30", "Wed", "easy", "Easy endurance", 3_000, "Maintain", "training"],
+      ["2026-10-01", "Thu", null, "Rest", null, "Absorb", "rest"],
+      ["2026-10-02", "Fri", "opener", "Race opener", 1_800, "Sharpen", "training"],
+      ["2026-10-03", "Sat", "spin", "Pre-race spin", 3_600, "Prime", "training"],
+      ["2026-10-04", "Sun", raceWorkoutId, "Gran Fondo Almaty", 18_000, "Race", "race"],
+    ].map(([date, weekday, workoutId, name, durationS, purpose, kind]) => ({
+      date,
+      weekday,
+      workoutId,
+      name,
+      durationS,
+      purpose,
+      kind,
+    }));
+    const data = PlanActiveProjectionDataSchema.parse({
+      plan: {
+        id: planId,
+        name: "Gran Fondo Almaty",
+        primaryGoal: "Finish in the front half",
+        startDate: "2026-07-13",
+        targetDate: "2026-10-04",
+        kind: "full-plan",
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 58,
+        plannedDurationS: 309_600,
+      },
+      today: "2026-08-18",
+      weekIndex: 6,
+      todayWorkout: null,
+      workouts: [],
+      matchSync: { lastSuccessfulSyncAtMs: 1_787_477_200_000, awaitingSync: true },
+      selectedWorkoutId: null,
+      season: {
+        priority: "A",
+        distanceKm: 120,
+        weeks,
+        constraint: {
+          weekIndex: 8,
+          title: "FTP refresh required before Build 2",
+          detail: "Later durations stay fixed; power targets wait for refreshed FTP.",
+        },
+        raceWeek: {
+          startDate: "2026-09-28",
+          endDate: "2026-10-04",
+          raceDate: "2026-10-04",
+          trainingDurationS: 11_100,
+          raceDurationS: 18_000,
+          totalDurationS: 29_100,
+          days: raceDays,
+        },
+      },
+    });
+    const seasonState = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S006",
+      projection: "active",
+      planId,
+      data,
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state: seasonState },
+        lastReady: seasonState,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Season" })).toHaveFocus());
+    expect(screen.getByRole("columnheader", { name: "Week" })).toBeInTheDocument();
+    expect(screen.getByText("Wk 12")).toBeInTheDocument();
+    expect(screen.getByRole("row", { current: true })).toHaveTextContent("Wk 6");
+    expect(screen.getByText(/FTP refresh required before Build 2/u)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Race week" }));
+    expect(planActions.openRaceWeek).toHaveBeenCalledOnce();
+
+    const raceState = { ...seasonState, scenarioId: "PL-S009" as const };
+    document.documentElement.setAttribute("data-theme", "dark");
+    act(() =>
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: raceState }),
+    );
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Race week" })).toHaveFocus());
+    expect(screen.getByText("3:05")).toBeInTheDocument();
+    expect(screen.getAllByText("5:00")).toHaveLength(2);
+    expect(screen.getByText("8:05")).toBeInTheDocument();
+    expect(screen.getByText(/Plan below is authoritative/u)).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(8);
+    await user.click(screen.getByRole("button", { name: "Gran Fondo Almaty" }));
+    expect(planActions.openWorkout).toHaveBeenCalledWith(raceWorkoutId);
+    const workoutDetailState = {
+      ...raceState,
+      scenarioId: "PL-S021" as const,
+      data: {
+        ...data,
+        selectedWorkoutId: raceWorkoutId,
+        selectedWorkoutSourceScenarioId: "PL-S009" as const,
+        selectedWorkout: {
+          id: raceWorkoutId,
+          date: "2026-10-04",
+          sport: "cycling",
+          name: "Gran Fondo Almaty",
+          durationS: 18_000,
+        },
+      },
+    };
+    act(() =>
+      useEnduragentStore
+        .getState()
+        .setPlanHydration({ status: "ready", state: workoutDetailState }),
+    );
+    const returnedRaceState = {
+      ...raceState,
+      data: {
+        ...data,
+        returnFocusId: `race-week-workout-${raceWorkoutId}`,
+      },
+    };
+    act(() =>
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: returnedRaceState }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Gran Fondo Almaty" })).toHaveFocus(),
+    );
+    await user.click(screen.getByRole("button", { name: "Back to Season" }));
+    expect(planActions.closeRaceWeek).toHaveBeenCalledOnce();
+  });
+
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {
     const [view, page, tokens] = await Promise.all([
       readFile(resolve(import.meta.dirname, "..", "src", "ui", "plan", "PlanView.tsx"), "utf8"),
@@ -1528,6 +1687,8 @@ describe("Plan surface", () => {
     ]);
 
     expect(view).toContain("rounded-card bg-surface");
+    expect(view).toContain("min-w-[720px]");
+    expect(view).toContain("overflow-x-auto");
     expect(view).toContain("text-ink-2");
     expect(view).not.toMatch(/#[\da-f]{3,8}/iu);
     expect(page).toContain("w-[min(680px,calc(100%-64px))]");

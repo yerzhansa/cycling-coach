@@ -83,6 +83,10 @@ export interface PlanActions {
   openReplacementActivePlan(): void;
   reconcilePlan(): void;
   verifyReconciliation(): void;
+  openSeason(): void;
+  closeSeason(): void;
+  openRaceWeek(): void;
+  closeRaceWeek(): void;
   openWorkout(workoutId: string): void;
   closeWorkout(): void;
   resolveWorkoutMatch(workoutId: string, activityId: string, decision: "confirm" | "reject"): void;

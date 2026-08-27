@@ -1160,6 +1160,7 @@ describe("Plan view adapter", () => {
       commandId: "open-command",
       planId: "00000000000000000000000003",
       workoutId: "00000000000000000000000004",
+      sourceScenarioId: "PL-S004",
     });
     expect(subject.executePlanTransition).toHaveBeenNthCalledWith(2, {
       transitionId: "PL-T14",
@@ -1169,6 +1170,72 @@ describe("Plan view adapter", () => {
       activityId: "activity-1",
       decision: "confirm",
     });
+  });
+
+  it("navigates active Plan to Season and Race week with exact source commands", async () => {
+    const planId = "00000000000000000000000003";
+    const active = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId,
+    });
+    const season = { ...active, scenarioId: "PL-S006" as const };
+    const raceWeek = { ...active, scenarioId: "PL-S009" as const };
+    const subject = harness({
+      ids: ["season-open", "race-open", "race-close", "season-close"],
+      getPlanState: async () => ({ status: "ready", state: active }),
+      executePlanTransition: async (command) => {
+        const state =
+          command.transitionId === "PL-T31"
+            ? season
+            : command.transitionId === "PL-T39" && command.destinationScenarioId === "PL-S009"
+              ? raceWeek
+              : command.transitionId === "PL-T39" && command.destinationScenarioId === "PL-S006"
+                ? season
+                : active;
+        return { status: "completed", state };
+      },
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.openSeason();
+    await settle();
+    subject.adapter.openRaceWeek();
+    await settle();
+    subject.adapter.closeRaceWeek();
+    await settle();
+    subject.adapter.closeSeason();
+    await settle();
+
+    expect(subject.executePlanTransition.mock.calls.map(([command]) => command)).toEqual([
+      { transitionId: "PL-T31", commandId: "season-open", planId },
+      {
+        transitionId: "PL-T39",
+        commandId: "race-open",
+        action: "open",
+        sourceScenarioId: "PL-S006",
+        destinationScenarioId: "PL-S009",
+        returnFocusId: "plan-race-week-trigger",
+      },
+      {
+        transitionId: "PL-T39",
+        commandId: "race-close",
+        action: "back",
+        sourceScenarioId: "PL-S009",
+        destinationScenarioId: "PL-S006",
+        returnFocusId: "plan-race-week-trigger",
+      },
+      {
+        transitionId: "PL-T39",
+        commandId: "season-close",
+        action: "back",
+        sourceScenarioId: "PL-S006",
+        destinationScenarioId: "PL-S004",
+        returnFocusId: "plan-season-trigger",
+      },
+    ]);
   });
 
   it("resumes an interrupted reconciliation once after hydration", async () => {

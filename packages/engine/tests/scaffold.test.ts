@@ -125,6 +125,7 @@ describe("engine scaffold", () => {
       "projectPlanHistoryEligibility",
       "projectPlanProposalDiff",
       "projectPlanReconciliation",
+      "projectPlanSeason",
       "projectWorkoutMatches",
       "provenanceForSourceBearingData",
       "provenanceOfMessages",
