@@ -62,10 +62,7 @@ export const CreatePlanningRequestPayloadSchema = z
         message: "workout review requires an attachment and selected Workout",
       });
     }
-    if (
-      value.sourceSnapshot.selectedWorkout !== null &&
-      value.sourceSnapshot.attachment === null
-    ) {
+    if (value.sourceSnapshot.selectedWorkout !== null && value.sourceSnapshot.attachment === null) {
       context.addIssue({
         code: "custom",
         path: ["sourceSnapshot", "attachment"],
@@ -173,6 +170,16 @@ export type PlanningRequestReadModel = z.infer<typeof PlanningRequestReadModelSc
 export const PlanningRequestDeliverySchema = z
   .object({
     requestId: PlanningRequestIdSchema,
+    source: z
+      .object({
+        kind: PlanningRequestKindSchema,
+        intent: z.string().min(1).max(20_000),
+        chatId: PlanningRequestIdSchema,
+        messageId: PlanningRequestIdSchema,
+        attachmentId: PlanningRequestIdSchema.nullable(),
+      })
+      .strict()
+      .nullable(),
     state: z.enum(["pending", "failed", "delivered", "cancelled"]),
     attemptCount: z.number().int().nonnegative(),
     failureCode: z.string().min(1).max(128).nullable(),
@@ -220,10 +227,22 @@ export type PlanningRequestDelivery = z.infer<typeof PlanningRequestDeliverySche
 
 export const CreatePlanningRequestRpcParamsSchema = z
   .object({ payload: CreatePlanningRequestPayloadSchema })
-  .strict();
-export type CreatePlanningRequestRpcParams = z.infer<
-  typeof CreatePlanningRequestRpcParamsSchema
->;
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.payload.kind === "workout_review" ||
+      value.payload.source.attachmentId !== undefined ||
+      value.payload.sourceSnapshot.attachment !== null ||
+      value.payload.sourceSnapshot.selectedWorkout !== null
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["payload"],
+        message: "Workout handoffs require trusted daemon source resolution",
+      });
+    }
+  });
+export type CreatePlanningRequestRpcParams = z.infer<typeof CreatePlanningRequestRpcParamsSchema>;
 
 export const CreatePlanningRequestRpcResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("accepted"), delivery: PlanningRequestDeliverySchema }).strict(),
@@ -234,9 +253,36 @@ export const CreatePlanningRequestRpcResultSchema = z.discriminatedUnion("status
     })
     .strict(),
 ]);
-export type CreatePlanningRequestRpcResult = z.infer<
-  typeof CreatePlanningRequestRpcResultSchema
+export type CreatePlanningRequestRpcResult = z.infer<typeof CreatePlanningRequestRpcResultSchema>;
+
+export const CreateWorkoutPlanningRequestRpcParamsSchema = z
+  .object({
+    requestId: PlanningRequestIdSchema,
+    intent: z.string().min(1).max(20_000),
+    source: z
+      .object({
+        chatId: PlanningRequestIdSchema,
+        messageId: PlanningRequestIdSchema,
+        attachmentId: PlanningRequestIdSchema,
+      })
+      .strict(),
+    requestedDate: PlanningRequestCivilDateSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.requestId === value.source.messageId ||
+      value.requestId === value.source.attachmentId ||
+      value.source.messageId === value.source.attachmentId
+    ) {
+      context.addIssue({ code: "custom", message: "Planning request identities must be distinct" });
+    }
+  });
+export type CreateWorkoutPlanningRequestRpcParams = z.infer<
+  typeof CreateWorkoutPlanningRequestRpcParamsSchema
 >;
+export const CreateWorkoutPlanningRequestRpcResultSchema = CreatePlanningRequestRpcResultSchema;
+export type CreateWorkoutPlanningRequestRpcResult = CreatePlanningRequestRpcResult;
 
 export const GetPlanningRequestRpcParamsSchema = z
   .object({ requestId: PlanningRequestIdSchema })
@@ -255,20 +301,28 @@ export const RetryPlanningRequestRpcResultSchema = GetPlanningRequestRpcResultSc
 export type RetryPlanningRequestRpcResult = GetPlanningRequestRpcResult;
 
 export const ResumePlanningRequestsRpcParamsSchema = z.object({}).strict();
-export type ResumePlanningRequestsRpcParams = z.infer<
-  typeof ResumePlanningRequestsRpcParamsSchema
->;
+export type ResumePlanningRequestsRpcParams = z.infer<typeof ResumePlanningRequestsRpcParamsSchema>;
 export const ResumePlanningRequestsRpcResultSchema = z
   .object({ deliveries: z.array(PlanningRequestDeliverySchema) })
   .strict();
-export type ResumePlanningRequestsRpcResult = z.infer<
-  typeof ResumePlanningRequestsRpcResultSchema
->;
+export type ResumePlanningRequestsRpcResult = z.infer<typeof ResumePlanningRequestsRpcResultSchema>;
+
+export const ListPlanningRequestsRpcParamsSchema = z
+  .object({ chatId: PlanningRequestIdSchema })
+  .strict();
+export type ListPlanningRequestsRpcParams = z.infer<typeof ListPlanningRequestsRpcParamsSchema>;
+export const ListPlanningRequestsRpcResultSchema = z
+  .object({ deliveries: z.array(PlanningRequestDeliverySchema) })
+  .strict();
+export type ListPlanningRequestsRpcResult = z.infer<typeof ListPlanningRequestsRpcResultSchema>;
 
 export interface PlanningRequestOperations {
   createPlanningRequest?(
     request: CreatePlanningRequestRpcParams,
   ): Promise<CreatePlanningRequestRpcResult>;
+  createWorkoutPlanningRequest?(
+    request: CreateWorkoutPlanningRequestRpcParams,
+  ): Promise<CreateWorkoutPlanningRequestRpcResult>;
   getPlanningRequest?(request: GetPlanningRequestRpcParams): Promise<GetPlanningRequestRpcResult>;
   retryPlanningRequest?(
     request: RetryPlanningRequestRpcParams,
@@ -276,4 +330,7 @@ export interface PlanningRequestOperations {
   resumePlanningRequests?(
     request: ResumePlanningRequestsRpcParams,
   ): Promise<ResumePlanningRequestsRpcResult>;
+  listPlanningRequests?(
+    request: ListPlanningRequestsRpcParams,
+  ): Promise<ListPlanningRequestsRpcResult>;
 }

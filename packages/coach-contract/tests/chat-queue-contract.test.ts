@@ -7,8 +7,8 @@ import {
 } from "../src/index.js";
 
 describe("chat queue contract", () => {
-  it("ships protocol 30 and rejects a blank enqueue without attachments", () => {
-    expect(PROTOCOL_VERSION).toBe(30);
+  it("ships protocol 31 and rejects a blank enqueue without attachments", () => {
+    expect(PROTOCOL_VERSION).toBe(31);
     expect(() =>
       EnqueueChatMessageRequestSchema.parse({
         chatId: "desktop",

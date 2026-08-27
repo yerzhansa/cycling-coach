@@ -85,8 +85,8 @@ describe("service-aware arbitration", () => {
     const handshake = vi.fn(async () => ({
       type: "handshake" as const,
       status: "accepted" as const,
-      clientProtocolVersion: 30 as const,
-      serverProtocolVersion: 30 as const,
+      clientProtocolVersion: 31 as const,
+      serverProtocolVersion: 31 as const,
       owner: "service-managed" as const,
       athleteHome: home.root,
       rendererCapability,

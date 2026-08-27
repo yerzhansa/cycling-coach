@@ -1,8 +1,12 @@
 import {
   CreatePlanningRequestRpcParamsSchema,
   CreatePlanningRequestRpcResultSchema,
+  CreateWorkoutPlanningRequestRpcParamsSchema,
+  CreateWorkoutPlanningRequestRpcResultSchema,
   GetPlanningRequestRpcParamsSchema,
   GetPlanningRequestRpcResultSchema,
+  ListPlanningRequestsRpcParamsSchema,
+  ListPlanningRequestsRpcResultSchema,
   PlanningRequestDeliverySchema,
   ResumePlanningRequestsRpcParamsSchema,
   ResumePlanningRequestsRpcResultSchema,
@@ -10,6 +14,8 @@ import {
   RetryPlanningRequestRpcResultSchema,
   type PlanningRequestDelivery,
   type PlanningRequestOperations,
+  type CreatePlanningRequestPayload,
+  type CreatePlanningRequestRpcResult,
 } from "@enduragent/coach-contract";
 import {
   PlanningRequestStoreError,
@@ -29,6 +35,15 @@ export interface PlanningRequestDeliveryServiceInput {
   readonly requests: PlanningRequestRepository;
   readonly identity: AuthoredIdentity;
   readonly resolveTarget: () => Promise<PlanningRequestTarget>;
+  readonly resolveWorkoutSource?: (input: {
+    readonly chatId: string;
+    readonly attachmentId: string;
+  }) => Promise<{
+    readonly attachment: NonNullable<CreatePlanningRequestPayload["sourceSnapshot"]["attachment"]>;
+    readonly selectedWorkout: NonNullable<
+      CreatePlanningRequestPayload["sourceSnapshot"]["selectedWorkout"]
+    >;
+  }>;
 }
 
 export interface PlanningRequestDeliveryServiceDependencies {
@@ -48,6 +63,16 @@ async function project(
     planningRecord?.payloadHash === record.payloadHash ? planningRecord : undefined;
   const delivery = {
     requestId: record.requestId,
+    source:
+      record.payload === null
+        ? null
+        : {
+            kind: record.payload.kind,
+            intent: record.payload.intent,
+            chatId: record.payload.source.chatId,
+            messageId: record.payload.source.messageId,
+            attachmentId: record.payload.source.attachmentId ?? null,
+          },
     state: record.state,
     attemptCount: record.attemptCount,
     failureCode: record.state === "failed" ? record.failureCode : null,
@@ -148,35 +173,76 @@ export function createPlanningRequestDeliveryService(
     return project(input.requests, delivered);
   };
 
+  const create = async (
+    payload: CreatePlanningRequestPayload,
+  ): Promise<CreatePlanningRequestRpcResult> => {
+    let record: ChatPlanOutboxRecord;
+    try {
+      record = await input.outbox.createOrGet({
+        payload,
+        createdAtMs: input.identity.hlcStamp().physicalMs,
+      });
+    } catch (error) {
+      if (error instanceof ChatPlanOutboxStoreError) {
+        if (error.code === "request-conflict") {
+          return CreatePlanningRequestRpcResultSchema.parse({
+            status: "rejected",
+            reason: "request_conflict",
+          });
+        }
+        if (error.code === "invalid-create") {
+          return CreatePlanningRequestRpcResultSchema.parse({
+            status: "rejected",
+            reason: "invalid_request",
+          });
+        }
+      }
+      throw error;
+    }
+    return CreatePlanningRequestRpcResultSchema.parse({
+      status: "accepted",
+      delivery: await delivery(record),
+    });
+  };
+
   return {
     async createPlanningRequest(request) {
       const parsed = CreatePlanningRequestRpcParamsSchema.parse(request);
-      let record: ChatPlanOutboxRecord;
-      try {
-        record = await input.outbox.createOrGet({
-          payload: parsed.payload,
-          createdAtMs: input.identity.hlcStamp().physicalMs,
+      return create(parsed.payload);
+    },
+
+    async createWorkoutPlanningRequest(request) {
+      const parsed = CreateWorkoutPlanningRequestRpcParamsSchema.parse(request);
+      if (input.resolveWorkoutSource === undefined) {
+        return CreateWorkoutPlanningRequestRpcResultSchema.parse({
+          status: "rejected",
+          reason: "invalid_request",
         });
-      } catch (error) {
-        if (error instanceof ChatPlanOutboxStoreError) {
-          if (error.code === "request-conflict") {
-            return CreatePlanningRequestRpcResultSchema.parse({
-              status: "rejected",
-              reason: "request_conflict",
-            });
-          }
-          if (error.code === "invalid-create") {
-            return CreatePlanningRequestRpcResultSchema.parse({
-              status: "rejected",
-              reason: "invalid_request",
-            });
-          }
-        }
-        throw error;
       }
-      return CreatePlanningRequestRpcResultSchema.parse({
-        status: "accepted",
-        delivery: await delivery(record),
+      let source: Awaited<ReturnType<NonNullable<typeof input.resolveWorkoutSource>>>;
+      try {
+        source = await input.resolveWorkoutSource({
+          chatId: parsed.source.chatId,
+          attachmentId: parsed.source.attachmentId,
+        });
+      } catch {
+        return CreateWorkoutPlanningRequestRpcResultSchema.parse({
+          status: "rejected",
+          reason: "invalid_request",
+        });
+      }
+      const capturedAtMs = input.identity.hlcStamp().physicalMs;
+      return create({
+        requestId: parsed.requestId,
+        kind: "workout_review",
+        intent: parsed.intent,
+        source: parsed.source,
+        sourceSnapshot: {
+          capturedAt: new Date(capturedAtMs).toISOString(),
+          attachment: source.attachment,
+          selectedWorkout: source.selectedWorkout,
+        },
+        ...(parsed.requestedDate === undefined ? {} : { requestedDate: parsed.requestedDate }),
       });
     },
 
@@ -206,6 +272,14 @@ export function createPlanningRequestDeliveryService(
       const deliveries: PlanningRequestDelivery[] = [];
       for (const record of records) deliveries.push(await delivery(record));
       return ResumePlanningRequestsRpcResultSchema.parse({ deliveries });
+    },
+
+    async listPlanningRequests(request) {
+      const parsed = ListPlanningRequestsRpcParamsSchema.parse(request);
+      const records = await input.outbox.readByChatId(parsed.chatId);
+      return ListPlanningRequestsRpcResultSchema.parse({
+        deliveries: await Promise.all(records.map((record) => project(input.requests, record))),
+      });
     },
   };
 }
