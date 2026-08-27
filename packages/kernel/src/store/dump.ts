@@ -28,6 +28,7 @@ export const DUMP_TABLES = [
   { table: "analytics_curve_generation_promotion", orderBy: "generation_id" },
   { table: "anchor_history", orderBy: "id" },
   { table: "athlete", orderBy: "id" },
+  { table: "chat_plan_outbox", orderBy: "request_id" },
   { table: "dedup_confirmation", orderBy: "id" },
   { table: "field_merge_override_overlay", orderBy: "id" },
   { table: "ingest_candidate_index", orderBy: "candidate_id" },
