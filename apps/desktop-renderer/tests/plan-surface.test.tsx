@@ -75,6 +75,8 @@ function actions(): PlanActions {
     verifyPlanCleanup: vi.fn(),
     openRaceOutcome: vi.fn(),
     recordRaceOutcome: vi.fn(),
+    openEndedConversation: vi.fn(),
+    closeEndedConversation: vi.fn(),
     openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
@@ -456,13 +458,26 @@ describe("Plan surface", () => {
       projection: "draft",
       planId: draft.planId,
       revision: 1,
-      data: planCoachData({ draft, plan, startDate }),
+      data: planCoachData({
+        draft,
+        plan,
+        startDate,
+        course: {
+          status: "omitted",
+          accepted: null,
+          candidate: null,
+          fileName: null,
+          detail: null,
+        },
+      }),
     });
     useEnduragentStore.setState({
       plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
       planActions,
     });
     render(<PlanView />);
+    expect(screen.getByRole("heading", { name: "Race Course · optional" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^Race Course$/ })).not.toBeInTheDocument();
 
     expect(screen.getByText("58 workouts · 86 h · 12 weeks")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Change" }));
@@ -821,6 +836,83 @@ describe("Plan surface", () => {
     expect(screen.getByText("Not completed", { selector: "strong" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Start a new Plan" }));
     expect(planActions.startPlan).toHaveBeenCalledOnce();
+  });
+
+  it("opens an ended Plan conversation as read-only History", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const plan = {
+      id: planId,
+      name: "Gran Fondo Almaty",
+      primaryGoal: "Finish in the front half",
+      startDate: "1998-07-13",
+      targetDate: "1998-10-04",
+      kind: "full-plan" as const,
+      totalWeeks: 12,
+      weekStartDay: 1,
+      workoutCount: 20,
+      plannedDurationS: 72_000,
+    };
+    const ended = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S089",
+      projection: "ended",
+      planId,
+      reconciliation: {
+        status: "verified",
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: "1998-10-06",
+        error: null,
+      },
+      data: { plan, endedAtMs: 20, cleanupItems: [] },
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state: ended },
+        lastReady: ended,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    await user.click(screen.getByRole("button", { name: "View coach conversation" }));
+    expect(planActions.openEndedConversation).toHaveBeenCalledOnce();
+
+    const history = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S102",
+      projection: "coach",
+      planId,
+      data: planCoachData({
+        messages: [
+          {
+            id: "coach-1",
+            turnId: null,
+            role: "coach",
+            text: "Let’s build this here in Plan.",
+          },
+          {
+            id: "athlete-1",
+            turnId: "turn-1",
+            role: "athlete",
+            text: "Gran Fondo Almaty on 4 October.",
+          },
+        ],
+      }),
+    });
+    act(() => useEnduragentStore.getState().setPlanHydration({ status: "ready", state: history }));
+    expect(screen.getByRole("heading", { name: "Plan conversation" })).toBeInTheDocument();
+    expect(screen.getByText("Gran Fondo Almaty on 4 October.")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "Reply to your Plan coach" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to ended Plan" }));
+    expect(planActions.closeEndedConversation).toHaveBeenCalledOnce();
   });
 
   it("keeps replacement confirmation safe and cleanup recovery explicit", async () => {
@@ -1656,7 +1748,7 @@ describe("Plan surface", () => {
       ["2026-09-29", "Tue", "openers", "Openers · 3×1 min", 2_700, "Sharpen", "training"],
       ["2026-09-30", "Wed", "easy", "Easy endurance", 3_000, "Maintain", "training"],
       ["2026-10-01", "Thu", null, "Rest", null, "Absorb", "rest"],
-      ["2026-10-02", "Fri", "opener", "Race opener", 1_800, "Sharpen", "training"],
+      ["2026-10-02", "Fri", "opener", "Race opener", 1_800, "Blocked", "training"],
       ["2026-10-03", "Sat", "spin", "Pre-race spin", 3_600, "Prime", "training"],
       ["2026-10-04", "Sun", raceWorkoutId, "Gran Fondo Almaty", 18_000, "Race", "race"],
     ].map(([date, weekday, workoutId, name, durationS, purpose, kind]) => ({
@@ -1742,6 +1834,7 @@ describe("Plan surface", () => {
     expect(screen.getAllByText("5:00")).toHaveLength(2);
     expect(screen.getByText("8:05")).toBeInTheDocument();
     expect(screen.getByText(/Plan below is authoritative/u)).toBeInTheDocument();
+    expect(screen.getByText("Blocked")).toHaveClass("text-warn");
     expect(screen.getAllByRole("row")).toHaveLength(8);
     await user.click(screen.getByRole("button", { name: "Gran Fondo Almaty" }));
     expect(planActions.openWorkout).toHaveBeenCalledWith(raceWorkoutId);
@@ -1882,7 +1975,11 @@ describe("Plan surface", () => {
     });
     render(<PlanView />);
 
-    const trigger = screen.getByRole("button", { name: "Race readiness" });
+    expect(screen.getByRole("heading", { name: "Predictions" })).toBeInTheDocument();
+    expect(screen.getByText("Race-day form")).toBeInTheDocument();
+    expect(screen.getByText("+4 to +9")).toBeInTheDocument();
+    expect(screen.getByText("On track — with assumptions")).toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "View race readiness" });
     await user.click(trigger);
     expect(planActions.openReadiness).toHaveBeenCalledOnce();
 
@@ -2049,7 +2146,7 @@ describe("Plan surface", () => {
     });
     act(() => useEnduragentStore.getState().setPlanHydration({ status: "ready", state: returned }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Race readiness" })).toHaveFocus(),
+      expect(screen.getByRole("button", { name: "View race readiness" })).toHaveFocus(),
     );
   });
 

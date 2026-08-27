@@ -1086,6 +1086,32 @@ function PlanCoach(): ReactElement {
         })) ?? []);
   const decision = coach.decision ?? data?.decision ?? null;
 
+  if (model?.scenarioId === "PL-S102") {
+    return (
+      <section
+        className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1"
+        data-plan-scenario="PL-S102"
+      >
+        <div className="flex flex-col gap-row sm:flex-row sm:items-start sm:justify-between">
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-lg font-semibold">Plan conversation</h2>
+            <p className="m-0 text-ink-2">Read-only history for this ended Plan.</p>
+          </div>
+          <Button type="button" variant="outline" onClick={() => actions?.closeEndedConversation()}>
+            Back to ended Plan
+          </Button>
+        </div>
+        <div className="border-t border-line pt-row">
+          <ConversationTranscript
+            messages={messages}
+            timeline={coach.timeline}
+            historyControls={false}
+          />
+        </div>
+      </section>
+    );
+  }
+
   if (data?.ftp !== undefined && data.ftp !== null && FTP_SCENARIOS.has(model?.scenarioId ?? "")) {
     return <FtpResolution ftp={data.ftp} />;
   }
@@ -1604,8 +1630,7 @@ function DraftProjection(): ReactElement {
           <span className="rounded-chip bg-sunk px-3 py-1 text-sm text-primary">Draft</span>
         </div>
         {data?.course !== undefined ? (
-          <div className="grid gap-inset border-t border-line pt-5">
-            <h3 className="m-0 text-sm font-semibold">Race Course</h3>
+          <div className="border-t border-line pt-5">
             <RaceCoursePanel course={data.course} draft />
           </div>
         ) : null}
@@ -2245,7 +2270,13 @@ function RaceWeekProjection(props: {
               })}
             </p>
             <h3 className="m-0 text-lg font-semibold">{props.data.plan.name}</h3>
-            <p className="m-0 text-sm text-ink-2">Goal: {props.data.plan.primaryGoal}</p>
+            <p className="m-0 text-sm text-ink-2">
+              Goal: {props.data.plan.primaryGoal}
+              {props.data.readiness?.courseEstimate.rangeMinutes === null ||
+              props.data.readiness?.courseEstimate.rangeMinutes === undefined
+                ? ""
+                : ` · modeled finish ${finishRange(props.data.readiness.courseEstimate.rangeMinutes)} · with assumptions`}
+            </p>
           </div>
           {season.priority === null ? null : (
             <span className="self-start rounded-full border border-warn px-3 py-1 text-sm text-warn">
@@ -2326,7 +2357,9 @@ function RaceWeekProjection(props: {
                   </td>
                   <td
                     className={
-                      day.kind === "race" ? "px-5 py-row text-warn" : "px-5 py-row text-ink-2"
+                      day.kind === "race" || day.purpose === "Blocked"
+                        ? "px-5 py-row text-warn"
+                        : "px-5 py-row text-ink-2"
                     }
                   >
                     {day.purpose}
@@ -2349,6 +2382,62 @@ function formRange(readiness: PlanReadinessProjection): string {
   const range = readiness.form.raceRange;
   if (range === null) return "Unavailable";
   return `${signed(range.min)} to ${signed(range.max)}`;
+}
+
+function PredictionsSummary(props: {
+  readonly readiness: PlanReadinessProjection | undefined;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const atRisk = props.readiness?.feasibility.verdict === "at-risk";
+  const verdict =
+    props.readiness === undefined
+      ? "Unavailable"
+      : atRisk
+        ? "At risk — here’s why"
+        : "On track — with assumptions";
+  return (
+    <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
+      <h2 className="m-0 text-base font-semibold">Predictions</h2>
+      <div className="grid gap-row sm:grid-cols-2">
+        <div className={SUPPORT_PAIR}>
+          <p className="m-0 text-sm text-ink-2">Race-day form</p>
+          <strong className="text-2xl">
+            {props.readiness === undefined ? "Unavailable" : formRange(props.readiness)}
+          </strong>
+        </div>
+        <div className={SUPPORT_PAIR}>
+          <p className="m-0 text-sm text-ink-2">Goal feasibility</p>
+          <span
+            className={`inline-flex w-fit items-center gap-inset rounded-full border px-3 py-1 text-sm ${
+              props.readiness === undefined
+                ? "border-line-2 text-ink-2"
+                : atRisk
+                  ? "border-warn text-warn"
+                  : "border-ok text-ok"
+            }`}
+          >
+            {props.readiness === undefined ? null : atRisk ? (
+              <TriangleAlert className="size-4" aria-hidden="true" />
+            ) : (
+              <CheckCircle2 className="size-4" aria-hidden="true" />
+            )}
+            {verdict}
+          </span>
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <Button
+          id="plan-readiness-trigger"
+          type="button"
+          variant="ghost"
+          onClick={() => actions?.openReadiness()}
+        >
+          View race readiness
+          <ChevronRight className="size-4" aria-hidden="true" />
+        </Button>
+      </div>
+    </section>
+  );
 }
 
 function effortDuration(durationS: number): string {
@@ -2618,7 +2707,7 @@ function ReadinessProjection(props: {
       <section className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1">
         {header}
         <div className="grid gap-row border-t border-line pt-row md:grid-cols-2">
-          <div className={SUPPORT_PAIR}>
+          <div className={`${SUPPORT_PAIR} rounded-card bg-sunk p-4`}>
             <h3 className="m-0 text-sm font-semibold">Form trajectory to race day</h3>
             <strong className="text-2xl">
               {readiness.form.current === null ? "Unavailable" : signed(readiness.form.current)} →{" "}
@@ -2626,14 +2715,14 @@ function ReadinessProjection(props: {
             </strong>
             <p className="m-0 text-sm text-ink-2">Modeled from planned Load and normal recovery.</p>
           </div>
-          <div className={SUPPORT_PAIR}>
+          <div className={`${SUPPORT_PAIR} rounded-card bg-sunk p-4`}>
             <h3 className="m-0 text-sm font-semibold">Goal feasibility</h3>
             <span className="self-start rounded-full border border-ok px-3 py-1 text-sm text-ok">
-              On track · with assumptions
+              On track — with assumptions
             </span>
             <p className="m-0 text-sm text-ink-2">{readiness.feasibility.recommendation}</p>
           </div>
-          <div className={SUPPORT_PAIR}>
+          <div className={`${SUPPORT_PAIR} rounded-card bg-sunk p-4`}>
             <div className="flex items-center justify-between gap-inset">
               <h3 className="m-0 text-sm font-semibold">Estimated CP</h3>
               <div className="flex items-center gap-inset">
@@ -2694,7 +2783,7 @@ function ReadinessProjection(props: {
               </>
             )}
           </div>
-          <div className={SUPPORT_PAIR}>
+          <div className={`${SUPPORT_PAIR} rounded-card bg-sunk p-4`}>
             <h3 className="m-0 text-sm font-semibold">Course-based finish time</h3>
             <strong className="text-2xl">
               {readiness.courseEstimate.rangeMinutes === null
@@ -3019,15 +3108,6 @@ function ActiveProjection(): ReactElement {
           </div>
           <div className="flex flex-wrap justify-end gap-inset">
             <Button
-              id="plan-readiness-trigger"
-              type="button"
-              variant="outline"
-              onClick={() => actions?.openReadiness()}
-            >
-              <Activity className="size-4" aria-hidden="true" />
-              Race readiness
-            </Button>
-            <Button
               id="plan-season-trigger"
               type="button"
               variant="outline"
@@ -3063,6 +3143,8 @@ function ActiveProjection(): ReactElement {
           </div>
         </div>
       </section>
+
+      <PredictionsSummary readiness={data.readiness} />
 
       <section
         className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1"
@@ -3755,9 +3837,22 @@ function EndedProjection(): ReactElement {
             </Button>
           </>
         ) : verified || data.raceOutcome !== null ? (
-          <Button type="button" disabled={actions === null} onClick={() => actions?.startPlan()}>
-            Start a new Plan
-          </Button>
+          <>
+            {model.scenarioId === "PL-S089" ? (
+              <Button
+                id="plan-ended-conversation-trigger"
+                type="button"
+                variant="outline"
+                disabled={actions === null}
+                onClick={() => actions?.openEndedConversation()}
+              >
+                View coach conversation
+              </Button>
+            ) : null}
+            <Button type="button" disabled={actions === null} onClick={() => actions?.startPlan()}>
+              Start a new Plan
+            </Button>
+          </>
         ) : null}
       </div>
     </section>
