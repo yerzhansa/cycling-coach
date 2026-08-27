@@ -539,9 +539,11 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "getPlanState",
   "executePlanTransition",
   "createPlanningRequest",
+  "createWorkoutPlanningRequest",
   "getPlanningRequest",
   "retryPlanningRequest",
   "resumePlanningRequests",
+  "listPlanningRequests",
 ]);
 
 const PLAN_CHAT_RENDERER_METHODS = new Set<CoachRpcMethodName>([
@@ -1736,6 +1738,20 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               invocationFailure = { error };
             }
             break;
+          case "createWorkoutPlanningRequest":
+            try {
+              if (input.operations.createWorkoutPlanningRequest === undefined) {
+                throw new TypeError("Workout Planning request creation is unavailable.");
+              }
+              result = await input.operations.createWorkoutPlanningRequest(
+                COACH_RPC_METHOD_REGISTRY.createWorkoutPlanningRequest.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
           case "getPlanningRequest":
             try {
               if (input.operations.getPlanningRequest === undefined) {
@@ -1771,6 +1787,20 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
               }
               result = await input.operations.resumePlanningRequests(
                 COACH_RPC_METHOD_REGISTRY.resumePlanningRequests.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "listPlanningRequests":
+            try {
+              if (input.operations.listPlanningRequests === undefined) {
+                throw new TypeError("Planning request list is unavailable.");
+              }
+              result = await input.operations.listPlanningRequests(
+                COACH_RPC_METHOD_REGISTRY.listPlanningRequests.requestSchema.parse(
                   generic.data.params,
                 ),
               );

@@ -77,6 +77,7 @@ export interface DetachDeliveredChatPlanSourceInput {
 export interface ChatPlanOutboxRepository {
   createOrGet(input: CreateChatPlanOutboxInput): Promise<ChatPlanOutboxRecord>;
   read(requestId: string): Promise<ChatPlanOutboxRecord | undefined>;
+  readByChatId(chatId: string): Promise<readonly ChatPlanOutboxRecord[]>;
   readRecoverable(): Promise<readonly ChatPlanOutboxRecord[]>;
   beginDelivery(input: BeginChatPlanDeliveryInput): Promise<ChatPlanOutboxRecord>;
   markFailed(input: FailChatPlanDeliveryInput): Promise<ChatPlanOutboxRecord>;
@@ -334,6 +335,20 @@ export function createChatPlanOutboxRepository(
     },
 
     read,
+
+    async readByChatId(chatId) {
+      if (!validId(chatId)) throw new ChatPlanOutboxStoreError("missing-outbox");
+      const rows = await store.all(
+        `SELECT request_id FROM chat_plan_outbox
+WHERE payload_json IS NOT NULL
+  AND json_extract(payload_json, '$.source.chatId') = ?
+ORDER BY created_at_ms ASC, request_id ASC`,
+        [chatId],
+      );
+      return Object.freeze(
+        await Promise.all(rows.map((row) => requireRecord(text(row, "request_id")))),
+      );
+    },
 
     async readRecoverable() {
       const rows = await store.all(

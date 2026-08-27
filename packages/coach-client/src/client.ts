@@ -177,9 +177,11 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   getPlanState: 30_000,
   executePlanTransition: 11 * 60_000,
   createPlanningRequest: 30_000,
+  createWorkoutPlanningRequest: 30_000,
   getPlanningRequest: 30_000,
   retryPlanningRequest: 30_000,
   resumePlanningRequests: 30_000,
+  listPlanningRequests: 30_000,
 };
 
 function positiveSafeInteger(value: unknown): value is number {
@@ -542,8 +544,7 @@ class CoachClientRuntime {
       if (
         progress.commandId !== request.commandId ||
         progress.transitionId !== request.transitionId ||
-        (pending.planOperationId !== undefined &&
-          progress.operationId !== pending.planOperationId)
+        (pending.planOperationId !== undefined && progress.operationId !== pending.planOperationId)
       ) {
         this.failProtocol();
         return;

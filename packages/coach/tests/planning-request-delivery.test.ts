@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreatePlanningRequestPayload } from "@enduragent/coach-contract";
 import {
   createPlanningRequestRepository,
@@ -27,25 +27,16 @@ function requestPayload(
 ): CreatePlanningRequestPayload {
   return {
     requestId: "request-1",
-    kind: "workout_review",
-    intent: "Review this Workout before I add it to my Plan.",
+    kind: "plan_change",
+    intent: "Move the tempo Workout to Wednesday.",
     source: {
       chatId: "chat-1",
       messageId: "message-1",
-      attachmentId: "attachment-1",
     },
     sourceSnapshot: {
       capturedAt: "1998-08-24T08:00:00.000Z",
-      attachment: {
-        attachmentId: "attachment-1",
-        displayName: "tempo-3x12.mrc",
-        extension: "mrc",
-      },
-      selectedWorkout: {
-        setId: "set-1",
-        workoutId: "workout-1",
-        workout: { name: "Tempo 3 × 12", sport: "cycling", durationSeconds: 3_840 },
-      },
+      attachment: null,
+      selectedWorkout: null,
     },
     requestedDate: "1998-08-26",
     ...overrides,
@@ -93,6 +84,9 @@ describe("Planning request delivery", () => {
 
   const service = (
     afterPlanningAccepted?: PlanningRequestDeliveryServiceDependencies["afterPlanningAccepted"],
+    resolveWorkoutSource?: Parameters<
+      typeof createPlanningRequestDeliveryService
+    >[0]["resolveWorkoutSource"],
   ) => {
     const crypto = createNodeCrypto();
     const plans = createPlanRepository(store);
@@ -107,6 +101,7 @@ describe("Planning request delivery", () => {
           if (latest?.status === "draft") return "draft";
           return "plan_creation";
         },
+        ...(resolveWorkoutSource === undefined ? {} : { resolveWorkoutSource }),
       },
       { afterPlanningAccepted },
     );
@@ -134,6 +129,84 @@ describe("Planning request delivery", () => {
     expect(result.status).toBe("accepted");
     if (result.status !== "accepted") throw new TypeError();
     expect(result.delivery.planningRequest?.target).toBe("plan_creation");
+  });
+
+  it("builds a trusted Workout request from the selected local attachment", async () => {
+    const resolveWorkoutSource = vi.fn(async () => ({
+      attachment: {
+        attachmentId: "attachment-1",
+        displayName: "tempo-3x12.mrc",
+        extension: "mrc" as const,
+      },
+      selectedWorkout: {
+        setId: "set-1",
+        workoutId: "workout-1",
+        workout: {
+          workoutId: "workout-1",
+          title: "Tempo 3 × 12",
+          sport: "cycling",
+          durationSeconds: 3_840,
+          purpose: "Build sustainable power",
+          segments: [],
+        },
+      },
+    }));
+    const result = await service(undefined, resolveWorkoutSource).createWorkoutPlanningRequest!({
+      requestId: "request-workout",
+      intent: "Tempo 3 × 12",
+      source: {
+        chatId: "chat-1",
+        messageId: "message-workout",
+        attachmentId: "attachment-1",
+      },
+      requestedDate: "1998-08-26",
+    });
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      delivery: {
+        source: {
+          kind: "workout_review",
+          intent: "Tempo 3 × 12",
+          chatId: "chat-1",
+          messageId: "message-workout",
+          attachmentId: "attachment-1",
+        },
+        state: "delivered",
+        planningRequest: {
+          requestId: "request-workout",
+          kind: "workout_review",
+          intent: "Tempo 3 × 12",
+        },
+      },
+    });
+    expect(resolveWorkoutSource).toHaveBeenCalledWith({
+      chatId: "chat-1",
+      attachmentId: "attachment-1",
+    });
+    const record = await createPlanningRequestRepository(store, createNodeCrypto()).read(
+      "request-workout",
+    );
+    expect(record?.sourceState.payload?.sourceSnapshot).toMatchObject({
+      attachment: { displayName: "tempo-3x12.mrc" },
+      selectedWorkout: { setId: "set-1", workoutId: "workout-1" },
+    });
+  });
+
+  it("rejects a Workout request when its local source cannot be resolved", async () => {
+    const result = await service(undefined, async () => {
+      throw new Error("missing selection");
+    }).createWorkoutPlanningRequest!({
+      requestId: "request-workout",
+      intent: "Tempo 3 × 12",
+      source: {
+        chatId: "chat-1",
+        messageId: "message-workout",
+        attachmentId: "attachment-1",
+      },
+    });
+
+    expect(result).toEqual({ status: "rejected", reason: "invalid_request" });
   });
 
   it("retries the same request after Planning accepted before Chat acknowledged", async () => {
@@ -185,6 +258,31 @@ describe("Planning request delivery", () => {
         payload: requestPayload({ intent: "Use a different intent under the same identifier." }),
       }),
     ).resolves.toEqual({ status: "rejected", reason: "request_conflict" });
+  });
+
+  it("lists current handoffs for one Chat after relaunch", async () => {
+    await service().createPlanningRequest!({ payload: requestPayload() });
+    await service().createPlanningRequest!({
+      payload: requestPayload({
+        requestId: "request-2",
+        source: { chatId: "chat-2", messageId: "message-2" },
+      }),
+    });
+
+    const result = await service().listPlanningRequests!({ chatId: "chat-1" });
+    expect(result.deliveries).toHaveLength(1);
+    expect(result.deliveries[0]).toMatchObject({
+      requestId: "request-1",
+      source: {
+        kind: "plan_change",
+        intent: "Move the tempo Workout to Wednesday.",
+        chatId: "chat-1",
+        messageId: "message-1",
+        attachmentId: null,
+      },
+      state: "delivered",
+      planningRequest: { source: { chatId: "chat-1", messageId: "message-1" } },
+    });
   });
 
   it("records a non-retryable failure when Planning owns a conflicting payload", async () => {

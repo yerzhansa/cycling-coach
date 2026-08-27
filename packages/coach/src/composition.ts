@@ -103,6 +103,7 @@ import {
   type ListArchivedConversationsRpcResult,
   type GetRuntimeConfigRpcResult,
   type PlanningReadOperations,
+  type CreatePlanningRequestPayload,
   type PlanningRequestOperations,
   type PlanningOperations,
   type VerifyIntervalsCredentialRpcParams,
@@ -2021,6 +2022,36 @@ export async function createLocalCoachComposition(
           if (latest?.status === "active") return "active_plan";
           if (latest?.status === "draft") return "draft";
           return "plan_creation";
+        },
+        async resolveWorkoutSource({ chatId, attachmentId }) {
+          const attachment = await attachmentRepository.readAttachment(attachmentId);
+          if (
+            attachment === undefined ||
+            attachment.conversation_id !== chatId ||
+            attachment.kind !== "workout" ||
+            (attachment.status !== "ready" && attachment.status !== "sent")
+          ) {
+            throw new TypeError("Workout attachment is unavailable.");
+          }
+          const set = await workoutAttachmentOperations.readWorkoutSet(attachmentId);
+          const workout = set.workouts.find(
+            (candidate) => candidate.workoutId === set.selectedWorkoutId,
+          );
+          if (workout === undefined) throw new TypeError("Workout selection is unavailable.");
+          return {
+            attachment: {
+              attachmentId: attachment.id,
+              displayName: attachment.display_name,
+              extension: set.sourceFormat,
+            },
+            selectedWorkout: {
+              setId: set.setId,
+              workoutId: workout.workoutId,
+              workout: JSON.parse(JSON.stringify(workout)) as NonNullable<
+                CreatePlanningRequestPayload["sourceSnapshot"]["selectedWorkout"]
+              >["workout"],
+            },
+          };
         },
       },
       {

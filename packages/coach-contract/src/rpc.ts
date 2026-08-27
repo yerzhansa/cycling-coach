@@ -127,8 +127,12 @@ import {
 import {
   CreatePlanningRequestRpcParamsSchema,
   CreatePlanningRequestRpcResultSchema,
+  CreateWorkoutPlanningRequestRpcParamsSchema,
+  CreateWorkoutPlanningRequestRpcResultSchema,
   GetPlanningRequestRpcParamsSchema,
   GetPlanningRequestRpcResultSchema,
+  ListPlanningRequestsRpcParamsSchema,
+  ListPlanningRequestsRpcResultSchema,
   ResumePlanningRequestsRpcParamsSchema,
   ResumePlanningRequestsRpcResultSchema,
   RetryPlanningRequestRpcParamsSchema,
@@ -289,9 +293,11 @@ export const COACH_RPC_METHOD_NAMES = [
   "getPlanState",
   "executePlanTransition",
   "createPlanningRequest",
+  "createWorkoutPlanningRequest",
   "getPlanningRequest",
   "retryPlanningRequest",
   "resumePlanningRequests",
+  "listPlanningRequests",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -1791,6 +1797,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
     .object({
       jsonrpc: z.literal("2.0"),
       id: JsonRpcIdSchema,
+      method: z.literal("createWorkoutPlanningRequest"),
+      params: CreateWorkoutPlanningRequestRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
       method: z.literal("getPlanningRequest"),
       params: GetPlanningRequestRpcParamsSchema,
     })
@@ -1809,6 +1823,14 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       id: JsonRpcIdSchema,
       method: z.literal("resumePlanningRequests"),
       params: ResumePlanningRequestsRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("listPlanningRequests"),
+      params: ListPlanningRequestsRpcParamsSchema,
     })
     .strict(),
 ]);
@@ -2295,6 +2317,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     responseSchema: CreatePlanningRequestRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
+  createWorkoutPlanningRequest: {
+    wireName: "createWorkoutPlanningRequest",
+    requestSchema: CreateWorkoutPlanningRequestRpcParamsSchema,
+    responseSchema: CreateWorkoutPlanningRequestRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
   getPlanningRequest: {
     wireName: "getPlanningRequest",
     requestSchema: GetPlanningRequestRpcParamsSchema,
@@ -2311,6 +2339,12 @@ export const COACH_RPC_METHOD_REGISTRY = {
     wireName: "resumePlanningRequests",
     requestSchema: ResumePlanningRequestsRpcParamsSchema,
     responseSchema: ResumePlanningRequestsRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  listPlanningRequests: {
+    wireName: "listPlanningRequests",
+    requestSchema: ListPlanningRequestsRpcParamsSchema,
+    responseSchema: ListPlanningRequestsRpcResultSchema,
     eventSchema: NoRpcEventSchema,
   },
 } as const satisfies CoachRpcMethodRegistryShape;

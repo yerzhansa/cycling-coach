@@ -202,9 +202,24 @@ const rpcDeadlineCases = [
     },
     30_000,
   ],
+  [
+    "createWorkoutPlanningRequest",
+    {
+      requestId: "request-workout",
+      intent: "Review Tempo 3 × 12.",
+      source: {
+        chatId: "chat-1",
+        messageId: "message-workout",
+        attachmentId: "attachment-1",
+      },
+      requestedDate: "1998-08-26",
+    },
+    30_000,
+  ],
   ["getPlanningRequest", { requestId: "request-1" }, 30_000],
   ["retryPlanningRequest", { requestId: "request-1" }, 30_000],
   ["resumePlanningRequests", {}, 30_000],
+  ["listPlanningRequests", { chatId: "chat-1" }, 30_000],
 ] as const satisfies ReadonlyArray<readonly [CoachRpcMethodName, unknown, number]>;
 
 class ControllableSocket extends EventTarget {
@@ -1148,9 +1163,11 @@ describe("RPC receive and observers", () => {
           capability: "planning",
         },
         createPlanningRequest: { status: "rejected", reason: "invalid_request" },
+        createWorkoutPlanningRequest: { status: "rejected", reason: "invalid_request" },
         getPlanningRequest: { status: "missing" },
         retryPlanningRequest: { status: "missing" },
         resumePlanningRequests: { deliveries: [] },
+        listPlanningRequests: { deliveries: [] },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
@@ -1770,46 +1787,49 @@ describe("RPC receive and observers", () => {
       ],
       observedEvents: 1,
     },
-  ])("fails closed on Planning $name correlation mismatches", async ({ frames, observedEvents }) => {
-    const { socket, connecting } = acceptedSocket();
-    const client = await connecting;
-    socket.sendHook = () => {};
-    const events: unknown[] = [];
-    const operation = client.call(
-      "executePlanTransition",
-      { transitionId: "PL-T01", commandId: "command-1", sourceConversationId: null },
-      { onEvent: (event) => events.push(event) },
-    );
-    for (const frame of frames) {
-      socket.emitMessage(
-        frame.kind === "progress"
-          ? serializeCoachRpcEnvelope({
-              jsonrpc: "2.0",
-              method: "coach.planProgress",
-              params: {
-                requestId: 1,
-                requestMethod: "executePlanTransition",
-                event: frame.event,
-              },
-            })
-          : serializeCoachRpcEnvelope({
-              jsonrpc: "2.0",
-              id: 1,
-              result: {
-                status: "accepted",
-                operationId: frame.operationId,
-                state: planReadModel,
-              },
-            }),
+  ])(
+    "fails closed on Planning $name correlation mismatches",
+    async ({ frames, observedEvents }) => {
+      const { socket, connecting } = acceptedSocket();
+      const client = await connecting;
+      socket.sendHook = () => {};
+      const events: unknown[] = [];
+      const operation = client.call(
+        "executePlanTransition",
+        { transitionId: "PL-T01", commandId: "command-1", sourceConversationId: null },
+        { onEvent: (event) => events.push(event) },
       );
-    }
-    await expect(operation).rejects.toBeInstanceOf(CoachClientProtocolError);
-    expect(events).toHaveLength(observedEvents);
-    expect(socket.closeCalls).toHaveLength(1);
-    const closing = client.close();
-    socket.emitClose(1002, "protocol");
-    await closing;
-  });
+      for (const frame of frames) {
+        socket.emitMessage(
+          frame.kind === "progress"
+            ? serializeCoachRpcEnvelope({
+                jsonrpc: "2.0",
+                method: "coach.planProgress",
+                params: {
+                  requestId: 1,
+                  requestMethod: "executePlanTransition",
+                  event: frame.event,
+                },
+              })
+            : serializeCoachRpcEnvelope({
+                jsonrpc: "2.0",
+                id: 1,
+                result: {
+                  status: "accepted",
+                  operationId: frame.operationId,
+                  state: planReadModel,
+                },
+              }),
+        );
+      }
+      await expect(operation).rejects.toBeInstanceOf(CoachClientProtocolError);
+      expect(events).toHaveLength(observedEvents);
+      expect(socket.closeCalls).toHaveLength(1);
+      const closing = client.close();
+      socket.emitClose(1002, "protocol");
+      await closing;
+    },
+  );
 
   it.each([-32700, -32600] as const)(
     "treats null-id protocol error %s as connection-wide",

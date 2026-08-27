@@ -2042,17 +2042,24 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
       status: "rejected" as const,
       reason: "invalid_request" as const,
     }));
+    const createWorkoutPlanningRequest = vi.fn(async () => ({
+      status: "rejected" as const,
+      reason: "invalid_request" as const,
+    }));
     const getPlanningRequest = vi.fn(async () => ({ status: "missing" as const }));
     const retryPlanningRequest = vi.fn(async () => ({ status: "missing" as const }));
     const resumePlanningRequests = vi.fn(async () => ({ deliveries: [] }));
+    const listPlanningRequests = vi.fn(async () => ({ deliveries: [] }));
     const rpc = createCoachRpcServer({
       engine: engine(),
       operations: {
         ...operations,
         createPlanningRequest,
+        createWorkoutPlanningRequest,
         getPlanningRequest,
         retryPlanningRequest,
         resumePlanningRequests,
+        listPlanningRequests,
       },
       token,
       owner: "app-supervised",
@@ -2074,25 +2081,51 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     };
     for (const request of [
       { id: "create-request", method: "createPlanningRequest", params: { payload } },
+      {
+        id: "create-workout-request",
+        method: "createWorkoutPlanningRequest",
+        params: {
+          requestId: "request-workout",
+          intent: "Review Tempo 3 × 12.",
+          source: {
+            chatId: "desktop",
+            messageId: "message-workout",
+            attachmentId: "attachment-1",
+          },
+        },
+      },
       { id: "get-request", method: "getPlanningRequest", params: { requestId: "request-1" } },
       { id: "retry-request", method: "retryPlanningRequest", params: { requestId: "request-1" } },
       { id: "resume-requests", method: "resumePlanningRequests", params: {} },
+      { id: "list-requests", method: "listPlanningRequests", params: { chatId: "desktop" } },
     ]) {
       client.ws.send(JSON.stringify({ jsonrpc: "2.0", ...request }));
       expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
         id: request.id,
         result:
-          request.method === "createPlanningRequest"
+          request.method === "createPlanningRequest" ||
+          request.method === "createWorkoutPlanningRequest"
             ? { status: "rejected", reason: "invalid_request" }
-            : request.method === "resumePlanningRequests"
+            : request.method === "resumePlanningRequests" ||
+                request.method === "listPlanningRequests"
               ? { deliveries: [] }
               : { status: "missing" },
       });
     }
     expect(createPlanningRequest).toHaveBeenCalledWith({ payload });
+    expect(createWorkoutPlanningRequest).toHaveBeenCalledWith({
+      requestId: "request-workout",
+      intent: "Review Tempo 3 × 12.",
+      source: {
+        chatId: "desktop",
+        messageId: "message-workout",
+        attachmentId: "attachment-1",
+      },
+    });
     expect(getPlanningRequest).toHaveBeenCalledWith({ requestId: "request-1" });
     expect(retryPlanningRequest).toHaveBeenCalledWith({ requestId: "request-1" });
     expect(resumePlanningRequests).toHaveBeenCalledWith({});
+    expect(listPlanningRequests).toHaveBeenCalledWith({ chatId: "desktop" });
 
     client.ws.send(
       JSON.stringify({

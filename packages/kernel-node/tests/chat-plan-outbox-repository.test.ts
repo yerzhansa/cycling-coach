@@ -179,6 +179,39 @@ describe("Chat Plan outbox repository", () => {
     expect(recoverable.map(({ requestId }) => requestId)).toEqual(["request-1", "request-2"]);
   });
 
+  it("lists durable source cards for one Chat in creation order", async () => {
+    await repository.createOrGet({
+      payload: payload({ requestId: "request-2" }),
+      createdAtMs: 102,
+    });
+    await repository.createOrGet({
+      payload: payload({ requestId: "request-1" }),
+      createdAtMs: 101,
+    });
+    await repository.createOrGet({
+      payload: payload({
+        requestId: "request-other",
+        source: {
+          chatId: "chat-2",
+          messageId: "message-other",
+          attachmentId: "attachment-1",
+        },
+      }),
+      createdAtMs: 100,
+    });
+    await repository.createOrGet({
+      payload: payload({ requestId: "request-cancelled" }),
+      createdAtMs: 103,
+    });
+    await repository.cancelUndelivered({
+      requestId: "request-cancelled",
+      cancelledAtMs: 104,
+    });
+
+    const records = await repository.readByChatId("chat-1");
+    expect(records.map(({ requestId }) => requestId)).toEqual(["request-1", "request-2"]);
+  });
+
   it("cancels an undelivered source and makes its payload irrecoverable", async () => {
     await repository.createOrGet({ payload: payload(), createdAtMs: 100 });
     await repository.beginDelivery({ requestId: REQUEST_ID, attemptedAtMs: 110 });
