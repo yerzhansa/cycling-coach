@@ -29,6 +29,8 @@ export type {
 } from "./season.js";
 export { cyclingTaperRefusal, projectCyclingReadinessInput } from "./readiness.js";
 export type { CyclingReadinessSourceInput, CyclingReadinessWorkoutInput } from "./readiness.js";
+export { projectCyclingEstimatedCp } from "./estimated-cp.js";
+export type { CyclingEstimatedCpEffort, CyclingEstimatedCpProjection } from "./estimated-cp.js";
 
 export {
   serializeIntervalsWorkout,

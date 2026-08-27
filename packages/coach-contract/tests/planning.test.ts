@@ -439,6 +439,31 @@ describe("planning contract", () => {
         changedAssumption: null,
         unavailableReason: null,
       },
+      estimatedCp: {
+        status: "available",
+        watts: 287,
+        calculatedOn: "1998-08-22",
+        lastSuccessfulSyncAtMs: 100,
+        unavailableReason: null,
+        efforts: [
+          {
+            activityId: "ride-short",
+            ride: "Tuesday Hill Repeats",
+            date: "1998-08-18",
+            durationS: 180,
+            averagePowerW: 407,
+            device: "Favero Assioma Duo",
+          },
+          {
+            activityId: "ride-long",
+            ride: "Sunday Tempo Climb",
+            date: "1998-08-09",
+            durationS: 900,
+            averagePowerW: 311,
+            device: "Garmin Rally RS200",
+          },
+        ],
+      },
       evidence: {
         prescribedDurationS: 154_800,
         riddenDurationS: 142_800,
@@ -450,6 +475,12 @@ describe("planning contract", () => {
       error: null,
     };
     expect(PlanReadinessProjectionSchema.parse(readiness)).toEqual(readiness);
+    expect(
+      PlanReadinessProjectionSchema.safeParse({
+        ...readiness,
+        estimatedCp: { ...readiness.estimatedCp, watts: 0 },
+      }).success,
+    ).toBe(true);
     expect(
       PlanReadinessProjectionSchema.safeParse({
         ...readiness,
@@ -465,6 +496,32 @@ describe("planning contract", () => {
       PlanReadinessProjectionSchema.safeParse({
         ...readiness,
         courseEstimate: { ...readiness.courseEstimate, rangeMinutes: null },
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanReadinessProjectionSchema.safeParse({
+        ...readiness,
+        estimatedCp: { ...readiness.estimatedCp, efforts: [] },
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanReadinessProjectionSchema.safeParse({
+        ...readiness,
+        estimatedCp: {
+          ...readiness.estimatedCp,
+          status: "unavailable",
+          unavailableReason: "missing-effort",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanReadinessProjectionSchema.safeParse({
+        ...readiness,
+        estimatedCp: {
+          ...readiness.estimatedCp,
+          status: "stale",
+          lastSuccessfulSyncAtMs: null,
+        },
       }).success,
     ).toBe(false);
     expect(

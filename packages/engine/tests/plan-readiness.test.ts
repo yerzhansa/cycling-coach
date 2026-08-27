@@ -31,6 +31,14 @@ function input() {
       changedAssumption: null,
       unavailableReason: null,
     },
+    estimatedCp: {
+      status: "unavailable" as const,
+      watts: null,
+      calculatedOn: null,
+      lastSuccessfulSyncAtMs: null,
+      unavailableReason: "missing-effort" as const,
+      efforts: [],
+    },
     evidence: {
       prescribedDurationS: 154_800,
       riddenDurationS: 142_800,

@@ -470,6 +470,27 @@ export const PlanReadinessProjectionSchema = z
         unavailableReason: z.enum(["missing-course", "missing-elevation"]).nullable(),
       })
       .strict(),
+    estimatedCp: z
+      .object({
+        status: z.enum(["available", "unavailable", "stale"]),
+        watts: z.number().int().nonnegative().nullable(),
+        calculatedOn: TrainingExportCivilDateSchema.nullable(),
+        lastSuccessfulSyncAtMs: z.number().int().nonnegative().nullable(),
+        unavailableReason: z.enum(["missing-effort", "mathematically-invalid"]).nullable(),
+        efforts: z.array(
+          z
+            .object({
+              activityId: z.string().min(1),
+              ride: z.string().min(1),
+              date: TrainingExportCivilDateSchema,
+              durationS: z.number().int().positive(),
+              averagePowerW: z.number().positive(),
+              device: z.string().min(1),
+            })
+            .strict(),
+        ),
+      })
+      .strict(),
     evidence: z
       .object({
         prescribedDurationS: z.number().int().nonnegative(),
@@ -539,6 +560,46 @@ export const PlanReadinessProjectionSchema = z
         code: "custom",
         path: ["courseEstimate"],
         message: "changed course estimates require the previous range and changed assumption",
+      });
+    }
+    const cpAvailable = value.estimatedCp.status !== "unavailable";
+    const cpHasAvailableEvidence =
+      value.estimatedCp.watts !== null &&
+      value.estimatedCp.calculatedOn !== null &&
+      value.estimatedCp.efforts.length === 2;
+    const cpHasUnavailableEvidence =
+      value.estimatedCp.watts === null &&
+      value.estimatedCp.calculatedOn === null &&
+      value.estimatedCp.efforts.length === 0;
+    if ((cpAvailable && !cpHasAvailableEvidence) || (!cpAvailable && !cpHasUnavailableEvidence)) {
+      context.addIssue({
+        code: "custom",
+        path: ["estimatedCp"],
+        message: "Estimated CP value, date, and evidence must match its status",
+      });
+    }
+    if (
+      (value.estimatedCp.status === "unavailable") !==
+      (value.estimatedCp.unavailableReason !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["estimatedCp", "unavailableReason"],
+        message: "unavailable Estimated CP requires a reason",
+      });
+    }
+    if (cpAvailable && value.estimatedCp.unavailableReason !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["estimatedCp", "unavailableReason"],
+        message: "available Estimated CP forbids an unavailable reason",
+      });
+    }
+    if (value.estimatedCp.status === "stale" && value.estimatedCp.lastSuccessfulSyncAtMs === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["estimatedCp", "lastSuccessfulSyncAtMs"],
+        message: "stale Estimated CP requires a last successful sync time",
       });
     }
   });

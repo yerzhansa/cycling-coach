@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { cyclingTaperRefusal, projectCyclingReadinessInput } from "../src/readiness.js";
 
+const estimatedCp = {
+  status: "unavailable" as const,
+  watts: null,
+  calculatedOn: null,
+  lastSuccessfulSyncAtMs: null,
+  unavailableReason: "missing-effort" as const,
+  efforts: [] as [],
+};
+
 describe("cycling readiness inputs", () => {
   it("normalizes the latest platform seed and explicit future Load ranges", () => {
     expect(
@@ -24,6 +33,7 @@ describe("cycling readiness inputs", () => {
             },
           },
         },
+        estimatedCp,
         lastSuccessfulRefreshAtMs: 1_777_000_000_000,
         workouts: [
           {
@@ -50,6 +60,7 @@ describe("cycling readiness inputs", () => {
       raceDate: "2026-08-23",
       wellness: [],
       currentStatus: null,
+      estimatedCp,
       lastSuccessfulRefreshAtMs: null,
       workouts: [{ date: "2026-08-23", name: "Ride", durationS: 3_600, structureJson: "{}" }],
     });
@@ -62,6 +73,7 @@ describe("cycling readiness inputs", () => {
       raceDate: "2026-08-23",
       wellness: [],
       currentStatus: { readiness: { courseEstimate: { status: "available" } } },
+      estimatedCp,
       lastSuccessfulRefreshAtMs: null,
       workouts: [],
     });

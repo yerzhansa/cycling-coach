@@ -59,6 +59,7 @@ import {
 } from "@enduragent/kernel/anchors";
 import {
   createAnchorRepository,
+  createAnalyticsCurveStateReader,
   createCanonicalActivityReader,
   createIntervalsSourceRepository,
   createTrustedActivitySourceResolver,
@@ -66,6 +67,8 @@ import {
   type AnchorRepository,
 } from "@enduragent/kernel/store";
 import { ErrorStateSchema, LatestJsonSchema } from "@enduragent/kernel/reference/schemas";
+import { createVerifiedSnapshotReader } from "@enduragent/kernel-node/archive";
+import { nodeFileSystem } from "@enduragent/kernel-node/filesystem";
 import { createAuthoredIdentity, type AthleteHome } from "@enduragent/kernel-node/home";
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
 import {
@@ -93,8 +96,10 @@ import {
 import {
   createCyclingPlanFtpAdapter,
   cyclingSport,
+  projectCyclingEstimatedCp,
   projectCyclingReadinessInput,
 } from "@enduragent/sport-cycling";
+import { projectAnalyticsCurveEvidence } from "@enduragent/sync-intervals-icu";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import { createPowerProgressStateSource } from "./power-progress.js";
 import { createRecentRidesSource } from "./recent-rides.js";
@@ -1412,6 +1417,15 @@ export async function createLocalCoachComposition(
       store: input.context.store,
     });
     const analysisCrypto = createNodeCrypto();
+    const curveState = createAnalyticsCurveStateReader(input.context.store, (fields) => {
+      if (fields.length === 0) throw new TypeError("empty key tuple");
+      return H(analysisCrypto, ...(fields as [string | number, ...(string | number)[]]));
+    });
+    const curveSnapshots = createVerifiedSnapshotReader({
+      archiveRoot: input.home.archiveDir,
+      crypto: analysisCrypto,
+      fs: nodeFileSystem(),
+    });
     const analysisSources = createIntervalsSourceRepository(input.context.store, (fields) => {
       if (fields.length === 0) throw new TypeError("empty key tuple");
       return H(analysisCrypto, ...(fields as [string | number, ...(string | number)[]]));
@@ -1604,11 +1618,37 @@ export async function createLocalCoachComposition(
           return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
         };
         const refreshedAtMs = Date.parse(latest?.metadata.last_updated ?? "");
+        let estimatedCp = projectCyclingEstimatedCp({
+          curves: undefined,
+          calculatedOn: civil(todayDateKey),
+          lastSuccessfulSyncAtMs: null,
+          stale: false,
+        });
+        try {
+          const state = await curveState.readState();
+          if (state.current !== null) {
+            const projected = await projectAnalyticsCurveEvidence(state.current, curveSnapshots);
+            const failedAt = state.refreshFailure?.failedEpochSeconds ?? null;
+            estimatedCp = projectCyclingEstimatedCp({
+              curves: projected.sustainabilityCurves?.cycling,
+              calculatedOn: state.current.generation.frozenOn,
+              lastSuccessfulSyncAtMs: state.current.promotedEpochSeconds * 1_000,
+              stale:
+                failedAt !== null && failedAt * 1_000 >= state.current.promotedEpochSeconds * 1_000,
+            });
+            if (estimatedCp.unavailableReason === "mathematically-invalid") {
+              logger.warn("estimated_cp_mathematically_invalid");
+            }
+          }
+        } catch {
+          // Estimated CP is optional evidence; readiness remains available when it cannot load.
+        }
         return projectCyclingReadinessInput({
           today: civil(todayDateKey),
           raceDate: plan.targetDateKey === null ? null : civil(plan.targetDateKey),
           wellness: latest?.wellness_data ?? null,
           currentStatus: latest?.current_status ?? null,
+          estimatedCp,
           lastSuccessfulRefreshAtMs: Number.isFinite(refreshedAtMs) ? refreshedAtMs : null,
           workouts: workouts.map((workout) => ({
             date: civil(workout.dateKey),

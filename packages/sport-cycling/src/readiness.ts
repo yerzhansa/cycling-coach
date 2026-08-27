@@ -1,3 +1,5 @@
+import type { CyclingEstimatedCpProjection } from "./estimated-cp.js";
+
 export interface CyclingPlanReadinessInput {
   readonly today: string;
   readonly raceDate: string | null;
@@ -24,6 +26,7 @@ export interface CyclingPlanReadinessInput {
     readonly changedAssumption: string | null;
     readonly unavailableReason: "missing-course" | "missing-elevation" | null;
   };
+  readonly estimatedCp: CyclingEstimatedCpProjection;
   readonly evidence: {
     readonly prescribedDurationS: number;
     readonly riddenDurationS: number;
@@ -43,6 +46,7 @@ export interface CyclingReadinessSourceInput {
   readonly raceDate: string | null;
   readonly wellness: unknown;
   readonly currentStatus: unknown;
+  readonly estimatedCp: CyclingEstimatedCpProjection;
   readonly lastSuccessfulRefreshAtMs: number | null;
   readonly workouts: readonly CyclingReadinessWorkoutInput[];
 }
@@ -244,6 +248,7 @@ export function projectCyclingReadinessInput(
     raceDate: input.raceDate,
     platformSeed: platformSeed(input.wellness, input.today, input.lastSuccessfulRefreshAtMs),
     dailyLoadRanges: dailyLoadRanges(input.today, input.raceDate, input.workouts),
+    estimatedCp: input.estimatedCp,
     ...sourceFacts(input.currentStatus),
   };
 }

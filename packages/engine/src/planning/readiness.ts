@@ -29,6 +29,7 @@ export interface PlanReadinessInput {
     readonly changedAssumption: string | null;
     readonly unavailableReason: "missing-course" | "missing-elevation" | null;
   };
+  readonly estimatedCp: PlanReadinessProjection["estimatedCp"];
   readonly evidence: {
     readonly prescribedDurationS: number;
     readonly riddenDurationS: number;
@@ -158,6 +159,7 @@ export function projectPlanReadiness(input: PlanReadinessInput): ProjectedPlanRe
     form,
     feasibility: projectFeasibility(input, form),
     courseEstimate: input.courseEstimate,
+    estimatedCp: input.estimatedCp,
     evidence: {
       ...input.evidence,
       missedKeyWorkouts: input.missedKeyWorkouts,
