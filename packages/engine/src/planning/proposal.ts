@@ -227,8 +227,7 @@ function parseBase(value: string): PlanProposalBaseSnapshot {
     Number(parsed.planHlcPhysicalMs) < 0 ||
     !Number.isSafeInteger(parsed.planHlcCounter) ||
     Number(parsed.planHlcCounter) < 0 ||
-    !Array.isArray(parsed.workouts) ||
-    parsed.workouts.length === 0
+    !Array.isArray(parsed.workouts)
   ) {
     throw new PlanProposalError("invalid-base");
   }

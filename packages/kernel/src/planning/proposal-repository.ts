@@ -154,7 +154,7 @@ function nullableInteger(row: Row, key: string): number | null {
   return value;
 }
 
-function validateProposal(record: PlanProposalRecord): void {
+export function validatePlanProposalRecord(record: PlanProposalRecord): void {
   const resolved = record.status !== "proposed";
   if (
     !ULID.test(record.id) ||
@@ -187,7 +187,7 @@ function validateProposal(record: PlanProposalRecord): void {
   }
 }
 
-function validatePremise(record: PlanProposalPremiseRecord): void {
+export function validatePlanProposalPremiseRecord(record: PlanProposalPremiseRecord): void {
   if (
     !ULID.test(record.id) ||
     !ULID.test(record.proposalId) ||
@@ -229,7 +229,7 @@ function proposalFromRow(row: Row): PlanProposalRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   };
-  validateProposal(record);
+  validatePlanProposalRecord(record);
   return Object.freeze(record);
 }
 
@@ -248,7 +248,7 @@ function premiseFromRow(row: Row): PlanProposalPremiseRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   };
-  validatePremise(record);
+  validatePlanProposalPremiseRecord(record);
   return Object.freeze(record);
 }
 
@@ -269,12 +269,12 @@ export function createPlanProposalRepository(store: ProposalStore): PlanProposal
 
   const repository: PlanProposalRepository = Object.freeze({
     async save(proposal: PlanProposalRecord, premises: readonly PlanProposalPremiseRecord[]) {
-      validateProposal(proposal);
+      validatePlanProposalRecord(proposal);
       if (proposal.status !== "proposed" || premises.length === 0) {
         throw new PlanProposalValidationError("invalid-proposal");
       }
       for (const premise of premises) {
-        validatePremise(premise);
+        validatePlanProposalPremiseRecord(premise);
         if (premise.proposalId !== proposal.id) {
           throw new PlanProposalValidationError("invalid-premise");
         }

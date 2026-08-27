@@ -129,7 +129,18 @@ export function createPlanningRequestDeliveryService(
       return project(input.requests, failed);
     }
 
-    await dependencies.afterPlanningAccepted?.(accepted);
+    try {
+      await dependencies.afterPlanningAccepted?.(accepted);
+    } catch (error) {
+      const failure = planningFailure(error);
+      const failed = await input.outbox.markFailed({
+        requestId: pending.requestId,
+        failureCode: failure.code,
+        retryable: failure.retryable,
+        failedAtMs: input.identity.hlcStamp().physicalMs,
+      });
+      return project(input.requests, failed);
+    }
     const delivered = await input.outbox.markDelivered({
       requestId: pending.requestId,
       deliveredAtMs: input.identity.hlcStamp().physicalMs,
