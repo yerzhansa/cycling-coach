@@ -189,10 +189,7 @@ import { createDocumentMediaAttachmentOperations } from "./document-media-attach
 import { createAttachmentComposerOperations } from "./attachment-composer-operations.js";
 import { createPlanningReadService } from "./planning-read-service.js";
 import { createPlanningRequestDeliveryService } from "./planning-request-delivery.js";
-import {
-  createPlanningRequestRepository,
-  createPlanRepository,
-} from "@enduragent/kernel/planning";
+import { createPlanningRequestRepository, createPlanRepository } from "@enduragent/kernel/planning";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -1973,6 +1970,11 @@ export async function createLocalCoachComposition(
         await coachOperations.sync({});
       },
     };
+    const planRepository = createPlanRepository(input.context.store);
+    const planningRequestRepository = createPlanningRequestRepository(
+      input.context.store,
+      analysisCrypto,
+    );
     const planningOperations = createPlanningOperations(
       {
         context: input.context,
@@ -1986,12 +1988,12 @@ export async function createLocalCoachComposition(
         calendar: planCalendar,
         workoutDriftCalendar: planCalendar,
         readiness,
+        requests: planningRequestRepository,
       },
     );
-    const planRepository = createPlanRepository(input.context.store);
     const planningRequestOperations = createPlanningRequestDeliveryService({
       outbox: createChatPlanOutboxRepository(input.context.store, analysisCrypto),
-      requests: createPlanningRequestRepository(input.context.store, analysisCrypto),
+      requests: planningRequestRepository,
       identity: planningIdentity,
       async resolveTarget() {
         const latest = await planRepository.readLatest();

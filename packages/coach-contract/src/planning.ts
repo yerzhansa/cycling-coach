@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ChatQueueSnapshotSchema } from "./chat-queue.js";
 import { CoachDecisionAnswerSchema, CoachDecisionReadModelSchema } from "./coach-decision.js";
 import { PlatformAbsolutePathSchema } from "./platform-path.js";
+import { PlanningRequestReadModelSchema } from "./planning-request.js";
 import { TrainingExportCivilDateSchema } from "./training-export.js";
 import { TurnEventSchema } from "./turn-event.js";
 
@@ -1021,6 +1022,50 @@ export const PlanCoachProjectionDataSchema = z
   .strict();
 export type PlanCoachProjectionData = z.infer<typeof PlanCoachProjectionDataSchema>;
 
+export const PlanChatOriginatedResultProjectionDataSchema = z
+  .object({
+    request: PlanningRequestReadModelSchema,
+    returnTarget: z
+      .object({
+        destination: z.literal("chat"),
+        chatId: z.string().min(1),
+        messageId: z.string().min(1),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.request.lifecycle === "open") {
+      context.addIssue({
+        code: "custom",
+        path: ["request", "lifecycle"],
+        message: "Chat-originated result requires a terminal Planning request",
+      });
+    }
+    if ((value.returnTarget !== null) !== value.request.source.available) {
+      context.addIssue({
+        code: "custom",
+        path: ["returnTarget"],
+        message: "Chat return target must match source availability",
+      });
+    }
+    if (
+      value.returnTarget !== null &&
+      (value.returnTarget.chatId !== value.request.source.chatId ||
+        value.returnTarget.messageId !== value.request.source.messageId)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["returnTarget"],
+        message: "Chat return target must match the Planning request source",
+      });
+    }
+  });
+export type PlanChatOriginatedResultProjectionData = z.infer<
+  typeof PlanChatOriginatedResultProjectionDataSchema
+>;
+
 export const PlanReadModelSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -1398,6 +1443,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       transitionId: z.literal("PL-T37"),
       commandId: CommandIdSchema,
       sourceConversationId: EntityIdSchema,
+      requestId: EntityIdSchema,
     })
     .strict(),
   z

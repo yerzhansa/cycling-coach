@@ -13,6 +13,7 @@ import {
   createPlanWeeklyReviewRepository,
   createPlanWorkoutMatchRepository,
   createPlanProposalRepository,
+  createPlanningRequestRepository,
   createRaceCourseSnapshot,
   createPlanReplacementRepository,
   createPlanRaceOutcomeRepository,
@@ -26,6 +27,7 @@ import {
 import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import type { AuthoredIdentity } from "@enduragent/kernel-node/home";
+import { createNodeCrypto } from "@enduragent/kernel-node/ingest";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
 import {
   planMirrorExternalId,
@@ -322,6 +324,180 @@ describe("Plan operations", () => {
             { role: "coach", text: "I found your rides." },
           ],
         },
+      },
+    });
+  });
+
+  it("opens a terminal Chat-originated result and validates its exact return source", async () => {
+    const authored = identity();
+    const planId = `${"0".repeat(25)}P`;
+    const activePlan = {
+      ...plan(planId, 20),
+      startDateKey: 19980709,
+      targetDateKey: 19980930,
+      status: "active" as const,
+    };
+    await createPlanRepository(store).replace(activePlan, []);
+    const requests = createPlanningRequestRepository(store, createNodeCrypto());
+    const created = await requests.createOrGet({
+      payload: {
+        requestId: "request-1",
+        kind: "workout_review",
+        intent: "Add Tempo 3 × 12 to Wednesday.",
+        source: {
+          chatId: "chat-1",
+          messageId: "message-1",
+          attachmentId: "attachment-1",
+        },
+        sourceSnapshot: {
+          capturedAt: "1998-08-24T08:00:00.000Z",
+          attachment: {
+            attachmentId: "attachment-1",
+            displayName: "tempo-3x12.mrc",
+            extension: "mrc",
+          },
+          selectedWorkout: {
+            setId: "set-1",
+            workoutId: "workout-1",
+            workout: {
+              name: "Tempo 3 × 12",
+              sport: "cycling",
+              durationSeconds: 3_840,
+            },
+          },
+        },
+        requestedDate: "1998-08-26",
+      },
+      target: "active_plan",
+      createdAtMs: 30,
+      deviceId: "device-1",
+      hlcPhysicalMs: 30,
+      hlcCounter: 0,
+    });
+    await requests.complete({
+      requestId: created.request.requestId,
+      expectedRevision: created.request.revision,
+      result: {
+        kind: "applied",
+        resultId: "result-1",
+        completedAtMs: 40,
+        title: "Workout added",
+        detail: "Tempo 3 × 12 is scheduled for Wednesday.",
+        workoutRef: { setId: "set-1", workoutId: "workout-1" },
+        planRevisionId: "revision-1",
+      },
+      resolvedDateKey: 19980826,
+      updatedAtMs: 40,
+      deviceId: "device-1",
+      hlcPhysicalMs: 40,
+      hlcCounter: 0,
+    });
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { requests, todayDateKey: () => 19980824 },
+    );
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T36",
+        commandId: "command-open-request",
+        sourceConversationId: "chat-1",
+        requestId: "request-1",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S099",
+        data: {
+          returnTarget: { destination: "chat", chatId: "chat-1", messageId: "message-1" },
+        },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T37",
+        commandId: "command-return-wrong-source",
+        sourceConversationId: "chat-2",
+        requestId: "request-1",
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T37",
+        commandId: "command-return-source",
+        sourceConversationId: "chat-1",
+        requestId: "request-1",
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S099" } });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-stay-in-plan",
+        action: "done",
+        sourceScenarioId: "PL-S099",
+        destinationScenarioId: "PL-S004",
+        returnFocusId: "request-1",
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S004" } });
+  });
+
+  it("reopens the exact Plan conversation bound to an unresolved Chat request", async () => {
+    const authored = identity();
+    const requests = createPlanningRequestRepository(store, createNodeCrypto());
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { requests },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "command-start-plan",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    const created = await requests.createOrGet({
+      payload: {
+        requestId: "request-open",
+        kind: "plan_creation",
+        intent: "Build a Plan for my autumn event.",
+        source: { chatId: "chat-open", messageId: "message-open" },
+        sourceSnapshot: {
+          capturedAt: "1998-08-24T08:00:00.000Z",
+          attachment: null,
+          selectedWorkout: null,
+        },
+      },
+      target: "plan_creation",
+      createdAtMs: 30,
+      deviceId: "device-1",
+      hlcPhysicalMs: 30,
+      hlcCounter: 0,
+    });
+    await requests.reviseOpen({
+      requestId: created.request.requestId,
+      expectedRevision: created.request.revision,
+      planConversationId: conversationId,
+      proposalId: null,
+      attention: "none",
+      resolvedDateKey: null,
+      updatedAtMs: 31,
+      deviceId: "device-1",
+      hlcPhysicalMs: 31,
+      hlcCounter: 0,
+    });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T36",
+        commandId: "command-open-plan-request",
+        sourceConversationId: "chat-open",
+        requestId: "request-open",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S017",
+        data: { conversationId, sourceConversationId: "chat-open" },
       },
     });
   });
