@@ -16,6 +16,7 @@ export type { CoachEngine } from "@enduragent/coach-contract";
 export type { ChatStreamTimeouts } from "./host-ports.js";
 export * from "./planning/proposal.js";
 export * from "./planning/history.js";
+export * from "./planning/auto-apply.js";
 export type {
   AthleteDataReaderPort,
   AthleteReadResult,

@@ -9,6 +9,7 @@ import {
   PlanHydrationStateSchema,
   PlanProgressEventSchema,
   PlanRaceCourseProjectionSchema,
+  PlanSettingsProjectionSchema,
   PlanStartDateProjectionSchema,
   PlanScenarioIdSchema,
   PlanTransitionCommandSchema,
@@ -219,6 +220,29 @@ describe("planning contract", () => {
     expect(
       PlanFtpProjectionSchema.safeParse({ ...accepted, status: "accepted", error: {} }).success,
     ).toBe(false);
+  });
+
+  it("keeps Plan settings values, the selected control, and save errors coherent", () => {
+    const settings = {
+      autoApply: false,
+      weeklyReview: true,
+      updatedAtMs: 42,
+      selectedSetting: "auto-apply" as const,
+      error: null,
+    };
+    expect(PlanSettingsProjectionSchema.parse(settings)).toEqual(settings);
+    expect(
+      PlanSettingsProjectionSchema.parse({
+        ...settings,
+        error: { code: "persistence-failed", message: "Could not save.", retryable: true },
+      }),
+    ).toMatchObject({ selectedSetting: "auto-apply", error: { retryable: true } });
+    expect(
+      PlanSettingsProjectionSchema.safeParse({ ...settings, selectedSetting: "all" }).success,
+    ).toBe(false);
+    expect(PlanSettingsProjectionSchema.safeParse({ ...settings, saveAll: true }).success).toBe(
+      false,
+    );
   });
 
   it("keeps Race Course transition intent and projection states coherent", () => {

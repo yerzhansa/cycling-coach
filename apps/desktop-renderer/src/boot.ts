@@ -183,6 +183,7 @@ export function bootRenderer(): Disposer {
     publishRevisionComposer: (open) => store.getState().setPlanRevisionComposer(open),
     publishCoursePicker: (open) => store.getState().setPlanCoursePicker(open),
     publishDatePicker: (open) => store.getState().setPlanDatePicker(open),
+    publishSettingPending: (next) => store.getState().setPlanSettingPending(next),
   });
   store.getState().bindPlanActions({
     open: () => planAdapter.open(),
@@ -229,6 +230,9 @@ export function bootRenderer(): Disposer {
     openHistory: () => planAdapter.openHistory(),
     closeHistory: () => planAdapter.closeHistory(),
     undoPlanChange: (ledgerId) => planAdapter.undoPlanChange(ledgerId),
+    openPlanSettings: () => planAdapter.openPlanSettings(),
+    closePlanSettings: () => planAdapter.closePlanSettings(),
+    setPlanSetting: (setting, value) => planAdapter.setPlanSetting(setting, value),
     openAttention: (attentionId) => planAdapter.openAttention(attentionId),
     returnToCoach: () => planAdapter.returnToCoach(),
     retry: () => planAdapter.retry(),

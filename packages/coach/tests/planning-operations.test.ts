@@ -9,6 +9,7 @@ import {
   createPlanConversationRepository,
   createPlanReconciliationRepository,
   createPlanRepository,
+  createPlanSettingsRepository,
   createPlanWorkoutMatchRepository,
   createPlanProposalRepository,
   createRaceCourseSnapshot,
@@ -1785,5 +1786,263 @@ describe("Plan operations", () => {
         returnFocusId: ledgerId,
       }),
     ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S005" } });
+  });
+
+  it("saves each active Plan setting immediately and restores the persisted value on failure", async () => {
+    const planId = `${"0".repeat(25)}A`;
+    const activePlan = {
+      ...plan(planId, 10),
+      status: "active" as const,
+      structureJson: JSON.stringify({
+        phases: [
+          { focus: "base", durationWeeks: 4 },
+          { focus: "build", durationWeeks: 6 },
+          { focus: "taper", durationWeeks: 2 },
+        ],
+      }),
+    };
+    const plans = createPlanRepository(store);
+    const settings = createPlanSettingsRepository(store);
+    await plans.replace(activePlan, []);
+
+    const failing = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        settings: {
+          read: (id) => settings.read(id),
+          save: vi.fn(async () => {
+            throw new Error("disk full");
+          }),
+        },
+        todayDateKey: () => 20260826,
+      },
+    );
+    await expect(
+      failing.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-settings-open",
+        action: "open",
+        sourceScenarioId: "PL-S005",
+        destinationScenarioId: "PL-S090",
+        returnFocusId: "plan-settings-trigger",
+      }),
+    ).resolves.toMatchObject({ status: "completed", state: { scenarioId: "PL-S090" } });
+    await expect(
+      failing.executePlanTransition?.({
+        transitionId: "PL-T22",
+        commandId: "command-settings-failed",
+        planId,
+        setting: "weekly-review",
+        value: false,
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: { code: "persistence-failed", retryable: true },
+      state: {
+        scenarioId: "PL-S093",
+        data: {
+          settings: {
+            autoApply: false,
+            weeklyReview: true,
+            selectedSetting: "weekly-review",
+            error: { code: "persistence-failed" },
+          },
+        },
+      },
+    });
+    await expect(settings.read(planId)).resolves.toMatchObject({ weeklyReview: true });
+
+    const working = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      { plans, settings, todayDateKey: () => 20260826 },
+    );
+    await expect(
+      working.executePlanTransition?.({
+        transitionId: "PL-T22",
+        commandId: "command-settings-retry",
+        planId,
+        setting: "weekly-review",
+        value: false,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S092",
+        data: {
+          settings: {
+            autoApply: false,
+            weeklyReview: false,
+            selectedSetting: "weekly-review",
+            error: null,
+          },
+        },
+      },
+    });
+  });
+
+  it("automatically applies only an enabled eligible reduction and records its atomic result", async () => {
+    const planId = `${"0".repeat(25)}B`;
+    const workoutId = `${"0".repeat(25)}C`;
+    const proposalId = `${"0".repeat(25)}D`;
+    const premiseId = `${"0".repeat(25)}E`;
+    const activePlan: PlanRecord = {
+      ...plan(planId, 10),
+      status: "active",
+      structureJson: JSON.stringify({
+        phases: [
+          { focus: "base", durationWeeks: 4 },
+          { focus: "build", durationWeeks: 6 },
+          { focus: "taper", durationWeeks: 2 },
+        ],
+      }),
+    };
+    const workout: PlanWorkoutRecord = {
+      id: workoutId,
+      planId,
+      dateKey: 20260830,
+      sport: "cycling",
+      name: "Endurance",
+      durationS: 5_400,
+      structureJson: "{}",
+      origin: "coach",
+      deviceId: "device-1",
+      hlcPhysicalMs: 10,
+      hlcCounter: 0,
+    };
+    const plans = createPlanRepository(store);
+    const proposals = createPlanProposalRepository(store);
+    const settings = createPlanSettingsRepository(store);
+    await plans.replace(activePlan, [workout]);
+    await proposals.save(
+      {
+        id: proposalId,
+        planId,
+        parentProposalId: null,
+        revision: 1,
+        status: "proposed",
+        title: "Reduce Sunday duration",
+        rationale: "Protect recovery.",
+        confidence: "High",
+        mutationJson: encodePlanProposalMutation({
+          schemaVersion: 1,
+          changes: [
+            {
+              workoutId,
+              before: {
+                dateKey: workout.dateKey,
+                sport: workout.sport,
+                name: workout.name,
+                durationS: workout.durationS,
+                structureJson: workout.structureJson,
+              },
+              after: {
+                dateKey: workout.dateKey,
+                sport: workout.sport,
+                name: workout.name,
+                durationS: 2_700,
+                structureJson: workout.structureJson,
+              },
+            },
+          ],
+          weekLoad: null,
+        }),
+        baseSnapshotJson: encodePlanProposalBase(capturePlanProposalBase(activePlan, [workout])),
+        refusalReason: null,
+        createdAtMs: 20,
+        updatedAtMs: 20,
+        resolvedAtMs: null,
+        deviceId: "device-1",
+        hlcPhysicalMs: 20,
+        hlcCounter: 0,
+      },
+      [
+        {
+          id: premiseId,
+          proposalId,
+          sourceType: "wellness",
+          sourceId: "wellness-1",
+          sourceLabel: "Wellness",
+          sourceDateKey: 20260829,
+          confidence: "High",
+          snapshotJson: "{}",
+          createdAtMs: 20,
+          deviceId: "device-1",
+          hlcPhysicalMs: 20,
+          hlcCounter: 0,
+        },
+      ],
+    );
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: identity() },
+      {
+        plans,
+        proposals,
+        settings,
+        todayDateKey: () => 20260826,
+        proposalPremiseReader: { read: async () => "{}" },
+      },
+    );
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T17",
+        commandId: "command-auto-disabled",
+        planId,
+        proposalId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S007", data: { selectedProposalId: proposalId } },
+    });
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T22",
+      commandId: "command-auto-enable",
+      planId,
+      setting: "auto-apply",
+      value: true,
+    });
+    const applied = await operations.executePlanTransition?.({
+      transitionId: "PL-T17",
+      commandId: "command-auto-apply",
+      planId,
+      proposalId,
+    });
+    expect(applied).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S101",
+        data: {
+          history: [
+            expect.objectContaining({
+              kind: "proposal-applied",
+              before: expect.objectContaining({ durationS: 5_400 }),
+              after: expect.objectContaining({ durationS: 2_700 }),
+              undoStatus: "eligible",
+            }),
+            expect.objectContaining({ kind: "activation" }),
+          ],
+        },
+      },
+    });
+    await expect(plans.readWorkouts(planId)).resolves.toEqual([
+      expect.objectContaining({ name: "Endurance", durationS: 2_700 }),
+    ]);
+    await expect(proposals.read(proposalId)).resolves.toMatchObject({ status: "applied" });
+    await expect(
+      createPlanReconciliationRepository(store).readLatestJob(planId, "mirror"),
+    ).resolves.toMatchObject({
+      status: "pending",
+      windowStartDateKey: 20260826,
+      windowEndDateKey: 20260901,
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T17",
+        commandId: "command-auto-repeat",
+        planId,
+        proposalId,
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
   });
 });

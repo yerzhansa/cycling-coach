@@ -94,6 +94,9 @@ function harness(
     publishDatePicker(open) {
       surface = { ...surface, datePicker: open };
     },
+    publishSettingPending(next) {
+      surface = { ...surface, settingPending: next };
+    },
     createCommandId: () => ids.shift() ?? "unexpected-command",
     createMessageId: () => messageIds.shift() ?? "unexpected-message",
   });
@@ -986,6 +989,123 @@ describe("Plan view adapter", () => {
       planId: "00000000000000000000000003",
       mode: "reconcile",
     });
+  });
+
+  it("optimistically saves one Plan setting, restores failure, and retries the same control", async () => {
+    const planId = "00000000000000000000000003";
+    const data = {
+      plan: {
+        id: planId,
+        name: "Gran Fondo",
+        primaryGoal: "Finish",
+        startDate: "2026-07-13",
+        targetDate: "2026-10-04",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 0,
+        plannedDurationS: 0,
+      },
+      today: "2026-08-26",
+      weekIndex: 7,
+      todayWorkout: null,
+      workouts: [],
+      settings: {
+        autoApply: false,
+        weeklyReview: true,
+        updatedAtMs: 10,
+        selectedSetting: null,
+        error: null,
+      },
+    };
+    const ready = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S090",
+      projection: "active",
+      planId,
+      data,
+    });
+    const failed = {
+      ...ready,
+      scenarioId: "PL-S093" as const,
+      data: {
+        ...data,
+        settings: {
+          ...data.settings,
+          selectedSetting: "auto-apply" as const,
+          error: {
+            code: "persistence-failed" as const,
+            message: "Could not save.",
+            retryable: true,
+          },
+        },
+      },
+    };
+    const saved = {
+      ...ready,
+      scenarioId: "PL-S092" as const,
+      data: {
+        ...data,
+        settings: {
+          ...data.settings,
+          autoApply: true,
+          updatedAtMs: 11,
+          selectedSetting: "auto-apply" as const,
+        },
+      },
+    };
+    const first = deferred<ExecutePlanTransitionRpcResult>();
+    const second = deferred<ExecutePlanTransitionRpcResult>();
+    const execute = vi
+      .fn<PlanBridge["executePlanTransition"]>()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const subject = harness({
+      ids: ["setting-save", "setting-retry"],
+      getPlanState: async () => ({ status: "ready", state: ready }),
+      executePlanTransition: execute,
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.setPlanSetting("auto-apply", true);
+    expect(subject.surface.settingPending).toEqual({ setting: "auto-apply", value: true });
+    expect(subject.surface.transition).toMatchObject({
+      status: "submitting",
+      transitionId: "PL-T22",
+    });
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(1, {
+      transitionId: "PL-T22",
+      commandId: "setting-save",
+      planId,
+      setting: "auto-apply",
+      value: true,
+    });
+
+    first.resolve({
+      status: "rejected",
+      error: { code: "persistence-failed", message: "Could not save.", retryable: true },
+      state: failed,
+    });
+    await settle();
+    expect(subject.surface.settingPending).toBeNull();
+    expect(subject.surface.hydration).toEqual({ status: "ready", state: failed });
+    expect(subject.surface.transition.status).toBe("failed");
+
+    subject.adapter.retry();
+    expect(subject.surface.settingPending).toEqual({ setting: "auto-apply", value: true });
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(2, {
+      transitionId: "PL-T22",
+      commandId: "setting-retry",
+      planId,
+      setting: "auto-apply",
+      value: true,
+    });
+    second.resolve({ status: "completed", state: saved });
+    await settle();
+    expect(subject.surface.settingPending).toBeNull();
+    expect(subject.surface.hydration).toEqual({ status: "ready", state: saved });
+    expect(subject.surface.transition).toEqual({ status: "idle" });
   });
 
   it("accepts progress only for the current command, transition, and operation", async () => {

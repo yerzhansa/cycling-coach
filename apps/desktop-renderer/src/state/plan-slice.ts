@@ -40,6 +40,10 @@ export interface PlanSurfaceState {
   readonly revisionComposer: boolean;
   readonly coursePicker: boolean;
   readonly datePicker: boolean;
+  readonly settingPending: {
+    readonly setting: "auto-apply" | "weekly-review";
+    readonly value: boolean;
+  } | null;
 }
 
 export interface PlanActions {
@@ -83,6 +87,9 @@ export interface PlanActions {
   openHistory(): void;
   closeHistory(): void;
   undoPlanChange(ledgerId: string): void;
+  openPlanSettings(): void;
+  closePlanSettings(): void;
+  setPlanSetting(setting: "auto-apply" | "weekly-review", value: boolean): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
@@ -98,6 +105,7 @@ export interface PlanSlice {
   setPlanRevisionComposer: (open: boolean) => void;
   setPlanCoursePicker: (open: boolean) => void;
   setPlanDatePicker: (open: boolean) => void;
+  setPlanSettingPending: (next: PlanSurfaceState["settingPending"]) => void;
   bindPlanActions: (actions: PlanActions | null) => void;
 }
 
@@ -110,6 +118,7 @@ export const EMPTY_PLAN_SURFACE: PlanSurfaceState = Object.freeze({
   revisionComposer: false,
   coursePicker: false,
   datePicker: false,
+  settingPending: null,
 });
 
 export function planReadModel(plan: PlanSurfaceState): PlanReadModel | null {
@@ -154,6 +163,9 @@ export const createPlanSlice: StateCreator<EnduragentState, [], [], PlanSlice> =
   },
   setPlanDatePicker(open) {
     set((current) => ({ plan: { ...current.plan, datePicker: open } }));
+  },
+  setPlanSettingPending(next) {
+    set((current) => ({ plan: { ...current.plan, settingPending: next } }));
   },
   bindPlanActions(actions) {
     set({ planActions: actions });

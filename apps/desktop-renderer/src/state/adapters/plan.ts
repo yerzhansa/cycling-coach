@@ -74,6 +74,9 @@ export interface PlanViewAdapter {
   openHistory(): void;
   closeHistory(): void;
   undoPlanChange(ledgerId: string): void;
+  openPlanSettings(): void;
+  closePlanSettings(): void;
+  setPlanSetting(setting: "auto-apply" | "weekly-review", value: boolean): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
@@ -128,6 +131,7 @@ export function createPlanViewAdapter(input: {
   readonly publishRevisionComposer: (open: boolean) => void;
   readonly publishCoursePicker: (open: boolean) => void;
   readonly publishDatePicker: (open: boolean) => void;
+  readonly publishSettingPending: (next: PlanSurfaceState["settingPending"]) => void;
   readonly createCommandId?: () => string;
   readonly createMessageId?: () => string;
 }): PlanViewAdapter {
@@ -276,6 +280,7 @@ export function createPlanViewAdapter(input: {
       publishHydration(hydrationFromTransition(result));
       if (result.status === "unsupported-capability") {
         active = null;
+        if (command.transitionId === "PL-T22") input.publishSettingPending(null);
         input.publishTransition({ status: "idle" });
         return;
       }
@@ -285,6 +290,7 @@ export function createPlanViewAdapter(input: {
           reduceCoach({ type: "fail", requestKey: coachRequestKey, copy: result.error.message });
         }
         active = null;
+        if (command.transitionId === "PL-T22") input.publishSettingPending(null);
         input.publishTransition({
           status: "failed",
           commandId: command.commandId,
@@ -306,6 +312,7 @@ export function createPlanViewAdapter(input: {
         return;
       }
       active = null;
+      if (command.transitionId === "PL-T22") input.publishSettingPending(null);
       input.publishTransition({ status: "idle" });
       if (
         command.transitionId === "PL-T04" &&
@@ -327,6 +334,7 @@ export function createPlanViewAdapter(input: {
         reduceCoach({ type: "fail", requestKey: coachRequestKey, copy: UNAVAILABLE_ERROR.message });
       }
       active = null;
+      if (command.transitionId === "PL-T22") input.publishSettingPending(null);
       input.publishTransition({
         status: "failed",
         commandId: command.commandId,
@@ -817,6 +825,42 @@ export function createPlanViewAdapter(input: {
         ledgerId,
       });
     },
+    openPlanSettings() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "open",
+        sourceScenarioId: model.scenarioId,
+        destinationScenarioId: "PL-S090",
+        returnFocusId: "plan-settings-trigger",
+      });
+    },
+    closePlanSettings() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "back",
+        sourceScenarioId: model.scenarioId,
+        destinationScenarioId: "PL-S005",
+        returnFocusId: "plan-settings-trigger",
+      });
+    },
+    setPlanSetting(setting, value) {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      input.publishSettingPending({ setting, value });
+      void execute({
+        transitionId: "PL-T22",
+        commandId: createCommandId(),
+        planId: model.planId,
+        setting,
+        value,
+      });
+    },
     openAttention(attentionId) {
       if (active !== null) return;
       void execute({
@@ -839,6 +883,9 @@ export function createPlanViewAdapter(input: {
         ...lastCommand,
         commandId: createCommandId(),
       } as ExecutePlanTransitionRpcParams;
+      if (retry.transitionId === "PL-T22") {
+        input.publishSettingPending({ setting: retry.setting, value: retry.value });
+      }
       if (retry.transitionId === "PL-T05") {
         coachState = { ...coachState, status: "idle", activeTurn: null };
         submitCommand(retry.text, retry.decision);
@@ -851,6 +898,7 @@ export function createPlanViewAdapter(input: {
       disposed = true;
       hydrationGeneration += 1;
       active = null;
+      input.publishSettingPending(null);
       disposeProgress?.();
       disposeProgress = null;
     },

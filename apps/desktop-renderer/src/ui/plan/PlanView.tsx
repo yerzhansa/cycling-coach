@@ -173,6 +173,120 @@ function PlanHistoryProjection(props: {
           </article>
         ))}
       </div>
+      <div className="flex flex-col gap-inset border-t border-line pt-row sm:flex-row sm:items-center sm:justify-between">
+        <p className="m-0 text-sm text-ink-2">
+          Auto-apply and Weekly review change future behavior; History remains unchanged.
+        </p>
+        <Button
+          id="plan-settings-trigger"
+          type="button"
+          variant="outline"
+          onClick={() => actions?.openPlanSettings()}
+        >
+          Open settings
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function PlanSettingsProjection(props: {
+  readonly data: ReturnType<typeof PlanActiveProjectionDataSchema.parse>;
+  readonly scenarioId: string;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const pending = useEnduragentStore((state) => state.plan.settingPending);
+  const settings = props.data.settings;
+  if (settings === undefined) {
+    return <StatusCard title="Plan settings" support="Refreshing Plan settings…" />;
+  }
+  const saving =
+    (transition.status === "submitting" || transition.status === "running") &&
+    transition.transitionId === "PL-T22";
+  const row = (
+    setting: "auto-apply" | "weekly-review",
+    title: string,
+    support: string,
+    persisted: boolean,
+  ): ReactElement => {
+    const active = pending?.setting === setting || settings.selectedSetting === setting;
+    const value = saving && pending?.setting === setting ? pending.value : persisted;
+    const failed = active && props.scenarioId === "PL-S093";
+    const saved = active && props.scenarioId === "PL-S092";
+    return (
+      <div className="flex min-h-[76px] items-center justify-between gap-row px-5 py-4">
+        <div className={SUPPORT_PAIR}>
+          <h3 className="m-0 text-base font-medium">{title}</h3>
+          <p className="m-0 text-sm text-ink-2">{support}</p>
+          {active ? (
+            <p
+              className={`m-0 text-sm ${failed ? "text-danger" : saved ? "text-ok" : "text-ink-2"}`}
+              aria-live="polite"
+            >
+              {saving ? "Saving…" : failed ? "Couldn’t save · previous value restored" : "Saved"}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-inset">
+          {failed ? (
+            <Button type="button" variant="ghost" onClick={() => actions?.retry()}>
+              Retry
+            </Button>
+          ) : null}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={value}
+            aria-label={title}
+            disabled={actions === null || saving}
+            className={`relative h-7 w-12 rounded-full border-0 p-0 transition-colors ${
+              value ? "bg-primary" : "bg-line-2"
+            } disabled:cursor-wait disabled:opacity-70`}
+            onClick={() => actions?.setPlanSetting(setting, !persisted)}
+          >
+            <span
+              className={`absolute top-1 size-5 rounded-full bg-surface shadow-elev-1 transition-[left] ${
+                value ? "left-6" : "left-1"
+              }`}
+              aria-hidden="true"
+            />
+          </button>
+        </div>
+      </div>
+    );
+  };
+  return (
+    <section className="grid rounded-card bg-surface shadow-elev-1">
+      <div className="flex items-start justify-between gap-row p-5 pb-row">
+        <div className={SUPPORT_PAIR}>
+          <h2
+            id="plan-settings-heading"
+            tabIndex={-1}
+            className="m-0 text-lg font-semibold outline-none"
+          >
+            Plan settings
+          </h2>
+          <p className="m-0 text-ink-2">{props.data.plan.name} · changes save immediately</p>
+        </div>
+        <Button type="button" variant="outline" onClick={() => actions?.closePlanSettings()}>
+          Back to history
+        </Button>
+      </div>
+      <div className="divide-y divide-line border-t border-line">
+        {row(
+          "auto-apply",
+          "Auto-apply",
+          "Apply eligible coach changes without approval.",
+          settings.autoApply,
+        )}
+        {row(
+          "weekly-review",
+          "Weekly review",
+          "Prepare one review each week.",
+          settings.weeklyReview,
+        )}
+      </div>
     </section>
   );
 }
@@ -244,6 +358,7 @@ function HistoryResultProjection(props: {
 
 function AppliedHistoryProjection(props: {
   readonly entry: PlanHistoryEntry | null;
+  readonly autoApplied?: boolean;
 }): ReactElement {
   const actions = useEnduragentStore((state) => state.planActions);
   const before = props.entry?.before ?? null;
@@ -253,12 +368,23 @@ function AppliedHistoryProjection(props: {
       <div className="flex items-start gap-row">
         <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
         <div className={SUPPORT_PAIR}>
-          <h2 className="m-0 text-lg font-semibold">
-            {after === null ? "Plan updated" : `${after.name} is now active`}
+          <h2
+            id="plan-history-result-heading"
+            tabIndex={-1}
+            className="m-0 text-lg font-semibold outline-none"
+          >
+            {props.autoApplied
+              ? after === null
+                ? "Plan updated"
+                : `${after.name} applied automatically`
+              : after === null
+                ? "Plan updated"
+                : `${after.name} is now active`}
           </h2>
           <p className="m-0 text-ink-2">
-            The approved change is part of your Plan. The seven-day Intervals update has not started
-            yet.
+            {props.autoApplied
+              ? "Auto-apply reduced one future Workout after every safety rule passed. The seven-day Intervals update has not started yet."
+              : "The approved change is part of your Plan. The seven-day Intervals update has not started yet."}
           </p>
         </div>
       </div>
@@ -1729,9 +1855,14 @@ function ActiveProjection(): ReactElement {
         ? "plan-history-trigger"
         : current === "PL-S005"
           ? "plan-history-heading"
-          : current === "PL-S026" || current === "PL-S027"
+          : current === "PL-S008" ||
+              current === "PL-S026" ||
+              current === "PL-S027" ||
+              current === "PL-S101"
             ? "plan-history-result-heading"
-            : null;
+            : current !== null && ["PL-S090", "PL-S091", "PL-S092", "PL-S093"].includes(current)
+              ? "plan-settings-heading"
+              : null;
     if (focusId === null) return;
     requestAnimationFrame(() => document.getElementById(focusId)?.focus());
   }, [model?.scenarioId]);
@@ -1748,6 +1879,12 @@ function ActiveProjection(): ReactElement {
   }
   if (model.scenarioId === "PL-S008") {
     return <AppliedHistoryProjection entry={selectedHistoryEntry} />;
+  }
+  if (["PL-S090", "PL-S091", "PL-S092", "PL-S093"].includes(model.scenarioId)) {
+    return <PlanSettingsProjection data={data} scenarioId={model.scenarioId} />;
+  }
+  if (model.scenarioId === "PL-S101") {
+    return <AppliedHistoryProjection entry={selectedHistoryEntry} autoApplied />;
   }
   if (model.scenarioId === "PL-S026" || model.scenarioId === "PL-S027") {
     return <HistoryResultProjection scenarioId={model.scenarioId} entry={selectedHistoryEntry} />;
