@@ -12,3 +12,4 @@ export * from "./adaptation-ledger-repository.js";
 export * from "./settings-repository.js";
 export * from "./weekly-review-repository.js";
 export * from "./race-outcome-repository.js";
+export * from "./request-repository.js";
