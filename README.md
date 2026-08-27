@@ -202,12 +202,15 @@ The website — what it is, how it works, screenshots and the full privacy polic
 
 ## Development
 
+Full-workspace commands use the Node.js 24 runtime resolved from the root `devEngines.runtime`
+range and locked by pnpm.
+
 ```bash
 git clone git@github.com:yerzhansa/enduragent.git
-cd enduragent && npm install && npm run build
-npm run dev     # auto-reload
-npm run check   # tsc --noEmit + oxlint
-npm test        # vitest
+cd enduragent && pnpm install && pnpm build
+pnpm dev     # auto-reload
+pnpm check   # full workspace verification
+pnpm test    # vitest
 ```
 
 Set `CYCLING_COACH_HOME=~/.cycling-coach-dev` in `.env` so dev never collides with your real

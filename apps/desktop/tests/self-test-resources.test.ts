@@ -4,7 +4,7 @@ import { cp, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { METRIC_REGISTRY } from "@enduragent/kernel/reference/registry";
 import { mean, pythonSum, sampleStdev } from "@enduragent/kernel/reference/metrics";
 import { deviationMap } from "../scripts/self-test-deviations.js";
@@ -15,6 +15,9 @@ const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(desktopRoot, "../..");
 const generatedRoot = join(desktopRoot, "dist");
 const roots: string[] = [];
+let firstGeneratedMatrix: Buffer;
+let secondGeneratedMatrix: Buffer;
+let canonicalGeneratedRoot: string;
 
 afterAll(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -27,6 +30,24 @@ async function generate(): Promise<Buffer> {
   });
   return readFile(join(generatedRoot, "self-test-asar/resources/self-test/matrix.json"));
 }
+
+beforeAll(async () => {
+  firstGeneratedMatrix = await generate();
+  secondGeneratedMatrix = await generate();
+  canonicalGeneratedRoot = await mkdtemp(join(tmpdir(), "self-test-generated-"));
+  roots.push(canonicalGeneratedRoot);
+  await Promise.all([
+    cp(join(generatedRoot, "self-test-asar"), join(canonicalGeneratedRoot, "self-test-asar"), {
+      recursive: true,
+    }),
+    cp(join(generatedRoot, "self-test-runner"), join(canonicalGeneratedRoot, "self-test-runner"), {
+      recursive: true,
+    }),
+    cp(join(generatedRoot, "extra-resources"), join(canonicalGeneratedRoot, "extra-resources"), {
+      recursive: true,
+    }),
+  ]);
+});
 
 function seeded(seed: number): () => number {
   let state = seed >>> 0;
@@ -53,11 +74,9 @@ describe("packaged self-test resources", () => {
     expect([...deviationMap(source.replaceAll("\n", "\r\n"))]).toEqual(expected);
   });
 
-  it("generates a deterministic complete matrix and exact public bundle", async () => {
-    const first = await generate();
-    const second = await generate();
-    expect(second.equals(first)).toBe(true);
-    const matrix = JSON.parse(first.toString("utf8")) as {
+  it("generates a deterministic complete matrix and exact public bundle", () => {
+    expect(secondGeneratedMatrix.equals(firstGeneratedMatrix)).toBe(true);
+    const matrix = JSON.parse(firstGeneratedMatrix.toString("utf8")) as {
       fixtures: Array<{ slug: string }>;
       parityCases: Array<{ caseId: string; fixture: string; metric: string }>;
       differentialCases: Array<{ caseId: string; fixture: string; op: string }>;
@@ -74,7 +93,9 @@ describe("packaged self-test resources", () => {
         matrix.parityCases.some((parity) => parity.caseId === item.caseId),
       ),
     ).toBe(false);
-    const runner = require(join(generatedRoot, "self-test-runner/self-test-runner.cjs")) as unknown;
+    const runner = require(
+      join(canonicalGeneratedRoot, "self-test-runner/self-test-runner.cjs"),
+    ) as unknown;
     expect(Object.keys(runner as object)).toEqual(["runSelfTest"]);
   }, 30_000);
 
@@ -104,15 +125,17 @@ describe("packaged self-test resources", () => {
   }, 180_000);
 
   it("stages disjoint byte-identical resources and preserves builder inputs", async () => {
-    await generate();
     const [insideMatrix, outsideMatrix, insideChecksum, outsideChecksum, builder, bundle] =
       await Promise.all([
-        readFile(join(generatedRoot, "self-test-asar/resources/self-test/matrix.json")),
-        readFile(join(generatedRoot, "extra-resources/self-test/matrix.json")),
-        readFile(join(generatedRoot, "self-test-asar/resources/self-test/matrix.sha256")),
-        readFile(join(generatedRoot, "extra-resources/self-test/matrix.sha256")),
+        readFile(join(canonicalGeneratedRoot, "self-test-asar/resources/self-test/matrix.json")),
+        readFile(join(canonicalGeneratedRoot, "extra-resources/self-test/matrix.json")),
+        readFile(join(canonicalGeneratedRoot, "self-test-asar/resources/self-test/matrix.sha256")),
+        readFile(join(canonicalGeneratedRoot, "extra-resources/self-test/matrix.sha256")),
         readFile(join(desktopRoot, "electron-builder.yml"), "utf8"),
-        readFile(join(generatedRoot, "extra-resources/self-test/self-test-runner.cjs"), "utf8"),
+        readFile(
+          join(canonicalGeneratedRoot, "extra-resources/self-test/self-test-runner.cjs"),
+          "utf8",
+        ),
       ]);
     expect(outsideMatrix.equals(insideMatrix)).toBe(true);
     expect(outsideChecksum.equals(insideChecksum)).toBe(true);
@@ -121,11 +144,15 @@ describe("packaged self-test resources", () => {
     expect(bundle).not.toMatch(/vitest|process\.exit|process\.exitCode|console\./iu);
     const root = await mkdtemp(join(tmpdir(), "self-test-layout-"));
     roots.push(root);
-    await cp(join(generatedRoot, "self-test-asar"), join(root, "app.asar"), { recursive: true });
-    await cp(join(generatedRoot, "extra-resources/self-test"), join(root, "self-test"), {
+    await cp(join(canonicalGeneratedRoot, "self-test-asar"), join(root, "app.asar"), {
       recursive: true,
     });
-    const loaded = require(join(generatedRoot, "self-test-runner/self-test-runner.cjs")) as {
+    await cp(join(canonicalGeneratedRoot, "extra-resources/self-test"), join(root, "self-test"), {
+      recursive: true,
+    });
+    const loaded = require(
+      join(canonicalGeneratedRoot, "self-test-runner/self-test-runner.cjs"),
+    ) as {
       runSelfTest(input: { resourcesPath: string }): { ok: boolean };
     };
     expect(loaded.runSelfTest({ resourcesPath: root }).ok).toBe(true);
@@ -139,18 +166,21 @@ describe("packaged self-test resources", () => {
   ] as const)(
     "classifies %s %s corruption",
     async (location, resource, relativePath) => {
-      await generate();
       const root = await mkdtemp(join(tmpdir(), "self-test-corruption-"));
       roots.push(root);
-      await cp(join(generatedRoot, "self-test-asar"), join(root, "app.asar"), { recursive: true });
-      await cp(join(generatedRoot, "extra-resources/self-test"), join(root, "self-test"), {
+      await cp(join(canonicalGeneratedRoot, "self-test-asar"), join(root, "app.asar"), {
+        recursive: true,
+      });
+      await cp(join(canonicalGeneratedRoot, "extra-resources/self-test"), join(root, "self-test"), {
         recursive: true,
       });
       const target = join(root, relativePath);
       const bytes = await readFile(target);
       bytes[0] = bytes[0] === 97 ? 98 : 97;
       await writeFile(target, bytes);
-      const loaded = require(join(generatedRoot, "self-test-runner/self-test-runner.cjs")) as {
+      const loaded = require(
+        join(canonicalGeneratedRoot, "self-test-runner/self-test-runner.cjs"),
+      ) as {
         runSelfTest(input: { resourcesPath: string }): unknown;
       };
       expect(loaded.runSelfTest({ resourcesPath: root })).toMatchObject({

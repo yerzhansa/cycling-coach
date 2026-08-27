@@ -62,37 +62,16 @@
     "zod": "^4.3.6"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
-  "packageManager": "pnpm@10.6.3+sha512.bb45e34d50a9a76e858a95837301bfb6bd6d35aea2c5d52094fa497a467c43f5c440103ce2511e9e0a2f89c3d6071baac3358fc68ac6fb75e2ceb3d2736065e6",
-  "pnpm": {
-    "overrides": {
-      "@ai-sdk/provider-utils": "^4.0.30",
-      "@noble/hashes": "1.8.0",
-      "js-yaml@3": "3.15.1",
-      "js-yaml@4": "4.3.1"
-    },
-    "onlyBuiltDependencies": [
-      "@google/genai",
-      "electron",
-      "esbuild",
-      "msw",
-      "protobufjs"
-    ],
-    "patchedDependencies": {
-      "fit-file-parser@3.0.2": "patches/fit-file-parser@3.0.2.patch"
-    },
-    "ignoredOptionalDependencies": [
-      "@anthropic-ai/claude-agent-sdk-darwin-arm64",
-      "@anthropic-ai/claude-agent-sdk-darwin-x64",
-      "@anthropic-ai/claude-agent-sdk-linux-arm64",
-      "@anthropic-ai/claude-agent-sdk-linux-arm64-musl",
-      "@anthropic-ai/claude-agent-sdk-linux-x64",
-      "@anthropic-ai/claude-agent-sdk-linux-x64-musl",
-      "@anthropic-ai/claude-agent-sdk-win32-arm64",
-      "@anthropic-ai/claude-agent-sdk-win32-x64"
-    ]
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24.19.0",
+      "onFail": "download"
+    }
   },
+  "packageManager": "pnpm@11.24.0+sha512.bd27e345e976dcb0be0b7a1228217b049a817e21b1f355c90dbe7dc46671895a8bc1e6d06c24554505ea93ea0b45f489a27ec1bfbc8de6a9659fca0f16fa0000",
   "license": "MIT",
   "repository": {
     "type": "git",
