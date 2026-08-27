@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        # Reads `packageManager` from root package.json (corepack-style pin).
+        # Reads the exact `packageManager` pin from root package.json.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
@@ -91,13 +91,25 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        # Reads `packageManager` from root package.json (corepack-style pin).
+        # Reads the exact `packageManager` pin from root package.json.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --no-runtime
+      - name: Verify Node 22 compatibility runtime
+        env:
+          PNPM_SHIM_BYPASS: "1"
+        run: |
+          node_version="$(pnpm --filter @enduragent/core exec node -p 'process.version')"
+          printf 'Test runtime: %s\n' "$node_version"
+          case "$node_version" in
+            v22.*) ;;
+            *) exit 1 ;;
+          esac
       - run: pnpm --filter @enduragent/core exec vitest run tests/secrets
+        env:
+          PNPM_SHIM_BYPASS: "1"
 
   desktop-packaged-self-test:
     runs-on: macos-latest
