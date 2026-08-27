@@ -45,7 +45,7 @@ const SENDERS = Object.freeze({
   senders: Object.freeze([{ senderId: 101, role: "primary" as const }]),
 }) satisfies TelegramAllowedSenders;
 
-function setup() {
+function setup(options: { readonly credentialMutationsBlocked?: () => boolean } = {}) {
   const states: TelegramSettingsState[] = [];
   let handlers!: Parameters<TelegramSettingsView["bind"]>[0];
   let poll: (() => void) | undefined;
@@ -137,6 +137,9 @@ function setup() {
   const controller = createTelegramSettingsController({
     bridge,
     beginMutation: () => release,
+    ...(options.credentialMutationsBlocked === undefined
+      ? {}
+      : { credentialMutationsBlocked: options.credentialMutationsBlocked }),
     view,
     pollIntervalMs: 10,
     setInterval: ((callback: () => void) => {
@@ -249,6 +252,24 @@ describe("Telegram settings controller", () => {
     });
   });
 
+  it("blocks credential-changing Telegram actions while allowing recovery checks", async () => {
+    const runtime = setup({ credentialMutationsBlocked: () => true });
+    await runtime.controller.activate();
+
+    runtime.handlers.onPasteToken();
+    runtime.handlers.onRemove();
+    runtime.handlers.onAddSender(202);
+    runtime.handlers.onRemoveSender(202);
+
+    expect(runtime.bridge.pasteTokenFromClipboard).not.toHaveBeenCalled();
+    expect(runtime.bridge.remove).not.toHaveBeenCalled();
+    expect(runtime.bridge.addAllowedSender).not.toHaveBeenCalled();
+    expect(runtime.bridge.removeAllowedSender).not.toHaveBeenCalled();
+
+    runtime.handlers.onReconcile();
+    await vi.waitFor(() => expect(runtime.bridge.reconcile).toHaveBeenCalledOnce());
+  });
+
   it("announces a fresh clipboard connection with the connected bot", async () => {
     const runtime = setup();
     await runtime.controller.activate();
@@ -313,7 +334,7 @@ describe("Telegram settings controller", () => {
         feedback: {
           tone: "error",
           message:
-            "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, copy the bot token again, then retry.",
+            "Secure token storage is unavailable. Quit and reopen Enduragent, unlock your login keychain, copy the bot token again, then retry.",
         },
       }),
     );
@@ -611,7 +632,7 @@ describe("Telegram settings controller", () => {
     ],
     [
       "encryption-unavailable",
-      "The current Telegram bot is unchanged because secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, copy the bot token again, then retry.",
+      "The current Telegram bot is unchanged because secure token storage is unavailable. Quit and reopen Enduragent, unlock your login keychain, copy the bot token again, then retry.",
     ],
     [
       "unsafe-backend",
@@ -671,7 +692,7 @@ describe("Telegram settings controller", () => {
     [
       "reconcile" as const,
       "encryption-unavailable" as const,
-      "Secure token storage is unavailable. Quit and reopen Enduragent, unlock or approve Keychain access, then choose Check again.",
+      "Secure token storage is unavailable. Quit and reopen Enduragent, unlock your login keychain, then choose Check again.",
     ],
     [
       "remove-webhook" as const,

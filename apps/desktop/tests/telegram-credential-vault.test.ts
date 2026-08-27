@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -15,7 +16,13 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCredentialEnvelopeMutationLock } from "../src/main/credential-envelope-lock.js";
 import type { CredentialEncryptionPort } from "../src/main/credential-vault.js";
+import {
+  openCredentialEnvelope,
+  sealCredentialEnvelope,
+} from "../src/main/keychain-credential-encryption.js";
+import { KEYCHAIN_KEY_BYTES } from "../src/main/keychain-binding.js";
 import {
   TELEGRAM_CREDENTIAL_DIRECTORY_MODE,
   TELEGRAM_CREDENTIAL_FILE_MODE,
@@ -89,6 +96,15 @@ function encryption(): CredentialEncryptionPort {
       }
       return Buffer.from(value.subarray(5, -4)).reverse().toString("utf8");
     },
+  };
+}
+
+function keychainEncryption(): CredentialEncryptionPort {
+  const key = randomBytes(KEYCHAIN_KEY_BYTES);
+  return {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => sealCredentialEnvelope(key, value),
+    decryptString: (value) => openCredentialEnvelope(key, value),
   };
 }
 
@@ -399,6 +415,45 @@ describe("Telegram credential vault", () => {
     expect(syncParentDirectory).toHaveBeenCalledOnce();
   });
 
+  it("revalidates encryption after preparing the profile namespace and before encrypting", async () => {
+    const value = await fixture();
+    await mkdir(value.root, { mode: TELEGRAM_CREDENTIAL_DIRECTORY_MODE });
+    let persistedKey = "key-a";
+    const cachedKey = "key-a";
+    let available = true;
+    const encryptString = vi.fn(() => Buffer.from("unused"));
+    const prepareEnvelopeWrite = vi.fn(async () => {
+      if (persistedKey !== cachedKey) available = false;
+    });
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: {
+        isEncryptionAvailable: () => available,
+        encryptString,
+        decryptString: vi.fn(),
+      },
+      createProfileId: () => PROFILE_A,
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      prepareEnvelopeWrite,
+      syncDirectory: vi.fn(async () => {
+        persistedKey = "key-b";
+      }),
+    });
+
+    await expect(
+      vault.replaceProfile({
+        token: "synthetic-token-a",
+        bot: BOT_A,
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toEqual({ outcome: "refused", reason: "encryption-unavailable" });
+    expect(prepareEnvelopeWrite).toHaveBeenCalledOnce();
+    expect(encryptString).not.toHaveBeenCalled();
+    await expect(lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("creates token-independent random profile IDs for successive coherent profiles", async () => {
     const value = await fixture();
     const vault = createTelegramCredentialVault({ ...value, encryption: encryption() });
@@ -492,255 +547,273 @@ describe("Telegram credential vault", () => {
     }
   });
 
-  posixIt("durably restores the prior ciphertext before refusing post-rename profile uncertainty", async () => {
-    const value = await fixture();
-    await seedProfile(value);
-    let syncCount = 0;
-    const vault = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      createProfileId: () => PROFILE_B,
-      createId: () => `replace-${syncCount}`,
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 2) throw new TypeError("synthetic replacement sync failure");
-        await syncDirectory(value.root);
-      },
-    });
+  posixIt(
+    "durably restores the prior ciphertext before refusing post-rename profile uncertainty",
+    async () => {
+      const value = await fixture();
+      await seedProfile(value);
+      let syncCount = 0;
+      const vault = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        createProfileId: () => PROFILE_B,
+        createId: () => `replace-${syncCount}`,
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 2) throw new TypeError("synthetic replacement sync failure");
+          await syncDirectory(value.root);
+        },
+      });
 
-    await expect(
-      vault.replaceProfile({
-        token: "synthetic-token-b",
-        bot: BOT_B,
-        authenticatedAthleteHome: value.athleteHome,
-      }),
-    ).resolves.toEqual({ outcome: "refused", reason: "storage-failed" });
-    await expect(vault.profileStatus()).resolves.toEqual({
-      state: "configured",
-      profileId: PROFILE_A,
-      bot: BOT_A,
-    });
-    const apply = vi.fn();
-    await vault.applyStoredProfile(value.athleteHome, apply);
-    expect(apply.mock.calls[0]?.[0]).toMatchObject({
-      profileId: PROFILE_A,
-      token: "synthetic-token-a",
-      bot: BOT_A,
-    });
-  });
-
-  posixIt("durably removes a first candidate before refusing initial-write uncertainty", async () => {
-    const value = await fixture();
-    let syncCount = 0;
-    const vault = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      createProfileId: () => PROFILE_A,
-      createId: () => `initial-${syncCount}`,
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 1) throw new TypeError("synthetic first directory sync failure");
-        await syncDirectory(value.root);
-      },
-    });
-
-    await expect(
-      vault.replaceProfile({
+      await expect(
+        vault.replaceProfile({
+          token: "synthetic-token-b",
+          bot: BOT_B,
+          authenticatedAthleteHome: value.athleteHome,
+        }),
+      ).resolves.toEqual({ outcome: "refused", reason: "storage-failed" });
+      await expect(vault.profileStatus()).resolves.toEqual({
+        state: "configured",
+        profileId: PROFILE_A,
+        bot: BOT_A,
+      });
+      const apply = vi.fn();
+      await vault.applyStoredProfile(value.athleteHome, apply);
+      expect(apply.mock.calls[0]?.[0]).toMatchObject({
+        profileId: PROFILE_A,
         token: "synthetic-token-a",
         bot: BOT_A,
-        authenticatedAthleteHome: value.athleteHome,
-      }),
-    ).resolves.toEqual({ outcome: "refused", reason: "storage-failed" });
-    await expect(vault.profileStatus()).resolves.toEqual({ state: "missing" });
-    await expect(lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
+      });
+    },
+  );
 
-  posixIt("blocks replay and reports uncertainty when neither candidate nor prior can converge durably", async () => {
-    const value = await fixture();
-    await seedProfile(value);
-    let syncCount = 0;
-    const vault = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      createProfileId: () => PROFILE_B,
-      createId: () => "never-durable",
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 1) {
+  posixIt(
+    "durably removes a first candidate before refusing initial-write uncertainty",
+    async () => {
+      const value = await fixture();
+      let syncCount = 0;
+      const vault = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        createProfileId: () => PROFILE_A,
+        createId: () => `initial-${syncCount}`,
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 1) throw new TypeError("synthetic first directory sync failure");
           await syncDirectory(value.root);
-          return;
-        }
-        throw new TypeError("synthetic persistent directory sync failure");
-      },
-    });
-
-    await expect(
-      vault.replaceProfile({
-        token: "synthetic-token-b",
-        bot: BOT_B,
-        authenticatedAthleteHome: value.athleteHome,
-      }),
-    ).resolves.toEqual({ outcome: "uncertain", reason: "storage-uncertain" });
-    await expect(vault.profileStatus()).resolves.toEqual({ state: "uncertain" });
-    const apply = vi.fn();
-    await expect(vault.applyStoredProfile(value.athleteHome, apply)).resolves.toEqual({
-      outcome: "uncertain",
-      reason: "storage-uncertain",
-    });
-    expect(apply).not.toHaveBeenCalled();
-  });
-
-  posixIt("converges a visible prior profile on reopen before accepting or replaying it", async () => {
-    const value = await fixture();
-    await seedProfile(value);
-    let syncCount = 0;
-    const uncertain = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      createProfileId: () => PROFILE_B,
-      createId: () => "reopen-old",
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 1) {
-          await syncDirectory(value.root);
-          return;
-        }
-        throw new TypeError("synthetic indeterminate directory sync");
-      },
-    });
-    await expect(
-      uncertain.replaceProfile({
-        token: "synthetic-token-b",
-        bot: BOT_B,
-        authenticatedAthleteHome: value.athleteHome,
-      }),
-    ).resolves.toEqual({ outcome: "uncertain", reason: "storage-uncertain" });
-
-    const events: string[] = [];
-    const baseEncryption = encryption();
-    const reopened = createTelegramCredentialVault({
-      ...value,
-      encryption: {
-        ...baseEncryption,
-        decryptString(ciphertext) {
-          events.push("decrypt");
-          return baseEncryption.decryptString(ciphertext);
         },
-      },
-      syncDirectory: async () => {
-        events.push("sync");
-        await syncDirectory(value.root);
-      },
-    });
-    await expect(reopened.profileStatus()).resolves.toEqual({
-      state: "configured",
-      profileId: PROFILE_A,
-      bot: BOT_A,
-    });
-    const apply = vi.fn(async (_profile: TelegramProfileRecord) => {
-      events.push("apply");
-    });
-    await expect(reopened.applyStoredProfile(value.athleteHome, apply)).resolves.toMatchObject({
-      outcome: "applied",
-      profileId: PROFILE_A,
-    });
-    expect(apply.mock.calls[0]?.[0]).toMatchObject({
-      profileId: PROFILE_A,
-      token: "synthetic-token-a",
-      bot: BOT_A,
-    });
-    expect(events).toEqual(["sync", "decrypt", "decrypt", "apply"]);
-  });
+      });
 
-  posixIt("converges a visible candidate profile on reopen before accepting or replaying it", async () => {
-    const value = await fixture();
-    await seedProfile(value);
-    let syncCount = 0;
-    let renameCount = 0;
-    const uncertain = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      createProfileId: () => PROFILE_B,
-      createId: () => "reopen-candidate",
-      renameFile: (async (from: string, to: string) => {
-        renameCount += 1;
-        if (renameCount === 2) throw new TypeError("synthetic compensation rename failure");
-        await rename(from, to);
-      }) as never,
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 1) {
+      await expect(
+        vault.replaceProfile({
+          token: "synthetic-token-a",
+          bot: BOT_A,
+          authenticatedAthleteHome: value.athleteHome,
+        }),
+      ).resolves.toEqual({ outcome: "refused", reason: "storage-failed" });
+      await expect(vault.profileStatus()).resolves.toEqual({ state: "missing" });
+      await expect(lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  posixIt(
+    "blocks replay and reports uncertainty when neither candidate nor prior can converge durably",
+    async () => {
+      const value = await fixture();
+      await seedProfile(value);
+      let syncCount = 0;
+      const vault = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        createProfileId: () => PROFILE_B,
+        createId: () => "never-durable",
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 1) {
+            await syncDirectory(value.root);
+            return;
+          }
+          throw new TypeError("synthetic persistent directory sync failure");
+        },
+      });
+
+      await expect(
+        vault.replaceProfile({
+          token: "synthetic-token-b",
+          bot: BOT_B,
+          authenticatedAthleteHome: value.athleteHome,
+        }),
+      ).resolves.toEqual({ outcome: "uncertain", reason: "storage-uncertain" });
+      await expect(vault.profileStatus()).resolves.toEqual({ state: "uncertain" });
+      const apply = vi.fn();
+      await expect(vault.applyStoredProfile(value.athleteHome, apply)).resolves.toEqual({
+        outcome: "uncertain",
+        reason: "storage-uncertain",
+      });
+      expect(apply).not.toHaveBeenCalled();
+    },
+  );
+
+  posixIt(
+    "converges a visible prior profile on reopen before accepting or replaying it",
+    async () => {
+      const value = await fixture();
+      await seedProfile(value);
+      let syncCount = 0;
+      const uncertain = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        createProfileId: () => PROFILE_B,
+        createId: () => "reopen-old",
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 1) {
+            await syncDirectory(value.root);
+            return;
+          }
+          throw new TypeError("synthetic indeterminate directory sync");
+        },
+      });
+      await expect(
+        uncertain.replaceProfile({
+          token: "synthetic-token-b",
+          bot: BOT_B,
+          authenticatedAthleteHome: value.athleteHome,
+        }),
+      ).resolves.toEqual({ outcome: "uncertain", reason: "storage-uncertain" });
+
+      const events: string[] = [];
+      const baseEncryption = encryption();
+      const reopened = createTelegramCredentialVault({
+        ...value,
+        encryption: {
+          ...baseEncryption,
+          decryptString(ciphertext) {
+            events.push("decrypt");
+            return baseEncryption.decryptString(ciphertext);
+          },
+        },
+        syncDirectory: async () => {
+          events.push("sync");
           await syncDirectory(value.root);
-          return;
-        }
-        throw new TypeError("synthetic indeterminate directory sync");
-      },
-    });
-    await expect(
-      uncertain.replaceProfile({
+        },
+      });
+      await expect(reopened.profileStatus()).resolves.toEqual({
+        state: "configured",
+        profileId: PROFILE_A,
+        bot: BOT_A,
+      });
+      const apply = vi.fn(async (_profile: TelegramProfileRecord) => {
+        events.push("apply");
+      });
+      await expect(reopened.applyStoredProfile(value.athleteHome, apply)).resolves.toMatchObject({
+        outcome: "applied",
+        profileId: PROFILE_A,
+      });
+      expect(apply.mock.calls[0]?.[0]).toMatchObject({
+        profileId: PROFILE_A,
+        token: "synthetic-token-a",
+        bot: BOT_A,
+      });
+      expect(events).toEqual(["sync", "decrypt", "decrypt", "apply"]);
+    },
+  );
+
+  posixIt(
+    "converges a visible candidate profile on reopen before accepting or replaying it",
+    async () => {
+      const value = await fixture();
+      await seedProfile(value);
+      let syncCount = 0;
+      let renameCount = 0;
+      const uncertain = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        createProfileId: () => PROFILE_B,
+        createId: () => "reopen-candidate",
+        renameFile: (async (from: string, to: string) => {
+          renameCount += 1;
+          if (renameCount === 2) throw new TypeError("synthetic compensation rename failure");
+          await rename(from, to);
+        }) as never,
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 1) {
+            await syncDirectory(value.root);
+            return;
+          }
+          throw new TypeError("synthetic indeterminate directory sync");
+        },
+      });
+      await expect(
+        uncertain.replaceProfile({
+          token: "synthetic-token-b",
+          bot: BOT_B,
+          authenticatedAthleteHome: value.athleteHome,
+        }),
+      ).resolves.toEqual({ outcome: "uncertain", reason: "storage-uncertain" });
+
+      const namespaceSync = vi.fn(async () => syncDirectory(value.root));
+      const reopened = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        syncDirectory: namespaceSync,
+      });
+      await expect(reopened.profileStatus()).resolves.toEqual({
+        state: "configured",
+        profileId: PROFILE_B,
+        bot: BOT_B,
+      });
+      const apply = vi.fn(async (_profile: TelegramProfileRecord) => {});
+      await expect(reopened.applyStoredProfile(value.athleteHome, apply)).resolves.toMatchObject({
+        outcome: "applied",
+        profileId: PROFILE_B,
+      });
+      expect(apply.mock.calls[0]?.[0]).toMatchObject({
+        profileId: PROFILE_B,
         token: "synthetic-token-b",
         bot: BOT_B,
-        authenticatedAthleteHome: value.athleteHome,
-      }),
-    ).resolves.toEqual({ outcome: "uncertain", reason: "storage-uncertain" });
+      });
+      expect(namespaceSync).toHaveBeenCalledTimes(1);
+    },
+  );
 
-    const namespaceSync = vi.fn(async () => syncDirectory(value.root));
-    const reopened = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      syncDirectory: namespaceSync,
-    });
-    await expect(reopened.profileStatus()).resolves.toEqual({
-      state: "configured",
-      profileId: PROFILE_B,
-      bot: BOT_B,
-    });
-    const apply = vi.fn(async (_profile: TelegramProfileRecord) => {});
-    await expect(reopened.applyStoredProfile(value.athleteHome, apply)).resolves.toMatchObject({
-      outcome: "applied",
-      profileId: PROFILE_B,
-    });
-    expect(apply.mock.calls[0]?.[0]).toMatchObject({
-      profileId: PROFILE_B,
-      token: "synthetic-token-b",
-      bot: BOT_B,
-    });
-    expect(namespaceSync).toHaveBeenCalledTimes(1);
-  });
+  posixIt(
+    "keeps a failed reopen reconciliation uncertain and never replays the visible profile",
+    async () => {
+      const value = await fixture();
+      await seedProfile(value);
+      let syncAttempts = 0;
+      const decryptString = vi.fn(encryption().decryptString);
+      const reopened = createTelegramCredentialVault({
+        ...value,
+        encryption: { ...encryption(), decryptString },
+        syncDirectory: async () => {
+          syncAttempts += 1;
+          if (syncAttempts === 1) throw new TypeError("synthetic reopen sync failure");
+          await syncDirectory(value.root);
+        },
+      });
 
-  posixIt("keeps a failed reopen reconciliation uncertain and never replays the visible profile", async () => {
-    const value = await fixture();
-    await seedProfile(value);
-    let syncAttempts = 0;
-    const decryptString = vi.fn(encryption().decryptString);
-    const reopened = createTelegramCredentialVault({
-      ...value,
-      encryption: { ...encryption(), decryptString },
-      syncDirectory: async () => {
-        syncAttempts += 1;
-        if (syncAttempts === 1) throw new TypeError("synthetic reopen sync failure");
-        await syncDirectory(value.root);
-      },
-    });
-
-    await expect(reopened.profileStatus()).resolves.toEqual({ state: "uncertain" });
-    await expect(reopened.profileStatus()).resolves.toEqual({ state: "uncertain" });
-    const apply = vi.fn();
-    await expect(reopened.applyStoredProfile(value.athleteHome, apply)).resolves.toEqual({
-      outcome: "uncertain",
-      reason: "storage-uncertain",
-    });
-    await expect(reopened.deleteProfile()).resolves.toEqual({
-      outcome: "uncertain",
-      reason: "storage-uncertain",
-    });
-    expect(syncAttempts).toBe(1);
-    expect(decryptString).not.toHaveBeenCalled();
-    expect(apply).not.toHaveBeenCalled();
-    expect((await lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile()).toBe(true);
-  });
+      await expect(reopened.profileStatus()).resolves.toEqual({ state: "uncertain" });
+      await expect(reopened.profileStatus()).resolves.toEqual({ state: "uncertain" });
+      const apply = vi.fn();
+      await expect(reopened.applyStoredProfile(value.athleteHome, apply)).resolves.toEqual({
+        outcome: "uncertain",
+        reason: "storage-uncertain",
+      });
+      await expect(reopened.deleteProfile()).resolves.toEqual({
+        outcome: "uncertain",
+        reason: "storage-uncertain",
+      });
+      expect(syncAttempts).toBe(1);
+      expect(decryptString).not.toHaveBeenCalled();
+      expect(apply).not.toHaveBeenCalled();
+      expect((await lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile()).toBe(true);
+    },
+  );
 
   it("reconciles only exact vault-owned transient artifacts before reading a profile", async () => {
     const value = await fixture();
@@ -849,41 +922,44 @@ describe("Telegram credential vault", () => {
     expect((await readdir(value.root)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
   });
 
-  posixIt("stores desired state separately without encryption and durably compensates uncertainty", async () => {
-    const value = await fixture();
-    const encryptString = vi.fn();
-    const decryptString = vi.fn();
-    const seed = createTelegramCredentialVault({
-      ...value,
-      encryption: { isEncryptionAvailable: () => false, encryptString, decryptString },
-    });
-    await expect(seed.setDesiredState(false)).resolves.toEqual({
-      status: "stored",
-      enabled: false,
-    });
-    let syncCount = 0;
-    const vault = createTelegramCredentialVault({
-      ...value,
-      encryption: { isEncryptionAvailable: () => false, encryptString, decryptString },
-      createId: () => `desired-${syncCount}`,
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 2) throw new TypeError("synthetic replacement sync failure");
-        await syncDirectory(value.root);
-      },
-    });
+  posixIt(
+    "stores desired state separately without encryption and durably compensates uncertainty",
+    async () => {
+      const value = await fixture();
+      const encryptString = vi.fn();
+      const decryptString = vi.fn();
+      const seed = createTelegramCredentialVault({
+        ...value,
+        encryption: { isEncryptionAvailable: () => false, encryptString, decryptString },
+      });
+      await expect(seed.setDesiredState(false)).resolves.toEqual({
+        status: "stored",
+        enabled: false,
+      });
+      let syncCount = 0;
+      const vault = createTelegramCredentialVault({
+        ...value,
+        encryption: { isEncryptionAvailable: () => false, encryptString, decryptString },
+        createId: () => `desired-${syncCount}`,
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 2) throw new TypeError("synthetic replacement sync failure");
+          await syncDirectory(value.root);
+        },
+      });
 
-    await expect(vault.setDesiredState(true)).resolves.toEqual({
-      status: "refused",
-      reason: "storage-failed",
-    });
-    await expect(vault.desiredState()).resolves.toEqual({ state: "configured", enabled: false });
-    expect(encryptString).not.toHaveBeenCalled();
-    expect(decryptString).not.toHaveBeenCalled();
-    expect(
-      JSON.parse(await readFile(join(value.root, TELEGRAM_DESIRED_STATE_FILE_NAME), "utf8")),
-    ).toEqual({ schemaVersion: 1, athleteHome: value.athleteHome, enabled: false });
-  });
+      await expect(vault.setDesiredState(true)).resolves.toEqual({
+        status: "refused",
+        reason: "storage-failed",
+      });
+      await expect(vault.desiredState()).resolves.toEqual({ state: "configured", enabled: false });
+      expect(encryptString).not.toHaveBeenCalled();
+      expect(decryptString).not.toHaveBeenCalled();
+      expect(
+        JSON.parse(await readFile(join(value.root, TELEGRAM_DESIRED_STATE_FILE_NAME), "utf8")),
+      ).toEqual({ schemaVersion: 1, athleteHome: value.athleteHome, enabled: false });
+    },
+  );
 
   posixIt("marks desired state uncertain when durable compensation cannot be proven", async () => {
     const value = await fixture();
@@ -943,97 +1019,103 @@ describe("Telegram credential vault", () => {
     expect(namespaceSync).toHaveBeenCalledTimes(process.platform === "win32" ? 0 : 1);
   });
 
-  posixIt("accepts an uncertain visible enable only after a fresh reopen converges it", async () => {
-    const value = await fixture();
-    const seed = createTelegramCredentialVault({ ...value, encryption: encryption() });
-    await seed.setDesiredState(false);
-    let syncCount = 0;
-    let renameCount = 0;
-    const uncertain = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      createId: () => "uncertain-enable-candidate",
-      renameFile: (async (from: string, to: string) => {
-        renameCount += 1;
-        if (renameCount === 2) throw new TypeError("synthetic compensation rename failure");
-        await rename(from, to);
-      }) as never,
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 1) {
+  posixIt(
+    "accepts an uncertain visible enable only after a fresh reopen converges it",
+    async () => {
+      const value = await fixture();
+      const seed = createTelegramCredentialVault({ ...value, encryption: encryption() });
+      await seed.setDesiredState(false);
+      let syncCount = 0;
+      let renameCount = 0;
+      const uncertain = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        createId: () => "uncertain-enable-candidate",
+        renameFile: (async (from: string, to: string) => {
+          renameCount += 1;
+          if (renameCount === 2) throw new TypeError("synthetic compensation rename failure");
+          await rename(from, to);
+        }) as never,
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 1) {
+            await syncDirectory(value.root);
+            return;
+          }
+          throw new TypeError("synthetic indeterminate directory sync");
+        },
+      });
+      await expect(uncertain.setDesiredState(true)).resolves.toEqual({
+        status: "uncertain",
+        reason: "storage-uncertain",
+      });
+      expect(
+        JSON.parse(await readFile(join(value.root, TELEGRAM_DESIRED_STATE_FILE_NAME), "utf8")),
+      ).toMatchObject({ enabled: true });
+
+      const namespaceSync = vi.fn(async () => syncDirectory(value.root));
+      const reopened = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        syncDirectory: namespaceSync,
+      });
+      await expect(reopened.desiredState()).resolves.toEqual({
+        state: "configured",
+        enabled: true,
+      });
+      expect(namespaceSync).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  posixIt(
+    "keeps an uncertain visible enable disabled while reopen convergence is indeterminate",
+    async () => {
+      const value = await fixture();
+      const seed = createTelegramCredentialVault({ ...value, encryption: encryption() });
+      await seed.setDesiredState(false);
+      let syncCount = 0;
+      let renameCount = 0;
+      const uncertain = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        createId: () => "indeterminate-enable-candidate",
+        renameFile: (async (from: string, to: string) => {
+          renameCount += 1;
+          if (renameCount === 2) throw new TypeError("synthetic compensation rename failure");
+          await rename(from, to);
+        }) as never,
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 1) {
+            await syncDirectory(value.root);
+            return;
+          }
+          throw new TypeError("synthetic indeterminate directory sync");
+        },
+      });
+      await expect(uncertain.setDesiredState(true)).resolves.toMatchObject({ status: "uncertain" });
+
+      let reopenSyncAttempts = 0;
+      const reopened = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        syncDirectory: async () => {
+          reopenSyncAttempts += 1;
+          if (reopenSyncAttempts === 1) throw new TypeError("synthetic reopen sync failure");
           await syncDirectory(value.root);
-          return;
-        }
-        throw new TypeError("synthetic indeterminate directory sync");
-      },
-    });
-    await expect(uncertain.setDesiredState(true)).resolves.toEqual({
-      status: "uncertain",
-      reason: "storage-uncertain",
-    });
-    expect(
-      JSON.parse(await readFile(join(value.root, TELEGRAM_DESIRED_STATE_FILE_NAME), "utf8")),
-    ).toMatchObject({ enabled: true });
-
-    const namespaceSync = vi.fn(async () => syncDirectory(value.root));
-    const reopened = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      syncDirectory: namespaceSync,
-    });
-    await expect(reopened.desiredState()).resolves.toEqual({
-      state: "configured",
-      enabled: true,
-    });
-    expect(namespaceSync).toHaveBeenCalledTimes(1);
-  });
-
-  posixIt("keeps an uncertain visible enable disabled while reopen convergence is indeterminate", async () => {
-    const value = await fixture();
-    const seed = createTelegramCredentialVault({ ...value, encryption: encryption() });
-    await seed.setDesiredState(false);
-    let syncCount = 0;
-    let renameCount = 0;
-    const uncertain = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      createId: () => "indeterminate-enable-candidate",
-      renameFile: (async (from: string, to: string) => {
-        renameCount += 1;
-        if (renameCount === 2) throw new TypeError("synthetic compensation rename failure");
-        await rename(from, to);
-      }) as never,
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 1) {
-          await syncDirectory(value.root);
-          return;
-        }
-        throw new TypeError("synthetic indeterminate directory sync");
-      },
-    });
-    await expect(uncertain.setDesiredState(true)).resolves.toMatchObject({ status: "uncertain" });
-
-    let reopenSyncAttempts = 0;
-    const reopened = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      syncDirectory: async () => {
-        reopenSyncAttempts += 1;
-        if (reopenSyncAttempts === 1) throw new TypeError("synthetic reopen sync failure");
-        await syncDirectory(value.root);
-      },
-    });
-    await expect(reopened.desiredState()).resolves.toEqual({
-      state: "uncertain",
-      enabled: false,
-    });
-    await expect(reopened.desiredState()).resolves.toEqual({
-      state: "uncertain",
-      enabled: false,
-    });
-    expect(reopenSyncAttempts).toBe(1);
-  });
+        },
+      });
+      await expect(reopened.desiredState()).resolves.toEqual({
+        state: "uncertain",
+        enabled: false,
+      });
+      await expect(reopened.desiredState()).resolves.toEqual({
+        state: "uncertain",
+        enabled: false,
+      });
+      expect(reopenSyncAttempts).toBe(1);
+    },
+  );
 
   it("refuses symlinked and permissive profile storage", async ({ skip }) => {
     const value = await fixture();
@@ -1114,6 +1196,229 @@ describe("Telegram credential vault", () => {
     expect((await readdir(value.root)).some((entry) => entry.endsWith(".deleted"))).toBe(false);
   });
 
+  it("retains a configured profile when removal key revalidation fails", async () => {
+    const value = await fixture();
+    const encryptionPort = keychainEncryption();
+    const seed = createTelegramCredentialVault({
+      ...value,
+      encryption: encryptionPort,
+      createProfileId: () => PROFILE_A,
+    });
+    await expect(
+      seed.replaceProfile({
+        token: "synthetic-token-a",
+        bot: BOT_A,
+        authenticatedAthleteHome: value.athleteHome,
+      }),
+    ).resolves.toMatchObject({ outcome: "applied", profileId: PROFILE_A });
+    const revalidateEnvelopeRemoval = vi.fn(async () => false);
+    const removeFile = vi.fn(rm);
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: encryptionPort,
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+      removeFile,
+    });
+    removeFile.mockClear();
+
+    await expect(vault.deleteProfile()).resolves.toEqual({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    expect(revalidateEnvelopeRemoval).toHaveBeenCalledOnce();
+    expect(removeFile).not.toHaveBeenCalled();
+    await expect(vault.profileStatus()).resolves.toMatchObject({
+      state: "configured",
+      profileId: PROFILE_A,
+    });
+  });
+
+  it.each(["missing-proof", "missing-hook"] as const)(
+    "retains a keychain profile with %s",
+    async (missing) => {
+      const value = await fixture();
+      const encryptionPort = keychainEncryption();
+      const seed = createTelegramCredentialVault({
+        ...value,
+        encryption: encryptionPort,
+        createProfileId: () => PROFILE_A,
+      });
+      await seed.replaceProfile({
+        token: "synthetic-token-a",
+        bot: BOT_A,
+        authenticatedAthleteHome: value.athleteHome,
+      });
+      const vault = createTelegramCredentialVault({
+        ...value,
+        encryption: encryptionPort,
+        serializeEnvelopeMutation:
+          missing === "missing-proof"
+            ? async (operation) => await operation(undefined as never)
+            : createCredentialEnvelopeMutationLock(),
+        revalidateEnvelopeRemoval: missing === "missing-hook" ? undefined : vi.fn(async () => true),
+      });
+
+      await expect(vault.deleteProfile()).resolves.toEqual({
+        outcome: "refused",
+        reason: "encryption-unavailable",
+      });
+      expect((await lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile()).toBe(true);
+    },
+  );
+
+  it("retains a keychain profile without decrypting when encryption is unavailable", async () => {
+    const value = await fixture();
+    const encryptionPort = keychainEncryption();
+    const seed = createTelegramCredentialVault({
+      ...value,
+      encryption: encryptionPort,
+      createProfileId: () => PROFILE_A,
+    });
+    await seed.replaceProfile({
+      token: "synthetic-token-a",
+      bot: BOT_A,
+      authenticatedAthleteHome: value.athleteHome,
+    });
+    const decryptString = vi.fn(() => {
+      throw new TypeError();
+    });
+    const revalidateEnvelopeRemoval = vi.fn(async () => true);
+    const vault = createTelegramCredentialVault({
+      ...value,
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString,
+      },
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+    });
+
+    await expect(vault.deleteProfile()).resolves.toEqual({
+      outcome: "refused",
+      reason: "encryption-unavailable",
+    });
+    expect(decryptString).not.toHaveBeenCalled();
+    expect(revalidateEnvelopeRemoval).not.toHaveBeenCalled();
+    expect((await lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile()).toBe(true);
+  });
+
+  posixIt("deletes an unverified Darwin profile without decrypting it", async () => {
+    const value = await fixture();
+    await seedProfile(value);
+    const revalidateEnvelopeRemoval = vi.fn(async () => false);
+    const decryptString = vi.fn();
+    const vault = createTelegramCredentialVault({
+      ...value,
+      platform: "darwin",
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString,
+      },
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+    });
+
+    await expect(vault.deleteProfile()).resolves.toEqual({
+      outcome: "applied",
+      cleanupPending: false,
+    });
+
+    expect(decryptString).not.toHaveBeenCalled();
+    expect(revalidateEnvelopeRemoval).not.toHaveBeenCalled();
+    await expect(lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it.each(["linux", "win32"] as const)(
+    "refuses an unverified %s profile owned by another athlete home",
+    async (platform) => {
+      const value = await fixture();
+      const foreignHome = await anotherHome(value.root);
+      await seedProfile({ ...value, athleteHome: foreignHome });
+      const baseEncryption = encryption();
+      const decryptString = vi.fn(baseEncryption.decryptString);
+      const vault = createTelegramCredentialVault({
+        ...value,
+        platform,
+        encryption: { ...baseEncryption, decryptString },
+      });
+
+      await expect(vault.deleteProfile()).resolves.toEqual({
+        outcome: "refused",
+        reason: "wrong-home",
+      });
+
+      expect(decryptString).toHaveBeenCalledOnce();
+      expect((await lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile()).toBe(true);
+    },
+  );
+
+  it.each(["linux", "win32"] as const)(
+    "deletes an unverified %s profile after confirming its athlete home",
+    async (platform) => {
+      const value = await fixture();
+      await seedProfile(value);
+      const baseEncryption = encryption();
+      const decryptString = vi.fn(baseEncryption.decryptString);
+      const vault = createTelegramCredentialVault({
+        ...value,
+        platform,
+        encryption: { ...baseEncryption, decryptString },
+      });
+
+      await expect(vault.deleteProfile()).resolves.toEqual({
+        outcome: "applied",
+        cleanupPending: false,
+      });
+
+      expect(decryptString).toHaveBeenCalledOnce();
+      await expect(lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it.each(["linux", "win32"] as const)(
+    "refuses an unreadable unverified %s profile before file mutation",
+    async (platform) => {
+      const value = await fixture();
+      await seedProfile(value);
+      const renameFile = vi.fn(rename);
+      const removeFile = vi.fn(rm);
+      const vault = createTelegramCredentialVault({
+        ...value,
+        platform,
+        encryption: {
+          isEncryptionAvailable: () => true,
+          encryptString: vi.fn(),
+          decryptString: vi.fn(() => {
+            throw new TypeError("synthetic unreadable profile");
+          }),
+        },
+        renameFile,
+        removeFile,
+      });
+
+      await expect(vault.preauthorizeProfileRemoval()).resolves.toEqual({
+        outcome: "refused",
+        reason: "storage-failed",
+      });
+      await expect(vault.deleteProfile()).resolves.toEqual({
+        outcome: "refused",
+        reason: "storage-failed",
+      });
+
+      expect(renameFile).not.toHaveBeenCalled();
+      expect(removeFile).not.toHaveBeenCalled();
+      expect((await lstat(join(value.root, TELEGRAM_PROFILE_FILE_NAME))).isFile()).toBe(true);
+    },
+  );
+
   it("refuses deletion when the tombstone id is invalid instead of rejecting", async () => {
     const value = await fixture();
     await seedProfile(value);
@@ -1132,61 +1437,64 @@ describe("Telegram credential vault", () => {
     await expect(vault.profileStatus()).resolves.toMatchObject({ state: "configured" });
   });
 
-  posixIt("restores a profile when tombstone durability fails and reports uncertainty if restore fails", async () => {
-    const value = await fixture();
-    await seedProfile(value);
-    let syncCount = 0;
-    const restored = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      createId: () => "restore-profile",
-      syncDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 2) throw new TypeError("synthetic tombstone sync failure");
-        await syncDirectory(value.root);
-      },
-    });
-    await expect(restored.deleteProfile()).resolves.toEqual({
-      outcome: "refused",
-      reason: "storage-failed",
-    });
-    await expect(restored.profileStatus()).resolves.toMatchObject({
-      state: "configured",
-      profileId: PROFILE_A,
-    });
-
-    let renameCount = 0;
-    let uncertainSyncCount = 0;
-    const uncertain = createTelegramCredentialVault({
-      ...value,
-      encryption: encryption(),
-      createId: () => "uncertain-delete",
-      renameFile: (async (from: string, to: string) => {
-        renameCount += 1;
-        if (renameCount === 2) throw new TypeError("synthetic restore failure");
-        await rename(from, to);
-      }) as never,
-      syncDirectory: async () => {
-        uncertainSyncCount += 1;
-        if (uncertainSyncCount === 1) {
+  posixIt(
+    "restores a profile when tombstone durability fails and reports uncertainty if restore fails",
+    async () => {
+      const value = await fixture();
+      await seedProfile(value);
+      let syncCount = 0;
+      const restored = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        createId: () => "restore-profile",
+        syncDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 2) throw new TypeError("synthetic tombstone sync failure");
           await syncDirectory(value.root);
-          return;
-        }
-        throw new TypeError("synthetic tombstone sync failure");
-      },
-    });
-    await expect(uncertain.deleteProfile()).resolves.toEqual({
-      outcome: "uncertain",
-      reason: "storage-uncertain",
-    });
-    await expect(uncertain.profileStatus()).resolves.toEqual({ state: "uncertain" });
-    const apply = vi.fn();
-    await expect(uncertain.applyStoredProfile(value.athleteHome, apply)).resolves.toEqual({
-      outcome: "uncertain",
-      reason: "storage-uncertain",
-    });
-    expect(apply).not.toHaveBeenCalled();
-  });
+        },
+      });
+      await expect(restored.deleteProfile()).resolves.toEqual({
+        outcome: "refused",
+        reason: "storage-failed",
+      });
+      await expect(restored.profileStatus()).resolves.toMatchObject({
+        state: "configured",
+        profileId: PROFILE_A,
+      });
+
+      let renameCount = 0;
+      let uncertainSyncCount = 0;
+      const uncertain = createTelegramCredentialVault({
+        ...value,
+        encryption: encryption(),
+        createId: () => "uncertain-delete",
+        renameFile: (async (from: string, to: string) => {
+          renameCount += 1;
+          if (renameCount === 2) throw new TypeError("synthetic restore failure");
+          await rename(from, to);
+        }) as never,
+        syncDirectory: async () => {
+          uncertainSyncCount += 1;
+          if (uncertainSyncCount === 1) {
+            await syncDirectory(value.root);
+            return;
+          }
+          throw new TypeError("synthetic tombstone sync failure");
+        },
+      });
+      await expect(uncertain.deleteProfile()).resolves.toEqual({
+        outcome: "uncertain",
+        reason: "storage-uncertain",
+      });
+      await expect(uncertain.profileStatus()).resolves.toEqual({ state: "uncertain" });
+      const apply = vi.fn();
+      await expect(uncertain.applyStoredProfile(value.athleteHome, apply)).resolves.toEqual({
+        outcome: "uncertain",
+        reason: "storage-uncertain",
+      });
+      expect(apply).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps Windows DPAPI ciphertext isolated from a corrupt profile and desired state", async () => {
     const value = await fixture();

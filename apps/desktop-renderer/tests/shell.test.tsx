@@ -30,6 +30,7 @@ const REPAIR_REQUIRED_CREDENTIALS: CredentialSettingsState = {
   providerStatuses: [],
   confirmation: null,
   announcement: "That saved key could not be used. Enter it again to continue.",
+  recovery: { state: "ready", unverifiedEnvelopes: 0 },
   repairCredential: "anthropic",
   recoveryAvailable: false,
   focus: null,
@@ -633,6 +634,19 @@ describe("shell", () => {
     expect(feedback).not.toBeNull();
     expect(screen.getByRole("button", { name: "Reload credential status" })).toBeEnabled();
     expect(screen.queryByRole("navigation", { name: "Main navigation" })).toBeNull();
+  });
+
+  it("preserves global reset uncertainty when settings panes close", () => {
+    useEnduragentStore.getState().patchSettings({
+      credentials: { status: "closed", resetUncertain: true },
+    });
+
+    useEnduragentStore.getState().closeSettingsPanes();
+
+    expect(useEnduragentStore.getState().settings.credentials).toEqual({
+      status: "closed",
+      resetUncertain: true,
+    });
   });
 
   it("holds a repair-triggered gate after reconciliation until Start coaching", () => {

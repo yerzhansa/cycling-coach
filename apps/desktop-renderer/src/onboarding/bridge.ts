@@ -48,6 +48,14 @@ export type CredentialWriteResult =
 
 export type DesktopCredentialId = DesktopCredentialSlot | "openai-codex";
 
+export type CredentialRecoveryStatus =
+  | Readonly<{ state: "ready"; unverifiedEnvelopes: number }>
+  | Readonly<{ state: "locked" | "missing" | "unavailable" }>;
+
+export type CredentialResetResult =
+  | Readonly<{ status: "reset"; keyCleanupPending: boolean }>
+  | Readonly<{ status: "refused"; reason: "runtime-unavailable" | "storage-failed" }>;
+
 export type CredentialDeleteResult =
   | {
       readonly credential: DesktopCredentialId;
@@ -60,6 +68,7 @@ export type CredentialDeleteResult =
       readonly reason:
         | "not-found"
         | "managed-by-environment"
+        | "encryption-unavailable"
         | "storage-failed"
         | "runtime-unavailable"
         | "runtime-state-diverged";

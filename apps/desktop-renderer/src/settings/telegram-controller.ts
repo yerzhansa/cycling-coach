@@ -502,6 +502,7 @@ async function loadSenders(
 export function createTelegramSettingsController(input: {
   readonly bridge: TelegramSettingsBridge;
   readonly beginMutation: () => (() => void) | null;
+  readonly credentialMutationsBlocked?: () => boolean;
   readonly view: TelegramSettingsView;
   readonly pollIntervalMs?: number;
   readonly setInterval?: typeof globalThis.setInterval;
@@ -651,7 +652,13 @@ export function createTelegramSettingsController(input: {
     action: TelegramSettingsAction,
     invoke: () => Promise<TelegramMutationResult>,
   ): void => {
-    if (disposed || operation !== undefined) return;
+    if (
+      disposed ||
+      operation !== undefined ||
+      ((action === "paste-token" || action === "remove") && input.credentialMutationsBlocked?.())
+    ) {
+      return;
+    }
     const release = input.beginMutation();
     if (release === null) return;
     const previous = readCurrentContent();
@@ -729,7 +736,7 @@ export function createTelegramSettingsController(input: {
     action: "add-sender" | "remove-sender",
     invoke: () => Promise<TelegramAllowedSendersMutationResult>,
   ): void => {
-    if (disposed || operation !== undefined) return;
+    if (disposed || operation !== undefined || input.credentialMutationsBlocked?.()) return;
     const release = input.beginMutation();
     if (release === null) return;
     const previous = readCurrentContent();

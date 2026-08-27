@@ -5,6 +5,10 @@ import { defineConfig, externalizeDepsPlugin, type UserConfig } from "electron-v
 import { appVersionDefine } from "../desktop-renderer/app-version.mjs";
 
 const desktopRoot = import.meta.dirname;
+const keychainBindingProbeDeprecationEntry = resolve(
+  desktopRoot,
+  "src/main/keychain-binding-probe-deprecation.ts",
+);
 
 export function createDesktopViteConfig(
   options: {
@@ -25,6 +29,11 @@ export function createDesktopViteConfig(
           input: {
             index: resolve(desktopRoot, "src/main/index.ts"),
             "daemon-utility": daemonUtilityEntry,
+          },
+          output: {
+            manualChunks: {
+              "keychain-binding-probe-deprecation": [keychainBindingProbeDeprecationEntry],
+            },
           },
         },
       },

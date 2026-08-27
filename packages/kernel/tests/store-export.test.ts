@@ -5,7 +5,6 @@ import {
   decodeContainer,
   encodeContainer,
   EXPORT_WARNING,
-  EXPORT_FORMAT_VERSION,
   CONTAINER_MAGIC,
   PBKDF2_ITERATIONS,
   ExportFormatError,

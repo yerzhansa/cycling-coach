@@ -35,6 +35,7 @@ export type DesktopAutoUpdater = Pick<
   | "autoRunAppAfterInstall"
   | "allowPrerelease"
   | "allowDowngrade"
+  | "disableWebInstaller"
   | "on"
   | "off"
   | "checkForUpdates"
@@ -433,6 +434,7 @@ export function createDesktopUpdateController(input: {
         updater.autoRunAppAfterInstall = true;
         updater.allowPrerelease = false;
         updater.allowDowngrade = false;
+        updater.disableWebInstaller = true;
         intervalTimer = scheduleInterval(() => {
           void check();
         }, DESKTOP_UPDATE_INTERVAL_MS);

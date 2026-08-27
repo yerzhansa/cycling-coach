@@ -447,6 +447,7 @@ function readOwnershipToken(
   let descriptor: number | undefined;
   let token = "";
   let finalMetadata: Stats | undefined;
+  let readFailure: ClaudeWorkingAreaError | undefined;
   try {
     const nonblocking = platform === "win32" ? 0 : constants.O_NONBLOCK;
     descriptor = fileSystem.openSync(
@@ -486,17 +487,19 @@ function readOwnershipToken(
     assertFileAccess(path, fileSystem);
     finalMetadata = after;
   } catch (error) {
-    if (error instanceof ClaudeWorkingAreaError) throw error;
-    throw failure(stage, errorCode(error) === "ELOOP" ? "link-reparse" : "io-failure");
+    readFailure = error instanceof ClaudeWorkingAreaError
+      ? error
+      : failure(stage, errorCode(error) === "ELOOP" ? "link-reparse" : "io-failure");
   } finally {
     if (descriptor !== undefined) {
       try {
         fileSystem.closeSync(descriptor);
       } catch {
-        throw failure(stage, "io-failure");
+        readFailure ??= failure(stage, "io-failure");
       }
     }
   }
+  if (readFailure !== undefined) throw readFailure;
   if (finalMetadata === undefined) throw failure(stage, "identity-changed");
   return { metadata: finalMetadata, token };
 }

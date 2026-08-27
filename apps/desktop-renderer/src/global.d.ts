@@ -30,6 +30,9 @@ interface EnduragentAuth {
   deleteCredential(input: {
     readonly credential: DesktopCredentialId;
   }): Promise<CredentialDeleteResult>;
+  credentialRecoveryStatus(): Promise<CredentialRecoveryStatus>;
+  retryCredentialRecovery(): Promise<CredentialRecoveryStatus>;
+  resetAllCredentials(): Promise<CredentialResetResult>;
   llmConfiguration(): Promise<OnboardingLlmConfiguration>;
   applyLlmSelection(input: OnboardingLlmSelection): Promise<OnboardingLlmSelectionResult>;
   chatgptStatus(): Promise<ChatGptStatus>;
@@ -73,6 +76,8 @@ type DesktopPlanTransitionCommand =
 type DesktopPlanTransitionResult =
   import("@enduragent/coach-contract").ExecutePlanTransitionRpcResult;
 type DesktopPlanProgressEvent = import("@enduragent/coach-contract").PlanProgressEvent;
+type CredentialRecoveryStatus = import("./onboarding/bridge").CredentialRecoveryStatus;
+type CredentialResetResult = import("./onboarding/bridge").CredentialResetResult;
 
 type DesktopTrainingExportRequest =
   | {
@@ -441,6 +446,7 @@ type CredentialDeleteResult =
       readonly reason:
         | "not-found"
         | "managed-by-environment"
+        | "encryption-unavailable"
         | "storage-failed"
         | "runtime-unavailable"
         | "runtime-state-diverged";

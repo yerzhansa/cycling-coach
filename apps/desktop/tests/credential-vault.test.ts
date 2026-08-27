@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -16,6 +16,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCredentialEnvelopeMutationLock,
+  createCredentialMutationLock,
+} from "../src/main/credential-envelope-lock.js";
+import {
   CREDENTIAL_DIRECTORY_MODE,
   CREDENTIAL_FILE_MODE,
   CredentialRuntimeRefusal,
@@ -25,6 +29,13 @@ import {
   type CredentialEncryptionPort,
   type CredentialVaultMutation,
 } from "../src/main/credential-vault.js";
+import {
+  CREDENTIAL_ENVELOPE_MAGIC,
+  SAFE_STORAGE_ENVELOPE_KEY_ID,
+  openCredentialEnvelope,
+  sealCredentialEnvelope,
+} from "../src/main/keychain-credential-encryption.js";
+import { KEYCHAIN_KEY_BYTES } from "../src/main/keychain-binding.js";
 
 const roots: string[] = [];
 const posixIt = it.skipIf(process.platform === "win32");
@@ -66,6 +77,14 @@ function encryption(): CredentialEncryptionPort {
       }
       return value.subarray(5, -4).reverse().toString();
     },
+  };
+}
+
+function keychainEncryption(key = randomBytes(KEYCHAIN_KEY_BYTES)): CredentialEncryptionPort {
+  return {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => sealCredentialEnvelope(key, value),
+    decryptString: (value) => openCredentialEnvelope(key, value),
   };
 }
 
@@ -137,6 +156,44 @@ afterEach(async () => {
 });
 
 describe("desktop credential vault", () => {
+  it("finishes an active credential write before a shared reset mutation can run", async () => {
+    const root = await temporaryRoot();
+    const trace: string[] = [];
+    let finishApply: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const applyStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const applyFinished = new Promise<void>((resolve) => {
+      finishApply = resolve;
+    });
+    const serializeCredentialMutation = createCredentialMutationLock();
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      serializeCredentialMutation,
+      async applyCredential() {
+        trace.push("write-started");
+        markStarted?.();
+        await applyFinished;
+        trace.push("write-finished");
+      },
+    });
+
+    const write = vault.writeCredential({ slot: "anthropic", value: "synthetic-secret" });
+    await applyStarted;
+    const reset = serializeCredentialMutation(async () => {
+      trace.push("reset");
+    });
+    await Promise.resolve();
+    expect(trace).toEqual(["write-started"]);
+
+    finishApply?.();
+    await write;
+    await reset;
+    expect(trace).toEqual(["write-started", "write-finished", "reset"]);
+  });
+
   it("refuses unavailable encryption and invalid input before filesystem work", async () => {
     const root = await temporaryRoot();
     const encryptString = vi.fn(() => Buffer.from("unused"));
@@ -223,106 +280,112 @@ describe("desktop credential vault", () => {
     });
   });
 
-  posixIt("anchors the credential namespace in its parent before publishing a credential", async () => {
-    const root = await temporaryRoot();
-    let parentSyncAvailable = false;
-    const syncCredentialParentDirectory = vi.fn(async (path: string) => {
-      expect(path).toBe(dirname(root));
-      if (!parentSyncAvailable) throw new TypeError("synthetic parent sync failure");
-      const directory = await open(path, "r");
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    });
-    const applyCredential = vi.fn(async () => undefined);
-    const vault = createCredentialVault({
-      root,
-      encryption: encryption(),
-      applyCredential,
-      syncCredentialParentDirectory,
-    });
-
-    await expect(
-      vault.writeCredential({ slot: "anthropic", value: "synthetic-candidate" }),
-    ).resolves.toEqual({ slot: "anthropic", status: "refused", reason: "storage-failed" });
-    await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
-    expect(applyCredential).not.toHaveBeenCalled();
-
-    parentSyncAvailable = true;
-    await expect(
-      vault.writeCredential({ slot: "anthropic", value: "synthetic-candidate" }),
-    ).resolves.toEqual({ slot: "anthropic", status: "configured", runtimeReady: true });
-    expect(syncCredentialParentDirectory).toHaveBeenCalledTimes(2);
-  });
-
-  posixIt("zeros encryption and rollback buffers after success, refusal, and compensation", async () => {
-    const scenarios = ["success", "pre-rename", "compensation"] as const;
-    for (const scenario of scenarios) {
+  posixIt(
+    "anchors the credential namespace in its parent before publishing a credential",
+    async () => {
       const root = await temporaryRoot();
-      const baseEncryption = encryption();
-      if (scenario === "compensation") {
-        await storeEncryptedCredential(root, "anthropic", "synthetic-old", baseEncryption);
-      }
-      const ciphertexts: Buffer[] = [];
-      const rollbackBuffers: Buffer[] = [];
-      let syncCount = 0;
+      let parentSyncAvailable = false;
+      const syncCredentialParentDirectory = vi.fn(async (path: string) => {
+        expect(path).toBe(dirname(root));
+        if (!parentSyncAvailable) throw new TypeError("synthetic parent sync failure");
+        const directory = await open(path, "r");
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
+      });
+      const applyCredential = vi.fn(async () => undefined);
       const vault = createCredentialVault({
         root,
-        encryption: {
-          ...baseEncryption,
-          encryptString(value) {
-            const ciphertext = baseEncryption.encryptString(value);
-            ciphertexts.push(ciphertext);
-            return ciphertext;
+        encryption: encryption(),
+        applyCredential,
+        syncCredentialParentDirectory,
+      });
+
+      await expect(
+        vault.writeCredential({ slot: "anthropic", value: "synthetic-candidate" }),
+      ).resolves.toEqual({ slot: "anthropic", status: "refused", reason: "storage-failed" });
+      await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(applyCredential).not.toHaveBeenCalled();
+
+      parentSyncAvailable = true;
+      await expect(
+        vault.writeCredential({ slot: "anthropic", value: "synthetic-candidate" }),
+      ).resolves.toEqual({ slot: "anthropic", status: "configured", runtimeReady: true });
+      expect(syncCredentialParentDirectory).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  posixIt(
+    "zeros encryption and rollback buffers after success, refusal, and compensation",
+    async () => {
+      const scenarios = ["success", "pre-rename", "compensation"] as const;
+      for (const scenario of scenarios) {
+        const root = await temporaryRoot();
+        const baseEncryption = encryption();
+        if (scenario === "compensation") {
+          await storeEncryptedCredential(root, "anthropic", "synthetic-old", baseEncryption);
+        }
+        const ciphertexts: Buffer[] = [];
+        const rollbackBuffers: Buffer[] = [];
+        let syncCount = 0;
+        const vault = createCredentialVault({
+          root,
+          encryption: {
+            ...baseEncryption,
+            encryptString(value) {
+              const ciphertext = baseEncryption.encryptString(value);
+              ciphertexts.push(ciphertext);
+              return ciphertext;
+            },
           },
-        },
-        applyCredential: vi.fn(async () => undefined),
-        readCredentialFile:
-          scenario === "compensation"
-            ? ((async (path: string) => {
-                const contents = await readFile(path);
-                rollbackBuffers.push(contents);
-                return contents;
-              }) as typeof readFile)
-            : undefined,
-        renameCredentialFile:
-          scenario === "pre-rename"
-            ? (vi.fn(async () => {
-                throw new TypeError("synthetic rename failure");
-              }) as never)
-            : undefined,
-        syncCredentialDirectory:
-          scenario === "compensation"
-            ? async () => {
-                syncCount += 1;
-                if (syncCount === 2) {
-                  throw new TypeError("synthetic candidate directory sync failure");
+          applyCredential: vi.fn(async () => undefined),
+          readCredentialFile:
+            scenario === "compensation"
+              ? ((async (path: string) => {
+                  const contents = await readFile(path);
+                  rollbackBuffers.push(contents);
+                  return contents;
+                }) as typeof readFile)
+              : undefined,
+          renameCredentialFile:
+            scenario === "pre-rename"
+              ? (vi.fn(async () => {
+                  throw new TypeError("synthetic rename failure");
+                }) as never)
+              : undefined,
+          syncCredentialDirectory:
+            scenario === "compensation"
+              ? async () => {
+                  syncCount += 1;
+                  if (syncCount === 2) {
+                    throw new TypeError("synthetic candidate directory sync failure");
+                  }
+                  const directory = await open(root, "r");
+                  try {
+                    await directory.sync();
+                  } finally {
+                    await directory.close();
+                  }
                 }
-                const directory = await open(root, "r");
-                try {
-                  await directory.sync();
-                } finally {
-                  await directory.close();
-                }
-              }
-            : undefined,
-      });
+              : undefined,
+        });
 
-      const result = await vault.writeCredential({
-        slot: "anthropic",
-        value: `synthetic-${scenario}`,
-      });
+        const result = await vault.writeCredential({
+          slot: "anthropic",
+          value: `synthetic-${scenario}`,
+        });
 
-      expect(result.status).toBe(scenario === "success" ? "configured" : "refused");
-      expect(ciphertexts).toHaveLength(1);
-      for (const buffer of [...ciphertexts, ...rollbackBuffers]) {
-        expect(buffer.every((byte) => byte === 0)).toBe(true);
+        expect(result.status).toBe(scenario === "success" ? "configured" : "refused");
+        expect(ciphertexts).toHaveLength(1);
+        for (const buffer of [...ciphertexts, ...rollbackBuffers]) {
+          expect(buffer.every((byte) => byte === 0)).toBe(true);
+        }
+        if (scenario === "compensation") expect(rollbackBuffers).toHaveLength(1);
       }
-      if (scenario === "compensation") expect(rollbackBuffers).toHaveLength(1);
-    }
-  });
+    },
+  );
 
   it("keeps a write committed when directory cleanup fails after a successful fsync", async () => {
     const root = await temporaryRoot();
@@ -360,91 +423,103 @@ describe("desktop credential vault", () => {
     expect(applyCredential).toHaveBeenCalledWith("anthropic", "synthetic-candidate");
   });
 
-  posixIt("restores the previous ciphertext before refusing a post-rename durability failure", async () => {
-    const root = await temporaryRoot();
-    const encryptionPort = encryption();
-    const seed = createCredentialVault({
-      root,
-      encryption: encryptionPort,
-      applyCredential: vi.fn(),
-    });
-    await seed.writeCredential({ slot: "anthropic", value: "synthetic-old" }, { activate: false });
-    let syncCount = 0;
-    const applyCredential = vi.fn();
-    const vault = createCredentialVault({
-      root,
-      encryption: encryptionPort,
-      applyCredential,
-      createId: () => `write-${syncCount}`,
-      syncCredentialDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 2) throw new TypeError("synthetic replacement directory sync failure");
-        const directory = await open(root, "r");
-        try {
-          await directory.sync();
-        } finally {
-          await directory.close();
-        }
-      },
-    });
-
-    await expect(
-      vault.writeCredential({ slot: "anthropic", value: "synthetic-candidate" }),
-    ).resolves.toEqual({
-      slot: "anthropic",
-      status: "refused",
-      reason: "storage-failed",
-    });
-    const stored = await readFile(join(root, "anthropic.bin"));
-    expect(encryptionPort.decryptString(stored)).toBe("synthetic-old");
-    expect(applyCredential).not.toHaveBeenCalled();
-  });
-
-  posixIt("reports uncertainty and blocks replay when credential convergence cannot be proven", async () => {
-    const root = await temporaryRoot();
-    const encryptionPort = encryption();
-    const seed = createCredentialVault({
-      root,
-      encryption: encryptionPort,
-      applyCredential: vi.fn(),
-    });
-    await seed.writeCredential({ slot: "anthropic", value: "synthetic-old" }, { activate: false });
-    const applyCredential = vi.fn();
-    let syncCount = 0;
-    const vault = createCredentialVault({
-      root,
-      encryption: encryptionPort,
-      applyCredential,
-      createId: () => "never-durable",
-      syncCredentialDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 1) {
+  posixIt(
+    "restores the previous ciphertext before refusing a post-rename durability failure",
+    async () => {
+      const root = await temporaryRoot();
+      const encryptionPort = encryption();
+      const seed = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential: vi.fn(),
+      });
+      await seed.writeCredential(
+        { slot: "anthropic", value: "synthetic-old" },
+        { activate: false },
+      );
+      let syncCount = 0;
+      const applyCredential = vi.fn();
+      const vault = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential,
+        createId: () => `write-${syncCount}`,
+        syncCredentialDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 2) throw new TypeError("synthetic replacement directory sync failure");
           const directory = await open(root, "r");
           try {
             await directory.sync();
           } finally {
             await directory.close();
           }
-          return;
-        }
-        throw new TypeError("synthetic persistent directory sync failure");
-      },
-    });
+        },
+      });
 
-    await expect(
-      vault.writeCredential({ slot: "anthropic", value: "synthetic-candidate" }),
-    ).resolves.toEqual({
-      slot: "anthropic",
-      status: "uncertain",
-      reason: "storage-uncertain",
-    });
-    await expect(vault.credentialStatuses()).resolves.toContainEqual({
-      slot: "anthropic",
-      state: "re-prompt",
-      runtimeState: null,
-    });
-    expect(applyCredential).not.toHaveBeenCalled();
-  });
+      await expect(
+        vault.writeCredential({ slot: "anthropic", value: "synthetic-candidate" }),
+      ).resolves.toEqual({
+        slot: "anthropic",
+        status: "refused",
+        reason: "storage-failed",
+      });
+      const stored = await readFile(join(root, "anthropic.bin"));
+      expect(encryptionPort.decryptString(stored)).toBe("synthetic-old");
+      expect(applyCredential).not.toHaveBeenCalled();
+    },
+  );
+
+  posixIt(
+    "reports uncertainty and blocks replay when credential convergence cannot be proven",
+    async () => {
+      const root = await temporaryRoot();
+      const encryptionPort = encryption();
+      const seed = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential: vi.fn(),
+      });
+      await seed.writeCredential(
+        { slot: "anthropic", value: "synthetic-old" },
+        { activate: false },
+      );
+      const applyCredential = vi.fn();
+      let syncCount = 0;
+      const vault = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential,
+        createId: () => "never-durable",
+        syncCredentialDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 1) {
+            const directory = await open(root, "r");
+            try {
+              await directory.sync();
+            } finally {
+              await directory.close();
+            }
+            return;
+          }
+          throw new TypeError("synthetic persistent directory sync failure");
+        },
+      });
+
+      await expect(
+        vault.writeCredential({ slot: "anthropic", value: "synthetic-candidate" }),
+      ).resolves.toEqual({
+        slot: "anthropic",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      });
+      await expect(vault.credentialStatuses()).resolves.toContainEqual({
+        slot: "anthropic",
+        state: "re-prompt",
+        runtimeState: null,
+      });
+      expect(applyCredential).not.toHaveBeenCalled();
+    },
+  );
 
   it("serializes successor replay behind an in-flight replacement until storage converges", async () => {
     const root = await temporaryRoot();
@@ -520,75 +595,121 @@ describe("desktop credential vault", () => {
     await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  posixIt("reopens a visible old credential only after cleaning owned transients and syncing", async () => {
+  it("revalidates encryption at the delayed exclusive mutation write boundary", async () => {
     const root = await temporaryRoot();
-    const baseEncryption = encryption();
-    await leaveAmbiguousCredential(root, "old", baseEncryption);
-    const ownedTemporary = join(root, ".anthropic.bin.reopen-old.tmp");
-    await writeFile(ownedTemporary, Buffer.from("synthetic abandoned ciphertext"), {
-      mode: CREDENTIAL_FILE_MODE,
+    let persistedKey = "key-a";
+    const cachedKey = "key-a";
+    let available = true;
+    const encryptString = vi.fn((value: string) => Buffer.from(value));
+    const prepareEnvelopeWrite = vi.fn(async () => {
+      if (persistedKey !== cachedKey) available = false;
     });
-    const syncCredentialDirectory = vi.fn(async () => {
-      await expect(lstat(ownedTemporary)).rejects.toMatchObject({ code: "ENOENT" });
-      const directory = await open(root, "r");
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    });
-    const decryptString = vi.fn((value: Buffer) => {
-      expect(syncCredentialDirectory).toHaveBeenCalledOnce();
-      return baseEncryption.decryptString(value);
-    });
-    const applyCredential = vi.fn(async () => undefined);
-    const reopened = createCredentialVault({
+    const vault = createCredentialVault({
       root,
-      encryption: { ...baseEncryption, decryptString },
-      applyCredential,
-      syncCredentialDirectory,
+      encryption: {
+        isEncryptionAvailable: () => available,
+        encryptString,
+        decryptString: vi.fn(),
+      },
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      prepareEnvelopeWrite,
+      applyCredential: vi.fn(async () => undefined),
     });
 
-    await reopened.reapplyConfigured();
+    const result = await vault.runExclusiveMutation(async (mutation) => {
+      expect(prepareEnvelopeWrite).not.toHaveBeenCalled();
+      persistedKey = "key-b";
+      return await mutation.writeCredential(
+        { slot: "anthropic", value: "synthetic-secret" },
+        { activate: false },
+      );
+    });
 
-    expect(applyCredential).toHaveBeenCalledWith("anthropic", "synthetic-old");
-    await expect(reopened.credentialStatuses()).resolves.toContainEqual({
+    expect(result).toEqual({
       slot: "anthropic",
-      state: "configured",
-      runtimeState: "active",
+      status: "refused",
+      reason: "encryption-unavailable",
     });
-    expect(syncCredentialDirectory).toHaveBeenCalledOnce();
+    expect(prepareEnvelopeWrite).toHaveBeenCalledOnce();
+    expect(encryptString).not.toHaveBeenCalled();
+    await expect(lstat(join(root, "anthropic.bin"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  posixIt("reopens a visible candidate only after syncing even when no transient remains", async () => {
-    const root = await temporaryRoot();
-    const baseEncryption = encryption();
-    await leaveAmbiguousCredential(root, "candidate", baseEncryption);
-    const syncCredentialDirectory = vi.fn(async () => {
-      const directory = await open(root, "r");
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    });
-    const decryptString = vi.fn((value: Buffer) => {
+  posixIt(
+    "reopens a visible old credential only after cleaning owned transients and syncing",
+    async () => {
+      const root = await temporaryRoot();
+      const baseEncryption = encryption();
+      await leaveAmbiguousCredential(root, "old", baseEncryption);
+      const ownedTemporary = join(root, ".anthropic.bin.reopen-old.tmp");
+      await writeFile(ownedTemporary, Buffer.from("synthetic abandoned ciphertext"), {
+        mode: CREDENTIAL_FILE_MODE,
+      });
+      const syncCredentialDirectory = vi.fn(async () => {
+        await expect(lstat(ownedTemporary)).rejects.toMatchObject({ code: "ENOENT" });
+        const directory = await open(root, "r");
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
+      });
+      const decryptString = vi.fn((value: Buffer) => {
+        expect(syncCredentialDirectory).toHaveBeenCalledOnce();
+        return baseEncryption.decryptString(value);
+      });
+      const applyCredential = vi.fn(async () => undefined);
+      const reopened = createCredentialVault({
+        root,
+        encryption: { ...baseEncryption, decryptString },
+        applyCredential,
+        syncCredentialDirectory,
+      });
+
+      await reopened.reapplyConfigured();
+
+      expect(applyCredential).toHaveBeenCalledWith("anthropic", "synthetic-old");
+      await expect(reopened.credentialStatuses()).resolves.toContainEqual({
+        slot: "anthropic",
+        state: "configured",
+        runtimeState: "active",
+      });
       expect(syncCredentialDirectory).toHaveBeenCalledOnce();
-      return baseEncryption.decryptString(value);
-    });
-    const applyCredential = vi.fn(async () => undefined);
-    const reopened = createCredentialVault({
-      root,
-      encryption: { ...baseEncryption, decryptString },
-      applyCredential,
-      syncCredentialDirectory,
-    });
+    },
+  );
 
-    await reopened.reapplyConfigured();
+  posixIt(
+    "reopens a visible candidate only after syncing even when no transient remains",
+    async () => {
+      const root = await temporaryRoot();
+      const baseEncryption = encryption();
+      await leaveAmbiguousCredential(root, "candidate", baseEncryption);
+      const syncCredentialDirectory = vi.fn(async () => {
+        const directory = await open(root, "r");
+        try {
+          await directory.sync();
+        } finally {
+          await directory.close();
+        }
+      });
+      const decryptString = vi.fn((value: Buffer) => {
+        expect(syncCredentialDirectory).toHaveBeenCalledOnce();
+        return baseEncryption.decryptString(value);
+      });
+      const applyCredential = vi.fn(async () => undefined);
+      const reopened = createCredentialVault({
+        root,
+        encryption: { ...baseEncryption, decryptString },
+        applyCredential,
+        syncCredentialDirectory,
+      });
 
-    expect(applyCredential).toHaveBeenCalledWith("anthropic", "synthetic-candidate");
-    expect(syncCredentialDirectory).toHaveBeenCalledOnce();
-  });
+      await reopened.reapplyConfigured();
+
+      expect(applyCredential).toHaveBeenCalledWith("anthropic", "synthetic-candidate");
+      expect(syncCredentialDirectory).toHaveBeenCalledOnce();
+    },
+  );
 
   posixIt("keeps a reopened vault indeterminate when its durability barrier fails", async () => {
     const root = await temporaryRoot();
@@ -727,6 +848,349 @@ describe("desktop credential vault", () => {
     });
   });
 
+  it("retains a configured envelope when removal key revalidation fails", async () => {
+    const root = await temporaryRoot();
+    const encryptionPort = keychainEncryption();
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
+    const applyCredential = vi.fn(async () => undefined);
+    const clearCredential = vi.fn(async () => "cleared" as const);
+    const revalidateEnvelopeRemoval = vi.fn(async () => false);
+    const removeCredentialFile = vi.fn(rm);
+    const vault = createCredentialVault({
+      root,
+      encryption: encryptionPort,
+      applyCredential,
+      clearCredential,
+      serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval,
+      removeCredentialFile,
+    });
+    await vault.writeCredential({ slot: "anthropic", value: randomUUID() });
+    removeCredentialFile.mockClear();
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    expect(clearCredential).not.toHaveBeenCalled();
+    expect(revalidateEnvelopeRemoval).toHaveBeenCalledOnce();
+    expect(removeCredentialFile).not.toHaveBeenCalled();
+    expect(applyCredential).toHaveBeenCalledOnce();
+    expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+  });
+
+  it("retains a keychain envelope when encryption is unavailable", async () => {
+    const root = await temporaryRoot();
+    const encryptionPort = keychainEncryption();
+    await storeEncryptedCredential(root, "anthropic", "synthetic-secret", encryptionPort);
+    const decryptString = vi.fn(() => {
+      throw new TypeError();
+    });
+    const clearCredential = vi.fn(async () => "cleared" as const);
+    const revalidateEnvelopeRemoval = vi.fn(async () => true);
+    const vault = createCredentialVault({
+      root,
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString,
+      },
+      applyCredential: vi.fn(async () => undefined),
+      clearCredential,
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+    });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "encryption-unavailable",
+    });
+
+    expect(decryptString).not.toHaveBeenCalled();
+    expect(clearCredential).not.toHaveBeenCalled();
+    expect(revalidateEnvelopeRemoval).not.toHaveBeenCalled();
+    expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+  });
+
+  it("maps a corrupt keychain envelope to storage failure", async () => {
+    const root = await temporaryRoot();
+    await storeEncryptedCredential(root, "anthropic", "synthetic-secret", keychainEncryption());
+    const clearCredential = vi.fn(async () => "cleared" as const);
+    const revalidateEnvelopeRemoval = vi.fn(async () => true);
+    const vault = createCredentialVault({
+      root,
+      encryption: keychainEncryption(),
+      applyCredential: vi.fn(async () => undefined),
+      clearCredential,
+      serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+      revalidateEnvelopeRemoval,
+    });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "storage-failed",
+    });
+
+    expect(clearCredential).not.toHaveBeenCalled();
+    expect(revalidateEnvelopeRemoval).not.toHaveBeenCalled();
+    expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+  });
+
+  it.each(["missing-proof", "missing-hook"] as const)(
+    "retains a keychain envelope with %s",
+    async (missing) => {
+      const root = await temporaryRoot();
+      const encryptionPort = keychainEncryption();
+      await storeEncryptedCredential(root, "anthropic", "synthetic-secret", encryptionPort);
+      const vault = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential: vi.fn(async () => undefined),
+        serializeEnvelopeMutation:
+          missing === "missing-proof"
+            ? async (operation) => await operation(undefined as never)
+            : createCredentialEnvelopeMutationLock(),
+        revalidateEnvelopeRemoval: missing === "missing-hook" ? undefined : vi.fn(async () => true),
+      });
+
+      await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+        slot: "anthropic",
+        status: "refused",
+        reason: "encryption-unavailable",
+      });
+      expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+    },
+  );
+
+  it.each(["false", "throws"] as const)(
+    "does not clear runtime when first key validation %s",
+    async (failure) => {
+      const root = await temporaryRoot();
+      const encryptionPort = keychainEncryption();
+      const clearCredential = vi.fn(async () => "cleared" as const);
+      const revalidateEnvelopeRemoval = vi.fn(async () => {
+        if (failure === "throws") throw new TypeError();
+        return false;
+      });
+      const vault = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential: vi.fn(async () => undefined),
+        clearCredential,
+        serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+        revalidateEnvelopeRemoval,
+      });
+      await vault.writeCredential({ slot: "anthropic", value: "synthetic-secret" });
+
+      await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+        slot: "anthropic",
+        status: "refused",
+        reason: "encryption-unavailable",
+      });
+
+      expect(clearCredential).not.toHaveBeenCalled();
+      expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+    },
+  );
+
+  it.each(["restored", "diverged"] as const)(
+    "retains storage and reports runtime %s after late key replacement",
+    async (compensation) => {
+      const root = await temporaryRoot();
+      const encryptionPort = keychainEncryption();
+      let applyCount = 0;
+      const applyCredential = vi.fn(async () => {
+        applyCount += 1;
+        if (compensation === "diverged" && applyCount > 1) throw new TypeError();
+      });
+      const clearCredential = vi.fn(async () => "cleared" as const);
+      const revalidateEnvelopeRemoval = vi
+        .fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      const vault = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential,
+        clearCredential,
+        serializeEnvelopeMutation: createCredentialEnvelopeMutationLock(),
+        revalidateEnvelopeRemoval,
+      });
+      await vault.writeCredential({ slot: "anthropic", value: "synthetic-secret" });
+
+      await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+        slot: "anthropic",
+        status: "refused",
+        reason: compensation === "restored" ? "encryption-unavailable" : "runtime-state-diverged",
+      });
+
+      expect(clearCredential).toHaveBeenCalledOnce();
+      expect(revalidateEnvelopeRemoval).toHaveBeenCalledTimes(2);
+      expect(applyCredential).toHaveBeenCalledTimes(2);
+      expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+    },
+  );
+
+  posixIt("deletes an unknown Darwin envelope without decrypting during deletion", async () => {
+    const root = await temporaryRoot();
+    await mkdir(root, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const path = join(root, "anthropic.bin");
+    await writeFile(path, Buffer.from("unverified-envelope"), { mode: CREDENTIAL_FILE_MODE });
+    const baseEncryption = encryption();
+    const decryptString = vi.fn(baseEncryption.decryptString);
+    const vault = createCredentialVault({
+      root,
+      platform: "darwin",
+      encryption: { ...baseEncryption, decryptString },
+      applyCredential: vi.fn(async () => undefined),
+    });
+
+    await expect(vault.credentialStatuses()).resolves.toContainEqual({
+      slot: "anthropic",
+      state: "re-prompt",
+      runtimeState: null,
+    });
+    decryptString.mockClear();
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "deleted",
+      cleanupPending: false,
+    });
+    expect(decryptString).not.toHaveBeenCalled();
+    await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  posixIt("deletes an explicit Darwin key-id zero envelope without Keychain access", async () => {
+    const root = await temporaryRoot();
+    await mkdir(root, { mode: CREDENTIAL_DIRECTORY_MODE });
+    const path = join(root, "anthropic.bin");
+    const envelope = sealCredentialEnvelope(
+      randomBytes(KEYCHAIN_KEY_BYTES),
+      "synthetic-legacy-secret",
+    );
+    envelope[CREDENTIAL_ENVELOPE_MAGIC.length] = SAFE_STORAGE_ENVELOPE_KEY_ID;
+    await writeFile(path, envelope, { mode: CREDENTIAL_FILE_MODE });
+    envelope.fill(0);
+    const decryptString = vi.fn();
+    const vault = createCredentialVault({
+      root,
+      platform: "darwin",
+      encryption: {
+        isEncryptionAvailable: () => false,
+        encryptString: vi.fn(),
+        decryptString,
+      },
+      applyCredential: vi.fn(async () => undefined),
+    });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "deleted",
+      cleanupPending: false,
+    });
+
+    expect(decryptString).not.toHaveBeenCalled();
+    await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["linux", "win32"] as const)(
+    "restores an active %s credential when its unverified envelope cannot be renamed",
+    async (platform) => {
+      const root = await temporaryRoot();
+      await storeEncryptedCredential(root, "anthropic", "synthetic-secret", encryption());
+      const runtimeState = new Map([["anthropic", "active"]] as const);
+      const applyCredential = vi.fn(async () => undefined);
+      const clearCredential = vi.fn(async () => "cleared" as const);
+      const vault = createCredentialVault({
+        root,
+        platform,
+        runtimeState,
+        encryption: encryption(),
+        applyCredential,
+        clearCredential,
+        renameCredentialFile: vi.fn(async () => {
+          throw new TypeError("synthetic rename failure");
+        }),
+      });
+
+      await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+        slot: "anthropic",
+        status: "refused",
+        reason: "storage-failed",
+      });
+
+      expect(clearCredential).toHaveBeenCalledOnce();
+      expect(applyCredential).toHaveBeenCalledWith("anthropic", "synthetic-secret");
+      expect(runtimeState.get("anthropic")).toBe("active");
+      expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+    },
+  );
+
+  it.each(["linux", "win32"] as const)(
+    "refuses to clear a failed %s runtime when its unverified credential cannot be backed up",
+    async (platform) => {
+      const root = await temporaryRoot();
+      await mkdir(root, { mode: CREDENTIAL_DIRECTORY_MODE });
+      await writeFile(join(root, "anthropic.bin"), "unreadable-ciphertext", {
+        mode: CREDENTIAL_FILE_MODE,
+      });
+      const runtimeState = new Map([["anthropic", "failed"]] as const);
+      const decryptString = vi.fn(() => {
+        throw new TypeError("synthetic decrypt failure");
+      });
+      const clearCredential = vi.fn(async () => "cleared" as const);
+      const vault = createCredentialVault({
+        root,
+        platform,
+        runtimeState,
+        encryption: {
+          isEncryptionAvailable: () => true,
+          encryptString: vi.fn(),
+          decryptString,
+        },
+        applyCredential: vi.fn(async () => undefined),
+        clearCredential,
+      });
+
+      await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+        slot: "anthropic",
+        status: "refused",
+        reason: "storage-failed",
+      });
+
+      expect(decryptString).toHaveBeenCalledOnce();
+      expect(clearCredential).not.toHaveBeenCalled();
+      expect(runtimeState.get("anthropic")).toBe("failed");
+      expect((await lstat(join(root, "anthropic.bin"))).isFile()).toBe(true);
+    },
+  );
+
+  it("does not clear stale runtime state when the envelope is missing", async () => {
+    const root = await temporaryRoot();
+    const runtimeState = new Map([["anthropic", "active"]] as const);
+    const clearCredential = vi.fn(async () => "cleared" as const);
+    const vault = createCredentialVault({
+      root,
+      encryption: encryption(),
+      runtimeState,
+      applyCredential: vi.fn(async () => undefined),
+      clearCredential,
+    });
+
+    await expect(vault.deleteCredential("anthropic")).resolves.toEqual({
+      slot: "anthropic",
+      status: "refused",
+      reason: "not-found",
+    });
+
+    expect(clearCredential).not.toHaveBeenCalled();
+    expect(runtimeState.get("anthropic")).toBe("active");
+  });
+
   it("deletes a stored-inactive credential without replacing the active runtime", async () => {
     const root = await temporaryRoot();
     const clearCredential = vi.fn(async () => "cleared" as const);
@@ -798,6 +1262,7 @@ describe("desktop credential vault", () => {
 
   it("restores runtime after a retained vault delete failure and surfaces failed reconciliation", async () => {
     const root = await temporaryRoot();
+    const serializeEnvelopeMutation = createCredentialEnvelopeMutationLock();
     let applyCount = 0;
     let restoreFails = false;
     const applyCredential = vi.fn(async () => {
@@ -806,9 +1271,11 @@ describe("desktop credential vault", () => {
     });
     const vault = createCredentialVault({
       root,
-      encryption: encryption(),
+      encryption: keychainEncryption(),
       applyCredential,
       clearCredential: vi.fn(async () => "cleared" as const),
+      serializeEnvelopeMutation,
+      revalidateEnvelopeRemoval: vi.fn(async () => true),
       renameCredentialFile: vi.fn(async (from: string, to: string) => {
         if (to.endsWith(".deleted")) throw new TypeError();
         await rename(from, to);
@@ -866,45 +1333,48 @@ describe("desktop credential vault", () => {
     });
   });
 
-  posixIt("reports deletion uncertainty when neither the visible delete nor restoration is durable", async () => {
-    const root = await temporaryRoot();
-    const encryptionPort = encryption();
-    await storeEncryptedCredential(root, "openrouter", "synthetic-old", encryptionPort);
-    let renameCount = 0;
-    let syncCount = 0;
-    const vault = createCredentialVault({
-      root,
-      encryption: encryptionPort,
-      applyCredential: vi.fn(async () => undefined),
-      renameCredentialFile: (async (from: string, to: string) => {
-        renameCount += 1;
-        if (renameCount === 2) throw new TypeError("synthetic restoration rename failure");
-        await rename(from, to);
-      }) as never,
-      syncCredentialDirectory: async () => {
-        syncCount += 1;
-        if (syncCount === 2) throw new TypeError("synthetic deletion directory sync failure");
-        const directory = await open(root, "r");
-        try {
-          await directory.sync();
-        } finally {
-          await directory.close();
-        }
-      },
-    });
+  posixIt(
+    "reports deletion uncertainty when neither the visible delete nor restoration is durable",
+    async () => {
+      const root = await temporaryRoot();
+      const encryptionPort = encryption();
+      await storeEncryptedCredential(root, "openrouter", "synthetic-old", encryptionPort);
+      let renameCount = 0;
+      let syncCount = 0;
+      const vault = createCredentialVault({
+        root,
+        encryption: encryptionPort,
+        applyCredential: vi.fn(async () => undefined),
+        renameCredentialFile: (async (from: string, to: string) => {
+          renameCount += 1;
+          if (renameCount === 2) throw new TypeError("synthetic restoration rename failure");
+          await rename(from, to);
+        }) as never,
+        syncCredentialDirectory: async () => {
+          syncCount += 1;
+          if (syncCount === 2) throw new TypeError("synthetic deletion directory sync failure");
+          const directory = await open(root, "r");
+          try {
+            await directory.sync();
+          } finally {
+            await directory.close();
+          }
+        },
+      });
 
-    await expect(vault.deleteCredential("openrouter")).resolves.toEqual({
-      slot: "openrouter",
-      status: "uncertain",
-      reason: "storage-uncertain",
-    });
-    await expect(vault.credentialStatuses()).resolves.toContainEqual({
-      slot: "openrouter",
-      state: "re-prompt",
-      runtimeState: null,
-    });
-    expect((await readdir(root)).some((entry) => entry.endsWith(".deleted"))).toBe(true);
-  });
+      await expect(vault.deleteCredential("openrouter")).resolves.toEqual({
+        slot: "openrouter",
+        status: "uncertain",
+        reason: "storage-uncertain",
+      });
+      await expect(vault.credentialStatuses()).resolves.toContainEqual({
+        slot: "openrouter",
+        state: "re-prompt",
+        runtimeState: null,
+      });
+      expect((await readdir(root)).some((entry) => entry.endsWith(".deleted"))).toBe(true);
+    },
+  );
 
   it("fails closed for insecure directories and targets", async ({ skip }) => {
     const root = await temporaryRoot();
@@ -1118,11 +1588,9 @@ describe("desktop credential vault", () => {
     await vault.reapplyConfigured();
 
     expect(applyCredential).not.toHaveBeenCalled();
-    expect(reapplyCredential).toHaveBeenCalledWith(
+    expect(reapplyCredential).toHaveBeenCalledWith("intervals-icu", "synthetic-intervals-key", [
       "intervals-icu",
-      "synthetic-intervals-key",
-      ["intervals-icu"],
-    );
+    ]);
     expect(JSON.stringify(reapplyCredential.mock.calls)).not.toContain(VERIFICATION_APPROVAL);
   });
 
@@ -1141,9 +1609,7 @@ describe("desktop credential vault", () => {
       status: "configured",
       runtimeReady: true,
     });
-    expect(applyCredential.mock.calls).toEqual([
-      ["intervals-icu", "synthetic-intervals-key"],
-    ]);
+    expect(applyCredential.mock.calls).toEqual([["intervals-icu", "synthetic-intervals-key"]]);
   });
 
   it("refuses approval data outside an explicit Intervals activation", async () => {
