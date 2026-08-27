@@ -49,6 +49,7 @@ export const DUMP_TABLES = [
   { table: "plan_proposal_premise", orderBy: "proposal_id, source_type, source_id, id" },
   { table: "plan_reconciliation_item", orderBy: "job_id, date_key, id" },
   { table: "plan_reconciliation_job", orderBy: "plan_id, kind, window_start_date_key, id" },
+  { table: "plan_replacement", orderBy: "previous_plan_id, created_at_ms, id" },
   { table: "plan_settings", orderBy: "plan_id" },
   { table: "plan_source_request", orderBy: "conversation_id, created_at_ms, id" },
   { table: "plan_workout", orderBy: "plan_id, date_key, id" },

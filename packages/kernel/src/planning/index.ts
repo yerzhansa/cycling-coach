@@ -4,6 +4,7 @@ export * from "./legacy-plan.js";
 export * from "./conversation-repository.js";
 export * from "./reconciliation-repository.js";
 export * from "./race-course.js";
+export * from "./replacement-repository.js";
 export * from "./workout-match-repository.js";
 export * from "./workout-drift-repository.js";
 export * from "./proposal-repository.js";

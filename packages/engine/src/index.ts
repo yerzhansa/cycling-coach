@@ -17,6 +17,7 @@ export type { ChatStreamTimeouts } from "./host-ports.js";
 export * from "./planning/proposal.js";
 export * from "./planning/history.js";
 export * from "./planning/auto-apply.js";
+export * from "./planning/replacement.js";
 export type {
   AthleteDataReaderPort,
   AthleteReadResult,

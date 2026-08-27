@@ -88,13 +88,16 @@ export function planCoachData(
     readonly course?: PlanRaceCourseProjection;
     readonly plan?: PlanDraftPlanProjection | null;
     readonly startDate?: PlanStartDateProjection;
+    readonly replacement?: boolean;
+    readonly replacesPlanId?: string | null;
   } = {},
 ): PlanReadModel["data"] {
   return {
     conversationId: "00000000000000000000000001",
     chatId: "plan:00000000000000000000000001",
     sourceConversationId: null,
-    replacement: false,
+    replacement: input.replacement ?? false,
+    replacesPlanId: input.replacesPlanId ?? null,
     readyToCreateDraft: input.ready ?? false,
     messages: input.messages?.map((message) => ({ ...message })) ?? [
       {

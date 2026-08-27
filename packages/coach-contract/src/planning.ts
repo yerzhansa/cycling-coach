@@ -449,6 +449,25 @@ export const PlanActiveProjectionDataSchema = z
     history: z.array(PlanHistoryEntrySchema).optional(),
     selectedHistoryId: z.string().min(1).nullable().optional(),
     settings: PlanSettingsProjectionSchema.optional(),
+    replacement: z
+      .object({
+        id: z.string().min(1),
+        previousPlan: PlanDraftPlanProjectionSchema,
+        activatedAtMs: z.number().int().nonnegative(),
+        cleanupItems: z.array(
+          z
+            .object({
+              id: z.string().min(1),
+              date: TrainingExportCivilDateSchema,
+              externalId: z.string().min(1),
+              status: z.enum(["pending", "running", "failed", "verified"]),
+              errorCode: z.string().min(1).nullable(),
+            })
+            .strict(),
+        ),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type PlanActiveProjectionData = z.infer<typeof PlanActiveProjectionDataSchema>;
@@ -675,6 +694,7 @@ export const PlanCoachProjectionDataSchema = z
     chatId: z.string().min(1),
     sourceConversationId: z.string().min(1).nullable(),
     replacement: z.boolean(),
+    replacesPlanId: z.string().min(1).nullable(),
     readyToCreateDraft: z.boolean(),
     messages: z.array(PlanCoachMessageSchema),
     queue: ChatQueueSnapshotSchema,
@@ -979,6 +999,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       activePlanId: EntityIdSchema,
       draftId: EntityIdSchema,
       expectedRevision: z.number().int().nonnegative(),
+      confirm: z.boolean().optional(),
     })
     .strict(),
   z
@@ -987,6 +1008,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       commandId: CommandIdSchema,
       planId: EntityIdSchema,
       replacementPlanId: EntityIdSchema,
+      mode: z.enum(["cleanup", "verify"]).optional(),
     })
     .strict(),
   z

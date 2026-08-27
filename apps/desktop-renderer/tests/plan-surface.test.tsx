@@ -38,6 +38,13 @@ function actions(): PlanActions {
     closeDatePicker: vi.fn(),
     recalculateStartDate: vi.fn(),
     approveDraft: vi.fn(),
+    openReplacement: vi.fn(),
+    closeReplacementConfirmation: vi.fn(),
+    confirmReplacement: vi.fn(),
+    retryReplacementCleanup: vi.fn(),
+    verifyReplacementCleanup: vi.fn(),
+    writeReplacementMirror: vi.fn(),
+    openReplacementActivePlan: vi.fn(),
     reconcilePlan: vi.fn(),
     verifyReconciliation: vi.fn(),
     openWorkout: vi.fn(),
@@ -709,6 +716,137 @@ describe("Plan surface", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(planActions.verifyPlanCleanup).toHaveBeenCalledOnce();
     expect(planActions.retryPlanCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("keeps replacement confirmation safe and cleanup recovery explicit", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const previousPlanId = "00000000000000000000000003";
+    const replacementPlanId = "00000000000000000000000004";
+    const draft = {
+      id: "00000000000000000000000005",
+      planId: replacementPlanId,
+      revision: 2,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    const confirmation = planReadModel({
+      lifecycle: "replacement-draft",
+      scenarioId: "PL-S081",
+      projection: "draft",
+      planId: replacementPlanId,
+      revision: 2,
+      data: planCoachData({
+        replacement: true,
+        replacesPlanId: previousPlanId,
+        draft,
+      }),
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state: confirmation },
+        lastReady: confirmation,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("The old Plan ends and the replacement activates locally");
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus(),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Replace Plan" }));
+    expect(planActions.confirmReplacement).toHaveBeenCalledOnce();
+
+    const replacementData = {
+      plan: {
+        id: replacementPlanId,
+        name: "Replacement Plan",
+        primaryGoal: "Finish",
+        startDate: "2026-08-27",
+        targetDate: "2026-11-18",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 4,
+        workoutCount: 1,
+        plannedDurationS: 3_600,
+      },
+      today: "2026-08-26",
+      weekIndex: 1,
+      todayWorkout: null,
+      workouts: [],
+      replacement: {
+        id: "00000000000000000000000006",
+        previousPlan: {
+          id: previousPlanId,
+          name: "Previous Plan",
+          primaryGoal: "Finish",
+          startDate: "2026-07-09",
+          targetDate: "2026-09-30",
+          kind: "full-plan" as const,
+          totalWeeks: 12,
+          weekStartDay: 4,
+          workoutCount: 0,
+          plannedDurationS: 0,
+        },
+        activatedAtMs: 100,
+        cleanupItems: [
+          {
+            id: "00000000000000000000000007",
+            date: "2026-08-27",
+            externalId: `cycling-coach:plan:${previousPlanId}:workout`,
+            status: "failed" as const,
+            errorCode: "calendar-delete-failed",
+          },
+        ],
+      },
+    };
+    const failed = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S083",
+      projection: "active",
+      planId: replacementPlanId,
+      attentionCount: 1,
+      data: replacementData,
+    });
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: failed });
+    });
+    expect(
+      screen.getByRole("heading", { name: "Old Plan cleanup needs attention" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Still in Intervals")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Continue anyway/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Verify again" }));
+    await user.click(screen.getByRole("button", { name: "Retry cleanup" }));
+    expect(planActions.verifyReplacementCleanup).toHaveBeenCalledOnce();
+    expect(planActions.retryReplacementCleanup).toHaveBeenCalledOnce();
+
+    const verified = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S085",
+      projection: "active",
+      planId: replacementPlanId,
+      data: {
+        ...replacementData,
+        replacement: { ...replacementData.replacement, cleanupItems: [] },
+      },
+    });
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: verified });
+    });
+    await user.click(screen.getByRole("button", { name: "Write next 7 days" }));
+    expect(planActions.writeReplacementMirror).toHaveBeenCalledOnce();
+
+    const completed = { ...verified, scenarioId: "PL-S087" as const };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: completed });
+    });
+    expect(screen.getByRole("heading", { name: "Replacement complete" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open active Plan" }));
+    expect(planActions.openReplacementActivePlan).toHaveBeenCalledOnce();
   });
 
   it("highlights WorkoutMatch decisions and keeps drawer actions visible", async () => {

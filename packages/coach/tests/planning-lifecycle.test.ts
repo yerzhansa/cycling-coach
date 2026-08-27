@@ -505,4 +505,106 @@ describe("Plan lifecycle projection", () => {
       }),
     ).toMatchObject({ scenarioId: "PL-S105", lifecycle: "replacement-draft-forming" });
   });
+
+  it("projects replacement confirmation and the cleanup barrier before new mirror writes", () => {
+    const replacementConversation = {
+      ...conversation,
+      planId: "plan-2",
+      replacesPlanId: "plan-1",
+    };
+    const draft = {
+      id: "draft-2",
+      planId: "plan-2",
+      revision: 1,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    expect(
+      build({
+        conversation: replacementConversation,
+        draft,
+        replacementConfirmation: true,
+      }),
+    ).toMatchObject({
+      scenarioId: "PL-S081",
+      lifecycle: "replacement-draft",
+      transitions: [
+        { transitionId: "PL-T26", status: "available" },
+        { transitionId: "PL-T39", status: "available" },
+      ],
+    });
+
+    const data = {
+      plan: {
+        id: "plan-2",
+        name: "Replacement Plan",
+        primaryGoal: "Finish",
+        startDate: "2026-08-27",
+        targetDate: "2026-11-18",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 4,
+        workoutCount: 1,
+        plannedDurationS: 3_600,
+      },
+      today: "2026-08-26",
+      weekIndex: 1,
+      todayWorkout: null,
+      workouts: [],
+      replacement: {
+        id: "replacement-1",
+        previousPlan: {
+          id: "plan-1",
+          name: "Previous Plan",
+          primaryGoal: "Finish",
+          startDate: "2026-07-09",
+          targetDate: "2026-09-30",
+          kind: "full-plan" as const,
+          totalWeeks: 12,
+          weekStartDay: 4,
+          workoutCount: 0,
+          plannedDurationS: 0,
+        },
+        activatedAtMs: 100,
+        cleanupItems: [],
+      },
+    };
+    const reconciliation = {
+      status: "not-started" as const,
+      created: 0,
+      pending: 0,
+      failed: 0,
+      total: 0,
+      currentThrough: null,
+      error: null,
+    };
+    expect(
+      buildActivePlanReadModel({
+        scenarioId: "PL-S083",
+        planId: "plan-2",
+        revision: 1,
+        data,
+        reconciliation,
+      }),
+    ).toMatchObject({
+      title: "Old Plan cleanup needs attention",
+      attention: { count: 1, destination: "direct" },
+      transitions: expect.arrayContaining([
+        expect.objectContaining({ transitionId: "PL-T27", status: "available" }),
+      ]),
+    });
+    expect(
+      buildActivePlanReadModel({
+        scenarioId: "PL-S085",
+        planId: "plan-2",
+        revision: 1,
+        data,
+        reconciliation,
+      }).transitions,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ transitionId: "PL-T28", status: "available" }),
+      ]),
+    );
+  });
 });

@@ -74,6 +74,13 @@ export interface PlanActions {
   closeDatePicker(): void;
   recalculateStartDate(startDate: string): void;
   approveDraft(): void;
+  openReplacement(): void;
+  closeReplacementConfirmation(): void;
+  confirmReplacement(): void;
+  retryReplacementCleanup(): void;
+  verifyReplacementCleanup(): void;
+  writeReplacementMirror(): void;
+  openReplacementActivePlan(): void;
   reconcilePlan(): void;
   verifyReconciliation(): void;
   openWorkout(workoutId: string): void;

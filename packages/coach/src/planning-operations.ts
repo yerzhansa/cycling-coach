@@ -81,6 +81,7 @@ import {
   validatePlanUndo,
   PlanUndoError,
   validatePlanAutoApply,
+  approvePlanReplacement,
 } from "@enduragent/engine";
 import {
   buildActivePlanReadModel,
@@ -99,6 +100,7 @@ import {
   createPlanProposalRepository,
   createPlanAdaptationLedgerRepository,
   createPlanSettingsRepository,
+  createPlanReplacementRepository,
   planWeekIndex,
   PlanConversationValidationError,
   type PlanConversationRecord,
@@ -120,9 +122,11 @@ import {
   type PlanSetting,
   type PlanSettingsRecord,
   type PlanSettingsRepository,
+  type PlanReplacementRepository,
   parsePlanAdaptationWorkoutSnapshot,
   PlanAdaptationLedgerValidationError,
   PlanProposalValidationError,
+  PlanReplacementValidationError,
   parseRaceCourseSnapshot,
   type RaceCourseSnapshot,
 } from "@enduragent/kernel/planning";
@@ -332,6 +336,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly proposals?: PlanProposalRepository;
   readonly history?: PlanAdaptationLedgerRepository;
   readonly settings?: PlanSettingsRepository;
+  readonly replacements?: PlanReplacementRepository;
   readonly proposalReviser?: PlanProposalReviser;
   readonly proposalPremiseReader?: PlanProposalPremiseReader;
   readonly proposalLoadCalculator?: PlanProposalLoadCalculator;
@@ -525,6 +530,7 @@ function activePlanData(input: {
   readonly settings: PlanSettingsRecord;
   readonly selectedSetting?: PlanSetting | null;
   readonly settingsError?: PlanError | null;
+  readonly replacement?: PlanActiveProjectionData["replacement"];
 }): PlanActiveProjectionData {
   const plan = draftPlanProjection(input.plan, input.workouts);
   if (plan === null) throw new TypeError("An active Plan projection requires a Plan.");
@@ -643,6 +649,7 @@ function activePlanData(input: {
       selectedSetting: input.selectedSetting ?? null,
       error: input.settingsError ?? null,
     },
+    ...(input.replacement === undefined ? {} : { replacement: input.replacement }),
   });
 }
 
@@ -806,6 +813,7 @@ interface ReadOverrides {
   readonly selectedHistoryId?: string | null;
   readonly selectedSetting?: PlanSetting | null;
   readonly settingsError?: PlanError | null;
+  readonly replacementConfirmation?: boolean;
 }
 
 function queueText(queue: ChatQueueSnapshot): string {
@@ -849,6 +857,8 @@ export function createPlanningOperations(
     dependencies.history ?? createPlanAdaptationLedgerRepository(input.context.store);
   const settingsRepository =
     dependencies.settings ?? createPlanSettingsRepository(input.context.store);
+  const replacementRepository =
+    dependencies.replacements ?? createPlanReplacementRepository(input.context.store);
   const enqueue = createSerializedLane();
   const refuseProposal = async (
     proposal: PlanProposalRecord,
@@ -883,11 +893,12 @@ export function createPlanningOperations(
     overrides: ReadOverrides,
   ): Promise<PlanReadModel> => {
     const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
-    const [workouts, job, historyRows, settings] = await Promise.all([
+    const [workouts, job, historyRows, settings, replacementLineage] = await Promise.all([
       plans.readWorkouts(plan.id),
       reconciliations.readLatestJob(plan.id, "mirror"),
       historyRepository.readForPlan(plan.id),
       settingsRepository.read(plan.id),
+      replacementRepository.readByReplacementPlanId(plan.id),
     ]);
     if (settings === undefined) throw new TypeError("An active Plan requires Plan settings.");
     const projection =
@@ -944,19 +955,77 @@ export function createPlanningOperations(
         // Provider reads are best effort; an already-detected decision stays durable and visible.
       }
     }
-    const baseScenario = activeScenario(projection, undefined);
+    let replacementData: PlanActiveProjectionData["replacement"] | undefined;
+    let cleanupProjection: PlanReconciliationProjection | null = null;
+    if (replacementLineage !== undefined) {
+      const [previousPlan, previousWorkouts, cleanupJob] = await Promise.all([
+        plans.read(replacementLineage.previousPlanId),
+        plans.readWorkouts(replacementLineage.previousPlanId),
+        reconciliations.readJob(replacementLineage.cleanupJobId),
+      ]);
+      if (previousPlan === undefined || cleanupJob === undefined) {
+        throw new TypeError("Replacement lineage is incomplete.");
+      }
+      const previousPlanProjection = draftPlanProjection(previousPlan, previousWorkouts);
+      if (previousPlanProjection === null) throw new TypeError("Previous Plan is unavailable.");
+      const cleanupItems = await reconciliations.readItems(cleanupJob.id);
+      cleanupProjection = await projectPlanReconciliation(reconciliations, cleanupJob);
+      replacementData = {
+        id: replacementLineage.id,
+        previousPlan: previousPlanProjection,
+        activatedAtMs: replacementLineage.createdAtMs,
+        cleanupItems: cleanupItems.map((item) => ({
+          id: item.id,
+          date: dateText(item.dateKey),
+          externalId: item.externalId,
+          status:
+            item.status === "verified"
+              ? "verified"
+              : item.status === "failed"
+                ? "failed"
+                : item.status === "running"
+                  ? "running"
+                  : "pending",
+          errorCode: item.lastErrorCode,
+        })),
+      };
+    }
+    const replacementScenario =
+      cleanupProjection === null
+        ? undefined
+        : cleanupProjection.job.status === "failed"
+          ? "PL-S083"
+          : cleanupProjection.job.status === "retrying"
+            ? "PL-S084"
+            : cleanupProjection.job.status === "verified"
+              ? projection === null || projection.job.status === "pending"
+                ? "PL-S085"
+                : projection.job.status === "verified"
+                  ? "PL-S088"
+                  : projection.job.status === "failed"
+                    ? projection.job.failureCount > 1
+                      ? "PL-S041"
+                      : "PL-S039"
+                    : "PL-S086"
+              : "PL-S082";
+    const baseScenario = replacementScenario ?? activeScenario(projection, undefined);
     const scenarioId =
       overrides.activeScenario ??
       (matchSync.awaitingSync && baseScenario === "PL-S004" ? "PL-S013" : baseScenario);
+    const displayedProjection =
+      cleanupProjection !== null && cleanupProjection.job.status !== "verified"
+        ? cleanupProjection
+        : projection;
     const status =
-      projection === null || projection.job.status === "pending"
+      displayedProjection === null || displayedProjection.job.status === "pending"
         ? "not-started"
-        : projection.job.status === "verified"
+        : displayedProjection.job.status === "verified"
           ? "verified"
-          : projection.job.status === "failed"
+          : displayedProjection.job.status === "failed"
             ? "failed"
             : "running";
-    const verificationFailure = projection?.job.lastErrorCode === "calendar-verification-failed";
+    const verificationFailure =
+      displayedProjection?.job.lastErrorCode === "calendar-verification-failed";
     const proposalRows = await proposalRepository.readOpenForPlan(plan.id);
     const proposalProjections = (
       await Promise.all(
@@ -1038,20 +1107,25 @@ export function createPlanningOperations(
         settings,
         selectedSetting: overrides.selectedSetting,
         settingsError: overrides.settingsError,
+        replacement: replacementData,
       }),
       reconciliation: {
         status,
-        created: projection?.created ?? 0,
-        pending: projection?.pending ?? 0,
-        failed: projection?.failed ?? 0,
-        total: projection?.total ?? 0,
+        created: displayedProjection?.created ?? 0,
+        pending: displayedProjection?.pending ?? 0,
+        failed: displayedProjection?.failed ?? 0,
+        total: displayedProjection?.total ?? 0,
         currentThrough:
-          projection?.job.status === "verified" ? dateText(projection.job.windowEndDateKey) : null,
+          displayedProjection?.job.status === "verified"
+            ? dateText(displayedProjection.job.windowEndDateKey)
+            : null,
         error:
           status === "failed"
             ? verificationFailure
               ? CALENDAR_VERIFICATION_FAILED
-              : CALENDAR_UPDATE_FAILED
+              : cleanupProjection !== null && cleanupProjection.job.status !== "verified"
+                ? CALENDAR_CLEANUP_FAILED
+                : CALENDAR_UPDATE_FAILED
             : null,
       },
       proposalCapabilities: {
@@ -1207,6 +1281,9 @@ export function createPlanningOperations(
         ? {}
         : { courseScenario: overrides.courseScenario }),
       ...(dateScenario === undefined ? {} : { dateScenario }),
+      ...(overrides.replacementConfirmation === undefined
+        ? {}
+        : { replacementConfirmation: overrides.replacementConfirmation }),
     });
   };
 
@@ -2894,7 +2971,306 @@ export function createPlanningOperations(
             );
           }
         }
+        if (command.transitionId === "PL-T25") {
+          const activePlan = await plans.read(command.planId);
+          if (activePlan?.status !== "active") return reject(UNAVAILABLE);
+          let conversation = await conversations.readLatestOpenReplacement(activePlan.id);
+          if (conversation === undefined) {
+            const timestamp = input.identity.hlcStamp().physicalMs;
+            const stamp = input.identity.hlcStamp();
+            conversation = {
+              id: input.identity.newUlid(),
+              planId: null,
+              replacesPlanId: activePlan.id,
+              courseChoiceStatus: "undecided",
+              raceCourseJson: null,
+              status: "open",
+              endedAtMs: null,
+              createdAtMs: timestamp,
+              updatedAtMs: timestamp,
+              deviceId: await input.identity.deviceId(),
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+            };
+            try {
+              await conversations.saveConversation(conversation);
+            } catch {
+              return reject(PERSISTENCE_FAILED);
+            }
+          }
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await read(),
+          });
+        }
+        if (command.transitionId === "PL-T26") {
+          const draft = await conversations.readDraftRevision(command.draftId);
+          if (draft === undefined || draft.revision !== command.expectedRevision) {
+            return reject(DRAFT_STALE);
+          }
+          if (draft.status === "approved") {
+            const [lineage, replacementPlan] = await Promise.all([
+              replacementRepository.readByReplacementPlanId(draft.planId),
+              plans.read(draft.planId),
+            ]);
+            if (
+              lineage?.previousPlanId !== command.activePlanId ||
+              lineage.draftRevisionId !== draft.id ||
+              replacementPlan?.status !== "active"
+            ) {
+              return reject(DRAFT_STALE);
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: "PL-S082" }),
+            });
+          }
+          const activePlan = await plans.read(command.activePlanId);
+          if (activePlan?.status !== "active") return reject(UNAVAILABLE);
+          const conversation = await conversations.readConversation(draft.conversationId);
+          if (
+            conversation?.status !== "open" ||
+            conversation.replacesPlanId !== activePlan.id ||
+            conversation.planId !== draft.planId ||
+            draft.status !== "ready"
+          ) {
+            return reject(DRAFT_STALE);
+          }
+          if (command.confirm !== true) {
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ replacementConfirmation: true }),
+            });
+          }
+          const replacementPlan = await plans.read(draft.planId);
+          if (replacementPlan?.status !== "draft") return reject(DRAFT_STALE);
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          const windowStartDateKey = addCivilDays(todayDateKey, 1);
+          const oldPlanEndDateKey = addCivilDays(
+            activePlan.startDateKey,
+            activePlan.totalWeeks * 7 - 1,
+          );
+          const windowEndDateKey = Math.max(windowStartDateKey, oldPlanEndDateKey);
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total: 1,
+          });
+          try {
+            await approvePlanReplacement(
+              {
+                replacementId: input.identity.newUlid(),
+                previousPlanId: activePlan.id,
+                replacementPlanId: replacementPlan.id,
+                draftRevisionId: draft.id,
+                expectedRevision: command.expectedRevision,
+                cleanupJobId: input.identity.newUlid(),
+                windowStartDateKey,
+                windowEndDateKey,
+              },
+              { replacements: replacementRepository, identity: input.identity },
+            );
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: 1,
+              total: 1,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: "PL-S082" }),
+            });
+          } catch (error) {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total: 1,
+            });
+            return reject(
+              error instanceof PlanReplacementValidationError &&
+                (error.code === "stale-draft" || error.code === "replacement-not-draft")
+                ? DRAFT_STALE
+                : PERSISTENCE_FAILED,
+            );
+          }
+        }
+        if (command.transitionId === "PL-T27") {
+          if (dependencies.calendar === undefined) return reject(UNAVAILABLE);
+          const replacementPlan = await plans.read(command.replacementPlanId);
+          const lineage = await replacementRepository.readByReplacementPlanId(
+            command.replacementPlanId,
+          );
+          if (
+            replacementPlan?.status !== "active" ||
+            lineage === undefined ||
+            lineage.previousPlanId !== command.planId
+          ) {
+            return reject(UNAVAILABLE);
+          }
+          const job = await reconciliations.readJob(lineage.cleanupJobId);
+          if (job === undefined || job.planId !== command.planId || job.kind !== "cleanup") {
+            return reject(PERSISTENCE_FAILED);
+          }
+          const existingItems = await reconciliations.readItems(job.id);
+          const total = Math.max(existingItems.length, 1);
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total,
+          });
+          try {
+            const reconcilerDependencies = {
+              repository: reconciliations,
+              calendar: dependencies.calendar,
+              identity: { newId: () => input.identity.newUlid() },
+              now: () => input.identity.hlcStamp().physicalMs,
+            };
+            const result =
+              command.mode === "verify"
+                ? await verifyPlanCleanup(job, reconcilerDependencies)
+                : await cleanupPlanMirror(
+                    {
+                      planId: command.planId,
+                      todayDateKey: dependencies.todayDateKey?.() ?? utcTodayDateKey(),
+                      startDateKey: job.windowStartDateKey,
+                      endDateKey: job.windowEndDateKey,
+                    },
+                    reconcilerDependencies,
+                  );
+            if (result.job.status === "failed") {
+              deliver(onEvent, {
+                commandId: command.commandId,
+                transitionId: command.transitionId,
+                operationId,
+                phase: "failed",
+                completed: Math.min(result.created, Math.max(result.total, 1)),
+                total: Math.max(result.total, 1),
+              });
+              return reject(CALENDAR_CLEANUP_FAILED, { activeScenario: "PL-S083" });
+            }
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: Math.max(result.total, 1),
+              total: Math.max(result.total, 1),
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: "PL-S085" }),
+            });
+          } catch {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total,
+            });
+            return reject(CALENDAR_CLEANUP_FAILED, { activeScenario: "PL-S083" });
+          }
+        }
+        if (command.transitionId === "PL-T28") {
+          if (dependencies.calendar === undefined) return reject(UNAVAILABLE);
+          const plan = await plans.read(command.planId);
+          const lineage = await replacementRepository.readByReplacementPlanId(command.planId);
+          if (plan?.status !== "active" || lineage === undefined) return reject(UNAVAILABLE);
+          const cleanupJob = await reconciliations.readJob(lineage.cleanupJobId);
+          if (cleanupJob?.status !== "verified") {
+            return reject(UNAVAILABLE, {
+              activeScenario: cleanupJob?.status === "failed" ? "PL-S083" : "PL-S082",
+            });
+          }
+          const workouts = await plans.readWorkouts(plan.id);
+          const mirrorJob = await reconciliations.readLatestJob(plan.id, "mirror");
+          const existingItems =
+            mirrorJob === undefined ? [] : await reconciliations.readItems(mirrorJob.id);
+          const total = Math.max(existingItems.length, 1);
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total,
+          });
+          try {
+            const result = await reconcileActivePlanWindow(
+              {
+                plan,
+                workouts,
+                todayDateKey: dependencies.todayDateKey?.() ?? utcTodayDateKey(),
+              },
+              {
+                repository: reconciliations,
+                calendar: dependencies.calendar,
+                identity: { newId: () => input.identity.newUlid() },
+                now: () => input.identity.hlcStamp().physicalMs,
+              },
+            );
+            if (result.job.status === "failed") {
+              deliver(onEvent, {
+                commandId: command.commandId,
+                transitionId: command.transitionId,
+                operationId,
+                phase: "failed",
+                completed: Math.min(result.created, Math.max(result.total, 1)),
+                total: Math.max(result.total, 1),
+              });
+              return reject(CALENDAR_UPDATE_FAILED, {
+                activeScenario: result.job.failureCount > 1 ? "PL-S041" : "PL-S039",
+              });
+            }
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: Math.max(result.total, 1),
+              total: Math.max(result.total, 1),
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: "PL-S087" }),
+            });
+          } catch {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total,
+            });
+            return reject(CALENDAR_UPDATE_FAILED, { activeScenario: "PL-S039" });
+          }
+        }
         if (command.transitionId === "PL-T39") {
+          if (
+            command.sourceScenarioId === "PL-S081" &&
+            command.destinationScenarioId === "PL-S080"
+          ) {
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ replacementConfirmation: false }),
+            });
+          }
           const allowed =
             (command.destinationScenarioId === "PL-S005" &&
               [
@@ -2913,7 +3289,9 @@ export function createPlanningOperations(
               ["PL-S005", "PL-S026", "PL-S027", "PL-S051", "PL-S101"].includes(
                 command.sourceScenarioId,
               )) ||
-            (command.sourceScenarioId === "PL-S005" && command.destinationScenarioId === "PL-S090");
+            (command.sourceScenarioId === "PL-S005" &&
+              command.destinationScenarioId === "PL-S090") ||
+            (command.sourceScenarioId === "PL-S087" && command.destinationScenarioId === "PL-S088");
           if (!allowed) return reject(UNAVAILABLE);
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",
