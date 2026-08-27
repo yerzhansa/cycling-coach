@@ -444,22 +444,28 @@ device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
         input.hlcCounter < 0 ||
         input.workouts.length === 0 ||
         input.workouts.length !== 1 ||
-        input.expectedWorkouts.length !== input.workouts.length ||
+        input.expectedWorkouts.length > 1 ||
         expectedById.size !== input.expectedWorkouts.length ||
-        input.workouts.some((workout) => !expectedById.has(workout.id))
+        (input.expectedWorkouts.length === 1 &&
+          input.expectedWorkouts[0]!.id !== input.workouts[0]!.id)
       ) {
         throw new PlanProposalValidationError("invalid-proposal");
       }
-      const expectedWorkout = input.expectedWorkouts[0]!;
+      const expectedWorkout = input.expectedWorkouts[0];
       const nextWorkout = input.workouts[0]!;
       if (
         input.ledger.kind !== "proposal-applied" ||
         input.ledger.sourceId !== input.id ||
         input.ledger.reversalOfId !== null ||
         input.ledger.planId !== input.plan.id ||
-        input.ledger.targetWorkoutId !== expectedWorkout.id ||
-        input.ledger.beforeJson !==
-          encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(expectedWorkout)) ||
+        input.ledger.targetWorkoutId !== nextWorkout.id ||
+        (expectedWorkout === undefined
+          ? input.ledger.operation !== "add" || input.ledger.beforeJson !== null
+          : input.ledger.operation !== "update" ||
+            input.ledger.beforeJson !==
+              encodePlanAdaptationWorkoutSnapshot(
+                planAdaptationWorkoutSnapshot(expectedWorkout),
+              )) ||
         input.ledger.afterJson !==
           encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(nextWorkout))
       ) {
@@ -489,12 +495,7 @@ device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
         }
         for (const workout of input.workouts) {
           const expected = expectedById.get(workout.id);
-          if (
-            expected === undefined ||
-            workout.planId !== input.plan.id ||
-            expected.planId !== input.plan.id ||
-            !ULID.test(workout.id)
-          ) {
+          if (workout.planId !== input.plan.id || !ULID.test(workout.id)) {
             throw new PlanProposalValidationError("invalid-proposal");
           }
           const current = await store.get(
@@ -502,6 +503,35 @@ device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
 device_id, hlc_physical_ms, hlc_counter FROM plan_workout WHERE id=? AND plan_id=?`,
             [workout.id, input.plan.id],
           );
+          if (expected === undefined) {
+            const dateConflict = await store.get(
+              "SELECT id FROM plan_workout WHERE plan_id=? AND date_key=? LIMIT 1",
+              [input.plan.id, workout.dateKey],
+            );
+            if (current !== undefined || dateConflict !== undefined) {
+              throw new PlanProposalValidationError("stale-base");
+            }
+            await store.run(
+              `INSERT INTO plan_workout (
+  id, plan_id, date_key, sport, name, duration_s, structure_json, origin,
+  device_id, hlc_physical_ms, hlc_counter
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                workout.id,
+                workout.planId,
+                workout.dateKey,
+                workout.sport,
+                workout.name,
+                workout.durationS,
+                workout.structureJson,
+                workout.origin,
+                workout.deviceId,
+                workout.hlcPhysicalMs,
+                workout.hlcCounter,
+              ],
+            );
+            continue;
+          }
           if (
             current === undefined ||
             text(current, "id") !== expected.id ||

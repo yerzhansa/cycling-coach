@@ -26,7 +26,7 @@ export interface PlanHistoryEligibility {
 export interface ValidatedPlanUndo {
   readonly target: PlanAdaptationLedgerRecord;
   readonly current: PlanWorkoutRecord;
-  readonly next: PlanWorkoutRecord;
+  readonly next: PlanWorkoutRecord | null;
 }
 
 export class PlanUndoError extends Error {
@@ -55,6 +55,7 @@ function reasonForTarget(input: {
   if (input.workout === undefined) return "workout-missing";
   if (input.workout.dateKey <= input.todayDateKey) return "workout-not-future";
   if (input.workout.origin !== "coach") return "workout-not-coach-owned";
+  if (input.target.afterJson === null) return "workout-missing";
   if (currentSnapshot(input.workout) !== input.target.afterJson) return "workout-changed";
   return null;
 }
@@ -122,17 +123,21 @@ export function validatePlanUndo(input: {
     todayDateKey: input.todayDateKey,
   });
   if (reason !== null) throw new PlanUndoError("unavailable", reason);
-  const before = parsePlanAdaptationWorkoutSnapshot(target.beforeJson);
+  const before =
+    target.beforeJson === null ? null : parsePlanAdaptationWorkoutSnapshot(target.beforeJson);
   return Object.freeze({
     target,
     current: current!,
-    next: Object.freeze({
-      ...current!,
-      ...before,
-      deviceId: input.deviceId,
-      hlcPhysicalMs: input.hlcPhysicalMs,
-      hlcCounter: input.hlcCounter,
-    }),
+    next:
+      before === null
+        ? null
+        : Object.freeze({
+            ...current!,
+            ...before,
+            deviceId: input.deviceId,
+            hlcPhysicalMs: input.hlcPhysicalMs,
+            hlcCounter: input.hlcCounter,
+          }),
   });
 }
 
@@ -165,6 +170,7 @@ export async function applyValidatedPlanUndo(
       id: input.undoId,
       planId: validated.target.planId,
       targetWorkoutId: validated.target.targetWorkoutId,
+      operation: validated.target.operation === "add" ? "remove" : "update",
       kind: "undo",
       sourceId: validated.target.id,
       reversalOfId: validated.target.id,
