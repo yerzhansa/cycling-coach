@@ -21,6 +21,7 @@ export * from "./planning/replacement.js";
 export * from "./planning/season.js";
 export * from "./planning/readiness.js";
 export * from "./planning/weekly-review.js";
+export * from "./planning/race-outcome.js";
 export type {
   AthleteDataReaderPort,
   AthleteReadResult,

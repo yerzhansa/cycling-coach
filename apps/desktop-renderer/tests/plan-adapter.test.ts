@@ -1406,6 +1406,151 @@ describe("Plan view adapter", () => {
     });
   });
 
+  it("ends an active Plan after its final civil date and resumes ordinary cleanup", async () => {
+    const planId = "00000000000000000000000003";
+    const active = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId,
+      data: {
+        plan: {
+          id: planId,
+          name: "Gran Fondo",
+          primaryGoal: "Finish",
+          startDate: "1998-07-13",
+          targetDate: "1998-10-04",
+          kind: "full-plan",
+          totalWeeks: 12,
+          weekStartDay: 1,
+          workoutCount: 0,
+          plannedDurationS: 0,
+        },
+        today: "1998-10-05",
+        weekIndex: 12,
+        todayWorkout: null,
+        workouts: [],
+      },
+    });
+    const ended = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S094",
+      projection: "ended",
+      planId,
+      reconciliation: {
+        status: "not-started",
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: null,
+        error: null,
+      },
+      data: {},
+    });
+    const cleaned = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S056",
+      projection: "ended",
+      planId,
+      reconciliation: {
+        status: "verified",
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: "1998-10-06",
+        error: null,
+      },
+      data: {},
+    });
+    const subject = harness({
+      ids: ["natural-completion", "natural-cleanup"],
+      getPlanState: async () => ({ status: "ready", state: active }),
+      executePlanTransition: async (command) => ({
+        status: "completed",
+        state: command.transitionId === "PL-T29" ? ended : cleaned,
+      }),
+    });
+
+    subject.adapter.start();
+    await settle();
+    await settle();
+    await settle();
+
+    expect(subject.executePlanTransition.mock.calls.map(([command]) => command)).toEqual([
+      {
+        transitionId: "PL-T29",
+        commandId: "natural-completion",
+        planId,
+        asOf: "1998-10-05",
+      },
+      {
+        transitionId: "PL-T24",
+        commandId: "natural-cleanup",
+        planId,
+        mode: "cleanup",
+      },
+    ]);
+  });
+
+  it("opens and records the separate race outcome", async () => {
+    const planId = "00000000000000000000000003";
+    const natural = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S094",
+      projection: "ended",
+      planId,
+      reconciliation: {
+        status: "verified",
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: "1998-10-06",
+        error: null,
+      },
+    });
+    const choice = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S095",
+      projection: "ended",
+      planId,
+    });
+    const subject = harness({
+      ids: ["open-outcome", "save-outcome"],
+      getPlanState: async () => ({ status: "ready", state: natural }),
+      executePlanTransition: async (command) => ({
+        status: "completed",
+        state: command.transitionId === "PL-T39" ? choice : natural,
+      }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.openRaceOutcome();
+    await settle();
+    subject.adapter.recordRaceOutcome("not-completed");
+    await settle();
+
+    expect(subject.executePlanTransition.mock.calls.map(([command]) => command)).toEqual([
+      {
+        transitionId: "PL-T39",
+        commandId: "open-outcome",
+        action: "open",
+        sourceScenarioId: "PL-S094",
+        destinationScenarioId: "PL-S095",
+        returnFocusId: planId,
+      },
+      {
+        transitionId: "PL-T30",
+        commandId: "save-outcome",
+        planId,
+        outcome: "not-completed",
+      },
+    ]);
+  });
+
   it("delivers one due Weekly review per successful sync", async () => {
     const planId = "00000000000000000000000003";
     const dueData = {

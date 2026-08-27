@@ -591,7 +591,10 @@ export type EndedPlanScenario =
   | "PL-S054"
   | "PL-S055"
   | "PL-S056"
-  | "PL-S089";
+  | "PL-S089"
+  | "PL-S094"
+  | "PL-S095"
+  | "PL-S096";
 
 export function buildEndedPlanReadModel(input: {
   readonly scenarioId: EndedPlanScenario;
@@ -608,6 +611,9 @@ export function buildEndedPlanReadModel(input: {
     "PL-S055": ["Retrying cleanup", "Removing only the remaining Plan-owned workouts."],
     "PL-S056": ["Plan ended", "Calendar cleanup is verified."],
     "PL-S089": ["Plan ended", "Calendar cleanup is verified and Plan history is saved."],
+    "PL-S094": ["Plan completed", "The Plan ended automatically after its final date."],
+    "PL-S095": ["Race outcome", "Record the result separately from the ended Plan."],
+    "PL-S096": ["Race not completed", "The ended Plan and training history remain saved."],
   } as const;
   const failed = input.scenarioId === "PL-S053";
   return PlanReadModelSchema.parse({
@@ -622,6 +628,8 @@ export function buildEndedPlanReadModel(input: {
     transitions: [
       ...(failed ? [guard("PL-T24")] : []),
       ...(input.reconciliation.status === "verified" ? [guard("PL-T01")] : []),
+      ...(input.scenarioId === "PL-S094" ? [guard("PL-T39")] : []),
+      ...(input.scenarioId === "PL-S095" ? [guard("PL-T30")] : []),
     ],
     reconciliation: input.reconciliation,
     attention: failed

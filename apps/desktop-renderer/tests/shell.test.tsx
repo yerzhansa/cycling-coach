@@ -138,6 +138,8 @@ function stubPlanActions(): PlanActions {
     confirmEndPlan: vi.fn(),
     retryPlanCleanup: vi.fn(),
     verifyPlanCleanup: vi.fn(),
+    openRaceOutcome: vi.fn(),
+    recordRaceOutcome: vi.fn(),
     openAttention: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),

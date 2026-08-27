@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildActivePlanReadModel,
+  buildEndedPlanReadModel,
   buildPlanLifecycleReadModel,
 } from "../src/planning-lifecycle.js";
 
@@ -25,6 +26,64 @@ function build(input: Partial<Parameters<typeof buildPlanLifecycleReadModel>[0]>
 }
 
 describe("Plan lifecycle projection", () => {
+  it("advertises only the accepted natural completion and outcome actions", () => {
+    const data = {
+      plan: {
+        id: "plan-1",
+        name: "Gran Fondo",
+        primaryGoal: "Finish",
+        startDate: "1998-07-13",
+        targetDate: "1998-10-04",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 0,
+        plannedDurationS: 0,
+      },
+      endedAtMs: 10,
+      raceOutcome: null,
+      outcomeAvailable: true,
+      cleanupItems: [],
+    };
+    const reconciliation = {
+      status: "verified" as const,
+      created: 0,
+      pending: 0,
+      failed: 0,
+      total: 0,
+      currentThrough: "1998-10-06",
+      error: null,
+    };
+    expect(
+      buildEndedPlanReadModel({
+        scenarioId: "PL-S094",
+        planId: "plan-1",
+        revision: 0,
+        data,
+        reconciliation,
+      }).transitions,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ transitionId: "PL-T01" }),
+        expect.objectContaining({ transitionId: "PL-T39" }),
+      ]),
+    );
+    expect(
+      buildEndedPlanReadModel({
+        scenarioId: "PL-S095",
+        planId: "plan-1",
+        revision: 0,
+        data,
+        reconciliation,
+      }).transitions,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ transitionId: "PL-T01" }),
+        expect.objectContaining({ transitionId: "PL-T30" }),
+      ]),
+    );
+  });
+
   it("exposes read-only Season and race-week Scenarios from an active Plan", () => {
     const data = {
       plan: {

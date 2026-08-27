@@ -109,6 +109,8 @@ export interface PlanActions {
   confirmEndPlan(): void;
   retryPlanCleanup(): void;
   verifyPlanCleanup(): void;
+  openRaceOutcome(): void;
+  recordRaceOutcome(outcome: "completed" | "not-completed"): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
