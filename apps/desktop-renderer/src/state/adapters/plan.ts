@@ -99,6 +99,8 @@ export interface PlanViewAdapter {
   verifyPlanCleanup(): void;
   openRaceOutcome(): void;
   recordRaceOutcome(outcome: "completed" | "not-completed"): void;
+  openEndedConversation(): void;
+  closeEndedConversation(): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
@@ -1269,6 +1271,44 @@ export function createPlanViewAdapter(input: {
         commandId: createCommandId(),
         planId: model.planId,
         outcome,
+      });
+    },
+    openEndedConversation() {
+      const model = planReadModel(input.read());
+      if (
+        model?.planId === null ||
+        model?.planId === undefined ||
+        model.scenarioId !== "PL-S089" ||
+        active !== null
+      ) {
+        return;
+      }
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "open",
+        sourceScenarioId: "PL-S089",
+        destinationScenarioId: "PL-S102",
+        returnFocusId: model.planId,
+      });
+    },
+    closeEndedConversation() {
+      const model = planReadModel(input.read());
+      if (
+        model?.planId === null ||
+        model?.planId === undefined ||
+        model.scenarioId !== "PL-S102" ||
+        active !== null
+      ) {
+        return;
+      }
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "back",
+        sourceScenarioId: "PL-S102",
+        destinationScenarioId: "PL-S089",
+        returnFocusId: model.planId,
       });
     },
     openAttention(attentionId) {

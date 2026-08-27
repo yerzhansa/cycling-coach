@@ -100,6 +100,8 @@ function stubPlanActions(): PlanActions {
     closeDiscardConfirmation: vi.fn(),
     discardDraft: vi.fn(),
     openRevisionComposer: vi.fn(),
+    openEndedConversation: vi.fn(),
+    closeEndedConversation: vi.fn(),
     closeRevisionComposer: vi.fn(),
     openCoursePicker: vi.fn(),
     closeCoursePicker: vi.fn(),

@@ -124,6 +124,8 @@ export interface PlanActions {
   verifyPlanCleanup(): void;
   openRaceOutcome(): void;
   recordRaceOutcome(outcome: "completed" | "not-completed"): void;
+  openEndedConversation(): void;
+  closeEndedConversation(): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;

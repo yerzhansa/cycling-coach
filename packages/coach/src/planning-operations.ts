@@ -98,6 +98,7 @@ import {
 import { cyclingTaperRefusal, projectCyclingSeasonMetadata } from "@enduragent/sport-cycling";
 import {
   buildActivePlanReadModel,
+  buildEndedPlanConversationReadModel,
   buildEndedPlanReadModel,
   buildPlanLifecycleReadModel,
   type ActivePlanScenario,
@@ -3814,6 +3815,41 @@ export function createPlanningOperations(
           }
         }
         if (command.transitionId === "PL-T39") {
+          if (
+            command.sourceScenarioId === "PL-S089" &&
+            command.destinationScenarioId === "PL-S102"
+          ) {
+            const plan = await plans.readLatest();
+            if (plan?.status !== "ended") return reject(UNAVAILABLE);
+            const conversation = await conversations.readConversationByPlanId(plan.id);
+            if (conversation === undefined) return reject(UNAVAILABLE);
+            const turns = await conversations.readTurns(conversation.id);
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: buildEndedPlanConversationReadModel({
+                conversation: {
+                  id: conversation.id,
+                  planId: conversation.planId,
+                  replacesPlanId: conversation.replacesPlanId,
+                  sourceConversationId: null,
+                },
+                turns,
+                planId: plan.id,
+                revision: 0,
+              }),
+            });
+          }
+          if (
+            command.sourceScenarioId === "PL-S102" &&
+            command.destinationScenarioId === "PL-S089"
+          ) {
+            const plan = await plans.readLatest();
+            if (plan?.status !== "ended") return reject(UNAVAILABLE);
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ endedScenario: "PL-S089" }),
+            });
+          }
           if (
             command.sourceScenarioId === "PL-S081" &&
             command.destinationScenarioId === "PL-S080"
