@@ -661,6 +661,9 @@ export function buildActivePlanReadModel(input: {
       ...(input.scenarioId === "PL-S083" ? [guard("PL-T27")] : []),
       ...(input.scenarioId === "PL-S085" ? [guard("PL-T28")] : []),
       guard("PL-T39"),
+      ...(input.data.selectedPlanningRequest?.request.attention === "date_conflict"
+        ? [guard("PL-T40")]
+        : []),
     ],
     reconciliation: input.reconciliation,
     attention,

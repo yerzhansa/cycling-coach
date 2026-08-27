@@ -145,6 +145,7 @@ import {
   type PlanProposalPremiseRecord,
   type PlanProposalRepository,
   type PlanningRequestReadModel,
+  type PlanningRequestAttention,
   type PlanningRequestRecord,
   type PlanningRequestRepository,
   type PlanAdaptationLedgerRecord,
@@ -795,6 +796,7 @@ function activePlanData(input: {
   readonly proposals: readonly PlanProposalProjection[];
   readonly selectedProposalId?: string | null;
   readonly selectedProposalReturn?: PlanProposalReturn | null;
+  readonly selectedPlanningRequest?: PlanActiveProjectionData["selectedPlanningRequest"];
   readonly proposalRevisionText?: string | null;
   readonly history: readonly PlanHistoryEntry[];
   readonly selectedHistoryId?: string | null;
@@ -971,6 +973,7 @@ function activePlanData(input: {
     proposals: input.proposals,
     selectedProposalId: input.selectedProposalId ?? null,
     selectedProposalReturn: input.selectedProposalReturn ?? null,
+    selectedPlanningRequest: input.selectedPlanningRequest ?? null,
     proposalRevisionText: input.proposalRevisionText ?? null,
     history: input.history,
     selectedHistoryId: input.selectedHistoryId ?? null,
@@ -1005,6 +1008,61 @@ function activeScenario(
     return "PL-S042";
   }
   return projection.job.failureCount > 1 ? "PL-S041" : "PL-S039";
+}
+
+function selectedPlanningRequestContext(input: {
+  readonly record: PlanningRequestRecord | undefined;
+  readonly plan: PlanRecord;
+  readonly workouts: readonly PlanWorkoutRecord[];
+  readonly todayDateKey: number;
+}): PlanActiveProjectionData["selectedPlanningRequest"] {
+  const record = input.record;
+  if (record === undefined) return null;
+  if (record.request.attention !== "date_conflict") {
+    return { request: record.request, dateConflict: null };
+  }
+  const requestedDateKey = record.request.requestedDateKey;
+  if (requestedDateKey === null) throw new TypeError("A date conflict requires a requested date.");
+  const minimumDateKey = Math.max(input.plan.startDateKey, addCivilDays(input.todayDateKey, 1));
+  const maximumDateKey =
+    input.plan.targetDateKey ??
+    addCivilDays(input.plan.startDateKey, input.plan.totalWeeks * 7 - 1);
+  const occupied = new Set(input.workouts.map((workout) => workout.dateKey));
+  let recommendedDateKey: number | null = null;
+  for (let dateKey = addCivilDays(requestedDateKey, 1); dateKey <= maximumDateKey; ) {
+    if (!occupied.has(dateKey)) {
+      recommendedDateKey = dateKey;
+      break;
+    }
+    dateKey = addCivilDays(dateKey, 1);
+  }
+  if (recommendedDateKey === null) {
+    for (let dateKey = minimumDateKey; dateKey < requestedDateKey; ) {
+      if (!occupied.has(dateKey)) {
+        recommendedDateKey = dateKey;
+        break;
+      }
+      dateKey = addCivilDays(dateKey, 1);
+    }
+  }
+  return {
+    request: record.request,
+    dateConflict: {
+      recommendedDate: recommendedDateKey === null ? null : dateText(recommendedDateKey),
+      minimumDate: dateText(minimumDateKey),
+      maximumDate: dateText(maximumDateKey),
+      workouts: input.workouts
+        .filter((workout) => workout.dateKey === requestedDateKey)
+        .map((workout) => ({
+          workoutId: workout.id,
+          date: dateText(workout.dateKey),
+          name: workout.name,
+          durationS: workout.durationS ?? 0,
+          ownership: workout.origin,
+          replaceable: workout.origin === "coach" && workout.dateKey > input.todayDateKey,
+        })),
+    },
+  };
 }
 
 function draftProjection(value: PlanDraftRevisionRecord | undefined): PlanDraftProjection | null {
@@ -1638,6 +1696,16 @@ export function createPlanningOperations(
               (proposal) => proposal.id !== overrides.proposalOverride!.id,
             ),
           ];
+    const selectedRequestRecord =
+      overrides.selectedProposalId === undefined || overrides.selectedProposalId === null
+        ? undefined
+        : await planningRequests?.readByProposalId(overrides.selectedProposalId);
+    const selectedPlanningRequest = selectedPlanningRequestContext({
+      record: selectedRequestRecord,
+      plan,
+      workouts,
+      todayDateKey,
+    });
     const readiness =
       overrides.readiness ??
       projectPlanReadiness(
@@ -1665,6 +1733,7 @@ export function createPlanningOperations(
         proposals: mergedProposalProjections,
         selectedProposalId: overrides.selectedProposalId,
         selectedProposalReturn: overrides.selectedProposalReturn,
+        selectedPlanningRequest,
         proposalRevisionText: overrides.proposalRevisionText,
         history: historyProjection({ plan, workouts, history: historyRows, todayDateKey }),
         selectedHistoryId: overrides.selectedHistoryId,
@@ -2188,6 +2257,8 @@ export function createPlanningOperations(
     readonly plan: PlanRecord;
     readonly workouts: readonly PlanWorkoutRecord[];
     readonly instruction: string;
+    readonly requestAttention?: PlanningRequestAttention;
+    readonly requestResolvedDateKey?: number | null;
   }): Promise<PlanProposalRecord> => {
     if (dependencies.proposalReviser === undefined)
       throw new Error("Proposal revision unavailable.");
@@ -2252,12 +2323,37 @@ export function createPlanningOperations(
             expectedRevision: linkedRequest.request.revision,
             previousProposalId: inputValue.current.id,
             proposalId: next.id,
+            attention: inputValue.requestAttention ?? "needs_review",
+            resolvedDateKey:
+              inputValue.requestResolvedDateKey ?? linkedRequest.request.resolvedDateKey,
             updatedAtMs: timestamp,
             deviceId,
             hlcPhysicalMs: stamp.physicalMs,
             hlcCounter: stamp.counter,
           },
     );
+  };
+
+  const revisePlanningRequestAttention = async (
+    record: PlanningRequestRecord,
+    attention: PlanningRequestAttention,
+    proposalId = record.request.proposalId,
+    resolvedDateKey = record.request.resolvedDateKey,
+  ): Promise<PlanningRequestRecord> => {
+    if (planningRequests === undefined) return record;
+    const stamp = input.identity.hlcStamp();
+    return planningRequests.reviseOpen({
+      requestId: record.request.requestId,
+      expectedRevision: record.request.revision,
+      planConversationId: record.request.planConversationId,
+      proposalId,
+      attention,
+      resolvedDateKey,
+      updatedAtMs: stamp.physicalMs,
+      deviceId: await input.identity.deviceId(),
+      hlcPhysicalMs: stamp.physicalMs,
+      hlcCounter: stamp.counter,
+    });
   };
 
   const reject = async (
@@ -2376,6 +2472,140 @@ export function createPlanningOperations(
             });
           }
           return reject(UNAVAILABLE);
+        }
+        if (command.transitionId === "PL-T40") {
+          if (planningRequests === undefined) return reject(UNAVAILABLE);
+          const record = await planningRequests.read(command.requestId);
+          if (
+            record === undefined ||
+            record.request.lifecycle !== "open" ||
+            record.request.attention !== "date_conflict" ||
+            record.request.proposalId === null
+          ) {
+            return reject(UNAVAILABLE);
+          }
+          const proposal = await proposalRepository.read(record.request.proposalId);
+          if (proposal?.status !== "proposed") return reject(UNAVAILABLE);
+          const [plan, workouts, premises] = await Promise.all([
+            plans.read(proposal.planId),
+            plans.readWorkouts(proposal.planId),
+            proposalRepository.readPremises(proposal.id),
+          ]);
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          const mutation = parsePlanProposalMutation(proposal.mutationJson);
+          const change = mutation.changes[0];
+          if (mutation.changes.length !== 1 || change === undefined || change.before !== null) {
+            return reject(UNAVAILABLE);
+          }
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          let resolvedDateKey: number;
+          let nextChange: PlanProposalMutation["changes"][number];
+          if (command.resolution.kind === "use-date") {
+            resolvedDateKey = dateKeyFromText(command.resolution.date);
+            if (
+              resolvedDateKey <= todayDateKey ||
+              planWeekIndex(plan, resolvedDateKey).kind !== "inside" ||
+              workouts.some((workout) => workout.dateKey === resolvedDateKey)
+            ) {
+              return reject({
+                code: "conflict",
+                message: "That date is no longer available. Choose another date.",
+                retryable: true,
+              });
+            }
+            nextChange = {
+              ...change,
+              after: { ...change.after, dateKey: resolvedDateKey },
+            };
+          } else {
+            const replacementWorkoutId = command.resolution.workoutId;
+            const existing = workouts.find((workout) => workout.id === replacementWorkoutId);
+            if (
+              existing === undefined ||
+              existing.origin !== "coach" ||
+              existing.dateKey <= todayDateKey ||
+              existing.dateKey !== record.request.requestedDateKey
+            ) {
+              return reject({
+                code: "conflict",
+                message: "That Workout is protected and cannot be replaced.",
+                retryable: false,
+              });
+            }
+            resolvedDateKey = existing.dateKey;
+            nextChange = {
+              workoutId: existing.id,
+              before: {
+                dateKey: existing.dateKey,
+                sport: existing.sport,
+                name: existing.name,
+                durationS: existing.durationS,
+                structureJson: existing.structureJson,
+              },
+              after: { ...change.after, dateKey: existing.dateKey },
+            };
+          }
+          const stamp = input.identity.hlcStamp();
+          const timestamp = stamp.physicalMs;
+          const deviceId = await input.identity.deviceId();
+          const next: PlanProposalRecord = {
+            ...proposal,
+            id: input.identity.newUlid(),
+            parentProposalId: proposal.id,
+            revision: proposal.revision + 1,
+            mutationJson: encodePlanProposalMutation({
+              schemaVersion: 1,
+              changes: [nextChange],
+              weekLoad: mutation.weekLoad,
+            }),
+            baseSnapshotJson: encodePlanProposalBase(capturePlanProposalBase(plan, workouts)),
+            createdAtMs: timestamp,
+            updatedAtMs: timestamp,
+            deviceId,
+            hlcPhysicalMs: stamp.physicalMs,
+            hlcCounter: stamp.counter,
+          };
+          const nextPremises = premises.map((premise) => ({
+            ...premise,
+            id: input.identity.newUlid(),
+            proposalId: next.id,
+            createdAtMs: timestamp,
+            deviceId,
+            hlcPhysicalMs: stamp.physicalMs,
+            hlcCounter: stamp.counter,
+          }));
+          try {
+            validatePlanProposal({
+              proposal: next,
+              premises: nextPremises,
+              plan,
+              workouts,
+              todayDateKey,
+              calculateWeekLoad: dependencies.proposalLoadCalculator,
+            });
+            await proposalRepository.save(next, nextPremises, {
+              requestId: record.request.requestId,
+              expectedRevision: record.request.revision,
+              previousProposalId: proposal.id,
+              proposalId: next.id,
+              attention: "needs_review",
+              resolvedDateKey,
+              updatedAtMs: timestamp,
+              deviceId,
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+            });
+          } catch {
+            return reject({
+              code: "conflict",
+              message: "The Plan changed while checking that date. Review the latest options.",
+              retryable: true,
+            });
+          }
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await read({ activeScenario: "PL-S007", selectedProposalId: next.id }),
+          });
         }
         if (command.transitionId === "PL-T37") {
           if (planningRequests === undefined) return reject(UNAVAILABLE);
@@ -3685,6 +3915,18 @@ export function createPlanningOperations(
           if (mutation.weekLoad !== null && dependencies.proposalLoadCalculator === undefined) {
             return reject(UNAVAILABLE);
           }
+          let linkedRequest = await planningRequests?.readByProposalId(proposal.id);
+          if (linkedRequest !== undefined) {
+            try {
+              linkedRequest = await revisePlanningRequestAttention(linkedRequest, "revalidating");
+            } catch {
+              return reject(PERSISTENCE_FAILED, {
+                activeScenario: "PL-S007",
+                selectedProposalId: proposal.id,
+                selectedProposalReturn: command.selectedProposalReturn,
+              });
+            }
+          }
           const operationId = input.identity.newUlid();
           deliver(onEvent, {
             commandId: command.commandId,
@@ -3695,6 +3937,7 @@ export function createPlanningOperations(
             total: 1,
           });
           const ledgerId = input.identity.newUlid();
+          let validationCompleted = false;
           try {
             await revalidatePlanProposalPremises(premises, premiseReader);
             const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
@@ -3706,8 +3949,8 @@ export function createPlanningOperations(
               todayDateKey,
               calculateWeekLoad: dependencies.proposalLoadCalculator,
             });
+            validationCompleted = true;
             const stamp = input.identity.hlcStamp();
-            const linkedRequest = await planningRequests?.readByProposalId(proposal.id);
             const requestWorkout =
               linkedRequest === undefined ? null : planningRequestWorkout(linkedRequest);
             const appliedDateKey =
@@ -3755,6 +3998,11 @@ export function createPlanningOperations(
             });
           } catch (error) {
             if (error instanceof PlanProposalError && error.code === "missing-capability") {
+              if (linkedRequest !== undefined) {
+                await revisePlanningRequestAttention(linkedRequest, "needs_review").catch(
+                  () => undefined,
+                );
+              }
               deliver(onEvent, {
                 commandId: command.commandId,
                 transitionId: command.transitionId,
@@ -3795,10 +4043,17 @@ export function createPlanningOperations(
                     workouts: latestWorkouts,
                     instruction:
                       "Revalidate this Proposal against the current Plan and source data without changing the athlete's intent.",
+                    requestAttention: "stale_base",
                   });
                 } catch {
                   current = proposal;
                 }
+              }
+              if (linkedRequest !== undefined && current.id === proposal.id) {
+                linkedRequest = await revisePlanningRequestAttention(
+                  linkedRequest,
+                  "stale_base",
+                ).catch(() => linkedRequest);
               }
               const currentPremises = await proposalRepository.readPremises(current.id);
               const projected = proposalProjection({
@@ -3834,7 +4089,24 @@ export function createPlanningOperations(
               completed: 0,
               total: 1,
             });
-            return reject(PROPOSAL_INVALID, {
+            if (!validationCompleted) {
+              if (linkedRequest !== undefined) {
+                await revisePlanningRequestAttention(linkedRequest, "needs_review").catch(
+                  () => undefined,
+                );
+              }
+              return reject(PROPOSAL_INVALID, {
+                activeScenario: "PL-S007",
+                selectedProposalId: proposal.id,
+                selectedProposalReturn: command.selectedProposalReturn,
+              });
+            }
+            if (linkedRequest !== undefined) {
+              await revisePlanningRequestAttention(linkedRequest, "apply_failed").catch(
+                () => undefined,
+              );
+            }
+            return reject(PERSISTENCE_FAILED, {
               activeScenario: "PL-S007",
               selectedProposalId: proposal.id,
               selectedProposalReturn: command.selectedProposalReturn,

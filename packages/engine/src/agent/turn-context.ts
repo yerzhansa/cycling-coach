@@ -3,6 +3,7 @@ import { EMPTY_PROVENANCE, type SourceProvenance } from "../provenance.js";
 import type {
   CoachDecisionReadModel,
   PlanIntakePatch,
+  PlanHandoffSuggestion,
   PlanReferenceSelection,
 } from "@enduragent/coach-contract";
 
@@ -22,6 +23,10 @@ export interface TurnDecisionRecord {
 
 export interface TurnPlanReferenceRecord {
   selection: PlanReferenceSelection | null;
+}
+
+export interface TurnPlanHandoffRecord {
+  suggestion: PlanHandoffSuggestion | null;
 }
 
 export interface TurnPlanIntakeRecord {
@@ -54,6 +59,7 @@ export interface TurnContext {
   readonly referenceProvenance: SourceProvenance;
   readonly decision: TurnDecisionRecord;
   readonly planReference: TurnPlanReferenceRecord;
+  readonly planHandoff: TurnPlanHandoffRecord;
   readonly planIntake: TurnPlanIntakeRecord;
 }
 
@@ -82,6 +88,7 @@ export function createTurnContext(
     referenceProvenance,
     decision: { requested: null, fallbackText: null },
     planReference: { selection: null },
+    planHandoff: { suggestion: null },
     planIntake: { patch: null },
   };
   return ctx;

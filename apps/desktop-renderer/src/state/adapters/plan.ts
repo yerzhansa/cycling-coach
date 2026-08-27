@@ -90,6 +90,12 @@ export interface PlanViewAdapter {
   reviseProposal(proposalId: string, text: string): void;
   approveProposal(proposalId: string, expectedRevision: number): void;
   rejectProposal(proposalId: string): void;
+  resolvePlanningRequestDate(
+    requestId: string,
+    resolution:
+      | { readonly kind: "use-date"; readonly date: string }
+      | { readonly kind: "replace-workout"; readonly workoutId: string },
+  ): void;
   openHistory(): void;
   closeHistory(): void;
   undoPlanChange(ledgerId: string): void;
@@ -1236,6 +1242,15 @@ export function createPlanViewAdapter(input: {
         ...(selectedProposalReturn === null || selectedProposalReturn === undefined
           ? {}
           : { selectedProposalReturn }),
+      });
+    },
+    resolvePlanningRequestDate(requestId, resolution) {
+      if (active !== null) return;
+      void execute({
+        transitionId: "PL-T40",
+        commandId: createCommandId(),
+        requestId,
+        resolution,
       });
     },
     openHistory() {

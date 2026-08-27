@@ -31,6 +31,7 @@ import {
   type PlanFtpProjection,
   type PlanFtpSourceValue,
   type PlanHistoryEntry,
+  type PlanPlanningRequestContext,
   type PlanRaceCourseProjection,
   type PlanRaceCourseSummary,
   type PlanReadinessProjection,
@@ -3236,6 +3237,198 @@ function WeeklyReviewProjection(props: {
   );
 }
 
+function PlanningRequestDateConflictProjection(props: {
+  readonly context: PlanPlanningRequestContext;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.planActions);
+  const transition = useEnduragentStore((state) => state.plan.transition);
+  const conflict = props.context.dateConflict;
+  const recommended = conflict?.recommendedDate ?? null;
+  const firstReplaceable = conflict?.workouts.find((workout) => workout.replaceable) ?? null;
+  const [choice, setChoice] = useState<"recommended" | "replace" | "custom">(
+    recommended !== null ? "recommended" : firstReplaceable !== null ? "replace" : "custom",
+  );
+  const [replacementWorkoutId, setReplacementWorkoutId] = useState(
+    firstReplaceable?.workoutId ?? null,
+  );
+  const [customDate, setCustomDate] = useState(recommended ?? conflict?.minimumDate ?? "");
+  if (conflict === null) {
+    return <StatusCard title="Plan request" support="Refreshing the current date options…" />;
+  }
+  const busy =
+    (transition.status === "submitting" || transition.status === "running") &&
+    transition.transitionId === "PL-T40";
+  const failed = transition.status === "failed" && transition.transitionId === "PL-T40";
+  const submit = (): void => {
+    if (choice === "replace" && replacementWorkoutId !== null) {
+      actions?.resolvePlanningRequestDate(props.context.request.requestId, {
+        kind: "replace-workout",
+        workoutId: replacementWorkoutId,
+      });
+      return;
+    }
+    const date = choice === "recommended" ? recommended : customDate;
+    if (date !== null && date.length > 0) {
+      actions?.resolvePlanningRequestDate(props.context.request.requestId, {
+        kind: "use-date",
+        date,
+      });
+    }
+  };
+  const selectedDate = choice === "recommended" ? recommended : customDate;
+  const primaryLabel =
+    choice === "replace" && replacementWorkoutId !== null
+      ? "Review replacement"
+      : selectedDate === null || selectedDate.length === 0
+        ? "Choose date"
+        : `Use ${formatCivilDate(selectedDate)}`;
+  return (
+    <section className="grid gap-5 rounded-card bg-surface p-5 shadow-elev-1">
+      <div className={SUPPORT_PAIR}>
+        <p className="m-0 text-xs font-semibold tracking-wide text-ink-2 uppercase">
+          Date conflict
+        </p>
+        <h2 className="m-0 text-xl font-semibold">
+          {conflict.workouts[0] === undefined
+            ? "The requested date already has a Workout"
+            : `${formatCivilDate(conflict.workouts[0].date)} already has a Workout`}
+        </h2>
+        <p className="m-0 text-ink-2">
+          Choose another date by default, or explicitly replace a future coach-owned Workout.
+        </p>
+      </div>
+      <div className="grid gap-inset">
+        {recommended === null ? null : (
+          <button
+            type="button"
+            aria-pressed={choice === "recommended"}
+            className={`grid min-h-ctl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-row rounded-ctl border p-row text-left outline-none focus:ring-3 focus:ring-ring/25 ${
+              choice === "recommended" ? "border-primary bg-primary/10" : "border-line bg-surface"
+            }`}
+            onClick={() => setChoice("recommended")}
+          >
+            <span className="grid size-4 place-items-center rounded-full border-2 border-current">
+              {choice === "recommended" ? (
+                <span className="size-2 rounded-full bg-current" />
+              ) : null}
+            </span>
+            <span className={SUPPORT_PAIR}>
+              <strong>Use {formatCivilDate(recommended)}</strong>
+              <small className="text-ink-2">No existing Workout</small>
+            </span>
+            <span className="rounded-full bg-ok/14 px-3 py-1 text-xs font-medium text-ok">
+              Recommended
+            </span>
+          </button>
+        )}
+        {conflict.workouts.map((workout) =>
+          workout.replaceable ? (
+            <button
+              key={workout.workoutId}
+              type="button"
+              aria-pressed={choice === "replace" && replacementWorkoutId === workout.workoutId}
+              className={`grid min-h-ctl grid-cols-[auto_minmax(0,1fr)] items-center gap-row rounded-ctl border p-row text-left outline-none focus:ring-3 focus:ring-ring/25 ${
+                choice === "replace" && replacementWorkoutId === workout.workoutId
+                  ? "border-primary bg-primary/10"
+                  : "border-line bg-surface"
+              }`}
+              onClick={() => {
+                setReplacementWorkoutId(workout.workoutId);
+                setChoice("replace");
+              }}
+            >
+              <span className="grid size-4 place-items-center rounded-full border-2 border-current">
+                {choice === "replace" && replacementWorkoutId === workout.workoutId ? (
+                  <span className="size-2 rounded-full bg-current" />
+                ) : null}
+              </span>
+              <span className={SUPPORT_PAIR}>
+                <strong>Replace {workout.name}</strong>
+                <small className="text-ink-2">
+                  Future · coach-owned · {clockTime(workout.durationS)}
+                </small>
+              </span>
+            </button>
+          ) : null,
+        )}
+        <button
+          type="button"
+          aria-pressed={choice === "custom"}
+          className={`grid min-h-ctl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-row rounded-ctl border p-row text-left outline-none focus:ring-3 focus:ring-ring/25 ${
+            choice === "custom" ? "border-primary bg-primary/10" : "border-line bg-surface"
+          }`}
+          onClick={() => setChoice("custom")}
+        >
+          <span className="grid size-4 place-items-center rounded-full border-2 border-current">
+            {choice === "custom" ? <span className="size-2 rounded-full bg-current" /> : null}
+          </span>
+          <span className={SUPPORT_PAIR}>
+            <strong>Choose another date…</strong>
+            <small className="text-ink-2">Check another day against the current Plan</small>
+          </span>
+          <CalendarDays className="size-4 text-ink-2" aria-hidden="true" />
+        </button>
+        {choice === "custom" ? (
+          <label className="grid gap-inset rounded-ctl bg-sunk p-row text-sm">
+            <span className="font-medium">Date</span>
+            <input
+              type="date"
+              min={conflict.minimumDate}
+              max={conflict.maximumDate}
+              value={customDate}
+              className="h-ctl rounded-ctl border border-line bg-surface px-3 text-sm outline-none focus:ring-3 focus:ring-ring/25"
+              onChange={(event) => setCustomDate(event.currentTarget.value)}
+            />
+          </label>
+        ) : null}
+        {conflict.workouts.map((workout) =>
+          workout.replaceable ? null : (
+            <div
+              key={workout.workoutId}
+              className="grid min-h-ctl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-row rounded-ctl bg-sunk p-row text-ink-2"
+            >
+              <TriangleAlert className="size-4" aria-hidden="true" />
+              <span className={SUPPORT_PAIR}>
+                <strong className="text-ink">{workout.name}</strong>
+                <small>Athlete-created · cannot be replaced by Coach</small>
+              </span>
+              <span className="rounded-full bg-bg-2 px-3 py-1 text-xs font-medium">Protected</span>
+            </div>
+          ),
+        )}
+      </div>
+      {failed ? (
+        <div className="flex items-start gap-row rounded-ctl bg-warn/10 p-row" role="alert">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden="true" />
+          <p className="m-0 text-sm text-ink-2">{transition.error.message}</p>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap justify-end gap-inset">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy}
+          onClick={() => actions?.closeProposal()}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          disabled={
+            busy ||
+            actions === null ||
+            (choice === "custom" && customDate.length === 0) ||
+            (choice === "replace" && replacementWorkoutId === null)
+          }
+          onClick={submit}
+        >
+          {busy ? "Checking…" : primaryLabel}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function ActiveProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
   const transition = useEnduragentStore((state) => state.plan.transition);
@@ -3302,6 +3495,9 @@ function ActiveProjection(): ReactElement {
   const parsed = PlanActiveProjectionDataSchema.safeParse(model.data);
   if (!parsed.success) return <StatusCard title={model.title} support={model.summary} />;
   const data = parsed.data;
+  if (data.selectedPlanningRequest?.request.attention === "date_conflict") {
+    return <PlanningRequestDateConflictProjection context={data.selectedPlanningRequest} />;
+  }
   if (model.scenarioId === "PL-S006") {
     return <SeasonProjection data={data} />;
   }
@@ -3386,6 +3582,7 @@ function ActiveProjection(): ReactElement {
       ? null
       : ((data.proposals ?? []).find((proposal) => proposal.id === data.selectedProposalId) ??
         null);
+  const planningRequestAttention = data.selectedPlanningRequest?.request.attention ?? null;
   const proposalTargetWorkout =
     selectedProposal === null
       ? null
@@ -3913,6 +4110,28 @@ function ActiveProjection(): ReactElement {
                     Decision needed
                   </span>
                 </div>
+                {planningRequestAttention === "apply_failed" ||
+                (planningRequestAttention === "revalidating" && !proposalBusy) ? (
+                  <div
+                    className="flex items-start gap-row rounded-ctl bg-warn/10 p-row"
+                    role="alert"
+                  >
+                    <TriangleAlert
+                      className="mt-0.5 size-5 shrink-0 text-warn"
+                      aria-hidden="true"
+                    />
+                    <div className={SUPPORT_PAIR}>
+                      <p className="m-0 font-medium">
+                        {planningRequestAttention === "apply_failed"
+                          ? "We couldn’t save this change"
+                          : "The previous check was interrupted"}
+                      </p>
+                      <p className="m-0 text-sm text-ink-2">
+                        The active Plan is unchanged and this Proposal is still available.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
                 {selectedProposal.stale ? (
                   <StaleNotice message="The Plan changed before approval. Review this updated Proposal." />
                 ) : null}
@@ -3997,9 +4216,12 @@ function ActiveProjection(): ReactElement {
                     >
                       {proposalBusy
                         ? "Checking…"
-                        : selectedProposal.stale
-                          ? "Revalidate"
-                          : "Approve"}
+                        : planningRequestAttention === "apply_failed" ||
+                            planningRequestAttention === "revalidating"
+                          ? "Try again"
+                          : selectedProposal.stale
+                            ? "Revalidate"
+                            : "Approve"}
                     </Button>
                   ) : null}
                 </>

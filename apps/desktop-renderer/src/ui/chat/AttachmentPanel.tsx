@@ -1,7 +1,6 @@
 import type {
   AttachmentAdmissionReadModel,
   ChatAttachmentComposerItem,
-  PlanningRequestDelivery,
 } from "@enduragent/coach-contract";
 import {
   Activity,
@@ -87,9 +86,7 @@ function Note(props: {
 function ReadyPreview(props: { readonly attachment: ChatAttachmentComposerItem }): ReactElement {
   const actions = useEnduragentStore((state) => state.chatActions);
   const planningRequestsLoaded = useEnduragentStore((state) => state.chat.planningRequestsLoaded);
-  const planningRequestBusyId = useEnduragentStore(
-    (state) => state.chat.planningRequestBusyId,
-  );
+  const planningRequestBusyId = useEnduragentStore((state) => state.chat.planningRequestBusyId);
   const attachment = props.attachment;
   if (attachment.status !== "ready") throw new TypeError("attachment is not ready");
   if (attachment.preview.kind === "document") {
@@ -337,64 +334,15 @@ function AdmissionFailure(props: {
   );
 }
 
-function PlanningRequestFailure(props: {
-  readonly delivery: PlanningRequestDelivery;
-}): ReactElement {
-  const actions = useEnduragentStore((state) => state.chatActions);
-  const busyId = useEnduragentStore((state) => state.chat.planningRequestBusyId);
-  return (
-    <section
-      className="overflow-hidden rounded-card border border-danger/40 bg-surface shadow-elev-2"
-      role="alert"
-      data-planning-request-id={props.delivery.requestId}
-    >
-      <div className="flex min-h-14 items-center gap-3 px-4 py-2">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-bg-2 text-danger">
-          <CalendarDays className="size-5" aria-hidden="true" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <strong className="block truncate text-sm">
-            {props.delivery.source?.intent ?? "Plan request"}
-          </strong>
-          <small className="mt-1 block text-xs text-ink-2">Workout preserved</small>
-        </div>
-      </div>
-      <Note
-        tone="warning"
-        title="Plan couldn’t receive this request"
-        action={
-          props.delivery.retryable ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={actions === null || busyId !== null}
-              onClick={() => actions?.retryPlanningRequest(props.delivery.requestId)}
-            >
-              {busyId === props.delivery.requestId ? "Trying again…" : "Try again"}
-            </Button>
-          ) : undefined
-        }
-      >
-        The parsed workout and request are still here; retrying will not create a duplicate.
-      </Note>
-    </section>
-  );
-}
-
 export function AttachmentPanel(): ReactElement | null {
   const surface = useEnduragentStore((state) => state.chat);
   const actions = useEnduragentStore((state) => state.chatActions);
   const attachments = surface.attachments?.draft?.attachments ?? [];
-  const failedPlanningRequests = surface.planningRequests.filter(
-    (delivery) => delivery.state === "failed",
-  );
   if (
     attachments.length === 0 &&
     surface.attachmentAdmissions.length === 0 &&
     !surface.attachmentBusy &&
     surface.attachmentError === null &&
-    failedPlanningRequests.length === 0 &&
     surface.planningRequestError === null
   ) {
     return null;
@@ -435,9 +383,6 @@ export function AttachmentPanel(): ReactElement | null {
           </Button>
         </div>
       )}
-      {failedPlanningRequests.map((delivery) => (
-        <PlanningRequestFailure key={delivery.requestId} delivery={delivery} />
-      ))}
       {surface.attachmentAdmissions.map((admission) => (
         <AdmissionFailure key={admission.selectionId} admission={admission} />
       ))}

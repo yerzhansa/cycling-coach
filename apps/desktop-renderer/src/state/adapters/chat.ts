@@ -91,6 +91,7 @@ function historicalTimeline(
             historical: true,
             text: entry.coachText,
             ...(entry.planReference === undefined ? {} : { planReference: entry.planReference }),
+            ...(entry.planHandoff === undefined ? {} : { planHandoff: entry.planHandoff }),
           },
         },
       );
@@ -189,6 +190,7 @@ export function createChatViewAdapter(input: {
       text: input.bufferStreaming !== false && isStreamingCoach(message) ? "" : message.text,
       ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
       ...(message.planReference === undefined ? {} : { planReference: message.planReference }),
+      ...(message.planHandoff === undefined ? {} : { planHandoff: message.planHandoff }),
     }));
     const workBlocked =
       controls?.workBlocked ??
@@ -244,7 +246,7 @@ export function createChatViewAdapter(input: {
     const planningRequests =
       controls?.planningRequests?.value ?? EMPTY_CHAT_SURFACE.planningRequests;
     const planningItems: ChatTranscriptItemView[] = planningRequests
-      .filter((delivery) => delivery.state === "pending" || delivery.state === "delivered")
+      .filter((delivery) => delivery.state !== "cancelled")
       .map((delivery) => ({ kind: "planning-request", delivery }));
     const timeline = [...historicalItems, ...liveItems, ...planningItems];
     const decisionBlocksWork =

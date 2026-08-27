@@ -285,6 +285,8 @@ export function bootRenderer(): Disposer {
     approveProposal: (proposalId, expectedRevision) =>
       planAdapter.approveProposal(proposalId, expectedRevision),
     rejectProposal: (proposalId) => planAdapter.rejectProposal(proposalId),
+    resolvePlanningRequestDate: (requestId, resolution) =>
+      planAdapter.resolvePlanningRequestDate(requestId, resolution),
     openHistory: () => planAdapter.openHistory(),
     closeHistory: () => planAdapter.closeHistory(),
     undoPlanChange: (ledgerId) => planAdapter.undoPlanChange(ledgerId),
@@ -339,8 +341,9 @@ export function bootRenderer(): Disposer {
     retryAttachment: (attachmentId) => chatController.retryAttachment(attachmentId),
     selectAttachmentWorkout: (attachmentId, workoutId) =>
       chatController.selectAttachmentWorkout(attachmentId, workoutId),
-    reviewAttachmentInPlan: (attachmentId) =>
-      chatController.reviewAttachmentInPlan(attachmentId),
+    reviewAttachmentInPlan: (attachmentId) => chatController.reviewAttachmentInPlan(attachmentId),
+    continueMessageInPlan: (messageId, suggestion) =>
+      chatController.continueMessageInPlan(messageId, suggestion),
     openPlanningRequest: (requestId) => chatController.openPlanningRequest(requestId),
     retryPlanningRequest: (requestId) => chatController.retryPlanningRequest(requestId),
     retryPlanningRequestLoad: () => chatController.retryPlanningRequestLoad(),

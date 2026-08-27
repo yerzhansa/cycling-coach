@@ -13,7 +13,7 @@ import {
 } from "./engine.js";
 import { TurnEventSchema, type TurnEvent } from "./turn-event.js";
 import { PlatformAbsolutePathSchema } from "./platform-path.js";
-import { PlanReferenceSelectionSchema } from "./plan-chat-card.js";
+import { PlanHandoffSuggestionSchema, PlanReferenceSelectionSchema } from "./plan-chat-card.js";
 import {
   AdmitPastedChatAttachmentRequestSchema,
   AdmitChatAttachmentRequestSchema,
@@ -427,14 +427,18 @@ export const TranscriptPageTurnSchema = z
     delivery: z.literal("interrupted").optional(),
     attachments: z.array(ChatAttachmentReferenceSchema).max(5).optional(),
     planReference: PlanReferenceSelectionSchema.optional(),
+    planHandoff: PlanHandoffSuggestionSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.delivery === "interrupted" && value.planReference !== undefined) {
+    if (
+      value.delivery === "interrupted" &&
+      (value.planReference !== undefined || value.planHandoff !== undefined)
+    ) {
       context.addIssue({
         code: "custom",
-        path: ["planReference"],
-        message: "interrupted turns cannot carry Plan references",
+        path: ["planHandoff"],
+        message: "interrupted turns cannot carry Plan metadata",
       });
     }
   });

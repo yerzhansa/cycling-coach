@@ -3,6 +3,7 @@ import type {
   ChatQueueRecoveryClaim,
   ChatQueueSnapshot,
   PlanReferenceSelection,
+  PlanHandoffSuggestion,
   TurnEvent,
 } from "@enduragent/coach-contract";
 import { isSlashCommandText } from "./chat/commands.js";
@@ -49,6 +50,7 @@ export interface ChatTranscriptMessage {
   readonly historical?: boolean;
   readonly attachments?: readonly ChatSentAttachment[];
   readonly planReference?: PlanReferenceSelection;
+  readonly planHandoff?: PlanHandoffSuggestion;
 }
 
 export type ChatSentAttachment = Pick<
@@ -293,6 +295,17 @@ export function reduceChatState(state: ChatState, action: ChatAction): ChatState
             messages: state.messages.map((message) =>
               message.id === active.assistantMessageId
                 ? { ...message, planReference: selection }
+                : message,
+            ),
+          };
+        }
+        case "plan-handoff": {
+          const suggestion = action.event.suggestion;
+          return {
+            ...state,
+            messages: state.messages.map((message) =>
+              message.id === active.assistantMessageId
+                ? { ...message, planHandoff: suggestion }
                 : message,
             ),
           };

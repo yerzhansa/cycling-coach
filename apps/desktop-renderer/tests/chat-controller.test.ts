@@ -11,6 +11,7 @@ import type {
   ChatAttachmentComposerReadModel,
   ChatQueueSnapshot,
   CoachTurnEventNotificationEnvelope,
+  CreatePlanningRequestRpcParams,
   CreateWorkoutPlanningRequestRpcParams,
   PlanningRequestDelivery,
   QueuedChatMessage,
@@ -158,6 +159,12 @@ function client(
       | { readonly status: "accepted"; readonly delivery: PlanningRequestDelivery }
       | { readonly status: "rejected"; readonly reason: "invalid_request" | "request_conflict" }
     >;
+    readonly createPlanningRequest?: (
+      request: CreatePlanningRequestRpcParams,
+    ) => Promise<
+      | { readonly status: "accepted"; readonly delivery: PlanningRequestDelivery }
+      | { readonly status: "rejected"; readonly reason: "invalid_request" | "request_conflict" }
+    >;
     readonly retryPlanningRequest?: () => Promise<
       | { readonly status: "found"; readonly delivery: PlanningRequestDelivery }
       | { readonly status: "missing" }
@@ -215,7 +222,10 @@ function client(
     if (method === "createWorkoutPlanningRequest") {
       return (sessions.createWorkoutPlanningRequest?.(
         request as CreateWorkoutPlanningRequestRpcParams,
-      ) ??
+      ) ?? Promise.resolve({ status: "rejected", reason: "invalid_request" })) as never;
+    }
+    if (method === "createPlanningRequest") {
+      return (sessions.createPlanningRequest?.(request as CreatePlanningRequestRpcParams) ??
         Promise.resolve({ status: "rejected", reason: "invalid_request" })) as never;
     }
     if (method === "retryPlanningRequest") {
@@ -1459,6 +1469,83 @@ describe("chat controller", () => {
       expect(openPlanningRequest).toHaveBeenCalledWith(
         "desktop",
         create.mock.calls[0]![0].requestId,
+      ),
+    );
+  });
+
+  it("retries an uncertain text-only Plan handoff with the same durable payload", async () => {
+    let attempt = 0;
+    const create = vi.fn(async (request: CreatePlanningRequestRpcParams) => {
+      attempt += 1;
+      if (attempt === 1) throw new CoachClientDisconnectedError(1006, "synthetic");
+      const payload = request.payload;
+      const delivery: PlanningRequestDelivery = {
+        requestId: payload.requestId,
+        source: {
+          kind: payload.kind,
+          intent: payload.intent,
+          chatId: payload.source.chatId,
+          messageId: payload.source.messageId,
+          attachmentId: null,
+        },
+        state: "delivered",
+        attemptCount: 2,
+        failureCode: null,
+        retryable: false,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        deliveredAtMs: 2,
+        planningRequest: {
+          requestId: payload.requestId,
+          kind: payload.kind,
+          target: "active_plan",
+          intent: payload.intent,
+          planConversationId: null,
+          proposalId: null,
+          requestedDateKey: 20260829,
+          resolvedDateKey: null,
+          source: { chatId: "desktop", messageId: "turn-1", available: true },
+          lifecycle: "open",
+          attention: "none",
+          revision: 1,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          terminalResult: null,
+        },
+      };
+      return { status: "accepted" as const, delivery };
+    });
+    const fake = client(replies(), {
+      listPlanningRequests: async () => ({ deliveries: [] }),
+      createPlanningRequest: create,
+    });
+    const { controller, openPlanningRequest } = subject(fake);
+    await controller.start();
+
+    controller.continueMessageInPlan("turn-1", {
+      kind: "plan_change",
+      title: "Review a lighter Friday",
+      intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+      requestedDate: "2026-08-29",
+    });
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    controller.retryPlanningRequestLoad();
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+
+    expect(create.mock.calls[1]![0]).toEqual(create.mock.calls[0]![0]);
+    expect(create.mock.calls[0]![0]).toMatchObject({
+      payload: {
+        kind: "plan_change",
+        intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+        source: { chatId: "desktop", messageId: "turn-1" },
+        sourceSnapshot: { attachment: null, selectedWorkout: null },
+        requestedDate: "2026-08-29",
+      },
+    });
+    await vi.waitFor(() =>
+      expect(openPlanningRequest).toHaveBeenCalledWith(
+        "desktop",
+        create.mock.calls[0]![0].payload.requestId,
       ),
     );
   });

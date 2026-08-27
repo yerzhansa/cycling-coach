@@ -46,6 +46,7 @@ export const PLAN_TRANSITION_IDS = [
   "PL-T37",
   "PL-T38",
   "PL-T39",
+  "PL-T40",
 ] as const;
 
 export const PLAN_MIN_FULL_DAYS = 84 as const;
@@ -753,6 +754,51 @@ export const PlanProposalReturnSchema = z
   .strict();
 export type PlanProposalReturn = z.infer<typeof PlanProposalReturnSchema>;
 
+export const PlanPlanningRequestContextSchema = z
+  .object({
+    request: PlanningRequestReadModelSchema,
+    dateConflict: z
+      .object({
+        recommendedDate: TrainingExportCivilDateSchema.nullable(),
+        minimumDate: TrainingExportCivilDateSchema,
+        maximumDate: TrainingExportCivilDateSchema,
+        workouts: z.array(
+          z
+            .object({
+              workoutId: z.string().min(1),
+              date: TrainingExportCivilDateSchema,
+              name: z.string().min(1),
+              durationS: z.number().int().nonnegative(),
+              ownership: z.enum(["coach", "athlete"]),
+              replaceable: z.boolean(),
+            })
+            .strict()
+            .superRefine((value, context) => {
+              if (value.replaceable !== (value.ownership === "coach")) {
+                context.addIssue({
+                  code: "custom",
+                  path: ["replaceable"],
+                  message: "only coach-owned conflict workouts are replaceable",
+                });
+              }
+            }),
+        ),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if ((value.request.attention === "date_conflict") !== (value.dateConflict !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["dateConflict"],
+        message: "date conflict details must match request attention",
+      });
+    }
+  });
+export type PlanPlanningRequestContext = z.infer<typeof PlanPlanningRequestContextSchema>;
+
 export const PlanActiveProjectionDataSchema = z
   .object({
     plan: PlanDraftPlanProjectionSchema,
@@ -774,6 +820,7 @@ export const PlanActiveProjectionDataSchema = z
     proposals: z.array(PlanProposalProjectionSchema).optional(),
     selectedProposalId: z.string().min(1).nullable().optional(),
     selectedProposalReturn: PlanProposalReturnSchema.nullable().optional(),
+    selectedPlanningRequest: PlanPlanningRequestContextSchema.nullable().optional(),
     proposalRevisionText: z.string().nullable().optional(),
     history: z.array(PlanHistoryEntrySchema).optional(),
     selectedHistoryId: z.string().min(1).nullable().optional(),
@@ -1556,6 +1603,27 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       destinationScenarioId: PlanScenarioIdSchema,
       returnFocusId: EntityIdSchema,
       selectedProposalReturn: PlanProposalReturnSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      transitionId: z.literal("PL-T40"),
+      commandId: CommandIdSchema,
+      requestId: EntityIdSchema,
+      resolution: z.discriminatedUnion("kind", [
+        z
+          .object({
+            kind: z.literal("use-date"),
+            date: TrainingExportCivilDateSchema,
+          })
+          .strict(),
+        z
+          .object({
+            kind: z.literal("replace-workout"),
+            workoutId: EntityIdSchema,
+          })
+          .strict(),
+      ]),
     })
     .strict(),
 ]);

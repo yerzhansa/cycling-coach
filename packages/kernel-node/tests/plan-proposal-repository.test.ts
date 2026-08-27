@@ -535,6 +535,8 @@ describe("Plan proposal repository", () => {
         expectedRevision: record.request.revision,
         previousProposalId: initialId,
         proposalId: revisedId,
+        attention: "stale_base",
+        resolvedDateKey: 20260831,
         updatedAtMs: 40,
         deviceId: "device-1",
         hlcPhysicalMs: 40,
@@ -543,7 +545,12 @@ describe("Plan proposal repository", () => {
     );
     await expect(proposals.read(initialId)).resolves.toMatchObject({ status: "superseded" });
     await expect(requests.read(requestId)).resolves.toMatchObject({
-      request: { proposalId: revisedId, revision: record.request.revision + 1 },
+      request: {
+        proposalId: revisedId,
+        attention: "stale_base",
+        resolvedDateKey: 20260831,
+        revision: record.request.revision + 1,
+      },
     });
   });
 

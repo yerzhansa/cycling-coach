@@ -212,6 +212,44 @@ describe("CoachAgent transcript recording", () => {
     ]);
   });
 
+  it("emits and persists one Desktop Plan handoff before final text", async () => {
+    const setup = harness({
+      generate: async (request) => {
+        const handoffTool = request.options.tools?.request_plan_handoff;
+        if (handoffTool?.execute === undefined) throw new TypeError("Plan handoff tool missing");
+        await (handoffTool.execute as (input: unknown, options: unknown) => Promise<unknown>)(
+          {
+            kind: "plan_change",
+            title: "Review a lighter Friday",
+            intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+          },
+          { toolCallId: "tool-1", experimental_context: request.options.context },
+        );
+        return result("I prepared a safe Plan review.");
+      },
+    });
+    const events: TurnEvent[] = [];
+
+    await setup.agent.chat("desktop", "Can we move Friday?", undefined, (event) =>
+      events.push(event),
+    );
+
+    const suggestion = {
+      kind: "plan_change" as const,
+      title: "Review a lighter Friday",
+      intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+    };
+    expect(setup.completed).toMatchObject([{ planHandoff: suggestion }]);
+    expect(events.slice(-2)).toEqual([
+      { type: "plan-handoff", turnId: "turn-transcript-1", suggestion },
+      {
+        type: "final-text",
+        turnId: "turn-transcript-1",
+        text: "I prepared a safe Plan review.",
+      },
+    ]);
+  });
+
   it.each(["ENOSPC", "EACCES"])(
     "keeps final delivery exact and single when the transcript writer throws %s",
     async (code) => {
