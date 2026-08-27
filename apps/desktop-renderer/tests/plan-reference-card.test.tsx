@@ -55,7 +55,12 @@ describe("Plan reference card", () => {
     act(() =>
       useEnduragentStore.setState({
         planSurface: { status: "ready", value: model },
-        planningReadActions: { refresh: vi.fn(), openFromChat, backToChat: vi.fn() },
+        planningReadActions: {
+          refresh: vi.fn(),
+          openFromChat,
+          backToChat: vi.fn(),
+          returnToChatRequest: vi.fn(),
+        },
       }),
     );
     const user = userEvent.setup();
@@ -86,6 +91,7 @@ describe("Plan reference card", () => {
           refresh: vi.fn(),
           openFromChat: vi.fn(),
           backToChat: vi.fn(),
+          returnToChatRequest: vi.fn(),
         },
       }),
     );

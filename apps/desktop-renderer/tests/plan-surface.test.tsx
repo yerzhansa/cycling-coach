@@ -89,7 +89,11 @@ beforeEach(() => {
 
 afterEach(() => {
   document.documentElement.removeAttribute("data-theme");
-  useEnduragentStore.setState({ plan: EMPTY_PLAN_SURFACE, planActions: null });
+  useEnduragentStore.setState({
+    plan: EMPTY_PLAN_SURFACE,
+    planActions: null,
+    planningReadActions: null,
+  });
 });
 
 describe("Plan surface", () => {
@@ -2203,6 +2207,72 @@ describe("Plan surface", () => {
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Back to Plan" }));
     expect(planActions.closeWorkout).toHaveBeenCalledOnce();
+  });
+
+  it("shows a terminal Chat request and returns to its exact source card", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const returnToChatRequest = vi.fn();
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S099",
+      projection: "proposal",
+      planId: "plan-1",
+      data: {
+        request: {
+          requestId: "request-plan-1",
+          kind: "workout_review",
+          target: "active_plan",
+          intent: "Review Tempo 3 × 12 in Plan.",
+          planConversationId: "plan-conversation-1",
+          proposalId: null,
+          requestedDateKey: 19980826,
+          resolvedDateKey: 19980826,
+          source: { chatId: "desktop", messageId: "message-plan-1", available: true },
+          lifecycle: "applied",
+          attention: "none",
+          revision: 2,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          terminalResult: {
+            kind: "applied",
+            resultId: "result-1",
+            completedAtMs: 2,
+            title: "Added to Plan",
+            detail: "Tempo 3 × 12 · Wednesday · 64 min",
+            workoutRef: { setId: "set-1", workoutId: "tempo" },
+            planRevisionId: "revision-1",
+          },
+        },
+        returnTarget: {
+          destination: "chat",
+          chatId: "desktop",
+          messageId: "message-plan-1",
+        },
+      },
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+      },
+      planActions,
+      planningReadActions: {
+        refresh: vi.fn(),
+        openFromChat: vi.fn(),
+        backToChat: vi.fn(),
+        returnToChatRequest,
+      },
+    });
+
+    render(<PlanView />);
+    expect(screen.getByRole("heading", { name: "Added to Plan" })).toBeVisible();
+    expect(screen.getByText("Tempo 3 × 12 · Wednesday · 64 min")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Back to Chat" }));
+    expect(returnToChatRequest).toHaveBeenCalledWith("request-plan-1");
+    await user.click(screen.getByRole("button", { name: "Open current week" }));
+    expect(planActions.open).toHaveBeenCalledOnce();
   });
 
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {

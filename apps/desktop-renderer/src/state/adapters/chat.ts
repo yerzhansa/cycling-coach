@@ -241,7 +241,12 @@ export function createChatViewAdapter(input: {
         else liveItems.splice(continuationIndex, 0, choiceItem);
       }
     }
-    const timeline = [...historicalItems, ...liveItems];
+    const planningRequests =
+      controls?.planningRequests?.value ?? EMPTY_CHAT_SURFACE.planningRequests;
+    const planningItems: ChatTranscriptItemView[] = planningRequests
+      .filter((delivery) => delivery.state === "pending" || delivery.state === "delivered")
+      .map((delivery) => ({ kind: "planning-request", delivery }));
+    const timeline = [...historicalItems, ...liveItems, ...planningItems];
     const decisionBlocksWork =
       decision?.value?.status === "unanswered" ||
       (decision?.value?.status === "answered" && decision.value.continuation.status === "pending");
@@ -275,6 +280,11 @@ export function createChatViewAdapter(input: {
       attachmentAdmissions: attachments?.admissions ?? EMPTY_CHAT_SURFACE.attachmentAdmissions,
       attachmentBusy: attachments?.busy ?? false,
       attachmentError: attachments?.error ?? null,
+      planningRequests,
+      planningRequestsLoaded: controls?.planningRequests?.loaded ?? false,
+      planningRequestBusyId: controls?.planningRequests?.busyId ?? null,
+      planningRequestError: controls?.planningRequests?.error ?? null,
+      planningRequestFocusId: controls?.planningRequests?.focusId ?? null,
       timeline: sameChatTimeline(published.timeline, timeline) ? published.timeline : timeline,
       status: state.status,
       notice:

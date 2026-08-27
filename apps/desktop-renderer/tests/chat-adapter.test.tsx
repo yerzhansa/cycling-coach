@@ -99,6 +99,11 @@ describe("chat view adapter", () => {
       attachmentAdmissions: [],
       attachmentBusy: false,
       attachmentError: null,
+      planningRequests: [],
+      planningRequestsLoaded: false,
+      planningRequestBusyId: null,
+      planningRequestError: null,
+      planningRequestFocusId: null,
       timeline: [
         {
           kind: "message",

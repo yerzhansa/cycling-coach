@@ -178,6 +178,20 @@ describe("Plan view adapter", () => {
     expect(subject.surface.hydration.status).toBe("ready");
   });
 
+  it("opens the exact Chat-originated request through PL-T36", async () => {
+    const subject = harness({ ids: ["open-request-command"] });
+
+    subject.adapter.openChatRequest("desktop", "request-plan-1");
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T36",
+      commandId: "open-request-command",
+      sourceConversationId: "desktop",
+      requestId: "request-plan-1",
+    });
+  });
+
   it("saves manual FTP and automatically returns to the Plan coach", async () => {
     const required = planReadModel({
       lifecycle: "intake",

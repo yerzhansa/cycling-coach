@@ -169,6 +169,7 @@ export function bootRenderer(): Disposer {
         store.getState().setChatSurface(next);
       }),
   });
+  let activePlanAdapter: ReturnType<typeof createPlanViewAdapter> | null = null;
   const chatController = createChatController({
     clients,
     view: chatAdapter.view,
@@ -182,9 +183,18 @@ export function bootRenderer(): Disposer {
       choose: () => window.enduragentAuth.chooseChatAttachments(),
       paste: () => window.enduragentAuth.pasteChatAttachment(),
     },
+    openPlanningRequest: (chatId, requestId) => {
+      store.getState().setActiveView("plan");
+      activePlanAdapter?.openChatRequest(chatId, requestId);
+    },
   });
   const disposeSetupReadiness = store.subscribe((state, previousState) => {
     if (!setupReady(previousState) && setupReady(state)) void chatController.resume();
+  });
+  const disposePlanToChatRefresh = store.subscribe((state, previousState) => {
+    if (previousState.activeView === "plan" && state.activeView === "chat") {
+      chatController.refreshPlanningRequests();
+    }
   });
 
   const planAdapter = createPlanViewAdapter({
@@ -200,6 +210,7 @@ export function bootRenderer(): Disposer {
     publishDatePicker: (open) => store.getState().setPlanDatePicker(open),
     publishSettingPending: (next) => store.getState().setPlanSettingPending(next),
   });
+  activePlanAdapter = planAdapter;
   store.getState().bindPlanningReadActions({
     refresh: () => void planController.refresh(),
     openFromChat: (target) => {
@@ -210,6 +221,10 @@ export function bootRenderer(): Disposer {
       }
     },
     backToChat: () => planController.backToChat(),
+    returnToChatRequest: (requestId) => {
+      chatController.focusPlanningRequest(requestId);
+      planController.backToChat();
+    },
   });
   store.getState().bindPlanActions({
     open: () => planAdapter.open(),
@@ -321,6 +336,12 @@ export function bootRenderer(): Disposer {
     retryAttachment: (attachmentId) => chatController.retryAttachment(attachmentId),
     selectAttachmentWorkout: (attachmentId, workoutId) =>
       chatController.selectAttachmentWorkout(attachmentId, workoutId),
+    reviewAttachmentInPlan: (attachmentId) =>
+      chatController.reviewAttachmentInPlan(attachmentId),
+    openPlanningRequest: (requestId) => chatController.openPlanningRequest(requestId),
+    retryPlanningRequest: (requestId) => chatController.retryPlanningRequest(requestId),
+    retryPlanningRequestLoad: () => chatController.retryPlanningRequestLoad(),
+    clearPlanningRequestFocus: () => chatController.clearPlanningRequestFocus(),
     stop: () => chatController.stop(),
     removeQueued: (id) => chatController.removeQueued(id),
     runQueuedCommand: (id) => void chatController.runQueuedCommand(id),
@@ -587,6 +608,7 @@ export function bootRenderer(): Disposer {
     store.getState().bindOnboardingActions(null);
     disposeRideAnalysisSelection();
     disposeSetupReadiness();
+    disposePlanToChatRefresh();
     window.removeEventListener("enduragent-lifecycle", onLifecycle);
     window.removeEventListener("pagehide", dispose);
     desktopUpdateController.dispose();

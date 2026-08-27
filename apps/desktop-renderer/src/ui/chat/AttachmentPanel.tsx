@@ -1,6 +1,7 @@
 import type {
   AttachmentAdmissionReadModel,
   ChatAttachmentComposerItem,
+  PlanningRequestDelivery,
 } from "@enduragent/coach-contract";
 import {
   Activity,
@@ -85,6 +86,10 @@ function Note(props: {
 
 function ReadyPreview(props: { readonly attachment: ChatAttachmentComposerItem }): ReactElement {
   const actions = useEnduragentStore((state) => state.chatActions);
+  const planningRequestsLoaded = useEnduragentStore((state) => state.chat.planningRequestsLoaded);
+  const planningRequestBusyId = useEnduragentStore(
+    (state) => state.chat.planningRequestBusyId,
+  );
   const attachment = props.attachment;
   if (attachment.status !== "ready") throw new TypeError("attachment is not ready");
   if (attachment.preview.kind === "document") {
@@ -123,38 +128,63 @@ function ReadyPreview(props: { readonly attachment: ChatAttachmentComposerItem }
   }
   if (attachment.preview.kind === "workout") {
     const preview = attachment.preview;
+    const selected = preview.workouts.find(
+      (workout) => workout.workoutId === preview.selectedWorkoutId,
+    );
     return (
-      <fieldset className="m-0 grid gap-1 border-0 border-t border-line p-2">
-        <legend className="px-2 py-1 text-xs text-ink-2">Select a workout</legend>
-        {preview.workouts.map((workout) => {
-          const selected = workout.workoutId === preview.selectedWorkoutId;
-          return (
-            <button
-              key={workout.workoutId}
-              type="button"
-              className={`grid min-h-12 w-full grid-cols-[24px_minmax(0,1fr)] items-center gap-3 rounded-md border px-3 py-2 text-left ${selected ? "border-accent bg-accent/10" : "border-transparent hover:bg-bg-2"}`}
-              aria-pressed={selected}
-              onClick={() => {
-                actions?.selectAttachmentWorkout(attachment.attachmentId, workout.workoutId);
-              }}
-            >
-              <span
-                className={`flex size-4 items-center justify-center rounded-full border ${selected ? "border-accent" : "border-ink-3"}`}
-                aria-hidden="true"
+      <>
+        <fieldset className="m-0 grid gap-1 border-0 border-t border-line p-2">
+          <legend className="px-2 py-1 text-xs text-ink-2">Select a workout</legend>
+          {preview.workouts.map((workout) => {
+            const workoutSelected = workout.workoutId === preview.selectedWorkoutId;
+            return (
+              <button
+                key={workout.workoutId}
+                type="button"
+                className={`grid min-h-12 w-full grid-cols-[24px_minmax(0,1fr)] items-center gap-3 rounded-md border px-3 py-2 text-left ${workoutSelected ? "border-accent bg-accent/10" : "border-transparent hover:bg-bg-2"}`}
+                aria-pressed={workoutSelected}
+                onClick={() => {
+                  actions?.selectAttachmentWorkout(attachment.attachmentId, workout.workoutId);
+                }}
               >
-                {selected ? <span className="size-2 rounded-full bg-accent" /> : null}
-              </span>
-              <span className="min-w-0">
-                <strong className="block text-sm">{workout.title}</strong>
-                <small className="mt-1 block text-xs text-ink-2">
-                  {duration(workout.durationSeconds)} · {workout.target}
-                  {workout.purpose === null ? "" : ` · ${workout.purpose}`}
-                </small>
-              </span>
-            </button>
-          );
-        })}
-      </fieldset>
+                <span
+                  className={`flex size-4 items-center justify-center rounded-full border ${workoutSelected ? "border-accent" : "border-ink-3"}`}
+                  aria-hidden="true"
+                >
+                  {workoutSelected ? <span className="size-2 rounded-full bg-accent" /> : null}
+                </span>
+                <span className="min-w-0">
+                  <strong className="block text-sm">{workout.title}</strong>
+                  <small className="mt-1 block text-xs text-ink-2">
+                    {duration(workout.durationSeconds)} · {workout.target}
+                    {workout.purpose === null ? "" : ` · ${workout.purpose}`}
+                  </small>
+                </span>
+              </button>
+            );
+          })}
+        </fieldset>
+        {selected === undefined ? null : (
+          <Note
+            title={`${selected.title} selected`}
+            action={
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={
+                  actions === null || !planningRequestsLoaded || planningRequestBusyId !== null
+                }
+                onClick={() => actions?.reviewAttachmentInPlan(attachment.attachmentId)}
+              >
+                {planningRequestBusyId === null ? "Review in Plan" : "Opening Plan…"}
+              </Button>
+            }
+          >
+            Send asks Coach to analyze it, or review it in Plan now.
+          </Note>
+        )}
+      </>
     );
   }
   return (
@@ -307,14 +337,65 @@ function AdmissionFailure(props: {
   );
 }
 
+function PlanningRequestFailure(props: {
+  readonly delivery: PlanningRequestDelivery;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.chatActions);
+  const busyId = useEnduragentStore((state) => state.chat.planningRequestBusyId);
+  return (
+    <section
+      className="overflow-hidden rounded-card border border-danger/40 bg-surface shadow-elev-2"
+      role="alert"
+      data-planning-request-id={props.delivery.requestId}
+    >
+      <div className="flex min-h-14 items-center gap-3 px-4 py-2">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-bg-2 text-danger">
+          <CalendarDays className="size-5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <strong className="block truncate text-sm">
+            {props.delivery.source?.intent ?? "Plan request"}
+          </strong>
+          <small className="mt-1 block text-xs text-ink-2">Workout preserved</small>
+        </div>
+      </div>
+      <Note
+        tone="warning"
+        title="Plan couldn’t receive this request"
+        action={
+          props.delivery.retryable ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={actions === null || busyId !== null}
+              onClick={() => actions?.retryPlanningRequest(props.delivery.requestId)}
+            >
+              {busyId === props.delivery.requestId ? "Trying again…" : "Try again"}
+            </Button>
+          ) : undefined
+        }
+      >
+        The parsed workout and request are still here; retrying will not create a duplicate.
+      </Note>
+    </section>
+  );
+}
+
 export function AttachmentPanel(): ReactElement | null {
   const surface = useEnduragentStore((state) => state.chat);
+  const actions = useEnduragentStore((state) => state.chatActions);
   const attachments = surface.attachments?.draft?.attachments ?? [];
+  const failedPlanningRequests = surface.planningRequests.filter(
+    (delivery) => delivery.state === "failed",
+  );
   if (
     attachments.length === 0 &&
     surface.attachmentAdmissions.length === 0 &&
     !surface.attachmentBusy &&
-    surface.attachmentError === null
+    surface.attachmentError === null &&
+    failedPlanningRequests.length === 0 &&
+    surface.planningRequestError === null
   ) {
     return null;
   }
@@ -337,6 +418,26 @@ export function AttachmentPanel(): ReactElement | null {
           {surface.attachmentError}
         </div>
       )}
+      {surface.planningRequestError === null ? null : (
+        <div
+          className="flex items-center justify-between gap-3 rounded-card border border-danger/40 bg-surface p-4 text-sm text-danger"
+          role="alert"
+        >
+          <span>{surface.planningRequestError}</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={surface.planningRequestBusyId !== null}
+            onClick={() => actions?.retryPlanningRequestLoad()}
+          >
+            Try again
+          </Button>
+        </div>
+      )}
+      {failedPlanningRequests.map((delivery) => (
+        <PlanningRequestFailure key={delivery.requestId} delivery={delivery} />
+      ))}
       {surface.attachmentAdmissions.map((admission) => (
         <AdmissionFailure key={admission.selectionId} admission={admission} />
       ))}

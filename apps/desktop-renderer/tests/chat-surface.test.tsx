@@ -6,6 +6,8 @@ import type {
   AttachmentCapabilitiesReadModel,
   ChatAttachmentComposerReadModel,
   CoachDecisionReadModel,
+  PlanningRequestDelivery,
+  PlanningRequestReadModel,
 } from "@enduragent/coach-contract";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,6 +35,11 @@ function stubActions(): ChatActions {
     removeAttachment: vi.fn(),
     retryAttachment: vi.fn(),
     selectAttachmentWorkout: vi.fn(),
+    reviewAttachmentInPlan: vi.fn(),
+    openPlanningRequest: vi.fn(),
+    retryPlanningRequest: vi.fn(),
+    retryPlanningRequestLoad: vi.fn(),
+    clearPlanningRequestFocus: vi.fn(),
     stop: vi.fn(),
     removeQueued: vi.fn(),
     runQueuedCommand: vi.fn(),
@@ -96,6 +103,67 @@ function attachmentSurface(
       state,
       updatedAt: "2026-08-26T00:00:00.000Z",
       attachments: [attachment],
+    },
+  };
+}
+
+function planningDelivery(
+  lifecycle: "open" | "applied" | "rejected" = "open",
+): PlanningRequestDelivery {
+  const terminal: PlanningRequestReadModel["terminalResult"] =
+    lifecycle === "applied"
+      ? {
+          kind: "applied",
+          resultId: "result-1",
+          completedAtMs: 3,
+          title: "Added to Plan",
+          detail: "Tempo 3 × 12 · Wednesday · 64 min",
+          workoutRef: { setId: "set-1", workoutId: "tempo" },
+          planRevisionId: "revision-1",
+        }
+      : lifecycle === "rejected"
+        ? {
+            kind: "rejected",
+            resultId: "result-1",
+            completedAtMs: 3,
+            title: "Proposal rejected",
+            detail: "The active Plan remains unchanged.",
+            workoutRef: { setId: "set-1", workoutId: "tempo" },
+            planRevisionId: null,
+          }
+        : null;
+  return {
+    requestId: "request-plan-1",
+    source: {
+      kind: "workout_review",
+      intent: "Review Tempo 3 × 12 in Plan.",
+      chatId: "desktop",
+      messageId: "message-plan-1",
+      attachmentId: "attachment-workout",
+    },
+    state: "delivered",
+    attemptCount: 1,
+    failureCode: null,
+    retryable: false,
+    createdAtMs: 1,
+    updatedAtMs: 3,
+    deliveredAtMs: 2,
+    planningRequest: {
+      requestId: "request-plan-1",
+      kind: "workout_review",
+      target: "active_plan",
+      intent: "Review Tempo 3 × 12 in Plan.",
+      planConversationId: "plan-conversation-1",
+      proposalId: lifecycle === "open" ? "proposal-1" : null,
+      requestedDateKey: null,
+      resolvedDateKey: null,
+      source: { chatId: "desktop", messageId: "message-plan-1", available: true },
+      lifecycle,
+      attention: lifecycle === "open" ? "needs_review" : "none",
+      revision: 1,
+      createdAtMs: 1,
+      updatedAtMs: 3,
+      terminalResult: terminal,
     },
   };
 }
@@ -841,6 +909,67 @@ describe("chat surface", () => {
       expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
       await user.click(screen.getByRole("button", { name: /Tempo 3 × 12/u }));
       expect(actions.selectAttachmentWorkout).toHaveBeenCalledWith("attachment-workout", "tempo");
+    });
+
+    it("offers the selected Workout to Plan without changing the Send path", async () => {
+      const user = userEvent.setup();
+      setChat({
+        planningRequestsLoaded: true,
+        attachments: attachmentSurface({
+          schemaVersion: 1,
+          attachmentId: "attachment-workout",
+          displayName: "tempo.mrc",
+          kind: "workout",
+          extension: "mrc",
+          byteSize: 2_400,
+          status: "ready",
+          preview: {
+            kind: "workout",
+            sourceFormat: "mrc",
+            selectedWorkoutId: "tempo",
+            workouts: [
+              {
+                workoutId: "tempo",
+                title: "Tempo 3 × 12",
+                durationSeconds: 3_840,
+                target: "88–92% FTP",
+                purpose: "Sustainable power",
+              },
+            ],
+          },
+        }),
+      });
+      render(<Harness />);
+
+      expect(screen.getByText("Tempo 3 × 12 selected")).toBeVisible();
+      expect(screen.getByText(/Send asks Coach to analyze it/u)).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Review in Plan" }));
+      expect(actions.reviewAttachmentInPlan).toHaveBeenCalledWith("attachment-workout");
+    });
+
+    it("renders open and terminal request cards with one typed Plan action", async () => {
+      const user = userEvent.setup();
+      const open = planningDelivery("open");
+      setChat({
+        planningRequests: [open],
+        planningRequestsLoaded: true,
+        timeline: [{ kind: "planning-request", delivery: open }],
+      });
+      render(<Harness />);
+
+      expect(screen.getByRole("heading", { name: "Review Tempo 3 × 12 in Plan." })).toBeVisible();
+      expect(screen.getByText("Needs review")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Review in Plan" }));
+      expect(actions.openPlanningRequest).toHaveBeenCalledWith("request-plan-1");
+
+      const applied = planningDelivery("applied");
+      setChat({
+        planningRequests: [applied],
+        timeline: [{ kind: "planning-request", delivery: applied }],
+      });
+      expect(screen.getByText("Added to Plan")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Open Plan" }));
+      expect(actions.openPlanningRequest).toHaveBeenLastCalledWith("request-plan-1");
     });
 
     it("shows model-incompatible image recovery and retryable parser failure", async () => {

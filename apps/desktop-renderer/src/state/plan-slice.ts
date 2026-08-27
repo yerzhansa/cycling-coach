@@ -57,6 +57,7 @@ export interface PlanningReadActions {
   refresh(): void;
   openFromChat(target: PlanNavigationTarget): void;
   backToChat(): void;
+  returnToChatRequest(requestId: string): void;
 }
 
 export interface PlanActions {
