@@ -1,14 +1,20 @@
 # Multi-stage Dockerfile for the cycling-coach binary. Builds the cycling-coach
-# workspace closure via pnpm workspace, then ships only the runtime bundle via
-# `pnpm deploy --prod` (pnpm-canonical: rewrites workspace:* to real paths,
-# strips dev deps, produces a self-contained directory).
+# workspace closure via pnpm workspace, then ships the self-contained runtime
+# produced by modern `pnpm deploy --prod`.
 
 # ── builder ────────────────────────────────────────────────────────────────
 FROM node:24-alpine@sha256:21f403ab171f2dc89bad4dd69d7721bfd15f084ccb46cdd225f31f2bc59b5c9a AS builder
 WORKDIR /app
 
-# Honor the packageManager pin in root package.json.
-RUN corepack enable
+ARG PNPM_VERSION=11.24.0
+ARG PNPM_TARBALL_SHA512=bd27e345e976dcb0be0b7a1228217b049a817e21b1f355c90dbe7dc46671895a8bc1e6d06c24554505ea93ea0b45f489a27ec1bfbc8de6a9659fca0f16fa0000
+RUN apk add --no-cache --virtual .pnpm-download curl \
+    && curl -fsSL "https://registry.npmjs.org/pnpm/-/pnpm-${PNPM_VERSION}.tgz" -o /tmp/pnpm.tgz \
+    && echo "$PNPM_TARBALL_SHA512  /tmp/pnpm.tgz" | sha512sum -c - \
+    && npm install --global --ignore-scripts /tmp/pnpm.tgz \
+    && test "$(pnpm --version)" = "$PNPM_VERSION" \
+    && rm /tmp/pnpm.tgz \
+    && apk del .pnpm-download
 
 # Workspace manifests + lockfile for cache hits on dep installs. Only the
 # packages cycling-coach actually depends on — the full workspace closure is
@@ -18,8 +24,8 @@ RUN corepack enable
 # `pnpm install --filter cycling-coach...` resolves only the cycling-coach
 # subgraph and ignores the absent workspace dirs.
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
-# Root `pnpm.patchedDependencies` entries are hashed on every install, even
-# when the patched package is outside the filtered subgraph.
+# Workspace patch entries are hashed on every install, even when the patched
+# package is outside the filtered subgraph.
 COPY patches ./patches
 COPY packages/kernel/package.json ./packages/kernel/
 COPY packages/coach-contract/package.json ./packages/coach-contract/
@@ -44,21 +50,8 @@ COPY LICENSE NOTICE.md ./
 # topo order). Packages outside the closure aren't even copied into the image.
 RUN pnpm --filter cycling-coach... build
 
-# pnpm deploy: produces a self-contained dir with prod-only deps,
-# resolves workspace:* to actual files, the pnpm-canonical Docker pattern.
-# --legacy: pnpm 10 made `inject-workspace-packages=true` required for
-# `deploy` by default; without that workspace setting, deploy errors with
-# ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE. We don't need the injection model
-# (cycling-coach bundles @enduragent/* via tsup; workspace deps live in
-# devDependencies and get stripped by --prod anyway), so the legacy flag
-# is the right opt-out.
-# The root `pnpm.patchedDependencies` entry targets a workspace package outside
-# this subgraph, so `deploy` aborts with ERR_PNPM_PATCH_NOT_APPLIED. pnpm reads
-# that setting only from the root manifest — no CLI or npmrc override exists —
-# so drop it from the image's copy once the lockfile-checked install is done.
-RUN node -e "const fs=require('node:fs');const m=JSON.parse(fs.readFileSync('package.json','utf8'));delete m.pnpm.patchedDependencies;fs.writeFileSync('package.json',JSON.stringify(m,null,2))"
-
-RUN pnpm --filter cycling-coach --prod --legacy deploy /app/runtime-bundle
+RUN pnpm --filter cycling-coach --prod deploy /app/runtime-bundle \
+    && cp packages/cycling-coach/package.json /app/runtime-bundle/package.json
 
 # ── runtime ────────────────────────────────────────────────────────────────
 FROM node:24-alpine@sha256:21f403ab171f2dc89bad4dd69d7721bfd15f084ccb46cdd225f31f2bc59b5c9a AS runtime

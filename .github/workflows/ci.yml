@@ -10,30 +10,19 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        # Reads `packageManager` from root package.json (corepack-style pin).
+        # Reads the exact `packageManager` pin from root package.json.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - run: pnpm test
-      - run: pnpm s8a
-      - run: pnpm s8a --self-test
-      - name: Coverage (measure-only, per-directory)
-        run: pnpm test:coverage
-      - name: Upload coverage report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-report
-          path: coverage/
-          if-no-files-found: error
       - name: Changeset presence (warn-only)
         if: github.event_name == 'pull_request'
         run: |
@@ -48,6 +37,61 @@ jobs:
           else
             echo "::warning::No changeset found for this PR. Behavioral/user-facing changes should ship a .changeset/*.md (see .changeset/README.md). chore:/ci: PRs are exempt."
           fi
+
+  test_shards:
+    name: test shard ${{ matrix.shard }}/2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        # Reads the exact `packageManager` pin from root package.json.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm exec vitest run --shard=${{ matrix.shard }}/2
+
+  s8a:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        # Reads the exact `packageManager` pin from root package.json.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm s8a
+      - run: pnpm s8a --self-test
+
+  test:
+    needs: [check, test_shards, s8a]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every test lane
+        env:
+          CHECK_RESULT: ${{ needs.check.result }}
+          SHARDS_RESULT: ${{ needs.test_shards.result }}
+          S8A_RESULT: ${{ needs.s8a.result }}
+        run: |
+          printf 'check=%s\ntest-shards=%s\ns8a=%s\n' "$CHECK_RESULT" "$SHARDS_RESULT" "$S8A_RESULT"
+          for result in "$CHECK_RESULT" "$SHARDS_RESULT" "$S8A_RESULT"; do
+            if [ "$result" != "success" ]; then
+              exit 1
+            fi
+          done
 
   smoke:
     runs-on: ubuntu-latest
@@ -91,13 +135,25 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        # Reads `packageManager` from root package.json (corepack-style pin).
+        # Reads the exact `packageManager` pin from root package.json.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --no-runtime
+      - name: Verify Node 22 compatibility runtime
+        env:
+          PNPM_SHIM_BYPASS: "1"
+        run: |
+          node_version="$(pnpm --filter @enduragent/core exec node -p 'process.version')"
+          printf 'Test runtime: %s\n' "$node_version"
+          case "$node_version" in
+            v22.*) ;;
+            *) exit 1 ;;
+          esac
       - run: pnpm --filter @enduragent/core exec vitest run tests/secrets
+        env:
+          PNPM_SHIM_BYPASS: "1"
 
   desktop-packaged-self-test:
     runs-on: macos-latest
