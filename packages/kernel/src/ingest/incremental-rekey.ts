@@ -23,7 +23,6 @@ import {
   planClusters,
   readRepairFixerSettings,
   readSelectedSourceRows,
-  readSourceRevisionState,
   sourcePresentationRow,
   type IncrementalCandidateCacheRow,
 } from "./dedup-rekey.js";
@@ -32,7 +31,7 @@ import { DEFAULT_TRANSITION_WINDOW_S } from "./brick-adjacency.js";
 import { DEFAULT_TIER3_THRESHOLDS } from "./dedup.js";
 import { FIT_INGEST_VERSION } from "./types.js";
 import { qualityRankForFile, QUALITY_RANK } from "./quality-rank.js";
-import type { FileReport, ImportArtifact, ImportBatch, ImportReport, ImportReportDeps, PreparedFile, PreparedRepairEvent } from "./import-report.js";
+import type { FileReport, ImportBatch, ImportReport, ImportReportDeps, PreparedFile, PreparedRepairEvent } from "./import-report.js";
 
 function compareText(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
 function canonical(value: unknown): string { return JSON.stringify(sortKeys(value)); }
@@ -325,7 +324,7 @@ export async function importArtifactsIncrementally(batch: ImportBatch, deps: Imp
       hydrated.set(presentation.candidate.id, presentation.candidate);
     }
   }
-  for (const [id, candidate] of allCandidateById) if (hydrateIds.has(id)) allCandidateById.set(id, hydrated.get(id)!);
+  for (const id of allCandidateById.keys()) if (hydrateIds.has(id)) allCandidateById.set(id, hydrated.get(id)!);
   const hydratedDedup = await phase(deps, "topology", async () => planDedupFromPairStates(
     [...allCandidateById.values()], [...allSummaryById.values()], confirmations, dedupPairStates(topology.dedup),
   ));

@@ -118,15 +118,6 @@ describe("incremental backfill pages", () => {
     });
   }
 
-  function athleteHome(root: string, storeDir = root): AthleteHome {
-    return {
-      root,
-      storeDir,
-      archiveDir: join(root, "archive"),
-      configDir: join(root, "config"),
-    };
-  }
-
   it("sums dropped activity rows across pages and never counts the terminal replay twice", async () => {
     const value = await fresh();
     try {

@@ -217,7 +217,7 @@ export async function startCoachMcpEndpoint(
     close: async (): Promise<void> => {
       if (closed) return;
       closed = true;
-      for (const exchange of [...open]) {
+      for (const exchange of open) {
         open.delete(exchange);
         await exchange.transport.close();
         await exchange.server.close();
