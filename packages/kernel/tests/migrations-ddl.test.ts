@@ -30,6 +30,7 @@ const EXPECTED_TABLES = [
 const EXPECTED_FULL_TABLES = [
   ...EXPECTED_TABLES,
   "plan",
+  "plan_adaptation_ledger",
   "plan_conversation",
   "plan_conversation_turn",
   "plan_draft_revision",
@@ -190,6 +191,7 @@ describe("001_init migration", () => {
       { version: 16, name: "016_plan_workout_match" },
       { version: 17, name: "017_plan_workout_drift" },
       { version: 18, name: "018_plan_proposals" },
+      { version: 19, name: "019_plan_adaptation_ledger" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -281,7 +283,7 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies all migrations with exactly fifty-two tables and no foreign-key violations", () => {
+  it("applies all migrations with exactly fifty-five tables and no foreign-key violations", () => {
     db = openFull();
     const names = (
       db
@@ -291,7 +293,7 @@ describe("001_init migration", () => {
       .map((row) => row.name)
       .sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
-    expect(names).toHaveLength(54);
+    expect(names).toHaveLength(55);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
@@ -778,6 +780,7 @@ describe("001_init migration", () => {
       { table: "mean_max_cache", orderBy: "mmax_key" },
       { table: "metric_snapshot", orderBy: "snapshot_key" },
       { table: "plan", orderBy: "id" },
+      { table: "plan_adaptation_ledger", orderBy: "plan_id, occurred_at_ms, id" },
       { table: "plan_conversation", orderBy: "id" },
       { table: "plan_conversation_turn", orderBy: "conversation_id, sequence, id" },
       { table: "plan_draft_revision", orderBy: "conversation_id, revision, id" },
@@ -808,7 +811,7 @@ describe("001_init migration", () => {
       { table: "workout", orderBy: "workout_key" },
       { table: "zone_set_history", orderBy: "id" },
     ]);
-    expect(DUMP_TABLES).toHaveLength(49);
+    expect(DUMP_TABLES).toHaveLength(50);
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("source_watermark");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_operation");
     expect(DUMP_TABLES.map(({ table }) => String(table))).not.toContain("sync_failure");
@@ -865,7 +868,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
     }>;
     expect(tables.find((row) => row.name === "sync_failure")?.strict).toBe(1);
     expect(db.prepare("PRAGMA foreign_key_list(sync_failure)").all()).toEqual([]);
-    expect(DUMP_TABLES).toHaveLength(49);
+    expect(DUMP_TABLES).toHaveLength(50);
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(PURE_AUTHORED_TABLES).not.toContain("sync_failure");
     expect(MIXED_AUTHORED_TABLES).not.toContain("sync_failure");
@@ -924,7 +927,7 @@ candidate_id,artifact_kind,artifact_id,member_id,source_kind,source_session_seq,
       expect(tables.find((row) => row.name === name)?.strict).toBe(1);
     }
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(DUMP_TABLES).toHaveLength(49);
+    expect(DUMP_TABLES).toHaveLength(50);
     expect(DUMP_TABLES.map(({ table }) => table)).not.toContain("analytics_curve_refresh_failure");
     expect(DERIVED_TABLES).not.toContain("analytics_curve_generation");
   });
