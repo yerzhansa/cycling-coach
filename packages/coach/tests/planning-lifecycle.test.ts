@@ -699,4 +699,60 @@ describe("Plan lifecycle projection", () => {
       ]),
     );
   });
+
+  it("keeps every Race readiness state in the active lifecycle with refresh available", () => {
+    const data = {
+      plan: {
+        id: "plan-1",
+        name: "Gran Fondo Plan",
+        primaryGoal: "Finish",
+        startDate: "2026-07-09",
+        targetDate: "2026-09-30",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 4,
+        workoutCount: 0,
+        plannedDurationS: 0,
+      },
+      today: "2026-08-26",
+      weekIndex: 7,
+      todayWorkout: null,
+      workouts: [],
+    };
+    const reconciliation = {
+      status: "not-started" as const,
+      created: 0,
+      pending: 0,
+      failed: 0,
+      total: 0,
+      currentThrough: null,
+      error: null,
+    };
+    for (const scenarioId of [
+      "PL-S012",
+      "PL-S074",
+      "PL-S075",
+      "PL-S076",
+      "PL-S077",
+      "PL-S078",
+      "PL-S098",
+    ] as const) {
+      const model = buildActivePlanReadModel({
+        scenarioId,
+        planId: "plan-1",
+        revision: 1,
+        data,
+        reconciliation,
+      });
+      expect(model).toMatchObject({
+        lifecycle: "active",
+        projection: "active",
+        title: "Race readiness",
+        transitions: expect.arrayContaining([
+          expect.objectContaining({ transitionId: "PL-T32", status: "available" }),
+          expect.objectContaining({ transitionId: "PL-T39", status: "available" }),
+        ]),
+      });
+    }
+  });
 });

@@ -83,8 +83,12 @@ import {
   validatePlanAutoApply,
   approvePlanReplacement,
   projectPlanSeason,
+  failedPlanReadiness,
+  projectPlanReadiness,
+  taperRefusalReadiness,
+  type PlanReadinessInput as EnginePlanReadinessInput,
 } from "@enduragent/engine";
-import { projectCyclingSeasonMetadata } from "@enduragent/sport-cycling";
+import { cyclingTaperRefusal, projectCyclingSeasonMetadata } from "@enduragent/sport-cycling";
 import {
   buildActivePlanReadModel,
   buildEndedPlanReadModel,
@@ -232,6 +236,12 @@ const CALENDAR_CLEANUP_VERIFICATION_FAILED: PlanError = Object.freeze({
   retryable: true,
 });
 
+const READINESS_REFRESH_FAILED: PlanError = Object.freeze({
+  code: "provider-failed",
+  message: "Recent training load could not be refreshed from Intervals.",
+  retryable: true,
+});
+
 const DRAFT_STALE: PlanError = Object.freeze({
   code: "stale-base",
   message: "This Draft changed before approval. Review the latest Draft.",
@@ -303,6 +313,15 @@ export interface PlanReadinessInput {
   readonly draft: PlanDraftRevisionRecord | undefined;
 }
 
+export interface PlanRaceReadinessAdapter {
+  read(input: {
+    readonly plan: PlanRecord;
+    readonly workouts: readonly PlanWorkoutRecord[];
+    readonly todayDateKey: number;
+  }): Promise<EnginePlanReadinessInput>;
+  refresh(): Promise<void>;
+}
+
 export interface PlanProposalRevisionBuild {
   readonly title: string;
   readonly rationale: string;
@@ -343,6 +362,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly proposalPremiseReader?: PlanProposalPremiseReader;
   readonly proposalLoadCalculator?: PlanProposalLoadCalculator;
   readonly workoutDriftCalendar?: PlanMirrorCalendarPort;
+  readonly readiness?: PlanRaceReadinessAdapter;
   readonly todayDateKey?: () => number;
 }
 
@@ -370,6 +390,35 @@ function dateText(dateKey: number): string {
 function utcTodayDateKey(): number {
   const now = new Date();
   return now.getUTCFullYear() * 10_000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+}
+
+function unavailableReadinessInput(
+  plan: PlanRecord,
+  todayDateKey: number,
+): EnginePlanReadinessInput {
+  return {
+    today: dateText(todayDateKey),
+    raceDate: plan.targetDateKey === null ? null : dateText(plan.targetDateKey),
+    platformSeed: null,
+    dailyLoadRanges: [],
+    supportedDistanceKm: null,
+    missedKeyWorkouts: 0,
+    fatigue: "unknown",
+    courseEstimate: {
+      status: "unavailable",
+      rangeMinutes: null,
+      previousRangeMinutes: null,
+      confidence: null,
+      assumptions: [],
+      changedAssumption: null,
+      unavailableReason: "missing-course",
+    },
+    evidence: {
+      prescribedDurationS: 0,
+      riddenDurationS: 0,
+      adjustedDurationS: 0,
+    },
+  };
 }
 
 function draftPlanProjection(
@@ -536,6 +585,7 @@ function activePlanData(input: {
   readonly settingsError?: PlanError | null;
   readonly replacement?: PlanActiveProjectionData["replacement"];
   readonly seasonMetadata: ReturnType<typeof projectCyclingSeasonMetadata>;
+  readonly readiness?: PlanActiveProjectionData["readiness"];
 }): PlanActiveProjectionData {
   const plan = draftPlanProjection(input.plan, input.workouts);
   if (plan === null) throw new TypeError("An active Plan projection requires a Plan.");
@@ -711,6 +761,7 @@ function activePlanData(input: {
       workouts: seasonWorkouts,
       metadata: input.seasonMetadata,
     }),
+    readiness: input.readiness,
     ...(input.replacement === undefined ? {} : { replacement: input.replacement }),
   });
 }
@@ -878,6 +929,7 @@ interface ReadOverrides {
   readonly selectedSetting?: PlanSetting | null;
   readonly settingsError?: PlanError | null;
   readonly replacementConfirmation?: boolean;
+  readonly readiness?: PlanActiveProjectionData["readiness"];
 }
 
 function queueText(queue: ChatQueueSnapshot): string {
@@ -1150,6 +1202,15 @@ export function createPlanningOperations(
               (proposal) => proposal.id !== overrides.proposalOverride!.id,
             ),
           ];
+    const readiness =
+      overrides.readiness ??
+      projectPlanReadiness(
+        dependencies.readiness === undefined
+          ? unavailableReadinessInput(plan, todayDateKey)
+          : await dependencies.readiness
+              .read({ plan, workouts, todayDateKey })
+              .catch(() => unavailableReadinessInput(plan, todayDateKey)),
+      ).projection;
     return buildActivePlanReadModel({
       scenarioId,
       planId: plan.id,
@@ -1175,6 +1236,7 @@ export function createPlanningOperations(
         settingsError: overrides.settingsError,
         replacement: replacementData,
         seasonMetadata: projectCyclingSeasonMetadata(snapshot(plan.structureJson), plan.totalWeeks),
+        readiness,
       }),
       reconciliation: {
         status,
@@ -2369,6 +2431,80 @@ export function createPlanningOperations(
             state: await read({ activeScenario: "PL-S006" }),
           });
         }
+        if (command.transitionId === "PL-T32") {
+          const plan = await plans.read(command.planId);
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          const workouts = await plans.readWorkouts(plan.id);
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          const beforeInput =
+            dependencies.readiness === undefined
+              ? unavailableReadinessInput(plan, todayDateKey)
+              : await dependencies.readiness
+                  .read({ plan, workouts, todayDateKey })
+                  .catch(() => unavailableReadinessInput(plan, todayDateKey));
+          const before = projectPlanReadiness(beforeInput);
+          if (command.mode !== "refresh") {
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                activeScenario: before.scenarioId,
+                readiness: before.projection,
+              }),
+            });
+          }
+          if (dependencies.readiness === undefined) {
+            return reject(READINESS_REFRESH_FAILED, {
+              activeScenario: "PL-S076",
+              readiness: failedPlanReadiness(before.projection),
+            });
+          }
+          const operationId = input.identity.newUlid();
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total: 1,
+          });
+          try {
+            await dependencies.readiness.refresh();
+            const refreshedInput = await dependencies.readiness.read({
+              plan,
+              workouts,
+              todayDateKey,
+            });
+            const refreshed = projectPlanReadiness(refreshedInput);
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: 1,
+              total: 1,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                activeScenario: refreshed.scenarioId,
+                readiness: refreshed.projection,
+              }),
+            });
+          } catch {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total: 1,
+            });
+            return reject(READINESS_REFRESH_FAILED, {
+              activeScenario: "PL-S076",
+              readiness: failedPlanReadiness(before.projection),
+            });
+          }
+        }
         if (command.transitionId === "PL-T14") {
           const plan = await plans.read(command.planId);
           if (plan?.status !== "active") return reject(UNAVAILABLE);
@@ -2485,6 +2621,49 @@ export function createPlanningOperations(
               todayDateKey: dependencies.todayDateKey?.() ?? utcTodayDateKey(),
               calculateWeekLoad: dependencies.proposalLoadCalculator,
             });
+            const change = validated.changes[0];
+            const refusal =
+              change === undefined
+                ? null
+                : cyclingTaperRefusal({
+                    planStructureJson: plan.structureJson,
+                    planStartDate: dateText(plan.startDateKey),
+                    planTotalWeeks: plan.totalWeeks,
+                    workoutDate: dateText(change.current.dateKey),
+                    current: {
+                      name: change.current.name,
+                      durationS: change.current.durationS,
+                    },
+                    next: {
+                      name: change.next.name,
+                      durationS: change.next.durationS,
+                      structureJson: change.next.structureJson,
+                    },
+                  });
+            if (refusal !== null) {
+              await refuseProposal(
+                proposal,
+                "Adding missed work during taper would reduce freshness before the race.",
+              );
+              const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+              const readinessInput =
+                dependencies.readiness === undefined
+                  ? unavailableReadinessInput(plan, todayDateKey)
+                  : await dependencies.readiness
+                      .read({ plan, workouts, todayDateKey })
+                      .catch(() => unavailableReadinessInput(plan, todayDateKey));
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: await read({
+                  activeScenario: "PL-S078",
+                  readiness: taperRefusalReadiness(
+                    projectPlanReadiness(readinessInput).projection,
+                    refusal,
+                  ),
+                  returnFocusId: "plan-readiness-trigger",
+                }),
+              });
+            }
             const autoApply = validatePlanAutoApply({
               enabled: settings.autoApply,
               plan,
@@ -3366,6 +3545,13 @@ export function createPlanningOperations(
                 "PL-S005",
                 "PL-S006",
                 "PL-S009",
+                "PL-S012",
+                "PL-S074",
+                "PL-S075",
+                "PL-S076",
+                "PL-S077",
+                "PL-S078",
+                "PL-S098",
                 "PL-S026",
                 "PL-S027",
                 "PL-S051",

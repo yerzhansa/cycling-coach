@@ -48,6 +48,9 @@ function actions(): PlanActions {
     reconcilePlan: vi.fn(),
     verifyReconciliation: vi.fn(),
     openSeason: vi.fn(),
+    openReadiness: vi.fn(),
+    closeReadiness: vi.fn(),
+    refreshReadiness: vi.fn(),
     closeSeason: vi.fn(),
     openRaceWeek: vi.fn(),
     closeRaceWeek: vi.fn(),
@@ -1677,6 +1680,193 @@ describe("Plan surface", () => {
     );
     await user.click(screen.getByRole("button", { name: "Back to Season" }));
     expect(planActions.closeRaceWeek).toHaveBeenCalledOnce();
+  });
+
+  it("renders every Race readiness state and returns focus to its active-Plan trigger", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const baseData = PlanActiveProjectionDataSchema.parse({
+      plan: {
+        id: planId,
+        name: "Gran Fondo Almaty",
+        primaryGoal: "Finish in the front half",
+        startDate: "2026-07-13",
+        targetDate: "2026-10-04",
+        kind: "full-plan",
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 58,
+        plannedDurationS: 309_600,
+      },
+      today: "2026-08-22",
+      weekIndex: 6,
+      todayWorkout: null,
+      workouts: [],
+      readiness: {
+        form: {
+          status: "available",
+          asOf: "2026-08-22",
+          current: 1,
+          raceRange: { min: 4, max: 9 },
+          assumptions: ["Planned training", "Normal recovery"],
+          unavailableReason: null,
+          lastSuccessfulRefreshAtMs: 1_777_000_000_000,
+        },
+        feasibility: {
+          verdict: "on-track",
+          supportedDistanceKm: { min: 135, max: 145 },
+          reasons: ["The modeled range supports the goal"],
+          recommendation: "Continue the approved Plan",
+        },
+        courseEstimate: {
+          status: "available",
+          rangeMinutes: { min: 288, max: 312 },
+          previousRangeMinutes: null,
+          confidence: "moderate",
+          assumptions: ["Dry roads", "Low wind"],
+          changedAssumption: null,
+          unavailableReason: null,
+        },
+        evidence: {
+          prescribedDurationS: 154_800,
+          riddenDurationS: 142_800,
+          adjustedDurationS: 7_800,
+          missedKeyWorkouts: 0,
+          fatigue: "normal",
+        },
+        taperRefusal: null,
+        error: null,
+      },
+    });
+    const active = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId,
+      data: baseData,
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state: active },
+        lastReady: active,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    const trigger = screen.getByRole("button", { name: "Race readiness" });
+    await user.click(trigger);
+    expect(planActions.openReadiness).toHaveBeenCalledOnce();
+
+    const baseReadiness = baseData.readiness;
+    if (baseReadiness === undefined) throw new TypeError("Readiness fixture missing.");
+    const show = (scenarioId: string, readiness = baseReadiness): void => {
+      const state = planReadModel({
+        lifecycle: "active",
+        scenarioId,
+        projection: "active",
+        planId,
+        data: { ...baseData, readiness },
+      });
+      act(() => useEnduragentStore.getState().setPlanHydration({ status: "ready", state }));
+    };
+    show("PL-S012");
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Race readiness" })).toHaveFocus(),
+    );
+    expect(screen.getByText("+1 → +4 to +9")).toBeInTheDocument();
+    expect(screen.getByText("4 h 48–5 h 12")).toBeInTheDocument();
+
+    show("PL-S074", {
+      ...baseReadiness,
+      feasibility: {
+        verdict: "at-risk",
+        supportedDistanceKm: { min: 100, max: 110 },
+        reasons: ["Fatigue is above normal", "2 key Workouts were missed"],
+        recommendation: "Protect recovery this week",
+      },
+    });
+    expect(screen.getByText("At risk")).toBeInTheDocument();
+    expect(screen.getByText("Protect recovery this week")).toBeInTheDocument();
+
+    show("PL-S075", {
+      ...baseReadiness,
+      courseEstimate: {
+        status: "unavailable",
+        rangeMinutes: null,
+        previousRangeMinutes: null,
+        confidence: null,
+        assumptions: [],
+        changedAssumption: null,
+        unavailableReason: "missing-course",
+      },
+    });
+    expect(
+      screen.getByRole("heading", { name: "Finish-time estimate unavailable" }),
+    ).toBeInTheDocument();
+
+    show("PL-S076", {
+      ...baseReadiness,
+      form: {
+        ...baseReadiness.form,
+        status: "unavailable",
+        raceRange: null,
+        unavailableReason: "refresh-failed",
+      },
+      error: { code: "provider-failed", message: "Refresh failed.", retryable: true },
+    });
+    await user.click(screen.getByRole("button", { name: "Retry refresh" }));
+    expect(planActions.refreshReadiness).toHaveBeenCalledOnce();
+
+    act(() =>
+      useEnduragentStore.getState().setPlanTransition({
+        status: "running",
+        commandId: "refresh",
+        transitionId: "PL-T32",
+        operationId: "operation",
+        progress: null,
+      }),
+    );
+    expect(screen.getByRole("heading", { name: "Refreshing training load" })).toBeInTheDocument();
+    act(() => useEnduragentStore.getState().setPlanTransition({ status: "idle" }));
+
+    show("PL-S077", {
+      ...baseReadiness,
+      courseEstimate: {
+        ...baseReadiness.courseEstimate,
+        status: "changed",
+        previousRangeMinutes: { min: 288, max: 312 },
+        rangeMinutes: { min: 300, max: 328 },
+        changedAssumption: "Wind is now moderate instead of low.",
+      },
+    });
+    expect(screen.getByText("5 h 00–5 h 28")).toBeInTheDocument();
+
+    show("PL-S078", {
+      ...baseReadiness,
+      taperRefusal: {
+        requested: "Threshold 4×8 · 1:20",
+        kept: "Race opener · 0:30",
+        reason: "Adding missed work during taper would reduce freshness before the race.",
+      },
+    });
+    expect(screen.getByRole("heading", { name: "Hard Workout not added" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Back to Plan" }));
+    expect(planActions.closeReadiness).toHaveBeenCalledOnce();
+    const returned = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId,
+      data: { ...baseData, returnFocusId: "plan-readiness-trigger" },
+    });
+    act(() => useEnduragentStore.getState().setPlanHydration({ status: "ready", state: returned }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Race readiness" })).toHaveFocus(),
+    );
   });
 
   it("uses production token classes for wide, compact, Light, and Dark layouts", async () => {

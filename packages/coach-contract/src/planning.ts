@@ -427,6 +427,123 @@ export const PlanSeasonProjectionSchema = z
   });
 export type PlanSeasonProjection = z.infer<typeof PlanSeasonProjectionSchema>;
 
+export const PlanReadinessProjectionSchema = z
+  .object({
+    form: z
+      .object({
+        status: z.enum(["available", "unavailable", "refreshing"]),
+        asOf: TrainingExportCivilDateSchema.nullable(),
+        current: z.number().int().nullable(),
+        raceRange: z.object({ min: z.number().int(), max: z.number().int() }).strict().nullable(),
+        assumptions: z.array(z.string().min(1)),
+        unavailableReason: z
+          .enum(["missing-platform-seed", "missing-planned-load", "refresh-failed"])
+          .nullable(),
+        lastSuccessfulRefreshAtMs: z.number().int().nonnegative().nullable(),
+      })
+      .strict(),
+    feasibility: z
+      .object({
+        verdict: z.enum(["on-track", "at-risk"]),
+        supportedDistanceKm: z
+          .object({ min: z.number().nonnegative(), max: z.number().nonnegative() })
+          .strict()
+          .nullable(),
+        reasons: z.array(z.string().min(1)),
+        recommendation: z.string().min(1),
+      })
+      .strict(),
+    courseEstimate: z
+      .object({
+        status: z.enum(["available", "unavailable", "changed"]),
+        rangeMinutes: z
+          .object({ min: z.number().int().positive(), max: z.number().int().positive() })
+          .strict()
+          .nullable(),
+        previousRangeMinutes: z
+          .object({ min: z.number().int().positive(), max: z.number().int().positive() })
+          .strict()
+          .nullable(),
+        confidence: z.enum(["low", "moderate", "high"]).nullable(),
+        assumptions: z.array(z.string().min(1)),
+        changedAssumption: z.string().min(1).nullable(),
+        unavailableReason: z.enum(["missing-course", "missing-elevation"]).nullable(),
+      })
+      .strict(),
+    evidence: z
+      .object({
+        prescribedDurationS: z.number().int().nonnegative(),
+        riddenDurationS: z.number().int().nonnegative(),
+        adjustedDurationS: z.number().int().nonnegative(),
+        missedKeyWorkouts: z.number().int().nonnegative(),
+        fatigue: z.enum(["normal", "above-normal", "unknown"]),
+      })
+      .strict(),
+    taperRefusal: z
+      .object({
+        requested: z.string().min(1),
+        kept: z.string().min(1),
+        reason: z.string().min(1),
+      })
+      .strict()
+      .nullable(),
+    error: PlanErrorSchema.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.form.status === "available" && value.form.raceRange === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["form", "raceRange"],
+        message: "available Form requires a race range",
+      });
+    }
+    if (value.form.status === "unavailable" && value.form.raceRange !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["form", "raceRange"],
+        message: "unavailable Form forbids a race range",
+      });
+    }
+    if ((value.form.status === "unavailable") !== (value.form.unavailableReason !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["form", "unavailableReason"],
+        message: "unavailable Form requires a reason",
+      });
+    }
+    const estimateAvailable = value.courseEstimate.status !== "unavailable";
+    if (estimateAvailable !== (value.courseEstimate.rangeMinutes !== null)) {
+      context.addIssue({
+        code: "custom",
+        path: ["courseEstimate", "rangeMinutes"],
+        message: "available course estimates require a finish-time range",
+      });
+    }
+    if (
+      (value.courseEstimate.status === "unavailable") !==
+      (value.courseEstimate.unavailableReason !== null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["courseEstimate", "unavailableReason"],
+        message: "unavailable course estimates require a reason",
+      });
+    }
+    if (
+      value.courseEstimate.status === "changed" &&
+      (value.courseEstimate.previousRangeMinutes === null ||
+        value.courseEstimate.changedAssumption === null)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["courseEstimate"],
+        message: "changed course estimates require the previous range and changed assumption",
+      });
+    }
+  });
+export type PlanReadinessProjection = z.infer<typeof PlanReadinessProjectionSchema>;
+
 export const PlanProposalProjectionSchema = z
   .object({
     id: z.string().min(1),
@@ -542,6 +659,7 @@ export const PlanActiveProjectionDataSchema = z
     selectedHistoryId: z.string().min(1).nullable().optional(),
     settings: PlanSettingsProjectionSchema.optional(),
     season: PlanSeasonProjectionSchema.optional(),
+    readiness: PlanReadinessProjectionSchema.optional(),
     replacement: z
       .object({
         id: z.string().min(1),
@@ -1140,6 +1258,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       transitionId: z.literal("PL-T32"),
       commandId: CommandIdSchema,
       planId: EntityIdSchema,
+      mode: z.enum(["open", "refresh"]).optional(),
     })
     .strict(),
   z

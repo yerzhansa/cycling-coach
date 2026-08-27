@@ -27,6 +27,13 @@ export type ActivePlanScenario =
   | "PL-S005"
   | "PL-S006"
   | "PL-S009"
+  | "PL-S012"
+  | "PL-S074"
+  | "PL-S075"
+  | "PL-S076"
+  | "PL-S077"
+  | "PL-S078"
+  | "PL-S098"
   | "PL-S007"
   | "PL-S008"
   | "PL-S013"
@@ -391,6 +398,13 @@ export function buildActivePlanReadModel(input: {
     "PL-S005": ["Plan history", "Plan changes are immutable and ordered newest first."],
     "PL-S006": ["Season", "Every Plan week, phase, status, purpose, and planned time."],
     "PL-S009": ["Race week", "The complete final Plan week and fixed goal race."],
+    "PL-S012": ["Race readiness", "Modeled ranges and the evidence behind them."],
+    "PL-S074": ["Race readiness", "The current goal is at risk under today’s evidence."],
+    "PL-S075": ["Race readiness", "The course finish-time estimate is unavailable."],
+    "PL-S076": ["Race readiness", "Recent training Load is unavailable."],
+    "PL-S077": ["Race readiness", "The finish-time assumptions changed."],
+    "PL-S078": ["Race readiness", "A hard taper-week addition was not applied."],
+    "PL-S098": ["Race readiness", "Refreshing recent training Load."],
     "PL-S007": [
       "Plan change needs review",
       "Review the proposed change before it affects your Plan.",
@@ -543,6 +557,7 @@ export function buildActivePlanReadModel(input: {
       guard("PL-T23"),
       guard("PL-T25"),
       guard("PL-T31"),
+      guard("PL-T32"),
       ...(input.scenarioId === "PL-S083" ? [guard("PL-T27")] : []),
       ...(input.scenarioId === "PL-S085" ? [guard("PL-T28")] : []),
       guard("PL-T39"),

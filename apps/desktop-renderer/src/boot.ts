@@ -227,6 +227,9 @@ export function bootRenderer(): Disposer {
     closeSeason: () => planAdapter.closeSeason(),
     openRaceWeek: () => planAdapter.openRaceWeek(),
     closeRaceWeek: () => planAdapter.closeRaceWeek(),
+    openReadiness: () => planAdapter.openReadiness(),
+    closeReadiness: () => planAdapter.closeReadiness(),
+    refreshReadiness: () => planAdapter.refreshReadiness(),
     openWorkout: (workoutId) => planAdapter.openWorkout(workoutId),
     closeWorkout: () => planAdapter.closeWorkout(),
     resolveWorkoutMatch: (workoutId, activityId, decision) =>

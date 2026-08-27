@@ -9,6 +9,7 @@ import {
   PlanHydrationStateSchema,
   PlanProgressEventSchema,
   PlanRaceCourseProjectionSchema,
+  PlanReadinessProjectionSchema,
   PlanSeasonProjectionSchema,
   PlanSettingsProjectionSchema,
   PlanStartDateProjectionSchema,
@@ -410,6 +411,70 @@ describe("planning contract", () => {
         weeks: [{ ...season.weeks[0], weekIndex: 2 }],
       }).success,
     ).toBe(false);
+  });
+
+  it("keeps Race readiness modeled, unavailable, and refresh intent explicit", () => {
+    const readiness = {
+      form: {
+        status: "available",
+        asOf: "1998-08-22",
+        current: 1,
+        raceRange: { min: 4, max: 9 },
+        assumptions: ["Planned training", "Normal recovery"],
+        unavailableReason: null,
+        lastSuccessfulRefreshAtMs: 100,
+      },
+      feasibility: {
+        verdict: "on-track",
+        supportedDistanceKm: { min: 135, max: 145 },
+        reasons: ["The modeled range supports the goal"],
+        recommendation: "Continue the approved Plan",
+      },
+      courseEstimate: {
+        status: "available",
+        rangeMinutes: { min: 288, max: 312 },
+        previousRangeMinutes: null,
+        confidence: "moderate",
+        assumptions: ["Dry roads", "Low wind"],
+        changedAssumption: null,
+        unavailableReason: null,
+      },
+      evidence: {
+        prescribedDurationS: 154_800,
+        riddenDurationS: 142_800,
+        adjustedDurationS: 7_800,
+        missedKeyWorkouts: 0,
+        fatigue: "normal",
+      },
+      taperRefusal: null,
+      error: null,
+    };
+    expect(PlanReadinessProjectionSchema.parse(readiness)).toEqual(readiness);
+    expect(
+      PlanReadinessProjectionSchema.safeParse({
+        ...readiness,
+        form: {
+          ...readiness.form,
+          status: "unavailable",
+          raceRange: null,
+          unavailableReason: "missing-planned-load",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      PlanReadinessProjectionSchema.safeParse({
+        ...readiness,
+        courseEstimate: { ...readiness.courseEstimate, rangeMinutes: null },
+      }).success,
+    ).toBe(false);
+    expect(
+      PlanTransitionCommandSchema.parse({
+        transitionId: "PL-T32",
+        commandId,
+        planId,
+        mode: "refresh",
+      }),
+    ).toMatchObject({ transitionId: "PL-T32", mode: "refresh" });
   });
 
   it("keeps loading, stale, failed, and unsupported hydration explicit", () => {

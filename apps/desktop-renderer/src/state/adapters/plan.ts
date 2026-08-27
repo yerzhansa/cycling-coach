@@ -75,6 +75,9 @@ export interface PlanViewAdapter {
   closeSeason(): void;
   openRaceWeek(): void;
   closeRaceWeek(): void;
+  openReadiness(): void;
+  closeReadiness(): void;
+  refreshReadiness(): void;
   openWorkout(workoutId: string): void;
   closeWorkout(): void;
   resolveWorkoutMatch(workoutId: string, activityId: string, decision: "confirm" | "reject"): void;
@@ -914,6 +917,38 @@ export function createPlanViewAdapter(input: {
         sourceScenarioId: "PL-S009",
         destinationScenarioId: "PL-S006",
         returnFocusId: "plan-race-week-trigger",
+      });
+    },
+    openReadiness() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T32",
+        commandId: createCommandId(),
+        planId: model.planId,
+        mode: "open",
+      });
+    },
+    closeReadiness() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "back",
+        sourceScenarioId: model.scenarioId,
+        destinationScenarioId: "PL-S004",
+        returnFocusId: "plan-readiness-trigger",
+      });
+    },
+    refreshReadiness() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T32",
+        commandId: createCommandId(),
+        planId: model.planId,
+        mode: "refresh",
       });
     },
     openWorkout(workoutId) {
