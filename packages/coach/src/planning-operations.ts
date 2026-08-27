@@ -136,6 +136,7 @@ import {
   type PlanProposalPremiseRecord,
   type PlanProposalRepository,
   type PlanningRequestReadModel,
+  type PlanningRequestRecord,
   type PlanningRequestRepository,
   type PlanAdaptationLedgerRecord,
   type PlanAdaptationLedgerRepository,
@@ -406,6 +407,28 @@ function createSerializedLane(): <T>(operation: () => Promise<T>) => Promise<T> 
 
 function snapshot(value: string): unknown {
   return JSON.parse(value) as unknown;
+}
+
+function planningRequestWorkout(record: PlanningRequestRecord): {
+  readonly name: string;
+  readonly workoutRef: { readonly setId: string; readonly workoutId: string } | null;
+} {
+  const selected = record.sourceState.payload?.sourceSnapshot.selectedWorkout;
+  if (selected !== null && selected !== undefined) {
+    const name = selected.workout.title ?? selected.workout.name;
+    return {
+      name: typeof name === "string" && name.length > 0 ? name : "Workout",
+      workoutRef: { setId: selected.setId, workoutId: selected.workoutId },
+    };
+  }
+  const workout = record.sourceState.provenance?.workout;
+  return {
+    name: workout?.name ?? "Plan change",
+    workoutRef:
+      workout === null || workout === undefined
+        ? null
+        : { setId: workout.setId, workoutId: workout.workoutId },
+  };
 }
 
 function dateText(dateKey: number): string {
@@ -1067,6 +1090,9 @@ export function createPlanningOperations(
     reason = PROPOSAL_INVALID.message,
   ): Promise<void> => {
     const stamp = input.identity.hlcStamp();
+    const linkedRequest = await planningRequests?.readByProposalId(proposal.id);
+    const requestWorkout =
+      linkedRequest === undefined ? null : planningRequestWorkout(linkedRequest);
     await proposalRepository.resolve({
       id: proposal.id,
       status: "refused",
@@ -1075,6 +1101,29 @@ export function createPlanningOperations(
       deviceId: await input.identity.deviceId(),
       hlcPhysicalMs: stamp.physicalMs,
       hlcCounter: stamp.counter,
+      ...(linkedRequest === undefined
+        ? {}
+        : {
+            requestCompletion: {
+              requestId: linkedRequest.request.requestId,
+              expectedRevision: linkedRequest.request.revision,
+              expectedProposalId: proposal.id,
+              result: {
+                kind: "ended" as const,
+                resultId: input.identity.newUlid(),
+                completedAtMs: stamp.physicalMs,
+                title: "Proposal ended",
+                detail: `${requestWorkout!.name} was not applied; the active Plan remains unchanged.`,
+                workoutRef: requestWorkout!.workoutRef,
+                planRevisionId: null,
+              },
+              resolvedDateKey: linkedRequest.request.resolvedDateKey,
+              updatedAtMs: stamp.physicalMs,
+              deviceId: await input.identity.deviceId(),
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+            },
+          }),
     });
   };
   const parseProposalMutationOrRefuse = async (
@@ -1808,7 +1857,23 @@ export function createPlanningOperations(
       todayDateKey: dependencies.todayDateKey?.() ?? utcTodayDateKey(),
       calculateWeekLoad: dependencies.proposalLoadCalculator,
     });
-    return proposalRepository.save(next, premiseRecords);
+    const linkedRequest = await planningRequests?.readByProposalId(inputValue.current.id);
+    return proposalRepository.save(
+      next,
+      premiseRecords,
+      linkedRequest === undefined
+        ? undefined
+        : {
+            requestId: linkedRequest.request.requestId,
+            expectedRevision: linkedRequest.request.revision,
+            previousProposalId: inputValue.current.id,
+            proposalId: next.id,
+            updatedAtMs: timestamp,
+            deviceId,
+            hlcPhysicalMs: stamp.physicalMs,
+            hlcCounter: stamp.counter,
+          },
+    );
   };
 
   const reject = async (
@@ -2914,6 +2979,13 @@ export function createPlanningOperations(
                   throw new PlanProposalError("stale-base");
                 }
                 const stamp = input.identity.hlcStamp();
+                const linkedRequest = await planningRequests?.readByProposalId(proposal.id);
+                const requestWorkout =
+                  linkedRequest === undefined ? null : planningRequestWorkout(linkedRequest);
+                const appliedDateKey =
+                  linkedRequest?.request.resolvedDateKey ??
+                  current.changes[0]?.next.dateKey ??
+                  null;
                 await applyValidatedPlanProposal(current, {
                   repository: proposalRepository,
                   plan,
@@ -2922,6 +2994,32 @@ export function createPlanningOperations(
                   deviceId: await input.identity.deviceId(),
                   hlcPhysicalMs: stamp.physicalMs,
                   hlcCounter: stamp.counter,
+                  ...(linkedRequest === undefined
+                    ? {}
+                    : {
+                        requestCompletion: {
+                          requestId: linkedRequest.request.requestId,
+                          expectedRevision: linkedRequest.request.revision,
+                          expectedProposalId: proposal.id,
+                          result: {
+                            kind: "applied" as const,
+                            resultId: input.identity.newUlid(),
+                            completedAtMs: stamp.physicalMs,
+                            title: "Added to Plan",
+                            detail:
+                              appliedDateKey === null
+                                ? `${requestWorkout!.name} was added to the active Plan.`
+                                : `${requestWorkout!.name} is scheduled for ${dateText(appliedDateKey)}.`,
+                            workoutRef: requestWorkout!.workoutRef,
+                            planRevisionId: ledgerId,
+                          },
+                          resolvedDateKey: appliedDateKey,
+                          updatedAtMs: stamp.physicalMs,
+                          deviceId: await input.identity.deviceId(),
+                          hlcPhysicalMs: stamp.physicalMs,
+                          hlcCounter: stamp.counter,
+                        },
+                      }),
                   mirrorJob: {
                     id: input.identity.newUlid(),
                     windowStartDateKey: todayDateKey,
@@ -3107,6 +3205,11 @@ export function createPlanningOperations(
               calculateWeekLoad: dependencies.proposalLoadCalculator,
             });
             const stamp = input.identity.hlcStamp();
+            const linkedRequest = await planningRequests?.readByProposalId(proposal.id);
+            const requestWorkout =
+              linkedRequest === undefined ? null : planningRequestWorkout(linkedRequest);
+            const appliedDateKey =
+              linkedRequest?.request.resolvedDateKey ?? validated.changes[0]?.next.dateKey ?? null;
             await applyValidatedPlanProposal(validated, {
               repository: proposalRepository,
               plan,
@@ -3115,6 +3218,32 @@ export function createPlanningOperations(
               deviceId: await input.identity.deviceId(),
               hlcPhysicalMs: stamp.physicalMs,
               hlcCounter: stamp.counter,
+              ...(linkedRequest === undefined
+                ? {}
+                : {
+                    requestCompletion: {
+                      requestId: linkedRequest.request.requestId,
+                      expectedRevision: linkedRequest.request.revision,
+                      expectedProposalId: proposal.id,
+                      result: {
+                        kind: "applied" as const,
+                        resultId: input.identity.newUlid(),
+                        completedAtMs: stamp.physicalMs,
+                        title: "Added to Plan",
+                        detail:
+                          appliedDateKey === null
+                            ? `${requestWorkout!.name} was added to the active Plan.`
+                            : `${requestWorkout!.name} is scheduled for ${dateText(appliedDateKey)}.`,
+                        workoutRef: requestWorkout!.workoutRef,
+                        planRevisionId: ledgerId,
+                      },
+                      resolvedDateKey: appliedDateKey,
+                      updatedAtMs: stamp.physicalMs,
+                      deviceId: await input.identity.deviceId(),
+                      hlcPhysicalMs: stamp.physicalMs,
+                      hlcCounter: stamp.counter,
+                    },
+                  }),
               mirrorJob: {
                 id: input.identity.newUlid(),
                 windowStartDateKey: todayDateKey,
@@ -3223,6 +3352,9 @@ export function createPlanningOperations(
           const proposal = await proposalRepository.read(command.proposalId);
           if (proposal?.status !== "proposed") return reject(UNAVAILABLE);
           const stamp = input.identity.hlcStamp();
+          const linkedRequest = await planningRequests?.readByProposalId(proposal.id);
+          const requestWorkout =
+            linkedRequest === undefined ? null : planningRequestWorkout(linkedRequest);
           await proposalRepository.resolve({
             id: proposal.id,
             status: "rejected",
@@ -3230,6 +3362,29 @@ export function createPlanningOperations(
             deviceId: await input.identity.deviceId(),
             hlcPhysicalMs: stamp.physicalMs,
             hlcCounter: stamp.counter,
+            ...(linkedRequest === undefined
+              ? {}
+              : {
+                  requestCompletion: {
+                    requestId: linkedRequest.request.requestId,
+                    expectedRevision: linkedRequest.request.revision,
+                    expectedProposalId: proposal.id,
+                    result: {
+                      kind: "rejected" as const,
+                      resultId: input.identity.newUlid(),
+                      completedAtMs: stamp.physicalMs,
+                      title: "Proposal rejected",
+                      detail: `${requestWorkout!.name} was not applied; the active Plan remains unchanged.`,
+                      workoutRef: requestWorkout!.workoutRef,
+                      planRevisionId: null,
+                    },
+                    resolvedDateKey: linkedRequest.request.resolvedDateKey,
+                    updatedAtMs: stamp.physicalMs,
+                    deviceId: await input.identity.deviceId(),
+                    hlcPhysicalMs: stamp.physicalMs,
+                    hlcCounter: stamp.counter,
+                  },
+                }),
           });
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",

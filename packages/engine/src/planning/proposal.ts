@@ -504,6 +504,9 @@ export async function applyValidatedPlanProposal(
       readonly createdAtMs: number;
     };
     readonly ledgerId: string;
+    readonly requestCompletion?: Parameters<
+      PlanProposalRepository["apply"]
+    >[0]["requestCompletion"];
   },
 ): Promise<PlanProposalRecord> {
   const workouts = validated.changes.map(({ next }) =>
@@ -558,5 +561,8 @@ export async function applyValidatedPlanProposal(
     deviceId: input.deviceId,
     hlcPhysicalMs: input.hlcPhysicalMs,
     hlcCounter: input.hlcCounter,
+    ...(input.requestCompletion === undefined
+      ? {}
+      : { requestCompletion: input.requestCompletion }),
   });
 }

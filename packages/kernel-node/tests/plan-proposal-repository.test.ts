@@ -4,6 +4,7 @@ import {
   createPlanProposalRepository,
   createPlanReconciliationRepository,
   createPlanRepository,
+  createPlanningRequestRepository,
   encodePlanAdaptationWorkoutSnapshot,
   planAdaptationWorkoutSnapshot,
   type PlanAdaptationLedgerRecord,
@@ -15,6 +16,7 @@ import {
 } from "@enduragent/kernel/planning";
 import { runMigrations, type MigratorStore, type SqlStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
+import { createNodeCrypto } from "../src/ingest/import-files.js";
 import { openSqliteStorage } from "../src/sqlite/index.js";
 
 const id = (suffix: number): string => String(suffix).padStart(26, "0");
@@ -121,6 +123,65 @@ function ledger(
     deviceId: "device-1",
     hlcPhysicalMs: occurredAtMs,
     hlcCounter: 0,
+  };
+}
+
+async function linkedRequest(
+  store: SqlStore & MigratorStore,
+  requestId: string,
+  proposalId: string,
+  updatedAtMs = 30,
+) {
+  const requests = createPlanningRequestRepository(store, createNodeCrypto());
+  const created = await requests.createOrGet({
+    payload: {
+      requestId,
+      kind: "workout_review",
+      intent: "Add Tempo 3 × 12 to the active Plan.",
+      source: {
+        chatId: "chat-1",
+        messageId: "message-1",
+        attachmentId: "attachment-1",
+      },
+      sourceSnapshot: {
+        capturedAt: "1998-08-24T08:00:00.000Z",
+        attachment: {
+          attachmentId: "attachment-1",
+          displayName: "tempo-3x12.mrc",
+          extension: "mrc",
+        },
+        selectedWorkout: {
+          setId: "set-1",
+          workoutId: "workout-1",
+          workout: {
+            name: "Tempo 3 × 12",
+            sport: "cycling",
+            durationSeconds: 3_840,
+          },
+        },
+      },
+      requestedDate: "2026-08-30",
+    },
+    target: "active_plan",
+    createdAtMs: 20,
+    deviceId: "device-1",
+    hlcPhysicalMs: 20,
+    hlcCounter: 0,
+  });
+  return {
+    requests,
+    record: await requests.reviseOpen({
+      requestId,
+      expectedRevision: created.request.revision,
+      planConversationId: null,
+      proposalId,
+      attention: "needs_review",
+      resolvedDateKey: 20260830,
+      updatedAtMs,
+      deviceId: "device-1",
+      hlcPhysicalMs: updatedAtMs,
+      hlcCounter: 0,
+    }),
   };
 }
 
@@ -365,6 +426,165 @@ describe("Plan proposal repository", () => {
         beforeJson: null,
       }),
     ]);
+  });
+
+  it("rolls back Plan application when the linked request cannot commit its terminal result", async () => {
+    const proposals = createPlanProposalRepository(store);
+    const plans = createPlanRepository(store);
+    const history = createPlanAdaptationLedgerRepository(store);
+    const proposalId = id(17);
+    const ledgerId = id(18);
+    const requestId = id(19);
+    const nextWorkout = {
+      ...workout,
+      name: "Recovery",
+      durationS: 1_800,
+      hlcPhysicalMs: 40,
+    };
+    await proposals.save(proposal(proposalId), [premise(proposalId, id(20))]);
+    const { requests, record } = await linkedRequest(store, requestId, proposalId);
+    const requestCompletion = {
+      requestId,
+      expectedRevision: record.request.revision,
+      expectedProposalId: proposalId,
+      result: {
+        kind: "applied" as const,
+        resultId: id(21),
+        completedAtMs: 40,
+        title: "Added to Plan",
+        detail: "Tempo 3 × 12 is scheduled for 2026-08-30.",
+        workoutRef: { setId: "set-1", workoutId: "workout-1" },
+        planRevisionId: ledgerId,
+      },
+      resolvedDateKey: 20260830,
+      updatedAtMs: 40,
+      deviceId: "device-1",
+      hlcPhysicalMs: 40,
+      hlcCounter: 0,
+    };
+    const application = {
+      id: proposalId,
+      expectedPlanUpdatedAtMs: 10,
+      expectedPlanHlcPhysicalMs: 10,
+      expectedPlanHlcCounter: 0,
+      expectedWorkouts: [workout],
+      mirrorJob: {
+        id: id(22),
+        windowStartDateKey: 20260826,
+        windowEndDateKey: 20260901,
+        createdAtMs: 40,
+      },
+      plan: { ...plan, updatedAtMs: 40, hlcPhysicalMs: 40 },
+      workouts: [nextWorkout],
+      ledger: ledger(ledgerId, proposalId, workout, nextWorkout, 40),
+      resolvedAtMs: 40,
+      deviceId: "device-1",
+      hlcPhysicalMs: 40,
+      hlcCounter: 0,
+    };
+
+    await expect(
+      proposals.apply({
+        ...application,
+        requestCompletion: {
+          ...requestCompletion,
+          expectedRevision: requestCompletion.expectedRevision + 1,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "stale-revision" });
+    await expect(plans.readWorkouts(PLAN_ID)).resolves.toEqual([workout]);
+    await expect(proposals.read(proposalId)).resolves.toMatchObject({ status: "proposed" });
+    await expect(requests.read(requestId)).resolves.toMatchObject({
+      request: { lifecycle: "open", terminalResult: null },
+    });
+    await expect(history.readForPlan(PLAN_ID)).resolves.toEqual([]);
+
+    await expect(proposals.apply({ ...application, requestCompletion })).resolves.toMatchObject({
+      status: "applied",
+    });
+    await expect(plans.readWorkouts(PLAN_ID)).resolves.toEqual([
+      expect.objectContaining({ name: "Recovery" }),
+    ]);
+    await expect(requests.read(requestId)).resolves.toMatchObject({
+      request: {
+        lifecycle: "applied",
+        attention: "none",
+        terminalResult: { kind: "applied", planRevisionId: ledgerId },
+      },
+    });
+  });
+
+  it("moves a linked request to a revised Proposal in the same transaction", async () => {
+    const proposals = createPlanProposalRepository(store);
+    const initialId = id(23);
+    const revisedId = id(24);
+    const requestId = id(25);
+    await proposals.save(proposal(initialId), [premise(initialId, id(26))]);
+    const { requests, record } = await linkedRequest(store, requestId, initialId);
+    await proposals.save(
+      proposal(revisedId, {
+        parentProposalId: initialId,
+        revision: 2,
+        createdAtMs: 40,
+        updatedAtMs: 40,
+        hlcPhysicalMs: 40,
+      }),
+      [{ ...premise(revisedId, id(27)), createdAtMs: 40, hlcPhysicalMs: 40 }],
+      {
+        requestId,
+        expectedRevision: record.request.revision,
+        previousProposalId: initialId,
+        proposalId: revisedId,
+        updatedAtMs: 40,
+        deviceId: "device-1",
+        hlcPhysicalMs: 40,
+        hlcCounter: 0,
+      },
+    );
+    await expect(proposals.read(initialId)).resolves.toMatchObject({ status: "superseded" });
+    await expect(requests.read(requestId)).resolves.toMatchObject({
+      request: { proposalId: revisedId, revision: record.request.revision + 1 },
+    });
+  });
+
+  it("rejects a Proposal and completes its linked request atomically", async () => {
+    const proposals = createPlanProposalRepository(store);
+    const proposalId = id(28);
+    const requestId = id(29);
+    await proposals.save(proposal(proposalId), [premise(proposalId, id(30))]);
+    const { requests, record } = await linkedRequest(store, requestId, proposalId);
+    await proposals.resolve({
+      id: proposalId,
+      status: "rejected",
+      resolvedAtMs: 40,
+      deviceId: "device-1",
+      hlcPhysicalMs: 40,
+      hlcCounter: 0,
+      requestCompletion: {
+        requestId,
+        expectedRevision: record.request.revision,
+        expectedProposalId: proposalId,
+        result: {
+          kind: "rejected",
+          resultId: id(31),
+          completedAtMs: 40,
+          title: "Proposal rejected",
+          detail: "Tempo 3 × 12 was not applied; the active Plan remains unchanged.",
+          workoutRef: { setId: "set-1", workoutId: "workout-1" },
+          planRevisionId: null,
+        },
+        resolvedDateKey: 20260830,
+        updatedAtMs: 40,
+        deviceId: "device-1",
+        hlcPhysicalMs: 40,
+        hlcCounter: 0,
+      },
+    });
+    await expect(proposals.read(proposalId)).resolves.toMatchObject({ status: "rejected" });
+    await expect(requests.read(requestId)).resolves.toMatchObject({
+      request: { lifecycle: "rejected", terminalResult: { kind: "rejected" } },
+    });
+    await expect(createPlanRepository(store).readWorkouts(PLAN_ID)).resolves.toEqual([workout]);
   });
 
   it("rejects apply when a workout changed without advancing the Plan timestamp", async () => {

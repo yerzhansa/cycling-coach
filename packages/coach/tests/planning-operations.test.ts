@@ -360,7 +360,7 @@ describe("Plan operations", () => {
             setId: "set-1",
             workoutId: "workout-1",
             workout: {
-              name: "Tempo 3 × 12",
+              title: "Tempo 3 × 12",
               sport: "cycling",
               durationSeconds: 3_840,
             },
@@ -2049,6 +2049,7 @@ describe("Plan operations", () => {
     };
     const plans = createPlanRepository(store);
     const proposals = createPlanProposalRepository(store);
+    const requests = createPlanningRequestRepository(store, createNodeCrypto());
     await plans.replace(activePlan, [existingWorkout]);
     await proposals.save(
       {
@@ -2107,11 +2108,59 @@ describe("Plan operations", () => {
         },
       ],
     );
+    const request = await requests.createOrGet({
+      payload: {
+        requestId: "request-add-workout",
+        kind: "workout_review",
+        intent: "Add Tempo 3 × 12 to Monday.",
+        source: {
+          chatId: "chat-1",
+          messageId: "message-1",
+          attachmentId: "attachment-1",
+        },
+        sourceSnapshot: {
+          capturedAt: "1998-08-24T08:00:00.000Z",
+          attachment: {
+            attachmentId: "attachment-1",
+            displayName: "tempo-3x12.mrc",
+            extension: "mrc",
+          },
+          selectedWorkout: {
+            setId: "set-1",
+            workoutId: "workout-1",
+            workout: {
+              title: "Tempo 3 × 12",
+              sport: "cycling",
+              durationSeconds: 3_840,
+            },
+          },
+        },
+        requestedDate: "2026-08-31",
+      },
+      target: "active_plan",
+      createdAtMs: 30,
+      deviceId: "device-1",
+      hlcPhysicalMs: 30,
+      hlcCounter: 0,
+    });
+    await requests.reviseOpen({
+      requestId: request.request.requestId,
+      expectedRevision: request.request.revision,
+      planConversationId: null,
+      proposalId,
+      attention: "needs_review",
+      resolvedDateKey: 20260831,
+      updatedAtMs: 40,
+      deviceId: "device-1",
+      hlcPhysicalMs: 40,
+      hlcCounter: 0,
+    });
     const operations = createPlanningOperations(
       { context, engine: engine(), identity: identity() },
       {
         plans,
         proposals,
+        requests,
         todayDateKey: () => 20260826,
         proposalLoadCalculator: (workouts) => (workouts.length === 1 ? 420 : 480),
         proposalPremiseReader: {
@@ -2148,6 +2197,18 @@ describe("Plan operations", () => {
     if (applied?.status !== "completed") throw new TypeError("Workout addition did not apply.");
     const ledgerId = String(applied.state.data.selectedHistoryId);
     await expect(plans.readWorkouts(planId)).resolves.toHaveLength(2);
+    await expect(requests.read("request-add-workout")).resolves.toMatchObject({
+      request: {
+        lifecycle: "applied",
+        attention: "none",
+        terminalResult: {
+          kind: "applied",
+          title: "Added to Plan",
+          detail: "Tempo 3 × 12 is scheduled for 2026-08-31.",
+          planRevisionId: ledgerId,
+        },
+      },
+    });
 
     await expect(
       operations.executePlanTransition?.({

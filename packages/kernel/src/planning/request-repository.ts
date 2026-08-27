@@ -5,6 +5,10 @@ import { encodeUtf8Strict } from "../store/derived-key.js";
 import type { MigratorStore } from "../store/migrator.js";
 import type { Row, SqlStore } from "../store/ports.js";
 import { addCivilDays, dateKeyFromText } from "./date-keys.js";
+import { PlanningRequestStoreError } from "./request-errors.js";
+import { completePlanningRequestInTransaction } from "./request-transaction.js";
+
+export { PlanningRequestStoreError, type PlanningRequestStoreErrorCode } from "./request-errors.js";
 
 export type PlanningRequestKind =
   | "workout_review"
@@ -202,32 +206,12 @@ export interface CompactPlanningRequestSourceInput {
 export interface PlanningRequestRepository {
   createOrGet(input: CreatePlanningRequestInput): Promise<PlanningRequestRecord>;
   read(requestId: string): Promise<PlanningRequestRecord | undefined>;
+  readByProposalId(proposalId: string): Promise<PlanningRequestRecord | undefined>;
   readOpen(): Promise<readonly PlanningRequestRecord[]>;
   reviseOpen(input: ReviseOpenPlanningRequestInput): Promise<PlanningRequestRecord>;
   complete(input: CompletePlanningRequestInput): Promise<PlanningRequestRecord>;
   detachSource(input: DetachPlanningRequestSourceInput): Promise<PlanningRequestRecord>;
   compactSource(input: CompactPlanningRequestSourceInput): Promise<PlanningRequestRecord>;
-}
-
-export type PlanningRequestStoreErrorCode =
-  | "invalid-create"
-  | "invalid-provenance"
-  | "invalid-terminal-result"
-  | "request-conflict"
-  | "missing-request"
-  | "invalid-transition"
-  | "stale-revision"
-  | "immutable-terminal"
-  | "corrupt-record";
-
-export class PlanningRequestStoreError extends Error {
-  readonly code: PlanningRequestStoreErrorCode;
-
-  constructor(code: PlanningRequestStoreErrorCode) {
-    super(`planning request rejected: ${code}`);
-    this.name = "PlanningRequestStoreError";
-    this.code = code;
-  }
 }
 
 type PlanningStore = SqlStore & Pick<MigratorStore, "transaction">;
@@ -861,6 +845,17 @@ export function createPlanningRequestRepository(
 
     read,
 
+    async readByProposalId(proposalId) {
+      if (!validId(proposalId)) throw new PlanningRequestStoreError("invalid-transition");
+      const rows = await store.all(
+        "SELECT request_id FROM planning_request WHERE proposal_id=? ORDER BY request_id ASC",
+        [proposalId],
+      );
+      if (rows.length > 1) throw new PlanningRequestStoreError("corrupt-record");
+      const row = rows[0];
+      return row === undefined ? undefined : requireRequest(text(row, "request_id"));
+    },
+
     async readOpen() {
       const rows = await store.all(
         "SELECT request_id FROM planning_request WHERE lifecycle = 'open' ORDER BY created_at_ms ASC, request_id ASC",
@@ -933,50 +928,11 @@ WHERE request_id = ? AND lifecycle = 'open' AND revision = ?`,
         ) {
           throw new PlanningRequestStoreError("invalid-terminal-result");
         }
-        const resultJson = canonicalJson(result);
-        await store.run(
-          `INSERT INTO planning_request_terminal_result (
-  request_id, result_id, kind, result_json, completed_at_ms, plan_revision_id
-) VALUES (?, ?, ?, ?, ?, ?)`,
-          [
-            input.requestId,
-            result.resultId,
-            result.kind,
-            resultJson,
-            result.completedAtMs,
-            result.planRevisionId,
-          ],
-        );
-        if (current.tombstone === null) {
-          await store.run(
-            `INSERT INTO planning_request_tombstone (
-  request_id, payload_hash, status, created_at_ms, terminal_at_ms
-) VALUES (?, ?, ?, ?, ?)`,
-            [
-              input.requestId,
-              current.payloadHash,
-              result.kind,
-              input.updatedAtMs,
-              result.completedAtMs,
-            ],
-          );
-        }
-        await store.run(
-          `UPDATE planning_request SET
-  lifecycle = ?, attention = 'none', resolved_date_key = ?, revision = revision + 1,
-  updated_at_ms = ?, device_id = ?, hlc_physical_ms = ?, hlc_counter = ?
-WHERE request_id = ? AND lifecycle = 'open' AND revision = ?`,
-          [
-            result.kind,
-            input.resolvedDateKey,
-            input.updatedAtMs,
-            input.deviceId,
-            input.hlcPhysicalMs,
-            input.hlcCounter,
-            input.requestId,
-            input.expectedRevision,
-          ],
-        );
+        await completePlanningRequestInTransaction(store, {
+          ...input,
+          expectedProposalId: current.request.proposalId,
+          result,
+        });
         const updated = await requireRequest(input.requestId);
         if (updated.request.revision !== input.expectedRevision + 1) {
           throw new PlanningRequestStoreError("stale-revision");
