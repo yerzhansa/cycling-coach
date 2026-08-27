@@ -4,6 +4,7 @@ import {
   GetPlanStateRpcParamsSchema,
   GetPlanStateRpcResultSchema,
   PlanDraftPlanProjectionSchema,
+  PlanCoachProjectionDataSchema,
   PlanActiveProjectionDataSchema,
   PlanEndedProjectionDataSchema,
   PlanDraftProjectionSchema,
@@ -13,6 +14,7 @@ import {
   PlanProgressEventSchema,
   PlanReadModelSchema,
   PlanWeeklyReviewProjectionSchema,
+  PlanIntakePatchSchema,
   type ChatQueueRunResult,
   type ChatQueueSnapshot,
   type CoachEngine,
@@ -25,12 +27,15 @@ import {
   type PlanError,
   type PlanFtpProjection,
   type PlanHistoryEntry,
+  type PlanIntakePatch,
   type PlanProgressEvent,
   type PlanProposalProjection,
+  type PlanProposalReturn,
   type PlanRaceCourseProjection,
   type PlanRaceCourseSummary,
   type PlanStartDateProjection,
   type PlanReadModel,
+  type PlanScenarioId,
   type PlanWeeklyReviewProjection,
   type PlanningOperations,
   type TurnEvent,
@@ -94,6 +99,8 @@ import {
   naturalPlanCompletionDue,
   planFinalCivilDateKey,
   raceOutcomeDue,
+  evaluatePlanIntakeReadiness,
+  type PlanIntakeReadiness,
 } from "@enduragent/engine";
 import { cyclingTaperRefusal, projectCyclingSeasonMetadata } from "@enduragent/sport-cycling";
 import {
@@ -118,6 +125,8 @@ import {
   createPlanReplacementRepository,
   createPlanWeeklyReviewRepository,
   createPlanRaceOutcomeRepository,
+  createPlanIntakeRepository,
+  createPlanDraftBuildRepository,
   dateKeyFromText,
   planWeekIndex,
   PlanConversationValidationError,
@@ -147,6 +156,9 @@ import {
   type PlanWeeklyReviewRecord,
   type PlanWeeklyReviewRepository,
   type PlanRaceOutcomeRepository,
+  type PlanIntakeRecord,
+  type PlanIntakeRepository,
+  type PlanDraftBuildRepository,
   parsePlanAdaptationWorkoutSnapshot,
   PlanAdaptationLedgerValidationError,
   PlanProposalValidationError,
@@ -242,6 +254,12 @@ const CALENDAR_UPDATE_FAILED: PlanError = Object.freeze({
   retryable: true,
 });
 
+const CALENDAR_UPDATE_STATE_FAILED: PlanError = Object.freeze({
+  code: "persistence-failed",
+  message: "The Plan is active, but the Intervals update could not be saved. Retry.",
+  retryable: true,
+});
+
 const CALENDAR_VERIFICATION_FAILED: PlanError = Object.freeze({
   code: "verification-failed",
   message: "Intervals does not match the active Plan yet.",
@@ -272,6 +290,18 @@ const DRAFT_STALE: PlanError = Object.freeze({
   retryable: false,
 });
 
+const DRAFT_REVISION_INVALID: PlanError = Object.freeze({
+  code: "invalid-input",
+  message: "The coach couldn’t apply that request. Your current Draft is unchanged.",
+  retryable: false,
+});
+
+const DRAFT_INPUT_INVALID: PlanError = Object.freeze({
+  code: "invalid-input",
+  message: "Update the Goal Event date before creating this Draft.",
+  retryable: false,
+});
+
 const PROPOSAL_STALE: PlanError = Object.freeze({
   code: "stale-base",
   message: "The Plan changed before approval. Review the updated Proposal.",
@@ -283,6 +313,46 @@ const PROPOSAL_INVALID: PlanError = Object.freeze({
   message: "This Proposal could not be applied safely. The active Plan is unchanged.",
   retryable: false,
 });
+
+type SafeProposalReturn = PlanProposalReturn & {
+  readonly sourceScenarioId:
+    | "PL-S004"
+    | "PL-S010"
+    | "PL-S013"
+    | "PL-S037"
+    | "PL-S038"
+    | "PL-S039"
+    | "PL-S040"
+    | "PL-S041"
+    | "PL-S042"
+    | "PL-S043";
+};
+
+const SAFE_PROPOSAL_RETURN_SCENARIOS = new Set<PlanProposalReturn["sourceScenarioId"]>([
+  "PL-S004",
+  "PL-S010",
+  "PL-S013",
+  "PL-S037",
+  "PL-S038",
+  "PL-S039",
+  "PL-S040",
+  "PL-S041",
+  "PL-S042",
+  "PL-S043",
+]);
+
+const PROPOSAL_RESULT_SCENARIOS = new Set<PlanProposalReturn["sourceScenarioId"]>([
+  "PL-S007",
+  "PL-S022",
+  "PL-S023",
+  "PL-S024",
+  "PL-S025",
+  "PL-S097",
+]);
+
+function isSafeProposalReturn(value: PlanProposalReturn | undefined): value is SafeProposalReturn {
+  return value !== undefined && SAFE_PROPOSAL_RETURN_SCENARIOS.has(value.sourceScenarioId);
+}
 
 const UNDO_STALE: PlanError = Object.freeze({
   code: "conflict",
@@ -301,13 +371,22 @@ export interface PlanDraftBuild {
   readonly plan: PlanRecord;
   readonly workouts: readonly PlanWorkoutRecord[];
   readonly snapshot: unknown;
+  readonly checkpointId?: string;
+  readonly draftRevisionId?: string;
+}
+
+export interface PlanDraftBuildProgress {
+  readonly completedWeeks: number;
+  readonly totalWeeks: number;
 }
 
 export interface PlanDraftBuilder {
   form(input: {
     readonly conversation: PlanConversationRecord;
     readonly turns: readonly PlanConversationTurnRecord[];
+    readonly previous?: PlanDraftRevisionRecord;
     readonly course: RaceCourseSnapshot | null;
+    readonly onProgress?: (progress: PlanDraftBuildProgress) => void;
   }): Promise<PlanDraftBuild>;
   revise(input: {
     readonly conversation: PlanConversationRecord;
@@ -315,12 +394,14 @@ export interface PlanDraftBuilder {
     readonly previous: PlanDraftRevisionRecord;
     readonly instruction: string;
     readonly course: RaceCourseSnapshot | null;
+    readonly onProgress?: (progress: PlanDraftBuildProgress) => void;
   }): Promise<PlanDraftBuild>;
   recalculateCourse(input: {
     readonly conversation: PlanConversationRecord;
     readonly turns: readonly PlanConversationTurnRecord[];
     readonly previous: PlanDraftRevisionRecord;
     readonly course: RaceCourseSnapshot | null;
+    readonly onProgress?: (progress: PlanDraftBuildProgress) => void;
   }): Promise<PlanDraftBuild>;
   recalculateStartDate?(input: {
     readonly conversation: PlanConversationRecord;
@@ -328,6 +409,7 @@ export interface PlanDraftBuilder {
     readonly previous: PlanDraftRevisionRecord;
     readonly preview: PlanStartDatePreview;
     readonly course: RaceCourseSnapshot | null;
+    readonly onProgress?: (progress: PlanDraftBuildProgress) => void;
   }): Promise<PlanDraftBuild>;
 }
 
@@ -369,7 +451,9 @@ export interface PlanProposalReviser {
 
 export interface CreatePlanningOperationsDependencies {
   readonly conversations?: PlanConversationRepository;
+  readonly intakes?: PlanIntakeRepository;
   readonly plans?: PlanRepository;
+  readonly draftBuilds?: PlanDraftBuildRepository;
   readonly draftBuilder?: PlanDraftBuilder;
   readonly isReady?: (input: PlanReadinessInput) => boolean | Promise<boolean>;
   readonly ftp?: PlanFtpAdapter;
@@ -429,6 +513,12 @@ function planningRequestWorkout(record: PlanningRequestRecord): {
         ? null
         : { setId: workout.setId, workoutId: workout.workoutId },
   };
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function dateText(dateKey: number): string {
@@ -513,6 +603,11 @@ function draftPlanProjection(
   workouts: readonly PlanWorkoutRecord[],
 ): PlanDraftPlanProjection | null {
   if (plan === undefined) return null;
+  const structure = record(snapshot(plan.structureJson));
+  const metadata = projectCyclingSeasonMetadata(structure, plan.totalWeeks);
+  const phaseSummary = [...new Set(metadata.weeks.map((week) => week.phase))];
+  if (plan.targetDateKey !== null && !phaseSummary.includes("Race")) phaseSummary.push("Race");
+  const ftpWatts = structure?.ftpWatts;
   return PlanDraftPlanProjectionSchema.parse({
     id: plan.id,
     name: plan.name,
@@ -524,7 +619,33 @@ function draftPlanProjection(
     weekStartDay: plan.weekStartDay,
     workoutCount: workouts.length,
     plannedDurationS: workouts.reduce((total, workout) => total + (workout.durationS ?? 0), 0),
+    phaseSummary,
+    ...(typeof ftpWatts === "number" && Number.isSafeInteger(ftpWatts) && ftpWatts > 0
+      ? { ftpWatts }
+      : {}),
   });
+}
+
+function workoutGuidance(workout: PlanWorkoutRecord): {
+  readonly powerTargetW?: { readonly min: number; readonly max: number };
+  readonly cue?: string;
+} {
+  const structure = record(snapshot(workout.structureJson));
+  const power = record(structure?.powerWatts);
+  const min = power?.low;
+  const max = power?.high;
+  const workoutType = structure?.workoutType;
+  return {
+    ...(typeof min === "number" &&
+    Number.isSafeInteger(min) &&
+    min > 0 &&
+    typeof max === "number" &&
+    Number.isSafeInteger(max) &&
+    max >= min
+      ? { powerTargetW: { min, max } }
+      : {}),
+    ...(workoutType === "recovery" ? { cue: "Keep the pedals light." } : {}),
+  };
 }
 
 function startDateProjection(input: {
@@ -673,6 +794,7 @@ function activePlanData(input: {
   readonly driftError?: PlanError | null;
   readonly proposals: readonly PlanProposalProjection[];
   readonly selectedProposalId?: string | null;
+  readonly selectedProposalReturn?: PlanProposalReturn | null;
   readonly proposalRevisionText?: string | null;
   readonly history: readonly PlanHistoryEntry[];
   readonly selectedHistoryId?: string | null;
@@ -718,6 +840,7 @@ function activePlanData(input: {
         sport: workout.sport,
         name: workout.name,
         durationS: workout.durationS,
+        ...workoutGuidance(workout),
         ...(match === undefined
           ? {}
           : {
@@ -809,6 +932,7 @@ function activePlanData(input: {
               sport: selectedSource.sport,
               name: selectedSource.name,
               durationS: selectedSource.durationS,
+              ...workoutGuidance(selectedSource),
               ...(selectedDrift === undefined
                 ? {}
                 : {
@@ -846,6 +970,7 @@ function activePlanData(input: {
     selectedWorkoutId: input.selectedWorkoutId ?? null,
     proposals: input.proposals,
     selectedProposalId: input.selectedProposalId ?? null,
+    selectedProposalReturn: input.selectedProposalReturn ?? null,
     proposalRevisionText: input.proposalRevisionText ?? null,
     history: input.history,
     selectedHistoryId: input.selectedHistoryId ?? null,
@@ -873,7 +998,7 @@ function activeScenario(
   override: ActivePlanScenario | undefined,
 ): ActivePlanScenario {
   if (override !== undefined) return override;
-  if (projection === null) return "PL-S004";
+  if (projection === null) return "PL-S037";
   if (projection.job.status === "pending") return "PL-S037";
   if (projection.job.status === "verified") return "PL-S004";
   if (projection.job.status === "running" || projection.job.status === "retrying") {
@@ -948,10 +1073,32 @@ function courseFromJson(value: string | null): RaceCourseSnapshot | null {
   return value === null ? null : parseRaceCourseSnapshot(JSON.parse(value) as unknown);
 }
 
+function courseFailureFromJson(
+  value: string | null | undefined,
+): { readonly fileName: string; readonly detail: string } | null {
+  if (value === null || value === undefined) return null;
+  const parsed = JSON.parse(value) as Record<string, unknown>;
+  if (typeof parsed.fileName !== "string" || typeof parsed.detail !== "string") return null;
+  return { fileName: parsed.fileName, detail: parsed.detail };
+}
+
 function storedCourseProjection(
   conversation: PlanConversationRecord,
   draft: PlanDraftRevisionRecord | undefined,
 ): PlanRaceCourseProjection {
+  const failure = courseFailureFromJson(conversation.courseFailureJson);
+  if (failure !== null) {
+    const accepted =
+      draft !== undefined && draft.status !== "discarded"
+        ? courseFromJson(draft.raceCourseJson)
+        : courseFromJson(conversation.raceCourseJson);
+    return courseProjection({
+      status: "invalid",
+      accepted,
+      fileName: failure.fileName,
+      detail: failure.detail,
+    });
+  }
   if (draft !== undefined && draft.status !== "discarded") {
     const course = courseFromJson(draft.raceCourseJson);
     return PlanRaceCourseProjectionSchema.parse(
@@ -1020,12 +1167,14 @@ interface ReadOverrides {
   readonly dateScenario?: "PL-S046" | "PL-S048" | "PL-S050";
   readonly startDate?: PlanStartDateProjection;
   readonly activeScenario?: ActivePlanScenario;
+  readonly reconciliationError?: PlanError;
   readonly endedScenario?: EndedPlanScenario;
   readonly selectedWorkoutId?: string | null;
   readonly selectedWorkoutSourceScenarioId?: string | null;
   readonly returnFocusId?: string | null;
   readonly driftError?: PlanError | null;
   readonly selectedProposalId?: string | null;
+  readonly selectedProposalReturn?: PlanProposalReturn | null;
   readonly proposalRevisionText?: string | null;
   readonly proposalOverride?: PlanProposalProjection;
   readonly selectedHistoryId?: string | null;
@@ -1064,7 +1213,10 @@ export function createPlanningOperations(
 ): PlanningOperations {
   const conversations =
     dependencies.conversations ?? createPlanConversationRepository(input.context.store);
+  const intakes = dependencies.intakes ?? createPlanIntakeRepository(input.context.store);
   const plans = dependencies.plans ?? createPlanRepository(input.context.store);
+  const draftBuilds =
+    dependencies.draftBuilds ?? createPlanDraftBuildRepository(input.context.store);
   const reconciliations =
     dependencies.reconciliations ?? createPlanReconciliationRepository(input.context.store);
   const workoutMatches =
@@ -1085,6 +1237,121 @@ export function createPlanningOperations(
   const raceOutcomeRepository =
     dependencies.raceOutcomes ?? createPlanRaceOutcomeRepository(input.context.store);
   const enqueue = createSerializedLane();
+  const orderedWeekdays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+  const emptyIntake = async (conversationId: string): Promise<PlanIntakeRecord> => {
+    const stamp = input.identity.hlcStamp();
+    return {
+      conversationId,
+      eventName: null,
+      eventPriority: null,
+      eventDateKey: null,
+      athleteGoal: null,
+      availabilitySessionsPerWeek: null,
+      availabilityWeekdays: [],
+      experience: null,
+      currentTrainingSummary: null,
+      sourceTurnSequence: 0,
+      createdAtMs: stamp.physicalMs,
+      updatedAtMs: stamp.physicalMs,
+      deviceId: await input.identity.deviceId(),
+      hlcPhysicalMs: stamp.physicalMs,
+      hlcCounter: stamp.counter,
+    };
+  };
+  const ensureIntake = async (conversationId: string): Promise<PlanIntakeRecord> => {
+    const existing = await intakes.read(conversationId);
+    if (existing !== undefined) return existing;
+    return intakes.save(await emptyIntake(conversationId), null);
+  };
+  const applyIntakePatch = (
+    current: PlanIntakeRecord,
+    patch: PlanIntakePatch,
+  ): PlanIntakeRecord => {
+    const availability = patch.availability;
+    const weekdays =
+      availability === undefined
+        ? current.availabilityWeekdays
+        : availability === null
+          ? []
+          : orderedWeekdays.filter((weekday) => availability.weekdays.includes(weekday));
+    return {
+      ...current,
+      eventName: patch.eventName === undefined ? current.eventName : patch.eventName,
+      eventPriority:
+        patch.eventPriority === undefined ? current.eventPriority : patch.eventPriority,
+      eventDateKey:
+        patch.targetDate === undefined
+          ? current.eventDateKey
+          : patch.targetDate === null
+            ? null
+            : dateKeyFromText(patch.targetDate),
+      athleteGoal: patch.goal === undefined ? current.athleteGoal : patch.goal,
+      availabilitySessionsPerWeek:
+        availability === undefined
+          ? current.availabilitySessionsPerWeek
+          : (availability?.sessionsPerWeek ?? null),
+      availabilityWeekdays: weekdays,
+      experience: patch.experience === undefined ? current.experience : patch.experience,
+      currentTrainingSummary:
+        patch.currentTrainingSummary === undefined
+          ? current.currentTrainingSummary
+          : patch.currentTrainingSummary,
+    };
+  };
+  const synchronizeIntake = async (
+    conversationId: string,
+    knownTurns?: readonly PlanConversationTurnRecord[],
+  ): Promise<PlanIntakeRecord> => {
+    const current = await ensureIntake(conversationId);
+    const turns = knownTurns ?? (await conversations.readTurns(conversationId));
+    const pending = turns.filter((turn) => turn.sequence > current.sourceTurnSequence);
+    if (pending.length === 0) return current;
+    let next = current;
+    for (const turn of pending) {
+      try {
+        const lineage = snapshot(turn.lineageJson) as { readonly planIntakePatch?: unknown };
+        const parsed = PlanIntakePatchSchema.safeParse(lineage.planIntakePatch);
+        if (parsed.success) next = applyIntakePatch(next, parsed.data);
+      } catch {}
+    }
+    const stamp = input.identity.hlcStamp();
+    return intakes.save(
+      {
+        ...next,
+        sourceTurnSequence: pending.at(-1)?.sequence ?? current.sourceTurnSequence,
+        updatedAtMs: stamp.physicalMs,
+        deviceId: await input.identity.deviceId(),
+        hlcPhysicalMs: stamp.physicalMs,
+        hlcCounter: stamp.counter,
+      },
+      {
+        updatedAtMs: current.updatedAtMs,
+        deviceId: current.deviceId,
+        hlcPhysicalMs: current.hlcPhysicalMs,
+        hlcCounter: current.hlcCounter,
+      },
+    );
+  };
+  const draftReadiness = async (
+    readiness: PlanReadinessInput,
+    synchronizedIntake?: PlanIntakeRecord,
+  ): Promise<PlanIntakeReadiness> => {
+    if (dependencies.isReady !== undefined) {
+      return { ready: await dependencies.isReady(readiness), missing: [] };
+    }
+    const [intake, ftp] = await Promise.all([
+      synchronizedIntake ?? synchronizeIntake(readiness.conversation.id, readiness.turns),
+      dependencies.ftp?.read(),
+    ]);
+    const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+    return evaluatePlanIntakeReadiness({
+      intake,
+      ftp,
+      courseChoice: readiness.conversation.courseChoiceStatus,
+      minimumEventDateKey: todayDateKey,
+      maximumEventDateKey: addCivilDays(todayDateKey, 24 * 7 - 1),
+    });
+  };
   const refuseProposal = async (
     proposal: PlanProposalRecord,
     reason = PROPOSAL_INVALID.message,
@@ -1300,13 +1567,15 @@ export function createPlanningOperations(
         ? cleanupProjection
         : projection;
     const status =
-      displayedProjection === null || displayedProjection.job.status === "pending"
-        ? "not-started"
-        : displayedProjection.job.status === "verified"
-          ? "verified"
-          : displayedProjection.job.status === "failed"
-            ? "failed"
-            : "running";
+      overrides.reconciliationError !== undefined
+        ? "failed"
+        : displayedProjection === null || displayedProjection.job.status === "pending"
+          ? "not-started"
+          : displayedProjection.job.status === "verified"
+            ? "verified"
+            : displayedProjection.job.status === "failed"
+              ? "failed"
+              : "running";
     const verificationFailure =
       displayedProjection?.job.lastErrorCode === "calendar-verification-failed";
     const proposalRows = await proposalRepository.readOpenForPlan(plan.id);
@@ -1395,6 +1664,7 @@ export function createPlanningOperations(
         driftError: overrides.driftError,
         proposals: mergedProposalProjections,
         selectedProposalId: overrides.selectedProposalId,
+        selectedProposalReturn: overrides.selectedProposalReturn,
         proposalRevisionText: overrides.proposalRevisionText,
         history: historyProjection({ plan, workouts, history: historyRows, todayDateKey }),
         selectedHistoryId: overrides.selectedHistoryId,
@@ -1418,11 +1688,12 @@ export function createPlanningOperations(
             : null,
         error:
           status === "failed"
-            ? verificationFailure
-              ? CALENDAR_VERIFICATION_FAILED
-              : cleanupProjection !== null && cleanupProjection.job.status !== "verified"
-                ? CALENDAR_CLEANUP_FAILED
-                : CALENDAR_UPDATE_FAILED
+            ? (overrides.reconciliationError ??
+              (verificationFailure
+                ? CALENDAR_VERIFICATION_FAILED
+                : cleanupProjection !== null && cleanupProjection.job.status !== "verified"
+                  ? CALENDAR_CLEANUP_FAILED
+                  : CALENDAR_UPDATE_FAILED))
             : null,
       },
       proposalCapabilities: {
@@ -1570,9 +1841,12 @@ export function createPlanningOperations(
         : startDateProjection({ plan: draftPlan, todayDateKey }));
     const dateScenario =
       overrides.dateScenario ?? (projectedStartDate?.status === "invalid" ? "PL-S046" : undefined);
-    const ready =
-      conversation.courseChoiceStatus !== "undecided" &&
-      (await (dependencies.isReady?.({ conversation, turns, draft }) ?? Promise.resolve(false)));
+    const intake = await synchronizeIntake(conversation.id, turns);
+    const readiness = await draftReadiness({ conversation, turns, draft }, intake);
+    const ready = conversation.courseChoiceStatus !== "undecided" && readiness.ready;
+    const projectedCourse = overrides.course ?? storedCourseProjection(conversation, draft);
+    const courseScenario =
+      overrides.courseScenario ?? (projectedCourse.status === "invalid" ? "PL-S065" : undefined);
     return buildPlanLifecycleReadModel({
       conversation: {
         id: conversation.id,
@@ -1582,6 +1856,17 @@ export function createPlanningOperations(
       },
       turns,
       readyToCreateDraft: ready,
+      missingDraftRequirements: [...readiness.missing],
+      intake: {
+        eventName: intake.eventName,
+        eventPriority: intake.eventPriority,
+        eventDate: intake.eventDateKey === null ? null : dateText(intake.eventDateKey),
+        goal: intake.athleteGoal,
+        availabilitySessionsPerWeek: intake.availabilitySessionsPerWeek,
+        availabilityWeekdays: [...intake.availabilityWeekdays],
+        experience: intake.experience,
+        currentTrainingSummary: intake.currentTrainingSummary,
+      },
       queue,
       decision,
       draft: draftProjection(draft),
@@ -1591,10 +1876,8 @@ export function createPlanningOperations(
         ? {}
         : { ftp: ftpProjection(ftp, overrides.ftpScenario, overrides.ftpError ?? null) }),
       ...(overrides.ftpScenario === undefined ? {} : { ftpScenario: overrides.ftpScenario }),
-      course: overrides.course ?? storedCourseProjection(conversation, draft),
-      ...(overrides.courseScenario === undefined
-        ? {}
-        : { courseScenario: overrides.courseScenario }),
+      course: projectedCourse,
+      ...(courseScenario === undefined ? {} : { courseScenario }),
       ...(dateScenario === undefined ? {} : { dateScenario }),
       ...(overrides.replacementConfirmation === undefined
         ? {}
@@ -1617,8 +1900,9 @@ export function createPlanningOperations(
     athleteText: string,
     coachText: string,
     engineTurnId: string | null,
-  ): Promise<void> => {
-    if (!/\S/u.test(coachText) || engineTurnId === null) return;
+    intakePatch?: PlanIntakePatch,
+  ): Promise<boolean> => {
+    if (!/\S/u.test(coachText) || engineTurnId === null) return false;
     const existing = await conversations.readTurns(conversationId);
     if (
       existing.some((turn) => {
@@ -1626,21 +1910,48 @@ export function createPlanningOperations(
         return lineage.engineTurnId === engineTurnId;
       })
     ) {
-      return;
+      await synchronizeIntake(conversationId, existing);
+      return false;
     }
     const stamp = input.identity.hlcStamp();
-    await conversations.appendTurn({
+    const deviceId = await input.identity.deviceId();
+    const turn: PlanConversationTurnRecord = {
       id: input.identity.newUlid(),
       conversationId,
       sequence: existing.length + 1,
       athleteText,
       coachText,
-      lineageJson: JSON.stringify({ engineTurnId }),
+      lineageJson: JSON.stringify({
+        engineTurnId,
+        ...(intakePatch === undefined ? {} : { planIntakePatch: intakePatch }),
+      }),
       completedAtMs: stamp.physicalMs,
-      deviceId: await input.identity.deviceId(),
+      deviceId,
       hlcPhysicalMs: stamp.physicalMs,
       hlcCounter: stamp.counter,
-    });
+    };
+    const current = await ensureIntake(conversationId);
+    const projected = intakePatch === undefined ? current : applyIntakePatch(current, intakePatch);
+    const next: PlanIntakeRecord = {
+      ...projected,
+      sourceTurnSequence: turn.sequence,
+      updatedAtMs: stamp.physicalMs,
+      deviceId,
+      hlcPhysicalMs: stamp.physicalMs,
+      hlcCounter: stamp.counter,
+    };
+    if (intakes.appendTurnWithIntake !== undefined) {
+      await intakes.appendTurnWithIntake(turn, next, {
+        updatedAtMs: current.updatedAtMs,
+        deviceId: current.deviceId,
+        hlcPhysicalMs: current.hlcPhysicalMs,
+        hlcCounter: current.hlcCounter,
+      });
+      return true;
+    }
+    const saved = await conversations.appendTurn(turn);
+    await synchronizeIntake(conversationId, [...existing, saved]);
+    return true;
   };
 
   const executeCoachCall = async (
@@ -1663,6 +1974,16 @@ export function createPlanningOperations(
       });
     };
     let pendingText = command.text;
+    if (command.decision === undefined) {
+      const persistedTurns = await conversations.readTurns(conversation.id);
+      await input.engine.replacePlanChatHistory?.({
+        chatId,
+        turns: persistedTurns.map((turn) => ({
+          athleteText: turn.athleteText,
+          coachText: turn.coachText,
+        })),
+      });
+    }
     let queue = await (input.engine.getChatQueue?.({ chatId }) ?? Promise.resolve(EMPTY_QUEUE));
     if (command.decision !== undefined) {
       let turnId: string | null = null;
@@ -1694,12 +2015,33 @@ export function createPlanningOperations(
       const continuation =
         result.decision.status === "answered" ? result.decision.continuation : null;
       if (continuation?.status === "completed") {
-        await appendTurn(
+        const requestedPatch = await input.engine.getPlanDecisionIntakePatch?.({
+          chatId,
+          decisionId: command.decision.decisionId,
+        });
+        const continuationPatch = PlanIntakePatchSchema.safeParse(
+          continuation.lineage?.planIntakePatch,
+        );
+        const combinedPatch =
+          requestedPatch === undefined && !continuationPatch.success
+            ? undefined
+            : PlanIntakePatchSchema.parse({
+                ...requestedPatch,
+                ...(continuationPatch.success ? continuationPatch.data : {}),
+              });
+        const appended = await appendTurn(
           conversation.id,
           pendingText,
           continuation.coachText,
           turnId ?? continuation.turnId,
+          combinedPatch,
         );
+        if (appended) {
+          await input.engine.commitPlanChatTurn?.({
+            chatId,
+            turnId: turnId ?? continuation.turnId,
+          });
+        }
       }
       return;
     }
@@ -1712,6 +2054,7 @@ export function createPlanningOperations(
         forward(event);
       };
       let resultText = "";
+      let intakePatch: PlanIntakePatch | undefined;
       if (queue.items.length > 0 && queueText(queue) === pendingText) {
         let result: ChatQueueRunResult;
         if (queue.retryRequired !== undefined) {
@@ -1730,14 +2073,25 @@ export function createPlanningOperations(
           if (input.engine.resumeChatQueue === undefined) throw UNAVAILABLE;
           result = await input.engine.resumeChatQueue({ chatId }, onTurnEvent);
         }
-        resultText = result.response?.text ?? "";
+        resultText = result.response?.decision?.question ?? result.response?.text ?? "";
+        intakePatch = result.response?.planIntakePatch;
         queue = result.snapshot;
       } else {
         const result = await input.engine.chat({ chatId, message: pendingText }, onTurnEvent);
-        resultText = result.text;
+        resultText = result.decision?.question ?? result.text;
+        intakePatch = result.planIntakePatch;
         queue = await (input.engine.getChatQueue?.({ chatId }) ?? Promise.resolve(EMPTY_QUEUE));
       }
-      await appendTurn(conversation.id, pendingText, resultText, turnId);
+      const appended = await appendTurn(
+        conversation.id,
+        pendingText,
+        resultText,
+        turnId,
+        intakePatch,
+      );
+      if (appended && turnId !== null) {
+        await input.engine.commitPlanChatTurn?.({ chatId, turnId });
+      }
       if (queue.retryRequired !== undefined || queue.items.length === 0) break;
       const nextText = queueText(queue);
       if (!/\S/u.test(nextText) || (nextText === pendingText && resultText.length === 0)) break;
@@ -1752,21 +2106,22 @@ export function createPlanningOperations(
     course: RaceCourseSnapshot | null,
   ): Promise<void> => {
     const timestamp = input.identity.hlcStamp().physicalMs;
-    await plans.replace(build.plan, build.workouts);
+    const deviceId = await input.identity.deviceId();
     const conversationStamp = input.identity.hlcStamp();
-    await conversations.saveConversation({
+    const nextConversation: PlanConversationRecord = {
       ...conversation,
       planId: build.plan.id,
       courseChoiceStatus: course === null ? "omitted" : "attached",
       raceCourseJson: course === null ? null : JSON.stringify(course),
+      courseFailureJson: null,
       updatedAtMs: timestamp,
-      deviceId: await input.identity.deviceId(),
+      deviceId,
       hlcPhysicalMs: conversationStamp.physicalMs,
       hlcCounter: conversationStamp.counter,
-    });
+    };
     const stamp = input.identity.hlcStamp();
-    await conversations.saveDraftRevision({
-      id: input.identity.newUlid(),
+    const nextDraft: PlanDraftRevisionRecord = {
+      id: build.draftRevisionId ?? input.identity.newUlid(),
       conversationId: conversation.id,
       planId: build.plan.id,
       revision: (previous?.revision ?? 0) + 1,
@@ -1776,10 +2131,23 @@ export function createPlanningOperations(
       raceCourseJson: course === null ? null : JSON.stringify(course),
       createdAtMs: timestamp,
       updatedAtMs: timestamp,
-      deviceId: await input.identity.deviceId(),
+      deviceId,
       hlcPhysicalMs: stamp.physicalMs,
       hlcCounter: stamp.counter,
-    });
+    };
+    if (build.checkpointId !== undefined && build.draftRevisionId !== undefined) {
+      await draftBuilds.commitReady({
+        checkpointId: build.checkpointId,
+        conversation: nextConversation,
+        plan: build.plan,
+        workouts: build.workouts,
+        draft: nextDraft,
+      });
+      return;
+    }
+    await plans.replace(build.plan, build.workouts);
+    await conversations.saveConversation(nextConversation);
+    await conversations.saveDraftRevision(nextDraft);
   };
 
   const saveConversationCourse = async (
@@ -1791,6 +2159,22 @@ export function createPlanningOperations(
       ...conversation,
       courseChoiceStatus: course === null ? "omitted" : "attached",
       raceCourseJson: course === null ? null : JSON.stringify(course),
+      courseFailureJson: null,
+      updatedAtMs: stamp.physicalMs,
+      deviceId: await input.identity.deviceId(),
+      hlcPhysicalMs: stamp.physicalMs,
+      hlcCounter: stamp.counter,
+    });
+  };
+
+  const saveConversationCourseFailure = async (
+    conversation: PlanConversationRecord,
+    failure: { readonly fileName: string; readonly detail: string },
+  ): Promise<void> => {
+    const stamp = input.identity.hlcStamp();
+    await conversations.saveConversation({
+      ...conversation,
+      courseFailureJson: JSON.stringify(failure),
       updatedAtMs: stamp.physicalMs,
       deviceId: await input.identity.deviceId(),
       hlcPhysicalMs: stamp.physicalMs,
@@ -1915,14 +2299,19 @@ export function createPlanningOperations(
       const command = ExecutePlanTransitionRpcParamsSchema.parse(request);
       return enqueue(async () => {
         if (command.transitionId === "PL-T01") {
-          let conversation = await conversations.readLatestOpenConversation();
+          const latestPlan = await plans.readLatest();
+          const replacementPlanId = latestPlan?.status === "active" ? latestPlan.id : null;
+          let conversation =
+            replacementPlanId === null
+              ? await conversations.readLatestOpenConversation()
+              : await conversations.readLatestOpenReplacement(replacementPlanId);
           if (conversation === undefined) {
             const timestamp = input.identity.hlcStamp().physicalMs;
             const stamp = input.identity.hlcStamp();
             conversation = {
               id: input.identity.newUlid(),
               planId: null,
-              replacesPlanId: null,
+              replacesPlanId: replacementPlanId,
               courseChoiceStatus: "undecided",
               raceCourseJson: null,
               status: "open",
@@ -1935,6 +2324,7 @@ export function createPlanningOperations(
             };
             await conversations.saveConversation(conversation);
           }
+          await ensureIntake(conversation.id);
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",
             state: await read(),
@@ -2033,6 +2423,14 @@ export function createPlanningOperations(
           );
           if (!parsed.ok) {
             const invalid = rejectRaceCourseFile(parsing, parsed.detail);
+            try {
+              await saveConversationCourseFailure(conversation, {
+                fileName: invalid.fileName,
+                detail: invalid.detail,
+              });
+            } catch {
+              return reject(PERSISTENCE_FAILED);
+            }
             deliver(onEvent, {
               commandId: command.commandId,
               transitionId: command.transitionId,
@@ -2221,6 +2619,18 @@ export function createPlanningOperations(
             completed: 0,
             total: 1,
           });
+          let buildProgress: PlanDraftBuildProgress = { completedWeeks: 0, totalWeeks: 1 };
+          const onBuildProgress = (progress: PlanDraftBuildProgress): void => {
+            buildProgress = progress;
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "running",
+              completed: progress.completedWeeks,
+              total: progress.totalWeeks,
+            });
+          };
           try {
             const selectedDraft =
               command.transitionId === "PL-T07"
@@ -2239,8 +2649,7 @@ export function createPlanningOperations(
             if (
               command.transitionId === "PL-T06" &&
               (conversation.courseChoiceStatus === "undecided" ||
-                !(await (dependencies.isReady?.({ conversation, turns, draft: previous }) ??
-                  Promise.resolve(false))))
+                !(await draftReadiness({ conversation, turns, draft: previous })).ready)
             ) {
               return reject(UNAVAILABLE);
             }
@@ -2250,7 +2659,13 @@ export function createPlanningOperations(
                 : courseFromJson(previous.raceCourseJson);
             const build =
               command.transitionId === "PL-T06"
-                ? await dependencies.draftBuilder.form({ conversation, turns, course })
+                ? await dependencies.draftBuilder.form({
+                    conversation,
+                    turns,
+                    previous,
+                    course,
+                    onProgress: onBuildProgress,
+                  })
                 : previous === undefined
                   ? null
                   : await dependencies.draftBuilder.revise({
@@ -2259,6 +2674,7 @@ export function createPlanningOperations(
                       previous,
                       instruction: command.text,
                       course,
+                      onProgress: onBuildProgress,
                     });
             if (build === null) return reject(UNAVAILABLE);
             await saveDraft(conversation, previous, build, course);
@@ -2267,14 +2683,14 @@ export function createPlanningOperations(
               transitionId: command.transitionId,
               operationId,
               phase: "completed",
-              completed: 1,
-              total: 1,
+              completed: buildProgress.totalWeeks,
+              total: buildProgress.totalWeeks,
             });
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
               state: await read(),
             });
-          } catch {
+          } catch (error) {
             deliver(onEvent, {
               commandId: command.commandId,
               transitionId: command.transitionId,
@@ -2283,7 +2699,24 @@ export function createPlanningOperations(
               completed: 0,
               total: 1,
             });
-            return reject(PERSISTENCE_FAILED);
+            const revisionRejected =
+              command.transitionId === "PL-T07" &&
+              error instanceof Error &&
+              error.name === "CyclingPlanDraftBuildError" &&
+              ((error as Error & { readonly code?: string }).code === "unsupported-revision" ||
+                (error as Error & { readonly code?: string }).code === "revision-conflict");
+            const invalidDraftInput =
+              command.transitionId === "PL-T06" &&
+              error instanceof Error &&
+              error.name === "CyclingPlanDraftBuildError" &&
+              (error as Error & { readonly code?: string }).code === "invalid-target-date";
+            return reject(
+              revisionRejected
+                ? DRAFT_REVISION_INVALID
+                : invalidDraftInput
+                  ? DRAFT_INPUT_INVALID
+                  : PERSISTENCE_FAILED,
+            );
           }
         }
         if (command.transitionId === "PL-T08") {
@@ -2432,6 +2865,14 @@ export function createPlanningOperations(
             );
             if (!parsed.ok) {
               const invalid = rejectRaceCourseFile(parsing, parsed.detail);
+              try {
+                await saveConversationCourseFailure(conversation, {
+                  fileName: invalid.fileName,
+                  detail: invalid.detail,
+                });
+              } catch {
+                return reject(PERSISTENCE_FAILED);
+              }
               return reject(COURSE_INVALID, {
                 courseScenario: "PL-S065",
                 course: courseProjection({
@@ -2566,16 +3007,29 @@ export function createPlanningOperations(
               throw new Error("Plan activation failed.");
             const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
             const stamp = input.identity.hlcStamp();
-            await reconciliations
-              .createOrGetJob({
+            try {
+              await reconciliations.createOrGetJob({
                 id: input.identity.newUlid(),
                 planId: plan.id,
                 kind: "mirror",
                 windowStartDateKey: todayDateKey,
                 windowEndDateKey: addCivilDays(todayDateKey, 6),
                 createdAtMs: stamp.physicalMs,
-              })
-              .catch(() => undefined);
+              });
+            } catch {
+              deliver(onEvent, {
+                commandId: command.commandId,
+                transitionId: command.transitionId,
+                operationId,
+                phase: "failed",
+                completed: 0,
+                total: 1,
+              });
+              return reject(CALENDAR_UPDATE_STATE_FAILED, {
+                activeScenario: "PL-S039",
+                reconciliationError: CALENDAR_UPDATE_STATE_FAILED,
+              });
+            }
             deliver(onEvent, {
               commandId: command.commandId,
               transitionId: command.transitionId,
@@ -2586,7 +3040,7 @@ export function createPlanningOperations(
             });
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
-              state: await read(),
+              state: await read({ activeScenario: "PL-S037" }),
             });
           } catch (error) {
             deliver(onEvent, {
@@ -2674,7 +3128,10 @@ export function createPlanningOperations(
               completed: 0,
               total,
             });
-            return reject(CALENDAR_UPDATE_FAILED);
+            return reject(CALENDAR_UPDATE_STATE_FAILED, {
+              activeScenario: "PL-S039",
+              reconciliationError: CALENDAR_UPDATE_STATE_FAILED,
+            });
           }
         }
         if (command.transitionId === "PL-T13") {
@@ -2880,6 +3337,12 @@ export function createPlanningOperations(
           }
         }
         if (command.transitionId === "PL-T17") {
+          if (
+            command.selectedProposalReturn !== undefined &&
+            !isSafeProposalReturn(command.selectedProposalReturn)
+          ) {
+            return reject(UNAVAILABLE);
+          }
           const [proposal, plan] = await Promise.all([
             proposalRepository.read(command.proposalId),
             plans.read(command.planId),
@@ -3041,6 +3504,7 @@ export function createPlanningOperations(
                     state: await read({
                       activeScenario: "PL-S025",
                       selectedProposalId: proposal.id,
+                      selectedProposalReturn: command.selectedProposalReturn,
                       proposalOverride: projected,
                     }),
                   });
@@ -3048,6 +3512,7 @@ export function createPlanningOperations(
                 return reject(PERSISTENCE_FAILED, {
                   activeScenario: "PL-S007",
                   selectedProposalId: proposal.id,
+                  selectedProposalReturn: command.selectedProposalReturn,
                 });
               }
               return ExecutePlanTransitionRpcResultSchema.parse({
@@ -3060,6 +3525,7 @@ export function createPlanningOperations(
               state: await read({
                 activeScenario: "PL-S007",
                 selectedProposalId: proposal.id,
+                selectedProposalReturn: command.selectedProposalReturn,
                 proposalOverride: proposalProjection({
                   proposal,
                   premises,
@@ -3076,6 +3542,7 @@ export function createPlanningOperations(
                 state: await read({
                   activeScenario: "PL-S007",
                   selectedProposalId: proposal.id,
+                  selectedProposalReturn: command.selectedProposalReturn,
                   proposalOverride: proposalProjection({
                     proposal,
                     premises,
@@ -3099,6 +3566,7 @@ export function createPlanningOperations(
                 state: await read({
                   activeScenario: "PL-S025",
                   selectedProposalId: proposal.id,
+                  selectedProposalReturn: command.selectedProposalReturn,
                   proposalOverride: projected,
                 }),
               });
@@ -3106,11 +3574,21 @@ export function createPlanningOperations(
             await refuseProposal(proposal);
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
-              state: await read({ activeScenario: "PL-S097" }),
+              state: await read({
+                activeScenario: "PL-S097",
+                selectedProposalId: proposal.id,
+                selectedProposalReturn: command.selectedProposalReturn,
+              }),
             });
           }
         }
         if (command.transitionId === "PL-T18") {
+          if (
+            command.selectedProposalReturn !== undefined &&
+            !isSafeProposalReturn(command.selectedProposalReturn)
+          ) {
+            return reject(UNAVAILABLE);
+          }
           if (dependencies.proposalReviser === undefined) return reject(UNAVAILABLE);
           const proposal = await proposalRepository.read(command.proposalId);
           if (proposal?.status !== "proposed") return reject(UNAVAILABLE);
@@ -3118,7 +3596,11 @@ export function createPlanningOperations(
           if (mutation === null) {
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
-              state: await read({ activeScenario: "PL-S097" }),
+              state: await read({
+                activeScenario: "PL-S097",
+                selectedProposalId: proposal.id,
+                selectedProposalReturn: command.selectedProposalReturn,
+              }),
             });
           }
           if (mutation.weekLoad !== null && dependencies.proposalLoadCalculator === undefined) {
@@ -3143,6 +3625,7 @@ export function createPlanningOperations(
               state: await read({
                 activeScenario: "PL-S023",
                 selectedProposalId: revised.id,
+                selectedProposalReturn: command.selectedProposalReturn,
                 proposalRevisionText: command.text,
               }),
             });
@@ -3151,25 +3634,44 @@ export function createPlanningOperations(
               return reject(UNAVAILABLE, {
                 activeScenario: "PL-S007",
                 selectedProposalId: proposal.id,
+                selectedProposalReturn: command.selectedProposalReturn,
               });
             }
             return reject(PERSISTENCE_FAILED, {
               activeScenario: "PL-S022",
               selectedProposalId: proposal.id,
+              selectedProposalReturn: command.selectedProposalReturn,
               proposalRevisionText: command.text,
             });
           }
         }
         if (command.transitionId === "PL-T19") {
+          if (
+            command.selectedProposalReturn !== undefined &&
+            !isSafeProposalReturn(command.selectedProposalReturn)
+          ) {
+            return reject(UNAVAILABLE);
+          }
           const proposal = await proposalRepository.read(command.proposalId);
-          if (proposal?.status !== "proposed" || proposal.revision !== command.expectedRevision) {
+          if (proposal?.status !== "proposed") {
             return reject(PROPOSAL_STALE);
+          }
+          if (proposal.revision !== command.expectedRevision) {
+            return reject(PROPOSAL_STALE, {
+              activeScenario: "PL-S025",
+              selectedProposalId: proposal.id,
+              selectedProposalReturn: command.selectedProposalReturn,
+            });
           }
           const mutation = await parseProposalMutationOrRefuse(proposal);
           if (mutation === null) {
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
-              state: await read({ activeScenario: "PL-S097" }),
+              state: await read({
+                activeScenario: "PL-S097",
+                selectedProposalId: proposal.id,
+                selectedProposalReturn: command.selectedProposalReturn,
+              }),
             });
           }
           const [plan, workouts, premises] = await Promise.all([
@@ -3264,6 +3766,7 @@ export function createPlanningOperations(
               return reject(UNAVAILABLE, {
                 activeScenario: "PL-S007",
                 selectedProposalId: proposal.id,
+                selectedProposalReturn: command.selectedProposalReturn,
               });
             }
             if (isProposalStale(error)) {
@@ -3318,6 +3821,7 @@ export function createPlanningOperations(
                 state: await read({
                   activeScenario: "PL-S025",
                   selectedProposalId: current.id,
+                  selectedProposalReturn: command.selectedProposalReturn,
                   proposalOverride: projected,
                 }),
               });
@@ -3333,6 +3837,7 @@ export function createPlanningOperations(
             return reject(PROPOSAL_INVALID, {
               activeScenario: "PL-S007",
               selectedProposalId: proposal.id,
+              selectedProposalReturn: command.selectedProposalReturn,
             });
           }
           deliver(onEvent, {
@@ -3345,10 +3850,20 @@ export function createPlanningOperations(
           });
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",
-            state: await read({ activeScenario: "PL-S008", selectedHistoryId: ledgerId }),
+            state: await read({
+              activeScenario: "PL-S008",
+              selectedProposalReturn: command.selectedProposalReturn,
+              selectedHistoryId: ledgerId,
+            }),
           });
         }
         if (command.transitionId === "PL-T20") {
+          if (
+            command.selectedProposalReturn !== undefined &&
+            !isSafeProposalReturn(command.selectedProposalReturn)
+          ) {
+            return reject(UNAVAILABLE);
+          }
           const proposal = await proposalRepository.read(command.proposalId);
           if (proposal?.status !== "proposed") return reject(UNAVAILABLE);
           const stamp = input.identity.hlcStamp();
@@ -3388,7 +3903,11 @@ export function createPlanningOperations(
           });
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",
-            state: await read({ activeScenario: "PL-S097" }),
+            state: await read({
+              activeScenario: "PL-S097",
+              selectedProposalId: proposal.id,
+              selectedProposalReturn: command.selectedProposalReturn,
+            }),
           });
         }
         if (command.transitionId === "PL-T21") {
@@ -4067,6 +4586,60 @@ export function createPlanningOperations(
           }
         }
         if (command.transitionId === "PL-T39") {
+          const closeCoachPair =
+            (command.sourceScenarioId === "PL-S017" &&
+              command.destinationScenarioId === "PL-S001") ||
+            (command.sourceScenarioId === "PL-S079" && command.destinationScenarioId === "PL-S004");
+          if (closeCoachPair) {
+            const state = await read();
+            if (state.scenarioId !== command.sourceScenarioId || state.projection !== "coach") {
+              return reject(UNAVAILABLE);
+            }
+            if (command.destinationScenarioId === "PL-S001") {
+              return ExecutePlanTransitionRpcResultSchema.parse({
+                status: "completed",
+                state: buildPlanLifecycleReadModel({
+                  conversation: null,
+                  turns: [],
+                  readyToCreateDraft: false,
+                  queue: EMPTY_QUEUE,
+                  decision: null,
+                  draft: null,
+                }),
+              });
+            }
+            const data = PlanCoachProjectionDataSchema.parse(state.data);
+            const activePlan =
+              data.replacesPlanId === null ? undefined : await plans.read(data.replacesPlanId);
+            if (activePlan?.status !== "active") return reject(UNAVAILABLE);
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await readActive(activePlan, 0, { activeScenario: "PL-S004" }),
+            });
+          }
+          const coachBackPair =
+            (command.sourceScenarioId === "PL-S016" &&
+              command.destinationScenarioId === "PL-S017") ||
+            (command.sourceScenarioId === "PL-S103" && command.destinationScenarioId === "PL-S079");
+          if (coachBackPair) {
+            const state = await read();
+            if (state.scenarioId !== command.sourceScenarioId || state.projection !== "coach") {
+              return reject(UNAVAILABLE);
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: PlanReadModelSchema.parse({
+                ...state,
+                scenarioId: command.destinationScenarioId,
+                title: "Plan coach",
+                summary: "Tell your coach what else should shape this Plan.",
+                transitions: state.transitions.filter(
+                  (transition) =>
+                    transition.transitionId !== "PL-T06" && transition.transitionId !== "PL-T39",
+                ),
+              }),
+            });
+          }
           if (
             command.sourceScenarioId === "PL-S099" &&
             command.destinationScenarioId === "PL-S004"
@@ -4156,6 +4729,42 @@ export function createPlanningOperations(
               state: await read({ endedScenario: "PL-S095" }),
             });
           }
+          const readReturnState = async (
+            scenarioId: PlanScenarioId,
+            returnFocusId: string,
+          ): Promise<PlanReadModel> => {
+            if (scenarioId !== "PL-S028") {
+              return read({
+                activeScenario: scenarioId as ActivePlanScenario,
+                returnFocusId,
+              });
+            }
+            const state = await read({ returnFocusId });
+            return PlanReadModelSchema.parse({
+              ...state,
+              scenarioId: "PL-S028",
+              projection: "attention",
+              title: "Plan attention",
+              summary: `${state.attention.count} items need your decision.`,
+            });
+          };
+          if (PROPOSAL_RESULT_SCENARIOS.has(command.sourceScenarioId)) {
+            const proposalReturn = command.selectedProposalReturn;
+            if (
+              !isSafeProposalReturn(proposalReturn) ||
+              command.destinationScenarioId !== proposalReturn.sourceScenarioId ||
+              command.returnFocusId !== proposalReturn.returnFocusId
+            ) {
+              return reject(UNAVAILABLE);
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await readReturnState(
+                proposalReturn.sourceScenarioId,
+                proposalReturn.returnFocusId,
+              ),
+            });
+          }
           const allowed =
             (command.destinationScenarioId === "PL-S005" &&
               [
@@ -4191,18 +4800,17 @@ export function createPlanningOperations(
               command.destinationScenarioId === "PL-S009") ||
             (command.sourceScenarioId === "PL-S009" &&
               command.destinationScenarioId === "PL-S006") ||
-            (command.sourceScenarioId === "PL-S021" &&
-              command.destinationScenarioId === "PL-S009") ||
+            ((command.sourceScenarioId === "PL-S021" || command.sourceScenarioId === "PL-S032") &&
+              (command.destinationScenarioId === "PL-S004" ||
+                command.destinationScenarioId === "PL-S009" ||
+                command.destinationScenarioId === "PL-S028")) ||
             (command.sourceScenarioId === "PL-S005" &&
               command.destinationScenarioId === "PL-S090") ||
             (command.sourceScenarioId === "PL-S087" && command.destinationScenarioId === "PL-S088");
           if (!allowed) return reject(UNAVAILABLE);
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",
-            state: await read({
-              activeScenario: command.destinationScenarioId as ActivePlanScenario,
-              returnFocusId: command.returnFocusId,
-            }),
+            state: await readReturnState(command.destinationScenarioId, command.returnFocusId),
           });
         }
         if (command.transitionId === "PL-T33") {
@@ -4286,7 +4894,14 @@ export function createPlanningOperations(
             }
             return ExecutePlanTransitionRpcResultSchema.parse({
               status: "completed",
-              state: await read({ activeScenario: scenario, selectedProposalId: proposalId }),
+              state: await read({
+                activeScenario: scenario,
+                selectedProposalId: proposalId,
+                selectedProposalReturn: {
+                  sourceScenarioId: "PL-S028",
+                  returnFocusId: `plan-attention-${command.attentionId}`,
+                },
+              }),
             });
           }
           const workoutId = command.attentionId.slice(
@@ -4301,6 +4916,7 @@ export function createPlanningOperations(
             state: await read({
               activeScenario: isMatch ? "PL-S021" : "PL-S032",
               selectedWorkoutId: workoutId,
+              selectedWorkoutSourceScenarioId: "PL-S028",
             }),
           });
         }

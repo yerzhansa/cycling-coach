@@ -282,6 +282,8 @@ export const PlanDraftPlanProjectionSchema = z
     weekStartDay: z.number().int().min(0).max(6),
     workoutCount: z.number().int().nonnegative(),
     plannedDurationS: z.number().int().nonnegative(),
+    phaseSummary: z.array(z.string().min(1)).min(1).optional(),
+    ftpWatts: z.number().int().positive().optional(),
   })
   .strict();
 export type PlanDraftPlanProjection = z.infer<typeof PlanDraftPlanProjectionSchema>;
@@ -293,6 +295,15 @@ export const PlanActiveWorkoutProjectionSchema = z
     sport: z.string().min(1),
     name: z.string().min(1),
     durationS: z.number().int().positive().nullable(),
+    powerTargetW: z
+      .object({
+        min: z.number().int().positive(),
+        max: z.number().int().positive(),
+      })
+      .strict()
+      .refine((value) => value.min <= value.max, { message: "power range must be ordered" })
+      .optional(),
+    cue: z.string().min(1).optional(),
     match: z
       .object({
         kind: z.enum(["planned", "extra"]),
@@ -734,6 +745,14 @@ export const PlanWeeklyReviewProjectionSchema = z.discriminatedUnion("status", [
 ]);
 export type PlanWeeklyReviewProjection = z.infer<typeof PlanWeeklyReviewProjectionSchema>;
 
+export const PlanProposalReturnSchema = z
+  .object({
+    sourceScenarioId: PlanScenarioIdSchema,
+    returnFocusId: z.string().min(1),
+  })
+  .strict();
+export type PlanProposalReturn = z.infer<typeof PlanProposalReturnSchema>;
+
 export const PlanActiveProjectionDataSchema = z
   .object({
     plan: PlanDraftPlanProjectionSchema,
@@ -754,6 +773,7 @@ export const PlanActiveProjectionDataSchema = z
     selectedWorkoutId: z.string().min(1).nullable().optional(),
     proposals: z.array(PlanProposalProjectionSchema).optional(),
     selectedProposalId: z.string().min(1).nullable().optional(),
+    selectedProposalReturn: PlanProposalReturnSchema.nullable().optional(),
     proposalRevisionText: z.string().nullable().optional(),
     history: z.array(PlanHistoryEntrySchema).optional(),
     selectedHistoryId: z.string().min(1).nullable().optional(),
@@ -784,11 +804,39 @@ export const PlanActiveProjectionDataSchema = z
   .strict();
 export type PlanActiveProjectionData = z.infer<typeof PlanActiveProjectionDataSchema>;
 
+export const PlanRaceOutcomeDetailsSchema = z.discriminatedUnion("outcome", [
+  z
+    .object({
+      outcome: z.literal("completed"),
+      raceDate: TrainingExportCivilDateSchema,
+      goal: z.string().min(1),
+      result: z.string().min(1),
+      trainingDurationS: z.number().int().nonnegative(),
+      raceDurationS: z.number().int().positive(),
+      totalDurationS: z.number().int().positive(),
+      modeledFinishMinutes: z
+        .object({ min: z.number().int().positive(), max: z.number().int().positive() })
+        .strict()
+        .refine((value) => value.min <= value.max, { message: "finish range must be ordered" }),
+      actualDurationS: z.number().int().positive(),
+      appliedChangeCount: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal("not-completed"),
+      raceDate: TrainingExportCivilDateSchema,
+    })
+    .strict(),
+]);
+export type PlanRaceOutcomeDetails = z.infer<typeof PlanRaceOutcomeDetailsSchema>;
+
 export const PlanEndedProjectionDataSchema = z
   .object({
     plan: PlanDraftPlanProjectionSchema,
     endedAtMs: z.number().int().nonnegative(),
     raceOutcome: z.enum(["completed", "not-completed"]).nullable().optional(),
+    raceOutcomeDetails: PlanRaceOutcomeDetailsSchema.optional(),
     outcomeAvailable: z.boolean().optional(),
     cleanupItems: z.array(
       z
@@ -802,7 +850,19 @@ export const PlanEndedProjectionDataSchema = z
         .strict(),
     ),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (
+      value.raceOutcomeDetails !== undefined &&
+      value.raceOutcome !== value.raceOutcomeDetails.outcome
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["raceOutcomeDetails"],
+        message: "race outcome details must match the recorded outcome",
+      });
+    }
+  });
 export type PlanEndedProjectionData = z.infer<typeof PlanEndedProjectionDataSchema>;
 
 export const PlanStartDateProjectionSchema = z
@@ -1002,6 +1062,32 @@ export const PlanFtpProjectionSchema = z
   });
 export type PlanFtpProjection = z.infer<typeof PlanFtpProjectionSchema>;
 
+export const PlanIntakeProjectionSchema = z
+  .object({
+    eventName: z.string().min(1).nullable(),
+    eventPriority: z.enum(["A", "B", "C"]).nullable(),
+    eventDate: TrainingExportCivilDateSchema.nullable(),
+    goal: z.string().min(1).nullable(),
+    availabilitySessionsPerWeek: z.number().int().min(1).max(6).nullable(),
+    availabilityWeekdays: z.array(z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])),
+    experience: z.enum(["beginner", "intermediate", "advanced", "elite"]).nullable(),
+    currentTrainingSummary: z.string().min(1).nullable(),
+  })
+  .strict();
+export type PlanIntakeProjection = z.infer<typeof PlanIntakeProjectionSchema>;
+
+export const PlanDraftRequirementSchema = z.enum([
+  "event",
+  "priority",
+  "date",
+  "goal",
+  "availability",
+  "experience",
+  "ftp",
+  "course-choice",
+]);
+export type PlanDraftRequirement = z.infer<typeof PlanDraftRequirementSchema>;
+
 export const PlanCoachProjectionDataSchema = z
   .object({
     conversationId: z.string().min(1),
@@ -1010,6 +1096,8 @@ export const PlanCoachProjectionDataSchema = z
     replacement: z.boolean(),
     replacesPlanId: z.string().min(1).nullable(),
     readyToCreateDraft: z.boolean(),
+    missingDraftRequirements: z.array(PlanDraftRequirementSchema).optional(),
+    intake: PlanIntakeProjectionSchema.optional(),
     messages: z.array(PlanCoachMessageSchema),
     queue: ChatQueueSnapshotSchema,
     decision: CoachDecisionReadModelSchema.nullable(),
@@ -1287,6 +1375,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       commandId: CommandIdSchema,
       planId: EntityIdSchema,
       proposalId: EntityIdSchema,
+      selectedProposalReturn: PlanProposalReturnSchema.optional(),
     })
     .strict(),
   z
@@ -1295,6 +1384,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       commandId: CommandIdSchema,
       proposalId: EntityIdSchema,
       text: z.string().trim().min(1),
+      selectedProposalReturn: PlanProposalReturnSchema.optional(),
     })
     .strict(),
   z
@@ -1303,6 +1393,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       commandId: CommandIdSchema,
       proposalId: EntityIdSchema,
       expectedRevision: z.number().int().nonnegative(),
+      selectedProposalReturn: PlanProposalReturnSchema.optional(),
     })
     .strict(),
   z
@@ -1310,6 +1401,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       transitionId: z.literal("PL-T20"),
       commandId: CommandIdSchema,
       proposalId: EntityIdSchema,
+      selectedProposalReturn: PlanProposalReturnSchema.optional(),
     })
     .strict(),
   z
@@ -1463,6 +1555,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       sourceScenarioId: PlanScenarioIdSchema,
       destinationScenarioId: PlanScenarioIdSchema,
       returnFocusId: EntityIdSchema,
+      selectedProposalReturn: PlanProposalReturnSchema.optional(),
     })
     .strict(),
 ]);

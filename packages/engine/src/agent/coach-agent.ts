@@ -16,9 +16,11 @@ import type {
   SkipCoachDecisionRpcResult,
   TurnEvent,
   TurnEventHandler,
+  PlanIntakePatch,
 } from "@enduragent/coach-contract";
-import { RequestUserDecisionResultSchema } from "@enduragent/coach-contract";
+import { PlanIntakePatchSchema, RequestUserDecisionResultSchema } from "@enduragent/coach-contract";
 import type {
+  ChatLineage,
   ChatStorePort,
   ChatNativeMediaInput,
   EngineConfig,
@@ -32,7 +34,14 @@ import type {
 import type { Sport, SportRuntimePorts } from "../sport.js";
 import { messageText } from "../sport/model-message.js";
 import { getEffectiveSections } from "../sport/effective-sections.js";
-import { ATHLETE_CONTEXT_MAX_CHARS, buildSystemPrompt, staticRuleBlocks } from "./system-prompt.js";
+import {
+  ATHLETE_CONTEXT_MAX_CHARS,
+  buildPlanCoachSystemPrompt,
+  buildSystemPrompt,
+  PLAN_COACH_AUTHORITY_RULES,
+  planCoachRuleBlocks,
+  staticRuleBlocks,
+} from "./system-prompt.js";
 import {
   computeAssembledHash,
   computeTemplateHash,
@@ -91,6 +100,8 @@ import {
 } from "./coach-decision-tool.js";
 import { PLAN_REFERENCE_TOOL_NAME, createPlanReferenceTool } from "./plan-reference-tool.js";
 import { attachNativeMediaToCurrentUserMessage } from "../native-media-message.js";
+import { createPlanIntakeTool, PLAN_INTAKE_TOOL_NAME } from "./plan-intake-tool.js";
+import { assertPlanCoachReplyAuthority } from "./plan-coach-authority.js";
 
 const MAX_OVERFLOW_ATTEMPTS = 3;
 const MAX_TIMEOUT_ATTEMPTS = 2;
@@ -327,6 +338,17 @@ export function gateMutatingTool(
 // AGENT
 // ============================================================================
 
+export interface DeferredPlanTurn {
+  readonly chatId: string;
+  readonly turnId: string;
+  readonly athleteText: string;
+  readonly coachText: string;
+  readonly transcriptCoachText: string;
+  readonly completedAt: string;
+  readonly lineage: ChatLineage;
+  readonly planIntakePatch?: PlanIntakePatch;
+}
+
 export class CoachAgent {
   private sport: Sport;
   private llm: LLM;
@@ -339,6 +361,7 @@ export class CoachAgent {
   private chatStore: ChatStorePort;
   private log: LoggerPort;
   private tools: ToolSet;
+  private readonly planTools: ToolSet;
   private readonly decisionTool: Tool | undefined;
   private readonly planReferenceTool: Tool | undefined;
   private systemPrompt: string;
@@ -354,6 +377,7 @@ export class CoachAgent {
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
   private templateHash?: string;
+  private planTemplateHash?: string;
   private readonly activeChatTurns = new Map<
     string,
     { readonly turnId: string; readonly controller: AbortController }
@@ -471,9 +495,37 @@ export class CoachAgent {
         ? {}
         : { [PLAN_REFERENCE_TOOL_NAME]: this.planReferenceTool }),
     };
+    const planIntakeTool = createPlanIntakeTool();
+    this.planTools = {
+      ...(this.decisionTool === undefined ? {} : { [COACH_DECISION_TOOL_NAME]: this.decisionTool }),
+      [PLAN_INTAKE_TOOL_NAME]: planIntakeTool,
+    };
     ports.onToolsAssembled?.(Object.freeze(Object.keys(this.tools)));
     // systemPrompt is rebuilt at the top of every chat() call; no need to bake one here.
     this.systemPrompt = "";
+  }
+
+  private toolsForChat(chatId: string): ToolSet {
+    return chatId.startsWith("plan:") ? this.planTools : this.tools;
+  }
+
+  private templateHashForChat(chatId: string, tools: ToolSet): string {
+    const current = chatId.startsWith("plan:") ? this.planTemplateHash : this.templateHash;
+    if (current !== undefined) return current;
+    const value = computeTemplateHash({
+      soul: chatId.startsWith("plan:") ? PLAN_COACH_AUTHORITY_RULES : this.sport.soul,
+      skills: chatId.startsWith("plan:") ? {} : this.sport.skills,
+      ruleBlocks: chatId.startsWith("plan:")
+        ? planCoachRuleBlocks()
+        : staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
+            confirmationGate: this.confirmationGate,
+          }),
+      toolSchemas: tools,
+      model: this.config.llm.model,
+    });
+    if (chatId.startsWith("plan:")) this.planTemplateHash = value;
+    else this.templateHash = value;
+    return value;
   }
 
   private runWithWriteProvenance<T>(provenance: SourceProvenance, fn: () => T): T {
@@ -730,6 +782,8 @@ export class CoachAgent {
     onEvent?: TurnEventHandler,
     onDecision?: (decision: CoachDecisionReadModel) => void,
     requestedTurnId?: string,
+    onPlanIntake?: (patch: PlanIntakePatch) => void,
+    onDeferredPlanTurn?: (turn: DeferredPlanTurn) => void,
   ): Promise<string> {
     // One explicit context per turn, created synchronously before the session
     // lock is queued so rapid same-chat sends can never share turn state. Tool
@@ -840,16 +894,15 @@ export class CoachAgent {
           }
         }
 
-        this.systemPrompt = buildSystemPrompt(
-          this.sport,
-          this.memory,
-          this.tz,
-          this.buildDegradeBlock(),
-          {
-            excludeSections: this.excludedSectionNames,
-            confirmationGate: this.confirmationGate,
-          },
-        );
+        const turnTools = this.toolsForChat(chatId);
+        this.systemPrompt = chatId.startsWith("plan:")
+          ? buildPlanCoachSystemPrompt(this.memory, this.tz, this.buildDegradeBlock(), {
+              excludeSections: this.excludedSectionNames,
+            })
+          : buildSystemPrompt(this.sport, this.memory, this.tz, this.buildDegradeBlock(), {
+              excludeSections: this.excludedSectionNames,
+              confirmationGate: this.confirmationGate,
+            });
         const contextProvenance =
           this.memory.getContextWithProvenance?.({
             excludeSections: this.excludedSectionNames,
@@ -1035,7 +1088,7 @@ export class CoachAgent {
             const onAttemptTextDelta = (delta: string): void => {
               attemptObservedText = true;
               streamedText += delta;
-              emitEvent({ type: "text_delta", turnId, delta });
+              if (!chatId.startsWith("plan:")) emitEvent({ type: "text_delta", turnId, delta });
             };
 
             try {
@@ -1052,7 +1105,7 @@ export class CoachAgent {
               const result = await this.llm.generate({
                 system: this.systemPrompt,
                 messages: providerMessages,
-                tools: this.tools,
+                tools: turnTools,
                 stopWhen: stepCountIs(10),
                 maxSteps: 10,
                 caller: "chat",
@@ -1073,6 +1126,7 @@ export class CoachAgent {
 
               if (ctx.decision.requested !== null) {
                 const decision = ctx.decision.requested;
+                if (ctx.planIntake.patch !== null) onPlanIntake?.(ctx.planIntake.patch);
                 try {
                   this.chatStore.persistDecisionContext({
                     chatId,
@@ -1140,36 +1194,29 @@ export class CoachAgent {
                 effectiveText = STEP_LIMIT_TRUNCATION_MESSAGE;
                 ctx.provenance.value = EMPTY_PROVENANCE;
               }
+              if (chatId.startsWith("plan:")) assertPlanCoachReplyAuthority(effectiveText);
 
-              const templateHash = (this.templateHash ??= computeTemplateHash({
-                soul: this.sport.soul,
-                skills: this.sport.skills,
-                ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
-                  confirmationGate: this.confirmationGate,
-                }),
-                toolSchemas: this.tools,
-                model: this.config.llm.model,
-              }));
+              const templateHash = this.templateHashForChat(chatId, turnTools);
               const assembledHash = computeAssembledHash(this.systemPrompt, providerMessages);
 
-              // Append BOTH after success as one atomic write — JSONL unchanged
-              // on failure, no dangling user line on a partial write.
+              const lineage: ChatLineage = {
+                templateHash,
+                assembledHash,
+                provider: this.config.llm.provider,
+                model: this.config.llm.model,
+                lineageVersion: promptLineageSchemaVersion(providerMessages),
+                provenance: ctx.provenance.value,
+              };
+              const completedAt = new Date(this.ports.now()).toISOString();
+              const deferPlanTurn = chatId.startsWith("plan:") && onDeferredPlanTurn !== undefined;
               let persistenceNote = "";
-              try {
-                this.chatStore.appendTurn(chatId, userMessage, effectiveText, {
-                  templateHash,
-                  assembledHash,
-                  provider: this.config.llm.provider,
-                  model: this.config.llm.model,
-                  lineageVersion: promptLineageSchemaVersion(providerMessages),
-                  provenance: ctx.provenance.value,
-                });
-              } catch (persistErr) {
-                // Deliver-first: a full disk or permission error must never
-                // discard a reply the athlete already paid for. Swallow the
-                // persistence throw, warn once, and still return the reply.
-                console.warn("Session persistence failed; delivering reply unsaved", persistErr);
-                persistenceNote = noteForPersistenceFailure(persistErr);
+              if (!deferPlanTurn) {
+                try {
+                  this.chatStore.appendTurn(chatId, userMessage, effectiveText, lineage);
+                } catch (persistErr) {
+                  console.warn("Session persistence failed; delivering reply unsaved", persistErr);
+                  persistenceNote = noteForPersistenceFailure(persistErr);
+                }
               }
 
               // A turn can run several generations (retry/compaction/overflow
@@ -1203,17 +1250,33 @@ export class CoachAgent {
               // disclosure, not conversation content.
               const resetPrefix = archivedAt !== undefined ? `${POST_RESET_NOTICE}\n\n` : "";
               const responseText = resetPrefix + effectiveText + persistenceNote;
-              this.recordCompletedTurn({
-                chatId,
-                turnId,
-                completedAt: new Date(this.ports.now()).toISOString(),
-                athleteText: userMessage,
-                coachText: responseText,
-                ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }),
-                ...(ctx.planReference.selection === null
-                  ? {}
-                  : { planReference: ctx.planReference.selection }),
-              });
+              if (deferPlanTurn) {
+                onDeferredPlanTurn({
+                  chatId,
+                  turnId,
+                  completedAt,
+                  athleteText: userMessage,
+                  coachText: effectiveText,
+                  transcriptCoachText: responseText,
+                  lineage,
+                  ...(ctx.planIntake.patch === null
+                    ? {}
+                    : { planIntakePatch: ctx.planIntake.patch }),
+                });
+              } else {
+                this.recordCompletedTurn({
+                  chatId,
+                  turnId,
+                  completedAt,
+                  athleteText: userMessage,
+                  coachText: responseText,
+                  ...(turn?.attachments === undefined ? {} : { attachments: turn.attachments }),
+                  ...(ctx.planReference.selection === null
+                    ? {}
+                    : { planReference: ctx.planReference.selection }),
+                });
+              }
+              if (ctx.planIntake.patch !== null) onPlanIntake?.(ctx.planIntake.patch);
               if (ctx.planReference.selection !== null) {
                 emitEvent({
                   type: "plan-reference",
@@ -1407,20 +1470,12 @@ export class CoachAgent {
           }
         } catch (terminalErr) {
           if (abortController.signal.aborted) {
-            const templateHash = (this.templateHash ??= computeTemplateHash({
-              soul: this.sport.soul,
-              skills: this.sport.skills,
-              ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
-                confirmationGate: this.confirmationGate,
-              }),
-              toolSchemas: this.tools,
-              model: this.config.llm.model,
-            }));
             const providerMessages = attachNativeMediaToCurrentUserMessage(
               messages,
               providerUserMessage,
               turn?.nativeMedia ?? [],
             );
+            const templateHash = this.templateHashForChat(chatId, turnTools);
             try {
               this.chatStore.appendTurn(chatId, userMessage, streamedText, {
                 templateHash,
@@ -1490,6 +1545,43 @@ export class CoachAgent {
         }
       }
     });
+  }
+
+  commitDeferredPlanTurn(turn: DeferredPlanTurn): void {
+    if (
+      !turn.chatId.startsWith("plan:") ||
+      turn.turnId.length === 0 ||
+      turn.athleteText.length === 0 ||
+      turn.coachText.length === 0
+    ) {
+      throw new TypeError("Deferred Plan turn is invalid.");
+    }
+    this.chatStore.appendTurn(turn.chatId, turn.athleteText, turn.coachText, turn.lineage);
+    this.recordCompletedTurn({
+      chatId: turn.chatId,
+      turnId: turn.turnId,
+      completedAt: turn.completedAt,
+      athleteText: turn.athleteText,
+      coachText: turn.transcriptCoachText,
+    });
+  }
+
+  replacePlanConversationHistory(
+    chatId: string,
+    turns: readonly { readonly athleteText: string; readonly coachText: string }[],
+  ): void {
+    if (!chatId.startsWith("plan:")) throw new TypeError("Plan chat id is invalid.");
+    const messages: ModelMessage[] = [];
+    for (const turn of turns) {
+      if (turn.athleteText.length === 0 || turn.coachText.length === 0) {
+        throw new TypeError("Plan chat history turn is invalid.");
+      }
+      messages.push(
+        { role: "user", content: turn.athleteText },
+        { role: "assistant", content: turn.coachText },
+      );
+    }
+    this.chatStore.overwriteHistory(chatId, messages);
   }
 
   stopChat(chatId: string, turnId: string): boolean {
@@ -1730,11 +1822,31 @@ export class CoachAgent {
       onEvent?.({ type: "turn-start", turnId, chatId: decision.chatId });
     } catch {}
     const context = createTurnContext(null, decision.chatId, EMPTY_PROVENANCE, "", turnId);
+    const isPlan = decision.chatId.startsWith("plan:");
+    const continuationTools = isPlan ? this.planTools : undefined;
+    const lineageTemplateHash = isPlan
+      ? this.templateHashForChat(decision.chatId, this.planTools)
+      : computeTemplateHash({
+          soul: this.sport.soul,
+          skills: this.sport.skills,
+          ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
+            confirmationGate: this.confirmationGate,
+          }),
+          toolSchemas:
+            this.decisionTool === undefined
+              ? undefined
+              : { [COACH_DECISION_TOOL_NAME]: this.decisionTool },
+          model: this.config.llm.model,
+        });
     const system =
-      buildSystemPrompt(this.sport, this.memory, this.tz, this.buildDegradeBlock(), {
-        excludeSections: this.excludedSectionNames,
-        confirmationGate: this.confirmationGate,
-      }) + `\n\n# Decision Continuation\n\n${decisionContinuationMessage(decision)}`;
+      (isPlan
+        ? buildPlanCoachSystemPrompt(this.memory, this.tz, this.buildDegradeBlock(), {
+            excludeSections: this.excludedSectionNames,
+          })
+        : buildSystemPrompt(this.sport, this.memory, this.tz, this.buildDegradeBlock(), {
+            excludeSections: this.excludedSectionNames,
+            confirmationGate: this.confirmationGate,
+          })) + `\n\n# Decision Continuation\n\n${decisionContinuationMessage(decision)}`;
     const { messages: history } = this.chatStore.load(decision.chatId);
     const athleteText = store.getDecisionAthleteText(decision.chatId, decision.decisionId);
     if (athleteText === null) throw new Error("Decision athlete context was not found.");
@@ -1799,7 +1911,7 @@ export class CoachAgent {
       const result = await this.llm.generate({
         system,
         messages,
-        tools: undefined,
+        tools: continuationTools,
         stopWhen: stepCountIs(10),
         maxSteps: 10,
         caller: "chat",
@@ -1808,18 +1920,38 @@ export class CoachAgent {
         signal: abortController.signal,
         onTextDelta: (delta) => {
           streamedText += delta;
-          try {
-            onEvent?.({ type: "text_delta", turnId, delta });
-          } catch {}
+          if (!isPlan) {
+            try {
+              onEvent?.({ type: "text_delta", turnId, delta });
+            } catch {}
+          }
         },
       });
       const coachText = result.text.trim();
       if (coachText === "") throw new Error("Decision continuation returned no Coach text.");
+      if (isPlan) assertPlanCoachReplyAuthority(coachText);
+      const requestedPatch =
+        this.requireCoachDecisionStore().getDecisionPlanIntakePatch?.(
+          decision.chatId,
+          decision.decisionId,
+        ) ?? null;
+      const combinedPatch =
+        requestedPatch === null && context.planIntake.patch === null
+          ? null
+          : PlanIntakePatchSchema.parse({
+              ...requestedPatch,
+              ...context.planIntake.patch,
+            });
       return this.completeCoachDecisionContinuation(
         decision,
         coachText,
         turnId,
-        { system, messages },
+        {
+          system,
+          messages,
+          templateHash: lineageTemplateHash,
+          planIntakePatch: combinedPatch,
+        },
         onEvent,
       );
     } catch (error) {
@@ -1846,27 +1978,24 @@ export class CoachAgent {
     decision: Extract<CoachDecisionReadModel, { status: "answered" }>,
     coachText: string,
     turnId: string,
-    lineageInput: { readonly system: string; readonly messages: ModelMessage[] },
+    lineageInput: {
+      readonly system: string;
+      readonly messages: ModelMessage[];
+      readonly templateHash: string;
+      readonly planIntakePatch: PlanIntakePatch | null;
+    },
     onEvent?: TurnEventHandler,
   ): CoachDecisionReadModel {
     const store = this.requireCoachDecisionStore();
     const lineage: CoachDecisionContinuationLineage = {
-      templateHash: computeTemplateHash({
-        soul: this.sport.soul,
-        skills: this.sport.skills,
-        ruleBlocks: staticRuleBlocks(this.sport.sessionClusterGapMinutes, {
-          confirmationGate: this.confirmationGate,
-        }),
-        toolSchemas:
-          this.decisionTool === undefined
-            ? undefined
-            : { [COACH_DECISION_TOOL_NAME]: this.decisionTool },
-        model: this.config.llm.model,
-      }),
+      templateHash: lineageInput.templateHash,
       assembledHash: computeAssembledHash(lineageInput.system, lineageInput.messages),
       provider: this.config.llm.provider,
       model: this.config.llm.model,
       lineageVersion: promptLineageSchemaVersion(lineageInput.messages),
+      ...(lineageInput.planIntakePatch === null
+        ? {}
+        : { planIntakePatch: lineageInput.planIntakePatch }),
     };
     const completed = store.completeDecisionContinuation({
       chatId: decision.chatId,

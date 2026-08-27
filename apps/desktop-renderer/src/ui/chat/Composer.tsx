@@ -8,6 +8,7 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
   type ReactElement,
+  type ReactNode,
   type RefObject,
 } from "react";
 import { ArrowUp, Paperclip, Square } from "lucide-react";
@@ -24,7 +25,9 @@ export interface ComposerHandle {
 
 export function Composer(props: {
   readonly handle: RefObject<ComposerHandle | null>;
+  readonly inputId?: string;
   readonly hidden?: boolean;
+  readonly leadingAction?: ReactNode;
   readonly surface?: {
     readonly status: "idle" | "streaming" | "interrupted";
     readonly sendDisabled: boolean;
@@ -57,6 +60,7 @@ export function Composer(props: {
   const inputDisabled = props.surface?.inputDisabled ?? chatInputDisabled;
   const status = props.surface?.status ?? chatStatus;
   const canChat = props.surface === undefined ? chatReady : true;
+  const inputId = props.inputId ?? "message";
 
   const matches = useMemo(
     () => (props.surface?.allowSlashCommands === false ? [] : filterSlashCommands(draft)),
@@ -216,12 +220,12 @@ export function Composer(props: {
           setDismissed(true);
         }}
       />
-      <label className="sr-only" htmlFor="message">
+      <label className="sr-only" htmlFor={inputId}>
         {props.surface?.label ?? "Message your coach"}
       </label>
       <div className="chat-composer__controls grid grid-rows-[minmax(var(--ctl-h-lg),auto)_var(--ctl-h-lg)] gap-[calc(var(--inset)/2)] rounded-card border border-line-2 bg-surface pt-row pr-ctl-px pb-row pl-[calc(var(--inset)*2)] shadow-elev-2 transition-[border-color,box-shadow] duration-120 motion-reduce:transition-none focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
         <textarea
-          id="message"
+          id={inputId}
           ref={textarea}
           className="min-h-10 max-h-[140px] w-full resize-none border-0 bg-transparent py-[3px] text-sm text-ink outline-0 placeholder:text-ink-3 focus-visible:outline-0"
           rows={2}
@@ -253,9 +257,10 @@ export function Composer(props: {
           }}
         />
         <div
-          className={`chat-composer__toolbar flex items-center ${props.surface === undefined ? "justify-between" : "justify-end"}`}
+          className={`chat-composer__toolbar flex items-center ${props.leadingAction !== undefined || props.surface === undefined ? "justify-between" : "justify-end"}`}
         >
-          {props.surface === undefined ? (
+          {props.leadingAction ??
+          (props.surface === undefined ? (
             <Button
               type="button"
               variant="ghost"
@@ -266,7 +271,7 @@ export function Composer(props: {
             >
               <Paperclip aria-hidden="true" />
             </Button>
-          ) : null}
+          ) : null)}
           {status === "streaming" ? (
             <Button
               type="button"

@@ -39,7 +39,7 @@ export function createCoachDecisionTool(input: {
       ) {
         throw new Error("Coach decision context is unavailable.");
       }
-      if (context.chatId !== "desktop") {
+      if (context.chatId !== "desktop" && !context.chatId.startsWith("plan:")) {
         context.decision.fallbackText = numberedDecisionFallback(value);
         throw new Error("Coach decision panels are unavailable for this chat.");
       }
@@ -61,6 +61,9 @@ export function createCoachDecisionTool(input: {
           toolCallId: execution.toolCallId,
           athleteText: context.athleteText,
           requestedAt: new Date(input.now()).toISOString(),
+          ...(context.planIntake.patch === null
+            ? {}
+            : { planIntakePatch: context.planIntake.patch }),
         });
       } catch (error) {
         context.decision.fallbackText = numberedDecisionFallback(value);

@@ -38,6 +38,7 @@ export interface PlanViewAdapter {
   open(): void;
   openChatRequest(sourceConversationId: string, requestId: string): void;
   startPlan(): void;
+  closeCoach(): void;
   submitCoach(message: string): Promise<boolean>;
   stopCoach(): void;
   removeQueuedCoachMessage(id: string): void;
@@ -46,6 +47,7 @@ export interface PlanViewAdapter {
   skipCoachDecision(decisionId: string): void;
   saveFtp(watts: number): void;
   refreshFtp(): void;
+  backToCoachInterview(): void;
   createDraft(): void;
   updateDraft(message: string): void;
   openDiscardConfirmation(): void;
@@ -84,6 +86,7 @@ export interface PlanViewAdapter {
   resolveWorkoutMatch(workoutId: string, activityId: string, decision: "confirm" | "reject"): void;
   resolveWorkoutDrift(workoutId: string, eventId: string, decision: "adopt" | "restore"): void;
   openProposal(proposalId: string): void;
+  closeProposal(): void;
   reviseProposal(proposalId: string, text: string): void;
   approveProposal(proposalId: string, expectedRevision: number): void;
   rejectProposal(proposalId: string): void;
@@ -281,7 +284,7 @@ export function createPlanViewAdapter(input: {
         return;
       }
       if (
-        next.state.scenarioId === "PL-S042" &&
+        (next.state.scenarioId === "PL-S037" || next.state.scenarioId === "PL-S042") &&
         next.state.planId !== null &&
         autoResumingPlanId !== next.state.planId &&
         active === null
@@ -630,6 +633,25 @@ export function createPlanViewAdapter(input: {
       });
     },
     startPlan,
+    closeCoach() {
+      const model = planReadModel(input.read());
+      if (
+        active !== null ||
+        model === null ||
+        (model.scenarioId !== "PL-S017" && model.scenarioId !== "PL-S079")
+      ) {
+        return;
+      }
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "close",
+        sourceScenarioId: model.scenarioId,
+        destinationScenarioId: model.scenarioId === "PL-S079" ? "PL-S004" : "PL-S001",
+        returnFocusId:
+          model.scenarioId === "PL-S079" ? "plan-replacement-trigger" : "plan-start-coach",
+      });
+    },
     async submitCoach(message) {
       if (coachState.status === "streaming") {
         const data = currentCoachData();
@@ -720,6 +742,22 @@ export function createPlanViewAdapter(input: {
         conversationId: data.conversationId,
         source: "intervals",
         watts: null,
+      });
+    },
+    backToCoachInterview() {
+      const model = planReadModel(input.read());
+      const data = currentCoachData();
+      if (model === null || data === null || active !== null) return;
+      const destinationScenarioId = data.replacement ? "PL-S079" : "PL-S017";
+      const sourceScenarioId = data.replacement ? "PL-S103" : "PL-S016";
+      if (model.scenarioId !== sourceScenarioId || !data.readyToCreateDraft) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "back",
+        sourceScenarioId,
+        destinationScenarioId,
+        returnFocusId: "plan-coach-composer",
       });
     },
     createDraft() {
@@ -1056,19 +1094,29 @@ export function createPlanViewAdapter(input: {
       if (active !== null) return;
       const model = planReadModel(input.read());
       const parsed = model === null ? null : PlanActiveProjectionDataSchema.safeParse(model.data);
+      const sourceScenarioId = parsed?.success ? parsed.data.selectedWorkoutSourceScenarioId : null;
       if (
         model?.planId !== null &&
         model?.planId !== undefined &&
         parsed?.success === true &&
-        parsed.data.selectedWorkoutSourceScenarioId === "PL-S009"
+        parsed.data.selectedWorkoutId !== null &&
+        sourceScenarioId !== null &&
+        sourceScenarioId !== undefined
       ) {
+        const raceWeek = sourceScenarioId === "PL-S009";
+        const attention = sourceScenarioId === "PL-S028";
+        const attentionKind = model.scenarioId === "PL-S032" ? "workout-drift" : "workout-match";
         void execute({
           transitionId: "PL-T39",
           commandId: createCommandId(),
           action: "back",
-          sourceScenarioId: "PL-S021",
-          destinationScenarioId: "PL-S009",
-          returnFocusId: `race-week-workout-${parsed.data.selectedWorkoutId ?? ""}`,
+          sourceScenarioId: model.scenarioId === "PL-S032" ? "PL-S032" : "PL-S021",
+          destinationScenarioId: sourceScenarioId,
+          returnFocusId: raceWeek
+            ? `race-week-workout-${parsed.data.selectedWorkoutId}`
+            : attention
+              ? `plan-attention-${attentionKind}:${parsed.data.selectedWorkoutId}`
+              : `workout-row-${parsed.data.selectedWorkoutId}`,
         });
         return;
       }
@@ -1100,37 +1148,94 @@ export function createPlanViewAdapter(input: {
     openProposal(proposalId) {
       const model = planReadModel(input.read());
       if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      const parsed = PlanActiveProjectionDataSchema.safeParse(model.data);
+      const proposal = parsed.success
+        ? parsed.data.proposals?.find((candidate) => candidate.id === proposalId)
+        : undefined;
+      if (proposal === undefined) return;
       void execute({
         transitionId: "PL-T17",
         commandId: createCommandId(),
         planId: model.planId,
         proposalId,
+        selectedProposalReturn: {
+          sourceScenarioId: model.scenarioId === "PL-S011" ? "PL-S004" : model.scenarioId,
+          returnFocusId: `workout-row-${proposal.targetWorkoutId}`,
+        },
       });
+    },
+    closeProposal() {
+      if (active !== null) return;
+      const model = planReadModel(input.read());
+      const parsed = model === null ? null : PlanActiveProjectionDataSchema.safeParse(model.data);
+      const proposalReturn = parsed?.success ? parsed.data.selectedProposalReturn : null;
+      if (
+        model?.planId !== null &&
+        model?.planId !== undefined &&
+        proposalReturn !== null &&
+        proposalReturn !== undefined
+      ) {
+        void execute({
+          transitionId: "PL-T39",
+          commandId: createCommandId(),
+          action: "back",
+          sourceScenarioId: model.scenarioId,
+          destinationScenarioId: proposalReturn.sourceScenarioId,
+          returnFocusId: proposalReturn.returnFocusId,
+          selectedProposalReturn: proposalReturn,
+        });
+        return;
+      }
+      void refresh(false);
     },
     reviseProposal(proposalId, text) {
       if (active !== null || !/\S/u.test(text)) return;
+      const model = planReadModel(input.read());
+      const parsed = model === null ? null : PlanActiveProjectionDataSchema.safeParse(model.data);
+      const selectedProposalReturn = parsed?.success
+        ? parsed.data.selectedProposalReturn
+        : undefined;
       void execute({
         transitionId: "PL-T18",
         commandId: createCommandId(),
         proposalId,
         text,
+        ...(selectedProposalReturn === null || selectedProposalReturn === undefined
+          ? {}
+          : { selectedProposalReturn }),
       });
     },
     approveProposal(proposalId, expectedRevision) {
       if (active !== null) return;
+      const model = planReadModel(input.read());
+      const parsed = model === null ? null : PlanActiveProjectionDataSchema.safeParse(model.data);
+      const selectedProposalReturn = parsed?.success
+        ? parsed.data.selectedProposalReturn
+        : undefined;
       void execute({
         transitionId: "PL-T19",
         commandId: createCommandId(),
         proposalId,
         expectedRevision,
+        ...(selectedProposalReturn === null || selectedProposalReturn === undefined
+          ? {}
+          : { selectedProposalReturn }),
       });
     },
     rejectProposal(proposalId) {
       if (active !== null) return;
+      const model = planReadModel(input.read());
+      const parsed = model === null ? null : PlanActiveProjectionDataSchema.safeParse(model.data);
+      const selectedProposalReturn = parsed?.success
+        ? parsed.data.selectedProposalReturn
+        : undefined;
       void execute({
         transitionId: "PL-T20",
         commandId: createCommandId(),
         proposalId,
+        ...(selectedProposalReturn === null || selectedProposalReturn === undefined
+          ? {}
+          : { selectedProposalReturn }),
       });
     },
     openHistory() {

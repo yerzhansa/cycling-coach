@@ -69,12 +69,15 @@ describe("createCoachEngine", () => {
     expect(Object.keys(engine).sort()).toEqual([
       "answerCoachDecision",
       "chat",
+      "commitPlanChatTurn",
       "enqueueChatMessage",
       "getAthleteState",
       "getChatQueue",
       "getCoachDecision",
+      "getPlanDecisionIntakePatch",
       "hasSession",
       "removeQueuedChatMessage",
+      "replacePlanChatHistory",
       "resetSession",
       "resumeChatQueue",
       "resumeCoachDecision",
@@ -88,6 +91,22 @@ describe("createCoachEngine", () => {
       text: "unchanged reply",
     });
     await expect(engine.hasSession({ chatId: "c1" })).resolves.toEqual({ hasSession: true });
+    let planTurnId = "";
+    await expect(
+      engine.chat({ chatId: "plan:c2", message: "hello" }, (event) => {
+        if (event.type === "turn-start") planTurnId = event.turnId;
+      }),
+    ).resolves.toEqual({ text: "unchanged reply" });
+    await expect(engine.hasSession({ chatId: "plan:c2" })).resolves.toEqual({
+      hasSession: false,
+    });
+    await engine.commitPlanChatTurn?.({ chatId: "plan:c2", turnId: planTurnId });
+    await expect(engine.hasSession({ chatId: "plan:c2" })).resolves.toEqual({ hasSession: true });
+    await engine.replacePlanChatHistory?.({
+      chatId: "plan:c2",
+      turns: [{ athleteText: "restored athlete", coachText: "restored coach" }],
+    });
+    await expect(engine.hasSession({ chatId: "plan:c2" })).resolves.toEqual({ hasSession: true });
     await expect(engine.getAthleteState()).resolves.toBe(state);
   });
 });

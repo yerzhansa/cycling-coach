@@ -22,7 +22,7 @@ import {
   type TranscriptPageRequest,
   type TranscriptPageResult,
 } from "./transcript-store.js";
-import type { CoachDecisionReadModel } from "@enduragent/coach-contract";
+import type { CoachDecisionReadModel, PlanIntakePatch } from "@enduragent/coach-contract";
 import type { ChatQueueSnapshot } from "@enduragent/coach-contract";
 import { WindowsPrivatePathPolicyError } from "../io/windows-private-path-policy.js";
 import { ChatQueueStore, type ChatQueueStoreHooks } from "./chat-queue-store.js";
@@ -60,6 +60,7 @@ export interface ConversationStorePort extends ChatStorePort, TranscriptWriterPo
   ): CoachDecisionReadModel;
   getDecision(chatId: string, decisionId?: string): CoachDecisionReadModel | null;
   getDecisionAthleteText(chatId: string, decisionId: string): string | null;
+  getDecisionPlanIntakePatch(chatId: string, decisionId: string): PlanIntakePatch | null;
   readCurrentConversation(chatId: string): TranscriptTurnRecord[];
   readCurrentConversationPage(chatId: string, request: TranscriptPageRequest): TranscriptPageResult;
   listArchivedConversations(chatId: string): ArchivedConversationList;
@@ -199,6 +200,11 @@ export class ConversationStore implements ConversationStorePort {
   getDecisionAthleteText(chatId: string, decisionId: string): string | null {
     this.recoverBeforeAccess(chatId);
     return this.transcriptStore.getDecisionAthleteText(chatId, decisionId);
+  }
+
+  getDecisionPlanIntakePatch(chatId: string, decisionId: string): PlanIntakePatch | null {
+    this.recoverBeforeAccess(chatId);
+    return this.transcriptStore.getDecisionPlanIntakePatch(chatId, decisionId);
   }
 
   readCurrentConversation(chatId: string) {

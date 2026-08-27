@@ -30,12 +30,14 @@ import {
   CoachDecisionAnswerSchema,
   CoachDecisionReadModelSchema,
   PlanReferenceSelectionSchema,
+  PlanIntakePatchSchema,
   type CoachDecisionAnswer,
   type CoachDecisionContinuationLineage,
   type CoachDecisionOption,
   type CoachDecisionReadModel,
   type ChatAttachmentReference,
   type PlanReferenceSelection,
+  type PlanIntakePatch,
 } from "@enduragent/coach-contract";
 import {
   WindowsPrivatePathPolicyError,
@@ -143,6 +145,7 @@ export interface TranscriptDecisionRequestedRecord {
   readonly question: string;
   readonly options: CoachDecisionOption[];
   readonly requestedAt: string;
+  readonly planIntakePatch?: PlanIntakePatch;
 }
 
 export interface TranscriptDecisionAnsweredRecord {
@@ -211,6 +214,7 @@ export interface TranscriptDecisionRequestedInput {
   readonly toolCallId: string;
   readonly athleteText: string;
   readonly requestedAt: string;
+  readonly planIntakePatch?: PlanIntakePatch;
 }
 
 export interface TranscriptDecisionAnsweredInput {
@@ -390,14 +394,9 @@ function isIsoTimestamp(value: string): boolean {
 function isDecisionContinuationLineage(value: unknown): value is CoachDecisionContinuationLineage {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
+  const keys = ["templateHash", "assembledHash", "provider", "model", "lineageVersion"];
   return (
-    hasExactKeys(record, [
-      "templateHash",
-      "assembledHash",
-      "provider",
-      "model",
-      "lineageVersion",
-    ]) &&
+    (hasExactKeys(record, keys) || hasExactKeys(record, [...keys, "planIntakePatch"])) &&
     typeof record.templateHash === "string" &&
     record.templateHash.length > 0 &&
     typeof record.assembledHash === "string" &&
@@ -407,7 +406,9 @@ function isDecisionContinuationLineage(value: unknown): value is CoachDecisionCo
     typeof record.model === "string" &&
     record.model.length > 0 &&
     typeof record.lineageVersion === "string" &&
-    record.lineageVersion.length > 0
+    record.lineageVersion.length > 0 &&
+    (!Object.hasOwn(record, "planIntakePatch") ||
+      PlanIntakePatchSchema.safeParse(record.planIntakePatch).success)
   );
 }
 
@@ -522,6 +523,33 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
           "question",
           "options",
           "requestedAt",
+        ]) &&
+        !hasExactKeys(value, [
+          "version",
+          "kind",
+          "chatId",
+          "decisionId",
+          "toolCallId",
+          "messageId",
+          "athleteText",
+          "question",
+          "options",
+          "requestedAt",
+          "planIntakePatch",
+        ]) &&
+        !hasExactKeys(value, [
+          "version",
+          "kind",
+          "chatId",
+          "turnId",
+          "decisionId",
+          "toolCallId",
+          "messageId",
+          "athleteText",
+          "question",
+          "options",
+          "requestedAt",
+          "planIntakePatch",
         ])) ||
       typeof value.chatId !== "string" ||
       (value.turnId !== undefined &&
@@ -536,6 +564,8 @@ function parseRecordBytes(bytes: Buffer): TranscriptRecord | null {
       typeof value.question !== "string" ||
       !Array.isArray(value.options) ||
       !isIsoTimestamp(String(value.requestedAt)) ||
+      (value.planIntakePatch !== undefined &&
+        !PlanIntakePatchSchema.safeParse(value.planIntakePatch).success) ||
       !CoachDecisionReadModelSchema.safeParse({
         status: "unanswered",
         decisionId: value.decisionId,
@@ -1282,7 +1312,8 @@ export class TranscriptStore implements TranscriptWriterPort {
         matchingToolCall.athleteText === input.athleteText &&
         (matchingToolCall.turnId === undefined || matchingToolCall.turnId === input.turnId) &&
         matchingToolCall.question === parsed.question &&
-        JSON.stringify(matchingOptions) === JSON.stringify(requestedOptions);
+        JSON.stringify(matchingOptions) === JSON.stringify(requestedOptions) &&
+        JSON.stringify(matchingToolCall.planIntakePatch) === JSON.stringify(input.planIntakePatch);
       if (sameRequest && existing !== null) return existing;
       throw new Error("Tool call identifier already belongs to another decision request.");
     }
@@ -1307,6 +1338,7 @@ export class TranscriptStore implements TranscriptWriterPort {
       question: parsed.question,
       options: parsed.options,
       requestedAt: input.requestedAt,
+      ...(input.planIntakePatch === undefined ? {} : { planIntakePatch: input.planIntakePatch }),
     };
     this.appendRecord(parsed.chatId, serializeTranscriptRecord(record));
     return parsed;
@@ -1445,6 +1477,13 @@ export class TranscriptStore implements TranscriptWriterPort {
       (record) => record.kind === "decision-requested" && record.decisionId === decisionId,
     );
     return request?.kind === "decision-requested" ? request.athleteText : null;
+  }
+
+  getDecisionPlanIntakePatch(chatId: string, decisionId: string): PlanIntakePatch | null {
+    const request = this.readCurrentRecords(chatId).find(
+      (record) => record.kind === "decision-requested" && record.decisionId === decisionId,
+    );
+    return request?.kind === "decision-requested" ? (request.planIntakePatch ?? null) : null;
   }
 
   getTerminalTurnIds(chatId: string): ReadonlySet<string> {

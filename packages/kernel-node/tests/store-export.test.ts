@@ -26,7 +26,15 @@ interface Populated {
 
 function populated(userVersion = 3): Populated {
   const rows: Record<string, readonly AuthoredRow[]> = {};
-  for (const t of PURE_AUTHORED_TABLES) rows[t] = [{ id: `${t}-1`, v: 1 }, { id: `${t}-2`, note: "üñïçödé" }];
+  for (const t of PURE_AUTHORED_TABLES)
+    rows[t] = [
+      { id: `${t}-1`, v: 1 },
+      { id: `${t}-2`, note: "üñïçödé" },
+    ];
+  rows.plan_intake = [
+    { conversation_id: "intake-1", source_turn_sequence: 0 },
+    { conversation_id: "intake-2", source_turn_sequence: 3 },
+  ];
   for (const t of MIXED_AUTHORED_TABLES) rows[t] = [{ id: `${t}-m1`, provenance: "manual" }];
   const artifacts: ArchiveArtifact[] = [
     { address: "aa", relPath: "archive/2026/06/aa/aa.fit", bytes: 20, kind: "fit" },
@@ -172,10 +180,10 @@ describe("store export op with real WebCrypto", () => {
       { source: makeSource(data), manifest: makeManifest(data), crypto, codec },
       { passphrase: "pw" },
     );
-    const iterations = new DataView(
-      built.container.buffer,
-      built.container.byteOffset,
-    ).getUint32(11, false);
+    const iterations = new DataView(built.container.buffer, built.container.byteOffset).getUint32(
+      11,
+      false,
+    );
     expect(iterations).toBe(PBKDF2_ITERATIONS);
     expect(PBKDF2_ITERATIONS).toBeGreaterThanOrEqual(600_000);
   });
