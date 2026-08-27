@@ -335,6 +335,14 @@ async function launch(initial: "reached" | "complete" = "reached") {
     if (document.querySelector("[data-setup-host]") !== null) {
       throw new Error("ready fixture unexpectedly requires setup");
     }
+    const chatDeadline = Date.now() + 10000;
+    const chatReady = () => {
+      const composer = document.querySelector("textarea#message");
+      return composer instanceof HTMLTextAreaElement && !composer.disabled;
+    };
+    while (!chatReady() && Date.now() < chatDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     const composer = document.querySelector("textarea#message");
     if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) {
       throw new Error("ready fixture did not enable chat");
