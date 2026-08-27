@@ -338,6 +338,44 @@ export const PlanActiveWorkoutProjectionSchema = z
   .strict();
 export type PlanActiveWorkoutProjection = z.infer<typeof PlanActiveWorkoutProjectionSchema>;
 
+export const PlanProposalProjectionSchema = z
+  .object({
+    id: z.string().min(1),
+    revision: z.number().int().positive(),
+    title: z.string().min(1),
+    rationale: z.string().min(1),
+    confidence: z.enum(["Low", "Moderate", "High"]),
+    targetWorkoutId: z.string().min(1),
+    affectedDate: TrainingExportCivilDateSchema,
+    stale: z.boolean(),
+    diff: z.array(
+      z
+        .object({
+          field: z.enum(["duration", "workout", "date", "week-load"]),
+          label: z.string().min(1),
+          before: z.string(),
+          after: z.string(),
+        })
+        .strict(),
+    ),
+    premises: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          sourceType: z.string().min(1),
+          sourceId: z.string().min(1),
+          sourceLabel: z.string().min(1),
+          sourceDate: TrainingExportCivilDateSchema.nullable(),
+          confidence: z.enum(["Low", "Moderate", "High"]),
+          snapshotJson: z.string().min(1),
+        })
+        .strict(),
+    ),
+    error: PlanErrorSchema.nullable(),
+  })
+  .strict();
+export type PlanProposalProjection = z.infer<typeof PlanProposalProjectionSchema>;
+
 export const PlanActiveProjectionDataSchema = z
   .object({
     plan: PlanDraftPlanProjectionSchema,
@@ -353,6 +391,9 @@ export const PlanActiveProjectionDataSchema = z
       .strict()
       .optional(),
     selectedWorkoutId: z.string().min(1).nullable().optional(),
+    proposals: z.array(PlanProposalProjectionSchema).optional(),
+    selectedProposalId: z.string().min(1).nullable().optional(),
+    proposalRevisionText: z.string().nullable().optional(),
   })
   .strict();
 export type PlanActiveProjectionData = z.infer<typeof PlanActiveProjectionDataSchema>;

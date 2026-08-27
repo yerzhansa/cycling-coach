@@ -15,6 +15,7 @@ import planReconciliation014 from "./014_plan_reconciliation.sql";
 import planRaceCourse015 from "./015_plan_race_course.sql";
 import planWorkoutMatch016 from "./016_plan_workout_match.sql";
 import planWorkoutDrift017 from "./017_plan_workout_drift.sql";
+import planProposals018 from "./018_plan_proposals.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -47,4 +48,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 15, name: "015_plan_race_course", sql: planRaceCourse015 },
   { version: 16, name: "016_plan_workout_match", sql: planWorkoutMatch016 },
   { version: 17, name: "017_plan_workout_drift", sql: planWorkoutDrift017 },
+  { version: 18, name: "018_plan_proposals", sql: planProposals018 },
 ];

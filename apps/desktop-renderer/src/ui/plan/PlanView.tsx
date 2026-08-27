@@ -1466,6 +1466,17 @@ function ActiveProjection(): ReactElement {
   const model = useEnduragentStore((state) => planReadModel(state.plan));
   const transition = useEnduragentStore((state) => state.plan.transition);
   const actions = useEnduragentStore((state) => state.planActions);
+  const [proposalMode, setProposalMode] = useState<"proposal" | "evidence" | "edit">("proposal");
+  const [revisionText, setRevisionText] = useState("");
+  const evidenceTrigger = useRef<HTMLButtonElement>(null);
+  const selectedProposalKey =
+    typeof model?.data.selectedProposalId === "string" ? model.data.selectedProposalId : null;
+  const failedRevisionText =
+    typeof model?.data.proposalRevisionText === "string" ? model.data.proposalRevisionText : "";
+  useEffect(() => {
+    setProposalMode(model?.scenarioId === "PL-S022" ? "edit" : "proposal");
+    setRevisionText(model?.scenarioId === "PL-S022" ? failedRevisionText : "");
+  }, [failedRevisionText, model?.scenarioId, selectedProposalKey]);
   if (model === null) return <StatusCard title="Plan" support="Refreshing your Plan…" />;
   const parsed = PlanActiveProjectionDataSchema.safeParse(model.data);
   if (!parsed.success) return <StatusCard title={model.title} support={model.summary} />;
@@ -1497,11 +1508,45 @@ function ActiveProjection(): ReactElement {
     data.selectedWorkoutId === undefined || data.selectedWorkoutId === null
       ? null
       : (data.workouts.find((workout) => workout.id === data.selectedWorkoutId) ?? null);
+  const selectedProposal =
+    data.selectedProposalId === undefined || data.selectedProposalId === null
+      ? null
+      : ((data.proposals ?? []).find((proposal) => proposal.id === data.selectedProposalId) ??
+        null);
+  const canReviseProposal = model.transitions.some(
+    (guard) => guard.transitionId === "PL-T18" && guard.status === "available",
+  );
+  const canApproveProposal = model.transitions.some(
+    (guard) => guard.transitionId === "PL-T19" && guard.status === "available",
+  );
+  const proposalBusy =
+    (transition.status === "submitting" || transition.status === "running") &&
+    (transition.transitionId === "PL-T18" || transition.transitionId === "PL-T19");
   if (["PL-S032", "PL-S033", "PL-S034", "PL-S035", "PL-S036"].includes(model.scenarioId)) {
     return <WorkoutDriftProjection data={data} scenarioId={model.scenarioId} />;
   }
   return (
     <div className="grid gap-6">
+      {model.scenarioId === "PL-S008" ? (
+        <section className="flex items-start gap-row rounded-card bg-surface p-5 shadow-elev-1">
+          <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-base font-semibold">Plan updated</h2>
+            <p className="m-0 text-ink-2">The approved change is now part of your active Plan.</p>
+          </div>
+        </section>
+      ) : model.scenarioId === "PL-S097" ? (
+        <section className="flex items-start gap-row rounded-card bg-surface p-5 shadow-elev-1">
+          <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+          <div className={`min-w-0 flex-1 ${SUPPORT_PAIR}`}>
+            <h2 className="m-0 text-base font-semibold">Proposal rejected</h2>
+            <p className="m-0 text-ink-2">The active Plan did not change.</p>
+          </div>
+          <Button type="button" onClick={() => actions?.closeWorkout()}>
+            Back to Plan
+          </Button>
+        </section>
+      ) : null}
       <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
         <div className="flex items-start gap-row">
           <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
@@ -1622,13 +1667,22 @@ function ActiveProjection(): ReactElement {
             const status = workout.match?.status ?? "upcoming";
             const decision = status === "decision-needed";
             const drift = workout.drift !== undefined;
+            const proposal = (data.proposals ?? []).find(
+              (candidate) => candidate.targetWorkoutId === workout.id,
+            );
             return (
               <button
                 key={workout.id}
                 id={`workout-row-${workout.id}`}
                 type="button"
                 className="grid w-full grid-cols-[minmax(7rem,0.8fr)_minmax(12rem,2fr)_minmax(5rem,0.6fr)_minmax(9rem,1fr)_auto] items-center gap-inset bg-transparent px-5 py-row text-left text-sm hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary"
-                onClick={() => actions?.openWorkout(workout.id)}
+                onClick={() => {
+                  if (proposal !== undefined) {
+                    setProposalMode("proposal");
+                    setRevisionText("");
+                    actions?.openProposal(proposal.id);
+                  } else actions?.openWorkout(workout.id);
+                }}
               >
                 <span className="text-ink-2">
                   {formatCivilDate(workout.date, { weekday: "short", day: "numeric" })}
@@ -1637,7 +1691,11 @@ function ActiveProjection(): ReactElement {
                 <span className="text-ink-2">
                   {workout.durationS === null ? "—" : plannedTime(workout.durationS)}
                 </span>
-                {drift ? (
+                {proposal !== undefined ? (
+                  <span className="justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn">
+                    Decision needed
+                  </span>
+                ) : drift ? (
                   <span className="justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn">
                     Changed in Intervals
                   </span>
@@ -1746,6 +1804,219 @@ function ActiveProjection(): ReactElement {
                     Close
                   </Button>
                 )}
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={selectedProposal !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProposalMode("proposal");
+            setRevisionText("");
+            actions?.closeWorkout();
+          }
+        }}
+      >
+        <DialogContent className="top-0 right-0 left-auto flex h-full max-h-none w-[min(480px,calc(100%-32px))] max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-none rounded-l-card border-y-0 border-r-0 p-0">
+          {selectedProposal === null ? null : proposalMode === "evidence" ? (
+            <>
+              <DialogHeader className="grid gap-2 border-b border-line px-5 py-5 pr-16">
+                <DialogTitle className="m-0 text-xl">Where this came from</DialogTitle>
+                <DialogDescription className="m-0 text-ink-2">
+                  Evidence captured when this Proposal was created.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid flex-1 content-start gap-6 overflow-auto px-5 py-5">
+                <section className="grid gap-inset">
+                  <h3 className="m-0 text-sm font-semibold">Source</h3>
+                  {selectedProposal.premises.map((premise) => (
+                    <p key={premise.id} className="m-0 text-sm text-ink-2">
+                      {premise.sourceLabel}
+                    </p>
+                  ))}
+                </section>
+                <section className="grid gap-inset">
+                  <h3 className="m-0 text-sm font-semibold">Evidence</h3>
+                  <p className="m-0 text-sm text-ink-2">{selectedProposal.rationale}</p>
+                </section>
+                <section className="grid gap-inset">
+                  <h3 className="m-0 text-sm font-semibold">Confidence</h3>
+                  <p className="m-0 text-sm text-ink-2">{selectedProposal.confidence}</p>
+                </section>
+                <section className="grid gap-inset rounded-ctl bg-sunk p-row">
+                  <h3 className="m-0 text-sm font-semibold">Proposed impact</h3>
+                  {selectedProposal.diff.map((line) => (
+                    <div key={line.field} className="grid grid-cols-[7rem_1fr] gap-inset text-sm">
+                      <span>{line.label}</span>
+                      <span>
+                        {line.before} → {line.after}
+                      </span>
+                    </div>
+                  ))}
+                </section>
+              </div>
+              <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    setProposalMode("proposal");
+                    requestAnimationFrame(() => evidenceTrigger.current?.focus());
+                  }}
+                >
+                  Done
+                </Button>
+              </DialogFooter>
+            </>
+          ) : proposalMode === "edit" ? (
+            <>
+              <DialogHeader className="grid gap-2 border-b border-line px-5 py-5 pr-16">
+                <DialogTitle className="m-0 text-xl">Revise Proposal</DialogTitle>
+                <DialogDescription className="m-0 text-ink-2">
+                  The active Plan stays unchanged while the coach revises this Proposal.
+                </DialogDescription>
+              </DialogHeader>
+              <form
+                className="flex min-h-0 flex-1 flex-col"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!/\S/u.test(revisionText)) return;
+                  actions?.reviseProposal(selectedProposal.id, revisionText.trim());
+                }}
+              >
+                <div className="grid flex-1 content-start gap-row overflow-auto px-5 py-5">
+                  <div className="grid gap-inset rounded-ctl bg-sunk p-row">
+                    <p className="m-0 text-sm font-medium">Coach</p>
+                    <p className="m-0 text-sm text-ink-2">
+                      I’ll keep the active Plan unchanged while we revise this Proposal. What should
+                      change?
+                    </p>
+                  </div>
+                  <label className="grid gap-inset text-sm font-medium" htmlFor="proposal-revision">
+                    Your change
+                    <textarea
+                      id="proposal-revision"
+                      className="min-h-36 resize-y rounded-ctl border border-line bg-surface px-3 py-3 text-base text-ink-1 outline-none focus:border-primary"
+                      value={revisionText}
+                      placeholder="Keep 45 minutes and make it recovery."
+                      disabled={proposalBusy}
+                      onChange={(event) => setRevisionText(event.currentTarget.value)}
+                    />
+                  </label>
+                  {selectedProposal.error === null ? null : (
+                    <StaleNotice message={selectedProposal.error.message} />
+                  )}
+                </div>
+                <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={proposalBusy}
+                    onClick={() => {
+                      setProposalMode("proposal");
+                      setRevisionText("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={proposalBusy || !/\S/u.test(revisionText)}>
+                    {proposalBusy ? "Updating…" : "Update Proposal"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </>
+          ) : (
+            <>
+              <DialogHeader className="grid gap-2 border-b border-line px-5 py-5 pr-16">
+                <DialogTitle className="m-0 text-xl">{selectedProposal.title}</DialogTitle>
+                <DialogDescription className="m-0 text-ink-2">
+                  {selectedProposal.rationale}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid flex-1 content-start gap-row overflow-auto px-5 py-5">
+                {selectedProposal.stale ? (
+                  <StaleNotice message="The Plan changed before approval. Review this updated Proposal." />
+                ) : null}
+                {!selectedProposal.stale && selectedProposal.error !== null ? (
+                  <StaleNotice message={selectedProposal.error.message} />
+                ) : null}
+                {proposalBusy && transition.transitionId === "PL-T19" ? (
+                  <div className="flex items-start gap-row rounded-ctl bg-sunk p-row" role="status">
+                    <LoaderCircle
+                      className="mt-0.5 size-5 animate-spin text-primary"
+                      aria-hidden="true"
+                    />
+                    <div className={SUPPORT_PAIR}>
+                      <p className="m-0 font-medium">Checking the current Plan</p>
+                      <p className="m-0 text-sm text-ink-2">
+                        Confirming that the workout and source data have not changed.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+                <section className="grid gap-inset rounded-ctl bg-sunk p-row">
+                  <h3 className="m-0 text-sm font-semibold">Proposed change</h3>
+                  {selectedProposal.diff.map((line) => (
+                    <div key={line.field} className="grid grid-cols-[7rem_1fr] gap-inset text-sm">
+                      <span>{line.label}</span>
+                      <span>
+                        {line.before} → {line.after}
+                      </span>
+                    </div>
+                  ))}
+                </section>
+                <div className="flex items-center justify-between gap-inset">
+                  <span className="text-sm text-ink-2">
+                    Confidence · {selectedProposal.confidence}
+                  </span>
+                  <Button
+                    ref={evidenceTrigger}
+                    type="button"
+                    variant="outline"
+                    onClick={() => setProposalMode("evidence")}
+                  >
+                    View evidence
+                  </Button>
+                </div>
+              </div>
+              <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={proposalBusy}
+                    onClick={() => actions?.rejectProposal(selectedProposal.id)}
+                  >
+                    Reject
+                  </Button>
+                  {canReviseProposal ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={proposalBusy}
+                      onClick={() => setProposalMode("edit")}
+                    >
+                      Edit
+                    </Button>
+                  ) : null}
+                  {canApproveProposal ? (
+                    <Button
+                      type="button"
+                      disabled={proposalBusy}
+                      onClick={() =>
+                        actions?.approveProposal(selectedProposal.id, selectedProposal.revision)
+                      }
+                    >
+                      {proposalBusy
+                        ? "Checking…"
+                        : selectedProposal.stale
+                          ? "Revalidate"
+                          : "Approve"}
+                    </Button>
+                  ) : null}
+                </>
               </DialogFooter>
             </>
           )}

@@ -1,3 +1,4 @@
+import { canonicalJson } from "@enduragent/kernel/archive";
 import {
   addCivilDays,
   type PlanRecord,
@@ -51,7 +52,7 @@ export interface PlanMirrorCalendarPort {
   createEvent(input: PlanMirrorCreateInput): Promise<unknown>;
   deleteEvent(input: { readonly eventId: number }): Promise<unknown>;
   readEvent?(input: { readonly eventId: number }): Promise<PlanMirrorEvent>;
-  updateEvent?(input: PlanMirrorUpdateInput): Promise<unknown>;
+  updateEvent(input: PlanMirrorUpdateInput): Promise<unknown>;
 }
 
 export interface PlanReconcilerIdentity {
@@ -196,14 +197,96 @@ function mirrorExpected(workout: PlanWorkoutRecord): string {
   });
 }
 
-async function verifyCreateItems(
+function eventMatchesExpected(expectedJson: string, event: PlanMirrorEvent): boolean {
+  try {
+    const expected = JSON.parse(expectedJson) as {
+      readonly dateKey: number;
+      readonly name: string;
+      readonly durationS: number | null;
+      readonly structureJson: string;
+    };
+    const structure = JSON.parse(expected.structureJson) as Record<string, unknown>;
+    const expectedDescription =
+      typeof structure.description === "string" ? structure.description : null;
+    const expectedWorkoutDoc =
+      structure.workoutDoc !== null &&
+      typeof structure.workoutDoc === "object" &&
+      !Array.isArray(structure.workoutDoc)
+        ? structure.workoutDoc
+        : null;
+    return (
+      event.dateKey === expected.dateKey &&
+      (event.name === undefined || event.name === expected.name) &&
+      (event.durationS === undefined || event.durationS === expected.durationS) &&
+      (event.description === undefined || event.description === expectedDescription) &&
+      (event.workoutDoc === undefined ||
+        canonicalJson(event.workoutDoc) === canonicalJson(expectedWorkoutDoc))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function eventHasCompleteMirrorFields(event: PlanMirrorEvent): boolean {
+  return (
+    event.name !== undefined &&
+    event.durationS !== undefined &&
+    event.description !== undefined &&
+    event.workoutDoc !== undefined
+  );
+}
+
+function canVerifyMirrorEvent(
+  item: PlanReconciliationItemRecord,
+  event: PlanMirrorEvent,
+  previouslyVerifiedProviderEventId?: number,
+): boolean {
+  const providerIdentityWasVerified =
+    (item.status === "verified" && item.providerEventId === event.id) ||
+    previouslyVerifiedProviderEventId === event.id;
+  return (
+    eventMatchesExpected(item.expectedJson, event) &&
+    (eventHasCompleteMirrorFields(event) ||
+      item.status === "created" ||
+      providerIdentityWasVerified)
+  );
+}
+
+async function updateMirrorEvent(
+  deps: PlanReconcilerDeps,
+  item: PlanReconciliationItemRecord,
+  event: PlanMirrorEvent,
+  workout: PlanWorkoutRecord,
+): Promise<void> {
+  await deps.repository.startItem(item.id, deps.now());
+  try {
+    await deps.calendar.updateEvent({
+      eventId: event.id,
+      dateKey: workout.dateKey,
+      name: workout.name,
+      durationS: workout.durationS,
+      structureJson: workout.structureJson,
+    });
+    await deps.repository.markItemCreated(item.id, deps.now());
+  } catch {
+    await deps.repository.failItem(item.id, "calendar-create-failed", deps.now());
+  }
+}
+
+async function verifyMirrorItems(
   deps: PlanReconcilerDeps,
   job: PlanReconciliationJobRecord,
   grouped: ReadonlyMap<string, readonly PlanMirrorEvent[]>,
 ): Promise<void> {
   for (const item of await deps.repository.readItems(job.id)) {
     const matches = grouped.get(item.externalId) ?? [];
-    if (matches.length === 1) {
+    if (item.operation === "delete" && matches.length === 0) {
+      await deps.repository.verifyItem(item.id, null, deps.now());
+    } else if (
+      item.operation === "create" &&
+      matches.length === 1 &&
+      canVerifyMirrorEvent(item, matches[0]!)
+    ) {
       await deps.repository.verifyItem(item.id, matches[0]!.id, deps.now());
     } else {
       await deps.repository.failItem(item.id, "calendar-verification-failed", deps.now());
@@ -239,14 +322,16 @@ export async function reconcileActivePlanWindow(
     );
   });
   for (const workout of selected) {
+    const externalId = planMirrorExternalId(input.plan.id, workout.id);
+    const expectedJson = mirrorExpected(workout);
     await deps.repository.prepareItem({
       id: deps.identity.newId(),
       jobId: job.id,
       planWorkoutId: workout.id,
       operation: "create",
       dateKey: workout.dateKey,
-      externalId: planMirrorExternalId(input.plan.id, workout.id),
-      expectedJson: mirrorExpected(workout),
+      externalId,
+      expectedJson,
       createdAtMs: deps.now(),
     });
   }
@@ -262,19 +347,71 @@ export async function reconcileActivePlanWindow(
   } catch {
     return failListedJob(deps, running);
   }
-  const workoutById = new Map(selected.map((workout) => [workout.id, workout]));
+  const selectedExternalIds = new Set(
+    selected.map((workout) => planMirrorExternalId(input.plan.id, workout.id)),
+  );
+  const workoutById = new Map(input.workouts.map((workout) => [workout.id, workout]));
+  const prefix = planMirrorExternalIdPrefix(input.plan.id);
+  for (const [externalId, events] of before) {
+    if (!externalId.startsWith(prefix) || selectedExternalIds.has(externalId)) continue;
+    const workoutId = externalId.slice(prefix.length);
+    if (!ULID.test(workoutId)) continue;
+    const workout = workoutById.get(workoutId);
+    if (
+      workout !== undefined &&
+      (workout.origin !== "coach" ||
+        (workout.dateKey >= input.todayDateKey && workout.dateKey <= windowEndDateKey))
+    ) {
+      continue;
+    }
+    await deps.repository.prepareItem({
+      id: deps.identity.newId(),
+      jobId: job.id,
+      planWorkoutId: null,
+      operation: "delete",
+      dateKey: events[0]!.dateKey,
+      externalId,
+      expectedJson: JSON.stringify(events.map((event) => ({ eventId: event.id }))),
+      createdAtMs: deps.now(),
+    });
+  }
+  const selectedWorkoutById = new Map(selected.map((workout) => [workout.id, workout]));
   for (const item of await deps.repository.readItems(job.id)) {
     const matches = before.get(item.externalId) ?? [];
-    if (matches.length === 1) {
-      await deps.repository.verifyItem(item.id, matches[0]!.id, deps.now());
+    if (item.operation === "delete") {
+      if (matches.length === 0) {
+        await deps.repository.verifyItem(item.id, null, deps.now());
+        continue;
+      }
+      await deps.repository.startItem(item.id, deps.now());
+      let failed = false;
+      for (const event of matches) {
+        try {
+          await deps.calendar.deleteEvent({ eventId: event.id });
+        } catch {
+          failed = true;
+        }
+      }
+      if (failed) await deps.repository.failItem(item.id, "calendar-delete-failed", deps.now());
       continue;
     }
     if (matches.length > 1) {
       await deps.repository.failItem(item.id, "calendar-verification-failed", deps.now());
       continue;
     }
-    const workout = item.planWorkoutId === null ? undefined : workoutById.get(item.planWorkoutId);
+    const workout =
+      item.planWorkoutId === null ? undefined : selectedWorkoutById.get(item.planWorkoutId);
     if (workout === undefined) throw new PlanReconciliationError("invalid-workout");
+    if (matches.length === 1) {
+      if (
+        canVerifyMirrorEvent(item, matches[0]!)
+      ) {
+        await deps.repository.verifyItem(item.id, matches[0]!.id, deps.now());
+        continue;
+      }
+      await updateMirrorEvent(deps, item, matches[0]!, workout);
+      continue;
+    }
     let immediate: Map<string, PlanMirrorEvent[]>;
     try {
       immediate = groupedEvents(
@@ -287,12 +424,18 @@ export async function reconcileActivePlanWindow(
       return failListedJob(deps, running);
     }
     const immediateMatches = immediate.get(item.externalId) ?? [];
-    if (immediateMatches.length === 1) {
-      await deps.repository.verifyItem(item.id, immediateMatches[0]!.id, deps.now());
-      continue;
-    }
     if (immediateMatches.length > 1) {
       await deps.repository.failItem(item.id, "calendar-verification-failed", deps.now());
+      continue;
+    }
+    if (immediateMatches.length === 1) {
+      if (
+        canVerifyMirrorEvent(item, immediateMatches[0]!)
+      ) {
+        await deps.repository.verifyItem(item.id, immediateMatches[0]!.id, deps.now());
+        continue;
+      }
+      await updateMirrorEvent(deps, item, immediateMatches[0]!, workout);
       continue;
     }
     await deps.repository.startItem(item.id, deps.now());
@@ -329,7 +472,7 @@ export async function reconcileActivePlanWindow(
     }
     return failListedJob(deps, running);
   }
-  await verifyCreateItems(deps, job, after);
+  await verifyMirrorItems(deps, job, after);
   return finishJob(deps, running);
 }
 
@@ -353,7 +496,7 @@ export async function verifyPlanMirror(
   } catch {
     return failListedJob(deps, running);
   }
-  await verifyCreateItems(deps, running, events);
+  await verifyMirrorItems(deps, running, events);
   return finishJob(deps, running);
 }
 

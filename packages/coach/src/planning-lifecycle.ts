@@ -22,8 +22,14 @@ import {
 
 export type ActivePlanScenario =
   | "PL-S004"
+  | "PL-S007"
+  | "PL-S008"
   | "PL-S013"
   | "PL-S021"
+  | "PL-S022"
+  | "PL-S023"
+  | "PL-S024"
+  | "PL-S025"
   | "PL-S032"
   | "PL-S033"
   | "PL-S034"
@@ -36,7 +42,8 @@ export type ActivePlanScenario =
   | "PL-S040"
   | "PL-S041"
   | "PL-S042"
-  | "PL-S043";
+  | "PL-S043"
+  | "PL-S097";
 
 export interface PlanConversationProjection {
   readonly id: string;
@@ -341,11 +348,31 @@ export function buildActivePlanReadModel(input: {
   readonly revision: number;
   readonly data: PlanActiveProjectionData;
   readonly reconciliation: PlanReconciliation;
+  readonly proposalCapabilities?: {
+    readonly canRevise: boolean;
+    readonly canVerifyPremises: boolean;
+    readonly canCalculateLoad: boolean;
+  };
 }): PlanReadModel {
   const copy = {
     "PL-S004": ["Plan active", "This week reflects your Plan and completed activities."],
+    "PL-S007": [
+      "Plan change needs review",
+      "Review the proposed change before it affects your Plan.",
+    ],
+    "PL-S008": ["Plan updated", "The approved change is now part of the active Plan."],
     "PL-S013": ["Plan active", "Activity matches are shown as of the last successful sync."],
     "PL-S021": ["Workout details", "Review how this workout matched an activity."],
+    "PL-S022": ["Revise Proposal", "The active Plan stays unchanged while the coach revises it."],
+    "PL-S023": ["Updated Proposal", "Review the revised change before approving it."],
+    "PL-S024": [
+      "Checking the current Plan",
+      "Confirming the Proposal still matches its source data.",
+    ],
+    "PL-S025": [
+      "Plan changed before approval",
+      "Review the recalculated Proposal before approving it.",
+    ],
     "PL-S032": ["Workout changed in Intervals", "Choose which version becomes authoritative."],
     "PL-S033": [
       "Updating the Plan",
@@ -365,6 +392,7 @@ export function buildActivePlanReadModel(input: {
     "PL-S041": ["Calendar update still needs attention", "Retry or verify the provider again."],
     "PL-S042": ["Resuming calendar update", "The interrupted update is continuing safely."],
     "PL-S043": ["Plan active", "Intervals is current for the next seven days."],
+    "PL-S097": ["Proposal rejected", "The active Plan did not change."],
   } as const;
   const attentionItems: PlanAttention["items"] = [];
   if (input.scenarioId === "PL-S039" || input.scenarioId === "PL-S041") {
@@ -395,12 +423,33 @@ export function buildActivePlanReadModel(input: {
       affectedDate: workout.date,
     });
   }
+  for (const proposal of input.data.proposals ?? []) {
+    attentionItems.push({
+      id: `proposal:${proposal.id}`,
+      title: proposal.stale ? "Review updated Plan change" : proposal.title,
+      scenarioId: proposal.stale ? "PL-S025" : "PL-S007",
+      priority: "dated",
+      affectedDate: proposal.affectedDate,
+    });
+  }
   const attention: PlanAttention = {
     count: attentionItems.length,
     destination:
       attentionItems.length === 0 ? "none" : attentionItems.length === 1 ? "direct" : "list",
     items: attentionItems,
   };
+  const selectedProposal = (input.data.proposals ?? []).find(
+    (proposal) => proposal.id === input.data.selectedProposalId,
+  );
+  const requiresLoadCalculation =
+    selectedProposal?.diff.some((line) => line.field === "week-load") ?? false;
+  const canCalculateProposal =
+    !requiresLoadCalculation || input.proposalCapabilities?.canCalculateLoad === true;
+  const canReviseProposal = input.proposalCapabilities?.canRevise === true && canCalculateProposal;
+  const canApproveProposal =
+    input.proposalCapabilities?.canVerifyPremises === true &&
+    canCalculateProposal &&
+    (selectedProposal?.stale !== true || input.proposalCapabilities?.canRevise === true);
   return PlanReadModelSchema.parse({
     schemaVersion: 1,
     scenarioId: input.scenarioId,
@@ -416,6 +465,11 @@ export function buildActivePlanReadModel(input: {
       guard("PL-T14"),
       guard("PL-T15"),
       guard("PL-T16"),
+      guard("PL-T17"),
+      ...(canReviseProposal ? [guard("PL-T18")] : []),
+      ...(canApproveProposal ? [guard("PL-T19")] : []),
+      guard("PL-T20"),
+      guard("PL-T39"),
     ],
     reconciliation: input.reconciliation,
     attention,

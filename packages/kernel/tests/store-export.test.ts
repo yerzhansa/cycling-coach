@@ -167,7 +167,7 @@ function makePresence(
 }
 
 describe("store export op", () => {
-  it("(enumerate) exports exactly the 12 authored keys with correct manualOnly flags and no source/derived tables", async () => {
+  it("(enumerate) exports every authored key with correct manualOnly flags and no source/derived tables", async () => {
     const data = populated();
     const { source, calls } = makeSource(data);
     const crypto = new FakeCrypto();

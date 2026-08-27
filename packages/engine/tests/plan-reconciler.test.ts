@@ -19,6 +19,7 @@ import {
   type PlanMirrorCalendarPort,
   type PlanMirrorCreateInput,
   type PlanMirrorEvent,
+  type PlanMirrorUpdateInput,
 } from "../src/index.js";
 
 const PLAN_ID = "01K00000000000000000000001";
@@ -261,6 +262,7 @@ class MemoryReconciliationRepository implements PlanReconciliationRepository {
 class MemoryCalendar implements PlanMirrorCalendarPort {
   readonly events: PlanMirrorEvent[] = [];
   readonly creates: PlanMirrorCreateInput[] = [];
+  readonly updates: PlanMirrorUpdateInput[] = [];
   readonly deletes: number[] = [];
   readonly lists: Array<{ readonly startDateKey: number; readonly endDateKey: number }> = [];
   createFailures = 0;
@@ -283,11 +285,41 @@ class MemoryCalendar implements PlanMirrorCalendarPort {
       this.createFailures -= 1;
       throw new Error("unavailable");
     }
+    const content = JSON.parse(input.structureJson) as Record<string, unknown>;
     this.events.push({
       id: this.nextEventId++,
       dateKey: input.dateKey,
       externalId: input.externalId,
+      name: input.name,
+      durationS: input.durationS,
+      description: typeof content.description === "string" ? content.description : null,
+      workoutDoc:
+        content.workoutDoc !== null &&
+        typeof content.workoutDoc === "object" &&
+        !Array.isArray(content.workoutDoc)
+          ? (content.workoutDoc as Readonly<Record<string, unknown>>)
+          : null,
     });
+  }
+
+  async updateEvent(input: PlanMirrorUpdateInput) {
+    this.updates.push(input);
+    const index = this.events.findIndex((event) => event.id === input.eventId);
+    if (index < 0) throw new Error("missing");
+    const content = JSON.parse(input.structureJson) as Record<string, unknown>;
+    this.events[index] = {
+      ...this.events[index]!,
+      dateKey: input.dateKey,
+      name: input.name,
+      durationS: input.durationS,
+      description: typeof content.description === "string" ? content.description : null,
+      workoutDoc:
+        content.workoutDoc !== null &&
+        typeof content.workoutDoc === "object" &&
+        !Array.isArray(content.workoutDoc)
+          ? (content.workoutDoc as Readonly<Record<string, unknown>>)
+          : null,
+    };
   }
 
   async deleteEvent(input: { eventId: number }) {
@@ -426,6 +458,170 @@ describe("Plan reconciler", () => {
     ]);
   });
 
+  it("updates an existing managed event when the accepted Plan workout changed", async () => {
+    const value = harness();
+    const target = {
+      ...workout("01K00000000000000000000101", 20260825),
+      name: "Recovery",
+      durationS: 1_800,
+    };
+    value.calendar.events.push({
+      id: 42,
+      dateKey: target.dateKey,
+      externalId: planMirrorExternalId(PLAN_ID, target.id),
+      name: "Endurance",
+      durationS: 3_600,
+      description: null,
+      workoutDoc: null,
+    });
+
+    const result = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      value.deps,
+    );
+
+    expect(result).toMatchObject({ state: "reconcile-verified", created: 1, failed: 0 });
+    expect(value.calendar.updates).toEqual([
+      expect.objectContaining({ eventId: 42, name: "Recovery", durationS: 1_800 }),
+    ]);
+    expect(value.calendar.creates).toEqual([]);
+  });
+
+  it("updates a sparse verified event when the expected workout content changes", async () => {
+    const value = harness();
+    const target = workout("01K00000000000000000000101", 20260827);
+    const sparseCalendar: PlanMirrorCalendarPort = {
+      async listEvents(input) {
+        return (await value.calendar.listEvents(input)).map(({ id, dateKey, externalId }) => ({
+          id,
+          dateKey,
+          externalId,
+        }));
+      },
+      createEvent: (input) => value.calendar.createEvent(input),
+      updateEvent: (input) => value.calendar.updateEvent(input),
+      deleteEvent: (input) => value.calendar.deleteEvent(input),
+    };
+    await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      { ...value.deps, calendar: sparseCalendar },
+    );
+    const changed = { ...target, name: "Recovery", durationS: 1_800 };
+
+    const result = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [changed], todayDateKey: 20260826 },
+      { ...value.deps, calendar: sparseCalendar },
+    );
+
+    expect(result).toMatchObject({ state: "reconcile-verified", failed: 0 });
+    expect(value.calendar.updates).toEqual([
+      expect.objectContaining({ name: "Recovery", durationS: 1_800 }),
+    ]);
+    expect(value.calendar.events).toEqual([
+      expect.objectContaining({ name: "Recovery", durationS: 1_800 }),
+    ]);
+  });
+
+  it("retries a failed update instead of trusting a sparse stale event", async () => {
+    const value = harness();
+    const target = {
+      ...workout("01K00000000000000000000101", 20260825),
+      name: "Recovery",
+      durationS: 1_800,
+    };
+    value.calendar.events.push({
+      id: 42,
+      dateKey: target.dateKey,
+      externalId: planMirrorExternalId(PLAN_ID, target.id),
+      name: "Endurance",
+      durationS: 3_600,
+      description: null,
+      workoutDoc: null,
+    });
+    let updateAttempts = 0;
+    const sparseCalendar: PlanMirrorCalendarPort = {
+      async listEvents(input) {
+        return (await value.calendar.listEvents(input)).map(({ id, dateKey, externalId }) => ({
+          id,
+          dateKey,
+          externalId,
+        }));
+      },
+      createEvent: (input) => value.calendar.createEvent(input),
+      deleteEvent: (input) => value.calendar.deleteEvent(input),
+      async updateEvent(input) {
+        updateAttempts += 1;
+        if (updateAttempts === 1) throw new Error("temporary update failure");
+        await value.calendar.updateEvent(input);
+      },
+    };
+
+    const first = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      { ...value.deps, calendar: sparseCalendar },
+    );
+    const second = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      { ...value.deps, calendar: sparseCalendar },
+    );
+
+    expect(first).toMatchObject({ state: "reconcile-failed", failed: 1 });
+    expect(second).toMatchObject({ state: "reconcile-verified", failed: 0 });
+    expect(updateAttempts).toBe(2);
+    expect(value.calendar.updates).toEqual([
+      expect.objectContaining({ eventId: 42, name: "Recovery", durationS: 1_800 }),
+    ]);
+  });
+
+  it("deletes a managed event when its Plan workout moved outside the seven-day window", async () => {
+    const value = harness();
+    const target = workout("01K00000000000000000000101", 20260901);
+    value.calendar.events.push({
+      id: 42,
+      dateKey: 20260825,
+      externalId: planMirrorExternalId(PLAN_ID, target.id),
+      name: target.name,
+      durationS: target.durationS,
+      description: null,
+      workoutDoc: null,
+    });
+
+    const result = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      value.deps,
+    );
+
+    expect(result).toMatchObject({ state: "reconcile-verified", created: 1, failed: 0 });
+    expect(value.calendar.deletes).toEqual([42]);
+    expect(value.calendar.events).toEqual([]);
+  });
+
+  it("does not delete an athlete-owned event that uses the Plan mirror namespace", async () => {
+    const value = harness();
+    const target = {
+      ...workout("01K00000000000000000000101", 20260825),
+      origin: "athlete" as const,
+    };
+    value.calendar.events.push({
+      id: 42,
+      dateKey: target.dateKey,
+      externalId: planMirrorExternalId(PLAN_ID, target.id),
+      name: target.name,
+      durationS: target.durationS,
+      description: null,
+      workoutDoc: null,
+    });
+
+    const result = await reconcileActivePlanWindow(
+      { plan: plan(), workouts: [target], todayDateKey: 20260825 },
+      value.deps,
+    );
+
+    expect(result).toMatchObject({ state: "reconcile-verified", total: 0, failed: 0 });
+    expect(value.calendar.deletes).toEqual([]);
+    expect(value.calendar.events).toEqual([expect.objectContaining({ id: 42 })]);
+  });
+
   it("fails verification when a provider event disappears after the initial list", async () => {
     const value = harness();
     const target = workout("01K00000000000000000000101", 20260825);
@@ -526,6 +722,10 @@ describe("Plan reconciler", () => {
       id: 88,
       dateKey: target.dateKey,
       externalId: planMirrorExternalId(PLAN_ID, target.id),
+      name: target.name,
+      durationS: target.durationS,
+      description: null,
+      workoutDoc: null,
     });
 
     const verified = await verifyPlanMirror(failed.job, value.deps);

@@ -89,6 +89,8 @@ export const PURE_AUTHORED_TABLES = [
   "plan_conversation",
   "plan_conversation_turn",
   "plan_draft_revision",
+  "plan_proposal",
+  "plan_proposal_premise",
   "plan_source_request",
   "plan_workout",
   "plan_workout_drift",

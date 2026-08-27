@@ -221,6 +221,11 @@ export function bootRenderer(): Disposer {
       planAdapter.resolveWorkoutMatch(workoutId, activityId, decision),
     resolveWorkoutDrift: (workoutId, eventId, decision) =>
       planAdapter.resolveWorkoutDrift(workoutId, eventId, decision),
+    openProposal: (proposalId) => planAdapter.openProposal(proposalId),
+    reviseProposal: (proposalId, text) => planAdapter.reviseProposal(proposalId, text),
+    approveProposal: (proposalId, expectedRevision) =>
+      planAdapter.approveProposal(proposalId, expectedRevision),
+    rejectProposal: (proposalId) => planAdapter.rejectProposal(proposalId),
     openAttention: (attentionId) => planAdapter.openAttention(attentionId),
     returnToCoach: () => planAdapter.returnToCoach(),
     retry: () => planAdapter.retry(),
