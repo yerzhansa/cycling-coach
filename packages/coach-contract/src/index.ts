@@ -17,3 +17,4 @@ export * from "./chat-queue.js";
 export * from "./chat-attachment.js";
 export * from "./planning-read.js";
 export * from "./plan-chat-card.js";
+export * from "./planning-request.js";

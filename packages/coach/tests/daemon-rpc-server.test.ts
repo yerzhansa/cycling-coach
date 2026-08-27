@@ -2036,6 +2036,80 @@ describe.skipIf(!hasLoopback)("authenticated RPC projection", () => {
     await client.close();
   });
 
+  it("dispatches strict Chat-to-Plan request delivery operations", async () => {
+    const token = "x".repeat(43);
+    const createPlanningRequest = vi.fn(async () => ({
+      status: "rejected" as const,
+      reason: "invalid_request" as const,
+    }));
+    const getPlanningRequest = vi.fn(async () => ({ status: "missing" as const }));
+    const retryPlanningRequest = vi.fn(async () => ({ status: "missing" as const }));
+    const resumePlanningRequests = vi.fn(async () => ({ deliveries: [] }));
+    const rpc = createCoachRpcServer({
+      engine: engine(),
+      operations: {
+        ...operations,
+        createPlanningRequest,
+        getPlanningRequest,
+        retryPlanningRequest,
+        resumePlanningRequests,
+      },
+      token,
+      owner: "app-supervised",
+    });
+    const client = await openSocket(rpc);
+    client.ws.send(JSON.stringify(createClientHandshakeFrame(token)));
+    await client.frames.next();
+
+    const payload = {
+      requestId: "request-1",
+      kind: "plan_question",
+      intent: "Review the current week.",
+      source: { chatId: "desktop", messageId: "message-1" },
+      sourceSnapshot: {
+        capturedAt: "1998-08-24T08:00:00.000Z",
+        attachment: null,
+        selectedWorkout: null,
+      },
+    };
+    for (const request of [
+      { id: "create-request", method: "createPlanningRequest", params: { payload } },
+      { id: "get-request", method: "getPlanningRequest", params: { requestId: "request-1" } },
+      { id: "retry-request", method: "retryPlanningRequest", params: { requestId: "request-1" } },
+      { id: "resume-requests", method: "resumePlanningRequests", params: {} },
+    ]) {
+      client.ws.send(JSON.stringify({ jsonrpc: "2.0", ...request }));
+      expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+        id: request.id,
+        result:
+          request.method === "createPlanningRequest"
+            ? { status: "rejected", reason: "invalid_request" }
+            : request.method === "resumePlanningRequests"
+              ? { deliveries: [] }
+              : { status: "missing" },
+      });
+    }
+    expect(createPlanningRequest).toHaveBeenCalledWith({ payload });
+    expect(getPlanningRequest).toHaveBeenCalledWith({ requestId: "request-1" });
+    expect(retryPlanningRequest).toHaveBeenCalledWith({ requestId: "request-1" });
+    expect(resumePlanningRequests).toHaveBeenCalledWith({});
+
+    client.ws.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "invalid-request",
+        method: "resumePlanningRequests",
+        params: { extra: true },
+      }),
+    );
+    expect(parseCoachRpcEnvelope(await client.frames.next())).toMatchObject({
+      id: "invalid-request",
+      error: { code: -32602, message: "Invalid params" },
+    });
+    expect(resumePlanningRequests).toHaveBeenCalledOnce();
+    await client.close();
+  });
+
   it.each([
     {
       name: "command id",

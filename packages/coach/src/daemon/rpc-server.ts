@@ -36,6 +36,7 @@ import {
   type CoachEngine,
   type CoachOperations,
   type PlanningReadOperations,
+  type PlanningRequestOperations,
   type CoachRpcMethodName,
   type CoachSelfTestOperations,
   type DaemonOwner,
@@ -296,7 +297,10 @@ export async function ensureDaemonToken(
 
 export interface CoachRpcServerInput {
   readonly engine: CoachEngine;
-  readonly operations: CoachOperations & PlanningReadOperations & PlanningOperations;
+  readonly operations: CoachOperations &
+    PlanningReadOperations &
+    PlanningRequestOperations &
+    PlanningOperations;
   readonly spend: SpendRpcHandlers;
   readonly selfTestOperations: CoachSelfTestOperations;
   readonly telegram: DesktopTelegramController;
@@ -534,6 +538,10 @@ const RENDERER_RPC_METHODS = new Set<CoachRpcMethodName>([
   "selfTest",
   "getPlanState",
   "executePlanTransition",
+  "createPlanningRequest",
+  "getPlanningRequest",
+  "retryPlanningRequest",
+  "resumePlanningRequests",
 ]);
 
 const PLAN_CHAT_RENDERER_METHODS = new Set<CoachRpcMethodName>([
@@ -1710,6 +1718,62 @@ export function createCoachRpcServer(input: CoachRpcServerInput): CoachRpcServer
                   eventFailure = { error };
                 }
               });
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "createPlanningRequest":
+            try {
+              if (input.operations.createPlanningRequest === undefined) {
+                throw new TypeError("Planning request creation is unavailable.");
+              }
+              result = await input.operations.createPlanningRequest(
+                COACH_RPC_METHOD_REGISTRY.createPlanningRequest.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "getPlanningRequest":
+            try {
+              if (input.operations.getPlanningRequest === undefined) {
+                throw new TypeError("Planning request read is unavailable.");
+              }
+              result = await input.operations.getPlanningRequest(
+                COACH_RPC_METHOD_REGISTRY.getPlanningRequest.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "retryPlanningRequest":
+            try {
+              if (input.operations.retryPlanningRequest === undefined) {
+                throw new TypeError("Planning request retry is unavailable.");
+              }
+              result = await input.operations.retryPlanningRequest(
+                COACH_RPC_METHOD_REGISTRY.retryPlanningRequest.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
+            } catch (error) {
+              invocationFailure = { error };
+            }
+            break;
+          case "resumePlanningRequests":
+            try {
+              if (input.operations.resumePlanningRequests === undefined) {
+                throw new TypeError("Planning request recovery is unavailable.");
+              }
+              result = await input.operations.resumePlanningRequests(
+                COACH_RPC_METHOD_REGISTRY.resumePlanningRequests.requestSchema.parse(
+                  generic.data.params,
+                ),
+              );
             } catch (error) {
               invocationFailure = { error };
             }

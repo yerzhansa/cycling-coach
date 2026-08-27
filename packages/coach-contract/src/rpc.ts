@@ -124,6 +124,17 @@ import {
   GetPlanningReadModelRpcResultSchema,
   type PlanningReadOperations,
 } from "./planning-read.js";
+import {
+  CreatePlanningRequestRpcParamsSchema,
+  CreatePlanningRequestRpcResultSchema,
+  GetPlanningRequestRpcParamsSchema,
+  GetPlanningRequestRpcResultSchema,
+  ResumePlanningRequestsRpcParamsSchema,
+  ResumePlanningRequestsRpcResultSchema,
+  RetryPlanningRequestRpcParamsSchema,
+  RetryPlanningRequestRpcResultSchema,
+  type PlanningRequestOperations,
+} from "./planning-request.js";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -277,6 +288,10 @@ export const COACH_RPC_METHOD_NAMES = [
   "selfTest",
   "getPlanState",
   "executePlanTransition",
+  "createPlanningRequest",
+  "getPlanningRequest",
+  "retryPlanningRequest",
+  "resumePlanningRequests",
 ] as const satisfies readonly (keyof CoachRpcService)[];
 
 export const CoachRpcMethodNameSchema = z.enum(COACH_RPC_METHOD_NAMES);
@@ -1269,6 +1284,7 @@ export interface TelegramControlOperations {
 export type CoachRpcService = CoachEngine &
   CoachOperations &
   PlanningReadOperations &
+  PlanningRequestOperations &
   SpendOperations &
   CoachSelfTestOperations &
   TelegramControlOperations &
@@ -1763,6 +1779,38 @@ export const CoachRpcRequestEnvelopeSchema = z.discriminatedUnion("method", [
       params: ExecutePlanTransitionRpcParamsSchema,
     })
     .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("createPlanningRequest"),
+      params: CreatePlanningRequestRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("getPlanningRequest"),
+      params: GetPlanningRequestRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("retryPlanningRequest"),
+      params: RetryPlanningRequestRpcParamsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: JsonRpcIdSchema,
+      method: z.literal("resumePlanningRequests"),
+      params: ResumePlanningRequestsRpcParamsSchema,
+    })
+    .strict(),
 ]);
 export type CoachRpcRequestEnvelope = z.infer<typeof CoachRpcRequestEnvelopeSchema>;
 
@@ -2240,6 +2288,30 @@ export const COACH_RPC_METHOD_REGISTRY = {
     requestSchema: ExecutePlanTransitionRpcParamsSchema,
     responseSchema: ExecutePlanTransitionRpcResultSchema,
     eventSchema: PlanProgressEventSchema,
+  },
+  createPlanningRequest: {
+    wireName: "createPlanningRequest",
+    requestSchema: CreatePlanningRequestRpcParamsSchema,
+    responseSchema: CreatePlanningRequestRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  getPlanningRequest: {
+    wireName: "getPlanningRequest",
+    requestSchema: GetPlanningRequestRpcParamsSchema,
+    responseSchema: GetPlanningRequestRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  retryPlanningRequest: {
+    wireName: "retryPlanningRequest",
+    requestSchema: RetryPlanningRequestRpcParamsSchema,
+    responseSchema: RetryPlanningRequestRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
+  },
+  resumePlanningRequests: {
+    wireName: "resumePlanningRequests",
+    requestSchema: ResumePlanningRequestsRpcParamsSchema,
+    responseSchema: ResumePlanningRequestsRpcResultSchema,
+    eventSchema: NoRpcEventSchema,
   },
 } as const satisfies CoachRpcMethodRegistryShape;
 
