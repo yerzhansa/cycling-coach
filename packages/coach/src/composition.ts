@@ -190,6 +190,7 @@ import { createDocumentMediaAttachmentOperations } from "./document-media-attach
 import { createAttachmentComposerOperations } from "./attachment-composer-operations.js";
 import { createPlanningReadService } from "./planning-read-service.js";
 import { createPlanningRequestDeliveryService } from "./planning-request-delivery.js";
+import { createPlanningRequestSourceCleanup } from "./planning-request-source-cleanup.js";
 import {
   createPlanConversationRepository,
   createPlanningRequestIntakeRepository,
@@ -1035,6 +1036,7 @@ export async function createLocalCoachComposition(
     const observeAttachment = (observation: AttachmentObservation): void => {
       observeChatAttachment(logger, observation);
     };
+    let cleanupPlanningRequestSources: ((conversationId: string) => Promise<void>) | undefined;
     const attachmentRepository = createChatAttachmentRepository(input.context.store);
     const attachmentObjects = createManagedChatAttachmentStore({
       archiveDir: input.home.archiveDir,
@@ -1134,6 +1136,12 @@ export async function createLocalCoachComposition(
       runExclusive: (work) => runtime!.runExclusive(work),
       now,
       observe: observeAttachment,
+      beforeConversationCleanup: async (conversationId) => {
+        if (cleanupPlanningRequestSources === undefined) {
+          throw new Error("Planning request source cleanup is unavailable.");
+        }
+        await cleanupPlanningRequestSources(conversationId);
+      },
       onAdmitted: async (admitted) => {
         observeAttachment({
           operation: "admission",
@@ -1985,6 +1993,15 @@ export async function createLocalCoachComposition(
       input.context.store,
       analysisCrypto,
     );
+    const chatPlanOutboxRepository = createChatPlanOutboxRepository(
+      input.context.store,
+      analysisCrypto,
+    );
+    cleanupPlanningRequestSources = createPlanningRequestSourceCleanup({
+      outbox: chatPlanOutboxRepository,
+      requests: planningRequestRepository,
+      identity: planningIdentity,
+    });
     const planConversationRepository = createPlanConversationRepository(input.context.store);
     const planningRequestIntake = createPlanningRequestIntakeService({
       requests: planningRequestRepository,
@@ -2014,7 +2031,7 @@ export async function createLocalCoachComposition(
     );
     const planningRequestOperations = createPlanningRequestDeliveryService(
       {
-        outbox: createChatPlanOutboxRepository(input.context.store, analysisCrypto),
+        outbox: chatPlanOutboxRepository,
         requests: planningRequestRepository,
         identity: planningIdentity,
         async resolveTarget() {

@@ -768,6 +768,18 @@ export function createChatController(input: {
     render();
   };
 
+  const recoverPlanningRequests = async (): Promise<void> => {
+    const client = await input.clients.getClient();
+    let recoveryFailed = false;
+    try {
+      await client.call("resumePlanningRequests", {});
+    } catch {
+      recoveryFailed = true;
+    }
+    await loadPlanningRequests(client);
+    if (recoveryFailed) throw new Error("Planning request recovery failed.");
+  };
+
   const routeToPlanningRequest = (requestId: string): void => {
     const delivery = planningRequests.find((item) => item.requestId === requestId);
     if (delivery?.state !== "delivered") return;
@@ -1259,7 +1271,7 @@ export function createChatController(input: {
         render();
       }
     });
-    const planningRequestLoadTask = loadPlanningRequests().catch(() => {
+    const planningRequestLoadTask = recoverPlanningRequests().catch(() => {
       if (!disposed) {
         planningRequestsLoaded = false;
         planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;
@@ -1443,7 +1455,7 @@ export function createChatController(input: {
       }
       planningRequestError = null;
       render();
-      void loadPlanningRequests().catch(() => {
+      void recoverPlanningRequests().catch(() => {
         if (disposed) return;
         planningRequestsLoaded = false;
         planningRequestError = CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY;

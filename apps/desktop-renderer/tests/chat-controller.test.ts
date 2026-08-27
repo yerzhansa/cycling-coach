@@ -149,6 +149,9 @@ function client(
     readonly listPlanningRequests?: () => Promise<{
       readonly deliveries: readonly PlanningRequestDelivery[];
     }>;
+    readonly resumePlanningRequests?: () => Promise<{
+      readonly deliveries: readonly PlanningRequestDelivery[];
+    }>;
     readonly createWorkoutPlanningRequest?: (
       request: CreateWorkoutPlanningRequestRpcParams,
     ) => Promise<
@@ -204,6 +207,10 @@ function client(
     if (method === "listPlanningRequests") {
       hideQueueCall();
       return (sessions.listPlanningRequests?.() ?? Promise.resolve({ deliveries: [] })) as never;
+    }
+    if (method === "resumePlanningRequests") {
+      hideQueueCall();
+      return (sessions.resumePlanningRequests?.() ?? Promise.resolve({ deliveries: [] })) as never;
     }
     if (method === "createWorkoutPlanningRequest") {
       return (sessions.createWorkoutPlanningRequest?.(
@@ -1290,6 +1297,51 @@ describe("chat controller", () => {
       }),
     );
     expect(controls.at(-1)?.planningRequests?.value).toContainEqual(delivered);
+  });
+
+  it("resumes durable Plan handoffs before restoring their Chat cards", async () => {
+    const order: string[] = [];
+    const restored = planningDelivery();
+    const resumePlanningRequests = vi.fn(async () => {
+      order.push("resume");
+      return { deliveries: [restored] };
+    });
+    const listPlanningRequests = vi.fn(async () => {
+      order.push("list");
+      return { deliveries: [restored] };
+    });
+    const fake = client(replies(), { resumePlanningRequests, listPlanningRequests });
+    const { controller, controls } = subject(fake);
+
+    await controller.start();
+
+    expect(order).toEqual(["resume", "list"]);
+    expect(resumePlanningRequests).toHaveBeenCalledOnce();
+    expect(controls.at(-1)?.planningRequests).toMatchObject({
+      loaded: true,
+      error: null,
+      value: [restored],
+    });
+  });
+
+  it("keeps the last safe Plan cards when relaunch recovery cannot deliver", async () => {
+    const restored = planningDelivery("failed");
+    const resumePlanningRequests = vi.fn(async () => {
+      throw new Error("planning unavailable");
+    });
+    const listPlanningRequests = vi.fn(async () => ({ deliveries: [restored] }));
+    const fake = client(replies(), { resumePlanningRequests, listPlanningRequests });
+    const { controller, controls } = subject(fake);
+
+    await controller.start();
+
+    expect(resumePlanningRequests).toHaveBeenCalledOnce();
+    expect(listPlanningRequests).toHaveBeenCalledOnce();
+    expect(controls.at(-1)?.planningRequests).toMatchObject({
+      loaded: false,
+      error: expect.any(String),
+      value: [restored],
+    });
   });
 
   it("retries one saved failed Plan request without changing its identity", async () => {

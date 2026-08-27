@@ -57,6 +57,7 @@ export interface ManagedChatAttachmentOperationsInput {
     readonly attachment: ChatAttachmentRow;
     readonly object: ChatAttachmentObjectRow;
   }) => Promise<void>;
+  readonly beforeConversationCleanup?: (conversationId: string) => Promise<void>;
   readonly observe?: (input: AttachmentObservation) => void;
 }
 
@@ -338,6 +339,7 @@ export function createManagedChatAttachmentOperations(
       const startedAt = now();
       try {
         const count = await input.runExclusive(async () => {
+          await input.beforeConversationCleanup?.(conversationId);
           const objects = await input.repository.cleanupConversation(conversationId);
           for (const object of objects) await input.objects.removeObject(object.relative_path);
           return objects.length;

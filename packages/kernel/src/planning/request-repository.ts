@@ -933,8 +933,19 @@ WHERE request_id = ? AND lifecycle = 'open' AND revision = ?`,
           expectedProposalId: current.request.proposalId,
           result,
         });
+        if (current.sourceState.status === "detached_open") {
+          await store.run(
+            `UPDATE planning_request SET source_status = 'compacted', payload_json = NULL
+WHERE request_id = ? AND source_status = 'detached_open' AND revision = ?`,
+            [input.requestId, input.expectedRevision + 1],
+          );
+        }
         const updated = await requireRequest(input.requestId);
-        if (updated.request.revision !== input.expectedRevision + 1) {
+        if (
+          updated.request.revision !== input.expectedRevision + 1 ||
+          (current.sourceState.status === "detached_open" &&
+            updated.sourceState.status !== "compacted")
+        ) {
           throw new PlanningRequestStoreError("stale-revision");
         }
         return updated;
