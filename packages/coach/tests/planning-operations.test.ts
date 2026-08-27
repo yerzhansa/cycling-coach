@@ -2674,9 +2674,37 @@ describe("Plan operations", () => {
 
   it("ends locally, preserves today and athlete events, and recovers cleanup", async () => {
     const planId = `${"0".repeat(25)}F`;
+    const conversationId = `${"0".repeat(25)}J`;
     const activePlan = { ...plan(planId, 10), status: "active" as const };
     const plans = createPlanRepository(store);
+    const conversations = createPlanConversationRepository(store);
     await plans.replace(activePlan, []);
+    await conversations.saveConversation({
+      id: conversationId,
+      planId,
+      replacesPlanId: null,
+      courseChoiceStatus: "omitted",
+      raceCourseJson: null,
+      status: "open",
+      endedAtMs: null,
+      createdAtMs: 10,
+      updatedAtMs: 10,
+      deviceId: "device-1",
+      hlcPhysicalMs: 10,
+      hlcCounter: 0,
+    });
+    await conversations.appendTurn({
+      id: `${"0".repeat(25)}K`,
+      conversationId,
+      sequence: 1,
+      athleteText: "Gran Fondo Almaty on 4 October.",
+      coachText: "I found your recent rides and FTP.",
+      lineageJson: "{}",
+      completedAtMs: 11,
+      deviceId: "device-1",
+      hlcPhysicalMs: 11,
+      hlcCounter: 0,
+    });
     const ownToday = planMirrorExternalId(planId, `${"0".repeat(25)}G`);
     const ownTomorrow = planMirrorExternalId(planId, `${"0".repeat(25)}H`);
     const events = [
@@ -2764,6 +2792,42 @@ describe("Plan operations", () => {
 
     await expect(operations.getPlanState?.({})).resolves.toMatchObject({
       status: "ready",
+      state: { lifecycle: "ended", scenarioId: "PL-S089" },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-ended-conversation",
+        action: "open",
+        sourceScenarioId: "PL-S089",
+        destinationScenarioId: "PL-S102",
+        returnFocusId: planId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        lifecycle: "ended",
+        scenarioId: "PL-S102",
+        projection: "coach",
+        data: {
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: "athlete", text: "Gran Fondo Almaty on 4 October." }),
+            expect.objectContaining({ role: "coach", text: "I found your recent rides and FTP." }),
+          ]),
+        },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-ended-conversation-back",
+        action: "back",
+        sourceScenarioId: "PL-S102",
+        destinationScenarioId: "PL-S089",
+        returnFocusId: planId,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
       state: { lifecycle: "ended", scenarioId: "PL-S089" },
     });
   });
