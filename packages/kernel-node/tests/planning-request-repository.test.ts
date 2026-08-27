@@ -459,4 +459,41 @@ describe("Planning request repository", () => {
     expect(compacted.request.terminalResult).toEqual(terminal());
     expect(compacted.tombstone?.status).toBe("applied");
   });
+
+  it("compacts an already detached source in the terminal commit", async () => {
+    await repository.createOrGet(createInput());
+    await repository.detachSource({
+      requestId: REQUEST_ID,
+      expectedRevision: 1,
+      provenance: provenance(),
+      updatedAtMs: 200,
+      deviceId: "device-1",
+      hlcPhysicalMs: 200,
+      hlcCounter: 0,
+    });
+
+    const completed = await repository.complete({
+      requestId: REQUEST_ID,
+      expectedRevision: 2,
+      result: terminal(),
+      resolvedDateKey: 19980826,
+      updatedAtMs: 300,
+      deviceId: "device-1",
+      hlcPhysicalMs: 300,
+      hlcCounter: 0,
+    });
+
+    expect(completed.request.revision).toBe(3);
+    expect(completed.request.lifecycle).toBe("applied");
+    expect(completed.sourceState).toEqual({
+      status: "compacted",
+      identity: {
+        chatId: "chat-1",
+        messageId: "message-1",
+        attachmentId: "attachment-1",
+      },
+      payload: null,
+      provenance: provenance(),
+    });
+  });
 });

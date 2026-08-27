@@ -29,6 +29,9 @@ describe("managed Chat attachment operations", () => {
   function createOperations(
     ids: readonly string[],
     observe?: Parameters<typeof createManagedChatAttachmentOperations>[0]["observe"],
+    beforeConversationCleanup?: Parameters<
+      typeof createManagedChatAttachmentOperations
+    >[0]["beforeConversationCleanup"],
   ) {
     let index = 0;
     const repository = createChatAttachmentRepository(store);
@@ -51,6 +54,7 @@ describe("managed Chat attachment operations", () => {
         now: () => 100,
         randomId: () => ids[index++]!,
         ...(observe === undefined ? {} : { observe }),
+        ...(beforeConversationCleanup === undefined ? {} : { beforeConversationCleanup }),
       }),
     };
   }
@@ -311,5 +315,34 @@ describe("managed Chat attachment operations", () => {
       },
     ]);
     expect(JSON.stringify(observations)).not.toContain("desktop");
+  });
+
+  it("keeps attachment bytes when the destination cleanup barrier fails", async () => {
+    const sourcePath = join(root, "protected.txt");
+    await writeFile(sourcePath, "preserve until Plan provenance is safe");
+    const beforeConversationCleanup = vi.fn(async () => {
+      throw new Error("destination unavailable");
+    });
+    const { operations, repository } = createOperations(
+      ["object-protected", "attachment-protected"],
+      undefined,
+      beforeConversationCleanup,
+    );
+    await operations.admit({
+      chatId: "desktop",
+      selectionId: "selection-protected",
+      source: "picker",
+      candidate: { kind: "native-path", sourcePath },
+    });
+    const object = (await repository.readObject("object-protected"))!;
+
+    await expect(operations.cleanupConversation("desktop")).rejects.toThrow(
+      "destination unavailable",
+    );
+    expect(beforeConversationCleanup).toHaveBeenCalledWith("desktop");
+    await expect(repository.readObject("object-protected")).resolves.toBeDefined();
+    await expect(
+      readFile(join(archiveDir, ...object.relative_path.split("/")), "utf8"),
+    ).resolves.toBe("preserve until Plan provenance is safe");
   });
 });
