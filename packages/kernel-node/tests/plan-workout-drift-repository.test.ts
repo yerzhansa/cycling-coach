@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  createPlanAdaptationLedgerRepository,
   createPlanRepository,
   createPlanWorkoutDriftRepository,
+  encodePlanAdaptationWorkoutSnapshot,
+  planAdaptationWorkoutSnapshot,
   type PlanRecord,
   type PlanWorkoutDriftRecord,
   type PlanWorkoutRecord,
@@ -124,11 +127,33 @@ describe("Plan workout drift repository", () => {
   it("adopts the provider snapshot and resolves the drift in one transaction", async () => {
     const plans = createPlanRepository(store);
     const repository = createPlanWorkoutDriftRepository(store);
+    const history = createPlanAdaptationLedgerRepository(store);
+    const adoptedWorkout = { ...workout, durationS: 3_300, hlcPhysicalMs: 21 };
     await repository.observe(drift());
     await expect(
       repository.adopt({
         id: DRIFT_ID,
-        workout: { ...workout, durationS: 3_300, hlcPhysicalMs: 21 },
+        expectedWorkout: workout,
+        workout: adoptedWorkout,
+        ledger: {
+          id: `${"0".repeat(25)}4`,
+          planId: PLAN_ID,
+          targetWorkoutId: WORKOUT_ID,
+          kind: "drift-adopted",
+          sourceId: DRIFT_ID,
+          reversalOfId: null,
+          label: "Intervals edit adopted",
+          beforeJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(workout)),
+          afterJson: encodePlanAdaptationWorkoutSnapshot(
+            planAdaptationWorkoutSnapshot(adoptedWorkout),
+          ),
+          weekLoadBefore: null,
+          weekLoadAfter: null,
+          occurredAtMs: 21,
+          deviceId: "device-1",
+          hlcPhysicalMs: 21,
+          hlcCounter: 0,
+        },
         resolvedAtMs: 21,
         deviceId: "device-1",
         hlcPhysicalMs: 21,
@@ -139,5 +164,8 @@ describe("Plan workout drift repository", () => {
       expect.objectContaining({ id: WORKOUT_ID, durationS: 3_300 }),
     ]);
     await expect(repository.readOpenForWorkout(WORKOUT_ID)).resolves.toBeUndefined();
+    await expect(history.readForPlan(PLAN_ID)).resolves.toEqual([
+      expect.objectContaining({ kind: "drift-adopted", sourceId: DRIFT_ID }),
+    ]);
   });
 });

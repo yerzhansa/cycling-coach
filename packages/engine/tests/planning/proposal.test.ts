@@ -344,6 +344,7 @@ describe("structured Plan proposals", () => {
       deviceId: "device-1",
       hlcPhysicalMs: 30,
       hlcCounter: 0,
+      ledgerId: id(8),
       mirrorJob: {
         id: id(9),
         windowStartDateKey: 20260826,
@@ -357,6 +358,12 @@ describe("structured Plan proposals", () => {
         expectedPlanHlcPhysicalMs: 10,
         expectedPlanHlcCounter: 0,
         workouts: [expect.objectContaining({ name: "Recovery", durationS: 1_800 })],
+        ledger: expect.objectContaining({
+          id: id(8),
+          kind: "proposal-applied",
+          weekLoadBefore: 420,
+          weekLoadAfter: 360,
+        }),
       }),
     );
   });

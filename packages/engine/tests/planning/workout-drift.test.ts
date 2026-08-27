@@ -206,7 +206,13 @@ describe("Plan workout drift", () => {
     );
     expect(repository.adopt).toHaveBeenCalledWith(
       expect.objectContaining({
+        expectedWorkout: workout,
         workout: expect.objectContaining({ durationS: 3_300, name: "Threshold 4×8" }),
+        ledger: expect.objectContaining({
+          kind: "drift-adopted",
+          weekLoadBefore: null,
+          weekLoadAfter: null,
+        }),
       }),
     );
     expect(updateEvent).not.toHaveBeenCalled();

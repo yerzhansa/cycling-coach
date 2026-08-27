@@ -376,6 +376,47 @@ export const PlanProposalProjectionSchema = z
   .strict();
 export type PlanProposalProjection = z.infer<typeof PlanProposalProjectionSchema>;
 
+export const PlanHistoryEntrySchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.enum(["activation", "proposal-applied", "drift-adopted", "undo"]),
+    label: z.string().min(1),
+    occurredAtMs: z.number().int().nonnegative(),
+    targetWorkoutId: z.string().min(1).nullable(),
+    before: z
+      .object({
+        date: TrainingExportCivilDateSchema,
+        name: z.string().min(1),
+        durationS: z.number().int().positive().nullable(),
+      })
+      .strict()
+      .nullable(),
+    after: z
+      .object({
+        date: TrainingExportCivilDateSchema,
+        name: z.string().min(1),
+        durationS: z.number().int().positive().nullable(),
+      })
+      .strict()
+      .nullable(),
+    weekLoadBefore: z.number().nonnegative().nullable(),
+    weekLoadAfter: z.number().nonnegative().nullable(),
+    undoStatus: z.enum(["none", "eligible", "expired", "undone"]),
+    undoReason: z
+      .enum([
+        "newer-change",
+        "plan-not-active",
+        "workout-missing",
+        "workout-not-future",
+        "workout-not-coach-owned",
+        "workout-changed",
+        "already-undone",
+      ])
+      .nullable(),
+  })
+  .strict();
+export type PlanHistoryEntry = z.infer<typeof PlanHistoryEntrySchema>;
+
 export const PlanActiveProjectionDataSchema = z
   .object({
     plan: PlanDraftPlanProjectionSchema,
@@ -394,6 +435,8 @@ export const PlanActiveProjectionDataSchema = z
     proposals: z.array(PlanProposalProjectionSchema).optional(),
     selectedProposalId: z.string().min(1).nullable().optional(),
     proposalRevisionText: z.string().nullable().optional(),
+    history: z.array(PlanHistoryEntrySchema).optional(),
+    selectedHistoryId: z.string().min(1).nullable().optional(),
   })
   .strict();
 export type PlanActiveProjectionData = z.infer<typeof PlanActiveProjectionDataSchema>;

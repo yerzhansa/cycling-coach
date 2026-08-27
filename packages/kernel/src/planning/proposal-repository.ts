@@ -1,5 +1,11 @@
 import type { MigratorStore } from "../store/migrator.js";
 import type { Row, SqlStore } from "../store/ports.js";
+import {
+  encodePlanAdaptationWorkoutSnapshot,
+  insertPlanAdaptationLedgerRecord,
+  planAdaptationWorkoutSnapshot,
+  type PlanAdaptationLedgerRecord,
+} from "./adaptation-ledger-repository.js";
 import { addCivilDays } from "./date-keys.js";
 import type { PlanRecord, PlanWorkoutRecord } from "./repository.js";
 
@@ -70,6 +76,7 @@ export interface PlanProposalRepository {
       readonly windowEndDateKey: number;
       readonly createdAtMs: number;
     };
+    readonly ledger: PlanAdaptationLedgerRecord;
     readonly plan: PlanRecord;
     readonly workouts: readonly PlanWorkoutRecord[];
     readonly resolvedAtMs: number;
@@ -436,9 +443,25 @@ device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
         !Number.isSafeInteger(input.hlcCounter) ||
         input.hlcCounter < 0 ||
         input.workouts.length === 0 ||
+        input.workouts.length !== 1 ||
         input.expectedWorkouts.length !== input.workouts.length ||
         expectedById.size !== input.expectedWorkouts.length ||
         input.workouts.some((workout) => !expectedById.has(workout.id))
+      ) {
+        throw new PlanProposalValidationError("invalid-proposal");
+      }
+      const expectedWorkout = input.expectedWorkouts[0]!;
+      const nextWorkout = input.workouts[0]!;
+      if (
+        input.ledger.kind !== "proposal-applied" ||
+        input.ledger.sourceId !== input.id ||
+        input.ledger.reversalOfId !== null ||
+        input.ledger.planId !== input.plan.id ||
+        input.ledger.targetWorkoutId !== expectedWorkout.id ||
+        input.ledger.beforeJson !==
+          encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(expectedWorkout)) ||
+        input.ledger.afterJson !==
+          encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(nextWorkout))
       ) {
         throw new PlanProposalValidationError("invalid-proposal");
       }
@@ -536,6 +559,7 @@ device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='proposed'`,
             input.id,
           ],
         );
+        await insertPlanAdaptationLedgerRecord(store, input.ledger);
         await store.run(
           `INSERT INTO plan_reconciliation_job (
   id, plan_id, kind, status, window_start_date_key, window_end_date_key,

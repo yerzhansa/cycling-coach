@@ -7,3 +7,4 @@ export * from "./race-course.js";
 export * from "./workout-match-repository.js";
 export * from "./workout-drift-repository.js";
 export * from "./proposal-repository.js";
+export * from "./adaptation-ledger-repository.js";

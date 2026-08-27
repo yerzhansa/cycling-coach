@@ -874,6 +874,58 @@ describe("Plan view adapter", () => {
     });
   });
 
+  it("opens and closes Plan history and dispatches single-step Undo", async () => {
+    const planId = "00000000000000000000000003";
+    const ledgerId = "00000000000000000000000005";
+    const active = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId,
+    });
+    const history = { ...active, scenarioId: "PL-S005" as const };
+    const subject = harness({
+      ids: ["history-open", "history-close", "history-undo"],
+      getPlanState: async () => ({ status: "ready", state: active }),
+      executePlanTransition: async (command) => ({
+        status: "completed",
+        state: command.transitionId === "PL-T39" && command.action === "open" ? history : active,
+      }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.openHistory();
+    await settle();
+    subject.adapter.closeHistory();
+    await settle();
+    subject.adapter.undoPlanChange(ledgerId);
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(1, {
+      transitionId: "PL-T39",
+      commandId: "history-open",
+      action: "open",
+      sourceScenarioId: "PL-S004",
+      destinationScenarioId: "PL-S005",
+      returnFocusId: planId,
+    });
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(2, {
+      transitionId: "PL-T39",
+      commandId: "history-close",
+      action: "back",
+      sourceScenarioId: "PL-S005",
+      destinationScenarioId: "PL-S004",
+      returnFocusId: planId,
+    });
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(3, {
+      transitionId: "PL-T21",
+      commandId: "history-undo",
+      planId,
+      ledgerId,
+    });
+  });
+
   it("opens a workout and resolves a heuristic match through PL-T13 and PL-T14", async () => {
     const state = planReadModel({
       lifecycle: "active",
@@ -891,11 +943,7 @@ describe("Plan view adapter", () => {
 
     subject.adapter.openWorkout("00000000000000000000000004");
     await settle();
-    subject.adapter.resolveWorkoutMatch(
-      "00000000000000000000000004",
-      "activity-1",
-      "confirm",
-    );
+    subject.adapter.resolveWorkoutMatch("00000000000000000000000004", "activity-1", "confirm");
     await settle();
 
     expect(subject.executePlanTransition).toHaveBeenNthCalledWith(1, {

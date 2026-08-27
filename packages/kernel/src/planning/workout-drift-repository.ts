@@ -1,5 +1,11 @@
 import type { MigratorStore } from "../store/migrator.js";
 import type { Row, SqlStore } from "../store/ports.js";
+import {
+  encodePlanAdaptationWorkoutSnapshot,
+  insertPlanAdaptationLedgerRecord,
+  planAdaptationWorkoutSnapshot,
+  type PlanAdaptationLedgerRecord,
+} from "./adaptation-ledger-repository.js";
 import type { PlanWorkoutRecord } from "./repository.js";
 
 export type PlanWorkoutDriftStatus = "detected" | "adopted" | "restored";
@@ -36,7 +42,9 @@ export interface PlanWorkoutDriftRepository {
   }): Promise<PlanWorkoutDriftRecord>;
   adopt(input: {
     readonly id: string;
+    readonly expectedWorkout: PlanWorkoutRecord;
     readonly workout: PlanWorkoutRecord;
+    readonly ledger: PlanAdaptationLedgerRecord;
     readonly resolvedAtMs: number;
     readonly deviceId: string;
     readonly hlcPhysicalMs: number;
@@ -256,6 +264,8 @@ hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='detected'`,
         !ULID.test(input.workout.id) ||
         !ULID.test(input.workout.planId) ||
         input.workout.origin !== "coach" ||
+        input.expectedWorkout.id !== input.workout.id ||
+        input.expectedWorkout.planId !== input.workout.planId ||
         input.workout.name.length === 0 ||
         input.workout.sport.length === 0 ||
         (input.workout.durationS !== null &&
@@ -271,6 +281,21 @@ hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='detected'`,
       ) {
         throw new PlanWorkoutDriftValidationError("invalid-drift");
       }
+      if (
+        input.ledger.kind !== "drift-adopted" ||
+        input.ledger.sourceId !== input.id ||
+        input.ledger.reversalOfId !== null ||
+        input.ledger.planId !== input.workout.planId ||
+        input.ledger.targetWorkoutId !== input.workout.id ||
+        input.ledger.beforeJson !==
+          encodePlanAdaptationWorkoutSnapshot(
+            planAdaptationWorkoutSnapshot(input.expectedWorkout),
+          ) ||
+        input.ledger.afterJson !==
+          encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(input.workout))
+      ) {
+        throw new PlanWorkoutDriftValidationError("invalid-drift");
+      }
       const current = await read(input.id);
       if (current === undefined) throw new PlanWorkoutDriftValidationError("missing-drift");
       if (
@@ -282,21 +307,43 @@ hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='detected'`,
         throw new PlanWorkoutDriftValidationError("invalid-transition");
       }
       await store.transaction(async () => {
-        await store.run(`UPDATE plan_workout SET
+        const workoutRow = await store.get(
+          `SELECT id, plan_id, date_key, sport, name, duration_s, structure_json, origin,
+device_id, hlc_physical_ms, hlc_counter FROM plan_workout WHERE id=? AND plan_id=?`,
+          [input.expectedWorkout.id, input.expectedWorkout.planId],
+        );
+        if (
+          workoutRow === undefined ||
+          integer(workoutRow, "date_key") !== input.expectedWorkout.dateKey ||
+          text(workoutRow, "sport") !== input.expectedWorkout.sport ||
+          text(workoutRow, "name") !== input.expectedWorkout.name ||
+          nullableInteger(workoutRow, "duration_s") !== input.expectedWorkout.durationS ||
+          text(workoutRow, "structure_json") !== input.expectedWorkout.structureJson ||
+          text(workoutRow, "origin") !== input.expectedWorkout.origin ||
+          text(workoutRow, "device_id") !== input.expectedWorkout.deviceId ||
+          integer(workoutRow, "hlc_physical_ms") !== input.expectedWorkout.hlcPhysicalMs ||
+          integer(workoutRow, "hlc_counter") !== input.expectedWorkout.hlcCounter
+        ) {
+          throw new PlanWorkoutDriftValidationError("invalid-transition");
+        }
+        await store.run(
+          `UPDATE plan_workout SET
 date_key=?, sport=?, name=?, duration_s=?, structure_json=?, origin=?, device_id=?,
-hlc_physical_ms=?, hlc_counter=? WHERE id=? AND plan_id=?`, [
-          input.workout.dateKey,
-          input.workout.sport,
-          input.workout.name,
-          input.workout.durationS,
-          input.workout.structureJson,
-          input.workout.origin,
-          input.workout.deviceId,
-          input.workout.hlcPhysicalMs,
-          input.workout.hlcCounter,
-          input.workout.id,
-          input.workout.planId,
-        ]);
+hlc_physical_ms=?, hlc_counter=? WHERE id=? AND plan_id=?`,
+          [
+            input.workout.dateKey,
+            input.workout.sport,
+            input.workout.name,
+            input.workout.durationS,
+            input.workout.structureJson,
+            input.workout.origin,
+            input.workout.deviceId,
+            input.workout.hlcPhysicalMs,
+            input.workout.hlcCounter,
+            input.workout.id,
+            input.workout.planId,
+          ],
+        );
         const storedWorkout = await store.get(
           "SELECT id FROM plan_workout WHERE id=? AND plan_id=?",
           [input.workout.id, input.workout.planId],
@@ -304,14 +351,22 @@ hlc_physical_ms=?, hlc_counter=? WHERE id=? AND plan_id=?`, [
         if (storedWorkout === undefined) {
           throw new PlanWorkoutDriftValidationError("invalid-transition");
         }
-        await store.run(`UPDATE plan_workout_drift SET status='adopted', resolved_at_ms=?,
-device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='detected'`, [
-          input.resolvedAtMs,
-          input.deviceId,
-          input.hlcPhysicalMs,
-          input.hlcCounter,
-          input.id,
-        ]);
+        await store.run(
+          `UPDATE plan_workout_drift SET status='adopted', resolved_at_ms=?,
+device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=? AND status='detected'`,
+          [input.resolvedAtMs, input.deviceId, input.hlcPhysicalMs, input.hlcCounter, input.id],
+        );
+        await store.run(
+          `UPDATE plan SET updated_at_ms=?, device_id=?, hlc_physical_ms=?, hlc_counter=? WHERE id=?`,
+          [
+            input.resolvedAtMs,
+            input.deviceId,
+            input.hlcPhysicalMs,
+            input.hlcCounter,
+            input.workout.planId,
+          ],
+        );
+        await insertPlanAdaptationLedgerRecord(store, input.ledger);
       });
       const stored = await read(input.id);
       if (stored === undefined || stored.status !== "adopted") {
