@@ -85,6 +85,7 @@ export const PURE_AUTHORED_TABLES = [
   "field_merge_override_overlay",
   "pool_size_correction_overlay",
   "dedup_confirmation",
+  "chat_plan_outbox",
   "plan",
   "plan_adaptation_ledger",
   "plan_conversation",

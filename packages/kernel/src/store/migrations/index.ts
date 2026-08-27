@@ -23,6 +23,7 @@ import planWeeklyReview022 from "./022_plan_weekly_review.sql";
 import planRaceOutcome023 from "./023_plan_race_outcome.sql";
 import chatAttachments024 from "./024_chat_attachments.sql";
 import planningRequests025 from "./025_planning_requests.sql";
+import chatPlanOutbox026 from "./026_chat_plan_outbox.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -63,4 +64,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 23, name: "023_plan_race_outcome", sql: planRaceOutcome023 },
   { version: 24, name: "024_chat_attachments", sql: chatAttachments024 },
   { version: 25, name: "025_planning_requests", sql: planningRequests025 },
+  { version: 26, name: "026_chat_plan_outbox", sql: chatPlanOutbox026 },
 ];
