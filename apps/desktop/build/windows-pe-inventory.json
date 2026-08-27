@@ -1,0 +1,30 @@
+{
+  "schema": "windows-pe-inventory/1",
+  "signing": {
+    "tool": "electron-builder",
+    "version": "26.15.3",
+    "option": "win.signExts"
+  },
+  "required": [
+    { "path": "Enduragent.exe", "kind": "application" },
+    { "path": "d3dcompiler_47.dll", "kind": "runtime-library" },
+    { "path": "dxcompiler.dll", "kind": "runtime-library" },
+    { "path": "dxil.dll", "kind": "runtime-library" },
+    { "path": "ffmpeg.dll", "kind": "runtime-library" },
+    { "path": "libEGL.dll", "kind": "runtime-library" },
+    { "path": "libGLESv2.dll", "kind": "runtime-library" },
+    { "path": "vk_swiftshader.dll", "kind": "runtime-library" },
+    { "path": "vulkan-1.dll", "kind": "runtime-library" },
+    {
+      "path": "Uninstall Enduragent.exe",
+      "kind": "uninstaller",
+      "location": "installer-payload"
+    },
+    {
+      "path": "Enduragent-${version}-x64.exe",
+      "kind": "installer",
+      "location": "artifact"
+    }
+  ],
+  "thirdPartyExceptions": []
+}

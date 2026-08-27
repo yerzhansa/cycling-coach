@@ -1,6 +1,11 @@
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { isDesktopUpdateReleaseEligible } from "../src/main/update-eligibility.js";
+import {
+  DESKTOP_UPDATE_PLATFORM_ACTIVATION,
+  DESKTOP_UPDATE_SUPPORTED_PLATFORMS,
+  isDesktopUpdateReleaseEligible,
+  type DesktopUpdatePlatform,
+} from "../src/main/update-eligibility.js";
 
 const appPath = "/Applications/Enduragent.app/Contents/Resources/app.asar";
 
@@ -19,6 +24,39 @@ function eligibility(
 }
 
 describe("desktop update release eligibility", () => {
+  it("keeps Windows supported but inactive by default", () => {
+    expect(DESKTOP_UPDATE_SUPPORTED_PLATFORMS).toEqual(["darwin", "win32"]);
+    expect(DESKTOP_UPDATE_PLATFORM_ACTIVATION.win32).toBe(false);
+    const readPackageJson = vi.fn(() => {
+      throw new Error("must not read");
+    });
+    expect(eligibility({ platform: "win32", readPackageJson })).toBe(false);
+    expect(readPackageJson).not.toHaveBeenCalled();
+  });
+
+  it("uses the Windows activation test seam without bypassing release metadata", () => {
+    const platformActivation = { darwin: true, win32: true };
+    expect(eligibility({ platform: "win32", platformActivation })).toBe(true);
+    expect(
+      eligibility({
+        platform: "win32",
+        platformActivation,
+        readPackageJson: () => JSON.stringify({ version: "0.1.0" }),
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an unsupported platform even when activation claims it", () => {
+    const platformActivation = { darwin: true, win32: false, linux: true } as unknown as Readonly<
+      Record<DesktopUpdatePlatform, boolean>
+    >;
+    const readPackageJson = vi.fn(() => {
+      throw new Error("must not read");
+    });
+    expect(eligibility({ platform: "linux", platformActivation, readPackageJson })).toBe(false);
+    expect(readPackageJson).not.toHaveBeenCalled();
+  });
+
   it("accepts only the marked packaged mac release with its exact stable version", () => {
     const readPackageJson = vi.fn(() => '{"version":"0.1.0","enduragentDesktopRelease":true}');
     expect(eligibility({ readPackageJson })).toBe(true);

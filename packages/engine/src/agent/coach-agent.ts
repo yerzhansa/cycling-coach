@@ -123,6 +123,7 @@ const REPLAY_UNSAFE_TOOL_NAMES = new Set([
   "intervals_create_strength_workout",
   "intervals_create_workout",
   "intervals_delete_workout",
+  "intervals_update_workout",
   "memory_write",
   "plan_save",
 ]);
@@ -273,9 +274,17 @@ function committedWriteSummary(name: string, result: unknown): string | undefine
   // wrapWriteTool composes innermost (inside markUntrustedResult and the cap),
   // so the ack inspected here is the tool's raw result.
   if (result === null || typeof result !== "object") return undefined;
-  const out = result as { created?: unknown; deleted?: unknown; saved?: unknown };
+  const out = result as {
+    created?: unknown;
+    deleted?: unknown;
+    saved?: unknown;
+    updated?: unknown;
+  };
   if (out.created === true) return "created a workout on the calendar";
   if (out.deleted === true) return "deleted a scheduled workout";
+  if (out.updated === true && name === "intervals_update_workout") {
+    return "updated a scheduled workout";
+  }
   if (out.saved === true && name === "memory_write") return "saved athlete memory";
   if (out.saved === true && name === "plan_save") return "saved the training plan";
   return undefined;
@@ -388,7 +397,6 @@ export class CoachAgent {
           ? undefined
           : ports.platform.calendarMutations,
       memory: this.memory,
-      planPersistence: ports.planPersistence,
       secrets: ports.secrets,
       bindMemoryToolProvenance: true,
       tz: this.tz,

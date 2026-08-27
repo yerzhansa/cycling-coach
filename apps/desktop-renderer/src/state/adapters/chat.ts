@@ -169,6 +169,7 @@ export function createChatViewAdapter(input: {
   readonly publish: (next: ChatSurfaceState) => void;
   readonly buffer?: ChatStreamBuffer;
   readonly anchor?: ChatScrollAnchor;
+  readonly bufferStreaming?: boolean;
 }): ChatViewAdapter {
   const buffer = input.buffer ?? chatStreamBuffer;
   const anchor = input.anchor ?? chatScrollAnchor;
@@ -185,7 +186,7 @@ export function createChatViewAdapter(input: {
       role: message.role,
       delivery: message.delivery,
       historical: message.historical === true,
-      text: isStreamingCoach(message) ? "" : message.text,
+      text: input.bufferStreaming !== false && isStreamingCoach(message) ? "" : message.text,
       ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
       ...(message.planReference === undefined ? {} : { planReference: message.planReference }),
     }));

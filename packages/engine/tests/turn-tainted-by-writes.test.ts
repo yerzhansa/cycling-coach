@@ -427,6 +427,52 @@ describe("tainted-by-writes refusal", () => {
     }
   });
 
+  it("an update on a turn that then errors also taints without replaying", async () => {
+    const { server, createdWorkouts, updatedEventIds } = createMockIntervalsServer();
+    createdWorkouts.push({
+      id: 8888,
+      start_date_local: `${tomorrowISODate()}T00:00:00`,
+      category: "WORKOUT",
+      name: "Before update",
+      type: "Ride",
+      moving_time: 3600,
+      tags: [COACH_EVENT_TAG],
+    });
+    server.listen({ onUnhandledRequest: "bypass" });
+    try {
+      let mainTurns = 0;
+      const complete = vi.fn(async (params: { system?: string }) => {
+        const sys = params.system ?? "";
+        if (sys.includes(FLUSH_MARKER)) return mkAssistant({ text: "facts noted" });
+        if (sys.length === 0) return mkAssistant({ text: "summary" });
+        mainTurns++;
+        const ctx = params as { messages?: { role: string }[] };
+        const hasToolResult = (ctx.messages ?? []).some((m) => m.role === "tool");
+        if (mainTurns === 1 && !hasToolResult) {
+          return mkAssistant({
+            toolCall: {
+              id: "call-u",
+              name: "intervals_update_workout",
+              arguments: { eventId: 8888, changes: { name: "After update" } },
+            },
+            stopReason: "toolUse",
+          });
+        }
+        throw new Error("You have hit your rate limit. Try again later.");
+      });
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const agent = await setupAgent(complete);
+
+      const result = await agent.chat("taint-update", "rename tomorrow's workout");
+
+      expect(result).toBe(TAINTED_BY_WRITES_MESSAGE);
+      expect(updatedEventIds).toEqual([8888]);
+      expect(createdWorkouts[0]?.name).toBe("After update");
+    } finally {
+      server.close();
+    }
+  });
+
   it("a no-write brownout still retries normally and the guard does not over-fire", async () => {
     let mainTurns = 0;
     const complete = vi.fn(async (params: { system?: string }) => {

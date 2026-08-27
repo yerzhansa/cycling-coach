@@ -17,6 +17,9 @@ interface EnduragentAuth {
     readonly limit: number;
   }): Promise<DesktopTranscriptPage>;
   getPlanningReadModel(): Promise<DesktopPlanningReadModel>;
+  getPlanState(): Promise<DesktopPlanStateResult>;
+  executePlanTransition(input: DesktopPlanTransitionCommand): Promise<DesktopPlanTransitionResult>;
+  onPlanProgress(listener: (progress: DesktopPlanProgressEvent) => void): () => void;
   credentialStatuses(): Promise<readonly CredentialSlotStatus[]>;
   retryFailedCredentials(): Promise<readonly CredentialSlotStatus[]>;
   writeCredential(input: {
@@ -63,6 +66,7 @@ interface EnduragentAuth {
   onDroppedChatAttachments(
     listener: (results: readonly DesktopAttachmentAdmission[]) => void,
   ): () => void;
+  choosePlanRaceCourseFile(): Promise<string | null>;
   exportTrainingFile(input: DesktopTrainingExportRequest): Promise<DesktopTrainingExportResult>;
   onDroppedImportFiles(listener: (paths: readonly string[]) => void): () => void;
   getUpdateState(): Promise<DesktopUpdateState>;
@@ -75,6 +79,12 @@ type DesktopPlatformProjection = import("./platform-copy").DesktopPlatformProjec
 type DesktopAttachmentAdmission = import("@enduragent/coach-contract").AttachmentAdmissionReadModel;
 type DesktopAttachmentReference = import("@enduragent/coach-contract").ChatAttachmentReference;
 type DesktopPlanningReadModel = import("@enduragent/coach-contract").PlanningReadModel;
+type DesktopPlanStateResult = import("@enduragent/coach-contract").GetPlanStateRpcResult;
+type DesktopPlanTransitionCommand =
+  import("@enduragent/coach-contract").ExecutePlanTransitionRpcParams;
+type DesktopPlanTransitionResult =
+  import("@enduragent/coach-contract").ExecutePlanTransitionRpcResult;
+type DesktopPlanProgressEvent = import("@enduragent/coach-contract").PlanProgressEvent;
 type CredentialRecoveryStatus = import("./onboarding/bridge").CredentialRecoveryStatus;
 type CredentialResetResult = import("./onboarding/bridge").CredentialResetResult;
 

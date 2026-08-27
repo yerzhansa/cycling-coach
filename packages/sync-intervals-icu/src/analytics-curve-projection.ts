@@ -23,6 +23,23 @@ interface NormalizedCurve {
   readonly id: string;
   readonly secs: readonly number[];
   readonly values: readonly (number | null)[];
+  readonly activityIds: readonly (string | null)[];
+  readonly startIndexes: readonly (number | null)[];
+  readonly activities: Readonly<Record<string, NormalizedCurveActivity>>;
+}
+
+interface NormalizedCurveActivity {
+  readonly [key: string]: unknown;
+  readonly id: string | number;
+  readonly start_date_local: string;
+  readonly name?: string | null;
+  readonly type?: string | null;
+  readonly device_watts?: boolean | null;
+  readonly icu_ignore_power?: boolean | null;
+  readonly power_meter?: string | null;
+  readonly device_name?: string | null;
+  readonly missing_timestamps?: boolean | null;
+  readonly missing_power_samples?: boolean | null;
 }
 
 export class AnalyticsCurveProjectionError extends Error {
@@ -48,29 +65,102 @@ function normalizeCurve(
   id: string,
   secs: readonly number[],
   values: readonly (number | null)[],
+  activityIds: readonly string[] | null | undefined = undefined,
+  startIndexes: readonly (number | null)[] | null | undefined = undefined,
+  activities: Readonly<Record<string, NormalizedCurveActivity>> = Object.freeze({}),
 ): NormalizedCurve {
-  if (secs.length !== values.length || secs.length > MAX_PROJECTED_AXIS_LENGTH) fail();
+  if (
+    secs.length !== values.length ||
+    secs.length > MAX_PROJECTED_AXIS_LENGTH ||
+    (activityIds !== undefined && activityIds !== null && activityIds.length !== secs.length) ||
+    (startIndexes !== undefined && startIndexes !== null && startIndexes.length !== secs.length)
+  )
+    fail();
   const projectedSecs: number[] = [];
   const projectedValues: (number | null)[] = [];
+  const projectedActivityIds: (string | null)[] = [];
+  const projectedStartIndexes: (number | null)[] = [];
   let previous = 0;
   for (let index = 0; index < secs.length; index += 1) {
     const seconds = secs[index];
     const value = values[index];
+    const activityId = activityIds?.[index] ?? null;
+    const startIndex = startIndexes?.[index] ?? null;
     if (
       !Number.isSafeInteger(seconds) ||
       seconds <= previous ||
-      (value !== null && (!Number.isFinite(value) || value < 0))
+      (value !== null && (!Number.isFinite(value) || value < 0)) ||
+      (activityId !== null && activityId.length === 0) ||
+      (startIndex !== null && (!Number.isSafeInteger(startIndex) || startIndex < 0))
     )
       fail();
     projectedSecs.push(seconds);
     projectedValues.push(value);
+    projectedActivityIds.push(activityId);
+    projectedStartIndexes.push(startIndex);
     previous = seconds;
   }
   return Object.freeze({
     id,
     secs: Object.freeze(projectedSecs),
     values: Object.freeze(projectedValues),
+    activityIds: Object.freeze(projectedActivityIds),
+    startIndexes: Object.freeze(projectedStartIndexes),
+    activities,
   });
+}
+
+function optionalText(value: unknown): string | null | undefined {
+  return value === undefined ? undefined : typeof value === "string" ? value : null;
+}
+
+function optionalBoolean(value: unknown): boolean | null | undefined {
+  return value === undefined ? undefined : typeof value === "boolean" ? value : null;
+}
+
+function normalizeActivities(
+  source: ReadonlyMap<string, Record<string, unknown>>,
+): Readonly<Record<string, NormalizedCurveActivity>> {
+  const activities: Record<string, NormalizedCurveActivity> = {};
+  for (const [key, activity] of source) {
+    const id = activity.id;
+    const startDateLocal = activity.startDateLocal;
+    if (
+      (typeof id !== "string" && typeof id !== "number") ||
+      typeof startDateLocal !== "string" ||
+      startDateLocal.length === 0
+    )
+      fail();
+    activities[key] = Object.freeze({
+      id,
+      start_date_local: startDateLocal,
+      name: optionalText(activity.name),
+      type: optionalText(activity.type),
+      device_watts: optionalBoolean(activity.deviceWatts),
+      icu_ignore_power: optionalBoolean(activity.icuIgnorePower),
+      power_meter: optionalText(activity.powerMeter),
+      device_name: optionalText(activity.deviceName),
+      missing_timestamps: optionalBoolean(activity.missingTimestamps),
+      missing_power_samples: optionalBoolean(activity.missingPowerSamples),
+    });
+  }
+  return Object.freeze(activities);
+}
+
+function optionalStringArray(value: unknown): readonly string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) fail();
+  return value;
+}
+
+function optionalIndexArray(value: unknown): readonly (number | null)[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.some((item) => item !== null && (!Number.isSafeInteger(item) || (item as number) < 0))
+  )
+    fail();
+  return value as readonly (number | null)[];
 }
 
 function selectPowerCurves(
@@ -79,13 +169,23 @@ function selectPowerCurves(
 ): readonly NormalizedCurve[] {
   const decoded = decode(AthletePowerCurveSetSchema, payload);
   if (!decoded.ok) fail();
+  const activities = normalizeActivities(decoded.value.activities);
   const seen = new Set<string>();
   const selected: NormalizedCurve[] = [];
   for (const curve of decoded.value.list) {
     if (typeof curve.id !== "string" || !selectors.has(curve.id)) continue;
     if (seen.has(curve.id)) fail();
     seen.add(curve.id);
-    selected.push(normalizeCurve(curve.id, curve.secs, curve.values));
+    selected.push(
+      normalizeCurve(
+        curve.id,
+        curve.secs,
+        curve.values,
+        optionalStringArray(curve.activity_id),
+        optionalIndexArray(curve.start_index),
+        activities,
+      ),
+    );
   }
   return Object.freeze(selected);
 }
@@ -119,16 +219,25 @@ function aggregateCurves(
   // from the explicitly separated outdoor/indoor evidence by taking the best value per duration.
   const aggregated: NormalizedCurve[] = [];
   for (const id of selectors) {
-    const bySecond = new Map<number, number | null>();
+    const bySecond = new Map<
+      number,
+      { value: number | null; activityId: string | null; startIndex: number | null }
+    >();
+    const activities: Record<string, NormalizedCurveActivity> = {};
     for (const activityType of ACTIVITY_TYPES) {
       const curve = curveById(curvesByType[activityType], id);
       if (curve === undefined) continue;
+      Object.assign(activities, curve.activities);
       for (let index = 0; index < curve.secs.length; index += 1) {
         const seconds = curve.secs[index]!;
         const value = curve.values[index] ?? null;
-        const previous = bySecond.get(seconds);
+        const previous = bySecond.get(seconds)?.value;
         if (previous === undefined || previous === null || (value !== null && value > previous)) {
-          bySecond.set(seconds, value);
+          bySecond.set(seconds, {
+            value,
+            activityId: curve.activityIds[index] ?? null,
+            startIndex: curve.startIndexes[index] ?? null,
+          });
         }
       }
     }
@@ -138,7 +247,14 @@ function aggregateCurves(
       Object.freeze({
         id,
         secs: Object.freeze(secs),
-        values: Object.freeze(secs.map((seconds) => bySecond.get(seconds) ?? null)),
+        values: Object.freeze(secs.map((seconds) => bySecond.get(seconds)?.value ?? null)),
+        activityIds: Object.freeze(
+          secs.map((seconds) => bySecond.get(seconds)?.activityId ?? null),
+        ),
+        startIndexes: Object.freeze(
+          secs.map((seconds) => bySecond.get(seconds)?.startIndex ?? null),
+        ),
+        activities: Object.freeze(activities),
       }),
     );
   }
@@ -151,13 +267,25 @@ function powerEnvelope(
   const list = curves.map((curve) => {
     const secs = [...curve.secs];
     const watts = [...curve.values];
-    const entry = { id: curve.id, secs, watts };
+    const activity_ids = [...curve.activityIds];
+    const start_indexes = [...curve.startIndexes];
+    const entry = { id: curve.id, secs, watts, activity_ids, start_indexes };
     Object.freeze(secs);
     Object.freeze(watts);
+    Object.freeze(activity_ids);
+    Object.freeze(start_indexes);
     return Object.freeze(entry);
   });
   Object.freeze(list);
-  return Object.freeze({ list });
+  const activities: Record<string, NormalizedCurveActivity> = {};
+  for (const curve of curves) {
+    for (const activityId of curve.activityIds) {
+      if (activityId !== null && curve.activities[activityId] !== undefined) {
+        activities[activityId] = curve.activities[activityId];
+      }
+    }
+  }
+  return Object.freeze({ list, activities: Object.freeze(activities) });
 }
 
 function heartRateEnvelope(

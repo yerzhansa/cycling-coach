@@ -4,6 +4,11 @@ import { isStableDesktopVersion } from "./desktop-version.js";
 
 const PACKAGE_JSON_LIMIT = 64 * 1024;
 
+export const DESKTOP_UPDATE_SUPPORTED_PLATFORMS = Object.freeze(["darwin", "win32"] as const);
+export type DesktopUpdatePlatform = (typeof DESKTOP_UPDATE_SUPPORTED_PLATFORMS)[number];
+export const DESKTOP_UPDATE_PLATFORM_ACTIVATION: Readonly<Record<DesktopUpdatePlatform, boolean>> =
+  Object.freeze({ darwin: true, win32: false });
+
 export function isDesktopUpdateReleaseEligible(input: {
   readonly isPackaged: boolean;
   readonly platform: NodeJS.Platform;
@@ -11,10 +16,13 @@ export function isDesktopUpdateReleaseEligible(input: {
   readonly appPath: string;
   readonly currentVersion: string;
   readonly readPackageJson?: (path: string) => string;
+  readonly platformActivation?: Readonly<Record<DesktopUpdatePlatform, boolean>>;
 }): boolean {
+  const platformActivation = input.platformActivation ?? DESKTOP_UPDATE_PLATFORM_ACTIVATION;
   if (
     !input.isPackaged ||
-    input.platform !== "darwin" ||
+    !DESKTOP_UPDATE_SUPPORTED_PLATFORMS.includes(input.platform as DesktopUpdatePlatform) ||
+    platformActivation[input.platform as DesktopUpdatePlatform] !== true ||
     input.securitySmokeMode ||
     !isStableDesktopVersion(input.currentVersion)
   ) {

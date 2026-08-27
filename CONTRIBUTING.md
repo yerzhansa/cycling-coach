@@ -136,7 +136,7 @@ Never commit bytes from a real athlete recording. Gate tests use only fabricated
 
 ## Telegram allowlist file
 
-The bot enforces a per-user-ID allowlist via `~/.cycling-coach/allowed-senders.json` (mode `0600`). Schema and validation live in `packages/core/src/channels/allowed-senders.ts`. CLI mutations (`add-sender`, `remove-sender`) acquire a PID lockfile at `~/.cycling-coach/.allowed-senders.lock` so concurrent invocations serialize cleanly. **Do not edit `allowed-senders.json` by hand while the bot is running** — the bot re-reads it on every inbound message, but a hand-edit during a write will lose updates. Use the CLI subcommands instead.
+The bot enforces a per-user-ID allowlist via `~/.cycling-coach/allowed-senders.json` (mode `0600`). Schema and validation live in `packages/core/src/channels/allowed-senders.ts`. CLI mutations (`add-sender`, `remove-sender`) acquire a PID lockfile at `~/.cycling-coach/.allowed-senders.lock` so concurrent invocations serialize cleanly. **Do not edit `allowed-senders.json` by hand while the bot is running** — the bot re-reads it on every inbound message, but a hand-edit during a write loses updates. Use the CLI subcommands instead.
 
 `dmPolicy: "open"` is rejected when read from the file (defense in depth — only settable via the `CYCLING_COACH_DM_POLICY=open` env var, intended for debugging). The setup wizard never offers it.
 
@@ -148,7 +148,7 @@ Calendar-based for npm-published binaries: stable, SemVer-compatible UTC calenda
 
 Changesets-driven and CI-automated. Contributors do **not** create tags or GitHub Releases by hand. npm packages use `<package>@<version>` tags; the independent desktop app uses `enduragent-desktop@<SemVer>`.
 
-1. **Add a changeset to your PR.** Run `pnpm exec changeset`, pick the affected publishable package(s), describe the change in athlete-readable language. Commit the resulting `.changeset/<slug>.md`. A PR with a user-visible change but no changeset will skip release — this is intentional, not a bug. The required patch/minor/major choice is overridden by the CalVer policy for binary packages.
+1. **Add a changeset to your PR.** Run `pnpm exec changeset`, pick the affected publishable package(s), describe the change in athlete-readable language. Commit the resulting `.changeset/<slug>.md`. A PR with a user-visible change but no changeset skips release — this is intentional, not a bug. The required patch/minor/major choice is overridden by the CalVer policy for binary packages.
 
    For user-visible changes, add a `User-facing: <one-sentence description>` line at the top of the changeset body — see `.changeset/README.md` for the convention. The bot's `/whatsnew` command surfaces only those lines to athletes; engineering details, hashes, and infra-only changesets stay in `CHANGELOG.md` for git history but never reach users.
 
@@ -161,3 +161,62 @@ Today only `cycling-coach` is `private: false`, so only `cycling-coach@<v>` is t
 **If a release fails partway**, re-run the matching workflow with its existing tag: `release.yml` for npm, or `desktop-release.yml` for desktop (the version-pr run's failed step prints the exact dispatch command). A rerun never creates or moves a tag.
 
 `tools/bump-binaries-to-calver.ts` runs after `changeset version`. It reads the committed pre-Changesets version and all occupied npm versions, then overrides binary versions with the next stable release number for the current UTC month. It rewrites only the new matching changelog header; historical entries are immutable.
+
+## Windows release (operator)
+
+- Keep `desktop-release.yml` macOS-only and fully automatic.
+- Never make `desktop-release.yml` wait for Windows.
+- Use one GitHub release per desktop version.
+- Append Windows assets after the macOS release.
+- Append Windows assets only while `enduragent-desktop@<x.y.z>` is the repository's latest release. The updater feed is `/releases/latest/download/`, so Windows clients cannot discover assets on an older release.
+- Skip Windows for a version once a newer desktop release exists. Ship it with the next version instead.
+- State which platforms shipped in the release notes.
+- Build and sign in one `electron-builder` run on the operator's Windows VM inside an open SimplySign session.
+- Approve the single signing OTP with one phone tap.
+- Never build, repackage, or re-sign a Windows asset in CI.
+- Require every shipped Windows build to carry a valid Authenticode signature from `<PUBLISHER_NAME>`.
+- Do not put the certificate organisation field in shipped docs. The publisher line uses the `<PUBLISHER_NAME>` placeholder until the first signed release.
+- Never attach an unsigned installer to a GitHub release or the website.
+- Use unsigned CI builds only as test artifacts.
+- Keep `DESKTOP_UPDATE_PLATFORM_ACTIVATION` at `win32: false` until the first signed release and a signed N→N+1 update proof pass.
+- Upload only `Enduragent-<x.y.z>-x64.exe`, `Enduragent-<x.y.z>-x64.exe.blockmap`, and `latest.yml` from the repository root on the signing host, using absolute paths:
+
+  ```bash
+  node apps/desktop/scripts/upload-windows-release.mjs --version <x.y.z> --directory <absolute-artifact-dir> --commit <release-commit-sha> --authenticode verify --publisher-dn "<PUBLISHER_DN>" --app-update-metadata <absolute-dist-dir>/win-unpacked/resources/app-update.yml --record <absolute-path>/windows-release-<x.y.z>.json
+  ```
+
+- Pass `--authenticode verify` and the exact certificate subject as `--publisher-dn`. The uploader rejects every other mode and the placeholder DN.
+- Pass `--thumbprint <40-hex>` to pin the signing certificate. Omit it to accept any trusted certificate with the expected subject.
+- Run the upload on a Windows host with PowerShell 7 and `signtool.exe`. Local Authenticode verification runs before any release mutation.
+- Pass `--app-update-metadata` pointing at the packaged `win-unpacked/resources/app-update.yml` from the same build. The uploader refuses it unless `publisherName` equals `--publisher-dn`.
+- Keep `--record` outside `--directory`. The uploader refuses a record path inside the artifact directory.
+- Omit `--record` only when no local JSON record is required.
+- Leave `--repo` unset to use `yerzhansa/enduragent`.
+- Let `upload-windows-release.mjs` run `verify-windows-release.mjs` locally, including Authenticode and provenance verification.
+- Stop the upload when `enduragent-desktop@<x.y.z>` is missing, still a draft, a prerelease, or not the latest release.
+- Refuse the upload when any Windows envelope asset already exists on the release.
+- Upload owner-only, read-only copies of the verified bytes through `gh-personal release upload`. The original artifact paths are never uploaded.
+- Re-read the release after upload and fail unless all three assets are present and each GitHub asset `digest` and size equals the uploaded bytes.
+- Re-check `releases/latest` after the digest reconciliation. When the release stopped being latest during the upload, the uploader deletes its three assets and fails with `release lost latest status during upload; Windows assets removed`. Re-run the whole Windows release for the newer version.
+- Treat a failed record with `uploaded: true` or `uploaded: "unknown"` after that rollback as an incomplete upload. Remove the listed assets by hand; with `uploadedAssets: null`, inspect the release by hand.
+- Read `uploadedAssets` in a failed record before retrying. A partial upload lists the assets that became public.
+- Trigger the separate verification workflow from the repository root:
+
+  ```bash
+  gh-personal workflow run desktop-windows-release.yml -f version=<x.y.z> -f dry_run=false -f authenticode=verify -f publisher_dn="<PUBLISHER_DN>"
+  ```
+
+- Leave `dry_run` at its `true` default to verify without editing the release.
+- Pass `dry_run=false` only when the completed verification must be recorded on the release. The workflow refuses `dry_run=false` without `authenticode=verify` and a real `publisher_dn`.
+- Keep `desktop-windows-release.yml` to its single `verify-windows-envelope` job on `windows-latest`. `Get-AuthenticodeSignature` and `signtool.exe` exist only on Windows.
+- Reject a non-stable SemVer or a missing, draft, prerelease, or non-latest `enduragent-desktop@<version>` release in `verify-windows-envelope`.
+- Require exactly `Enduragent-<version>-x64.exe`, `Enduragent-<version>-x64.exe.blockmap`, and `latest.yml` as the Windows envelope among the release assets.
+- Download only those three Windows assets in `verify-windows-envelope`.
+- Resolve the release tag to its commit and pass it as `--commit`.
+- Run `node apps/desktop/scripts/verify-windows-release.mjs <dir> --version <version> --commit <sha> --authenticode verify --publisher-dn <dn>` against the downloaded envelope.
+- Record the verification only when `dry_run=false`, as the release asset `Enduragent-<version>-x64-verification.json` (`schemaVersion`, `tag`, `version`, `commit`, `arch`, `authenticode`, `installerSha256`, `publisherDnSha256`, and the exact Windows asset IDs/sizes/SHA-256 digests in `files`). Recheck those three asset identities before and after the evidence upload. Never edit the release body: a body `PATCH` overwrites concurrent release-note edits.
+- Skip the upload when an identical evidence asset exists. Fail when an evidence asset with different bytes exists; remove it by hand before retrying.
+- Never create, move, or delete a release or tag in `desktop-windows-release.yml`, and never delete or replace a pre-existing asset there. The evidence asset is the only asset the workflow creates; if release identity or latest status changes during that upload, delete only the exact evidence asset created by that run.
+- Leave uploaded assets in place when verification fails.
+- Remove failed Windows assets by hand before retrying.
+- Build provenance: `windows-release-plan.mjs` seals the release commit, SHA-256 of the publisher DN, and SHA-256 of the exact electron-builder-serialized `app-update.yml` into the installer's signed `LegalTrademarks` version string. Verification reads it from the signed installer and requires all three bindings to match before upload.

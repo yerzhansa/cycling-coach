@@ -22,6 +22,7 @@ function fakeMutations(event: unknown = { id: 42 }): {
       return event;
     },
     readEventForDelete: async ({ eventId }) => ({ id: eventId, startDateLocal: "2999-01-01" }),
+    updateEvent: async () => ({}),
     deleteEvent: async () => ({}),
   };
   return { mutations, calls };

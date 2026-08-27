@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseGpx } from "../../src/ingest/gpx.js";
+import { parseGpx, parseGpxCourse } from "../../src/ingest/gpx.js";
 
 const gpx11 = "http://www.topografix.com/GPX/1/1";
 const gpx10 = "http://www.topografix.com/GPX/1/0";
@@ -154,5 +154,47 @@ describe("GPX parser", () => {
     expect(parseGpx(xml).sessions[0]).toMatchObject({ segmentStartIndices: [0, 1], channels: { time: { values: [946684800, 946684801] } } });
     const reversed = document(gpx11, "1.1", track(segment(point("2000-01-01T00:00:01Z")) + segment(point("2000-01-01T00:00:00Z"))));
     rejected(reversed, "xml.non_chronological", "$/trk[0]/trkseg[1]/trkpt[0]/time[0]");
+  });
+});
+
+describe("GPX Race Course parser", () => {
+  it("accepts untimed track and route points without using the activity importer contract", () => {
+    const report = parseGpxCourse(document(gpx11, "1.1", [
+      "<metadata><name>Gran Fondo</name></metadata>",
+      '<trk><trkseg><trkpt lat="43.2" lon="76.8"><ele>900</ele></trkpt><trkpt lat="43.3" lon="76.9"><ele>940</ele></trkpt></trkseg></trk>',
+      '<rte><rtept lat="43.4" lon="77.0"/><rtept lat="43.5" lon="77.1"/></rte>',
+    ].join("")));
+    expect(report).toEqual({
+      ok: true,
+      route: {
+        format: "gpx",
+        segments: [
+          { points: [
+            { latitude: 43.2, longitude: 76.8, elevationM: 900 },
+            { latitude: 43.3, longitude: 76.9, elevationM: 940 },
+          ] },
+          { points: [
+            { latitude: 43.4, longitude: 77, elevationM: null },
+            { latitude: 43.5, longitude: 77.1, elevationM: null },
+          ] },
+        ],
+      },
+    });
+  });
+
+  it("distinguishes an unreadable file from a file without a usable route", () => {
+    expect(parseGpxCourse("not xml")).toMatchObject({ ok: false, reason: "unreadable" });
+    expect(parseGpxCourse(document(gpx11, "1.1", "<metadata/>"))).toEqual({
+      ok: false,
+      reason: "route-missing",
+      detail: "The GPX file does not contain a usable route.",
+    });
+  });
+
+  it("rejects invalid coordinates and duplicate elevation values", () => {
+    const invalidCoordinate = document(gpx11, "1.1", '<rte><rtept lat="91" lon="76"/><rtept lat="43" lon="77"/></rte>');
+    expect(parseGpxCourse(invalidCoordinate)).toMatchObject({ ok: false, reason: "unreadable" });
+    const duplicateElevation = document(gpx11, "1.1", '<rte><rtept lat="43" lon="76"><ele>1</ele><ele>2</ele></rtept><rtept lat="44" lon="77"/></rte>');
+    expect(parseGpxCourse(duplicateElevation)).toMatchObject({ ok: false, reason: "unreadable" });
   });
 });

@@ -16,6 +16,7 @@ export default defineConfig({
     "ingest/index": "src/ingest/index.ts",
     "capture-manifest/index": "src/capture-manifest/index.ts",
     "service/index": "src/service/index.ts",
+    "planning/index": "src/planning/index.ts",
     "coach-dev": "src/cli/coach-dev.ts",
   },
   format: ["esm"],

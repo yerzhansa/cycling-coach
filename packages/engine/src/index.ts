@@ -28,11 +28,20 @@ export {
   type OpenRouterModelMetadataSnapshot,
   type ResolveOpenRouterModelMetadataInput,
 } from "./openrouter-model-metadata.js";
+export * from "./planning/proposal.js";
+export * from "./planning/history.js";
+export * from "./planning/auto-apply.js";
+export * from "./planning/replacement.js";
+export * from "./planning/season.js";
+export * from "./planning/readiness.js";
+export * from "./planning/weekly-review.js";
+export * from "./planning/race-outcome.js";
 export type {
   AthleteDataReaderPort,
   AthleteReadResult,
   AthleteStateReaderPort,
   CalendarEventForDelete,
+  CalendarEventUpdate,
   CallerRole,
   ChatLineage,
   ChatStorePort,
@@ -60,7 +69,6 @@ export type {
   ModelTransportRequest,
   PlatformCalendarMutationsPort,
   PlatformClientPort,
-  PlanPersistencePort,
   PlanningReadPort,
   ReferenceStateSnapshot,
   SecretRef,
@@ -345,6 +353,90 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
 }
 
 export { extractAccountId };
+export {
+  PLAN_MIRROR_DAYS,
+  PLAN_MIRROR_EXTERNAL_ID_PREFIX,
+  cleanupPlanMirror,
+  planMirrorExternalId,
+  planMirrorExternalIdPrefix,
+  projectPlanReconciliation,
+  reconcileActivePlanWindow,
+  verifyPlanMirror,
+  verifyPlanCleanup,
+  type PlanMirrorCalendarPort,
+  type PlanMirrorCreateInput,
+  type PlanMirrorEvent,
+  type PlanMirrorUpdateInput,
+  type PlanReconciliationDomainState,
+  type PlanReconciliationProjection,
+  type PlanReconcilerDeps,
+  type PlanReconcilerIdentity,
+} from "./planning/reconciler.js";
+export {
+  PlanWorkoutDriftError,
+  adoptProviderWorkoutEdit,
+  planWorkoutDriftSnapshot,
+  providerWorkoutDriftSnapshot,
+  refreshPlanWorkoutDrifts,
+  restorePlanWorkout,
+  type PlanWorkoutDriftDeps,
+  type PlanWorkoutDriftIdentity,
+  type PlanWorkoutDriftSnapshot,
+} from "./planning/workout-drift.js";
+export {
+  activatePlanDraft,
+  type ActivatePlanDraftInput,
+  type PlanActivationIdentity,
+} from "./planning/activation.js";
+export {
+  RaceCourseLifecycleError,
+  acceptParsedRaceCourse,
+  beginRaceCourseParsing,
+  beginRaceCourseRemoval,
+  completeRaceCourseRecalculation,
+  failRaceCourseRecalculation,
+  openRaceCoursePicker,
+  rejectRaceCourseFile,
+  retryRaceCourseRecalculation,
+  useRouteWithoutElevation,
+  type RaceCourseInvalidState,
+  type RaceCourseLifecycleKind,
+  type RaceCourseLifecycleState,
+  type RaceCourseMissingElevationState,
+  type RaceCourseParsingState,
+  type RaceCoursePickerState,
+  type RaceCourseReadyState,
+  type RaceCourseRecalculatingState,
+  type RaceCourseRecalculationFailedState,
+} from "./planning/race-course.js";
+export {
+  executePlanFtpTransition,
+  type PlanFtpAdapter,
+  type PlanFtpSnapshot,
+  type PlanFtpSource,
+  type PlanFtpSourceValue,
+  type PlanFtpTransitionInput,
+} from "./planning/ftp.js";
+export {
+  PlanStartDateError,
+  applyPlanStartDatePreview,
+  previewPlanStartDate,
+  type PlanStartDatePreview,
+} from "./planning/start-date.js";
+export {
+  WORKOUT_MATCH_AS_PLANNED_MAX_SECONDS,
+  WORKOUT_MATCH_AS_PLANNED_MIN_SECONDS,
+  WORKOUT_MATCH_AS_PLANNED_RATIO,
+  WORKOUT_MATCH_DURATION_MAX_SECONDS,
+  WORKOUT_MATCH_DURATION_MIN_SECONDS,
+  WORKOUT_MATCH_DURATION_RATIO,
+  isRacePlanWorkout,
+  projectWorkoutMatches,
+  refreshPlanWorkoutMatches,
+  type ProjectedWorkoutMatch,
+  type WorkoutMatchDisplayStatus,
+  type WorkoutMatchIdentity,
+} from "./planning/workout-match.js";
 export { makeSummaryMessage, splitHistoryByBudget, SUMMARY_PREFIX } from "./agent/history-limit.js";
 export { truncateUtf16Safe } from "./text-truncate.js";
 export { warnOrphanSections, _resetOrphanWarnCacheForTesting } from "./sport/orphan-sections.js";

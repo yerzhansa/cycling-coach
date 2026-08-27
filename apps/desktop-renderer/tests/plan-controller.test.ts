@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PlanSurfaceState } from "../src/state/plan-slice.js";
+import type { PlanReadSurfaceState } from "../src/state/plan-slice.js";
 import { createPlanController } from "../src/plan/controller.js";
 
-const model = { schemaVersion: 1 as const, status: "no-plan" as const, asOfDateKey: 20260826, plan: null };
+const model = {
+  schemaVersion: 1 as const,
+  status: "no-plan" as const,
+  asOfDateKey: 20260826,
+  plan: null,
+};
 
 describe("Plan controller", () => {
   it("hydrates and preserves the last safe projection on refresh failure", async () => {
     let fail = false;
-    const states: PlanSurfaceState[] = [];
+    const states: PlanReadSurfaceState[] = [];
     const controller = createPlanController({
       read: vi.fn(async () => {
         if (fail) throw new Error("offline");
@@ -32,7 +37,11 @@ describe("Plan controller", () => {
       navigate,
       focus,
     });
-    const target = { destination: "plan" as const, focus: "active-plan" as const, entityId: "plan-1" };
+    const target = {
+      destination: "plan" as const,
+      focus: "active-plan" as const,
+      entityId: "plan-1",
+    };
     controller.openFromChat(target);
     expect(focus).toHaveBeenCalledWith(target, true);
     expect(navigate).toHaveBeenCalledWith("plan");

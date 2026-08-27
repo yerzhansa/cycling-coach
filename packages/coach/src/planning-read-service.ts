@@ -7,13 +7,12 @@ import {
 } from "@enduragent/coach-contract";
 import {
   createPlanRepository,
-  createPlanWorkoutRepository,
   planWeekIndex,
   planWeekRange,
-  type PlanRow,
-  type PlanWorkoutRow,
-  type SqlStore,
-} from "@enduragent/kernel/store";
+  type PlanRecord,
+  type PlanWorkoutRecord,
+} from "@enduragent/kernel/planning";
+import type { MigratorStore, SqlStore } from "@enduragent/kernel/store";
 
 export interface PlanningReadService {
   getPlanningReadModel(
@@ -22,7 +21,7 @@ export interface PlanningReadService {
 }
 
 export interface PlanningReadServiceInput {
-  readonly store: SqlStore;
+  readonly store: SqlStore & Pick<MigratorStore, "transaction">;
   readonly timezone: string;
   readonly now?: () => number;
 }
@@ -44,11 +43,11 @@ function record(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function phaseForWeek(plan: PlanRow, weekIndex: number | null): string | null {
+function phaseForWeek(plan: PlanRecord, weekIndex: number | null): string | null {
   if (weekIndex === null) return null;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(plan.structure_json) as unknown;
+    parsed = JSON.parse(plan.structureJson) as unknown;
   } catch {
     return null;
   }
@@ -68,14 +67,14 @@ function phaseForWeek(plan: PlanRow, weekIndex: number | null): string | null {
   return null;
 }
 
-function workoutDetails(row: PlanWorkoutRow): {
+function workoutDetails(row: PlanWorkoutRecord): {
   readonly targets: string | null;
   readonly purpose: string | null;
   readonly safetyGuardrail: string | null;
 } {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(row.structure_json) as unknown;
+    parsed = JSON.parse(row.structureJson) as unknown;
   } catch {
     return { targets: null, purpose: null, safetyGuardrail: null };
   }
@@ -95,14 +94,14 @@ function workoutDetails(row: PlanWorkoutRow): {
   };
 }
 
-function workoutReadModel(row: PlanWorkoutRow): PlanWorkoutReadModel {
+function workoutReadModel(row: PlanWorkoutRecord): PlanWorkoutReadModel {
   const details = workoutDetails(row);
   return {
     id: row.id,
-    dateKey: row.date_key,
+    dateKey: row.dateKey,
     sport: row.sport,
     name: row.name,
-    durationSeconds: row.duration_s,
+    durationSeconds: row.durationS,
     ...details,
     origin: row.origin,
     navigation: { destination: "plan", focus: "workout", entityId: row.id },
@@ -111,15 +110,14 @@ function workoutReadModel(row: PlanWorkoutRow): PlanWorkoutReadModel {
 
 export function createPlanningReadService(input: PlanningReadServiceInput): PlanningReadService {
   const plans = createPlanRepository(input.store);
-  const workouts = createPlanWorkoutRepository(input.store);
   const now = input.now ?? Date.now;
 
   return {
     async getPlanningReadModel(request) {
       GetPlanningReadModelRpcParamsSchema.parse(request);
       const asOfDateKey = todayInTimezone(now(), input.timezone);
-      const plan = await plans.readCurrent();
-      if (plan === undefined) {
+      const plan = await plans.readLatest();
+      if (plan === undefined || plan.status === "ended") {
         return GetPlanningReadModelRpcResultSchema.parse({
           schemaVersion: 1,
           status: "no-plan",
@@ -131,14 +129,14 @@ export function createPlanningReadService(input: PlanningReadServiceInput): Plan
       const week = planWeekIndex(plan, asOfDateKey);
       const currentWeek = week.kind === "inside" ? week.weekIndex : null;
       const range = currentWeek === null ? null : planWeekRange(plan, currentWeek);
-      const planWorkouts = await workouts.listForPlan(plan.id);
+      const planWorkouts = await plans.readWorkouts(plan.id);
       const currentWorkouts =
         range === null
           ? []
           : planWorkouts
               .filter(
                 (workout) =>
-                  workout.date_key >= range.startDateKey && workout.date_key <= range.endDateKey,
+                  workout.dateKey >= range.startDateKey && workout.dateKey <= range.endDateKey,
               )
               .map(workoutReadModel);
       const todayWorkout =
@@ -151,12 +149,12 @@ export function createPlanningReadService(input: PlanningReadServiceInput): Plan
         plan: {
           id: plan.id,
           name: plan.name,
-          goal: plan.primary_goal,
+          goal: plan.primaryGoal,
           lifecycle: plan.status === "draft" ? "draft" : "active",
-          startDateKey: plan.start_date_key,
-          targetDateKey: plan.target_date_key,
+          startDateKey: plan.startDateKey,
+          targetDateKey: plan.targetDateKey,
           currentWeek,
-          totalWeeks: plan.total_weeks,
+          totalWeeks: plan.totalWeeks,
           phase: phaseForWeek(plan, currentWeek),
           weekStartDateKey: range?.startDateKey ?? null,
           weekEndDateKey: range?.endDateKey ?? null,

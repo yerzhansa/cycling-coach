@@ -89,7 +89,7 @@ export function PlanReferenceCard(props: {
   readonly selection: PlanReferenceSelection;
 }): ReactElement | null {
   const surface = useEnduragentStore((state) => state.planSurface);
-  const actions = useEnduragentStore((state) => state.planActions);
+  const actions = useEnduragentStore((state) => state.planningReadActions);
   const card =
     surface.status !== "ready" || surface.value === null
       ? null

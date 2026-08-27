@@ -1,5 +1,6 @@
 import { ChevronRight, LoaderCircle, Plus, X } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -10,16 +11,51 @@ import {
 } from "react";
 import { Button } from "../../components/ui/button.js";
 import { useEnduragentStore } from "../../state/store.js";
+import type { CoachDecisionAnswer, CoachDecisionReadModel } from "@enduragent/coach-contract";
 
 export function CoachDecisionPanel(props: {
   readonly onCustomOpenChange: (open: boolean) => void;
+  readonly surface?: {
+    readonly decision: CoachDecisionReadModel | null;
+    readonly phase: "idle" | "continuing" | "recovering";
+    readonly answerLabel: string | null;
+    readonly error: string | null;
+    readonly loadError: string | null;
+    answer(decisionId: string, answer: CoachDecisionAnswer): void;
+    skip(decisionId: string): void;
+    retry(): void;
+  };
 }): ReactElement | null {
-  const decision = useEnduragentStore((state) => state.chat.decision);
-  const phase = useEnduragentStore((state) => state.chat.decisionPhase);
-  const answerLabel = useEnduragentStore((state) => state.chat.decisionAnswerLabel);
-  const error = useEnduragentStore((state) => state.chat.decisionError);
-  const loadError = useEnduragentStore((state) => state.chat.decisionLoadError);
+  const chatDecision = useEnduragentStore((state) => state.chat.decision);
+  const chatPhase = useEnduragentStore((state) => state.chat.decisionPhase);
+  const chatAnswerLabel = useEnduragentStore((state) => state.chat.decisionAnswerLabel);
+  const chatError = useEnduragentStore((state) => state.chat.decisionError);
+  const chatLoadError = useEnduragentStore((state) => state.chat.decisionLoadError);
   const actions = useEnduragentStore((state) => state.chatActions);
+  const decision = props.surface?.decision ?? chatDecision;
+  const phase = props.surface?.phase ?? chatPhase;
+  const answerLabel = props.surface?.answerLabel ?? chatAnswerLabel;
+  const error = props.surface?.error ?? chatError;
+  const loadError = props.surface?.loadError ?? chatLoadError;
+  const available = props.surface !== undefined || actions !== null;
+  const answer = useCallback(
+    (decisionId: string, value: CoachDecisionAnswer): void => {
+      if (props.surface === undefined) actions?.answerDecision(decisionId, value);
+      else props.surface.answer(decisionId, value);
+    },
+    [actions, props.surface],
+  );
+  const skipDecision = useCallback(
+    (decisionId: string): void => {
+      if (props.surface === undefined) actions?.skipDecision(decisionId);
+      else props.surface.skip(decisionId);
+    },
+    [actions, props.surface],
+  );
+  const retryDecision = useCallback((): void => {
+    if (props.surface === undefined) actions?.retryDecision();
+    else props.surface.retry();
+  }, [actions, props.surface]);
   const [customOpen, setCustomOpen] = useState(false);
   const [customText, setCustomText] = useState("");
   const questionId = useId();
@@ -59,7 +95,7 @@ export function CoachDecisionPanel(props: {
       if (event.defaultPrevented) return;
       if (event.key === "Escape") {
         event.preventDefault();
-        actions?.skipDecision(decision.decisionId);
+        skipDecision(decision.decisionId);
         return;
       }
       if (
@@ -74,13 +110,13 @@ export function CoachDecisionPanel(props: {
       const option = displayedOptions[number - 1];
       if (option === undefined) return;
       event.preventDefault();
-      actions?.answerDecision(decision.decisionId, { kind: "option", optionId: option.id });
+      answer(decision.decisionId, { kind: "option", optionId: option.id });
     };
     document.addEventListener("keydown", onShortcut);
     return () => {
       document.removeEventListener("keydown", onShortcut);
     };
-  }, [actions, decision, displayedOptions, phase]);
+  }, [answer, decision, displayedOptions, phase, skipDecision]);
 
   if (decision === null && loadError !== null) {
     return (
@@ -95,9 +131,9 @@ export function CoachDecisionPanel(props: {
           <Button
             type="button"
             variant="outline"
-            disabled={actions === null}
+            disabled={!available}
             onClick={() => {
-              actions?.retryDecision();
+              retryDecision();
             }}
           >
             Reconnect
@@ -141,9 +177,9 @@ export function CoachDecisionPanel(props: {
               <Button
                 type="button"
                 variant="outline"
-                disabled={actions === null}
+                disabled={!available}
                 onClick={() => {
-                  actions?.retryDecision();
+                  retryDecision();
                 }}
               >
                 Try again
@@ -158,10 +194,10 @@ export function CoachDecisionPanel(props: {
   if (decision?.status !== "unanswered") return null;
 
   const skip = (): void => {
-    actions?.skipDecision(decision.decisionId);
+    skipDecision(decision.decisionId);
   };
   const choose = (optionId: string): void => {
-    actions?.answerDecision(decision.decisionId, { kind: "option", optionId });
+    answer(decision.decisionId, { kind: "option", optionId });
   };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (event.key === "Escape") {
@@ -209,7 +245,7 @@ export function CoachDecisionPanel(props: {
           variant="ghost"
           size="icon-sm"
           aria-label="Skip question"
-          disabled={actions === null}
+          disabled={!available}
           onClick={skip}
         >
           <X aria-hidden="true" />
@@ -247,9 +283,9 @@ export function CoachDecisionPanel(props: {
             </Button>
             <Button
               type="button"
-              disabled={!/\S/u.test(customText) || actions === null}
+              disabled={!/\S/u.test(customText) || !available}
               onClick={() => {
-                actions?.answerDecision(decision.decisionId, {
+                answer(decision.decisionId, {
                   kind: "custom",
                   text: customText.trim(),
                 });

@@ -231,15 +231,24 @@ describe("sync failure repository", () => {
     }
   });
 
-  it("upgrades a migration-six store while keeping operational failures outside the dump", async () => {
+  it("upgrades a migration-six store while keeping sync failures outside the dump", async () => {
     store = openSqliteStorage(":memory:");
     await runMigrations(store, MIGRATIONS.slice(0, 6));
     await runMigrations(store, MIGRATIONS);
-    expect(await dumpStore(store)).not.toContain("# sync_failure");
-    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 13 });
-    expect(DUMP_TABLES).toHaveLength(39);
+    const dump = await dumpStore(store);
+    expect(dump).not.toContain("# sync_failure");
+    expect(dump).toContain("# plan_reconciliation_job");
+    expect(dump).toContain("# plan_reconciliation_item");
+    expect(await store.get("PRAGMA user_version")).toEqual({ user_version: 24 });
+    expect(DUMP_TABLES).toHaveLength(54);
     expect(DERIVED_TABLES).toHaveLength(12);
     expect(DUMP_TABLES.map(({ table }) => table)).not.toContain("sync_failure");
+    expect(DUMP_TABLES.map(({ table }) => table)).toContain("plan_reconciliation_job");
+    expect(DUMP_TABLES.map(({ table }) => table)).toContain("plan_reconciliation_item");
+    expect(DUMP_TABLES.map(({ table }) => table)).toContain("plan_workout_match");
+    expect(DUMP_TABLES.map(({ table }) => table)).toContain("plan_replacement");
+    expect(DUMP_TABLES.map(({ table }) => table)).toContain("plan_race_outcome");
+    expect(DUMP_TABLES.map(({ table }) => table)).toContain("plan_weekly_review");
     expect(DERIVED_TABLES).not.toContain("sync_failure");
   });
 });

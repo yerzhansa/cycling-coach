@@ -47,8 +47,8 @@ function offersProvider(
 
 export function offeredLanes(
   configuration: OnboardingLlmConfiguration | null,
-  wizard: OnboardingState,
-  currentLane: SetupLane | null = null,
+  _wizard: OnboardingState,
+  _currentLane: SetupLane | null = null,
 ): readonly SetupLane[] {
   if (configuration === null) return [];
   const lanes: SetupLane[] = [];

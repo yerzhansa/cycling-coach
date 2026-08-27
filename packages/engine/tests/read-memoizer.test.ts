@@ -38,6 +38,7 @@ describe("READ_ONLY_TOOL_NAMES allowlist", () => {
       "intervals_create_strength_workout",
       "intervals_create_workout",
       "intervals_delete_workout",
+      "intervals_update_workout",
       "memory_write",
       "plan_save",
     ]) {

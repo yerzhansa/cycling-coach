@@ -1,5 +1,5 @@
 import type { PlanNavigationTarget, PlanningReadModel } from "@enduragent/coach-contract";
-import type { PlanSurfaceState } from "../state/plan-slice.js";
+import type { PlanReadSurfaceState } from "../state/plan-slice.js";
 
 export interface PlanController {
   start(): Promise<void>;
@@ -11,7 +11,7 @@ export interface PlanController {
 
 export function createPlanController(input: {
   readonly read: () => Promise<PlanningReadModel>;
-  readonly render: (state: PlanSurfaceState) => void;
+  readonly render: (state: PlanReadSurfaceState) => void;
   readonly navigate: (view: "chat" | "plan") => void;
   readonly focus: (target: PlanNavigationTarget | null, returnToChat: boolean) => void;
 }): PlanController {

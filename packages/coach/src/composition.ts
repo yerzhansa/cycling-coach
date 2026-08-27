@@ -52,9 +52,10 @@ import {
   type EngineHostPorts,
   type ChatAttachmentTurnPort,
   type ModelTransportDecorator,
+  type PlanFtpSourceValue,
   type ReferenceStateSnapshot,
 } from "@enduragent/engine";
-import { resolveUserTimezone } from "@enduragent/engine/sport";
+import { resolveUserTimezone, todayInTZ } from "@enduragent/engine/sport";
 import {
   createCyclingFtpAnchorResolver,
   type CyclingFtpAnchorResolver,
@@ -62,6 +63,7 @@ import {
 import {
   createAnchorRepository,
   createChatAttachmentRepository,
+  createAnalyticsCurveStateReader,
   createCanonicalActivityReader,
   createIntervalsSourceRepository,
   createTrustedActivitySourceResolver,
@@ -76,7 +78,14 @@ import {
   createManagedDocumentReader,
   createManagedMediaReader,
 } from "@enduragent/kernel-node/chat-attachments";
+import { createVerifiedSnapshotReader } from "@enduragent/kernel-node/archive";
+import { nodeFileSystem } from "@enduragent/kernel-node/filesystem";
 import { createNodeCrypto, createNodeImportRuntime } from "@enduragent/kernel-node/ingest";
+import {
+  createLegacyPlanRepository,
+  createLegacyPlanRowWriter,
+  importLegacyCurrentPlan,
+} from "@enduragent/kernel-node/planning";
 import type { CoachStoreWriterContext } from "./runtime.js";
 import {
   CHAT_ATTACHMENT_LIMITS,
@@ -93,10 +102,17 @@ import {
   type ListArchivedConversationsRpcResult,
   type GetRuntimeConfigRpcResult,
   type PlanningReadOperations,
+  type PlanningOperations,
   type VerifyIntervalsCredentialRpcParams,
   type VerifyIntervalsCredentialRpcResult,
 } from "@enduragent/coach-contract";
-import { cyclingSport } from "@enduragent/sport-cycling";
+import {
+  createCyclingPlanFtpAdapter,
+  cyclingSport,
+  projectCyclingEstimatedCp,
+  projectCyclingReadinessInput,
+} from "@enduragent/sport-cycling";
+import { projectAnalyticsCurveEvidence } from "@enduragent/sync-intervals-icu";
 import { createPersistedAthleteStateSource } from "./athlete-state-reader.js";
 import { createPowerProgressStateSource } from "./power-progress.js";
 import { createRecentRidesSource } from "./recent-rides.js";
@@ -157,8 +173,10 @@ import {
   createProviderActivityPowerHeartRateReader,
 } from "./activity-power-heart-rate.js";
 import { createTrainingExportService } from "./training-export.js";
+import { createPlanningOperations } from "./planning-operations.js";
+import { createPlanMirrorCalendarAdapter } from "./planning-calendar.js";
+import { createNodePlanRaceCourseAdapter } from "./planning-race-course.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
-import { createPlanStorageService } from "./plan-storage.js";
 import { createManagedChatAttachmentOperations } from "./attachment-operations.js";
 import { observeChatAttachment, type AttachmentObservation } from "./attachment-observability.js";
 import { createActivityAttachmentOperations } from "./activity-attachment-operations.js";
@@ -180,7 +198,7 @@ interface OAuthCredential extends StoredProfile {
 
 export interface LocalCoachComposition {
   readonly engine: CoachEngine;
-  readonly operations: CoachOperations & PlanningReadOperations;
+  readonly operations: CoachOperations & PlanningReadOperations & PlanningOperations;
   readonly spendMeter: SpendMeterService;
   readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   startInitialRefresh(): Promise<void>;
@@ -662,6 +680,16 @@ function readReferenceState(dataDir: string): ReferenceStateSnapshot {
   };
 }
 
+function readLatestReference(dataDir: string) {
+  try {
+    const value = JSON.parse(readFileSync(join(dataDir, "data", "latest.json"), "utf8")) as unknown;
+    const result = LatestJsonSchema.safeParse(value);
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+
 function credential(value: unknown): OAuthCredential {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("OAuth profile is invalid.");
@@ -806,6 +834,25 @@ export async function createLocalCoachComposition(
     throw new TypeError("Ready engine configuration does not match the selected athlete home.");
   }
   const now = dependencies.now ?? Date.now;
+  const logger = createSubsystemLogger("agent", input.home.root);
+  const planningIdentity = createAuthoredIdentity(input.home.configDir, { now });
+  const planningRepository = createLegacyPlanRepository(input.context.store);
+  const planningTimezone = resolveUserTimezone(input.config.session.timezone);
+  const planningDateKey = (): number => Number(todayInTZ(planningTimezone).replaceAll("-", ""));
+  await importLegacyCurrentPlan({
+    home: input.home,
+    store: input.context.store,
+    identity: planningIdentity,
+    importDateKey: planningDateKey(),
+    importTimestampMs: now(),
+    logger: { warn: () => logger.warn("legacy_plan_import_skipped") },
+  });
+  const persistPlan = await createLegacyPlanRowWriter({
+    repository: planningRepository,
+    identity: planningIdentity,
+    fallbackDateKey: planningDateKey,
+    now,
+  });
   const ownerClock = { now, monotonicNow: () => performance.now() };
   const intervalsCredentialApprovals = createIntervalsCredentialApprovalStore({ now });
   let intervalsConfigRevision = 0;
@@ -1123,18 +1170,6 @@ export async function createLocalCoachComposition(
       },
     });
     await attachmentOperations.reconcile();
-    const planIdentity = createAuthoredIdentity(input.home.configDir, { now });
-    const createPlanPersistence = (timezone: string) =>
-      createPlanStorageService({
-        store: input.context.store,
-        identity: planIdentity,
-        timezone,
-        now,
-        logger,
-      });
-    await createPlanPersistence(
-      resolveUserTimezone(approvedConfig().session.timezone),
-    ).importLegacyPlan(join(input.home.root, "plans", "current-plan.json"));
     const getAccessToken = createAccessTokenReader(input.home.configDir);
     const openRouterModelMetadata = createPersistentOpenRouterModelMetadataCache(
       input.home.configDir,
@@ -1188,7 +1223,10 @@ export async function createLocalCoachComposition(
               ...config,
               session: { ...config.session, timezone },
             };
-      const memory = new Memory(input.home.root, timezone, { platform: dependencies.platform });
+      const memory = new Memory(input.home.root, timezone, {
+        platform: dependencies.platform,
+        persistPlan,
+      });
       const conversationStore = createConversationStore(
         input.home.root,
         config.session.resetArchiveRetentionDays,
@@ -1288,7 +1326,6 @@ export async function createLocalCoachComposition(
       const ports: EngineHostPorts = {
         config: projectedConfig,
         memory,
-        planPersistence: createPlanPersistence(timezone),
         chatStore: conversationStore,
         chatAttachments,
         attachmentCapabilities: {
@@ -1681,6 +1718,15 @@ export async function createLocalCoachComposition(
       store: input.context.store,
     });
     const analysisCrypto = createNodeCrypto();
+    const curveState = createAnalyticsCurveStateReader(input.context.store, (fields) => {
+      if (fields.length === 0) throw new TypeError("empty key tuple");
+      return H(analysisCrypto, ...(fields as [string | number, ...(string | number)[]]));
+    });
+    const curveSnapshots = createVerifiedSnapshotReader({
+      archiveRoot: input.home.archiveDir,
+      crypto: analysisCrypto,
+      fs: nodeFileSystem(),
+    });
     const analysisSources = createIntervalsSourceRepository(input.context.store, (fields) => {
       if (fields.length === 0) throw new TypeError("empty key tuple");
       return H(analysisCrypto, ...(fields as [string | number, ...(string | number)[]]));
@@ -1742,32 +1788,198 @@ export async function createLocalCoachComposition(
       credentials: options.liveIntervals,
       sources: trustedActivitySources,
     });
+    const coachOperations = createCoachOperations(
+      {
+        home: input.home,
+        context: input.context,
+        runtime,
+        intervalsCredentials: options.liveIntervals,
+        historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
+        readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
+        readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
+        readArchivedTranscriptPage: (request) => reconfigurable.getArchivedTranscriptPage(request),
+        applyRuntimeConfig,
+        verifyIntervalsCredential,
+        intervalsVerificationPending,
+        readRuntimeConfig: () =>
+          runtimeConfigSnapshot(
+            input.home.configDir,
+            unapprovedConfig,
+            input.env,
+            activeTimezone,
+            intervalsVerificationPending(),
+          ),
+      },
+      dependencies.operationsDependencies,
+    );
+    const readFtpAnchor = async (
+      confidence: "manual" | "platform",
+    ): Promise<PlanFtpSourceValue | null> => {
+      const row =
+        confidence === "manual"
+          ? await input.context.store.get(
+              "SELECT value, valid_from FROM anchor_history WHERE sport = ? AND anchor_type = ? AND confidence = ? ORDER BY valid_from DESC, id DESC LIMIT 1",
+              ["cycling", "ftp", confidence],
+            )
+          : await input.context.store.get(
+              "SELECT value, valid_from FROM anchor_history WHERE sport = ? AND anchor_type = ? AND confidence = ? AND source = ? ORDER BY valid_from DESC, id DESC LIMIT 1",
+              ["cycling", "ftp", confidence, "intervals-icu"],
+            );
+      if (
+        row === undefined ||
+        typeof row.value !== "number" ||
+        typeof row.valid_from !== "number"
+      ) {
+        return null;
+      }
+      return { watts: row.value, refreshedAtMs: row.valid_from * 1_000 };
+    };
+    const ftp = createCyclingPlanFtpAdapter({
+      readManual: () => readFtpAnchor("manual"),
+      readIntervalsFtp: () => readFtpAnchor("platform"),
+      async readIntervalsEftp() {
+        const latest = readReferenceState(input.home.root).latest;
+        const watts = latest?.derived_metrics?.eftp;
+        const refreshedAtMs = Date.parse(latest?.metadata?.last_updated ?? "");
+        return typeof watts === "number" && Number.isFinite(refreshedAtMs)
+          ? { watts, refreshedAtMs }
+          : null;
+      },
+      async saveManual(watts) {
+        const stamp = planningIdentity.hlcStamp();
+        const validFrom = Math.floor(stamp.physicalMs / 1_000);
+        const deviceId = await planningIdentity.deviceId();
+        const inserted = await repository.insertIfAbsent({
+          id: planningIdentity.newUlid(),
+          sport: "cycling",
+          anchor_type: "ftp",
+          value: watts,
+          unit: "W",
+          valid_from: validFrom,
+          source: "athlete",
+          confidence: "manual",
+          note: null,
+          provenance: "manual",
+          device_id: deviceId,
+          hlc_physical_ms: stamp.physicalMs,
+          hlc_counter: stamp.counter,
+        });
+        if (inserted) return;
+        const existing = await input.context.store.get(
+          "SELECT confidence FROM anchor_history WHERE sport = ? AND anchor_type = ? AND valid_from = ?",
+          ["cycling", "ftp", validFrom],
+        );
+        if (existing?.confidence !== "manual") throw new Error("Manual FTP could not be saved.");
+        await input.context.store.run(
+          "UPDATE anchor_history SET value = ?, unit = ?, source = ?, note = ?, provenance = ?, device_id = ?, hlc_physical_ms = ?, hlc_counter = ? WHERE sport = ? AND anchor_type = ? AND valid_from = ? AND confidence = ?",
+          [
+            watts,
+            "W",
+            "athlete",
+            null,
+            "manual",
+            deviceId,
+            stamp.physicalMs,
+            stamp.counter,
+            "cycling",
+            "ftp",
+            validFrom,
+            "manual",
+          ],
+        );
+      },
+      async refreshIntervals() {
+        await coachOperations.sync({});
+      },
+    });
+    const planCalendar = createPlanMirrorCalendarAdapter(() => {
+      const intervals = approvedConfig().intervals;
+      return intervals.apiKey.length === 0
+        ? null
+        : makeChatClient({ apiKey: intervals.apiKey, athleteId: intervals.athleteId });
+    });
+    const readiness = {
+      async read({
+        plan,
+        workouts,
+        todayDateKey,
+      }: {
+        readonly plan: { readonly targetDateKey: number | null };
+        readonly workouts: readonly {
+          readonly dateKey: number;
+          readonly name: string;
+          readonly durationS: number | null;
+          readonly structureJson: string;
+        }[];
+        readonly todayDateKey: number;
+      }) {
+        const latest = readLatestReference(input.home.root);
+        const civil = (dateKey: number): string => {
+          const value = String(dateKey).padStart(8, "0");
+          return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+        };
+        const refreshedAtMs = Date.parse(latest?.metadata.last_updated ?? "");
+        let estimatedCp = projectCyclingEstimatedCp({
+          curves: undefined,
+          calculatedOn: civil(todayDateKey),
+          lastSuccessfulSyncAtMs: null,
+          stale: false,
+        });
+        try {
+          const state = await curveState.readState();
+          if (state.current !== null) {
+            const projected = await projectAnalyticsCurveEvidence(state.current, curveSnapshots);
+            const failedAt = state.refreshFailure?.failedEpochSeconds ?? null;
+            estimatedCp = projectCyclingEstimatedCp({
+              curves: projected.sustainabilityCurves?.cycling,
+              calculatedOn: state.current.generation.frozenOn,
+              lastSuccessfulSyncAtMs: state.current.promotedEpochSeconds * 1_000,
+              stale:
+                failedAt !== null && failedAt * 1_000 >= state.current.promotedEpochSeconds * 1_000,
+            });
+            if (estimatedCp.unavailableReason === "mathematically-invalid") {
+              logger.warn("estimated_cp_mathematically_invalid");
+            }
+          }
+        } catch {
+          // Estimated CP is optional evidence; readiness remains available when it cannot load.
+        }
+        return projectCyclingReadinessInput({
+          today: civil(todayDateKey),
+          raceDate: plan.targetDateKey === null ? null : civil(plan.targetDateKey),
+          wellness: latest?.wellness_data ?? null,
+          currentStatus: latest?.current_status ?? null,
+          estimatedCp,
+          lastSuccessfulRefreshAtMs: Number.isFinite(refreshedAtMs) ? refreshedAtMs : null,
+          workouts: workouts.map((workout) => ({
+            date: civil(workout.dateKey),
+            name: workout.name,
+            durationS: workout.durationS,
+            structureJson: workout.structureJson,
+          })),
+        });
+      },
+      async refresh() {
+        await coachOperations.sync({});
+      },
+    };
+    const planningOperations = createPlanningOperations(
+      {
+        context: input.context,
+        engine: reconfigurable.engine,
+        identity: planningIdentity,
+      },
+      {
+        ftp,
+        course: createNodePlanRaceCourseAdapter(),
+        todayDateKey: planningDateKey,
+        calendar: planCalendar,
+        workoutDriftCalendar: planCalendar,
+        readiness,
+      },
+    );
     const operations = {
-      ...createCoachOperations(
-        {
-          home: input.home,
-          context: input.context,
-          runtime,
-          intervalsCredentials: options.liveIntervals,
-          historyNewestDate: () => new Date(now()).toISOString().slice(0, 10),
-          readTranscriptPage: (request) => reconfigurable.getTranscriptPage(request),
-          readArchivedConversations: (request) => reconfigurable.listArchivedConversations(request),
-          readArchivedTranscriptPage: (request) =>
-            reconfigurable.getArchivedTranscriptPage(request),
-          applyRuntimeConfig,
-          verifyIntervalsCredential,
-          intervalsVerificationPending,
-          readRuntimeConfig: () =>
-            runtimeConfigSnapshot(
-              input.home.configDir,
-              unapprovedConfig,
-              input.env,
-              activeTimezone,
-              intervalsVerificationPending(),
-            ),
-        },
-        dependencies.operationsDependencies,
-      ),
+      ...coachOperations,
       admitChatAttachment: async (request) => {
         const startedAt = now();
         const result = await attachmentOperations.admit(request);
@@ -1859,7 +2071,8 @@ export async function createLocalCoachComposition(
       getActivityAnalysis: (request, signal) =>
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
-    } satisfies CoachOperations & PlanningReadOperations;
+      ...planningOperations,
+    } satisfies CoachOperations & PlanningReadOperations & PlanningOperations;
     return {
       engine: reconfigurable.engine,
       operations,

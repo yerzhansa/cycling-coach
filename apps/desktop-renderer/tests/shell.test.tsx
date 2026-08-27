@@ -13,6 +13,7 @@ import {
   setupRequired,
   setupSurfaceOnScreen,
 } from "../src/state/onboarding-slice.js";
+import { EMPTY_PLAN_SURFACE, type PlanActions } from "../src/state/plan-slice.js";
 import { useEnduragentStore } from "../src/state/store.js";
 import { IDLE_MANUAL_SYNC } from "../src/state/sync-slice.js";
 import { EMPTY_TRAINING_SURFACE } from "../src/state/training-slice.js";
@@ -21,6 +22,7 @@ import {
   clearTrainingRestrictionFocusRequest,
   takeTrainingRestrictionFocusRequest,
 } from "../src/ui/training/restriction-focus.js";
+import { planReadModel } from "./plan-fixtures.js";
 
 const REPAIR_REQUIRED_CREDENTIALS: CredentialSettingsState = {
   status: "ready",
@@ -80,6 +82,78 @@ function stubActions(): ChatActions {
   };
 }
 
+function stubPlanActions(): PlanActions {
+  return {
+    open: vi.fn(),
+    startPlan: vi.fn(),
+    submitCoach: vi.fn(async () => true),
+    stopCoach: vi.fn(),
+    removeQueuedCoachMessage: vi.fn(),
+    retryQueuedCoachTurn: vi.fn(),
+    answerCoachDecision: vi.fn(),
+    skipCoachDecision: vi.fn(),
+    saveFtp: vi.fn(),
+    refreshFtp: vi.fn(),
+    createDraft: vi.fn(),
+    updateDraft: vi.fn(),
+    openDiscardConfirmation: vi.fn(),
+    closeDiscardConfirmation: vi.fn(),
+    discardDraft: vi.fn(),
+    openRevisionComposer: vi.fn(),
+    closeRevisionComposer: vi.fn(),
+    openCoursePicker: vi.fn(),
+    closeCoursePicker: vi.fn(),
+    chooseCourseFile: vi.fn(),
+    continueWithoutCourse: vi.fn(),
+    useCourseWithoutElevation: vi.fn(),
+    removeCourse: vi.fn(),
+    openDatePicker: vi.fn(),
+    closeDatePicker: vi.fn(),
+    recalculateStartDate: vi.fn(),
+    approveDraft: vi.fn(),
+    openReplacement: vi.fn(),
+    closeReplacementConfirmation: vi.fn(),
+    confirmReplacement: vi.fn(),
+    retryReplacementCleanup: vi.fn(),
+    verifyReplacementCleanup: vi.fn(),
+    writeReplacementMirror: vi.fn(),
+    openReplacementActivePlan: vi.fn(),
+    reconcilePlan: vi.fn(),
+    verifyReconciliation: vi.fn(),
+    openSeason: vi.fn(),
+    openReadiness: vi.fn(),
+    closeReadiness: vi.fn(),
+    refreshReadiness: vi.fn(),
+    closeSeason: vi.fn(),
+    openRaceWeek: vi.fn(),
+    closeRaceWeek: vi.fn(),
+    openWorkout: vi.fn(),
+    closeWorkout: vi.fn(),
+    resolveWorkoutMatch: vi.fn(),
+    resolveWorkoutDrift: vi.fn(),
+    openProposal: vi.fn(),
+    reviseProposal: vi.fn(),
+    approveProposal: vi.fn(),
+    rejectProposal: vi.fn(),
+    openHistory: vi.fn(),
+    closeHistory: vi.fn(),
+    undoPlanChange: vi.fn(),
+    openPlanSettings: vi.fn(),
+    closePlanSettings: vi.fn(),
+    setPlanSetting: vi.fn(),
+    openEndConfirmation: vi.fn(),
+    closeEndConfirmation: vi.fn(),
+    confirmEndPlan: vi.fn(),
+    retryPlanCleanup: vi.fn(),
+    verifyPlanCleanup: vi.fn(),
+    openRaceOutcome: vi.fn(),
+    recordRaceOutcome: vi.fn(),
+    openAttention: vi.fn(),
+    returnToCoach: vi.fn(),
+    retry: vi.fn(),
+  };
+}
+
 function stravaDroppedActivities() {
   return {
     overall: {
@@ -101,6 +175,7 @@ async function preloadLazyViews(): Promise<void> {
   await Promise.all([
     import("../src/ui/archive/ArchiveView.js"),
     import("../src/ui/training/TrainingView.js"),
+    import("../src/ui/plan/PlanView.js"),
     import("../src/ui/settings/SettingsView.js"),
   ]);
 }
@@ -121,6 +196,8 @@ describe("shell", () => {
       onboarding: READY_ONBOARDING,
       onboardingActions: null,
       onboardingStartupSettled: true,
+      plan: EMPTY_PLAN_SURFACE,
+      planActions: stubPlanActions(),
       settings: {
         ...useEnduragentStore.getState().settings,
         savingOwners: [],
@@ -139,6 +216,8 @@ describe("shell", () => {
       onboarding: CLOSED_ONBOARDING,
       onboardingActions: null,
       onboardingStartupSettled: false,
+      plan: EMPTY_PLAN_SURFACE,
+      planActions: null,
       settings: {
         ...useEnduragentStore.getState().settings,
         credentials: { status: "closed" },
@@ -196,6 +275,26 @@ describe("shell", () => {
 
     await user.click(screen.getByRole("button", { name: "Training" }));
     expect(await screen.findByRole("region", { name: "Training" })).toBeInTheDocument();
+
+    const planState = planReadModel();
+    act(() => {
+      useEnduragentStore.setState({
+        plan: {
+          ...EMPTY_PLAN_SURFACE,
+          hydration: { status: "ready", state: planState },
+          lastReady: planState,
+        },
+      });
+    });
+    await user.click(screen.getByRole("button", { name: "Plan" }));
+    expect(await screen.findByRole("region", { name: "Plan" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Train toward one clear goal" }),
+    ).toBeInTheDocument();
+    expect(document.querySelector("div.thread")).not.toBeNull();
+    const conversation = screen.getByLabelText("Coaching conversation");
+    expect(conversation.closest(".hidden")).not.toBeNull();
+    expect(screen.getByRole("region", { name: "Plan" }).querySelector("div.thread")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("region", { name: "Settings" })).toBeInTheDocument();

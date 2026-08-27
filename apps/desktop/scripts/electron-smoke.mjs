@@ -56,7 +56,7 @@ async function startElectron(flag, env, extraArgs = []) {
     pendingLine = parts.pop() ?? "";
     for (const line of parts) {
       lines.push(line);
-      for (const waiter of [...waiters]) waiter();
+      for (const waiter of waiters.slice()) waiter();
     }
   });
   child.stderr.on("data", (chunk) => {
@@ -299,6 +299,7 @@ async function security() {
             "checkForUpdates",
             "chooseChatAttachments",
             "chooseImportFiles",
+            "choosePlanRaceCourseFile",
             "claudeCliRecheck",
             "claudeCliStatus",
             "credentialRecoveryStatus",
@@ -306,9 +307,11 @@ async function security() {
             "deleteCredential",
             "disableTelegram",
             "enableTelegram",
+            "executePlanTransition",
             "exportTrainingFile",
             "getArchivedTranscriptPage",
             "getDaemonConnection",
+            "getPlanState",
             "getPlanningReadModel",
             "getTranscriptPage",
             "getUpdateState",
@@ -319,6 +322,7 @@ async function security() {
             "onChatgptLoginProgress",
             "onDroppedChatAttachments",
             "onDroppedImportFiles",
+            "onPlanProgress",
             "onUpdateState",
             "pasteChatAttachment",
             "pasteIntervalsApiKeyFromClipboard",

@@ -5,7 +5,6 @@ import {
   decodeContainer,
   encodeContainer,
   EXPORT_WARNING,
-  EXPORT_FORMAT_VERSION,
   CONTAINER_MAGIC,
   PBKDF2_ITERATIONS,
   ExportFormatError,
@@ -229,7 +228,9 @@ describe("store export op", () => {
       { sink, presence: makePresence(), crypto, codec, targetUserVersion: 5 },
       { container: built.container },
     );
-    expect(imported.restored).toHaveLength(14);
+    expect(imported.restored).toHaveLength(
+      PURE_AUTHORED_TABLES.length + MIXED_AUTHORED_TABLES.length,
+    );
     expect(imported.restored.find((row) => row.table === "dedup_confirmation")?.inserted).toBe(2);
     for (const t of PURE_AUTHORED_TABLES) {
       expect(imported.restored.find((r) => r.table === t)?.inserted).toBe(2);
@@ -238,6 +239,25 @@ describe("store export op", () => {
       expect(imported.restored.find((r) => r.table === t)?.inserted).toBe(1);
     }
     expect(imported.manifest.total).toBe(data.artifacts.length);
+  });
+
+  it("orders Draft revisions parent-first before restore", async () => {
+    const data = populated();
+    data.rows.plan_draft_revision = [
+      { id: "child", revision: 2, parent_revision_id: "parent" },
+      { id: "parent", revision: 1, parent_revision_id: null },
+    ];
+    const { source } = makeSource(data);
+    const crypto = new FakeCrypto();
+    const built = await buildExport({ source, manifest: makeManifest(data), crypto, codec }, {});
+    const sink = makeSink();
+    await importExport(
+      { sink, presence: makePresence(), crypto, codec, targetUserVersion: 5 },
+      { container: built.container },
+    );
+    const restored = [...(sink.stored.get("plan_draft_revision") ?? [])]
+      .map((row) => JSON.parse(row) as { readonly revision: number });
+    expect(restored.map(({ revision }) => revision)).toEqual([1, 2]);
   });
 
   it("(roundtrip-pass) passphrase container header + round-trip", async () => {
@@ -263,7 +283,9 @@ describe("store export op", () => {
       { sink, presence: makePresence(), crypto, codec, targetUserVersion: 5 },
       { container: built.container, passphrase: "correct horse" },
     );
-    expect(imported.restored).toHaveLength(14);
+    expect(imported.restored).toHaveLength(
+      PURE_AUTHORED_TABLES.length + MIXED_AUTHORED_TABLES.length,
+    );
     expect(imported.restored.find((row) => row.table === "dedup_confirmation")?.inserted).toBe(2);
   });
 
@@ -339,7 +361,9 @@ describe("store export op", () => {
         { sink: makeSink(), presence: makePresence(), crypto, codec, targetUserVersion: 5 },
         { container: built.container },
       );
-      expect(imported.restored).toHaveLength(14);
+      expect(imported.restored).toHaveLength(
+        PURE_AUTHORED_TABLES.length + MIXED_AUTHORED_TABLES.length,
+      );
     }
   });
 

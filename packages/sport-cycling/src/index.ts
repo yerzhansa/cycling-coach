@@ -21,6 +21,16 @@ export { getSampleWeek } from "./templates.js";
 export type { SampleWorkout, WorkoutType } from "./templates.js";
 
 export { buildPlanSkeleton } from "./plan-builder.js";
+export { projectCyclingSeasonMetadata } from "./season.js";
+export type {
+  CyclingSeasonConstraintMetadata,
+  CyclingSeasonMetadata,
+  CyclingSeasonWeekMetadata,
+} from "./season.js";
+export { cyclingTaperRefusal, projectCyclingReadinessInput } from "./readiness.js";
+export type { CyclingReadinessSourceInput, CyclingReadinessWorkoutInput } from "./readiness.js";
+export { projectCyclingEstimatedCp } from "./estimated-cp.js";
+export type { CyclingEstimatedCpEffort, CyclingEstimatedCpProjection } from "./estimated-cp.js";
 
 export {
   serializeIntervalsWorkout,
@@ -35,6 +45,13 @@ export { cyclingSport, CYCLING_VOCABULARY } from "./sport.js";
 export { CYCLING_PRESCRIPTION_CAPABILITY } from "./prescription-posture.js";
 export type { PrescriptionCapability } from "./prescription-posture.js";
 export { migrateCyclingLegacySections } from "./migrate.js";
+export { CyclingRaceCourseError, interpretCyclingRaceCourse } from "./race-course.js";
+export type { CyclingRaceCourseInterpretation } from "./race-course.js";
+export {
+  createCyclingPlanFtpAdapter,
+  validateManualPlanFtp,
+  type CyclingPlanFtpSourcePorts,
+} from "./plan-ftp.js";
 
 export {
   cyclingReferenceAdapter,

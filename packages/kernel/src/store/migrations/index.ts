@@ -9,8 +9,19 @@ import storeOwner008 from "./008_store_owner.sql";
 import activitySourceResolver009 from "./009_activity_source_resolver.sql";
 import analyticsCurves010 from "./010_analytics_curves.sql";
 import activityAnalysisProjection011 from "./011_activity_analysis_projection.sql";
-import plan012 from "./012_plan.sql";
-import chatAttachments013 from "./013_chat_attachments.sql";
+import planning012 from "./012_planning.sql";
+import planConversations013 from "./013_plan_conversations.sql";
+import planReconciliation014 from "./014_plan_reconciliation.sql";
+import planRaceCourse015 from "./015_plan_race_course.sql";
+import planWorkoutMatch016 from "./016_plan_workout_match.sql";
+import planWorkoutDrift017 from "./017_plan_workout_drift.sql";
+import planProposals018 from "./018_plan_proposals.sql";
+import planAdaptationLedger019 from "./019_plan_adaptation_ledger.sql";
+import planSettings020 from "./020_plan_settings.sql";
+import planReplacement021 from "./021_plan_replacement.sql";
+import planWeeklyReview022 from "./022_plan_weekly_review.sql";
+import planRaceOutcome023 from "./023_plan_race_outcome.sql";
+import chatAttachments024 from "./024_chat_attachments.sql";
 
 export interface Migration {
   /** Ascending schema version this migration advances the store to. */
@@ -37,6 +48,17 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 9, name: "009_activity_source_resolver", sql: activitySourceResolver009 },
   { version: 10, name: "010_analytics_curves", sql: analyticsCurves010 },
   { version: 11, name: "011_activity_analysis_projection", sql: activityAnalysisProjection011 },
-  { version: 12, name: "012_plan", sql: plan012 },
-  { version: 13, name: "013_chat_attachments", sql: chatAttachments013 },
+  { version: 12, name: "012_planning", sql: planning012 },
+  { version: 13, name: "013_plan_conversations", sql: planConversations013 },
+  { version: 14, name: "014_plan_reconciliation", sql: planReconciliation014 },
+  { version: 15, name: "015_plan_race_course", sql: planRaceCourse015 },
+  { version: 16, name: "016_plan_workout_match", sql: planWorkoutMatch016 },
+  { version: 17, name: "017_plan_workout_drift", sql: planWorkoutDrift017 },
+  { version: 18, name: "018_plan_proposals", sql: planProposals018 },
+  { version: 19, name: "019_plan_adaptation_ledger", sql: planAdaptationLedger019 },
+  { version: 20, name: "020_plan_settings", sql: planSettings020 },
+  { version: 21, name: "021_plan_replacement", sql: planReplacement021 },
+  { version: 22, name: "022_plan_weekly_review", sql: planWeeklyReview022 },
+  { version: 23, name: "023_plan_race_outcome", sql: planRaceOutcome023 },
+  { version: 24, name: "024_chat_attachments", sql: chatAttachments024 },
 ];
