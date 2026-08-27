@@ -139,6 +139,7 @@ describe("engine public export surface", () => {
       "validatePlanProposal",
       "validatePlanUndo",
       "validateWorkoutCreationDate",
+      "verifyPlanCleanup",
       "verifyPlanMirror",
       "warnOrphanSections",
       "wrapAthleteContextFence",

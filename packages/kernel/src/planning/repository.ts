@@ -87,8 +87,25 @@ export interface PlanRepository {
   readByOriginId(originId: string): Promise<PlanRecord | undefined>;
   readLatest(): Promise<PlanRecord | undefined>;
   readWorkouts(planId: string): Promise<readonly PlanWorkoutRecord[]>;
+  endActive(input: EndActivePlanInput): Promise<EndActivePlanResult>;
   count(): Promise<number>;
   delete(id: string): Promise<void>;
+}
+
+export interface EndActivePlanInput {
+  readonly planId: string;
+  readonly cleanupJobId: string;
+  readonly windowStartDateKey: number;
+  readonly windowEndDateKey: number;
+  readonly updatedAtMs: number;
+  readonly deviceId: string;
+  readonly hlcPhysicalMs: number;
+  readonly hlcCounter: number;
+}
+
+export interface EndActivePlanResult {
+  readonly plan: PlanRecord;
+  readonly cleanupJobId: string;
 }
 
 type PlanningStore = SqlStore & Pick<MigratorStore, "transaction">;
@@ -364,6 +381,81 @@ ON CONFLICT (id) DO UPDATE SET
           planId,
         ])
       ).map(workoutFromRow);
+    },
+    async endActive(input: EndActivePlanInput) {
+      if (!ULID.test(input.planId) || !ULID.test(input.cleanupJobId)) {
+        throw new PlanValidationError("invalid-id");
+      }
+      if (
+        !Number.isSafeInteger(input.updatedAtMs) ||
+        input.updatedAtMs < 0 ||
+        !Number.isSafeInteger(input.hlcPhysicalMs) ||
+        input.hlcPhysicalMs < 0 ||
+        !Number.isSafeInteger(input.hlcCounter) ||
+        input.hlcCounter < 0
+      ) {
+        throw new PlanValidationError("invalid-timestamp");
+      }
+      if (!DEVICE_ID.test(input.deviceId)) throw new PlanValidationError("invalid-device-id");
+      if (inclusiveCivilDays(input.windowStartDateKey, input.windowEndDateKey) <= 0) {
+        throw new PlanValidationError("invalid-target-date");
+      }
+      return store.transaction(async () => {
+        const row = await store.get("SELECT * FROM plan WHERE id = ?", [input.planId]);
+        if (row === undefined) throw new PlanValidationError("invalid-id");
+        const current = planFromRow(row);
+        if (current.status !== "active" && current.status !== "ended") {
+          throw new PlanValidationError("invalid-status");
+        }
+        if (current.status === "active") {
+          if (input.updatedAtMs < current.updatedAtMs) {
+            throw new PlanValidationError("invalid-timestamp");
+          }
+          await store.run(
+            `UPDATE plan SET
+               status='ended',updated_at_ms=?,device_id=?,hlc_physical_ms=?,hlc_counter=?
+             WHERE id=? AND status='active'`,
+            [
+              input.updatedAtMs,
+              input.deviceId,
+              input.hlcPhysicalMs,
+              input.hlcCounter,
+              input.planId,
+            ],
+          );
+        }
+        await store.run(
+          `INSERT INTO plan_reconciliation_job (
+             id,plan_id,kind,status,window_start_date_key,window_end_date_key,
+             attempt_count,failure_count,resumed_count,last_resumed_attempt,last_error_code,
+             created_at_ms,updated_at_ms,completed_at_ms
+           ) VALUES (?,?,'cleanup','pending',?,?,0,0,0,NULL,NULL,?,?,NULL)
+           ON CONFLICT(plan_id,kind,window_start_date_key,window_end_date_key) DO NOTHING`,
+          [
+            input.cleanupJobId,
+            input.planId,
+            input.windowStartDateKey,
+            input.windowEndDateKey,
+            input.updatedAtMs,
+            input.updatedAtMs,
+          ],
+        );
+        const [endedRow, jobRow] = await Promise.all([
+          store.get("SELECT * FROM plan WHERE id = ?", [input.planId]),
+          store.get(
+            `SELECT id FROM plan_reconciliation_job
+             WHERE plan_id=? AND kind='cleanup' AND window_start_date_key=? AND window_end_date_key=?`,
+            [input.planId, input.windowStartDateKey, input.windowEndDateKey],
+          ),
+        ]);
+        if (endedRow === undefined || jobRow === undefined) {
+          throw new PlanValidationError("invalid-id");
+        }
+        return Object.freeze({
+          plan: planFromRow(endedRow),
+          cleanupJobId: text(jobRow, "id"),
+        });
+      });
     },
     async count() {
       const row = await store.get("SELECT count(*) AS count FROM plan");

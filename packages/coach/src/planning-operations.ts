@@ -5,6 +5,7 @@ import {
   GetPlanStateRpcResultSchema,
   PlanDraftPlanProjectionSchema,
   PlanActiveProjectionDataSchema,
+  PlanEndedProjectionDataSchema,
   PlanDraftProjectionSchema,
   PlanFtpProjectionSchema,
   PlanRaceCourseProjectionSchema,
@@ -18,6 +19,7 @@ import {
   type ExecutePlanTransitionRpcResult,
   type PlanDraftProjection,
   type PlanActiveProjectionData,
+  type PlanEndedProjectionData,
   type PlanDraftPlanProjection,
   type PlanError,
   type PlanFtpProjection,
@@ -42,10 +44,12 @@ import {
   openRaceCoursePicker,
   previewPlanStartDate,
   projectPlanReconciliation,
+  cleanupPlanMirror,
   reconcileActivePlanWindow,
   rejectRaceCourseFile,
   useRouteWithoutElevation,
   verifyPlanMirror,
+  verifyPlanCleanup,
   projectWorkoutMatches,
   refreshPlanWorkoutMatches,
   adoptProviderWorkoutEdit,
@@ -80,8 +84,10 @@ import {
 } from "@enduragent/engine";
 import {
   buildActivePlanReadModel,
+  buildEndedPlanReadModel,
   buildPlanLifecycleReadModel,
   type ActivePlanScenario,
+  type EndedPlanScenario,
 } from "./planning-lifecycle.js";
 import {
   addCivilDays,
@@ -205,6 +211,18 @@ const CALENDAR_UPDATE_FAILED: PlanError = Object.freeze({
 const CALENDAR_VERIFICATION_FAILED: PlanError = Object.freeze({
   code: "verification-failed",
   message: "Intervals does not match the active Plan yet.",
+  retryable: true,
+});
+
+const CALENDAR_CLEANUP_FAILED: PlanError = Object.freeze({
+  code: "provider-failed",
+  message: "The Plan is ended, but some future workouts could not be removed from Intervals.",
+  retryable: true,
+});
+
+const CALENDAR_CLEANUP_VERIFICATION_FAILED: PlanError = Object.freeze({
+  code: "verification-failed",
+  message: "The Plan is ended, but future Enduragent workouts still remain in Intervals.",
   retryable: true,
 });
 
@@ -779,6 +797,7 @@ interface ReadOverrides {
   readonly dateScenario?: "PL-S046" | "PL-S048" | "PL-S050";
   readonly startDate?: PlanStartDateProjection;
   readonly activeScenario?: ActivePlanScenario;
+  readonly endedScenario?: EndedPlanScenario;
   readonly selectedWorkoutId?: string | null;
   readonly driftError?: PlanError | null;
   readonly selectedProposalId?: string | null;
@@ -1043,11 +1062,88 @@ export function createPlanningOperations(
     });
   };
 
+  const readEnded = async (
+    plan: PlanRecord,
+    revision: number,
+    overrides: ReadOverrides,
+  ): Promise<PlanReadModel> => {
+    const [workouts, job] = await Promise.all([
+      plans.readWorkouts(plan.id),
+      reconciliations.readLatestJob(plan.id, "cleanup"),
+    ]);
+    const projectedPlan = draftPlanProjection(plan, workouts);
+    if (projectedPlan === null) throw new TypeError("An ended Plan projection requires a Plan.");
+    const projection =
+      job === undefined ? null : await projectPlanReconciliation(reconciliations, job);
+    const items = job === undefined ? [] : await reconciliations.readItems(job.id);
+    const scenarioId: EndedPlanScenario =
+      overrides.endedScenario ??
+      (job === undefined
+        ? "PL-S014"
+        : job.status === "verified"
+          ? "PL-S089"
+          : job.status === "failed"
+            ? "PL-S053"
+            : job.status === "retrying"
+              ? "PL-S055"
+              : "PL-S052");
+    const status =
+      job === undefined
+        ? ("not-applicable" as const)
+        : job.status === "verified"
+          ? ("verified" as const)
+          : job.status === "failed"
+            ? ("failed" as const)
+            : job.status === "pending"
+              ? ("not-started" as const)
+              : ("running" as const);
+    const verificationFailure = job?.lastErrorCode === "calendar-verification-failed";
+    const data: PlanEndedProjectionData = PlanEndedProjectionDataSchema.parse({
+      plan: projectedPlan,
+      endedAtMs: plan.updatedAtMs,
+      cleanupItems: items.map((item) => ({
+        id: item.id,
+        date: dateText(item.dateKey),
+        externalId: item.externalId,
+        status:
+          item.status === "verified"
+            ? "verified"
+            : item.status === "failed"
+              ? "failed"
+              : item.status === "running"
+                ? "running"
+                : "pending",
+        errorCode: item.lastErrorCode,
+      })),
+    });
+    return buildEndedPlanReadModel({
+      scenarioId,
+      planId: plan.id,
+      revision,
+      data,
+      reconciliation: {
+        status,
+        created: projection?.created ?? 0,
+        pending: projection?.pending ?? 0,
+        failed: projection?.failed ?? 0,
+        total: projection?.total ?? 0,
+        currentThrough: job?.status === "verified" ? dateText(job.windowEndDateKey) : null,
+        error:
+          status === "failed"
+            ? verificationFailure
+              ? CALENDAR_CLEANUP_VERIFICATION_FAILED
+              : CALENDAR_CLEANUP_FAILED
+            : null,
+      },
+    });
+  };
+
   const read = async (overrides: ReadOverrides = {}): Promise<PlanReadModel> => {
     const conversation = await conversations.readLatestOpenConversation();
     if (conversation === undefined) {
       const latestPlan = await plans.readLatest();
       if (latestPlan?.status === "active") return readActive(latestPlan, 0, overrides);
+      if (latestPlan?.status === "ended") return readEnded(latestPlan, 0, overrides);
       return buildPlanLifecycleReadModel({
         conversation: null,
         turns: [],
@@ -1073,6 +1169,9 @@ export function createPlanningOperations(
     const draftWorkouts = draftPlan === undefined ? [] : await plans.readWorkouts(draftPlan.id);
     if (draftPlan?.status === "active") {
       return readActive(draftPlan, draft?.revision ?? 0, overrides);
+    }
+    if (draftPlan?.status === "ended") {
+      return readEnded(draftPlan, draft?.revision ?? 0, overrides);
     }
     const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
     const projectedStartDate =
@@ -2684,6 +2783,117 @@ export function createPlanningOperations(
             }),
           });
         }
+        if (command.transitionId === "PL-T23") {
+          const plan = await plans.read(command.planId);
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await read({ activeScenario: "PL-S051" }),
+          });
+        }
+        if (command.transitionId === "PL-T24") {
+          if (dependencies.calendar === undefined) return reject(UNAVAILABLE);
+          const plan = await plans.read(command.planId);
+          if (plan === undefined || (plan.status !== "active" && plan.status !== "ended")) {
+            return reject(UNAVAILABLE);
+          }
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          const existingJob = await reconciliations.readLatestJob(plan.id, "cleanup");
+          const windowStartDateKey =
+            existingJob?.windowStartDateKey ?? addCivilDays(todayDateKey, 1);
+          const planEndDateKey = addCivilDays(plan.startDateKey, plan.totalWeeks * 7 - 1);
+          const windowEndDateKey =
+            existingJob?.windowEndDateKey ?? Math.max(windowStartDateKey, planEndDateKey);
+          const operationId = input.identity.newUlid();
+          const existingItems =
+            existingJob === undefined ? [] : await reconciliations.readItems(existingJob.id);
+          const total = Math.max(existingItems.length, 1);
+          deliver(onEvent, {
+            commandId: command.commandId,
+            transitionId: command.transitionId,
+            operationId,
+            phase: "running",
+            completed: 0,
+            total,
+          });
+          try {
+            const stamp = input.identity.hlcStamp();
+            await plans.endActive({
+              planId: plan.id,
+              cleanupJobId: input.identity.newUlid(),
+              windowStartDateKey,
+              windowEndDateKey,
+              updatedAtMs: stamp.physicalMs,
+              deviceId: await input.identity.deviceId(),
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+            });
+            const job = await reconciliations.readLatestJob(plan.id, "cleanup");
+            if (job === undefined) throw new Error("Cleanup job was not created.");
+            const reconcilerDependencies = {
+              repository: reconciliations,
+              calendar: dependencies.calendar,
+              identity: { newId: () => input.identity.newUlid() },
+              now: () => input.identity.hlcStamp().physicalMs,
+            };
+            const result =
+              command.mode === "verify"
+                ? await verifyPlanCleanup(job, reconcilerDependencies)
+                : await cleanupPlanMirror(
+                    {
+                      planId: plan.id,
+                      todayDateKey,
+                      startDateKey: job.windowStartDateKey,
+                      endDateKey: job.windowEndDateKey,
+                    },
+                    reconcilerDependencies,
+                  );
+            if (result.job.status === "failed") {
+              deliver(onEvent, {
+                commandId: command.commandId,
+                transitionId: command.transitionId,
+                operationId,
+                phase: "failed",
+                completed: Math.min(result.created, Math.max(result.total, 1)),
+                total: Math.max(result.total, 1),
+              });
+              return reject(
+                result.job.lastErrorCode === "calendar-verification-failed"
+                  ? CALENDAR_CLEANUP_VERIFICATION_FAILED
+                  : CALENDAR_CLEANUP_FAILED,
+                { endedScenario: "PL-S053" },
+              );
+            }
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "completed",
+              completed: Math.max(result.total, 1),
+              total: Math.max(result.total, 1),
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ endedScenario: "PL-S056" }),
+            });
+          } catch {
+            deliver(onEvent, {
+              commandId: command.commandId,
+              transitionId: command.transitionId,
+              operationId,
+              phase: "failed",
+              completed: 0,
+              total,
+            });
+            const stored = await plans.read(plan.id);
+            return reject(
+              stored?.status === "ended" ? CALENDAR_CLEANUP_FAILED : PERSISTENCE_FAILED,
+              {
+                ...(stored?.status === "ended" ? { endedScenario: "PL-S053" as const } : {}),
+              },
+            );
+          }
+        }
         if (command.transitionId === "PL-T39") {
           const allowed =
             (command.destinationScenarioId === "PL-S005" &&
@@ -2696,10 +2906,13 @@ export function createPlanningOperations(
                 "PL-S091",
                 "PL-S092",
                 "PL-S093",
+                "PL-S051",
                 "PL-S101",
               ].includes(command.sourceScenarioId)) ||
             (command.destinationScenarioId === "PL-S004" &&
-              ["PL-S005", "PL-S026", "PL-S027", "PL-S101"].includes(command.sourceScenarioId)) ||
+              ["PL-S005", "PL-S026", "PL-S027", "PL-S051", "PL-S101"].includes(
+                command.sourceScenarioId,
+              )) ||
             (command.sourceScenarioId === "PL-S005" && command.destinationScenarioId === "PL-S090");
           if (!allowed) return reject(UNAVAILABLE);
           return ExecutePlanTransitionRpcResultSchema.parse({

@@ -877,6 +877,49 @@ describe("Plan view adapter", () => {
     });
   });
 
+  it("dispatches End Plan confirmation, cancellation, cleanup retry, and verify-only recovery", async () => {
+    const planId = "00000000000000000000000003";
+    const active = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId,
+    });
+    const subject = harness({
+      ids: ["open-end", "cancel-end", "confirm-end", "retry-cleanup", "verify-cleanup"],
+      getPlanState: async () => ({ status: "ready", state: active }),
+      executePlanTransition: async () => ({ status: "completed", state: active }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.openEndConfirmation();
+    await settle();
+    subject.adapter.closeEndConfirmation();
+    await settle();
+    subject.adapter.confirmEndPlan();
+    await settle();
+    subject.adapter.retryPlanCleanup();
+    await settle();
+    subject.adapter.verifyPlanCleanup();
+    await settle();
+
+    expect(subject.executePlanTransition.mock.calls.map(([command]) => command)).toEqual([
+      { transitionId: "PL-T23", commandId: "open-end", planId },
+      {
+        transitionId: "PL-T39",
+        commandId: "cancel-end",
+        action: "back",
+        sourceScenarioId: "PL-S051",
+        destinationScenarioId: "PL-S004",
+        returnFocusId: "plan-end-trigger",
+      },
+      { transitionId: "PL-T24", commandId: "confirm-end", planId, mode: "cleanup" },
+      { transitionId: "PL-T24", commandId: "retry-cleanup", planId, mode: "cleanup" },
+      { transitionId: "PL-T24", commandId: "verify-cleanup", planId, mode: "verify" },
+    ]);
+  });
+
   it("opens and closes Plan history and dispatches single-step Undo", async () => {
     const planId = "00000000000000000000000003";
     const ledgerId = "00000000000000000000000005";
@@ -988,6 +1031,33 @@ describe("Plan view adapter", () => {
       commandId: "resume-command",
       planId: "00000000000000000000000003",
       mode: "reconcile",
+    });
+  });
+
+  it("resumes an interrupted ended-Plan cleanup once after hydration", async () => {
+    const planId = "00000000000000000000000003";
+    const state = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S052",
+      projection: "ended",
+      planId,
+    });
+    const subject = harness({
+      ids: ["resume-cleanup"],
+      getPlanState: async () => ({ status: "ready", state }),
+      executePlanTransition: async () => ({ status: "completed", state }),
+    });
+
+    subject.adapter.start();
+    await settle();
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenCalledOnce();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T24",
+      commandId: "resume-cleanup",
+      planId,
+      mode: "cleanup",
     });
   });
 

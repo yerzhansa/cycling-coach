@@ -453,6 +453,25 @@ export const PlanActiveProjectionDataSchema = z
   .strict();
 export type PlanActiveProjectionData = z.infer<typeof PlanActiveProjectionDataSchema>;
 
+export const PlanEndedProjectionDataSchema = z
+  .object({
+    plan: PlanDraftPlanProjectionSchema,
+    endedAtMs: z.number().int().nonnegative(),
+    cleanupItems: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          date: TrainingExportCivilDateSchema,
+          externalId: z.string().min(1),
+          status: z.enum(["pending", "running", "failed", "verified"]),
+          errorCode: z.string().min(1).nullable(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type PlanEndedProjectionData = z.infer<typeof PlanEndedProjectionDataSchema>;
+
 export const PlanStartDateProjectionSchema = z
   .object({
     status: z.enum(["ready", "invalid", "recalculating", "failed", "updated"]),
@@ -943,6 +962,7 @@ export const PlanTransitionCommandSchema = z.discriminatedUnion("transitionId", 
       transitionId: z.literal("PL-T24"),
       commandId: CommandIdSchema,
       planId: EntityIdSchema,
+      mode: z.enum(["cleanup", "verify"]).optional(),
     })
     .strict(),
   z

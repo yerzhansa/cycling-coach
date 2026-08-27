@@ -187,6 +187,22 @@ describe("planning contract", () => {
         watts: null,
       }).success,
     ).toBe(true);
+    expect(
+      PlanTransitionCommandSchema.safeParse({
+        transitionId: "PL-T24",
+        commandId,
+        planId,
+        mode: "verify",
+      }).success,
+    ).toBe(true);
+    expect(
+      PlanTransitionCommandSchema.safeParse({
+        transitionId: "PL-T24",
+        commandId,
+        planId,
+        mode: "continue-anyway",
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps selected FTP source, value, conflicts, and refresh failures coherent", () => {

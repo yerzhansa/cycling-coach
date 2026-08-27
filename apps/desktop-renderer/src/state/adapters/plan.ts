@@ -77,6 +77,11 @@ export interface PlanViewAdapter {
   openPlanSettings(): void;
   closePlanSettings(): void;
   setPlanSetting(setting: "auto-apply" | "weekly-review", value: boolean): void;
+  openEndConfirmation(): void;
+  closeEndConfirmation(): void;
+  confirmEndPlan(): void;
+  retryPlanCleanup(): void;
+  verifyPlanCleanup(): void;
   openAttention(attentionId: string): void;
   returnToCoach(): void;
   retry(): void;
@@ -150,6 +155,7 @@ export function createPlanViewAdapter(input: {
   let coachDecisionError: string | null = null;
   let recoveringDecisionId: string | null = null;
   let autoResumingPlanId: string | null = null;
+  let autoResumingCleanupPlanId: string | null = null;
   let active: {
     readonly commandId: string;
     readonly transitionId: PlanTransitionId;
@@ -233,6 +239,24 @@ export function createPlanViewAdapter(input: {
             commandId: createCommandId(),
             planId,
             mode: "reconcile",
+          });
+        });
+      }
+      if (
+        next.state.scenarioId === "PL-S052" &&
+        next.state.planId !== null &&
+        autoResumingCleanupPlanId !== next.state.planId &&
+        active === null
+      ) {
+        const planId = next.state.planId;
+        autoResumingCleanupPlanId = planId;
+        queueMicrotask(() => {
+          if (disposed || active !== null) return;
+          void execute({
+            transitionId: "PL-T24",
+            commandId: createCommandId(),
+            planId,
+            mode: "cleanup",
           });
         });
       }
@@ -859,6 +883,57 @@ export function createPlanViewAdapter(input: {
         planId: model.planId,
         setting,
         value,
+      });
+    },
+    openEndConfirmation() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T23",
+        commandId: createCommandId(),
+        planId: model.planId,
+      });
+    },
+    closeEndConfirmation() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T39",
+        commandId: createCommandId(),
+        action: "back",
+        sourceScenarioId: "PL-S051",
+        destinationScenarioId: "PL-S004",
+        returnFocusId: "plan-end-trigger",
+      });
+    },
+    confirmEndPlan() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T24",
+        commandId: createCommandId(),
+        planId: model.planId,
+        mode: "cleanup",
+      });
+    },
+    retryPlanCleanup() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T24",
+        commandId: createCommandId(),
+        planId: model.planId,
+        mode: "cleanup",
+      });
+    },
+    verifyPlanCleanup() {
+      const model = planReadModel(input.read());
+      if (model?.planId === null || model?.planId === undefined || active !== null) return;
+      void execute({
+        transitionId: "PL-T24",
+        commandId: createCommandId(),
+        planId: model.planId,
+        mode: "verify",
       });
     },
     openAttention(attentionId) {
