@@ -212,6 +212,7 @@ describe("001_init migration", () => {
       { version: 24, name: "024_chat_attachments" },
       { version: 25, name: "025_planning_requests" },
       { version: 26, name: "026_chat_plan_outbox" },
+      { version: 27, name: "027_plan_workout_additions" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");

@@ -108,6 +108,7 @@ function ledger(
     id: ledgerId,
     planId: PLAN_ID,
     targetWorkoutId: WORKOUT_ID,
+    operation: "update",
     kind: "proposal-applied",
     sourceId: proposalId,
     reversalOfId: null,
@@ -293,6 +294,77 @@ describe("Plan proposal repository", () => {
         hlcCounter: 0,
       }),
     ).rejects.toBeInstanceOf(PlanProposalValidationError);
+  });
+
+  it("atomically adds a reviewed Workout and preserves an immutable addition ledger", async () => {
+    const proposals = createPlanProposalRepository(store);
+    const plans = createPlanRepository(store);
+    const history = createPlanAdaptationLedgerRepository(store);
+    const proposalId = id(12);
+    const addedWorkout: PlanWorkoutRecord = {
+      id: id(13),
+      planId: PLAN_ID,
+      dateKey: 20260831,
+      sport: "cycling",
+      name: "Tempo 3 × 12",
+      durationS: 3_840,
+      structureJson: JSON.stringify({ intervals: [{ repetitions: 3, durationS: 720 }] }),
+      origin: "coach",
+      deviceId: "device-1",
+      hlcPhysicalMs: 40,
+      hlcCounter: 0,
+    };
+    await proposals.save(proposal(proposalId), [premise(proposalId, id(14))]);
+
+    await expect(
+      proposals.apply({
+        id: proposalId,
+        expectedPlanUpdatedAtMs: 10,
+        expectedPlanHlcPhysicalMs: 10,
+        expectedPlanHlcCounter: 0,
+        expectedWorkouts: [],
+        mirrorJob: {
+          id: id(15),
+          windowStartDateKey: 20260826,
+          windowEndDateKey: 20260901,
+          createdAtMs: 40,
+        },
+        plan: { ...plan, updatedAtMs: 40, hlcPhysicalMs: 40 },
+        workouts: [addedWorkout],
+        ledger: {
+          id: id(16),
+          planId: PLAN_ID,
+          targetWorkoutId: addedWorkout.id,
+          operation: "add",
+          kind: "proposal-applied",
+          sourceId: proposalId,
+          reversalOfId: null,
+          label: "Tempo 3 × 12 added",
+          beforeJson: null,
+          afterJson: encodePlanAdaptationWorkoutSnapshot(
+            planAdaptationWorkoutSnapshot(addedWorkout),
+          ),
+          weekLoadBefore: 420,
+          weekLoadAfter: 480,
+          occurredAtMs: 40,
+          deviceId: "device-1",
+          hlcPhysicalMs: 40,
+          hlcCounter: 0,
+        },
+        resolvedAtMs: 40,
+        deviceId: "device-1",
+        hlcPhysicalMs: 40,
+        hlcCounter: 0,
+      }),
+    ).resolves.toMatchObject({ status: "applied" });
+    await expect(plans.readWorkouts(PLAN_ID)).resolves.toEqual([workout, addedWorkout]);
+    await expect(history.readForPlan(PLAN_ID)).resolves.toEqual([
+      expect.objectContaining({
+        operation: "add",
+        targetWorkoutId: addedWorkout.id,
+        beforeJson: null,
+      }),
+    ]);
   });
 
   it("rejects apply when a workout changed without advancing the Plan timestamp", async () => {

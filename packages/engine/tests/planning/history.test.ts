@@ -63,6 +63,7 @@ function applied(overrides: Partial<PlanAdaptationLedgerRecord> = {}): PlanAdapt
     id: id(3),
     planId: PLAN_ID,
     targetWorkoutId: WORKOUT_ID,
+    operation: "update",
     kind: "proposal-applied",
     sourceId: id(8),
     reversalOfId: null,
@@ -167,6 +168,53 @@ describe("Plan history Undo policy", () => {
         undo: expect.objectContaining({
           beforeJson: target.afterJson,
           afterJson: target.beforeJson,
+        }),
+      }),
+    );
+  });
+
+  it("undoes an added Workout by requesting one atomic removal", async () => {
+    const target: PlanAdaptationLedgerRecord = {
+      ...applied(),
+      operation: "add",
+      label: "Tempo 3 × 12 added",
+      beforeJson: null,
+      afterJson: encodePlanAdaptationWorkoutSnapshot(planAdaptationWorkoutSnapshot(currentWorkout)),
+    };
+    const validated = validatePlanUndo({
+      ledgerId: target.id,
+      plan,
+      workouts: [currentWorkout],
+      history: [target],
+      todayDateKey: 20260826,
+      deviceId: "device-2",
+      hlcPhysicalMs: 30,
+      hlcCounter: 1,
+    });
+    expect(validated.next).toBeNull();
+    const reverse = vi.fn(async (input) => input.undo);
+    await applyValidatedPlanUndo(validated, {
+      repository: { reverse } as unknown as PlanAdaptationLedgerRepository,
+      plan,
+      undoId: id(5),
+      occurredAtMs: 30,
+      deviceId: "device-2",
+      hlcPhysicalMs: 30,
+      hlcCounter: 1,
+      mirrorJob: {
+        id: id(6),
+        windowStartDateKey: 20260826,
+        windowEndDateKey: 20260901,
+        createdAtMs: 30,
+      },
+    });
+    expect(reverse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextWorkout: null,
+        undo: expect.objectContaining({
+          operation: "remove",
+          beforeJson: target.afterJson,
+          afterJson: null,
         }),
       }),
     );

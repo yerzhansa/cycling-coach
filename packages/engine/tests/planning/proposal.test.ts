@@ -136,9 +136,9 @@ describe("structured Plan proposals", () => {
         changes: [
           {
             workoutId: workout.id,
-            before: { ...mutation.changes[0]!.before, durationS: 1_800 },
+            before: { ...mutation.changes[0]!.before!, durationS: 1_800 },
             after: {
-              ...mutation.changes[0]!.before,
+              ...mutation.changes[0]!.before!,
               durationS: 1_830,
             },
           },
@@ -272,7 +272,7 @@ describe("structured Plan proposals", () => {
       changes: [
         {
           ...mutation.changes[0]!,
-          before: { ...mutation.changes[0]!.before, structureJson },
+          before: { ...mutation.changes[0]!.before!, structureJson },
           after: { ...mutation.changes[0]!.after, structureJson },
         },
       ],
@@ -324,6 +324,101 @@ describe("structured Plan proposals", () => {
     await expect(
       revalidatePlanProposalPremises([premise], { read: vi.fn(async () => null) }),
     ).rejects.toMatchObject({ code: "stale-base" });
+  });
+
+  it("validates a conflict-free Workout addition and sends it to the atomic apply boundary", async () => {
+    const addedWorkoutId = id(7);
+    const addition: PlanProposalMutation = {
+      schemaVersion: 1,
+      changes: [
+        {
+          workoutId: addedWorkoutId,
+          before: null,
+          after: {
+            dateKey: 20260831,
+            sport: "cycling",
+            name: "Tempo 3 × 12",
+            durationS: 3_840,
+            structureJson: JSON.stringify({ intervals: [{ repetitions: 3, durationS: 720 }] }),
+          },
+        },
+      ],
+      weekLoad: { before: 420, after: 480 },
+    };
+    const additionProposal: PlanProposalRecord = {
+      ...proposal,
+      id: id(6),
+      title: "Add Tempo 3 × 12",
+      mutationJson: encodePlanProposalMutation(addition),
+    };
+    const additionPremise = { ...premise, id: id(5), proposalId: additionProposal.id };
+    const validated = validatePlanProposal({
+      proposal: additionProposal,
+      premises: [additionPremise],
+      plan,
+      workouts: [workout],
+      todayDateKey: 20260826,
+      calculateWeekLoad: (workouts) => (workouts.length === 1 ? 420 : 480),
+    });
+    expect(validated.diff).toEqual([
+      { field: "date", label: "Date", before: "None", after: "20260831" },
+      { field: "workout", label: "Workout", before: "None", after: "Tempo 3 × 12" },
+      { field: "week-load", label: "Week load", before: "420", after: "480" },
+    ]);
+    expect(validated.changes[0]).toMatchObject({
+      current: null,
+      next: { id: addedWorkoutId, planId: plan.id, origin: "coach" },
+    });
+
+    const apply = vi.fn(async () => ({ ...additionProposal, status: "applied" as const }));
+    await applyValidatedPlanProposal(validated, {
+      repository: { apply } as unknown as PlanProposalRepository,
+      plan,
+      resolvedAtMs: 30,
+      deviceId: "device-1",
+      hlcPhysicalMs: 30,
+      hlcCounter: 0,
+      ledgerId: id(8),
+      mirrorJob: {
+        id: id(9),
+        windowStartDateKey: 20260826,
+        windowEndDateKey: 20260901,
+        createdAtMs: 30,
+      },
+    });
+    expect(apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedWorkouts: [],
+        workouts: [expect.objectContaining({ id: addedWorkoutId, name: "Tempo 3 × 12" })],
+        ledger: expect.objectContaining({
+          operation: "add",
+          targetWorkoutId: addedWorkoutId,
+          beforeJson: null,
+        }),
+      }),
+    );
+
+    expect(() =>
+      validatePlanProposal({
+        proposal: {
+          ...additionProposal,
+          mutationJson: encodePlanProposalMutation({
+            ...addition,
+            changes: [
+              {
+                ...addition.changes[0]!,
+                after: { ...addition.changes[0]!.after, dateKey: workout.dateKey },
+              },
+            ],
+          }),
+        },
+        premises: [additionPremise],
+        plan,
+        workouts: [workout],
+        todayDateKey: 20260826,
+        calculateWeekLoad: (workouts) => (workouts.length === 1 ? 420 : 480),
+      }),
+    ).toThrowError(expect.objectContaining({ code: "stale-base" }));
   });
 
   it("applies only the validated revision through the atomic repository boundary", async () => {

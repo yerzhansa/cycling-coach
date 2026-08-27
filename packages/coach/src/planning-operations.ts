@@ -591,8 +591,10 @@ function historyProjection(input: {
     projectPlanHistoryEligibility(input).map((entry) => [entry.ledgerId, entry]),
   );
   const entries: PlanHistoryEntry[] = input.history.map((entry) => {
-    const before = parsePlanAdaptationWorkoutSnapshot(entry.beforeJson);
-    const after = parsePlanAdaptationWorkoutSnapshot(entry.afterJson);
+    const before =
+      entry.beforeJson === null ? null : parsePlanAdaptationWorkoutSnapshot(entry.beforeJson);
+    const after =
+      entry.afterJson === null ? null : parsePlanAdaptationWorkoutSnapshot(entry.afterJson);
     const undo = eligibility.get(entry.id);
     return {
       id: entry.id,
@@ -600,8 +602,14 @@ function historyProjection(input: {
       label: entry.label,
       occurredAtMs: entry.occurredAtMs,
       targetWorkoutId: entry.targetWorkoutId,
-      before: { date: dateText(before.dateKey), name: before.name, durationS: before.durationS },
-      after: { date: dateText(after.dateKey), name: after.name, durationS: after.durationS },
+      before:
+        before === null
+          ? null
+          : { date: dateText(before.dateKey), name: before.name, durationS: before.durationS },
+      after:
+        after === null
+          ? null
+          : { date: dateText(after.dateKey), name: after.name, durationS: after.durationS },
       weekLoadBefore: entry.weekLoadBefore,
       weekLoadAfter: entry.weekLoadAfter,
       undoStatus: undo?.status ?? "none",
@@ -2841,10 +2849,10 @@ export function createPlanningOperations(
                     planStructureJson: plan.structureJson,
                     planStartDate: dateText(plan.startDateKey),
                     planTotalWeeks: plan.totalWeeks,
-                    workoutDate: dateText(change.current.dateKey),
+                    workoutDate: dateText(change.next.dateKey),
                     current: {
-                      name: change.current.name,
-                      durationS: change.current.durationS,
+                      name: change.current?.name ?? "No Workout",
+                      durationS: change.current?.durationS ?? 0,
                     },
                     next: {
                       name: change.next.name,

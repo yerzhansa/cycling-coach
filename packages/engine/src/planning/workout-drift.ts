@@ -330,6 +330,7 @@ export async function adoptProviderWorkoutEdit(
       id: deps.identity.newId(),
       planId: value.plan.id,
       targetWorkoutId: value.workout.id,
+      operation: "update",
       kind: "drift-adopted",
       sourceId: value.drift.id,
       reversalOfId: null,
