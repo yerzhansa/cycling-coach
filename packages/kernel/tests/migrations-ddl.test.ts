@@ -41,6 +41,7 @@ const EXPECTED_FULL_TABLES = [
   "plan_replacement",
   "plan_settings",
   "plan_source_request",
+  "plan_weekly_review",
   "plan_workout",
   "plan_workout_drift",
   "plan_workout_match",
@@ -196,6 +197,7 @@ describe("001_init migration", () => {
       { version: 19, name: "019_plan_adaptation_ledger" },
       { version: 20, name: "020_plan_settings" },
       { version: 21, name: "021_plan_replacement" },
+      { version: 22, name: "022_plan_weekly_review" },
     ]);
     expect(typeof MIGRATIONS[0].sql).toBe("string");
     expect(MIGRATIONS[0].sql).toContain("CREATE TABLE athlete");
@@ -287,7 +289,7 @@ describe("001_init migration", () => {
     expect(MIGRATIONS[2]!.sql).toBe(MIGRATION_003);
   });
 
-  it("applies all migrations with exactly fifty-seven tables and no foreign-key violations", () => {
+  it("applies all migrations with exactly fifty-eight tables and no foreign-key violations", () => {
     db = openFull();
     const names = (
       db
@@ -297,7 +299,7 @@ describe("001_init migration", () => {
       .map((row) => row.name)
       .sort();
     expect(names).toEqual([...EXPECTED_FULL_TABLES].sort());
-    expect(names).toHaveLength(57);
+    expect(names).toHaveLength(58);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 

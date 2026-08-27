@@ -12,6 +12,7 @@ import {
   PlanStartDateProjectionSchema,
   PlanProgressEventSchema,
   PlanReadModelSchema,
+  PlanWeeklyReviewProjectionSchema,
   type ChatQueueRunResult,
   type ChatQueueSnapshot,
   type CoachEngine,
@@ -30,6 +31,7 @@ import {
   type PlanRaceCourseSummary,
   type PlanStartDateProjection,
   type PlanReadModel,
+  type PlanWeeklyReviewProjection,
   type PlanningOperations,
   type TurnEvent,
 } from "@enduragent/coach-contract";
@@ -87,6 +89,8 @@ import {
   projectPlanReadiness,
   taperRefusalReadiness,
   type PlanReadinessInput as EnginePlanReadinessInput,
+  composeWeeklyReview,
+  selectWeeklyReviewWindow,
 } from "@enduragent/engine";
 import { cyclingTaperRefusal, projectCyclingSeasonMetadata } from "@enduragent/sport-cycling";
 import {
@@ -107,6 +111,7 @@ import {
   createPlanAdaptationLedgerRepository,
   createPlanSettingsRepository,
   createPlanReplacementRepository,
+  createPlanWeeklyReviewRepository,
   planWeekIndex,
   PlanConversationValidationError,
   type PlanConversationRecord,
@@ -129,6 +134,8 @@ import {
   type PlanSettingsRecord,
   type PlanSettingsRepository,
   type PlanReplacementRepository,
+  type PlanWeeklyReviewRecord,
+  type PlanWeeklyReviewRepository,
   parsePlanAdaptationWorkoutSnapshot,
   PlanAdaptationLedgerValidationError,
   PlanProposalValidationError,
@@ -358,6 +365,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly history?: PlanAdaptationLedgerRepository;
   readonly settings?: PlanSettingsRepository;
   readonly replacements?: PlanReplacementRepository;
+  readonly weeklyReviews?: PlanWeeklyReviewRepository;
   readonly proposalReviser?: PlanProposalReviser;
   readonly proposalPremiseReader?: PlanProposalPremiseReader;
   readonly proposalLoadCalculator?: PlanProposalLoadCalculator;
@@ -390,6 +398,36 @@ function dateText(dateKey: number): string {
 function utcTodayDateKey(): number {
   const now = new Date();
   return now.getUTCFullYear() * 10_000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+}
+
+function utcDateKeyFromEpochMs(epochMs: number): number {
+  const date = new Date(epochMs);
+  return date.getUTCFullYear() * 10_000 + (date.getUTCMonth() + 1) * 100 + date.getUTCDate();
+}
+
+function deliveredWeeklyReviewProjection(
+  record: PlanWeeklyReviewRecord,
+): PlanWeeklyReviewProjection {
+  if (
+    record.status !== "delivered" ||
+    record.summaryJson === null ||
+    record.deliveredAtMs === null
+  ) {
+    throw new TypeError("A delivered Weekly review requires its stored result.");
+  }
+  const stored = JSON.parse(record.summaryJson) as {
+    readonly counts?: unknown;
+    readonly summary?: unknown;
+  };
+  return PlanWeeklyReviewProjectionSchema.parse({
+    status: "delivered",
+    id: record.id,
+    weekStart: dateText(record.weekStartDateKey),
+    weekEnd: dateText(record.weekEndDateKey),
+    deliveredAtMs: record.deliveredAtMs,
+    counts: stored.counts,
+    summary: stored.summary,
+  });
 }
 
 function unavailableReadinessInput(
@@ -509,6 +547,7 @@ function proposalProjection(input: {
     confidence: input.proposal.confidence,
     targetWorkoutId: first.workoutId,
     affectedDate: dateText(first.after.dateKey),
+    createdAtMs: input.proposal.createdAtMs,
     stale: input.stale,
     diff: [...projectPlanProposalDiff(input.mutation)],
     premises: input.premises.map((premise) => ({
@@ -591,6 +630,7 @@ function activePlanData(input: {
   readonly settings: PlanSettingsRecord;
   readonly selectedSetting?: PlanSetting | null;
   readonly settingsError?: PlanError | null;
+  readonly weeklyReview?: PlanWeeklyReviewProjection;
   readonly replacement?: PlanActiveProjectionData["replacement"];
   readonly seasonMetadata: ReturnType<typeof projectCyclingSeasonMetadata>;
   readonly readiness?: PlanActiveProjectionData["readiness"];
@@ -640,6 +680,7 @@ function activePlanData(input: {
                 actualDate: match.actualDateKey === null ? null : dateText(match.actualDateKey),
                 actualDurationS: match.actualDurationS,
                 requiresConfirmation: match.requiresConfirmation,
+                createdAtMs: match.createdAtMs,
               },
             }),
         ...(drift === undefined
@@ -659,6 +700,7 @@ function activePlanData(input: {
                   durationS: parsedDriftSnapshot(drift.providerSnapshotJson).durationS,
                 },
                 error: input.selectedWorkoutId === workout.id ? (input.driftError ?? null) : null,
+                detectedAtMs: drift.detectedAtMs,
               },
             }),
       };
@@ -687,6 +729,7 @@ function activePlanData(input: {
         actualDate: dateText(row.actualDateKey),
         actualDurationS: row.actualDurationS,
         requiresConfirmation: false,
+        createdAtMs: row.createdAtMs,
       },
     }));
   const allWorkouts = [...workouts, ...extra].sort(
@@ -737,6 +780,7 @@ function activePlanData(input: {
                           .durationS,
                       },
                       error: input.driftError ?? null,
+                      detectedAtMs: selectedDrift.detectedAtMs,
                     },
                   }),
             }));
@@ -763,6 +807,7 @@ function activePlanData(input: {
       selectedSetting: input.selectedSetting ?? null,
       error: input.settingsError ?? null,
     },
+    ...(input.weeklyReview === undefined ? {} : { weeklyReview: input.weeklyReview }),
     season: projectPlanSeason({
       plan,
       today: dateText(input.todayDateKey),
@@ -938,6 +983,7 @@ interface ReadOverrides {
   readonly settingsError?: PlanError | null;
   readonly replacementConfirmation?: boolean;
   readonly readiness?: PlanActiveProjectionData["readiness"];
+  readonly weeklyReview?: PlanWeeklyReviewProjection;
 }
 
 function queueText(queue: ChatQueueSnapshot): string {
@@ -983,6 +1029,8 @@ export function createPlanningOperations(
     dependencies.settings ?? createPlanSettingsRepository(input.context.store);
   const replacementRepository =
     dependencies.replacements ?? createPlanReplacementRepository(input.context.store);
+  const weeklyReviewRepository =
+    dependencies.weeklyReviews ?? createPlanWeeklyReviewRepository(input.context.store);
   const enqueue = createSerializedLane();
   const refuseProposal = async (
     proposal: PlanProposalRecord,
@@ -1055,6 +1103,38 @@ export function createPlanningOperations(
       todayDateKey,
       awaitingSync: matchSync.awaitingSync,
     });
+    let weeklyReview = overrides.weeklyReview;
+    if (
+      weeklyReview === undefined &&
+      !matchSync.awaitingSync &&
+      matchSync.lastSuccessfulSyncAtMs !== null
+    ) {
+      const reviewWindow = selectWeeklyReviewWindow({
+        todayDateKey,
+        planStartDateKey: plan.startDateKey,
+        targetDateKey: plan.targetDateKey,
+        lastSuccessfulSyncDateKey: utcDateKeyFromEpochMs(matchSync.lastSuccessfulSyncAtMs),
+        enabled: settings.weeklyReview,
+      });
+      if (reviewWindow !== null) {
+        const stored = await weeklyReviewRepository.readForWeek(
+          plan.id,
+          reviewWindow.weekStartDateKey,
+        );
+        if (
+          stored === undefined ||
+          (stored.status === "pending" &&
+            stored.lastAttemptSyncAtMs < matchSync.lastSuccessfulSyncAtMs)
+        ) {
+          weeklyReview = PlanWeeklyReviewProjectionSchema.parse({
+            status: "due",
+            weekStart: dateText(reviewWindow.weekStartDateKey),
+            weekEnd: dateText(reviewWindow.weekEndDateKey),
+            lastSuccessfulSyncAtMs: matchSync.lastSuccessfulSyncAtMs,
+          });
+        }
+      }
+    }
     let drifts = await workoutDrifts.readOpenForPlan(plan.id);
     if (dependencies.workoutDriftCalendar !== undefined) {
       try {
@@ -1240,6 +1320,7 @@ export function createPlanningOperations(
         history: historyProjection({ plan, workouts, history: historyRows, todayDateKey }),
         selectedHistoryId: overrides.selectedHistoryId,
         settings,
+        weeklyReview,
         selectedSetting: overrides.selectedSetting,
         settingsError: overrides.settingsError,
         replacement: replacementData,
@@ -1270,6 +1351,7 @@ export function createPlanningOperations(
         canVerifyPremises: dependencies.proposalPremiseReader !== undefined,
         canCalculateLoad: dependencies.proposalLoadCalculator !== undefined,
       },
+      attentionCreatedAtMs: displayedProjection?.job.createdAtMs,
     });
   };
 
@@ -3522,6 +3604,106 @@ export function createPlanningOperations(
               total,
             });
             return reject(CALENDAR_UPDATE_FAILED, { activeScenario: "PL-S039" });
+          }
+        }
+        if (command.transitionId === "PL-T35") {
+          const plan = await plans.read(command.planId);
+          if (plan?.status !== "active") return reject(UNAVAILABLE);
+          const settings = await settingsRepository.read(plan.id);
+          const sync = await workoutMatches.readSyncStatus();
+          const todayDateKey = dependencies.todayDateKey?.() ?? utcTodayDateKey();
+          if (
+            settings?.weeklyReview !== true ||
+            sync.awaitingSync ||
+            sync.lastSuccessfulSyncAtMs === null
+          ) {
+            return reject(UNAVAILABLE);
+          }
+          const window = selectWeeklyReviewWindow({
+            todayDateKey,
+            planStartDateKey: plan.startDateKey,
+            targetDateKey: plan.targetDateKey,
+            lastSuccessfulSyncDateKey: utcDateKeyFromEpochMs(sync.lastSuccessfulSyncAtMs),
+            enabled: true,
+          });
+          if (window === null || dateText(window.weekStartDateKey) !== command.weekStart) {
+            return reject(UNAVAILABLE);
+          }
+          const stored = await weeklyReviewRepository.readForWeek(plan.id, window.weekStartDateKey);
+          if (stored?.status === "delivered") {
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                activeScenario: "PL-S100",
+                weeklyReview: deliveredWeeklyReviewProjection(stored),
+              }),
+            });
+          }
+          const workouts = await plans.readWorkouts(plan.id);
+          const refreshed = await refreshPlanWorkoutMatches({
+            planId: plan.id,
+            workouts,
+            startDateKey: window.weekStartDateKey,
+            endDateKey: window.weekEndDateKey,
+            repository: workoutMatches,
+            identity: {
+              newId: () => input.identity.newUlid(),
+              deviceId: () => input.identity.deviceId(),
+              stamp: () => input.identity.hlcStamp(),
+            },
+          });
+          const result = composeWeeklyReview(
+            projectWorkoutMatches({
+              workouts: workouts.filter(
+                (workout) =>
+                  workout.dateKey >= window.weekStartDateKey &&
+                  workout.dateKey <= window.weekEndDateKey,
+              ),
+              activities: refreshed.activities,
+              matches: refreshed.matches,
+              todayDateKey,
+              awaitingSync: false,
+            }),
+          );
+          if (result === null) return reject(UNAVAILABLE);
+          const stamp = input.identity.hlcStamp();
+          const deviceId = await input.identity.deviceId();
+          try {
+            const attempt = await weeklyReviewRepository.beginAttempt({
+              id: input.identity.newUlid(),
+              planId: plan.id,
+              weekStartDateKey: window.weekStartDateKey,
+              weekEndDateKey: window.weekEndDateKey,
+              status: "pending",
+              lastAttemptSyncAtMs: sync.lastSuccessfulSyncAtMs,
+              summaryJson: null,
+              deliveredAtMs: null,
+              createdAtMs: stamp.physicalMs,
+              updatedAtMs: stamp.physicalMs,
+              deviceId,
+              hlcPhysicalMs: stamp.physicalMs,
+              hlcCounter: stamp.counter,
+            });
+            if (!attempt.started) return reject(UNAVAILABLE);
+            const completedStamp = input.identity.hlcStamp();
+            const completed = await weeklyReviewRepository.complete({
+              id: attempt.record.id,
+              summaryJson: JSON.stringify(result),
+              deliveredAtMs: completedStamp.physicalMs,
+              updatedAtMs: completedStamp.physicalMs,
+              deviceId,
+              hlcPhysicalMs: completedStamp.physicalMs,
+              hlcCounter: completedStamp.counter,
+            });
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                activeScenario: "PL-S100",
+                weeklyReview: deliveredWeeklyReviewProjection(completed),
+              }),
+            });
+          } catch {
+            return reject(PERSISTENCE_FAILED);
           }
         }
         if (command.transitionId === "PL-T39") {

@@ -93,6 +93,7 @@ export const PlanAttentionItemSchema = z
     scenarioId: PlanScenarioIdSchema,
     priority: z.enum(["blocker", "dated", "recent"]),
     affectedDate: TrainingExportCivilDateSchema.nullable(),
+    createdAtMs: z.number().int().nonnegative(),
   })
   .strict();
 export type PlanAttentionItem = z.infer<typeof PlanAttentionItemSchema>;
@@ -309,6 +310,7 @@ export const PlanActiveWorkoutProjectionSchema = z
         actualDate: TrainingExportCivilDateSchema.nullable(),
         actualDurationS: z.number().int().positive().nullable(),
         requiresConfirmation: z.boolean(),
+        createdAtMs: z.number().int().nonnegative(),
       })
       .strict()
       .optional(),
@@ -331,6 +333,7 @@ export const PlanActiveWorkoutProjectionSchema = z
           })
           .strict(),
         error: PlanErrorSchema.nullable(),
+        detectedAtMs: z.number().int().nonnegative(),
       })
       .strict()
       .optional(),
@@ -614,6 +617,7 @@ export const PlanProposalProjectionSchema = z
     confidence: z.enum(["Low", "Moderate", "High"]),
     targetWorkoutId: z.string().min(1),
     affectedDate: TrainingExportCivilDateSchema,
+    createdAtMs: z.number().int().nonnegative(),
     stale: z.boolean(),
     diff: z.array(
       z
@@ -695,6 +699,40 @@ export const PlanSettingsProjectionSchema = z
   .strict();
 export type PlanSettingsProjection = z.infer<typeof PlanSettingsProjectionSchema>;
 
+export const PlanWeeklyReviewCountsSchema = z
+  .object({
+    asPlanned: z.number().int().nonnegative(),
+    adjusted: z.number().int().nonnegative(),
+    moved: z.number().int().nonnegative(),
+    missed: z.number().int().nonnegative(),
+    extra: z.number().int().nonnegative(),
+  })
+  .strict();
+export type PlanWeeklyReviewCounts = z.infer<typeof PlanWeeklyReviewCountsSchema>;
+
+export const PlanWeeklyReviewProjectionSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("due"),
+      weekStart: TrainingExportCivilDateSchema,
+      weekEnd: TrainingExportCivilDateSchema,
+      lastSuccessfulSyncAtMs: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("delivered"),
+      id: z.string().min(1),
+      weekStart: TrainingExportCivilDateSchema,
+      weekEnd: TrainingExportCivilDateSchema,
+      deliveredAtMs: z.number().int().nonnegative(),
+      counts: PlanWeeklyReviewCountsSchema,
+      summary: z.string().min(1),
+    })
+    .strict(),
+]);
+export type PlanWeeklyReviewProjection = z.infer<typeof PlanWeeklyReviewProjectionSchema>;
+
 export const PlanActiveProjectionDataSchema = z
   .object({
     plan: PlanDraftPlanProjectionSchema,
@@ -719,6 +757,7 @@ export const PlanActiveProjectionDataSchema = z
     history: z.array(PlanHistoryEntrySchema).optional(),
     selectedHistoryId: z.string().min(1).nullable().optional(),
     settings: PlanSettingsProjectionSchema.optional(),
+    weeklyReview: PlanWeeklyReviewProjectionSchema.optional(),
     season: PlanSeasonProjectionSchema.optional(),
     readiness: PlanReadinessProjectionSchema.optional(),
     replacement: z

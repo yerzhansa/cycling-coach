@@ -1406,6 +1406,77 @@ describe("Plan view adapter", () => {
     });
   });
 
+  it("delivers one due Weekly review per successful sync", async () => {
+    const planId = "00000000000000000000000003";
+    const dueData = {
+      plan: {
+        id: planId,
+        name: "Gran Fondo",
+        primaryGoal: "Finish",
+        startDate: "2026-07-13",
+        targetDate: "2026-10-04",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 0,
+        plannedDurationS: 0,
+      },
+      today: "2026-08-26",
+      weekIndex: 7,
+      todayWorkout: null,
+      workouts: [],
+      weeklyReview: {
+        status: "due" as const,
+        weekStart: "2026-08-17",
+        weekEnd: "2026-08-23",
+        lastSuccessfulSyncAtMs: 100,
+      },
+    };
+    const due = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId,
+      data: dueData,
+    });
+    const delivered = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S100",
+      projection: "active",
+      planId,
+      data: {
+        ...dueData,
+        weeklyReview: {
+          status: "delivered" as const,
+          id: "00000000000000000000000004",
+          weekStart: "2026-08-17",
+          weekEnd: "2026-08-23",
+          deliveredAtMs: 101,
+          counts: { asPlanned: 3, adjusted: 1, moved: 0, missed: 1, extra: 1 },
+          summary: "Last week: 3 as planned, 1 adjusted, 0 moved, 1 missed, 1 extra.",
+        },
+      },
+    });
+    const subject = harness({
+      ids: ["weekly-review"],
+      getPlanState: async () => ({ status: "ready", state: due }),
+      executePlanTransition: async () => ({ status: "completed", state: delivered }),
+    });
+
+    subject.adapter.start();
+    await settle();
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenCalledOnce();
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T35",
+      commandId: "weekly-review",
+      planId,
+      weekStart: "2026-08-17",
+    });
+    expect(subject.surface.hydration).toEqual({ status: "ready", state: delivered });
+  });
+
   it("optimistically saves one Plan setting, restores failure, and retries the same control", async () => {
     const planId = "00000000000000000000000003";
     const data = {

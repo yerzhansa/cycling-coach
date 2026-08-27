@@ -21,6 +21,7 @@ import {
   type PlanScenarioId,
   type PlanTransitionGuard,
 } from "@enduragent/coach-contract";
+import { orderPlanAttentionItems } from "@enduragent/engine";
 
 export type ActivePlanScenario =
   | "PL-S004"
@@ -64,6 +65,7 @@ export type ActivePlanScenario =
   | "PL-S093"
   | "PL-S097"
   | "PL-S101"
+  | "PL-S100"
   | "PL-S082"
   | "PL-S083"
   | "PL-S084"
@@ -387,6 +389,7 @@ export function buildActivePlanReadModel(input: {
   readonly revision: number;
   readonly data: PlanActiveProjectionData;
   readonly reconciliation: PlanReconciliation;
+  readonly attentionCreatedAtMs?: number;
   readonly proposalCapabilities?: {
     readonly canRevise: boolean;
     readonly canVerifyPremises: boolean;
@@ -453,6 +456,7 @@ export function buildActivePlanReadModel(input: {
     "PL-S093": ["Plan settings", "The previous value was restored."],
     "PL-S097": ["Proposal rejected", "The active Plan did not change."],
     "PL-S101": ["Plan updated", "An eligible future Workout reduction was applied automatically."],
+    "PL-S100": ["Weekly review", "Last week’s Plan and completed activities in plain words."],
     "PL-S082": [
       "Replacement active locally",
       "Old Plan cleanup must verify before replacement calendar writing starts.",
@@ -475,6 +479,7 @@ export function buildActivePlanReadModel(input: {
       scenarioId: input.scenarioId,
       priority: "dated",
       affectedDate: input.data.today,
+      createdAtMs: input.attentionCreatedAtMs ?? 0,
     });
   }
   if (input.scenarioId === "PL-S083") {
@@ -484,6 +489,7 @@ export function buildActivePlanReadModel(input: {
       scenarioId: "PL-S083",
       priority: "blocker",
       affectedDate: null,
+      createdAtMs: input.data.replacement?.activatedAtMs ?? input.attentionCreatedAtMs ?? 0,
     });
   }
   for (const workout of input.data.workouts) {
@@ -494,6 +500,7 @@ export function buildActivePlanReadModel(input: {
         scenarioId: "PL-S032",
         priority: "dated",
         affectedDate: workout.date,
+        createdAtMs: workout.drift.detectedAtMs,
       });
     }
     if (workout.match?.requiresConfirmation !== true) continue;
@@ -503,6 +510,7 @@ export function buildActivePlanReadModel(input: {
       scenarioId: "PL-S021",
       priority: "dated",
       affectedDate: workout.date,
+      createdAtMs: workout.match.createdAtMs,
     });
   }
   for (const proposal of input.data.proposals ?? []) {
@@ -512,13 +520,19 @@ export function buildActivePlanReadModel(input: {
       scenarioId: proposal.stale ? "PL-S025" : "PL-S007",
       priority: "dated",
       affectedDate: proposal.affectedDate,
+      createdAtMs: proposal.createdAtMs,
     });
   }
+  const orderedAttentionItems = orderPlanAttentionItems(attentionItems);
   const attention: PlanAttention = {
-    count: attentionItems.length,
+    count: orderedAttentionItems.length,
     destination:
-      attentionItems.length === 0 ? "none" : attentionItems.length === 1 ? "direct" : "list",
-    items: attentionItems,
+      orderedAttentionItems.length === 0
+        ? "none"
+        : orderedAttentionItems.length === 1
+          ? "direct"
+          : "list",
+    items: [...orderedAttentionItems],
   };
   const selectedProposal = (input.data.proposals ?? []).find(
     (proposal) => proposal.id === input.data.selectedProposalId,
@@ -558,6 +572,7 @@ export function buildActivePlanReadModel(input: {
       guard("PL-T25"),
       guard("PL-T31"),
       guard("PL-T32"),
+      ...(input.data.weeklyReview?.status === "due" ? [guard("PL-T35")] : []),
       ...(input.scenarioId === "PL-S083" ? [guard("PL-T27")] : []),
       ...(input.scenarioId === "PL-S085" ? [guard("PL-T28")] : []),
       guard("PL-T39"),
@@ -620,6 +635,7 @@ export function buildEndedPlanReadModel(input: {
               scenarioId: "PL-S053",
               priority: "blocker",
               affectedDate: null,
+              createdAtMs: input.data.endedAtMs,
             },
           ],
         }
