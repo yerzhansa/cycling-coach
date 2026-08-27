@@ -10,7 +10,6 @@ import {
   readFile,
   realpath,
   rm,
-  stat,
   unlink,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -52,7 +51,7 @@ import {
   type ProducedLocalBundle,
   type VerifiedSnapshotReader,
 } from "@enduragent/kernel/reference/local-bundle";
-import { H, createIntervalsSourceRepository, runMigrations, type SqlReadStore, type SqlStore } from "@enduragent/kernel/store";
+import { H, createIntervalsSourceRepository, runMigrations, type SqlReadStore } from "@enduragent/kernel/store";
 import { MIGRATIONS } from "@enduragent/kernel/store/migrations";
 import { createArchiveManager, createVerifiedSnapshotReader } from "@enduragent/kernel-node/archive";
 import { nodeFileSystem } from "@enduragent/kernel-node/filesystem";

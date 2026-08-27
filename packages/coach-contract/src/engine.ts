@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { TurnEvent } from "./turn-event.js";
-import { AthleteStateSchema, type AthleteState } from "./athlete-state.js";
+import type { AthleteState } from "./athlete-state.js";
 
 export const ChatRequestSchema = z
   .object({
