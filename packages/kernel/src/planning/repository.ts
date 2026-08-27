@@ -137,7 +137,7 @@ function expectedKind(
   return plan.totalWeeks >= MIN_FULL_PLAN_WEEKS ? "full_plan" : "short_race_preparation";
 }
 
-function validatePlan(plan: PlanRecord): void {
+export function validatePlanRecord(plan: PlanRecord): void {
   if (!ULID.test(plan.id)) throw new PlanValidationError("invalid-id");
   if (plan.originId !== null && (typeof plan.originId !== "string" || plan.originId.length === 0)) {
     throw new PlanValidationError("invalid-origin-id");
@@ -181,7 +181,7 @@ function validatePlan(plan: PlanRecord): void {
   }
 }
 
-function validateWorkout(plan: PlanRecord, workout: PlanWorkoutRecord): void {
+export function validatePlanWorkoutRecord(plan: PlanRecord, workout: PlanWorkoutRecord): void {
   if (
     !ULID.test(workout.id) ||
     workout.planId !== plan.id ||
@@ -253,7 +253,7 @@ function planFromRow(row: Row): PlanRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   });
-  validatePlan(plan);
+  validatePlanRecord(plan);
   return plan;
 }
 
@@ -278,8 +278,8 @@ export function createPlanRepository(store: PlanningStore): PlanRepository {
     plan: PlanRecord,
     workouts: readonly PlanWorkoutRecord[],
   ): Promise<void> => {
-    validatePlan(plan);
-    for (const workout of workouts) validateWorkout(plan, workout);
+    validatePlanRecord(plan);
+    for (const workout of workouts) validatePlanWorkoutRecord(plan, workout);
     await store.transaction(async () => {
       await store.run(
         `INSERT INTO plan (

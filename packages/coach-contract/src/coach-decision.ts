@@ -61,6 +61,7 @@ export const CoachDecisionContinuationLineageSchema = z
     provider: z.string().min(1),
     model: z.string().min(1),
     lineageVersion: z.string().min(1),
+    planIntakePatch: z.json().optional(),
   })
   .strict();
 export type CoachDecisionContinuationLineage = z.infer<

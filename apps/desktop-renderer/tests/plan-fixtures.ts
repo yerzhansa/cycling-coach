@@ -6,6 +6,8 @@ import type {
   PlanDraftPlanProjection,
   PlanError,
   PlanFtpProjection,
+  PlanDraftRequirement,
+  PlanIntakeProjection,
   PlanProjectionKind,
   PlanRaceCourseProjection,
   PlanStartDateProjection,
@@ -91,6 +93,8 @@ export function planCoachData(
     readonly startDate?: PlanStartDateProjection;
     readonly replacement?: boolean;
     readonly replacesPlanId?: string | null;
+    readonly intake?: PlanIntakeProjection;
+    readonly missingDraftRequirements?: readonly PlanDraftRequirement[];
   } = {},
 ): PlanReadModel["data"] {
   return {
@@ -100,6 +104,10 @@ export function planCoachData(
     replacement: input.replacement ?? false,
     replacesPlanId: input.replacesPlanId ?? null,
     readyToCreateDraft: input.ready ?? false,
+    ...(input.intake === undefined ? {} : { intake: input.intake }),
+    ...(input.missingDraftRequirements === undefined
+      ? {}
+      : { missingDraftRequirements: [...input.missingDraftRequirements] }),
     messages: input.messages?.map((message) => ({ ...message })) ?? [
       {
         id: "plan-intro",

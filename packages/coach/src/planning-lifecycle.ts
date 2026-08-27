@@ -9,6 +9,7 @@ import {
   type PlanActiveProjectionData,
   type PlanEndedProjectionData,
   type PlanCoachMessage,
+  type PlanCoachProjectionData,
   type PlanDraftProjection,
   type PlanDraftPlanProjection,
   type PlanFtpProjection,
@@ -91,6 +92,8 @@ export interface BuildPlanLifecycleReadModelInput {
   readonly conversation: PlanConversationProjection | null;
   readonly turns: readonly PlanConversationTurnProjection[];
   readonly readyToCreateDraft: boolean;
+  readonly missingDraftRequirements?: PlanCoachProjectionData["missingDraftRequirements"];
+  readonly intake?: PlanCoachProjectionData["intake"];
   readonly queue: ChatQueueSnapshot;
   readonly decision: CoachDecisionReadModel | null;
   readonly draft: PlanDraftProjection | null;
@@ -323,7 +326,14 @@ function stateKind(input: BuildPlanLifecycleReadModelInput): {
         ? "The coach has enough information to build your Draft."
         : "Tell your coach what you are training toward.",
     transitions: ready
-      ? [guard("PL-T02"), guard("PL-T03"), guard("PL-T04"), guard("PL-T05"), guard("PL-T06")]
+      ? [
+          guard("PL-T02"),
+          guard("PL-T03"),
+          guard("PL-T04"),
+          guard("PL-T05"),
+          guard("PL-T06"),
+          guard("PL-T39"),
+        ]
       : [guard("PL-T02"), guard("PL-T03"), guard("PL-T04"), guard("PL-T05")],
   };
 }
@@ -357,6 +367,10 @@ export function buildPlanLifecycleReadModel(
     replacement: conversation.replacesPlanId !== null,
     replacesPlanId: conversation.replacesPlanId,
     readyToCreateDraft: input.readyToCreateDraft,
+    ...(input.missingDraftRequirements === undefined
+      ? {}
+      : { missingDraftRequirements: input.missingDraftRequirements }),
+    ...(input.intake === undefined ? {} : { intake: input.intake }),
     messages: messages(conversation.id, input.turns),
     queue: input.queue,
     decision: input.decision,

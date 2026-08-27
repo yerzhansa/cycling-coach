@@ -43,6 +43,7 @@ function stubPlanActions(): PlanActions {
   return {
     open: vi.fn(),
     startPlan: vi.fn(),
+    closeCoach: vi.fn(),
     submitCoach: vi.fn(async () => true),
     stopCoach: vi.fn(),
     removeQueuedCoachMessage: vi.fn(),
@@ -51,6 +52,7 @@ function stubPlanActions(): PlanActions {
     skipCoachDecision: vi.fn(),
     saveFtp: vi.fn(),
     refreshFtp: vi.fn(),
+    backToCoachInterview: vi.fn(),
     createDraft: vi.fn(),
     updateDraft: vi.fn(),
     openDiscardConfirmation: vi.fn(),
@@ -91,6 +93,7 @@ function stubPlanActions(): PlanActions {
     resolveWorkoutMatch: vi.fn(),
     resolveWorkoutDrift: vi.fn(),
     openProposal: vi.fn(),
+    closeProposal: vi.fn(),
     reviseProposal: vi.fn(),
     approveProposal: vi.fn(),
     rejectProposal: vi.fn(),
