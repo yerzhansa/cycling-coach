@@ -22,6 +22,48 @@ import type {
   RetryQueuedTurnRequest,
   RunQueuedCommandRequest,
 } from "./chat-queue.js";
+import { TrainingExportCivilDateSchema } from "./training-export.js";
+
+export const PlanIntakeWeekdaySchema = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+
+export const PlanIntakePatchSchema = z
+  .object({
+    eventName: z.string().trim().min(1).max(200).nullable().optional(),
+    eventPriority: z.enum(["A", "B", "C"]).nullable().optional(),
+    targetDate: TrainingExportCivilDateSchema.nullable().optional(),
+    goal: z.string().trim().min(1).max(1_000).nullable().optional(),
+    availability: z
+      .object({
+        sessionsPerWeek: z.number().int().min(1).max(6),
+        weekdays: z.array(PlanIntakeWeekdaySchema).max(7),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    experience: z.enum(["beginner", "intermediate", "advanced", "elite"]).nullable().optional(),
+    currentTrainingSummary: z.string().trim().min(1).max(2_000).nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (Object.values(value).every((field) => field === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "Plan intake patch must contain at least one field",
+      });
+    }
+    if (
+      value.availability !== undefined &&
+      value.availability !== null &&
+      new Set(value.availability.weekdays).size !== value.availability.weekdays.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["availability", "weekdays"],
+        message: "Plan intake weekdays must be unique",
+      });
+    }
+  });
+export type PlanIntakePatch = z.infer<typeof PlanIntakePatchSchema>;
 
 export const ChatRequestSchema = z
   .object({
@@ -41,7 +83,11 @@ export const ChatRequestSchema = z
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 
 export const ChatResponseSchema = z
-  .object({ text: z.string(), decision: CoachDecisionReadModelSchema.optional() })
+  .object({
+    text: z.string(),
+    decision: CoachDecisionReadModelSchema.optional(),
+    planIntakePatch: PlanIntakePatchSchema.optional(),
+  })
   .strict()
   .superRefine((value, context) => {
     if (value.decision !== undefined && value.decision.status !== "unanswered") {
@@ -80,6 +126,24 @@ export type HasSessionRequest = z.infer<typeof HasSessionRequestSchema>;
 
 export const HasSessionResponseSchema = z.object({ hasSession: z.boolean() }).strict();
 export type HasSessionResponse = z.infer<typeof HasSessionResponseSchema>;
+
+export interface ReplacePlanChatHistoryRequest {
+  readonly chatId: string;
+  readonly turns: readonly {
+    readonly athleteText: string;
+    readonly coachText: string;
+  }[];
+}
+
+export interface CommitPlanChatTurnRequest {
+  readonly chatId: string;
+  readonly turnId: string;
+}
+
+export interface GetPlanDecisionIntakePatchRequest {
+  readonly chatId: string;
+  readonly decisionId: string;
+}
 
 /**
  * The single seam between the coaching engine and every surface. In-process
@@ -124,4 +188,9 @@ export interface CoachEngine {
   resetSession(request: ResetSessionRequest): Promise<ResetSessionResponse>;
   hasSession(request: HasSessionRequest): Promise<HasSessionResponse>;
   getAthleteState(): Promise<AthleteState>;
+  replacePlanChatHistory?(request: ReplacePlanChatHistoryRequest): Promise<void>;
+  commitPlanChatTurn?(request: CommitPlanChatTurnRequest): Promise<void>;
+  getPlanDecisionIntakePatch?(
+    request: GetPlanDecisionIntakePatchRequest,
+  ): Promise<PlanIntakePatch | undefined>;
 }

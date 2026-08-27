@@ -33,6 +33,7 @@ import type { CyclingFtpAnchorResolver } from "@enduragent/kernel/anchors";
 import type { AthleteHome } from "@enduragent/kernel-node/home";
 import { inertWriterProtocolListener } from "@enduragent/kernel-node/lock";
 import { openSqliteStorage } from "@enduragent/kernel-node/sqlite";
+import { createPlanIntakeRepository, createPlanRepository } from "@enduragent/kernel/planning";
 import {
   createLocalCoachComposition,
   type LocalCoachCompositionDependencies,
@@ -2032,6 +2033,350 @@ describe("local coach composition", () => {
         ["cycling", "ftp", "manual"],
       ),
     ).resolves.toEqual({ value: 285, source: "athlete", confidence: "manual" });
+    await lifecycle.close();
+  });
+
+  it("composes durable Plan intake through a structured Draft and activates locally before provider work", async () => {
+    const home = await freshHome();
+    await mkdir(home.storeDir, { recursive: true });
+    const store = openSqliteStorage(join(home.storeDir, "store.db"));
+    stores.push(store);
+    await runMigrations(store, MIGRATIONS);
+    await store.run(
+      "INSERT INTO anchor_history (id, sport, anchor_type, value, unit, valid_from, source, confidence, note, provenance, device_id, hlc_physical_ms, hlc_counter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [
+        "plan-draft-ftp",
+        "cycling",
+        "ftp",
+        282,
+        "W",
+        899_510_400,
+        "intervals-icu",
+        "platform",
+        null,
+        "sync",
+        null,
+        null,
+        null,
+      ],
+    );
+    const chat: CoachEngine["chat"] = vi.fn(async (request, onEvent) => {
+      onEvent?.({ type: "turn-start", turnId: "plan-intake-turn", chatId: request.chatId });
+      onEvent?.({
+        type: "final-text",
+        turnId: "plan-intake-turn",
+        text: "I have enough information to create your Draft.",
+      });
+      return {
+        text: "I have enough information to create your Draft.",
+        planIntakePatch: {
+          eventName: "Gran Fondo Almaty",
+          eventPriority: "A" as const,
+          targetDate: "1998-10-04",
+          goal: "Finish in the front half",
+          availability: {
+            sessionsPerWeek: 4,
+            weekdays: ["tue" as const, "thu" as const, "sat" as const, "sun" as const],
+          },
+          experience: "intermediate" as const,
+          currentTrainingSummary: "Three rides each week with a weekend long ride",
+        },
+      };
+    });
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () =>
+          backend({
+            chat,
+            getChatQueue: async () => ({ schemaVersion: 1, revision: 0, items: [] }),
+          }),
+        now: () => Date.UTC(1998, 6, 13, 12),
+      },
+      { home, store, listener: inertWriterProtocolListener },
+      undefined,
+      undefined,
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+
+    await expect(lifecycle.operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: { scenarioId: "PL-S001" },
+    });
+    const started = await lifecycle.operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "plan-start",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    expect(started.state).toMatchObject({ scenarioId: "PL-S017" });
+    const conversationId = String(started.state.data.conversationId);
+    await lifecycle.operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "plan-course-omitted",
+      conversationId,
+    });
+    await expect(
+      lifecycle.operations.executePlanTransition?.({
+        transitionId: "PL-T05",
+        commandId: "plan-intake",
+        conversationId,
+        text: "I can train Tuesday, Thursday, Saturday, and Sunday.",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S016", data: { readyToCreateDraft: true } },
+    });
+    await expect(createPlanIntakeRepository(store).read(conversationId)).resolves.toMatchObject({
+      eventName: "Gran Fondo Almaty",
+      eventPriority: "A",
+      eventDateKey: 19981004,
+      sourceTurnSequence: 1,
+    });
+
+    const phases: string[] = [];
+    const formed = await lifecycle.operations.executePlanTransition?.(
+      {
+        transitionId: "PL-T06",
+        commandId: "plan-create-draft",
+        conversationId,
+      },
+      (event) => phases.push(event.phase),
+    );
+    expect(phases.at(0)).toBe("running");
+    expect(phases.at(-1)).toBe("completed");
+    expect(phases.filter((phase) => phase === "running").length).toBeGreaterThan(2);
+    expect(formed).toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S002", lifecycle: "draft", revision: 1 },
+    });
+    if (formed?.status !== "completed" || formed.state.planId === null) {
+      throw new TypeError("Structured Draft was not formed.");
+    }
+    const plans = createPlanRepository(store);
+    await expect(plans.read(formed.state.planId)).resolves.toMatchObject({
+      status: "draft",
+      name: "Gran Fondo Almaty Plan",
+      startDateKey: 19980713,
+      targetDateKey: 19981004,
+      totalWeeks: 12,
+    });
+    const workouts = await plans.readWorkouts(formed.state.planId);
+    expect(workouts).toHaveLength(48);
+    expect(workouts.at(-1)).toMatchObject({
+      dateKey: 19981004,
+      name: "Gran Fondo Almaty",
+    });
+    expect(await plans.readLatest()).toMatchObject({ status: "draft" });
+    await expect(
+      store.get("SELECT id FROM plan_draft_build_checkpoint WHERE conversation_id=?", [
+        conversationId,
+      ]),
+    ).resolves.toBeUndefined();
+    expect(chat).toHaveBeenCalledTimes(1);
+
+    const provider = vi.spyOn(globalThis, "fetch");
+    const providerCallsBeforeActivation = provider.mock.calls.length;
+    await store.run(
+      "CREATE TRIGGER fail_plan_mirror_job BEFORE INSERT ON plan_reconciliation_job BEGIN SELECT RAISE(FAIL, 'synthetic mirror job failure'); END",
+    );
+    const draft = formed.state.data.draft as { id: string; revision: number };
+    const activationPhases: string[] = [];
+    const activated = await lifecycle.operations.executePlanTransition?.(
+      {
+        transitionId: "PL-T11",
+        commandId: "plan-activate-locally",
+        draftId: draft.id,
+        expectedRevision: draft.revision,
+      },
+      (event) => activationPhases.push(event.phase),
+    );
+    expect(activationPhases).toEqual(["running", "failed"]);
+    expect(activated).toMatchObject({
+      status: "rejected",
+      error: {
+        code: "persistence-failed",
+        retryable: true,
+      },
+      state: {
+        lifecycle: "active",
+        scenarioId: "PL-S039",
+        reconciliation: {
+          status: "failed",
+          error: { code: "persistence-failed", retryable: true },
+        },
+        attention: { count: 1, destination: "direct" },
+      },
+    });
+    expect(provider.mock.calls).toHaveLength(providerCallsBeforeActivation);
+    await expect(plans.read(formed.state.planId)).resolves.toMatchObject({ status: "active" });
+    await expect(lifecycle.operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: {
+        lifecycle: "active",
+        scenarioId: "PL-S037",
+        reconciliation: { status: "not-started" },
+      },
+    });
+    await store.run("DROP TRIGGER fail_plan_mirror_job");
+    await expect(
+      lifecycle.operations.executePlanTransition?.({
+        transitionId: "PL-T12",
+        commandId: "plan-retry-mirror",
+        planId: formed.state.planId,
+        mode: "reconcile",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      state: { scenarioId: "PL-S039" },
+    });
+    await expect(
+      store.get("SELECT plan_id, kind FROM plan_reconciliation_job WHERE plan_id=?", [
+        formed.state.planId,
+      ]),
+    ).resolves.toEqual({ plan_id: formed.state.planId, kind: "mirror" });
+    await lifecycle.close();
+  });
+
+  it("keeps the active Plan while composing replacement intake into a structured Draft", async () => {
+    const home = await freshHome();
+    await mkdir(home.storeDir, { recursive: true });
+    const store = openSqliteStorage(join(home.storeDir, "store.db"));
+    stores.push(store);
+    await runMigrations(store, MIGRATIONS);
+    await store.run(
+      "INSERT INTO anchor_history (id, sport, anchor_type, value, unit, valid_from, source, confidence, note, provenance, device_id, hlc_physical_ms, hlc_counter) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [
+        "replacement-draft-ftp",
+        "cycling",
+        "ftp",
+        282,
+        "W",
+        899_510_400,
+        "intervals-icu",
+        "platform",
+        null,
+        "sync",
+        null,
+        null,
+        null,
+      ],
+    );
+    const plans = createPlanRepository(store);
+    const activePlanId = `${"0".repeat(25)}8`;
+    await plans.replaceNew(
+      {
+        id: activePlanId,
+        originId: null,
+        name: "Current Plan",
+        primaryGoal: "Build endurance",
+        startDateKey: 19980713,
+        targetDateKey: 19981004,
+        status: "active",
+        kind: "full_plan",
+        totalWeeks: 12,
+        weekStartDay: 1,
+        structureJson: "{}",
+        createdAtMs: 10,
+        updatedAtMs: 10,
+        deviceId: "device-1",
+        hlcPhysicalMs: 10,
+        hlcCounter: 0,
+      },
+      [],
+      19980713,
+    );
+    const chat: CoachEngine["chat"] = vi.fn(async (request, onEvent) => {
+      onEvent?.({ type: "turn-start", turnId: "replacement-intake-turn", chatId: request.chatId });
+      onEvent?.({
+        type: "final-text",
+        turnId: "replacement-intake-turn",
+        text: "The replacement Draft is ready to build.",
+      });
+      return {
+        text: "The replacement Draft is ready to build.",
+        planIntakePatch: {
+          eventName: "Gran Fondo Almaty",
+          eventPriority: "B" as const,
+          targetDate: "1998-10-04",
+          goal: "Finish in the front half",
+          availability: {
+            sessionsPerWeek: 4,
+            weekdays: ["tue" as const, "thu" as const, "sat" as const, "sun" as const],
+          },
+          experience: "intermediate" as const,
+          currentTrainingSummary: "Three rides each week with a weekend long ride",
+        },
+      };
+    });
+    const lifecycle = await compose(
+      home,
+      {
+        bootstrap: async () => reference(),
+        createRuntime: () => runtime(),
+        createBackend: () =>
+          backend({
+            chat,
+            getChatQueue: async () => ({ schemaVersion: 1, revision: 0, items: [] }),
+          }),
+        now: () => Date.UTC(1998, 6, 13, 12),
+      },
+      { home, store, listener: inertWriterProtocolListener },
+      undefined,
+      undefined,
+      { ENDURAGENT_HOME: home.root },
+      true,
+    );
+    const started = await lifecycle.operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "replacement-start",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Replacement intake did not start.");
+    expect(started.state).toMatchObject({
+      scenarioId: "PL-S079",
+      data: { replacement: true },
+    });
+    const conversationId = String(started.state.data.conversationId);
+    await lifecycle.operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "replacement-course-omitted",
+      conversationId,
+    });
+    await lifecycle.operations.executePlanTransition?.({
+      transitionId: "PL-T05",
+      commandId: "replacement-intake",
+      conversationId,
+      text: "Use four days and make this my B event.",
+    });
+    const formed = await lifecycle.operations.executePlanTransition?.({
+      transitionId: "PL-T06",
+      commandId: "replacement-create-draft",
+      conversationId,
+    });
+    expect(formed).toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S080", lifecycle: "replacement-draft", revision: 1 },
+    });
+    if (formed?.status !== "completed" || formed.state.planId === null) {
+      throw new TypeError("Replacement Draft was not formed.");
+    }
+    await expect(plans.read(activePlanId)).resolves.toMatchObject({ status: "active" });
+    await expect(plans.read(formed.state.planId)).resolves.toMatchObject({
+      status: "draft",
+      name: "Gran Fondo Almaty Plan",
+    });
+    await expect(
+      store.get("SELECT replaces_plan_id FROM plan_conversation WHERE id=?", [conversationId]),
+    ).resolves.toEqual({ replaces_plan_id: activePlanId });
+    await expect(createPlanIntakeRepository(store).read(conversationId)).resolves.toMatchObject({
+      eventPriority: "B",
+      sourceTurnSequence: 1,
+    });
+    expect(chat).toHaveBeenCalledTimes(1);
     await lifecycle.close();
   });
 

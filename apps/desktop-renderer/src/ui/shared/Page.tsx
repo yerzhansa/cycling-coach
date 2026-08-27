@@ -7,6 +7,7 @@ export function Page(props: {
   readonly busy?: boolean;
   readonly action?: ReactNode;
   readonly className?: string;
+  readonly contentMode?: "scroll" | "workspace";
   readonly onKeyDown?: KeyboardEventHandler<HTMLElement>;
   readonly ref?: Ref<HTMLElement>;
   readonly titleRef?: Ref<HTMLHeadingElement>;
@@ -35,8 +36,24 @@ export function Page(props: {
           <div className="ml-auto flex items-center gap-inset">{props.action}</div>
         )}
       </div>
-      <div className="flex-1 overflow-auto pt-7 pb-10 overscroll-contain" data-page-scroll>
-        <div className="mx-auto w-[min(680px,calc(100%-64px))]">{props.children}</div>
+      <div
+        className={cn(
+          "flex-1 min-h-0",
+          props.contentMode === "workspace"
+            ? "overflow-hidden"
+            : "overflow-auto pt-7 pb-10 overscroll-contain",
+        )}
+        data-page-scroll={props.contentMode === "workspace" ? undefined : ""}
+      >
+        <div
+          className={cn(
+            props.contentMode === "workspace"
+              ? "h-full min-h-0"
+              : "mx-auto w-[min(680px,calc(100%-64px))]",
+          )}
+        >
+          {props.children}
+        </div>
       </div>
     </section>
   );

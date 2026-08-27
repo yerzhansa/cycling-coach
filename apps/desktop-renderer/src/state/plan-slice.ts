@@ -49,6 +49,7 @@ export interface PlanSurfaceState {
 export interface PlanActions {
   open(): void;
   startPlan(): void;
+  closeCoach(): void;
   submitCoach(message: string): Promise<boolean>;
   stopCoach(): void;
   removeQueuedCoachMessage(id: string): void;
@@ -57,6 +58,7 @@ export interface PlanActions {
   skipCoachDecision(decisionId: string): void;
   saveFtp(watts: number): void;
   refreshFtp(): void;
+  backToCoachInterview(): void;
   createDraft(): void;
   updateDraft(message: string): void;
   openDiscardConfirmation(): void;
@@ -95,6 +97,7 @@ export interface PlanActions {
   resolveWorkoutMatch(workoutId: string, activityId: string, decision: "confirm" | "reject"): void;
   resolveWorkoutDrift(workoutId: string, eventId: string, decision: "adopt" | "restore"): void;
   openProposal(proposalId: string): void;
+  closeProposal(): void;
   reviseProposal(proposalId: string, text: string): void;
   approveProposal(proposalId: string, expectedRevision: number): void;
   rejectProposal(proposalId: string): void;

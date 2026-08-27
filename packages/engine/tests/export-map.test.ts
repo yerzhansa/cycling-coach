@@ -86,6 +86,7 @@ describe("engine public export surface", () => {
       "encodePlanProposalMutation",
       "ensureClaudeCliReady",
       "ensureCodexAgentReady",
+      "evaluatePlanIntakeReadiness",
       "executePlanFtpTransition",
       "extractAccountId",
       "failRaceCourseRecalculation",

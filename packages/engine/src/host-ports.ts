@@ -4,6 +4,7 @@ import type {
   CoachDecisionAnswer,
   CoachDecisionContinuationLineage,
   CoachDecisionReadModel,
+  PlanIntakePatch,
   RequestUserDecisionInput,
   RequestUserDecisionResult,
 } from "@enduragent/coach-contract";
@@ -204,6 +205,7 @@ export interface CoachDecisionStorePort {
     readonly toolCallId: string;
     readonly athleteText: string;
     readonly requestedAt: string;
+    readonly planIntakePatch?: PlanIntakePatch;
   }): CoachDecisionReadModel;
   answerDecision(input: {
     readonly chatId: string;
@@ -229,6 +231,7 @@ export interface CoachDecisionStorePort {
   }): CoachDecisionReadModel;
   getDecision(chatId: string, decisionId?: string): CoachDecisionReadModel | null;
   getDecisionAthleteText(chatId: string, decisionId: string): string | null;
+  getDecisionPlanIntakePatch?(chatId: string, decisionId: string): PlanIntakePatch | null;
 }
 
 export type ExecSecretRef = {

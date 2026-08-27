@@ -568,6 +568,7 @@ describe("Plan lifecycle projection", () => {
       projection: "coach",
     });
     expect(ready.transitions.map((transition) => transition.transitionId)).toContain("PL-T06");
+    expect(ready.transitions.map((transition) => transition.transitionId)).toContain("PL-T39");
   });
 
   it("projects every Race Course recovery state without hiding a ready Draft", () => {

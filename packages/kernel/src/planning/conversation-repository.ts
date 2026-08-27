@@ -12,6 +12,7 @@ export interface PlanConversationRecord {
   readonly replacesPlanId: string | null;
   readonly courseChoiceStatus: PlanRaceCourseChoiceStatus;
   readonly raceCourseJson: string | null;
+  readonly courseFailureJson?: string | null;
   readonly status: PlanConversationStatus;
   readonly endedAtMs: number | null;
   readonly createdAtMs: number;
@@ -162,7 +163,7 @@ function validHlc(record: {
   );
 }
 
-function validateConversation(record: PlanConversationRecord): void {
+export function validatePlanConversationRecord(record: PlanConversationRecord): void {
   const endedAtMs = record.endedAtMs;
   if (!ULID.test(record.id)) throw new PlanConversationValidationError("invalid-id");
   if (record.planId !== null && !ULID.test(record.planId)) {
@@ -177,7 +178,8 @@ function validateConversation(record: PlanConversationRecord): void {
   if (
     (record.courseChoiceStatus === "attached") !== (record.raceCourseJson !== null) ||
     !["undecided", "omitted", "attached"].includes(record.courseChoiceStatus) ||
-    !validRaceCourseJson(record.raceCourseJson)
+    !validRaceCourseJson(record.raceCourseJson) ||
+    !validCourseFailureJson(record.courseFailureJson)
   ) {
     throw new PlanConversationValidationError("invalid-race-course");
   }
@@ -208,7 +210,7 @@ function validateConversation(record: PlanConversationRecord): void {
   if (!validHlc(record)) throw new PlanConversationValidationError("invalid-hlc");
 }
 
-function validateTurn(record: PlanConversationTurnRecord): void {
+export function validatePlanConversationTurnRecord(record: PlanConversationTurnRecord): void {
   if (
     !ULID.test(record.id) ||
     !ULID.test(record.conversationId) ||
@@ -228,7 +230,7 @@ function validateTurn(record: PlanConversationTurnRecord): void {
   }
 }
 
-function validateDraftRevision(record: PlanDraftRevisionRecord): void {
+export function validatePlanDraftRevisionRecord(record: PlanDraftRevisionRecord): void {
   if (
     !ULID.test(record.id) ||
     !ULID.test(record.conversationId) ||
@@ -256,6 +258,21 @@ function validRaceCourseJson(value: string | null): boolean {
   try {
     parseRaceCourseSnapshot(JSON.parse(value) as unknown);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function validCourseFailureJson(value: string | null | undefined): boolean {
+  if (value === null || value === undefined) return true;
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return (
+      typeof parsed.fileName === "string" &&
+      parsed.fileName.length > 0 &&
+      typeof parsed.detail === "string" &&
+      parsed.detail.length > 0
+    );
   } catch {
     return false;
   }
@@ -312,12 +329,14 @@ function nullableInteger(row: Row, key: string): number | null {
 }
 
 function conversationFromRow(row: Row): PlanConversationRecord {
+  const courseFailureJson = nullableText(row, "course_failure_json");
   const record: PlanConversationRecord = Object.freeze({
     id: text(row, "id"),
     planId: nullableText(row, "plan_id"),
     replacesPlanId: nullableText(row, "replaces_plan_id"),
     courseChoiceStatus: text(row, "course_choice_status") as PlanRaceCourseChoiceStatus,
     raceCourseJson: nullableText(row, "race_course_json"),
+    ...(courseFailureJson === null ? {} : { courseFailureJson }),
     status: text(row, "status") as PlanConversationStatus,
     endedAtMs: nullableInteger(row, "ended_at_ms"),
     createdAtMs: integer(row, "created_at_ms"),
@@ -326,7 +345,7 @@ function conversationFromRow(row: Row): PlanConversationRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   });
-  validateConversation(record);
+  validatePlanConversationRecord(record);
   return record;
 }
 
@@ -343,7 +362,7 @@ function turnFromRow(row: Row): PlanConversationTurnRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   });
-  validateTurn(record);
+  validatePlanConversationTurnRecord(record);
   return record;
 }
 
@@ -363,7 +382,7 @@ function draftRevisionFromRow(row: Row): PlanDraftRevisionRecord {
     hlcPhysicalMs: integer(row, "hlc_physical_ms"),
     hlcCounter: integer(row, "hlc_counter"),
   });
-  validateDraftRevision(record);
+  validatePlanDraftRevisionRecord(record);
   return record;
 }
 
@@ -417,7 +436,7 @@ export function createPlanConversationRepository(store: PlanningStore): PlanConv
 
   return {
     async saveConversation(record) {
-      validateConversation(record);
+      validatePlanConversationRecord(record);
       await store.transaction(async () => {
         const existing = await readConversation(record.id);
         if (existing !== undefined) {
@@ -438,13 +457,14 @@ export function createPlanConversationRepository(store: PlanningStore): PlanConv
         }
         await store.run(
           `INSERT INTO plan_conversation (
-  id, plan_id, replaces_plan_id, course_choice_status, race_course_json, status,
+  id, plan_id, replaces_plan_id, course_choice_status, race_course_json, course_failure_json, status,
   ended_at_ms, created_at_ms, updated_at_ms, device_id, hlc_physical_ms, hlc_counter
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
   plan_id = excluded.plan_id,
   course_choice_status = excluded.course_choice_status,
   race_course_json = excluded.race_course_json,
+  course_failure_json = excluded.course_failure_json,
   status = excluded.status,
   ended_at_ms = excluded.ended_at_ms,
   updated_at_ms = excluded.updated_at_ms,
@@ -457,6 +477,7 @@ ON CONFLICT (id) DO UPDATE SET
             record.replacesPlanId,
             record.courseChoiceStatus,
             record.raceCourseJson,
+            record.courseFailureJson ?? null,
             record.status,
             record.endedAtMs,
             record.createdAtMs,
@@ -492,7 +513,7 @@ ON CONFLICT (id) DO UPDATE SET
     },
 
     async appendTurn(record) {
-      validateTurn(record);
+      validatePlanConversationTurnRecord(record);
       return store.transaction(async () => {
         await requireOpenConversation(record.conversationId);
         const existingRow = await store.get("SELECT * FROM plan_conversation_turn WHERE id = ?", [
@@ -544,7 +565,7 @@ ON CONFLICT (id) DO UPDATE SET
     },
 
     async saveDraftRevision(record) {
-      validateDraftRevision(record);
+      validatePlanDraftRevisionRecord(record);
       await store.transaction(async () => {
         const conversation = await requireOpenConversation(record.conversationId);
         if (conversation.planId !== null && conversation.planId !== record.planId) {
