@@ -280,6 +280,8 @@ export function bootRenderer(): Disposer {
     verifyPlanCleanup: () => planAdapter.verifyPlanCleanup(),
     openRaceOutcome: () => planAdapter.openRaceOutcome(),
     recordRaceOutcome: (outcome) => planAdapter.recordRaceOutcome(outcome),
+    openEndedConversation: () => planAdapter.openEndedConversation(),
+    closeEndedConversation: () => planAdapter.closeEndedConversation(),
     openAttention: (attentionId) => planAdapter.openAttention(attentionId),
     returnToCoach: () => planAdapter.returnToCoach(),
     retry: () => planAdapter.retry(),

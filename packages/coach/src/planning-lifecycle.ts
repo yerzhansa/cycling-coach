@@ -383,6 +383,40 @@ export function buildPlanLifecycleReadModel(
   });
 }
 
+export function buildEndedPlanConversationReadModel(input: {
+  readonly conversation: PlanConversationProjection;
+  readonly turns: readonly PlanConversationTurnProjection[];
+  readonly planId: string;
+  readonly revision: number;
+}): PlanReadModel {
+  return PlanReadModelSchema.parse({
+    schemaVersion: 1,
+    scenarioId: "PL-S102",
+    lifecycle: "ended",
+    planId: input.planId,
+    revision: input.revision,
+    title: "Plan conversation",
+    summary: "This ended Plan conversation is read-only and remains in Plan History.",
+    projection: "coach",
+    transitions: [guard("PL-T39")],
+    reconciliation: EMPTY_RECONCILIATION,
+    attention: EMPTY_ATTENTION,
+    activeOperation: null,
+    data: PlanCoachProjectionDataSchema.parse({
+      conversationId: input.conversation.id,
+      chatId: `plan:${input.conversation.id}`,
+      sourceConversationId: input.conversation.sourceConversationId,
+      replacement: input.conversation.replacesPlanId !== null,
+      replacesPlanId: input.conversation.replacesPlanId,
+      readyToCreateDraft: false,
+      messages: messages(input.conversation.id, input.turns),
+      queue: { schemaVersion: 1, revision: 0, items: [] },
+      decision: null,
+      draft: null,
+    }),
+  });
+}
+
 export function buildActivePlanReadModel(input: {
   readonly scenarioId: ActivePlanScenario;
   readonly planId: string;
@@ -628,7 +662,9 @@ export function buildEndedPlanReadModel(input: {
     transitions: [
       ...(failed ? [guard("PL-T24")] : []),
       ...(input.reconciliation.status === "verified" ? [guard("PL-T01")] : []),
-      ...(input.scenarioId === "PL-S094" ? [guard("PL-T39")] : []),
+      ...(input.scenarioId === "PL-S089" || input.scenarioId === "PL-S094"
+        ? [guard("PL-T39")]
+        : []),
       ...(input.scenarioId === "PL-S095" ? [guard("PL-T30")] : []),
     ],
     reconciliation: input.reconciliation,
