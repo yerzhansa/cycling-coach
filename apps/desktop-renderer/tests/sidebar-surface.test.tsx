@@ -30,6 +30,7 @@ function stubActions(): ChatActions {
     retryAttachment: vi.fn(),
     selectAttachmentWorkout: vi.fn(),
     reviewAttachmentInPlan: vi.fn(),
+    continueMessageInPlan: vi.fn(),
     openPlanningRequest: vi.fn(),
     retryPlanningRequest: vi.fn(),
     retryPlanningRequestLoad: vi.fn(),
@@ -123,6 +124,7 @@ function stubPlanActions(): PlanActions {
     openRaceOutcome: vi.fn(),
     recordRaceOutcome: vi.fn(),
     openAttention: vi.fn(),
+    resolvePlanningRequestDate: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
   };

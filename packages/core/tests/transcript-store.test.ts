@@ -483,6 +483,31 @@ describe("TranscriptStore append and corruption handling", () => {
     });
   });
 
+  it("round-trips one typed Plan handoff for relaunch hydration", () => {
+    const dataDir = makeDataDir();
+    const store = new TranscriptStore(dataDir);
+    const input = {
+      ...turn("chat-plan-handoff", "turn-1", "Can we move Friday?", "Review it in Plan."),
+      planHandoff: {
+        kind: "plan_change" as const,
+        title: "Review a lighter Friday",
+        intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+      },
+    };
+
+    store.appendCompletedTurn(input);
+
+    expect(store.readCurrentConversation(input.chatId)).toEqual([
+      { version: 1, kind: "turn-completed", ...input },
+    ]);
+    expect(
+      store.readCurrentConversationPage(input.chatId, { cursor: null, limit: 10 }),
+    ).toMatchObject({
+      status: "page",
+      turns: [{ turnId: "turn-1", planHandoff: input.planHandoff }],
+    });
+  });
+
   it("rejects arbitrary Plan-card markup in transcript records", () => {
     const store = new TranscriptStore(makeDataDir());
     expect(() =>

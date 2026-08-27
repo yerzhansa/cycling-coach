@@ -8,6 +8,24 @@ import {
 
 const PlanEntityIdSchema = z.string().min(1).max(256);
 
+export const PlanHandoffSuggestionSchema = z
+  .object({
+    kind: z.enum(["plan_question", "plan_change", "plan_creation"]),
+    title: z.string().min(1).max(500),
+    intent: z.string().min(1).max(20_000),
+    requestedDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/u)
+      .optional(),
+  })
+  .strict();
+export type PlanHandoffSuggestion = z.infer<typeof PlanHandoffSuggestionSchema>;
+
+export const PlanHandoffToolResultSchema = z
+  .object({ status: z.literal("ready"), suggestion: PlanHandoffSuggestionSchema })
+  .strict();
+export type PlanHandoffToolResult = z.infer<typeof PlanHandoffToolResultSchema>;
+
 export const PlanReferenceSelectionSchema = z.discriminatedUnion("kind", [
   z
     .object({

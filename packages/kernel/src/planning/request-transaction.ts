@@ -3,12 +3,15 @@ import type { SqlStore } from "../store/ports.js";
 import { addCivilDays } from "./date-keys.js";
 import { PlanningRequestStoreError } from "./request-errors.js";
 import type { PlanningRequestTerminalResult } from "./request-repository.js";
+import type { PlanningRequestAttention } from "./request-repository.js";
 
 export interface PlanningRequestProposalLinkTransactionInput {
   readonly requestId: string;
   readonly expectedRevision: number;
   readonly previousProposalId: string;
   readonly proposalId: string;
+  readonly attention: PlanningRequestAttention;
+  readonly resolvedDateKey: number | null;
   readonly updatedAtMs: number;
   readonly deviceId: string;
   readonly hlcPhysicalMs: number;
@@ -83,6 +86,9 @@ export async function linkPlanningRequestProposalInTransaction(
   store: SqlStore,
   input: PlanningRequestProposalLinkTransactionInput,
 ): Promise<void> {
+  if (!validDateKey(input.resolvedDateKey) || input.attention === "none") {
+    throw new PlanningRequestStoreError("invalid-transition");
+  }
   const row = await store.get(
     `SELECT lifecycle,proposal_id,revision,updated_at_ms,hlc_physical_ms,hlc_counter
 FROM planning_request WHERE request_id=?`,
@@ -100,11 +106,13 @@ FROM planning_request WHERE request_id=?`,
   }
   requireMutationClock(row, input);
   await store.run(
-    `UPDATE planning_request SET proposal_id=?,revision=revision+1,updated_at_ms=?,device_id=?,
+    `UPDATE planning_request SET proposal_id=?,attention=?,resolved_date_key=?,revision=revision+1,updated_at_ms=?,device_id=?,
 hlc_physical_ms=?,hlc_counter=?
 WHERE request_id=? AND lifecycle='open' AND proposal_id=? AND revision=?`,
     [
       input.proposalId,
+      input.attention,
+      input.resolvedDateKey,
       input.updatedAtMs,
       input.deviceId,
       input.hlcPhysicalMs,

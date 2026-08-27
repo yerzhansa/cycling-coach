@@ -81,6 +81,7 @@ function actions(): PlanActions {
     openEndedConversation: vi.fn(),
     closeEndedConversation: vi.fn(),
     openAttention: vi.fn(),
+    resolvePlanningRequestDate: vi.fn(),
     returnToCoach: vi.fn(),
     retry: vi.fn(),
   };
@@ -1829,6 +1830,43 @@ describe("Plan surface", () => {
     await user.click(revalidate);
     expect(planActions.approveProposal).toHaveBeenLastCalledWith(revisedProposalId, 2);
 
+    const applyFailedState = {
+      ...state,
+      data: {
+        ...currentData,
+        selectedPlanningRequest: {
+          request: {
+            requestId: "request-plan-1",
+            kind: "plan_change" as const,
+            target: "active_plan" as const,
+            intent: "Make Friday easier.",
+            planConversationId: null,
+            proposalId,
+            requestedDateKey: null,
+            resolvedDateKey: null,
+            source: { chatId: "desktop", messageId: "turn-1", available: true },
+            lifecycle: "open" as const,
+            attention: "apply_failed" as const,
+            revision: 3,
+            createdAtMs: 1,
+            updatedAtMs: 3,
+            terminalResult: null,
+          },
+          dateConflict: null,
+        },
+      },
+    };
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({
+        status: "ready",
+        state: applyFailedState,
+      });
+    });
+    expect(await screen.findByText("We couldn’t save this change")).toBeInTheDocument();
+    expect(screen.getByText(/active Plan is unchanged/u)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(planActions.approveProposal).toHaveBeenLastCalledWith(proposalId, 1);
+
     const unavailableState = {
       ...state,
       transitions: state.transitions.filter(
@@ -1874,6 +1912,126 @@ describe("Plan surface", () => {
     expect(await screen.findByRole("heading", { name: "Proposal rejected" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Back to Plan" }));
     expect(planActions.closeProposal).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers safe alternatives for a Chat-originated date conflict", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const planId = "00000000000000000000000003";
+    const proposalId = "00000000000000000000000005";
+    const requestId = "request-plan-date";
+    const state = {
+      ...planReadModel({
+        lifecycle: "active",
+        scenarioId: "PL-S007",
+        projection: "active",
+        planId,
+        data: {
+          plan: {
+            id: planId,
+            name: "Gran Fondo Almaty",
+            primaryGoal: "Finish in the front half",
+            startDate: "2026-07-13",
+            targetDate: "2026-10-04",
+            kind: "full-plan",
+            totalWeeks: 12,
+            weekStartDay: 1,
+            workoutCount: 20,
+            plannedDurationS: 72_000,
+          },
+          today: "2026-08-26",
+          weekIndex: 7,
+          todayWorkout: null,
+          workouts: [],
+          selectedWorkoutId: null,
+          selectedProposalId: proposalId,
+          proposals: [],
+          selectedPlanningRequest: {
+            request: {
+              requestId,
+              kind: "workout_review",
+              target: "active_plan",
+              intent: "Add Tempo 3 × 12 to Monday.",
+              planConversationId: null,
+              proposalId,
+              requestedDateKey: 20260831,
+              resolvedDateKey: null,
+              source: { chatId: "desktop", messageId: "turn-1", available: true },
+              lifecycle: "open",
+              attention: "date_conflict",
+              revision: 2,
+              createdAtMs: 1,
+              updatedAtMs: 2,
+              terminalResult: null,
+            },
+            dateConflict: {
+              recommendedDate: "2026-09-01",
+              minimumDate: "2026-08-27",
+              maximumDate: "2026-10-04",
+              workouts: [
+                {
+                  workoutId: "workout-coach",
+                  date: "2026-08-31",
+                  name: "Easy endurance",
+                  durationS: 3_000,
+                  ownership: "coach",
+                  replaceable: true,
+                },
+                {
+                  workoutId: "workout-athlete",
+                  date: "2026-08-31",
+                  name: "Club ride",
+                  durationS: 4_200,
+                  ownership: "athlete",
+                  replaceable: false,
+                },
+              ],
+            },
+          },
+        },
+      }),
+      transitions: [
+        { transitionId: "PL-T40" as const, status: "available" as const, reason: null },
+      ],
+    };
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(
+      screen.getByRole("heading", { name: /Aug 31, 2026 already has a Workout/u }),
+    ).toBeVisible();
+    expect(screen.getByText("Protected")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Replace Club ride/u })).not.toBeInTheDocument();
+    const recommendedButtons = screen.getAllByRole("button", { name: /Use Sep 1, 2026/u });
+    await user.click(recommendedButtons[recommendedButtons.length - 1]!);
+    expect(planActions.resolvePlanningRequestDate).toHaveBeenCalledWith(requestId, {
+      kind: "use-date",
+      date: "2026-09-01",
+    });
+
+    await user.click(screen.getByRole("button", { name: /Replace Easy endurance/u }));
+    await user.click(screen.getByRole("button", { name: "Review replacement" }));
+    expect(planActions.resolvePlanningRequestDate).toHaveBeenLastCalledWith(requestId, {
+      kind: "replace-workout",
+      workoutId: "workout-coach",
+    });
+
+    await user.click(screen.getByRole("button", { name: /Choose another date/u }));
+    const date = screen.getByLabelText("Date");
+    await user.clear(date);
+    await user.type(date, "2026-09-02");
+    await user.click(screen.getByRole("button", { name: /Use Sep 2, 2026/u }));
+    expect(planActions.resolvePlanningRequestDate).toHaveBeenLastCalledWith(requestId, {
+      kind: "use-date",
+      date: "2026-09-02",
+    });
   });
 
   it("shows the outside-edit comparison and exposes explicit adopt or restore choices", async () => {

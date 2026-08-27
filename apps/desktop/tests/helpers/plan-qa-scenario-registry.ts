@@ -1122,6 +1122,8 @@ export function resolvePlanQaTransition(
       return destination("PL-S100");
     case "PL-T38":
       return destination("PL-S101");
+    case "PL-T40":
+      return destination("PL-S007");
     case "PL-T39": {
       if (options.destinationScenarioId === undefined) {
         throw new TypeError("PL-T39 requires a destinationScenarioId");

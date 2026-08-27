@@ -36,6 +36,7 @@ function stubActions(): ChatActions {
     retryAttachment: vi.fn(),
     selectAttachmentWorkout: vi.fn(),
     reviewAttachmentInPlan: vi.fn(),
+    continueMessageInPlan: vi.fn(),
     openPlanningRequest: vi.fn(),
     retryPlanningRequest: vi.fn(),
     retryPlanningRequestLoad: vi.fn(),
@@ -970,6 +971,58 @@ describe("chat surface", () => {
       expect(screen.getByText("Added to Plan")).toBeVisible();
       await user.click(screen.getByRole("button", { name: "Open Plan" }));
       expect(actions.openPlanningRequest).toHaveBeenLastCalledWith("request-plan-1");
+    });
+
+    it("renders one host-owned text handoff and keeps Plan unchanged until continued", async () => {
+      const user = userEvent.setup();
+      const message: ChatMessageView = {
+        id: "message-live-1",
+        turnId: "turn-1",
+        role: "coach",
+        delivery: "complete",
+        historical: false,
+        text: "This change should be reviewed in Plan.",
+        planHandoff: {
+          kind: "plan_change",
+          title: "Review a lighter Friday",
+          intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+        },
+      };
+      setChat({
+        messages: [message],
+        planningRequestsLoaded: true,
+        timeline: [{ kind: "message", message }],
+      });
+      render(<Harness />);
+
+      expect(screen.getByRole("heading", { name: "Review a lighter Friday" })).toBeVisible();
+      expect(screen.getByText(/Nothing changes until you approve it/u)).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Continue in Plan" }));
+      expect(actions.continueMessageInPlan).toHaveBeenCalledWith("turn-1", message.planHandoff);
+    });
+
+    it("shows a retry action for a safely saved failed Plan handoff", async () => {
+      const user = userEvent.setup();
+      const delivered = planningDelivery("open");
+      const failed: PlanningRequestDelivery = {
+        ...delivered,
+        state: "failed",
+        failureCode: "planning_unavailable",
+        retryable: true,
+        deliveredAtMs: null,
+        planningRequest: null,
+      };
+      setChat({
+        planningRequests: [failed],
+        planningRequestsLoaded: true,
+        timeline: [{ kind: "planning-request", delivery: failed }],
+      });
+      render(<Harness />);
+
+      expect(screen.getByText("Couldn’t open")).toBeVisible();
+      expect(screen.getAllByText(/will not create a duplicate/u)).not.toHaveLength(0);
+      await user.click(screen.getByRole("button", { name: "Try again" }));
+      expect(actions.retryPlanningRequest).toHaveBeenCalledWith(failed.requestId);
     });
 
     it("shows model-incompatible image recovery and retryable parser failure", async () => {

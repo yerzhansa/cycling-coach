@@ -8,7 +8,7 @@ import {
   X,
 } from "lucide-react";
 import type { ReactElement } from "react";
-import type { PlanningRequestDelivery } from "@enduragent/coach-contract";
+import type { PlanHandoffSuggestion, PlanningRequestDelivery } from "@enduragent/coach-contract";
 import type {
   ChatChoiceView,
   ChatMessageView,
@@ -23,11 +23,57 @@ import { HistoryControls } from "./HistoryControls.js";
 import { PlanReferenceCard } from "./PlanReferenceCard.js";
 import { StreamingMessage } from "./StreamingMessage.js";
 
+function planHandoffSummary(suggestion: PlanHandoffSuggestion): string {
+  if (suggestion.kind === "plan_creation") {
+    return "Answer the remaining details in Plan, then review the Draft before applying it.";
+  }
+  if (suggestion.kind === "plan_change") {
+    return "Review a structured Proposal in Plan. Nothing changes until you approve it.";
+  }
+  return "Open Plan with this question and the relevant Chat context attached.";
+}
+
+function PlanHandoffCard(props: {
+  readonly messageId: string;
+  readonly suggestion: PlanHandoffSuggestion;
+}): ReactElement {
+  const actions = useEnduragentStore((state) => state.chatActions);
+  const loaded = useEnduragentStore((state) => state.chat.planningRequestsLoaded);
+  const busyId = useEnduragentStore((state) => state.chat.planningRequestBusyId);
+  return (
+    <aside className="mt-row grid gap-row rounded-card border border-line-2 bg-surface p-5 shadow-elev-1">
+      <div className="grid gap-inset">
+        <p className="m-0 text-xs font-semibold uppercase tracking-wide text-ink-2">
+          Continue in Plan
+        </p>
+        <h3 className="m-0 text-base font-semibold leading-6">{props.suggestion.title}</h3>
+        <p className="m-0 text-sm leading-5 text-ink-2">{planHandoffSummary(props.suggestion)}</p>
+      </div>
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          disabled={actions === null || !loaded || busyId !== null}
+          onClick={() => actions?.continueMessageInPlan(props.messageId, props.suggestion)}
+        >
+          Continue in Plan
+        </Button>
+      </div>
+    </aside>
+  );
+}
+
 function MessageRow(props: {
   readonly message: ChatMessageView;
   readonly bufferedStreaming: boolean;
 }): ReactElement {
   const message = props.message;
+  const sourceMessageId = message.turnId ?? message.id;
+  const handoffDelivery = useEnduragentStore((state) =>
+    state.chat.planningRequests.find(
+      (delivery) =>
+        delivery.source?.messageId === sourceMessageId && delivery.state !== "cancelled",
+    ),
+  );
   const streaming = message.role === "coach" && message.delivery === "streaming";
   const silent = message.historical || message.role === "athlete";
   const rowClassName = cn(
@@ -89,6 +135,9 @@ function MessageRow(props: {
           {message.planReference === undefined ? null : (
             <PlanReferenceCard selection={message.planReference} />
           )}
+          {message.planHandoff === undefined || handoffDelivery !== undefined ? null : (
+            <PlanHandoffCard messageId={sourceMessageId} suggestion={message.planHandoff} />
+          )}
         </div>
       )}
     </article>
@@ -128,6 +177,7 @@ function ChoiceRow(props: { readonly choice: ChatChoiceView }): ReactElement {
 
 function planningRequestStatus(delivery: PlanningRequestDelivery): string {
   if (delivery.state === "pending") return "Opening";
+  if (delivery.state === "failed") return "Couldn’t open";
   const request = delivery.planningRequest;
   if (request === null) return "Plan request";
   if (request.lifecycle === "applied") return "Added to Plan";
@@ -142,7 +192,13 @@ function planningRequestStatus(delivery: PlanningRequestDelivery): string {
 
 function planningRequestSummary(delivery: PlanningRequestDelivery): string {
   const request = delivery.planningRequest;
-  if (delivery.state === "pending") return "The workout and your Chat context are staying together.";
+  if (delivery.state === "pending")
+    return "The workout and your Chat context are staying together.";
+  if (delivery.state === "failed") {
+    return delivery.retryable
+      ? "The request is saved. Trying again will not create a duplicate."
+      : "The request could not be delivered safely.";
+  }
   if (request?.terminalResult !== null && request?.terminalResult !== undefined) {
     return request.terminalResult.detail;
   }
@@ -158,20 +214,21 @@ function planningRequestSummary(delivery: PlanningRequestDelivery): string {
   return "Review the structured Proposal in Plan; the active Plan is unchanged.";
 }
 
-function PlanningRequestRow(props: {
-  readonly delivery: PlanningRequestDelivery;
-}): ReactElement {
+function PlanningRequestRow(props: { readonly delivery: PlanningRequestDelivery }): ReactElement {
   const actions = useEnduragentStore((state) => state.chatActions);
   const busyId = useEnduragentStore((state) => state.chat.planningRequestBusyId);
   const delivery = props.delivery;
   const request = delivery.planningRequest;
   const pending = delivery.state === "pending";
+  const failed = delivery.state === "failed";
   const terminal = request !== null && request.lifecycle !== "open";
-  const buttonLabel = terminal
-    ? "Open Plan"
-    : request?.proposalId !== null && request?.proposalId !== undefined
-      ? "Review in Plan"
-      : "Continue in Plan";
+  const buttonLabel = failed
+    ? "Try again"
+    : terminal
+      ? "Open Plan"
+      : request?.proposalId !== null && request?.proposalId !== undefined
+        ? "Review in Plan"
+        : "Continue in Plan";
   return (
     <article
       className="grid gap-row rounded-card border border-line-2 bg-surface p-5 shadow-elev-1 outline-none focus-visible:ring-2 focus-visible:ring-primary"
@@ -213,8 +270,12 @@ function PlanningRequestRow(props: {
           <Button
             type="button"
             variant="outline"
-            disabled={actions === null || busyId !== null}
-            onClick={() => actions?.openPlanningRequest(delivery.requestId)}
+            disabled={actions === null || busyId !== null || (failed && !delivery.retryable)}
+            onClick={() =>
+              failed
+                ? actions?.retryPlanningRequest(delivery.requestId)
+                : actions?.openPlanningRequest(delivery.requestId)
+            }
           >
             {buttonLabel}
           </Button>

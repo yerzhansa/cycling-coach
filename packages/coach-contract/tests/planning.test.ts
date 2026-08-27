@@ -107,6 +107,12 @@ const commands = [
     destinationScenarioId: "PL-S021",
     returnFocusId: "workout-row-1",
   },
+  {
+    transitionId: "PL-T40",
+    commandId,
+    requestId,
+    resolution: { kind: "use-date", date: "1998-08-26" },
+  },
 ] satisfies PlanTransitionCommand[];
 
 const state = {

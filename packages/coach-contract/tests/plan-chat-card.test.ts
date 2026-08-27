@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   PlanChatCardReadModelSchema,
+  PlanHandoffSuggestionSchema,
   PlanReferenceSelectionSchema,
   TranscriptPageTurnSchema,
   TurnEventSchema,
 } from "../src/index.js";
 
 const selection = { kind: "workout_detail" as const, planId: "plan-1", workoutId: "workout-1" };
+const handoff = {
+  kind: "plan_change" as const,
+  title: "Review a lighter Friday",
+  intent: "Move Friday's endurance Workout to Saturday and keep Friday easy.",
+};
 
 describe("Plan Chat card contract", () => {
   it("accepts strict persisted selections and rejects extra fields", () => {
@@ -58,5 +64,25 @@ describe("Plan Chat card contract", () => {
         planReference: selection,
       }),
     ).toMatchObject({ planReference: selection });
+  });
+
+  it("carries one strict Plan handoff suggestion through live events and transcript pages", () => {
+    expect(PlanHandoffSuggestionSchema.parse(handoff)).toEqual(handoff);
+    expect(
+      PlanHandoffSuggestionSchema.safeParse({ ...handoff, markup: "<button>Apply</button>" })
+        .success,
+    ).toBe(false);
+    expect(
+      TurnEventSchema.parse({ type: "plan-handoff", turnId: "turn-1", suggestion: handoff }),
+    ).toMatchObject({ suggestion: handoff });
+    expect(
+      TranscriptPageTurnSchema.parse({
+        turnId: "turn-1",
+        completedAt: "2026-08-26T00:00:00.000Z",
+        athleteText: "Can we move Friday?",
+        coachText: "Review this change in Plan.",
+        planHandoff: handoff,
+      }),
+    ).toMatchObject({ planHandoff: handoff });
   });
 });

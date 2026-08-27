@@ -115,6 +115,12 @@ export interface PlanActions {
   reviseProposal(proposalId: string, text: string): void;
   approveProposal(proposalId: string, expectedRevision: number): void;
   rejectProposal(proposalId: string): void;
+  resolvePlanningRequestDate(
+    requestId: string,
+    resolution:
+      | { readonly kind: "use-date"; readonly date: string }
+      | { readonly kind: "replace-workout"; readonly workoutId: string },
+  ): void;
   openHistory(): void;
   closeHistory(): void;
   undoPlanChange(ledgerId: string): void;

@@ -99,6 +99,7 @@ import {
   decisionRequestInput,
 } from "./coach-decision-tool.js";
 import { PLAN_REFERENCE_TOOL_NAME, createPlanReferenceTool } from "./plan-reference-tool.js";
+import { PLAN_HANDOFF_TOOL_NAME, createPlanHandoffTool } from "./plan-handoff-tool.js";
 import { attachNativeMediaToCurrentUserMessage } from "../native-media-message.js";
 import { createPlanIntakeTool, PLAN_INTAKE_TOOL_NAME } from "./plan-intake-tool.js";
 import { assertPlanCoachReplyAuthority } from "./plan-coach-authority.js";
@@ -361,6 +362,7 @@ export class CoachAgent {
   private chatStore: ChatStorePort;
   private log: LoggerPort;
   private tools: ToolSet;
+  private readonly desktopTools: ToolSet;
   private readonly planTools: ToolSet;
   private readonly decisionTool: Tool | undefined;
   private readonly planReferenceTool: Tool | undefined;
@@ -377,6 +379,7 @@ export class CoachAgent {
   // skills, tool schemas, model, and the compile-time rule-block set), so it is
   // computed once on first use and reused for every turn of the process.
   private templateHash?: string;
+  private desktopTemplateHash?: string;
   private planTemplateHash?: string;
   private readonly activeChatTurns = new Map<
     string,
@@ -495,6 +498,12 @@ export class CoachAgent {
         ? {}
         : { [PLAN_REFERENCE_TOOL_NAME]: this.planReferenceTool }),
     };
+    this.desktopTools = {
+      ...this.tools,
+      [PLAN_HANDOFF_TOOL_NAME]: capToolResult(markUntrustedResult(createPlanHandoffTool()), {
+        maxResultTokens,
+      }),
+    };
     const planIntakeTool = createPlanIntakeTool();
     this.planTools = {
       ...(this.decisionTool === undefined ? {} : { [COACH_DECISION_TOOL_NAME]: this.decisionTool }),
@@ -506,11 +515,16 @@ export class CoachAgent {
   }
 
   private toolsForChat(chatId: string): ToolSet {
-    return chatId.startsWith("plan:") ? this.planTools : this.tools;
+    if (chatId.startsWith("plan:")) return this.planTools;
+    return chatId === "desktop" ? this.desktopTools : this.tools;
   }
 
   private templateHashForChat(chatId: string, tools: ToolSet): string {
-    const current = chatId.startsWith("plan:") ? this.planTemplateHash : this.templateHash;
+    const current = chatId.startsWith("plan:")
+      ? this.planTemplateHash
+      : chatId === "desktop"
+        ? this.desktopTemplateHash
+        : this.templateHash;
     if (current !== undefined) return current;
     const value = computeTemplateHash({
       soul: chatId.startsWith("plan:") ? PLAN_COACH_AUTHORITY_RULES : this.sport.soul,
@@ -524,6 +538,7 @@ export class CoachAgent {
       model: this.config.llm.model,
     });
     if (chatId.startsWith("plan:")) this.planTemplateHash = value;
+    else if (chatId === "desktop") this.desktopTemplateHash = value;
     else this.templateHash = value;
     return value;
   }
@@ -1274,6 +1289,9 @@ export class CoachAgent {
                   ...(ctx.planReference.selection === null
                     ? {}
                     : { planReference: ctx.planReference.selection }),
+                  ...(ctx.planHandoff.suggestion === null
+                    ? {}
+                    : { planHandoff: ctx.planHandoff.suggestion }),
                 });
               }
               if (ctx.planIntake.patch !== null) onPlanIntake?.(ctx.planIntake.patch);
@@ -1282,6 +1300,13 @@ export class CoachAgent {
                   type: "plan-reference",
                   turnId,
                   selection: ctx.planReference.selection,
+                });
+              }
+              if (ctx.planHandoff.suggestion !== null) {
+                emitEvent({
+                  type: "plan-handoff",
+                  turnId,
+                  suggestion: ctx.planHandoff.suggestion,
                 });
               }
               emitEvent({ type: "final-text", turnId, text: responseText });

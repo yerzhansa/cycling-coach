@@ -16,7 +16,9 @@ import type {
   CoachDecisionReadModel,
   ChatQueueSnapshot,
   CoachTurnEventNotificationEnvelope,
+  CreatePlanningRequestRpcParams,
   CreateWorkoutPlanningRequestRpcParams,
+  PlanHandoffSuggestion,
   PlanningRequestDelivery,
   TranscriptPageEntry,
   TurnEvent,
@@ -61,7 +63,7 @@ export const CHAT_ATTACHMENT_FAILURE_COPY =
 export const CHAT_PLANNING_REQUEST_LOAD_FAILURE_COPY =
   "We couldn’t check saved Plan requests. Reconnect and try again.";
 export const CHAT_PLANNING_REQUEST_FAILURE_COPY =
-  "Plan couldn’t receive this request. The parsed workout is still here.";
+  "Plan couldn’t receive this request. Your request is preserved and nothing changed in Plan.";
 export const NEW_CONVERSATION_SUCCESS_COPY = "New conversation started.";
 export const NEW_CONVERSATION_MEMORY_WARNING_COPY =
   "New conversation started. Some recent details may not have been saved to coach memory.";
@@ -127,6 +129,7 @@ export interface ChatController {
   retryAttachment(attachmentId: string): void;
   selectAttachmentWorkout(attachmentId: string, workoutId: string): void;
   reviewAttachmentInPlan(attachmentId: string): void;
+  continueMessageInPlan(messageId: string, suggestion: PlanHandoffSuggestion): void;
   openPlanningRequest(requestId: string): void;
   retryPlanningRequest(requestId: string): void;
   retryPlanningRequestLoad(): void;
@@ -164,6 +167,16 @@ interface ActiveStopRequest {
   readonly requestKey: number;
   request(): void;
 }
+
+type PendingPlanningRequestCreate =
+  | {
+      readonly kind: "generic";
+      readonly request: CreatePlanningRequestRpcParams;
+    }
+  | {
+      readonly kind: "workout";
+      readonly request: CreateWorkoutPlanningRequestRpcParams;
+    };
 
 export function createChatController(input: {
   readonly clients: DesktopCoachClientProvider;
@@ -223,7 +236,7 @@ export function createChatController(input: {
   let planningRequestBusyId: string | null = null;
   let planningRequestError: string | null = null;
   let planningRequestFocusId: string | null = null;
-  let pendingPlanningRequestCreate: CreateWorkoutPlanningRequestRpcParams | null = null;
+  let pendingPlanningRequestCreate: PendingPlanningRequestCreate | null = null;
   let decisionContinuationTask: Promise<void> | undefined;
   let epoch = 0;
   const canChat = input.canChat ?? (() => true);
@@ -823,11 +836,9 @@ export function createChatController(input: {
       });
   };
 
-  const deliverWorkoutPlanningRequest = (
-    request: CreateWorkoutPlanningRequestRpcParams,
-  ): void => {
+  const deliverWorkoutPlanningRequest = (request: CreateWorkoutPlanningRequestRpcParams): void => {
     if (disposed || planningRequestBusyId !== null) return;
-    pendingPlanningRequestCreate = request;
+    pendingPlanningRequestCreate = { kind: "workout", request };
     planningRequestBusyId = request.requestId;
     planningRequestError = null;
     render();
@@ -848,6 +859,38 @@ export function createChatController(input: {
         planningRequestError = null;
         render();
         routeToPlanningRequest(request.requestId);
+      })
+      .catch(() => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+        render();
+      });
+  };
+
+  const deliverPlanningRequest = (request: CreatePlanningRequestRpcParams): void => {
+    if (disposed || planningRequestBusyId !== null) return;
+    pendingPlanningRequestCreate = { kind: "generic", request };
+    planningRequestBusyId = request.payload.requestId;
+    planningRequestError = null;
+    render();
+    void input.clients
+      .getClient()
+      .then((client) => client.call("createPlanningRequest", request))
+      .then((result) => {
+        if (disposed) return;
+        planningRequestBusyId = null;
+        if (result.status === "rejected") {
+          pendingPlanningRequestCreate = null;
+          planningRequestError = CHAT_PLANNING_REQUEST_FAILURE_COPY;
+          render();
+          return;
+        }
+        pendingPlanningRequestCreate = null;
+        replacePlanningRequest(result.delivery);
+        planningRequestError = null;
+        render();
+        routeToPlanningRequest(request.payload.requestId);
       })
       .catch(() => {
         if (disposed) return;
@@ -1440,6 +1483,44 @@ export function createChatController(input: {
         },
       });
     },
+    continueMessageInPlan(messageId, suggestion) {
+      if (
+        disposed ||
+        resetBlocksWork() ||
+        !planningRequestsLoaded ||
+        planningRequestBusyId !== null
+      ) {
+        return;
+      }
+      const existing = planningRequests.find(
+        (delivery) => delivery.source?.messageId === messageId && delivery.state !== "cancelled",
+      );
+      if (existing !== undefined) {
+        if (existing.state === "failed" && existing.retryable) {
+          retrySavedPlanningRequest(existing.requestId);
+        } else {
+          routeToPlanningRequest(existing.requestId);
+        }
+        return;
+      }
+      const requestId = globalThis.crypto.randomUUID();
+      deliverPlanningRequest({
+        payload: {
+          requestId,
+          kind: suggestion.kind,
+          intent: suggestion.intent,
+          source: { chatId: DESKTOP_CHAT_ID, messageId },
+          sourceSnapshot: {
+            capturedAt: new Date().toISOString(),
+            attachment: null,
+            selectedWorkout: null,
+          },
+          ...(suggestion.requestedDate === undefined
+            ? {}
+            : { requestedDate: suggestion.requestedDate }),
+        },
+      });
+    },
     openPlanningRequest(requestId) {
       if (disposed) return;
       routeToPlanningRequest(requestId);
@@ -1450,7 +1531,11 @@ export function createChatController(input: {
     retryPlanningRequestLoad() {
       if (disposed || planningRequestBusyId !== null) return;
       if (pendingPlanningRequestCreate !== null) {
-        deliverWorkoutPlanningRequest(pendingPlanningRequestCreate);
+        if (pendingPlanningRequestCreate.kind === "generic") {
+          deliverPlanningRequest(pendingPlanningRequestCreate.request);
+        } else {
+          deliverWorkoutPlanningRequest(pendingPlanningRequestCreate.request);
+        }
         return;
       }
       planningRequestError = null;

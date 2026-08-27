@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CoachDecisionReadModelSchema } from "./coach-decision.js";
-import { PlanReferenceSelectionSchema } from "./plan-chat-card.js";
+import { PlanHandoffSuggestionSchema, PlanReferenceSelectionSchema } from "./plan-chat-card.js";
 
 /** Engine-internal turn failure classification (frozen field vocabulary). */
 export const TurnErrorClassSchema = z.enum([
@@ -138,6 +138,14 @@ export const PlanReferenceSelectedEventSchema = z
   })
   .strict();
 
+export const PlanHandoffRequestedEventSchema = z
+  .object({
+    type: z.literal("plan-handoff"),
+    turnId: z.string().min(1),
+    suggestion: PlanHandoffSuggestionSchema,
+  })
+  .strict();
+
 /**
  * Terminal shapes: a successful turn ends with `final-text` as its last event.
  * A failed turn with no committed writes ends with `error` and delivers no
@@ -156,6 +164,7 @@ export const TurnEventSchema = z.discriminatedUnion("type", [
   TextDeltaEventSchema,
   DecisionRequestedEventSchema,
   PlanReferenceSelectedEventSchema,
+  PlanHandoffRequestedEventSchema,
 ]);
 export type TurnEvent = z.infer<typeof TurnEventSchema>;
 

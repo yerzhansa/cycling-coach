@@ -5,6 +5,7 @@ import type {
   CoachDecisionAnswer,
   CoachDecisionReadModel,
   PlanningRequestDelivery,
+  PlanHandoffSuggestion,
 } from "@enduragent/coach-contract";
 import type { StateCreator } from "zustand";
 import type { TranscriptHydrationChange, TranscriptHydrationStatus } from "../chat/hydration.js";
@@ -22,6 +23,7 @@ export interface ChatMessageView {
   readonly text: string;
   readonly attachments?: ChatTranscriptMessage["attachments"];
   readonly planReference?: ChatTranscriptMessage["planReference"];
+  readonly planHandoff?: ChatTranscriptMessage["planHandoff"];
 }
 
 export interface ChatQueuedView {
@@ -94,6 +96,7 @@ export interface ChatActions {
   retryAttachment(attachmentId: string): void;
   selectAttachmentWorkout(attachmentId: string, workoutId: string): void;
   reviewAttachmentInPlan(attachmentId: string): void;
+  continueMessageInPlan(messageId: string, suggestion: PlanHandoffSuggestion): void;
   openPlanningRequest(requestId: string): void;
   retryPlanningRequest(requestId: string): void;
   retryPlanningRequestLoad(): void;
@@ -181,6 +184,7 @@ export function sameChatMessages(
       message.historical === other.historical &&
       message.text === other.text &&
       JSON.stringify(message.planReference) === JSON.stringify(other.planReference) &&
+      JSON.stringify(message.planHandoff) === JSON.stringify(other.planHandoff) &&
       sameAttachments(message.attachments, other.attachments)
     );
   });

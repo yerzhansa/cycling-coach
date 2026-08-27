@@ -9,6 +9,7 @@ import type {
   CoachDecisionContinuationLineage,
   CoachDecisionReadModel,
   PlanIntakePatch,
+  PlanHandoffSuggestion,
   RequestUserDecisionInput,
   RequestUserDecisionResult,
 } from "@enduragent/coach-contract";
@@ -255,6 +256,7 @@ export interface TranscriptCompletedTurnInput {
   readonly coachText: string;
   readonly attachments?: readonly ChatAttachmentReference[];
   readonly planReference?: PlanReferenceSelection;
+  readonly planHandoff?: PlanHandoffSuggestion;
 }
 
 export type TranscriptInterruptedTurnInput = TranscriptCompletedTurnInput;
