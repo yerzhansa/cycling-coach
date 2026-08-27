@@ -98,6 +98,7 @@ import {
 import { cyclingTaperRefusal, projectCyclingSeasonMetadata } from "@enduragent/sport-cycling";
 import {
   buildActivePlanReadModel,
+  buildChatOriginatedPlanResultReadModel,
   buildEndedPlanConversationReadModel,
   buildEndedPlanReadModel,
   buildPlanLifecycleReadModel,
@@ -134,6 +135,8 @@ import {
   type PlanProposalRecord,
   type PlanProposalPremiseRecord,
   type PlanProposalRepository,
+  type PlanningRequestReadModel,
+  type PlanningRequestRepository,
   type PlanAdaptationLedgerRecord,
   type PlanAdaptationLedgerRepository,
   type PlanSetting,
@@ -375,6 +378,7 @@ export interface CreatePlanningOperationsDependencies {
   readonly workoutMatches?: PlanWorkoutMatchRepository;
   readonly workoutDrifts?: PlanWorkoutDriftRepository;
   readonly proposals?: PlanProposalRepository;
+  readonly requests?: PlanningRequestRepository;
   readonly history?: PlanAdaptationLedgerRepository;
   readonly settings?: PlanSettingsRepository;
   readonly replacements?: PlanReplacementRepository;
@@ -977,6 +981,7 @@ function courseProjection(input: {
 }
 
 interface ReadOverrides {
+  readonly sourceConversationId?: string | null;
   readonly ftpScenario?: FtpScenario;
   readonly ftpError?: PlanError | null;
   readonly courseScenario?: CourseScenario;
@@ -1037,6 +1042,7 @@ export function createPlanningOperations(
     dependencies.workoutDrifts ?? createPlanWorkoutDriftRepository(input.context.store);
   const proposalRepository =
     dependencies.proposals ?? createPlanProposalRepository(input.context.store);
+  const planningRequests = dependencies.requests;
   const historyRepository =
     dependencies.history ?? createPlanAdaptationLedgerRepository(input.context.store);
   const settingsRepository =
@@ -1515,7 +1521,7 @@ export function createPlanningOperations(
         id: conversation.id,
         planId: conversation.planId,
         replacesPlanId: conversation.replacesPlanId,
-        sourceConversationId: null,
+        sourceConversationId: overrides.sourceConversationId ?? null,
       },
       turns,
       readyToCreateDraft: ready,
@@ -1807,6 +1813,26 @@ export function createPlanningOperations(
       state: await read({ ...overrides, ftpError: error }),
     });
 
+  const chatOriginatedResult = async (
+    request: PlanningRequestReadModel,
+  ): Promise<PlanReadModel> => {
+    const latestPlan = await plans.readLatest();
+    const lifecycle: PlanReadModel["lifecycle"] =
+      latestPlan?.status === "active"
+        ? "active"
+        : latestPlan?.status === "draft"
+          ? "draft"
+          : latestPlan?.status === "ended"
+            ? "ended"
+            : "none";
+    return buildChatOriginatedPlanResultReadModel({
+      request,
+      planId: latestPlan?.id ?? null,
+      lifecycle,
+      revision: request.revision,
+    });
+  };
+
   return {
     async getPlanState(request) {
       GetPlanStateRpcParamsSchema.parse(request);
@@ -1839,6 +1865,69 @@ export function createPlanningOperations(
           return ExecutePlanTransitionRpcResultSchema.parse({
             status: "completed",
             state: await read(),
+          });
+        }
+        if (command.transitionId === "PL-T36") {
+          if (planningRequests === undefined) return reject(UNAVAILABLE);
+          const record = await planningRequests.read(command.requestId);
+          if (
+            record === undefined ||
+            record.request.source.chatId !== command.sourceConversationId
+          ) {
+            return reject(UNAVAILABLE);
+          }
+          if (record.request.lifecycle !== "open") {
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await chatOriginatedResult(record.request),
+            });
+          }
+          if (record.request.proposalId !== null) {
+            const proposal = await proposalRepository.read(record.request.proposalId);
+            const plan = proposal === undefined ? undefined : await plans.read(proposal.planId);
+            if (proposal?.status !== "proposed" || plan?.status !== "active") {
+              return reject(UNAVAILABLE);
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({
+                activeScenario: record.request.attention === "stale_base" ? "PL-S025" : "PL-S007",
+                selectedProposalId: proposal.id,
+              }),
+            });
+          }
+          if (record.request.planConversationId !== null) {
+            const conversation = await conversations.readConversation(
+              record.request.planConversationId,
+            );
+            const current = await conversations.readLatestOpenConversation();
+            if (
+              conversation?.status !== "open" ||
+              current?.id !== record.request.planConversationId
+            ) {
+              return reject(UNAVAILABLE);
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ sourceConversationId: command.sourceConversationId }),
+            });
+          }
+          return reject(UNAVAILABLE);
+        }
+        if (command.transitionId === "PL-T37") {
+          if (planningRequests === undefined) return reject(UNAVAILABLE);
+          const record = await planningRequests.read(command.requestId);
+          if (
+            record === undefined ||
+            record.request.lifecycle === "open" ||
+            !record.request.source.available ||
+            record.request.source.chatId !== command.sourceConversationId
+          ) {
+            return reject(UNAVAILABLE);
+          }
+          return ExecutePlanTransitionRpcResultSchema.parse({
+            status: "completed",
+            state: await chatOriginatedResult(record.request),
           });
         }
         if (command.transitionId === "PL-T02") {
@@ -3815,6 +3904,25 @@ export function createPlanningOperations(
           }
         }
         if (command.transitionId === "PL-T39") {
+          if (
+            command.sourceScenarioId === "PL-S099" &&
+            command.destinationScenarioId === "PL-S004"
+          ) {
+            if (planningRequests === undefined) return reject(UNAVAILABLE);
+            const request = await planningRequests.read(command.returnFocusId);
+            const plan = await plans.readLatest();
+            if (
+              request === undefined ||
+              request.request.lifecycle === "open" ||
+              plan?.status !== "active"
+            ) {
+              return reject(UNAVAILABLE);
+            }
+            return ExecutePlanTransitionRpcResultSchema.parse({
+              status: "completed",
+              state: await read({ activeScenario: "PL-S004" }),
+            });
+          }
           if (
             command.sourceScenarioId === "PL-S089" &&
             command.destinationScenarioId === "PL-S102"

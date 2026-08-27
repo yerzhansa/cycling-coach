@@ -1,5 +1,6 @@
 import {
   PlanActiveProjectionDataSchema,
+  PlanChatOriginatedResultProjectionDataSchema,
   PlanEndedProjectionDataSchema,
   PlanCoachProjectionDataSchema,
   PlanReadModelSchema,
@@ -7,6 +8,7 @@ import {
   type CoachDecisionReadModel,
   type PlanAttention,
   type PlanActiveProjectionData,
+  type PlanningRequestReadModel,
   type PlanEndedProjectionData,
   type PlanCoachMessage,
   type PlanDraftProjection,
@@ -413,6 +415,41 @@ export function buildEndedPlanConversationReadModel(input: {
       queue: { schemaVersion: 1, revision: 0, items: [] },
       decision: null,
       draft: null,
+    }),
+  });
+}
+
+export function buildChatOriginatedPlanResultReadModel(input: {
+  readonly request: PlanningRequestReadModel;
+  readonly planId: string | null;
+  readonly lifecycle: PlanLifecycle;
+  readonly revision: number;
+}): PlanReadModel {
+  const terminal = input.request.terminalResult;
+  if (terminal === null) throw new TypeError("Chat-originated Plan result requires completion.");
+  const returnTarget = input.request.source.available
+    ? {
+        destination: "chat" as const,
+        chatId: input.request.source.chatId,
+        messageId: input.request.source.messageId,
+      }
+    : null;
+  return PlanReadModelSchema.parse({
+    schemaVersion: 1,
+    scenarioId: "PL-S099",
+    lifecycle: input.lifecycle,
+    planId: input.planId,
+    revision: input.revision,
+    title: terminal.title,
+    summary: terminal.detail,
+    projection: "proposal",
+    transitions: [...(returnTarget === null ? [] : [guard("PL-T37")]), guard("PL-T39")],
+    reconciliation: EMPTY_RECONCILIATION,
+    attention: EMPTY_ATTENTION,
+    activeOperation: null,
+    data: PlanChatOriginatedResultProjectionDataSchema.parse({
+      request: input.request,
+      returnTarget,
     }),
   });
 }
