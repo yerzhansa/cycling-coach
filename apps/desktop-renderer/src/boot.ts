@@ -229,6 +229,7 @@ export function bootRenderer(): Disposer {
   store.getState().bindPlanActions({
     open: () => planAdapter.open(),
     startPlan: () => planAdapter.startPlan(),
+    closeCoach: () => planAdapter.closeCoach(),
     submitCoach: (message) => planAdapter.submitCoach(message),
     stopCoach: () => planAdapter.stopCoach(),
     removeQueuedCoachMessage: (id) => planAdapter.removeQueuedCoachMessage(id),
@@ -238,6 +239,7 @@ export function bootRenderer(): Disposer {
     skipCoachDecision: (decisionId) => planAdapter.skipCoachDecision(decisionId),
     saveFtp: (watts) => planAdapter.saveFtp(watts),
     refreshFtp: () => planAdapter.refreshFtp(),
+    backToCoachInterview: () => planAdapter.backToCoachInterview(),
     createDraft: () => planAdapter.createDraft(),
     updateDraft: (message) => planAdapter.updateDraft(message),
     openDiscardConfirmation: () => planAdapter.openDiscardConfirmation(),
@@ -278,6 +280,7 @@ export function bootRenderer(): Disposer {
     resolveWorkoutDrift: (workoutId, eventId, decision) =>
       planAdapter.resolveWorkoutDrift(workoutId, eventId, decision),
     openProposal: (proposalId) => planAdapter.openProposal(proposalId),
+    closeProposal: () => planAdapter.closeProposal(),
     reviseProposal: (proposalId, text) => planAdapter.reviseProposal(proposalId, text),
     approveProposal: (proposalId, expectedRevision) =>
       planAdapter.approveProposal(proposalId, expectedRevision),

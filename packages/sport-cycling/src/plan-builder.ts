@@ -26,8 +26,21 @@ import {
 // MAIN ENTRY POINT
 // ============================================================================
 
-export function buildPlanSkeleton(profile: AthleteProfile, tz: string = "UTC"): TrainingPlan {
-  const totalWeeks = computeTotalWeeks(profile, tz);
+export interface BuildPlanSkeletonOptions {
+  readonly id?: string;
+  readonly now?: string;
+  readonly totalWeeks?: number;
+}
+
+export function buildPlanSkeleton(
+  profile: AthleteProfile,
+  tz: string = "UTC",
+  options: BuildPlanSkeletonOptions = {},
+): TrainingPlan {
+  const totalWeeks = options.totalWeeks ?? computeTotalWeeks(profile, tz);
+  if (!Number.isSafeInteger(totalWeeks) || totalWeeks < 1 || totalWeeks > 24) {
+    throw new RangeError("Plan duration must be between 1 and 24 weeks.");
+  }
   const model = selectPeriodizationModel(profile, totalWeeks);
   const cycleLength = 7;
 
@@ -38,10 +51,10 @@ export function buildPlanSkeleton(profile: AthleteProfile, tz: string = "UTC"): 
   const schedulePreferences = buildSchedulePreferences(profile);
 
   const ratio = BUILD_RECOVERY_RATIOS[profile.experienceLevel];
-  const now = new Date().toISOString();
+  const now = options.now ?? new Date().toISOString();
 
   return {
-    id: randomUUID(),
+    id: options.id ?? randomUUID(),
     name: `${totalWeeks}-Week Plan`,
     primaryGoal:
       profile.goalType === "race"
@@ -83,9 +96,11 @@ function buildPhases(
   cycleLength: number,
 ): TrainingPlanPhase[] {
   const taperWeeks =
-    profile.goalType === "race" && profile.raceType ? (TAPER_WEEKS[profile.raceType] ?? 0) : 0;
+    profile.goalType === "race" && profile.raceType
+      ? Math.min(totalWeeks, TAPER_WEEKS[profile.raceType] ?? 0)
+      : 0;
   const remainingWeeks = totalWeeks - taperWeeks;
-  const templates = PHASE_TEMPLATES[model];
+  const templates = PHASE_TEMPLATES[model].slice(0, remainingWeeks);
 
   const rawWeeks = templates.map((t) => t.pct * remainingWeeks);
   const roundedWeeks = distributeWeeks(rawWeeks, remainingWeeks);
@@ -137,6 +152,7 @@ function buildPhases(
 }
 
 function distributeWeeks(rawWeeks: number[], total: number): number[] {
+  if (total === 0 || rawWeeks.length === 0) return [];
   const rounded = rawWeeks.map((w) => Math.max(1, Math.round(w)));
   let sum = rounded.reduce((s, w) => s + w, 0);
 

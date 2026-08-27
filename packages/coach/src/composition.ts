@@ -87,6 +87,10 @@ import {
   createLegacyPlanRowWriter,
   importLegacyCurrentPlan,
 } from "@enduragent/kernel-node/planning";
+import {
+  createPlanDraftBuildRepository,
+  createPlanIntakeRepository,
+} from "@enduragent/kernel/planning";
 import type { CoachStoreWriterContext } from "./runtime.js";
 import {
   CHAT_ATTACHMENT_LIMITS,
@@ -177,6 +181,7 @@ import {
 } from "./activity-power-heart-rate.js";
 import { createTrainingExportService } from "./training-export.js";
 import { createPlanningOperations } from "./planning-operations.js";
+import { createCyclingPlanDraftBuilder } from "./cycling-plan-draft-builder.js";
 import { createPlanMirrorCalendarAdapter } from "./planning-calendar.js";
 import { createNodePlanRaceCourseAdapter } from "./planning-race-course.js";
 import { serializeBoundaryError } from "./daemon/error-boundary.js";
@@ -856,7 +861,8 @@ export async function createLocalCoachComposition(
   const planningIdentity = createAuthoredIdentity(input.home.configDir, { now });
   const planningRepository = createLegacyPlanRepository(input.context.store);
   const planningTimezone = resolveUserTimezone(input.config.session.timezone);
-  const planningDateKey = (): number => Number(todayInTZ(planningTimezone).replaceAll("-", ""));
+  const planningDateKey = (): number =>
+    Number(todayInTZ(planningTimezone, new Date(now())).replaceAll("-", ""));
   await importLegacyCurrentPlan({
     home: input.home,
     store: input.context.store,
@@ -2012,6 +2018,8 @@ export async function createLocalCoachComposition(
       workoutLimits,
       todayDateKey: planningDateKey,
     });
+    const planIntakes = createPlanIntakeRepository(input.context.store);
+    const planDraftBuilds = createPlanDraftBuildRepository(input.context.store);
     const planningOperations = createPlanningOperations(
       {
         context: input.context,
@@ -2019,7 +2027,16 @@ export async function createLocalCoachComposition(
         identity: planningIdentity,
       },
       {
+        intakes: planIntakes,
+        draftBuilds: planDraftBuilds,
         ftp,
+        draftBuilder: createCyclingPlanDraftBuilder({
+          intakes: planIntakes,
+          checkpoints: planDraftBuilds,
+          ftp,
+          identity: planningIdentity,
+          todayDateKey: planningDateKey,
+        }),
         course: createNodePlanRaceCourseAdapter(),
         todayDateKey: planningDateKey,
         calendar: planCalendar,

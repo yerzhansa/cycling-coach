@@ -99,6 +99,7 @@ describe("engine scaffold", () => {
       "encodePlanProposalMutation",
       "ensureClaudeCliReady",
       "ensureCodexAgentReady",
+      "evaluatePlanIntakeReadiness",
       "executePlanFtpTransition",
       "extractAccountId",
       "failRaceCourseRecalculation",

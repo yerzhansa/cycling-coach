@@ -4,7 +4,9 @@ import {
   GetPlanStateRpcResultSchema,
   PLAN_TRANSITION_IDS,
   PlanAttentionSchema,
+  PlanActiveWorkoutProjectionSchema,
   PlanDraftPlanProjectionSchema,
+  PlanEndedProjectionDataSchema,
   PlanFtpProjectionSchema,
   PlanHydrationStateSchema,
   PlanProgressEventSchema,
@@ -55,7 +57,16 @@ const commands = [
   { transitionId: "PL-T14", commandId, planId, workoutId, activityId: "activity-1" },
   { transitionId: "PL-T15", commandId, planId, workoutId, eventId },
   { transitionId: "PL-T16", commandId, planId, workoutId, eventId },
-  { transitionId: "PL-T17", commandId, planId, proposalId },
+  {
+    transitionId: "PL-T17",
+    commandId,
+    planId,
+    proposalId,
+    selectedProposalReturn: {
+      sourceScenarioId: "PL-S010",
+      returnFocusId: "workout-row-1",
+    },
+  },
   { transitionId: "PL-T18", commandId, proposalId, text: "Make it thirty minutes" },
   { transitionId: "PL-T19", commandId, proposalId, expectedRevision: 3 },
   { transitionId: "PL-T20", commandId, proposalId },
@@ -154,6 +165,18 @@ describe("planning contract", () => {
     ).toBe(false);
     expect(
       PlanTransitionCommandSchema.safeParse({ transitionId: "PL-T08", commandId, draftId }).success,
+    ).toBe(false);
+    expect(
+      PlanTransitionCommandSchema.safeParse({
+        transitionId: "PL-T17",
+        commandId,
+        planId,
+        proposalId,
+        selectedProposalReturn: {
+          sourceScenarioId: "PL-S010",
+          returnFocusId: "",
+        },
+      }).success,
     ).toBe(false);
     expect(
       PlanTransitionCommandSchema.safeParse({
@@ -323,8 +346,26 @@ describe("planning contract", () => {
         weekStartDay: 1,
         workoutCount: 58,
         plannedDurationS: 309_600,
+        phaseSummary: ["Build", "Recovery", "Taper", "Race"],
+        ftpWatts: 282,
       }),
-    ).toMatchObject({ kind: "full-plan", totalWeeks: 12 });
+    ).toMatchObject({
+      kind: "full-plan",
+      totalWeeks: 12,
+      phaseSummary: ["Build", "Recovery", "Taper", "Race"],
+      ftpWatts: 282,
+    });
+    expect(
+      PlanActiveWorkoutProjectionSchema.parse({
+        id: workoutId,
+        date: "1998-08-22",
+        sport: "cycling",
+        name: "Recovery spin",
+        durationS: 2_700,
+        powerTargetW: { min: 130, max: 165 },
+        cue: "Keep the pedals light.",
+      }),
+    ).toMatchObject({ powerTargetW: { min: 130, max: 165 } });
     const updated = {
       status: "updated" as const,
       selectedDate: "2026-07-20",
@@ -341,6 +382,44 @@ describe("planning contract", () => {
     expect(PlanStartDateProjectionSchema.safeParse({ ...updated, status: "invalid" }).success).toBe(
       false,
     );
+  });
+
+  it("keeps canonical race-outcome detail aligned with the stored outcome", () => {
+    const plan = {
+      id: planId,
+      name: "Gran Fondo Almaty",
+      primaryGoal: "Finish in the front half",
+      startDate: "1998-07-13",
+      targetDate: "1998-10-04",
+      kind: "full-plan" as const,
+      totalWeeks: 12,
+      weekStartDay: 1,
+      workoutCount: 58,
+      plannedDurationS: 309_600,
+    };
+    const raceOutcomeDetails = {
+      outcome: "completed" as const,
+      raceDate: "1998-10-04",
+      goal: "Front half",
+      result: "Front third",
+      trainingDurationS: 303_600,
+      raceDurationS: 18_180,
+      totalDurationS: 321_780,
+      modeledFinishMinutes: { min: 288, max: 312 },
+      actualDurationS: 18_180,
+      appliedChangeCount: 12,
+    };
+    const value = {
+      plan,
+      endedAtMs: 1,
+      raceOutcome: "completed" as const,
+      raceOutcomeDetails,
+      cleanupItems: [],
+    };
+    expect(PlanEndedProjectionDataSchema.safeParse(value).success).toBe(true);
+    expect(
+      PlanEndedProjectionDataSchema.safeParse({ ...value, raceOutcome: "not-completed" }).success,
+    ).toBe(false);
   });
 
   it("encodes the approved attention count and destination rule", () => {

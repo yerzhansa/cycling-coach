@@ -2,10 +2,11 @@ import type {
   ChatQueueRunResult,
   ChatQueueSnapshot,
   CoachEngine,
+  PlanIntakePatch,
   QueuedChatMessage,
   TurnEvent,
 } from "@enduragent/coach-contract";
-import { CoachAgent } from "./agent/coach-agent.js";
+import { CoachAgent, type DeferredPlanTurn } from "./agent/coach-agent.js";
 import { extractAccountId } from "./agent/codex/jwt.js";
 import type { ChatAttachmentActivitySummary, EngineHostPorts } from "./host-ports.js";
 import type { Sport } from "./sport.js";
@@ -34,6 +35,7 @@ export * from "./planning/auto-apply.js";
 export * from "./planning/replacement.js";
 export * from "./planning/season.js";
 export * from "./planning/readiness.js";
+export * from "./planning/intake-readiness.js";
 export * from "./planning/weekly-review.js";
 export * from "./planning/race-outcome.js";
 export type {
@@ -93,6 +95,8 @@ export interface CreateCoachEngineInput {
 export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
   const agent = new CoachAgent(input.sport, input.ports);
   const queueRuns = new Map<string, Promise<ChatQueueRunResult>>();
+  const deferredPlanTurns = new Map<string, DeferredPlanTurn>();
+  const deferredKey = (chatId: string, turnId: string): string => `${chatId}:${turnId}`;
   const queueAuthorities = new Map<string, Promise<void>>();
   const withQueueAuthority = async <T>(chatId: string, work: () => Promise<T>): Promise<T> => {
     const previous = queueAuthorities.get(chatId) ?? Promise.resolve();
@@ -217,6 +221,7 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
           .filter((value): value is string => value !== undefined && value.length > 0)
           .join("\n\n");
         let decision;
+        let planIntakePatch: PlanIntakePatch | undefined;
         const text = await agent.chat(
           chatId,
           queueText(selected),
@@ -247,6 +252,12 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
             decision = requested;
           },
           turnId,
+          (patch) => {
+            planIntakePatch = patch;
+          },
+          (turn) => {
+            deferredPlanTurns.set(deferredKey(turn.chatId, turn.turnId), turn);
+          },
         );
         if (interrupted) {
           return {
@@ -255,7 +266,14 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
               chatId,
               claimId,
             ),
-            response: decision === undefined ? { text } : { text, decision },
+            response:
+              decision === undefined
+                ? { text, ...(planIntakePatch === undefined ? {} : { planIntakePatch }) }
+                : {
+                    text,
+                    decision,
+                    ...(planIntakePatch === undefined ? {} : { planIntakePatch }),
+                  },
           };
         }
         await input.ports.chatAttachments?.completeQueuedTurn({
@@ -268,7 +286,14 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
             chatId,
             claimId,
           ),
-          response: decision === undefined ? { text } : { text, decision },
+          response:
+            decision === undefined
+              ? { text, ...(planIntakePatch === undefined ? {} : { planIntakePatch }) }
+              : {
+                  text,
+                  decision,
+                  ...(planIntakePatch === undefined ? {} : { planIntakePatch }),
+                },
         };
       } catch (error) {
         queuePort("requireChatQueueRetry").call(input.ports.chatStore, chatId, claimId);
@@ -285,6 +310,7 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
   return {
     chat: async (request, onEvent) => {
       let decision;
+      let planIntakePatch: PlanIntakePatch | undefined;
       const text = await agent.chat(
         request.chatId,
         request.message,
@@ -295,8 +321,19 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
         (requested) => {
           decision = requested;
         },
+        undefined,
+        (patch) => {
+          planIntakePatch = patch;
+        },
+        request.chatId.startsWith("plan:")
+          ? (turn) => {
+              deferredPlanTurns.set(deferredKey(turn.chatId, turn.turnId), turn);
+            }
+          : undefined,
       );
-      return decision === undefined ? { text } : { text, decision };
+      return decision === undefined
+        ? { text, ...(planIntakePatch === undefined ? {} : { planIntakePatch }) }
+        : { text, decision, ...(planIntakePatch === undefined ? {} : { planIntakePatch }) };
     },
     stopChat: async (request) => ({ stopped: agent.stopChat(request.chatId, request.turnId) }),
     enqueueChatMessage: async (request) => {
@@ -349,6 +386,24 @@ export function createCoachEngine(input: CreateCoachEngineInput): CoachEngine {
       withQueueAuthority(request.chatId, () => agent.resetSession(request.chatId)),
     hasSession: async (request) => ({ hasSession: agent.hasSession(request.chatId) }),
     getAthleteState: () => agent.getAthleteState(),
+    replacePlanChatHistory: async (request) => {
+      for (const [key, turn] of deferredPlanTurns) {
+        if (turn.chatId === request.chatId) deferredPlanTurns.delete(key);
+      }
+      agent.replacePlanConversationHistory(request.chatId, request.turns);
+    },
+    commitPlanChatTurn: async (request) => {
+      const key = deferredKey(request.chatId, request.turnId);
+      const turn = deferredPlanTurns.get(key);
+      if (turn === undefined) return;
+      agent.commitDeferredPlanTurn(turn);
+      deferredPlanTurns.delete(key);
+    },
+    getPlanDecisionIntakePatch: async (request) =>
+      input.ports.coachDecisions?.getDecisionPlanIntakePatch?.(
+        request.chatId,
+        request.decisionId,
+      ) ?? undefined,
   };
 }
 

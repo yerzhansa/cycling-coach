@@ -20,7 +20,7 @@ export type { FeasibilityInput, FeasibilityResult } from "./feasibility.js";
 export { getSampleWeek } from "./templates.js";
 export type { SampleWorkout, WorkoutType } from "./templates.js";
 
-export { buildPlanSkeleton } from "./plan-builder.js";
+export { buildPlanSkeleton, type BuildPlanSkeletonOptions } from "./plan-builder.js";
 export { projectCyclingSeasonMetadata } from "./season.js";
 export type {
   CyclingSeasonConstraintMetadata,

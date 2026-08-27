@@ -2,6 +2,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  PLAN_QA_SCENARIOS,
+  createPlanQaSeedModel,
+  planQaSeedScenarioId,
+} from "../../../apps/desktop/tests/helpers/plan-qa-scenario-registry.js";
 import { PLAN_TRANSITION_IDS, PlanScenarioIdSchema } from "../src/planning.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -24,7 +29,8 @@ function collectTestFiles(directory: string): string[] {
   for (const entry of readdirSync(join(repositoryRoot, directory), { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (!["dist", "node_modules", "out"].includes(entry.name)) paths.push(...collectTestFiles(path));
+      if (!["dist", "node_modules", "out"].includes(entry.name))
+        paths.push(...collectTestFiles(path));
       continue;
     }
     if (/\.test\.(?:ts|tsx)$/.test(entry.name) && path !== currentFile) paths.push(path);
@@ -282,15 +288,13 @@ const canonicalFlows = [
 describe("Plan acceptance closure", () => {
   it("assigns every Plan-owned Scenario to executable acceptance evidence", () => {
     const expected = scenarioRange(1, 105).filter((id) => id !== "PL-S099");
-    const actual = evidenceGroups.flatMap((group) => group.scenarios);
+    const actual = PLAN_QA_SCENARIOS.map((entry) => entry.id);
 
     expect(new Set(actual).size).toBe(actual.length);
     expect([...actual].sort()).toEqual(expected.sort());
-    for (const id of actual) expect(PlanScenarioIdSchema.parse(id)).toBe(id);
-    for (const group of evidenceGroups) {
-      for (const [path, marker] of group.evidence) {
-        expect(readRepositoryFile(path), `${path} must retain ${marker}`).toContain(marker);
-      }
+    for (const entry of PLAN_QA_SCENARIOS) {
+      expect(PlanScenarioIdSchema.parse(entry.id)).toBe(entry.id);
+      expect(createPlanQaSeedModel(entry.id).scenarioId).toBe(planQaSeedScenarioId(entry.id));
     }
   });
 
@@ -302,7 +306,8 @@ describe("Plan acceptance closure", () => {
       (id) => id !== "PL-T36" && id !== "PL-T37",
     );
 
-    for (const id of planOwnedTransitions) expect(testCorpus, `${id} needs test evidence`).toContain(id);
+    for (const id of planOwnedTransitions)
+      expect(testCorpus, `${id} needs test evidence`).toContain(id);
     expect(canonicalFlows).toHaveLength(9);
     for (const flow of canonicalFlows) {
       const [path, marker] = flow.evidence;
@@ -336,9 +341,7 @@ describe("Plan acceptance closure", () => {
   });
 
   it("retains keyboard, focus, visual-matrix, and Estimated CP evidence", () => {
-    const surfaceEvidence = readRepositoryFile(
-      "apps/desktop-renderer/tests/plan-surface.test.tsx",
-    );
+    const surfaceEvidence = readRepositoryFile("apps/desktop-renderer/tests/plan-surface.test.tsx");
     const cpEvidence = readRepositoryFile("packages/sport-cycling/tests/estimated-cp.test.ts");
 
     for (const marker of [

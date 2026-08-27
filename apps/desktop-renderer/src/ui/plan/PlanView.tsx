@@ -8,11 +8,19 @@ import {
   Info,
   LoaderCircle,
   MapPinned,
+  Paperclip,
   RefreshCw,
   TriangleAlert,
   Undo2,
 } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactElement,
+} from "react";
 import {
   PLAN_MIN_FULL_DAYS,
   PlanActiveProjectionDataSchema,
@@ -47,6 +55,31 @@ import { Page } from "../shared/Page.js";
 
 const SUPPORT_PAIR = "grid gap-[calc(var(--inset)/2)]";
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+const ACTIVE_OVERVIEW_SCENARIOS = new Set([
+  "PL-S004",
+  "PL-S007",
+  "PL-S010",
+  "PL-S011",
+  "PL-S013",
+  "PL-S021",
+  "PL-S022",
+  "PL-S023",
+  "PL-S024",
+  "PL-S025",
+  "PL-S028",
+  "PL-S037",
+  "PL-S038",
+  "PL-S039",
+  "PL-S040",
+  "PL-S041",
+  "PL-S042",
+  "PL-S043",
+  "PL-S051",
+  "PL-S071",
+  "PL-S072",
+  "PL-S073",
+  "PL-S097",
+]);
 
 function civilDate(value: string): Date {
   return new Date(`${value}T00:00:00.000Z`);
@@ -136,80 +169,108 @@ function historyDetail(entry: PlanHistoryEntry): string {
 }
 
 function PlanHistoryProjection(props: {
+  readonly data: ReturnType<typeof PlanActiveProjectionDataSchema.parse>;
   readonly entries: readonly PlanHistoryEntry[];
 }): ReactElement {
   const actions = useEnduragentStore((state) => state.planActions);
+  const currentPhase =
+    props.data.season?.weeks.find((week) => week.status === "current")?.phase ??
+    props.data.plan.phaseSummary?.[0] ??
+    "Plan";
   return (
-    <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
-      <div className="flex items-start justify-between gap-row">
+    <div className="grid gap-6">
+      <section className="flex items-start justify-between gap-row rounded-card bg-surface p-5 shadow-elev-1">
+        <div className={SUPPORT_PAIR}>
+          <h2 className="m-0 text-lg font-semibold">{props.data.plan.name}</h2>
+          <p className="m-0 text-ink-2">
+            {currentPhase} phase
+            {props.data.plan.ftpWatts === undefined ? "" : ` · FTP ${props.data.plan.ftpWatts} W`}
+          </p>
+        </div>
+        <span className="rounded-chip bg-sunk px-3 py-1 text-sm text-ok">Active</span>
+      </section>
+      <section className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1">
         <div className={SUPPORT_PAIR}>
           <h2
             id="plan-history-heading"
             tabIndex={-1}
             className="m-0 text-lg font-semibold outline-none"
           >
-            Plan history
+            Plan changes
           </h2>
-          <p className="m-0 text-ink-2">Plan changes are saved here and cannot be edited.</p>
+          <p className="m-0 text-ink-2">Saved changes cannot be edited.</p>
         </div>
-        <Button type="button" variant="outline" onClick={() => actions?.closeHistory()}>
-          Back to Plan
-        </Button>
-      </div>
-      <div className="relative grid pl-8">
-        <span className="absolute bottom-4 left-[7px] top-4 w-px bg-line" aria-hidden="true" />
-        {props.entries.map((entry) => (
-          <article
-            key={entry.id}
-            className="relative grid gap-[calc(var(--inset)/2)] border-b border-line py-row last:border-b-0"
-          >
-            <span
-              className="absolute -left-8 top-[calc(var(--row-inset)+2px)] size-[15px] rounded-full border-[4px] border-surface bg-primary"
-              aria-hidden="true"
-            />
-            <div className="flex items-start justify-between gap-row">
-              <div className={SUPPORT_PAIR}>
-                <h3 className="m-0 text-base font-semibold">{entry.label}</h3>
-                <p className="m-0 text-sm text-ink-2">
-                  {new Intl.DateTimeFormat(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  }).format(new Date(entry.occurredAtMs))}
-                  {" · "}
-                  {historyDetail(entry)}
-                </p>
+        <div className="relative grid pl-8">
+          <span className="absolute bottom-4 left-[7px] top-4 w-px bg-line" aria-hidden="true" />
+          {props.entries.map((entry) => (
+            <article
+              key={entry.id}
+              className="relative grid gap-[calc(var(--inset)/2)] border-b border-line py-row last:border-b-0"
+            >
+              <span
+                className="absolute -left-8 top-[calc(var(--row-inset)+2px)] size-[15px] rounded-full border-[4px] border-surface bg-primary"
+                aria-hidden="true"
+              />
+              <div className="flex items-start justify-between gap-row">
+                <div className={SUPPORT_PAIR}>
+                  <h3 className="m-0 text-base font-semibold">{entry.label}</h3>
+                  <p className="m-0 text-sm text-ink-2">
+                    {new Intl.DateTimeFormat(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(entry.occurredAtMs))}
+                    {" · "}
+                    {historyDetail(entry)}
+                  </p>
+                </div>
+                {entry.undoStatus === "eligible" ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => actions?.undoPlanChange(entry.id)}
+                  >
+                    <Undo2 className="size-4" aria-hidden="true" />
+                    Undo
+                  </Button>
+                ) : null}
               </div>
-              {entry.undoStatus === "eligible" ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => actions?.undoPlanChange(entry.id)}
-                >
-                  <Undo2 className="size-4" aria-hidden="true" />
-                  Undo
-                </Button>
-              ) : null}
-            </div>
-            {historyReason(entry) === null ? null : (
-              <p className="m-0 text-sm text-ink-2">{historyReason(entry)}</p>
-            )}
-          </article>
-        ))}
-      </div>
-      <div className="flex flex-col gap-inset border-t border-line pt-row sm:flex-row sm:items-center sm:justify-between">
-        <p className="m-0 text-sm text-ink-2">
-          Auto-apply and Weekly review change future behavior; History remains unchanged.
-        </p>
-        <Button
-          id="plan-settings-trigger"
-          type="button"
-          variant="outline"
-          onClick={() => actions?.openPlanSettings()}
-        >
-          Open settings
-        </Button>
-      </div>
-    </section>
+              {historyReason(entry) === null ? null : (
+                <p className="m-0 text-sm text-ink-2">{historyReason(entry)}</p>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
+      <section className="overflow-hidden rounded-card bg-surface shadow-elev-1">
+        <div className="flex flex-col gap-inset px-5 py-row sm:flex-row sm:items-center sm:justify-between">
+          <div className={SUPPORT_PAIR}>
+            <h2 className="m-0 text-base font-semibold">Plan settings</h2>
+            <p className="m-0 text-sm text-ink-2">Auto-apply and Weekly review.</p>
+          </div>
+          <Button
+            id="plan-settings-trigger"
+            type="button"
+            variant="outline"
+            onClick={() => actions?.openPlanSettings()}
+          >
+            Open settings
+          </Button>
+        </div>
+        <div className="flex flex-col gap-inset border-t border-line px-5 py-row sm:flex-row sm:items-center sm:justify-between">
+          <p className="m-0 text-sm text-ink-2">
+            End this Plan. Today’s workout stays; tomorrow-onward Enduragent workouts are removed.
+          </p>
+          <Button
+            id="plan-end-trigger"
+            type="button"
+            variant="destructive"
+            onClick={() => actions?.openEndConfirmation()}
+          >
+            End Plan
+          </Button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -879,6 +940,7 @@ function NoPlan(): ReactElement {
       ) : null}
       <div className="flex flex-wrap gap-inset">
         <Button
+          id="plan-start-coach"
           type="button"
           disabled={actions === null || busy || startBlocked}
           aria-busy={busy ? "true" : undefined}
@@ -1117,6 +1179,8 @@ function FtpResolution(props: { readonly ftp: PlanFtpProjection }): ReactElement
 
 function PlanCoach(): ReactElement {
   const composer = useRef<ComposerHandle>(null);
+  const conversation = useRef<HTMLElement>(null);
+  const followsLatest = useRef(true);
   const actions = useEnduragentStore((state) => state.planActions);
   const coach = useEnduragentStore((state) => state.plan.coach);
   const model = useEnduragentStore((state) => planReadModel(state.plan));
@@ -1125,7 +1189,11 @@ function PlanCoach(): ReactElement {
   const parsed = model === null ? null : PlanCoachProjectionDataSchema.safeParse(model.data);
   const data = parsed?.success === true ? parsed.data : null;
   const busy = transition.status === "submitting" || transition.status === "running";
-  const ready = data?.readyToCreateDraft === true;
+  const draftFormationFailed =
+    transition.status === "failed" && transition.transitionId === "PL-T06";
+  const ready =
+    data?.readyToCreateDraft === true &&
+    (model?.scenarioId === "PL-S016" || model?.scenarioId === "PL-S103");
   const messages =
     coach.messages.length > 0
       ? coach.messages
@@ -1138,6 +1206,28 @@ function PlanCoach(): ReactElement {
           historical: false,
         })) ?? []);
   const decision = coach.decision ?? data?.decision ?? null;
+  const latestMessage = messages.at(-1);
+  const scrollRevision = `${messages.length}:${latestMessage?.id ?? ""}:${latestMessage?.text.length ?? 0}:${coach.status}`;
+
+  useEffect(() => {
+    composer.current?.focus();
+  }, [model?.scenarioId]);
+
+  useEffect(() => {
+    const target = conversation.current;
+    if (target === null) return;
+    const onScroll = (): void => {
+      followsLatest.current = target.scrollHeight - target.scrollTop - target.clientHeight <= 80;
+    };
+    onScroll();
+    target.addEventListener("scroll", onScroll);
+    return () => target.removeEventListener("scroll", onScroll);
+  }, [model?.scenarioId, ready]);
+
+  useLayoutEffect(() => {
+    const target = conversation.current;
+    if (target !== null && followsLatest.current) target.scrollTop = target.scrollHeight;
+  }, [ready, scrollRevision]);
 
   if (model?.scenarioId === "PL-S102") {
     return (
@@ -1169,49 +1259,37 @@ function PlanCoach(): ReactElement {
     return <FtpResolution ftp={data.ftp} />;
   }
 
-  return (
-    <section
-      className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1"
-      data-plan-scenario={model?.scenarioId}
-    >
-      {model?.scenarioId === "PL-S020" ? (
-        <div className="flex items-start gap-row text-ok" role="status">
-          <CheckCircle2 className="mt-0.5 size-4" aria-hidden="true" />
-          <div className={SUPPORT_PAIR}>
-            <h2 className="m-0 text-base font-medium text-ink">Draft discarded</h2>
-            <p className="m-0 text-ink-2">Your Plan conversation is still here.</p>
-          </div>
-        </div>
-      ) : null}
-      {data?.ftp?.conflict === true && data.ftp.usedWatts !== null ? (
-        <div
-          className="rounded-ctl bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] p-3 text-sm"
-          role="status"
-        >
-          Using {data.ftp.usedWatts} W from the selected FTP source. Other FTP sources differ.
-        </div>
-      ) : null}
-      <ConversationTranscript
-        messages={messages}
-        timeline={coach.timeline}
-        historyControls={false}
-      />
-      <CoachDecisionPanel
-        onCustomOpenChange={setCustomDecisionOpen}
-        surface={{
-          decision,
-          phase: coach.decisionPhase,
-          answerLabel: coach.decisionAnswerLabel,
-          error: coach.decisionError,
-          loadError: coach.decisionLoadError,
-          answer: (decisionId, answer) => actions?.answerCoachDecision(decisionId, answer),
-          skip: (decisionId) => actions?.skipCoachDecision(decisionId),
-          retry: () => actions?.retry(),
-        }}
-      />
-      <PlanQueue />
-      {data?.course === undefined ? null : <RaceCoursePanel course={data.course} draft={false} />}
-      {ready ? (
+  if (ready) {
+    const weekdayLabels: Record<string, string> = {
+      mon: "Monday",
+      tue: "Tuesday",
+      wed: "Wednesday",
+      thu: "Thursday",
+      fri: "Friday",
+      sat: "Saturday",
+      sun: "Sunday",
+    };
+    const intake = data?.intake;
+    const ftp = data?.ftp;
+    const course = data?.course;
+    const sourceLabel =
+      ftp?.usedSource === "intervals-ftp"
+        ? "Intervals FTP"
+        : ftp?.usedSource === "intervals-eftp"
+          ? "Intervals eFTP"
+          : ftp?.usedSource === "manual"
+            ? "Athlete-entered FTP"
+            : null;
+    return (
+      <section
+        className="grid gap-6 rounded-card bg-surface p-5 shadow-elev-1"
+        data-plan-scenario={model?.scenarioId}
+      >
+        <ConversationTranscript
+          messages={messages}
+          timeline={coach.timeline}
+          historyControls={false}
+        />
         <section className="grid gap-row rounded-card bg-sunk p-4">
           <div className={SUPPORT_PAIR}>
             <h2 className="m-0 text-sm font-medium">Ready to create Draft</h2>
@@ -1219,8 +1297,61 @@ function PlanCoach(): ReactElement {
               Goal event, availability, FTP, and course choice are ready.
             </p>
           </div>
+          {intake === undefined ? null : (
+            <dl className="m-0 grid gap-0 border-y border-line">
+              <div className="grid gap-1 py-row">
+                <dt className="text-sm font-medium">Goal event</dt>
+                <dd className="m-0 text-sm text-ink-2">
+                  {intake.eventName} · {intake.eventPriority} priority · {intake.eventDate}
+                </dd>
+                <dd className="m-0 text-sm text-ink-2">{intake.goal}</dd>
+              </div>
+              <div className="grid gap-1 border-t border-line py-row">
+                <dt className="text-sm font-medium">Availability</dt>
+                <dd className="m-0 text-sm text-ink-2">
+                  {intake.availabilityWeekdays.map((day) => weekdayLabels[day]).join(" · ")}
+                </dd>
+              </div>
+              <div className="grid gap-1 border-t border-line py-row">
+                <dt className="text-sm font-medium">FTP</dt>
+                <dd className="m-0 text-sm text-ink-2">
+                  {ftp?.usedWatts} W{sourceLabel === null ? "" : ` · ${sourceLabel}`}
+                </dd>
+              </div>
+              <div className="grid gap-1 border-t border-line py-row">
+                <dt className="text-sm font-medium">Race Course</dt>
+                <dd className="m-0 text-sm text-ink-2">
+                  {course?.accepted?.fileName ?? "Course-agnostic"}
+                </dd>
+              </div>
+            </dl>
+          )}
+          {draftFormationFailed ? (
+            <div
+              className="grid gap-row rounded-ctl bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] p-3"
+              role="alert"
+            >
+              <div className="flex items-start gap-row">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden="true" />
+                <div className={SUPPORT_PAIR}>
+                  <h3 className="m-0 text-sm font-medium">Draft wasn’t created</h3>
+                  <p className="m-0 text-ink-2">{transition.error.message}</p>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button type="button" variant="outline" onClick={() => actions?.retry()}>
+                  Retry
+                </Button>
+              </div>
+            </div>
+          ) : null}
           <div className="flex flex-wrap justify-end gap-inset pt-inset">
-            <Button type="button" variant="outline" onClick={() => composer.current?.focus()}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={actions === null || busy}
+              onClick={() => actions?.backToCoachInterview()}
+            >
               Back to coach
             </Button>
             <Button
@@ -1232,21 +1363,121 @@ function PlanCoach(): ReactElement {
             </Button>
           </div>
         </section>
-      ) : null}
-      <Composer
-        handle={composer}
-        hidden={customDecisionOpen}
-        surface={{
-          status: coach.status,
-          sendDisabled: coach.sendDisabled,
-          inputDisabled: coach.inputDisabled || decision?.status === "unanswered",
-          placeholder: "Reply to your coach…",
-          label: "Reply to your Plan coach",
-          allowSlashCommands: false,
-          submit: (message) => actions?.submitCoach(message) ?? Promise.resolve(false),
-          stop: () => actions?.stopCoach(),
-        }}
-      />
+      </section>
+    );
+  }
+
+  const course = data?.course;
+  const courseVisible =
+    course !== undefined && course.status !== "undecided" && course.status !== "omitted";
+
+  return (
+    <section
+      className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto]"
+      data-plan-scenario={model?.scenarioId}
+      aria-label="Plan coach"
+    >
+      <main
+        ref={conversation}
+        className="min-h-0 overflow-auto pt-[calc(var(--inset)*4)] pb-[calc(var(--inset)*3)] [overflow-anchor:none] max-[760px]:pt-[calc(var(--inset)*3)]"
+        aria-label="Plan coaching conversation"
+      >
+        <div className="mx-auto grid w-[min(720px,calc(100%-48px))] gap-6 max-[760px]:w-[calc(100%-32px)]">
+          {model?.scenarioId === "PL-S020" ? (
+            <div className="flex items-start gap-row text-ok" role="status">
+              <CheckCircle2 className="mt-0.5 size-4" aria-hidden="true" />
+              <div className={SUPPORT_PAIR}>
+                <h2 className="m-0 text-base font-medium text-ink">Draft discarded</h2>
+                <p className="m-0 text-ink-2">Your Plan conversation is still here.</p>
+              </div>
+            </div>
+          ) : null}
+          {data?.ftp?.conflict === true && data.ftp.usedWatts !== null ? (
+            <div
+              className="rounded-ctl bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] p-3 text-sm"
+              role="status"
+            >
+              Using {data.ftp.usedWatts} W from the selected FTP source. Other FTP sources differ.
+            </div>
+          ) : null}
+          <ConversationTranscript
+            messages={messages}
+            timeline={coach.timeline}
+            historyControls={false}
+          />
+          {data?.missingDraftRequirements?.includes("date") === true ? (
+            <div
+              className="flex items-start gap-row rounded-ctl bg-[color-mix(in_srgb,var(--warn)_10%,var(--surface))] p-3"
+              role="status"
+            >
+              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden="true" />
+              <div className={SUPPORT_PAIR}>
+                <h2 className="m-0 text-sm font-medium">Choose another Goal Event date</h2>
+                <p className="m-0 text-ink-2">Use a date from today through 24 weeks from now.</p>
+              </div>
+            </div>
+          ) : null}
+          <CoachDecisionPanel
+            onCustomOpenChange={setCustomDecisionOpen}
+            surface={{
+              decision,
+              phase: coach.decisionPhase,
+              answerLabel: coach.decisionAnswerLabel,
+              error: coach.decisionError,
+              loadError: coach.decisionLoadError,
+              answer: (decisionId, answer) => actions?.answerCoachDecision(decisionId, answer),
+              skip: (decisionId) => actions?.skipCoachDecision(decisionId),
+              retry: () => actions?.retry(),
+            }}
+          />
+          <PlanQueue />
+          {courseVisible && course !== undefined ? (
+            <RaceCoursePanel course={course} draft={false} />
+          ) : null}
+        </div>
+      </main>
+      <div className="z-2 bg-bg bg-[linear-gradient(transparent,var(--bg)_22%)] px-[max(24px,calc((100%-720px)/2))] pt-[calc(var(--inset)*3)] pb-row max-[760px]:px-[calc(var(--inset)*2)]">
+        <Composer
+          handle={composer}
+          inputId="plan-coach-composer"
+          hidden={customDecisionOpen}
+          leadingAction={
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Attach Race Course"
+                disabled={actions === null || busy || coach.status === "streaming"}
+                onClick={() => actions?.openCoursePicker()}
+              >
+                <Paperclip aria-hidden="true" />
+              </Button>
+              {course?.status === "undecided" ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={actions === null || busy || coach.status === "streaming"}
+                  onClick={() => actions?.continueWithoutCourse()}
+                >
+                  Continue without course
+                </Button>
+              ) : null}
+            </div>
+          }
+          surface={{
+            status: coach.status,
+            sendDisabled: coach.sendDisabled,
+            inputDisabled: coach.inputDisabled || decision?.status === "unanswered",
+            placeholder: "Reply to your coach…",
+            label: "Reply to your Plan coach",
+            allowSlashCommands: false,
+            submit: (message) => actions?.submitCoach(message) ?? Promise.resolve(false),
+            stop: () => actions?.stopCoach(),
+          }}
+        />
+      </div>
     </section>
   );
 }
@@ -1430,7 +1661,7 @@ function DatePickerDialog(props: {
       }}
     >
       <DialogContent
-        className="w-[min(600px,calc(100vw-32px))] max-w-none gap-0 p-6 shadow-elev-4 sm:max-w-none"
+        className="w-[min(380px,calc(100vw-32px))] max-w-none gap-0 p-4 shadow-elev-4 sm:max-w-none"
         showCloseButton={false}
         initialFocus={cancel}
         data-plan-scenario={scenario}
@@ -1489,7 +1720,7 @@ function DatePickerDialog(props: {
                   aria-pressed={active}
                   disabled={disabled}
                   tabIndex={active ? 0 : -1}
-                  className={`grid size-10 place-items-center justify-self-center rounded-ctl text-sm outline-none transition-colors focus:ring-3 focus:ring-ring/25 ${
+                  className={`grid size-8 place-items-center justify-self-center rounded-ctl text-sm outline-none transition-colors focus:ring-3 focus:ring-ring/25 ${
                     active
                       ? "bg-primary text-primary-foreground"
                       : disabled
@@ -1576,13 +1807,20 @@ function DraftProjection(): ReactElement {
   const plan = data?.plan ?? null;
   const startDate = data?.startDate;
   const dateRunning = transition.status === "running" && transition.transitionId === "PL-T08";
+  const revisionFailed = transition.status === "failed" && transition.transitionId === "PL-T07";
   const retryingDate = dateRunning && model?.scenarioId === "PL-S048";
   const replacement = data?.replacement === true;
   const approving =
     (transition.status === "submitting" || transition.status === "running") &&
     (transition.transitionId === "PL-T11" || transition.transitionId === "PL-T26");
   const busy = dateRunning || approving;
-  const displayScenario = retryingDate ? "PL-S049" : dateRunning ? "PL-S047" : model?.scenarioId;
+  const displayScenario = revisionComposer
+    ? "PL-S029"
+    : retryingDate
+      ? "PL-S049"
+      : dateRunning
+        ? "PL-S047"
+        : model?.scenarioId;
   const submit = (event: FormEvent): void => {
     event.preventDefault();
     if (/\S/u.test(instruction)) actions?.updateDraft(instruction);
@@ -1664,6 +1902,20 @@ function DraftProjection(): ReactElement {
             </div>
           </div>
         ) : null}
+        {revisionFailed && !revisionComposer ? (
+          <div className="grid gap-inset">
+            <StaleNotice message={transition.error.message} />
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => actions?.openRevisionComposer()}
+              >
+                Try another change
+              </Button>
+            </div>
+          </div>
+        ) : null}
         {transition.status === "failed" &&
         (transition.transitionId === "PL-T11" || transition.transitionId === "PL-T26") ? (
           <StaleNotice message="The Plan could not be activated. Your Draft is unchanged." />
@@ -1676,7 +1928,10 @@ function DraftProjection(): ReactElement {
             <p className="m-0 text-ink-2">
               {plan === null
                 ? model?.summary
-                : `${plan.workoutCount} workouts · ${plannedTime(plan.plannedDurationS)} · ${plan.totalWeeks} ${plan.totalWeeks === 1 ? "week" : "weeks"}`}
+                : `${plan.workoutCount} workouts · ${plannedTime(plan.plannedDurationS)} · ${
+                    plan.phaseSummary?.join(" → ") ??
+                    `${plan.totalWeeks} ${plan.totalWeeks === 1 ? "week" : "weeks"}`
+                  }`}
             </p>
             <p className="m-0 text-sm text-ink-2">Calendar not started.</p>
           </div>
@@ -1837,6 +2092,7 @@ function AttentionProjection(): ReactElement {
         {model.attention.items.map((item) => (
           <button
             key={item.id}
+            id={`plan-attention-${item.id}`}
             type="button"
             className="flex w-full items-center justify-between gap-inset bg-transparent py-3 text-left text-sm hover:text-primary"
             onClick={() => actions?.openAttention(item.id)}
@@ -2690,7 +2946,7 @@ function ReadinessProjection(props: {
                 <li key={assumption}>{assumption}</li>
               ))}
             </ul>
-            <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+            <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
               <Button type="button" onClick={() => closeOverlay(false)}>
                 Done
               </Button>
@@ -2916,7 +3172,7 @@ function ReadinessProjection(props: {
               </p>
             )}
           </div>
-          <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+          <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
             <Button type="button" onClick={() => closeOverlay(false)}>
               Done
             </Button>
@@ -2936,7 +3192,7 @@ function ReadinessProjection(props: {
               <li key={assumption}>{assumption}</li>
             ))}
           </ul>
-          <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+          <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
             <Button type="button" onClick={() => closeOverlay(false)}>
               Done
             </Button>
@@ -3069,7 +3325,7 @@ function ActiveProjection(): ReactElement {
       ? null
       : ((data.history ?? []).find((entry) => entry.id === data.selectedHistoryId) ?? null);
   if (model.scenarioId === "PL-S005") {
-    return <PlanHistoryProjection entries={data.history ?? []} />;
+    return <PlanHistoryProjection data={data} entries={data.history ?? []} />;
   }
   if (model.scenarioId === "PL-S008") {
     return <AppliedHistoryProjection entry={selectedHistoryEntry} />;
@@ -3096,6 +3352,16 @@ function ActiveProjection(): ReactElement {
   const completed = model.reconciliation.created;
   const total = model.reconciliation.total;
   const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
+  const showReconciliation = [
+    "PL-S010",
+    "PL-S037",
+    "PL-S038",
+    "PL-S039",
+    "PL-S040",
+    "PL-S041",
+    "PL-S042",
+    "PL-S043",
+  ].includes(model.scenarioId);
   const calendarTitle = verified
     ? `Intervals · current through ${formatCivilDate(model.reconciliation.currentThrough!)}`
     : retrying
@@ -3120,6 +3386,10 @@ function ActiveProjection(): ReactElement {
       ? null
       : ((data.proposals ?? []).find((proposal) => proposal.id === data.selectedProposalId) ??
         null);
+  const proposalTargetWorkout =
+    selectedProposal === null
+      ? null
+      : (data.workouts.find((workout) => workout.id === selectedProposal.targetWorkoutId) ?? null);
   const canReviseProposal = model.transitions.some(
     (guard) => guard.transitionId === "PL-T18" && guard.status === "available",
   );
@@ -3129,11 +3399,29 @@ function ActiveProjection(): ReactElement {
   const proposalBusy =
     (transition.status === "submitting" || transition.status === "running") &&
     (transition.transitionId === "PL-T18" || transition.transitionId === "PL-T19");
+  const currentPhase =
+    data.season?.weeks.find((week) => week.status === "current")?.phase ??
+    data.plan.phaseSummary?.[0] ??
+    "Plan";
+  const todaySupport =
+    data.todayWorkout === null
+      ? "No workout scheduled."
+      : data.todayWorkout.durationS === null
+        ? "Follow the workout details in your Plan."
+        : [
+            clockTime(data.todayWorkout.durationS),
+            data.todayWorkout.powerTargetW === undefined
+              ? null
+              : `${data.todayWorkout.powerTargetW.min}–${data.todayWorkout.powerTargetW.max} W`,
+            data.todayWorkout.cue ?? null,
+          ]
+            .filter((value): value is string => value !== null)
+            .join(" · ");
   if (["PL-S032", "PL-S033", "PL-S034", "PL-S035", "PL-S036"].includes(model.scenarioId)) {
     return <WorkoutDriftProjection data={data} scenarioId={model.scenarioId} />;
   }
   return (
-    <div className="grid gap-6">
+    <div className="grid gap-6" data-plan-scenario={model.scenarioId}>
       {model.scenarioId === "PL-S097" ? (
         <section className="flex items-start gap-row rounded-card bg-surface p-5 shadow-elev-1">
           <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
@@ -3141,7 +3429,7 @@ function ActiveProjection(): ReactElement {
             <h2 className="m-0 text-base font-semibold">Proposal rejected</h2>
             <p className="m-0 text-ink-2">The active Plan did not change.</p>
           </div>
-          <Button type="button" onClick={() => actions?.closeWorkout()}>
+          <Button type="button" onClick={() => actions?.closeProposal()}>
             Back to Plan
           </Button>
         </section>
@@ -3155,7 +3443,9 @@ function ActiveProjection(): ReactElement {
                 Plan active · week {data.weekIndex} of {data.plan.totalWeeks}
               </h2>
               <p className="m-0 text-ink-2">
-                {data.plan.name} · starts {formatCivilDate(data.plan.startDate)}
+                {data.plan.name} · {currentPhase} phase · starts{" "}
+                {formatCivilDate(data.plan.startDate)}
+                {data.plan.ftpWatts === undefined ? "" : ` · FTP ${data.plan.ftpWatts} W`}
               </p>
             </div>
           </div>
@@ -3169,15 +3459,6 @@ function ActiveProjection(): ReactElement {
               <CalendarDays className="size-4" aria-hidden="true" />
               View season
             </Button>
-            <Button
-              id="plan-history-trigger"
-              type="button"
-              variant="outline"
-              onClick={() => actions?.openHistory()}
-            >
-              <History className="size-4" aria-hidden="true" />
-              Plan history
-            </Button>
           </div>
         </div>
         <div className="flex items-start gap-row border-t border-line pt-row">
@@ -3186,93 +3467,89 @@ function ActiveProjection(): ReactElement {
             <h3 className="m-0 text-base font-semibold">
               Today · {data.todayWorkout?.name ?? "Rest"}
             </h3>
-            <p className="m-0 text-ink-2">
-              {data.todayWorkout?.durationS === null || data.todayWorkout === null
-                ? data.todayWorkout === null
-                  ? "No workout scheduled."
-                  : "Follow the workout details in your Plan."
-                : plannedTime(data.todayWorkout.durationS)}
-            </p>
+            <p className="m-0 text-ink-2">{todaySupport}</p>
           </div>
         </div>
       </section>
 
       <PredictionsSummary readiness={data.readiness} />
 
-      <section
-        className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1"
-        aria-live="polite"
-      >
-        <div className="flex items-start gap-row">
-          {failed && !retrying ? (
-            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
-          ) : verified ? (
-            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
-          ) : running ? (
-            <LoaderCircle
-              className="mt-0.5 size-5 shrink-0 animate-spin text-primary"
-              aria-hidden="true"
-            />
-          ) : (
-            <CalendarDays className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
-          )}
-          <div className={`${SUPPORT_PAIR} min-w-0 flex-1`}>
-            <h2 className="m-0 text-base font-semibold">{calendarTitle}</h2>
-            <p className="m-0 text-ink-2">
-              {total > 0
-                ? `Created ${completed} · Pending ${model.reconciliation.pending} · Failed ${model.reconciliation.failed} · Total ${total}`
-                : "Only today plus the next six civil dates will be written."}
-            </p>
+      {showReconciliation ? (
+        <section
+          className="grid gap-row rounded-card bg-surface p-5 shadow-elev-1"
+          aria-live="polite"
+        >
+          <div className="flex items-start gap-row">
+            {failed && !retrying ? (
+              <TriangleAlert className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden="true" />
+            ) : verified ? (
+              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+            ) : running ? (
+              <LoaderCircle
+                className="mt-0.5 size-5 shrink-0 animate-spin text-primary"
+                aria-hidden="true"
+              />
+            ) : (
+              <CalendarDays className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden="true" />
+            )}
+            <div className={`${SUPPORT_PAIR} min-w-0 flex-1`}>
+              <h2 className="m-0 text-base font-semibold">{calendarTitle}</h2>
+              <p className="m-0 text-ink-2">
+                {total > 0
+                  ? `Created ${completed} · Pending ${model.reconciliation.pending} · Failed ${model.reconciliation.failed} · Total ${total}`
+                  : "Only today plus the next six civil dates will be written."}
+              </p>
+            </div>
+            {verified ? (
+              <span className="rounded-full border border-ok px-3 py-1 text-sm text-ok">
+                Verified
+              </span>
+            ) : null}
           </div>
-          {verified ? (
-            <span className="rounded-full border border-ok px-3 py-1 text-sm text-ok">
-              Verified
-            </span>
+          {total > 0 ? (
+            <div
+              className="h-2 overflow-hidden rounded-full bg-sunk"
+              role="progressbar"
+              aria-label="Intervals calendar update"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+            >
+              <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
+            </div>
           ) : null}
-        </div>
-        {total > 0 ? (
-          <div
-            className="h-2 overflow-hidden rounded-full bg-sunk"
-            role="progressbar"
-            aria-label="Intervals calendar update"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={percent}
-          >
-            <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
-          </div>
-        ) : null}
-        {!running && !verified ? (
-          <div className="flex flex-wrap justify-end gap-inset">
-            {failed ? (
+          {!running && !verified ? (
+            <div className="flex flex-wrap justify-end gap-inset">
+              {failed ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={actions === null}
+                  onClick={() => actions?.verifyReconciliation()}
+                >
+                  Verify again
+                </Button>
+              ) : null}
               <Button
                 type="button"
-                variant="outline"
                 disabled={actions === null}
-                onClick={() => actions?.verifyReconciliation()}
+                onClick={() => actions?.reconcilePlan()}
               >
-                Verify again
+                {failed
+                  ? "Retry"
+                  : model.scenarioId === "PL-S037"
+                    ? "View calendar progress"
+                    : "Update Intervals"}
               </Button>
-            ) : null}
-            <Button
-              type="button"
-              disabled={actions === null}
-              onClick={() => actions?.reconcilePlan()}
-            >
-              {failed
-                ? "Retry"
-                : model.scenarioId === "PL-S037"
-                  ? "View calendar progress"
-                  : "Update Intervals"}
-            </Button>
-          </div>
-        ) : null}
-      </section>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="overflow-hidden rounded-card bg-surface shadow-elev-1">
         <div className="flex items-start justify-between gap-row px-5 py-row">
           <div className={SUPPORT_PAIR}>
-            <h2 className="m-0 text-base font-semibold">This week</h2>
+            <h2 className="m-0 text-base font-semibold">WorkoutMatch · this week</h2>
             <p className="m-0 text-sm text-ink-2">
               {data.matchSync?.awaitingSync === true
                 ? "Awaiting sync · previous matches remain visible."
@@ -3298,7 +3575,7 @@ function ActiveProjection(): ReactElement {
                 key={workout.id}
                 id={`workout-row-${workout.id}`}
                 type="button"
-                className="grid w-full grid-cols-[minmax(7rem,0.8fr)_minmax(12rem,2fr)_minmax(5rem,0.6fr)_minmax(9rem,1fr)_auto] items-center gap-inset bg-transparent px-5 py-row text-left text-sm hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary"
+                className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-inset gap-y-1 bg-transparent px-5 py-row text-left text-sm hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary min-[760px]:grid-cols-[minmax(6rem,0.8fr)_minmax(0,2fr)_minmax(4rem,0.6fr)_minmax(8rem,1fr)_auto]"
                 onClick={() => {
                   if (proposal !== undefined) {
                     setProposalMode("proposal");
@@ -3307,29 +3584,38 @@ function ActiveProjection(): ReactElement {
                   } else actions?.openWorkout(workout.id);
                 }}
               >
-                <span className="text-ink-2">
+                <span className="col-start-1 row-start-1 text-ink-2 min-[760px]:col-auto min-[760px]:row-auto">
                   {formatCivilDate(workout.date, { weekday: "short", day: "numeric" })}
                 </span>
-                <span className="font-medium text-ink-1">{workout.name}</span>
-                <span className="text-ink-2">
+                <span className="col-start-1 row-start-2 min-w-0 truncate font-medium text-ink-1 min-[760px]:col-auto min-[760px]:row-auto">
+                  {workout.name}
+                </span>
+                <span className="col-start-2 row-start-1 text-ink-2 min-[760px]:col-auto min-[760px]:row-auto">
                   {workout.durationS === null ? "—" : plannedTime(workout.durationS)}
                 </span>
                 {proposal !== undefined ? (
-                  <span className="justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn">
+                  <span className="col-start-2 row-start-2 justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn min-[760px]:col-auto min-[760px]:row-auto">
                     Decision needed
                   </span>
                 ) : drift ? (
-                  <span className="justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn">
+                  <span className="col-start-2 row-start-2 justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn min-[760px]:col-auto min-[760px]:row-auto">
                     Changed in Intervals
                   </span>
                 ) : decision ? (
-                  <span className="justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn">
+                  <span className="col-start-2 row-start-2 justify-self-start rounded-full border border-warn px-2.5 py-1 text-warn min-[760px]:col-auto min-[760px]:row-auto">
                     Decision needed
                   </span>
                 ) : (
-                  <span className={matchStatusClass(status)}>{MATCH_STATUS_COPY[status]}</span>
+                  <span
+                    className={`col-start-2 row-start-2 justify-self-start min-[760px]:col-auto min-[760px]:row-auto ${matchStatusClass(status)}`}
+                  >
+                    {MATCH_STATUS_COPY[status]}
+                  </span>
                 )}
-                <ChevronRight className="size-4 text-ink-2" aria-hidden="true" />
+                <ChevronRight
+                  className="col-start-3 row-span-2 row-start-1 size-4 text-ink-2 min-[760px]:col-auto min-[760px]:row-auto"
+                  aria-hidden="true"
+                />
               </button>
             );
           })}
@@ -3450,7 +3736,7 @@ function ActiveProjection(): ReactElement {
                   </p>
                 ) : null}
               </div>
-              <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+              <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
                 {selectedWorkout.match?.requiresConfirmation === true &&
                 selectedWorkout.match.activityId !== null ? (
                   <>
@@ -3499,7 +3785,7 @@ function ActiveProjection(): ReactElement {
           if (!open) {
             setProposalMode("proposal");
             setRevisionText("");
-            actions?.closeWorkout();
+            actions?.closeProposal();
           }
         }}
       >
@@ -3541,7 +3827,7 @@ function ActiveProjection(): ReactElement {
                   ))}
                 </section>
               </div>
-              <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+              <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
                 <Button
                   type="button"
                   onClick={() => {
@@ -3592,7 +3878,7 @@ function ActiveProjection(): ReactElement {
                     <StaleNotice message={selectedProposal.error.message} />
                   )}
                 </div>
-                <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+                <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
                   <Button
                     type="button"
                     variant="outline"
@@ -3613,12 +3899,20 @@ function ActiveProjection(): ReactElement {
           ) : (
             <>
               <DialogHeader className="grid gap-2 border-b border-line px-5 py-5 pr-16">
-                <DialogTitle className="m-0 text-xl">{selectedProposal.title}</DialogTitle>
                 <DialogDescription className="m-0 text-ink-2">
-                  {selectedProposal.rationale}
+                  {formatCivilDate(selectedProposal.affectedDate)}
                 </DialogDescription>
+                <DialogTitle className="m-0 text-xl">
+                  {proposalTargetWorkout?.name ?? selectedProposal.title}
+                </DialogTitle>
               </DialogHeader>
               <div className="grid flex-1 content-start gap-row overflow-auto px-5 py-5">
+                <div className="flex items-center justify-between gap-inset">
+                  <span className="text-sm text-ink-2">Status</span>
+                  <span className="rounded-full border border-warn px-2.5 py-1 text-sm text-warn">
+                    Decision needed
+                  </span>
+                </div>
                 {selectedProposal.stale ? (
                   <StaleNotice message="The Plan changed before approval. Review this updated Proposal." />
                 ) : null}
@@ -3650,21 +3944,30 @@ function ActiveProjection(): ReactElement {
                     </div>
                   ))}
                 </section>
+                <section className={SUPPORT_PAIR}>
+                  <h3 className="m-0 text-sm font-semibold">Why</h3>
+                  <p className="m-0 text-sm text-ink-2">{selectedProposal.rationale}</p>
+                </section>
                 <div className="flex items-center justify-between gap-inset">
-                  <span className="text-sm text-ink-2">
-                    Confidence · {selectedProposal.confidence}
+                  <span className="text-sm text-ink-2">Confidence</span>
+                  <span className="rounded-full border border-ok px-2.5 py-1 text-sm text-ok">
+                    {selectedProposal.confidence}
                   </span>
+                </div>
+                <div>
                   <Button
                     ref={evidenceTrigger}
                     type="button"
-                    variant="outline"
+                    variant="link"
+                    aria-label="View evidence"
+                    className="h-auto p-0"
                     onClick={() => setProposalMode("evidence")}
                   >
-                    View evidence
+                    View evidence →
                   </Button>
                 </div>
               </div>
-              <DialogFooter className="m-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
+              <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-line bg-surface px-5 py-row">
                 <>
                   <Button
                     type="button"
@@ -3766,6 +4069,116 @@ function EndedProjection(): ReactElement {
       </section>
     );
   }
+  if (model.scenarioId === "PL-S014" && data.raceOutcomeDetails?.outcome === "completed") {
+    const result = data.raceOutcomeDetails;
+    return (
+      <section className="overflow-hidden rounded-card bg-surface shadow-elev-1">
+        <div className="grid gap-6 p-5">
+          <div className="flex items-start gap-row">
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <h2 className="m-0 text-lg font-semibold">
+                {data.plan.name} completed · {result.goal.toLowerCase()} achieved
+              </h2>
+              <p className="m-0 text-ink-2">
+                {formatCivilDate(result.raceDate)} · result recorded. The Plan no longer changes
+                future training.
+              </p>
+            </div>
+          </div>
+          <section className="grid gap-row border-t border-line pt-row">
+            <h3 className="m-0 text-base font-semibold">Time across Plan</h3>
+            <div className="grid grid-cols-3 gap-row">
+              <div className={SUPPORT_PAIR}>
+                <span className="text-sm text-ink-2">Training</span>
+                <strong className="text-lg">{clockTime(result.trainingDurationS)}</strong>
+              </div>
+              <div className={SUPPORT_PAIR}>
+                <span className="text-sm text-ink-2">Race</span>
+                <strong className="text-lg">{clockTime(result.raceDurationS)}</strong>
+              </div>
+              <div className={SUPPORT_PAIR}>
+                <span className="text-sm text-ink-2">Total</span>
+                <strong className="text-lg">{clockTime(result.totalDurationS)}</strong>
+              </div>
+            </div>
+          </section>
+          <section className="grid gap-inset border-t border-line pt-row text-sm">
+            <h3 className="m-0 text-base font-semibold">Plan outcome</h3>
+            {[
+              ["Goal", result.goal],
+              ["Result", result.result],
+              ["Modeled finish", finishRange(result.modeledFinishMinutes)],
+              ["Actual", clockTime(result.actualDurationS)],
+              ["Workout records", `${data.plan.workoutCount} total`],
+              ["Applied changes", String(result.appliedChangeCount)],
+              ["Eligible undo", "None"],
+            ].map(([label, value]) => (
+              <div
+                key={label}
+                className="flex justify-between gap-row border-t border-line py-inset first:border-t-0"
+              >
+                <span className="text-ink-2">{label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+          </section>
+          <div className="flex items-start gap-row border-t border-line pt-row">
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <h3 className="m-0 text-base font-semibold">Calendar cleanup verified</h3>
+              <p className="m-0 text-ink-2">
+                Today stayed. No tomorrow-onward Enduragent workouts remain in Intervals.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end border-t border-line px-5 py-row">
+          <Button type="button" disabled={actions === null} onClick={() => actions?.startPlan()}>
+            Start a new Plan
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  if (model.scenarioId === "PL-S096" && data.raceOutcomeDetails?.outcome === "not-completed") {
+    return (
+      <section className="overflow-hidden rounded-card bg-surface shadow-elev-1">
+        <div className="grid gap-6 p-5">
+          <div className="flex items-start gap-row">
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-ok" aria-hidden="true" />
+            <div className={SUPPORT_PAIR}>
+              <h2 className="m-0 text-lg font-semibold">Race outcome · Not completed</h2>
+              <p className="m-0 text-ink-2">
+                {formatCivilDate(data.raceOutcomeDetails.raceDate)} · the Plan remains ended and its
+                history stays available.
+              </p>
+            </div>
+          </div>
+          <section className="grid gap-inset border-t border-line pt-row text-sm">
+            <h3 className="m-0 text-base font-semibold">Plan record</h3>
+            <div className="flex justify-between gap-row">
+              <span className="text-ink-2">Planned race</span>
+              <strong>{data.plan.name}</strong>
+            </div>
+            <div className="flex justify-between gap-row border-t border-line pt-inset">
+              <span className="text-ink-2">Outcome</span>
+              <strong>Not completed</strong>
+            </div>
+            <div className="flex justify-between gap-row border-t border-line pt-inset">
+              <span className="text-ink-2">Training history</span>
+              <strong>Preserved</strong>
+            </div>
+          </section>
+        </div>
+        <div className="flex justify-end border-t border-line px-5 py-row">
+          <Button type="button" disabled={actions === null} onClick={() => actions?.startPlan()}>
+            Start a new Plan
+          </Button>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="overflow-hidden rounded-card bg-surface shadow-elev-1" aria-live="polite">
       <div className="grid gap-6 p-5">
@@ -3860,15 +4273,16 @@ function EndedProjection(): ReactElement {
       <div className="flex flex-wrap justify-end gap-inset border-t border-line px-5 py-row">
         {model.scenarioId === "PL-S094" ? (
           <>
-            <Button type="button" variant="outline" onClick={() => actions?.startPlan()}>
-              Start a new Plan
-            </Button>
             <Button
               type="button"
+              variant="outline"
               disabled={busy || actions === null || data.outcomeAvailable !== true}
               onClick={() => actions?.openRaceOutcome()}
             >
               Record outcome
+            </Button>
+            <Button type="button" onClick={() => actions?.startPlan()}>
+              Start a new Plan
             </Button>
           </>
         ) : failed ? (
@@ -3946,17 +4360,78 @@ function ReadyProjection(): ReactElement {
 
 export function PlanView(): ReactElement {
   const plan = useEnduragentStore((state) => state.plan);
+  const actions = useEnduragentStore((state) => state.planActions);
   const model = planReadModel(plan);
   const loading = plan.hydration.status === "loading";
+  const returnFocusId =
+    typeof model?.data.returnFocusId === "string" ? model.data.returnFocusId : null;
+  const coachWorkspace =
+    plan.hydration.status === "ready" &&
+    model?.projection === "coach" &&
+    (model.lifecycle === "intake" || model.lifecycle === "replacement-intake") &&
+    model.scenarioId !== "PL-S016" &&
+    model.scenarioId !== "PL-S103" &&
+    !FTP_SCENARIOS.has(model.scenarioId);
+  const parsedActive = PlanActiveProjectionDataSchema.safeParse(model?.data);
+  const activeData = parsedActive.success ? parsedActive.data : null;
+  const historyPage = model?.scenarioId === "PL-S005" && activeData !== null;
+  const activeOverview =
+    model?.projection === "active" && ACTIVE_OVERVIEW_SCENARIOS.has(model.scenarioId);
   const subtitle = loading
     ? "Loading…"
-    : model?.lifecycle === "none"
-      ? "No active plan"
-      : undefined;
+    : historyPage
+      ? `${activeData.plan.name} · active Plan · mutation and recovery log`
+      : activeOverview && activeData !== null
+        ? `${activeData.plan.name}${
+            activeData.plan.targetDate === null
+              ? ""
+              : ` · ${formatCivilDate(activeData.plan.targetDate)}`
+          } · Active`
+        : model?.lifecycle === "none"
+          ? "No active plan"
+          : undefined;
+
+  useEffect(() => {
+    if (returnFocusId === null) return;
+    requestAnimationFrame(() => document.getElementById(returnFocusId)?.focus());
+  }, [model?.scenarioId, returnFocusId]);
 
   return (
-    <Page title="Plan" subtitle={subtitle} busy={loading} className="plan-view">
-      <div className="grid gap-6">
+    <Page
+      title={historyPage ? "Plan history" : "Plan"}
+      subtitle={subtitle}
+      busy={loading}
+      action={
+        coachWorkspace ? (
+          <Button
+            id="plan-coach-close"
+            type="button"
+            variant="ghost"
+            disabled={actions === null}
+            onClick={() => actions?.closeCoach()}
+          >
+            Close coach
+          </Button>
+        ) : historyPage ? (
+          <Button type="button" variant="outline" onClick={() => actions?.closeHistory()}>
+            Back to Plan
+          </Button>
+        ) : activeOverview ? (
+          <Button
+            id="plan-history-trigger"
+            type="button"
+            variant="outline"
+            onClick={() => actions?.openHistory()}
+          >
+            <History className="size-4" aria-hidden="true" />
+            Plan history
+          </Button>
+        ) : undefined
+      }
+      className="plan-view"
+      contentMode={coachWorkspace ? "workspace" : "scroll"}
+    >
+      <div className={coachWorkspace ? "h-full min-h-0" : "grid gap-6"}>
         {plan.hydration.status === "stale" ? (
           <StaleNotice message={plan.hydration.error.message} />
         ) : null}

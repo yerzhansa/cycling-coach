@@ -70,6 +70,10 @@ _Avoid_: Training program, calendar plan
 A Workout that belongs to one Plan and carries its planned date, origin, and sport-owned prescription.
 _Avoid_: Session, `planned_workout`, `planned_workouts`
 
+**Plan Intake**:
+The structured athlete information gathered while the Plan coach prepares a Draft, before any Plan becomes active.
+_Avoid_: Plan chat, onboarding
+
 **Training Week**:
 A seven-day span counted from a Plan's athlete-selected start date; week 1 begins on that date.
 _Avoid_: Calendar week, partial week

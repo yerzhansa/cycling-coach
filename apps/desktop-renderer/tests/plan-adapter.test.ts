@@ -294,6 +294,58 @@ describe("Plan view adapter", () => {
     });
   });
 
+  it("returns from the ready summary to the Coach interview through PL-T39", async () => {
+    const ready = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S016",
+      projection: "coach",
+      data: planCoachData({ ready: true }),
+    });
+    const subject = harness({
+      ids: ["back-command"],
+      getPlanState: async () => ({ status: "ready", state: ready }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.backToCoachInterview();
+
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T39",
+      commandId: "back-command",
+      action: "back",
+      sourceScenarioId: "PL-S016",
+      destinationScenarioId: "PL-S017",
+      returnFocusId: "plan-coach-composer",
+    });
+  });
+
+  it("closes the Coach interview and returns focus to the destination action", async () => {
+    const interview = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData(),
+    });
+    const subject = harness({
+      ids: ["close-command"],
+      getPlanState: async () => ({ status: "ready", state: interview }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.closeCoach();
+
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T39",
+      commandId: "close-command",
+      action: "close",
+      sourceScenarioId: "PL-S017",
+      destinationScenarioId: "PL-S001",
+      returnFocusId: "plan-start-coach",
+    });
+  });
+
   it("uses the native picker and resumes a route-only Course choice", async () => {
     const summary = {
       fileName: "route-only.gpx",
@@ -1188,6 +1240,237 @@ describe("Plan view adapter", () => {
     });
   });
 
+  it("closes the active workout drawer and restores the initiating row", async () => {
+    const planId = "00000000000000000000000003";
+    const workoutId = "00000000000000000000000004";
+    const workout = {
+      id: workoutId,
+      date: "1998-08-23",
+      sport: "cycling" as const,
+      name: "Suggested endurance",
+      durationS: 1_800,
+    };
+    const drawer = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S021",
+      projection: "active",
+      planId,
+      data: {
+        plan: {
+          id: planId,
+          name: "Gran Fondo Plan",
+          primaryGoal: "Finish",
+          startDate: "1998-07-13",
+          targetDate: "1998-10-04",
+          kind: "full-plan",
+          totalWeeks: 12,
+          weekStartDay: 1,
+          workoutCount: 1,
+          plannedDurationS: 1_800,
+        },
+        today: "1998-08-23",
+        weekIndex: 6,
+        todayWorkout: workout,
+        workouts: [workout],
+        selectedWorkout: workout,
+        selectedWorkoutId: workoutId,
+        selectedWorkoutSourceScenarioId: "PL-S004",
+      },
+    });
+    const subject = harness({
+      ids: ["close-workout"],
+      getPlanState: async () => ({ status: "ready", state: drawer }),
+      executePlanTransition: async () => ({ status: "completed", state: drawer }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.closeWorkout();
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenCalledWith({
+      transitionId: "PL-T39",
+      commandId: "close-workout",
+      action: "back",
+      sourceScenarioId: "PL-S021",
+      destinationScenarioId: "PL-S004",
+      returnFocusId: `workout-row-${workoutId}`,
+    });
+  });
+
+  it.each([
+    ["PL-S021", "workout-match"],
+    ["PL-S032", "workout-drift"],
+  ] as const)(
+    "returns %s from a Plan attention item to its exact attention row",
+    async (scenarioId, attentionKind) => {
+      const planId = "00000000000000000000000003";
+      const workoutId = "00000000000000000000000004";
+      const workout = {
+        id: workoutId,
+        date: "1998-08-23",
+        sport: "cycling" as const,
+        name: "Suggested endurance",
+        durationS: 1_800,
+      };
+      const drawer = planReadModel({
+        lifecycle: "active",
+        scenarioId,
+        projection: "active",
+        planId,
+        data: {
+          plan: {
+            id: planId,
+            name: "Gran Fondo Plan",
+            primaryGoal: "Finish",
+            startDate: "1998-07-13",
+            targetDate: "1998-10-04",
+            kind: "full-plan",
+            totalWeeks: 12,
+            weekStartDay: 1,
+            workoutCount: 1,
+            plannedDurationS: 1_800,
+          },
+          today: "1998-08-23",
+          weekIndex: 6,
+          todayWorkout: workout,
+          workouts: [workout],
+          selectedWorkout: workout,
+          selectedWorkoutId: workoutId,
+          selectedWorkoutSourceScenarioId: "PL-S028",
+        },
+      });
+      const subject = harness({
+        ids: [`close-${attentionKind}`],
+        getPlanState: async () => ({ status: "ready", state: drawer }),
+        executePlanTransition: async () => ({ status: "completed", state: drawer }),
+      });
+      subject.adapter.start();
+      await settle();
+
+      subject.adapter.closeWorkout();
+      await settle();
+
+      expect(subject.executePlanTransition).toHaveBeenCalledWith({
+        transitionId: "PL-T39",
+        commandId: `close-${attentionKind}`,
+        action: "back",
+        sourceScenarioId: scenarioId,
+        destinationScenarioId: "PL-S028",
+        returnFocusId: `plan-attention-${attentionKind}:${workoutId}`,
+      });
+    },
+  );
+
+  it("returns a Proposal drawer to its exact active source and initiating row", async () => {
+    const planId = "00000000000000000000000003";
+    const workoutId = "00000000000000000000000004";
+    const proposalId = "00000000000000000000000005";
+    const workout = {
+      id: workoutId,
+      date: "1998-08-23",
+      sport: "cycling" as const,
+      name: "Endurance",
+      durationS: 5_400,
+    };
+    const proposal = {
+      id: proposalId,
+      revision: 1,
+      title: "Sunday recovery",
+      rationale: "Recovery is lower than normal.",
+      confidence: "High",
+      targetWorkoutId: workoutId,
+      affectedDate: "1998-08-23",
+      createdAtMs: 903_766_320_000,
+      stale: false,
+      diff: [{ field: "duration", label: "Duration", before: "1:30", after: "0:30" }],
+      premises: [],
+      error: null,
+    };
+    const data = {
+      plan: {
+        id: planId,
+        name: "Gran Fondo Plan",
+        primaryGoal: "Finish",
+        startDate: "1998-07-13",
+        targetDate: "1998-10-04",
+        kind: "full-plan" as const,
+        totalWeeks: 12,
+        weekStartDay: 1,
+        workoutCount: 1,
+        plannedDurationS: 5_400,
+      },
+      today: "1998-08-22",
+      weekIndex: 6,
+      todayWorkout: null,
+      workouts: [workout],
+      proposals: [proposal],
+      selectedProposalId: null,
+      selectedProposalReturn: null,
+    };
+    const overview = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S010",
+      projection: "active",
+      planId,
+      data,
+    });
+    const selectedProposalReturn = {
+      sourceScenarioId: "PL-S010" as const,
+      returnFocusId: `workout-row-${workoutId}`,
+    };
+    const drawer = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S007",
+      projection: "active",
+      planId,
+      data: {
+        ...data,
+        selectedProposalId: proposalId,
+        selectedProposalReturn,
+      },
+    });
+    const returned = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S010",
+      projection: "active",
+      planId,
+      data: { ...data, returnFocusId: selectedProposalReturn.returnFocusId },
+    });
+    const subject = harness({
+      ids: ["open-proposal", "close-proposal"],
+      getPlanState: async () => ({ status: "ready", state: overview }),
+      executePlanTransition: async (command) => ({
+        status: "completed",
+        state: command.transitionId === "PL-T17" ? drawer : returned,
+      }),
+    });
+    subject.adapter.start();
+    await settle();
+
+    subject.adapter.openProposal(proposalId);
+    await settle();
+    subject.adapter.closeProposal();
+    await settle();
+
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(1, {
+      transitionId: "PL-T17",
+      commandId: "open-proposal",
+      planId,
+      proposalId,
+      selectedProposalReturn,
+    });
+    expect(subject.executePlanTransition).toHaveBeenNthCalledWith(2, {
+      transitionId: "PL-T39",
+      commandId: "close-proposal",
+      action: "back",
+      sourceScenarioId: "PL-S007",
+      destinationScenarioId: "PL-S010",
+      returnFocusId: `workout-row-${workoutId}`,
+      selectedProposalReturn,
+    });
+  });
+
   it("navigates active Plan to Season and Race week with exact source commands", async () => {
     const planId = "00000000000000000000000003";
     const active = planReadModel({
@@ -1305,31 +1588,34 @@ describe("Plan view adapter", () => {
     ]);
   });
 
-  it("resumes an interrupted reconciliation once after hydration", async () => {
-    const state = planReadModel({
-      lifecycle: "active",
-      scenarioId: "PL-S042",
-      projection: "active",
-      planId: "00000000000000000000000003",
-    });
-    const subject = harness({
-      ids: ["resume-command"],
-      getPlanState: async () => ({ status: "ready", state }),
-      executePlanTransition: async () => ({ status: "completed", state }),
-    });
+  it.each(["PL-S037", "PL-S042"] as const)(
+    "starts or resumes reconciliation once after hydrating %s",
+    async (scenarioId) => {
+      const state = planReadModel({
+        lifecycle: "active",
+        scenarioId,
+        projection: "active",
+        planId: "00000000000000000000000003",
+      });
+      const subject = harness({
+        ids: ["resume-command"],
+        getPlanState: async () => ({ status: "ready", state }),
+        executePlanTransition: async () => ({ status: "completed", state }),
+      });
 
-    subject.adapter.start();
-    await settle();
-    await settle();
+      subject.adapter.start();
+      await settle();
+      await settle();
 
-    expect(subject.executePlanTransition).toHaveBeenCalledOnce();
-    expect(subject.executePlanTransition).toHaveBeenCalledWith({
-      transitionId: "PL-T12",
-      commandId: "resume-command",
-      planId: "00000000000000000000000003",
-      mode: "reconcile",
-    });
-  });
+      expect(subject.executePlanTransition).toHaveBeenCalledOnce();
+      expect(subject.executePlanTransition).toHaveBeenCalledWith({
+        transitionId: "PL-T12",
+        commandId: "resume-command",
+        planId: "00000000000000000000000003",
+        mode: "reconcile",
+      });
+    },
+  );
 
   it("resumes an interrupted ended-Plan cleanup once after hydration", async () => {
     const planId = "00000000000000000000000003";

@@ -17,7 +17,9 @@ import {
   createRaceCourseSnapshot,
   createPlanReplacementRepository,
   createPlanRaceOutcomeRepository,
+  createPlanIntakeRepository,
   type PlanActivityObservation,
+  type PlanIntakeRepository,
   type PlanRecord,
   type PlanWorkoutMatchRecord,
   type PlanWorkoutMatchRepository,
@@ -308,6 +310,23 @@ describe("Plan operations", () => {
       status: "completed",
       state: { scenarioId: "PL-S016", projection: "coach" },
     });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-4",
+        action: "back",
+        sourceScenarioId: "PL-S016",
+        destinationScenarioId: "PL-S017",
+        returnFocusId: "plan-coach-composer",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S017",
+        projection: "coach",
+        data: { readyToCreateDraft: true },
+      },
+    });
     const restored = createPlanningOperations(
       { context, engine: coach, identity: authored },
       readiness,
@@ -502,6 +521,499 @@ describe("Plan operations", () => {
     });
   });
 
+  it("persists typed Plan intake and evaluates production Draft readiness", async () => {
+    const coach = engine();
+    coach.chat = vi.fn(async (request, onEvent) => {
+      onEvent?.({ type: "turn-start", turnId: "engine-turn-intake", chatId: request.chatId });
+      onEvent?.({
+        type: "final-text",
+        turnId: "engine-turn-intake",
+        text: "Tell me about your current training.",
+      });
+      return {
+        text: "Tell me about your current training.",
+        planIntakePatch: {
+          eventName: "Gran Fondo Almaty",
+          eventPriority: "A" as const,
+          targetDate: "2026-10-04",
+          goal: "Finish in the front half",
+          availability: {
+            sessionsPerWeek: 4,
+            weekdays: ["tue" as const, "thu" as const, "sat" as const, "sun" as const],
+          },
+          experience: "intermediate" as const,
+          currentTrainingSummary: "Three rides each week with a weekend long ride",
+        },
+      };
+    });
+    const ftp: PlanFtpAdapter = {
+      read: async () => ({
+        manual: { watts: 282, refreshedAtMs: 1 },
+        intervalsFtp: null,
+        intervalsEftp: null,
+        usedSource: "manual",
+        usedWatts: 282,
+        conflict: false,
+      }),
+      saveManual: vi.fn(),
+      refreshIntervals: vi.fn(),
+    };
+    const authored = identity();
+    const operations = createPlanningOperations(
+      { context, engine: coach, identity: authored },
+      { ftp, todayDateKey: () => 20260709 },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "intake-start",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "intake-course",
+      conversationId,
+    });
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: {
+        scenarioId: "PL-S017",
+        data: {
+          readyToCreateDraft: false,
+          missingDraftRequirements: [
+            "event",
+            "priority",
+            "date",
+            "goal",
+            "availability",
+            "experience",
+          ],
+        },
+      },
+    });
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T05",
+      commandId: "intake-message",
+      conversationId,
+      text: "I can ride Tuesday, Thursday, Saturday, and Sunday.",
+    });
+
+    await expect(createPlanIntakeRepository(store).read(conversationId)).resolves.toMatchObject({
+      eventName: "Gran Fondo Almaty",
+      eventPriority: "A",
+      eventDateKey: 20261004,
+      athleteGoal: "Finish in the front half",
+      availabilitySessionsPerWeek: 4,
+      availabilityWeekdays: ["tue", "thu", "sat", "sun"],
+      experience: "intermediate",
+      sourceTurnSequence: 1,
+    });
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: { scenarioId: "PL-S016", data: { readyToCreateDraft: true } },
+    });
+    const restored = createPlanningOperations(
+      { context, engine: coach, identity: identity() },
+      { ftp, todayDateKey: () => 20260709 },
+    );
+    await expect(restored.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: { scenarioId: "PL-S016", data: { readyToCreateDraft: true } },
+    });
+  });
+
+  it("keeps an expired Goal Event in intake instead of entering Draft formation", async () => {
+    const coach = engine();
+    coach.chat = vi.fn(async (request, onEvent) => {
+      onEvent?.({ type: "turn-start", turnId: "expired-date-turn", chatId: request.chatId });
+      onEvent?.({
+        type: "final-text",
+        turnId: "expired-date-turn",
+        text: "That Goal Event date has passed. What future date should we use?",
+      });
+      return {
+        text: "That Goal Event date has passed. What future date should we use?",
+        planIntakePatch: {
+          eventName: "Gran Fondo Almaty",
+          eventPriority: "A" as const,
+          targetDate: "2026-07-08",
+          goal: "Finish in the front half",
+          availability: {
+            sessionsPerWeek: 4,
+            weekdays: ["tue" as const, "thu" as const, "sat" as const, "sun" as const],
+          },
+          experience: "intermediate" as const,
+        },
+      };
+    });
+    const ftp: PlanFtpAdapter = {
+      read: async () => ({
+        manual: { watts: 282, refreshedAtMs: 1 },
+        intervalsFtp: null,
+        intervalsEftp: null,
+        usedSource: "manual",
+        usedWatts: 282,
+        conflict: false,
+      }),
+      saveManual: vi.fn(),
+      refreshIntervals: vi.fn(),
+    };
+    const builder = activationBuilder();
+    const form = vi.spyOn(builder, "form");
+    const operations = createPlanningOperations(
+      { context, engine: coach, identity: identity() },
+      { ftp, draftBuilder: builder, todayDateKey: () => 20260709 },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "expired-date-start",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "expired-date-course",
+      conversationId,
+    });
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T05",
+      commandId: "expired-date-message",
+      conversationId,
+      text: "The event was yesterday.",
+    });
+
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: {
+        scenarioId: "PL-S017",
+        data: { readyToCreateDraft: false, missingDraftRequirements: ["date"] },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T06",
+        commandId: "expired-date-draft",
+        conversationId,
+      }),
+    ).resolves.toMatchObject({ status: "rejected" });
+    expect(form).not.toHaveBeenCalled();
+  });
+
+  it("persists typed Plan intake returned by a Coach decision continuation", async () => {
+    const coach = engine();
+    coach.answerCoachDecision = vi.fn(async (request, onEvent) => {
+      onEvent?.({
+        type: "turn-start",
+        turnId: "decision-continuation-turn",
+        chatId: request.chatId,
+      });
+      onEvent?.({
+        type: "final-text",
+        turnId: "decision-continuation-turn",
+        text: "Thanks. The app has enough information to create a Draft.",
+      });
+      return {
+        decision: {
+          status: "answered" as const,
+          decisionId: request.decisionId,
+          chatId: request.chatId,
+          messageId: "decision-message",
+          question: "Which days work best?",
+          options: [
+            {
+              id: "days-1",
+              label: "Tue, Thu, Sat, Sun",
+              description: "Use four available days.",
+              recommended: true,
+              consequence: "Use Tuesday, Thursday, Saturday, and Sunday.",
+            },
+            {
+              id: "days-2",
+              label: "Mon, Wed, Fri, Sun",
+              description: "Use four alternate days.",
+              recommended: false,
+              consequence: "Use Monday, Wednesday, Friday, and Sunday.",
+            },
+          ],
+          answer: request.answer,
+          consequence: "Use Tuesday, Thursday, Saturday, and Sunday.",
+          continuation: {
+            status: "completed" as const,
+            continuationId: "decision-continuation",
+            turnId: "decision-continuation-turn",
+            coachText: "Thanks. The app has enough information to create a Draft.",
+            lineage: {
+              templateHash: "template",
+              assembledHash: "assembled",
+              provider: "test",
+              model: "test",
+              lineageVersion: "1",
+              planIntakePatch: {
+                eventName: "Gran Fondo Almaty",
+                eventPriority: "A" as const,
+                targetDate: "1998-10-04",
+                goal: "Finish in the front half",
+                availability: {
+                  sessionsPerWeek: 4,
+                  weekdays: ["tue" as const, "thu" as const, "sat" as const, "sun" as const],
+                },
+                experience: "intermediate" as const,
+                currentTrainingSummary: "Three rides each week with a weekend long ride",
+              },
+            },
+          },
+        },
+      };
+    });
+    const ftp: PlanFtpAdapter = {
+      read: async () => ({
+        manual: { watts: 282, refreshedAtMs: 1 },
+        intervalsFtp: null,
+        intervalsEftp: null,
+        usedSource: "manual",
+        usedWatts: 282,
+        conflict: false,
+      }),
+      saveManual: vi.fn(),
+      refreshIntervals: vi.fn(),
+    };
+    const operations = createPlanningOperations(
+      { context, engine: coach, identity: identity() },
+      { ftp, todayDateKey: () => 19980709 },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "decision-start",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "decision-course",
+      conversationId,
+    });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T05",
+        commandId: "decision-answer",
+        conversationId,
+        text: "Tue, Thu, Sat, Sun",
+        decision: {
+          action: "answer",
+          decisionId: "decision-1",
+          answer: { kind: "option", optionId: "days-1" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S016", data: { readyToCreateDraft: true } },
+    });
+    await expect(createPlanIntakeRepository(store).read(conversationId)).resolves.toMatchObject({
+      eventName: "Gran Fondo Almaty",
+      eventPriority: "A",
+      eventDateKey: 19981004,
+      athleteGoal: "Finish in the front half",
+      availabilitySessionsPerWeek: 4,
+      availabilityWeekdays: ["tue", "thu", "sat", "sun"],
+      experience: "intermediate",
+      sourceTurnSequence: 1,
+    });
+  });
+
+  it("recovers the intake projection from the durable turn after an interrupted save", async () => {
+    const coach = engine();
+    const authored = identity();
+    coach.chat = vi.fn(async (request, onEvent) => {
+      onEvent?.({ type: "turn-start", turnId: "engine-turn-recovery", chatId: request.chatId });
+      onEvent?.({
+        type: "final-text",
+        turnId: "engine-turn-recovery",
+        text: "I have enough information to prepare the Draft.",
+      });
+      return {
+        text: "I have enough information to prepare the Draft.",
+        planIntakePatch: {
+          eventName: "Gran Fondo Almaty",
+          eventPriority: "A" as const,
+          targetDate: "2026-10-04",
+          goal: "Finish in the front half",
+          availability: {
+            sessionsPerWeek: 4,
+            weekdays: ["tue" as const, "thu" as const, "sat" as const, "sun" as const],
+          },
+          experience: "intermediate" as const,
+        },
+      };
+    });
+    const ftp: PlanFtpAdapter = {
+      read: async () => ({
+        manual: { watts: 282, refreshedAtMs: 1 },
+        intervalsFtp: null,
+        intervalsEftp: null,
+        usedSource: "manual",
+        usedWatts: 282,
+        conflict: false,
+      }),
+      saveManual: vi.fn(),
+      refreshIntervals: vi.fn(),
+    };
+    const storedIntakes = createPlanIntakeRepository(store);
+    let projectionAvailable = false;
+    const interruptedIntakes: PlanIntakeRepository = {
+      read: (conversationId) => storedIntakes.read(conversationId),
+      save: async (record, expectedVersion) => {
+        if (!projectionAvailable && expectedVersion !== null && record.sourceTurnSequence > 0) {
+          throw new Error("interrupted projection");
+        }
+        return storedIntakes.save(record, expectedVersion);
+      },
+    };
+    const operations = createPlanningOperations(
+      { context, engine: coach, identity: authored },
+      { ftp, intakes: interruptedIntakes, todayDateKey: () => 20260709 },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "recovery-start",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "recovery-course",
+      conversationId,
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T05",
+        commandId: "recovery-message",
+        conversationId,
+        text: "I can train four days each week.",
+      }),
+    ).rejects.toThrow("interrupted projection");
+    await expect(storedIntakes.read(conversationId)).resolves.toMatchObject({
+      sourceTurnSequence: 0,
+      eventName: null,
+    });
+
+    projectionAvailable = true;
+    const restored = createPlanningOperations(
+      { context, engine: coach, identity: authored },
+      { ftp, intakes: storedIntakes, todayDateKey: () => 20260709 },
+    );
+    await expect(restored.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: { scenarioId: "PL-S016", data: { readyToCreateDraft: true } },
+    });
+    await expect(storedIntakes.read(conversationId)).resolves.toMatchObject({
+      sourceTurnSequence: 1,
+      eventName: "Gran Fondo Almaty",
+      availabilityWeekdays: ["tue", "thu", "sat", "sun"],
+    });
+  });
+
+  it("commits Plan engine history only after the turn and intake transaction succeeds", async () => {
+    const coach = engine();
+    coach.chat = vi.fn(async (request, onEvent) => {
+      onEvent?.({ type: "turn-start", turnId: "engine-turn-atomic", chatId: request.chatId });
+      return {
+        text: "I have enough information to prepare the Draft.",
+        planIntakePatch: {
+          eventName: "Gran Fondo Almaty",
+          eventPriority: "A" as const,
+          targetDate: "2026-10-04",
+          goal: "Finish in the front half",
+          availability: {
+            sessionsPerWeek: 4,
+            weekdays: ["tue" as const, "thu" as const, "sat" as const, "sun" as const],
+          },
+          experience: "intermediate" as const,
+        },
+      };
+    });
+    coach.replacePlanChatHistory = vi.fn(async () => undefined);
+    coach.commitPlanChatTurn = vi.fn(async () => undefined);
+    const operations = createPlanningOperations(
+      { context, engine: coach, identity: identity() },
+      {
+        ftp: {
+          read: async () => ({
+            manual: { watts: 282, refreshedAtMs: 1 },
+            intervalsFtp: null,
+            intervalsEftp: null,
+            usedSource: "manual",
+            usedWatts: 282,
+            conflict: false,
+          }),
+          saveManual: vi.fn(),
+          refreshIntervals: vi.fn(),
+        },
+        todayDateKey: () => 20260709,
+      },
+    );
+    const started = await operations.executePlanTransition?.({
+      transitionId: "PL-T01",
+      commandId: "atomic-start",
+      sourceConversationId: null,
+    });
+    if (started?.status !== "completed") throw new TypeError("Plan conversation did not start.");
+    const conversationId = String(started.state.data.conversationId);
+    await operations.executePlanTransition?.({
+      transitionId: "PL-T03",
+      commandId: "atomic-course",
+      conversationId,
+    });
+    await store.run(
+      "CREATE TRIGGER fail_atomic_intake BEFORE UPDATE ON plan_intake WHEN NEW.source_turn_sequence > 0 BEGIN SELECT RAISE(FAIL, 'synthetic intake failure'); END",
+    );
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T05",
+        commandId: "atomic-fail",
+        conversationId,
+        text: "I can train four days each week.",
+      }),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "provider-failed" } });
+    expect(coach.commitPlanChatTurn).not.toHaveBeenCalled();
+    await expect(
+      createPlanConversationRepository(store).readTurns(conversationId),
+    ).resolves.toEqual([]);
+    await expect(createPlanIntakeRepository(store).read(conversationId)).resolves.toMatchObject({
+      sourceTurnSequence: 0,
+      eventName: null,
+    });
+
+    await store.run("DROP TRIGGER fail_atomic_intake");
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T05",
+        commandId: "atomic-retry",
+        conversationId,
+        text: "I can train four days each week.",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S016", data: { readyToCreateDraft: true } },
+    });
+    expect(coach.commitPlanChatTurn).toHaveBeenCalledWith({
+      chatId: `plan:${conversationId}`,
+      turnId: "engine-turn-atomic",
+    });
+    await expect(
+      createPlanConversationRepository(store).readTurns(conversationId),
+    ).resolves.toHaveLength(1);
+    await expect(createPlanIntakeRepository(store).read(conversationId)).resolves.toMatchObject({
+      sourceTurnSequence: 1,
+      eventName: "Gran Fondo Almaty",
+    });
+  });
+
   it("forms, revises, and discards a Draft without deleting the Plan conversation", async () => {
     const authored = identity();
     const coach = engine();
@@ -515,7 +1027,16 @@ describe("Plan operations", () => {
           snapshot: { completeWeeks: 12, revision },
         };
       },
-      async revise() {
+      async revise({ instruction }) {
+        if (instruction === "Replace every ride with swimming.") {
+          const error = new Error("unsupported Draft revision") as Error & {
+            name: string;
+            code: string;
+          };
+          error.name = "CyclingPlanDraftBuildError";
+          error.code = "unsupported-revision";
+          throw error;
+        }
         revision += 1;
         return {
           plan: plan(`${"0".repeat(25)}T`, 201),
@@ -577,6 +1098,22 @@ describe("Plan operations", () => {
     if (secondDraft === null || typeof secondDraft !== "object")
       throw new TypeError("Draft missing.");
     const secondDraftId = String((secondDraft as { id: unknown }).id);
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T07",
+        commandId: "command-invalid-revision",
+        draftId: secondDraftId,
+        text: "Replace every ride with swimming.",
+      }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      error: {
+        code: "invalid-input",
+        message: "The coach couldn’t apply that request. Your current Draft is unchanged.",
+        retryable: false,
+      },
+      state: { scenarioId: "PL-S031", revision: 2 },
+    });
     const discarded = await operations.executePlanTransition?.({
       transitionId: "PL-T10",
       commandId: "command-4",
@@ -761,6 +1298,27 @@ describe("Plan operations", () => {
     ).resolves.toMatchObject({
       status: "rejected",
       state: { scenarioId: "PL-S065", data: { course: { status: "invalid" } } },
+    });
+    await expect(operations.getPlanState?.({})).resolves.toMatchObject({
+      status: "ready",
+      state: {
+        scenarioId: "PL-S065",
+        data: {
+          course: {
+            status: "invalid",
+            fileName: "invalid.gpx",
+            detail: "No route found.",
+          },
+        },
+      },
+    });
+    await expect(
+      createPlanConversationRepository(store).readConversation(conversationId),
+    ).resolves.toMatchObject({
+      courseFailureJson: JSON.stringify({
+        fileName: "invalid.gpx",
+        detail: "No route found.",
+      }),
     });
     await expect(
       operations.executePlanTransition?.({
@@ -1275,7 +1833,7 @@ describe("Plan operations", () => {
     expect(initial).toMatchObject({
       status: "ready",
       state: {
-        scenarioId: "PL-S004",
+        scenarioId: "PL-S037",
         attention: { count: 1, destination: "direct" },
       },
     });
@@ -1312,6 +1870,25 @@ describe("Plan operations", () => {
       status: "completed",
       state: { scenarioId: "PL-S021", data: { selectedWorkoutId: workouts[0]!.id } },
     });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-close-workout",
+        action: "back",
+        sourceScenarioId: "PL-S021",
+        destinationScenarioId: "PL-S004",
+        returnFocusId: `workout-row-${workouts[0]!.id}`,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S004",
+        data: {
+          selectedWorkoutId: null,
+          returnFocusId: `workout-row-${workouts[0]!.id}`,
+        },
+      },
+    });
     const confirmed = await operations.executePlanTransition?.({
       transitionId: "PL-T14",
       commandId: "command-confirm",
@@ -1339,6 +1916,83 @@ describe("Plan operations", () => {
     await expect(matchRepository.readForWorkout(workouts[0]!.id)).resolves.toEqual([
       expect.objectContaining({ decision: "confirmed" }),
     ]);
+  });
+
+  it("returns a WorkoutMatch opened from the attention list to its exact item", async () => {
+    const authored = identity();
+    const activePlan = plan(`${"0".repeat(25)}W`, 40);
+    const workouts = await activationBuilder()
+      .form({} as never)
+      .then((build) => build.workouts);
+    await createPlanRepository(store).replace({ ...activePlan, status: "active" }, workouts);
+    const matchRepository = createPlanWorkoutMatchRepository(store);
+    for (const [index, workout] of workouts.slice(0, 2).entries()) {
+      await matchRepository.observe({
+        id: `${"0".repeat(25)}${index + 1}`,
+        planId: activePlan.id,
+        planWorkoutId: workout.id,
+        activityId: `${String.fromCharCode(97 + index)}`.repeat(64),
+        providerActivityId: `provider-${index + 1}`,
+        providerEventId: null,
+        source: "heuristic",
+        decision: "suggested",
+        activityDateKey: workout.dateKey,
+        activitySport: "cycling",
+        activityDurationS: workout.durationS,
+        observedAtMs: 90 + index,
+        decidedAtMs: null,
+        deviceId: "device-1",
+        hlcPhysicalMs: 90 + index,
+        hlcCounter: 0,
+      });
+    }
+    const operations = createPlanningOperations(
+      { context, engine: engine(), identity: authored },
+      { todayDateKey: () => 20260709 },
+    );
+
+    const attention = await operations.executePlanTransition?.({
+      transitionId: "PL-T33",
+      commandId: "command-attention-list",
+      planId: activePlan.id,
+    });
+    expect(attention).toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S028", attention: { count: 2, destination: "list" } },
+    });
+
+    const opened = await operations.executePlanTransition?.({
+      transitionId: "PL-T34",
+      commandId: "command-open-attention-item",
+      attentionId: `workout-match:${workouts[0]!.id}`,
+    });
+    expect(opened).toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S021",
+        data: {
+          selectedWorkoutId: workouts[0]!.id,
+          selectedWorkoutSourceScenarioId: "PL-S028",
+        },
+      },
+    });
+
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-close-attention-item",
+        action: "back",
+        sourceScenarioId: "PL-S021",
+        destinationScenarioId: "PL-S028",
+        returnFocusId: `plan-attention-workout-match:${workouts[0]!.id}`,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S028",
+        data: { returnFocusId: `plan-attention-workout-match:${workouts[0]!.id}` },
+      },
+    });
   });
 
   it("surfaces an outside Intervals edit and adopts it only after athlete confirmation", async () => {
@@ -1551,6 +2205,10 @@ describe("Plan operations", () => {
     const workoutId = `${"0".repeat(25)}Q`;
     const proposalId = `${"0".repeat(25)}R`;
     const premiseId = `${"0".repeat(25)}S`;
+    const proposalReturn = {
+      sourceScenarioId: "PL-S010" as const,
+      returnFocusId: `workout-row-${workoutId}`,
+    };
     const activePlan: PlanRecord = {
       ...plan(planId, 10),
       status: "active",
@@ -1660,6 +2318,7 @@ describe("Plan operations", () => {
       commandId: "command-proposal-open-without-capabilities",
       planId,
       proposalId,
+      selectedProposalReturn: proposalReturn,
     });
     expect(readOnlyOpen).toMatchObject({
       status: "completed",
@@ -1667,6 +2326,7 @@ describe("Plan operations", () => {
         scenarioId: "PL-S007",
         data: {
           selectedProposalId: proposalId,
+          selectedProposalReturn: proposalReturn,
           proposals: [{ id: proposalId, error: { code: "unavailable" } }],
         },
       },
@@ -1794,6 +2454,48 @@ describe("Plan operations", () => {
         ],
       );
     };
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T17",
+        commandId: "command-proposal-unsafe-return",
+        planId,
+        proposalId,
+        selectedProposalReturn: {
+          sourceScenarioId: "PL-S009",
+          returnFocusId: proposalReturn.returnFocusId,
+        },
+      }),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "unavailable" } });
+    const localActiveReturn = {
+      sourceScenarioId: "PL-S037" as const,
+      returnFocusId: `workout-row-${workoutId}`,
+    };
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T17",
+        commandId: "command-proposal-local-active-return",
+        planId,
+        proposalId,
+        selectedProposalReturn: localActiveReturn,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { data: { selectedProposalReturn: localActiveReturn } },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-proposal-local-active-back",
+        action: "back",
+        sourceScenarioId: "PL-S007",
+        destinationScenarioId: "PL-S037",
+        returnFocusId: localActiveReturn.returnFocusId,
+        selectedProposalReturn: localActiveReturn,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: { scenarioId: "PL-S037", data: { returnFocusId: localActiveReturn.returnFocusId } },
+    });
     const invalidReviseId = `${"0".repeat(25)}W`;
     await insertMalformedProposal(invalidReviseId, 22);
     await expect(
@@ -1857,22 +2559,68 @@ describe("Plan operations", () => {
         commandId: "command-proposal-open",
         planId,
         proposalId,
+        selectedProposalReturn: proposalReturn,
       }),
     ).resolves.toMatchObject({
       status: "completed",
-      state: { scenarioId: "PL-S007", data: { selectedProposalId: proposalId } },
+      state: {
+        scenarioId: "PL-S007",
+        data: { selectedProposalId: proposalId, selectedProposalReturn: proposalReturn },
+      },
+    });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-proposal-missing-return",
+        action: "back",
+        sourceScenarioId: "PL-S007",
+        destinationScenarioId: "PL-S010",
+        returnFocusId: proposalReturn.returnFocusId,
+      }),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "unavailable" } });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-proposal-forged-destination",
+        action: "back",
+        sourceScenarioId: "PL-S007",
+        destinationScenarioId: "PL-S004",
+        returnFocusId: proposalReturn.returnFocusId,
+        selectedProposalReturn: proposalReturn,
+      }),
+    ).resolves.toMatchObject({ status: "rejected", error: { code: "unavailable" } });
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T39",
+        commandId: "command-proposal-return",
+        action: "back",
+        sourceScenarioId: "PL-S007",
+        destinationScenarioId: "PL-S010",
+        returnFocusId: proposalReturn.returnFocusId,
+        selectedProposalReturn: proposalReturn,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S010",
+        data: { returnFocusId: proposalReturn.returnFocusId },
+      },
     });
     const staleResult = await operations.executePlanTransition?.({
       transitionId: "PL-T19",
       commandId: "command-proposal-stale-race",
       proposalId,
       expectedRevision: 1,
+      selectedProposalReturn: proposalReturn,
     });
     expect(staleResult).toMatchObject({
       status: "completed",
       state: {
         scenarioId: "PL-S025",
-        data: { proposals: [{ revision: 2, stale: false }] },
+        data: {
+          selectedProposalReturn: proposalReturn,
+          proposals: [{ revision: 2, stale: false }],
+        },
       },
     });
     const revalidated = (await proposals.readOpenForPlan(planId))[0];
@@ -1885,12 +2633,14 @@ describe("Plan operations", () => {
       commandId: "command-proposal-revise",
       proposalId: revalidated.id,
       text: "Keep 45 minutes and make it recovery.",
+      selectedProposalReturn: proposalReturn,
     });
     expect(revisedResult).toMatchObject({
       status: "completed",
       state: {
         scenarioId: "PL-S023",
         data: {
+          selectedProposalReturn: proposalReturn,
           proposals: [
             {
               revision: 3,
@@ -1914,12 +2664,14 @@ describe("Plan operations", () => {
       commandId: "command-proposal-approve",
       proposalId: revised.id,
       expectedRevision: 3,
+      selectedProposalReturn: proposalReturn,
     });
     expect(appliedResult).toMatchObject({
       status: "completed",
       state: {
         scenarioId: "PL-S008",
         data: {
+          selectedProposalReturn: proposalReturn,
           history: [
             expect.objectContaining({
               kind: "proposal-applied",
@@ -1945,6 +2697,87 @@ describe("Plan operations", () => {
     await expect(
       createPlanReconciliationRepository(store).readLatestJob(planId, "mirror"),
     ).resolves.toMatchObject({ status: "pending" });
+    const rejectedProposalId = `${"0".repeat(25)}Y`;
+    await proposals.save(
+      {
+        id: rejectedProposalId,
+        planId,
+        parentProposalId: null,
+        revision: 1,
+        status: "proposed",
+        title: "Skip Sunday",
+        rationale: "Protect recovery.",
+        confidence: "High",
+        mutationJson: encodePlanProposalMutation({
+          schemaVersion: 1,
+          changes: [
+            {
+              workoutId,
+              before: {
+                dateKey: workout.dateKey,
+                sport: workout.sport,
+                name: "Recovery",
+                durationS: 2_700,
+                structureJson: workout.structureJson,
+              },
+              after: {
+                dateKey: workout.dateKey,
+                sport: workout.sport,
+                name: "Rest",
+                durationS: 1_800,
+                structureJson: workout.structureJson,
+              },
+            },
+          ],
+          weekLoad: null,
+        }),
+        baseSnapshotJson: encodePlanProposalBase(
+          capturePlanProposalBase({ ...activePlan, updatedAtMs: 11, hlcPhysicalMs: 11 }, [
+            { ...workout, name: "Recovery", durationS: 2_700 },
+          ]),
+        ),
+        refusalReason: null,
+        createdAtMs: 30,
+        updatedAtMs: 30,
+        resolvedAtMs: null,
+        deviceId: "device-1",
+        hlcPhysicalMs: 30,
+        hlcCounter: 0,
+      },
+      [
+        {
+          id: `${"0".repeat(25)}Z`,
+          proposalId: rejectedProposalId,
+          sourceType: "wellness",
+          sourceId: "wellness-reject",
+          sourceLabel: "Current recovery",
+          sourceDateKey: 20260829,
+          confidence: "High",
+          snapshotJson: "{}",
+          createdAtMs: 30,
+          deviceId: "device-1",
+          hlcPhysicalMs: 30,
+          hlcCounter: 0,
+        },
+      ],
+    );
+    await expect(
+      operations.executePlanTransition?.({
+        transitionId: "PL-T20",
+        commandId: "command-proposal-reject",
+        proposalId: rejectedProposalId,
+        selectedProposalReturn: proposalReturn,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      state: {
+        scenarioId: "PL-S097",
+        data: { selectedProposalReturn: proposalReturn },
+      },
+    });
+    await expect(proposals.read(rejectedProposalId)).resolves.toMatchObject({
+      status: "rejected",
+    });
     await expect(
       operations.executePlanTransition?.({
         transitionId: "PL-T17",

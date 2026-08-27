@@ -13,6 +13,7 @@ function actions(): PlanActions {
   return {
     open: vi.fn(),
     startPlan: vi.fn(),
+    closeCoach: vi.fn(),
     submitCoach: vi.fn(async () => true),
     stopCoach: vi.fn(),
     removeQueuedCoachMessage: vi.fn(),
@@ -21,6 +22,7 @@ function actions(): PlanActions {
     skipCoachDecision: vi.fn(),
     saveFtp: vi.fn(),
     refreshFtp: vi.fn(),
+    backToCoachInterview: vi.fn(),
     createDraft: vi.fn(),
     updateDraft: vi.fn(),
     openDiscardConfirmation: vi.fn(),
@@ -59,6 +61,7 @@ function actions(): PlanActions {
     resolveWorkoutMatch: vi.fn(),
     resolveWorkoutDrift: vi.fn(),
     openProposal: vi.fn(),
+    closeProposal: vi.fn(),
     reviseProposal: vi.fn(),
     approveProposal: vi.fn(),
     rejectProposal: vi.fn(),
@@ -88,6 +91,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   document.documentElement.removeAttribute("data-theme");
   useEnduragentStore.setState({
     plan: EMPTY_PLAN_SURFACE,
@@ -147,6 +151,18 @@ describe("Plan surface", () => {
     expect(planActions.startPlan).toHaveBeenCalledOnce();
   });
 
+  it("returns focus to the no-Plan action after closing the Coach workspace", async () => {
+    const state = planReadModel({ data: { returnFocusId: "plan-start-coach" } });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+    });
+    render(<PlanView />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Build a plan with coach" })).toHaveFocus(),
+    );
+  });
+
   it("keeps the last ready no-Plan screen visible when hydration becomes stale", () => {
     const state = planReadModel();
     useEnduragentStore.setState({
@@ -167,7 +183,9 @@ describe("Plan surface", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders the server attention projection without deriving a count", () => {
+  it("renders the server attention projection without deriving a count", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
     const state = planReadModel({
       attentionCount: 2,
       lifecycle: "active",
@@ -180,22 +198,56 @@ describe("Plan surface", () => {
         hydration: { status: "ready", state },
         lastReady: state,
       },
+      planActions,
     });
     render(<PlanView />);
 
     expect(screen.getByText("2 items need your decision.")).toBeInTheDocument();
     expect(screen.getByText("Decision 1")).toBeInTheDocument();
     expect(screen.getByText("Decision 2")).toBeInTheDocument();
+    const decision = screen.getByRole("button", { name: "Decision 1" });
+    expect(decision).toHaveAttribute("id", "plan-attention-attention-1");
+    await user.click(decision);
+    expect(planActions.openAttention).toHaveBeenCalledWith("attention-1");
   });
 
-  it("keeps the Coach interview inside Plan and offers Draft creation when ready", async () => {
+  it("shows the ready summary without a composer and returns to the Coach interview", async () => {
     const user = userEvent.setup();
     const planActions = actions();
     const state = planReadModel({
       lifecycle: "intake",
       scenarioId: "PL-S016",
       projection: "coach",
-      data: planCoachData({ ready: true }),
+      data: {
+        ...planCoachData({ ready: true }),
+        intake: {
+          eventName: "Gran Fondo Almaty",
+          eventPriority: "A",
+          eventDate: "1998-10-04",
+          goal: "Finish in the front half",
+          availabilitySessionsPerWeek: 4,
+          availabilityWeekdays: ["tue", "thu", "sat", "sun"],
+          experience: "intermediate",
+          currentTrainingSummary: "Three rides each week",
+        },
+        ftp: {
+          status: "accepted",
+          manual: null,
+          intervalsFtp: { watts: 282, refreshedAtMs: 1 },
+          intervalsEftp: null,
+          usedSource: "intervals-ftp",
+          usedWatts: 282,
+          conflict: false,
+          error: null,
+        },
+        course: {
+          status: "omitted",
+          accepted: null,
+          candidate: null,
+          fileName: null,
+          detail: null,
+        },
+      },
     });
     useEnduragentStore.setState({
       plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
@@ -207,11 +259,164 @@ describe("Plan surface", () => {
       "What event are you training toward",
     );
     expect(screen.getByRole("heading", { name: "Ready to create Draft" })).toBeInTheDocument();
-    const composer = screen.getByRole("combobox", { name: "Reply to your Plan coach" });
-    await user.type(composer, "Four days each week.{Enter}");
-    expect(planActions.submitCoach).toHaveBeenCalledWith("Four days each week.");
+    expect(screen.getByText("Gran Fondo Almaty · A priority · 1998-10-04")).toBeInTheDocument();
+    expect(screen.getByText("Tuesday · Thursday · Saturday · Sunday")).toBeInTheDocument();
+    expect(screen.getByText("282 W · Intervals FTP")).toBeInTheDocument();
+    expect(screen.getByText("Course-agnostic")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Reply to your Plan coach" }),
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Create draft" }));
     expect(planActions.createDraft).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Back to coach" }));
+    expect(planActions.backToCoachInterview).toHaveBeenCalledOnce();
+    const interview = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData({ ready: true }),
+    });
+    act(() =>
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: interview }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Reply to your Plan coach" })).toHaveFocus(),
+    );
+  });
+
+  it("keeps Draft formation failure visible and retryable from the ready summary", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const state = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S016",
+      projection: "coach",
+      data: planCoachData({ ready: true }),
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+        transition: {
+          status: "failed",
+          commandId: "draft-command",
+          transitionId: "PL-T06",
+          error: PLAN_ERROR,
+        },
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Draft wasn’t created");
+    expect(screen.getByRole("alert")).toHaveTextContent(PLAN_ERROR.message);
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(planActions.retry).toHaveBeenCalledOnce();
+  });
+
+  it("explains the supported date window when date readiness is missing", () => {
+    const state = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: {
+        ...planCoachData(),
+        missingDraftRequirements: ["date"],
+      },
+    });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+    });
+    render(<PlanView />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Choose another Goal Event date");
+    expect(screen.getByRole("status")).toHaveTextContent("today through 24 weeks from now");
+  });
+
+  it("closes the embedded Coach workspace through the Plan action", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const state = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData(),
+    });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions,
+    });
+    render(<PlanView />);
+
+    const close = screen.getByRole("button", { name: "Close coach" });
+    expect(close).toHaveAttribute("id", "plan-coach-close");
+    await user.click(close);
+    expect(planActions.closeCoach).toHaveBeenCalledOnce();
+  });
+
+  it("anchors the Coach transcript to the latest message until the athlete scrolls up", () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1_000);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
+    const state = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData(),
+    });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+    });
+    render(<PlanView />);
+
+    const conversation = screen.getByRole("main", { name: "Plan coaching conversation" });
+    expect(conversation.scrollTop).toBe(1_000);
+
+    conversation.scrollTop = 100;
+    act(() => conversation.dispatchEvent(new Event("scroll")));
+    act(() => {
+      const coach = useEnduragentStore.getState().plan.coach;
+      useEnduragentStore.getState().setPlanCoach({
+        ...coach,
+        messages: [
+          {
+            id: "coach-1",
+            role: "coach",
+            text: "First response",
+            delivery: "complete",
+            historical: false,
+          },
+          {
+            id: "coach-2",
+            role: "coach",
+            text: "Second response",
+            delivery: "complete",
+            historical: false,
+          },
+        ],
+      });
+    });
+    expect(conversation.scrollTop).toBe(100);
+
+    conversation.scrollTop = 600;
+    act(() => conversation.dispatchEvent(new Event("scroll")));
+    act(() => {
+      const coach = useEnduragentStore.getState().plan.coach;
+      useEnduragentStore.getState().setPlanCoach({
+        ...coach,
+        messages: [
+          ...coach.messages,
+          {
+            id: "coach-3",
+            role: "coach",
+            text: "Newest response",
+            delivery: "complete",
+            historical: false,
+          },
+        ],
+      });
+    });
+    expect(conversation.scrollTop).toBe(1_000);
   });
 
   it("keeps Race Course selection and recovery inside the Plan surface", async () => {
@@ -241,13 +446,50 @@ describe("Plan surface", () => {
     });
     render(<PlanView />);
 
-    await user.click(screen.getByRole("button", { name: "Attach GPX/FIT" }));
+    expect(screen.getByRole("main", { name: "Plan coaching conversation" })).toHaveClass(
+      "overflow-auto",
+    );
+    expect(screen.getByRole("combobox", { name: "Reply to your Plan coach" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Race Course · optional" }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Continue without course" }));
+    expect(planActions.continueWithoutCourse).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Attach Race Course" }));
     expect(planActions.openCoursePicker).toHaveBeenCalledOnce();
     act(() => useEnduragentStore.getState().setPlanCoursePicker(true));
     expect(screen.getByRole("heading", { name: "Add Race Course" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
     await user.click(screen.getByRole("button", { name: "Choose file" }));
     expect(planActions.chooseCourseFile).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(planActions.closeCoursePicker).toHaveBeenCalledOnce();
+
+    const omitted = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData({
+        course: {
+          status: "omitted",
+          accepted: null,
+          candidate: null,
+          fileName: null,
+          detail: null,
+        },
+      }),
+    });
+    act(() => {
+      useEnduragentStore.getState().setPlanCoursePicker(false);
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: omitted });
+    });
+    expect(
+      screen.queryByRole("heading", { name: "Race Course · optional" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Continue without course" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Attach Race Course" })).toBeInTheDocument();
 
     const missingElevation = planReadModel({
       lifecycle: "intake",
@@ -277,6 +519,96 @@ describe("Plan surface", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Route found, elevation missing");
     await user.click(screen.getByRole("button", { name: "Use route only" }));
     expect(planActions.useCourseWithoutElevation).toHaveBeenCalledOnce();
+  });
+
+  it("invokes queued-message removal and Coach-decision skip inside Plan", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const decision = {
+      decisionId: "decision-1",
+      chatId: "plan:00000000000000000000000001",
+      messageId: "message-1",
+      question: "Choose tomorrow’s priority.",
+      status: "unanswered" as const,
+      options: [
+        {
+          id: "recovery",
+          label: "Prioritize recovery",
+          description: "Choose an easy day to protect the weekend session.",
+          recommended: true,
+          consequence: "Tomorrow becomes a recovery day.",
+        },
+        {
+          id: "tempo",
+          label: "Keep the tempo session",
+          description: "Keep the planned workout if your legs feel normal.",
+          recommended: false,
+          consequence: "Tomorrow keeps the planned tempo session.",
+        },
+      ],
+    };
+    const state = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S017",
+      projection: "coach",
+      data: planCoachData({ decision }),
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+        coach: {
+          ...EMPTY_PLAN_SURFACE.coach,
+          queued: [
+            {
+              id: "queued-1",
+              text: "Keep Sunday free.",
+              command: false,
+              restored: false,
+            },
+          ],
+        },
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    await user.click(screen.getByRole("button", { name: "Remove queued message 1" }));
+    expect(planActions.removeQueuedCoachMessage).toHaveBeenCalledWith("queued-1");
+    await user.click(screen.getByRole("button", { name: "Skip question" }));
+    expect(planActions.skipCoachDecision).toHaveBeenCalledWith("decision-1");
+  });
+
+  it("returns an omitted-Course persistence failure to the Coach conversation", async () => {
+    const user = userEvent.setup();
+    const planActions = actions();
+    const state = planReadModel({
+      lifecycle: "intake",
+      scenarioId: "PL-S104",
+      projection: "coach",
+      data: planCoachData({
+        course: {
+          status: "omission-failed",
+          accepted: null,
+          candidate: null,
+          fileName: null,
+          detail: "Course choice could not be saved.",
+        },
+      }),
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+      },
+      planActions,
+    });
+    render(<PlanView />);
+
+    await user.click(screen.getByRole("button", { name: "Back to coach" }));
+    expect(planActions.returnToCoach).toHaveBeenCalledOnce();
   });
 
   it("resolves FTP with one compact whole-watts control and an Intervals refresh", async () => {
@@ -418,6 +750,8 @@ describe("Plan surface", () => {
     act(() => useEnduragentStore.getState().setPlanDiscardConfirmation(true));
     expect(screen.getByRole("heading", { name: "Discard this Draft?" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(planActions.closeDiscardConfirmation).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Discard Draft" }));
     expect(planActions.discardDraft).toHaveBeenCalledOnce();
   });
@@ -443,6 +777,8 @@ describe("Plan surface", () => {
       weekStartDay: 1,
       workoutCount: 58,
       plannedDurationS: 309_600,
+      phaseSummary: ["Build", "Recovery", "Taper", "Race"],
+      ftpWatts: 282,
     };
     const startDate = {
       status: "ready" as const,
@@ -483,14 +819,17 @@ describe("Plan surface", () => {
     expect(screen.getByRole("heading", { name: "Race Course · optional" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /^Race Course$/ })).not.toBeInTheDocument();
 
-    expect(screen.getByText("58 workouts · 86 h · 12 weeks")).toBeInTheDocument();
+    expect(
+      screen.getByText("58 workouts · 86 h · Build → Recovery → Taper → Race"),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Change" }));
     expect(planActions.openDatePicker).toHaveBeenCalledOnce();
     act(() => useEnduragentStore.getState().setPlanDatePicker(true));
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
     const day = document.querySelector<HTMLButtonElement>('[data-plan-date="2026-07-20"]');
     expect(day).not.toBeNull();
-    expect(day).toHaveClass("size-10");
+    expect(screen.getByRole("dialog")).toHaveClass("w-[min(380px,calc(100vw-32px))]", "p-4");
+    expect(day).toHaveClass("size-8");
     day?.focus();
     await user.keyboard("{ArrowRight}");
     expect(document.querySelector('[data-plan-date="2026-07-21"]')).toHaveFocus();
@@ -527,8 +866,50 @@ describe("Plan surface", () => {
     render(<PlanView />);
 
     expect(screen.getByRole("status")).toHaveTextContent("Draft updated");
+    await user.click(screen.getByRole("button", { name: "Back to coach" }));
+    expect(planActions.openRevisionComposer).toHaveBeenCalledOnce();
+    act(() => useEnduragentStore.getState().setPlanRevisionComposer(true));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(planActions.closeRevisionComposer).toHaveBeenCalledOnce();
+    act(() => useEnduragentStore.getState().setPlanRevisionComposer(false));
     await user.click(screen.getByRole("button", { name: "Approve Plan" }));
     expect(planActions.approveDraft).toHaveBeenCalledOnce();
+  });
+
+  it("marks the inline Draft revision state as PL-S029", () => {
+    const draft = {
+      id: "00000000000000000000000002",
+      planId: "00000000000000000000000003",
+      revision: 1,
+      status: "ready" as const,
+      snapshot: {},
+    };
+    const state = planReadModel({
+      lifecycle: "draft",
+      scenarioId: "PL-S002",
+      projection: "draft",
+      planId: draft.planId,
+      revision: draft.revision,
+      data: planCoachData({ draft }),
+    });
+    useEnduragentStore.setState({
+      plan: {
+        ...EMPTY_PLAN_SURFACE,
+        hydration: { status: "ready", state },
+        lastReady: state,
+        revisionComposer: true,
+      },
+    });
+    render(<PlanView />);
+
+    const instruction = screen.getByRole("textbox", {
+      name: "What should the coach change?",
+    });
+    expect(instruction.closest("[data-plan-scenario]")).toHaveAttribute(
+      "data-plan-scenario",
+      "PL-S029",
+    );
+    expect(instruction).toHaveFocus();
   });
 
   it("keeps a failed start-date recalculation visible with both recovery choices", async () => {
@@ -656,6 +1037,66 @@ describe("Plan surface", () => {
     await user.click(screen.getByRole("button", { name: "Verify again" }));
     expect(planActions.reconcilePlan).toHaveBeenCalledOnce();
     expect(planActions.verifyReconciliation).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the normal active Plan concise and shows the prototype summary facts", () => {
+    const state = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S004",
+      projection: "active",
+      planId: "00000000000000000000000003",
+      data: {
+        plan: {
+          id: "00000000000000000000000003",
+          name: "Gran Fondo Almaty",
+          primaryGoal: "Finish in the front half",
+          startDate: "2026-07-13",
+          targetDate: "2026-10-04",
+          kind: "full-plan",
+          totalWeeks: 12,
+          weekStartDay: 1,
+          workoutCount: 58,
+          plannedDurationS: 309_600,
+          phaseSummary: ["Build", "Recovery", "Taper", "Race"],
+          ftpWatts: 282,
+        },
+        today: "2026-08-22",
+        weekIndex: 6,
+        todayWorkout: {
+          id: "00000000000000000000000004",
+          date: "2026-08-22",
+          sport: "cycling",
+          name: "Recovery spin",
+          durationS: 2_700,
+          powerTargetW: { min: 130, max: 165 },
+          cue: "Keep the pedals light.",
+        },
+        workouts: [
+          {
+            id: "00000000000000000000000005",
+            date: "2026-08-23",
+            sport: "cycling",
+            name: "Suggested endurance",
+            durationS: 1_800,
+          },
+        ],
+      },
+    });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions: actions(),
+    });
+
+    const { container } = render(<PlanView />);
+
+    expect(screen.getByText(/Gran Fondo Almaty · Build phase/u)).toHaveTextContent("FTP 282 W");
+    expect(screen.getByText("0:45 · 130–165 W · Keep the pedals light.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Plan history" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update Intervals" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "WorkoutMatch · this week" })).toBeInTheDocument();
+    expect(container.querySelector('[id^="workout-row-"]')).toHaveClass(
+      "min-[760px]:grid-cols-[minmax(6rem,0.8fr)_minmax(0,2fr)_minmax(4rem,0.6fr)_minmax(8rem,1fr)_auto]",
+    );
   });
 
   it("confirms End Plan with Cancel focused and keeps failed cleanup recoverable", async () => {
@@ -796,6 +1237,15 @@ describe("Plan surface", () => {
     render(<PlanView />);
 
     expect(screen.getByText(/ended automatically after/u)).toBeInTheDocument();
+    const naturalActions = screen
+      .getAllByRole("button")
+      .filter((button) =>
+        ["Record outcome", "Start a new Plan"].includes(button.textContent ?? ""),
+      );
+    expect(naturalActions.map((button) => button.textContent)).toEqual([
+      "Record outcome",
+      "Start a new Plan",
+    ]);
     await user.click(screen.getByRole("button", { name: "Record outcome" }));
     expect(planActions.openRaceOutcome).toHaveBeenCalledOnce();
 
@@ -830,6 +1280,7 @@ describe("Plan surface", () => {
         plan,
         endedAtMs: 20,
         raceOutcome: "not-completed",
+        raceOutcomeDetails: { outcome: "not-completed", raceDate: "1998-10-04" },
         outcomeAvailable: false,
         cleanupItems: [],
       },
@@ -837,9 +1288,75 @@ describe("Plan surface", () => {
     act(() =>
       useEnduragentStore.getState().setPlanHydration({ status: "ready", state: notCompleted }),
     );
-    expect(screen.getByText("Not completed", { selector: "strong" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Race outcome · Not completed" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Training history").parentElement).toHaveTextContent("Preserved");
     await user.click(screen.getByRole("button", { name: "Start a new Plan" }));
     expect(planActions.startPlan).toHaveBeenCalledOnce();
+  });
+
+  it("renders the canonical completed race result", () => {
+    const state = planReadModel({
+      lifecycle: "ended",
+      scenarioId: "PL-S014",
+      projection: "ended",
+      planId: "00000000000000000000000003",
+      reconciliation: {
+        status: "verified",
+        created: 0,
+        pending: 0,
+        failed: 0,
+        total: 0,
+        currentThrough: "1998-10-06",
+        error: null,
+      },
+      data: {
+        plan: {
+          id: "00000000000000000000000003",
+          name: "Gran Fondo Almaty",
+          primaryGoal: "Finish in the front half",
+          startDate: "1998-07-13",
+          targetDate: "1998-10-04",
+          kind: "full-plan",
+          totalWeeks: 12,
+          weekStartDay: 1,
+          workoutCount: 58,
+          plannedDurationS: 309_600,
+        },
+        endedAtMs: 20,
+        raceOutcome: "completed",
+        raceOutcomeDetails: {
+          outcome: "completed",
+          raceDate: "1998-10-04",
+          goal: "Front half",
+          result: "Front third",
+          trainingDurationS: 303_600,
+          raceDurationS: 18_180,
+          totalDurationS: 321_780,
+          modeledFinishMinutes: { min: 288, max: 312 },
+          actualDurationS: 18_180,
+          appliedChangeCount: 12,
+        },
+        outcomeAvailable: false,
+        cleanupItems: [],
+      },
+    });
+    useEnduragentStore.setState({
+      plan: { ...EMPTY_PLAN_SURFACE, hydration: { status: "ready", state }, lastReady: state },
+      planActions: actions(),
+    });
+
+    render(<PlanView />);
+
+    expect(
+      screen.getByRole("heading", { name: "Gran Fondo Almaty completed · front half achieved" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("84:20")).toBeInTheDocument();
+    expect(screen.getAllByText("5:03", { selector: "strong" })).toHaveLength(2);
+    expect(screen.getByText("89:23")).toBeInTheDocument();
+    expect(screen.getByText("Modeled finish").parentElement).toHaveTextContent("4 h 48–5 h 12");
+    expect(screen.getByRole("button", { name: "Start a new Plan" })).toBeInTheDocument();
   });
 
   it("opens an ended Plan conversation as read-only History", async () => {
@@ -1158,6 +1675,10 @@ describe("Plan surface", () => {
           ],
           selectedWorkoutId: null,
           selectedProposalId: proposalId,
+          selectedProposalReturn: {
+            sourceScenarioId: "PL-S010",
+            returnFocusId: `workout-row-${workoutId}`,
+          },
           proposals: [
             {
               id: proposalId,
@@ -1207,9 +1728,16 @@ describe("Plan surface", () => {
     render(<PlanView />);
 
     const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Endurance" })).toBeInTheDocument();
+    expect(within(dialog).getByText("Decision needed")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Duration1:30 → 0:30");
     expect(dialog).toHaveTextContent("WorkoutEndurance → Recovery");
     expect(dialog).toHaveTextContent("Week load420 → 360");
+    expect(dialog).toHaveTextContent("Saturday fatigue is 12 above your normal range.");
+    expect(dialog).toHaveTextContent("ConfidenceHigh");
+    expect(
+      screen.getByRole("button", { name: "Approve" }).closest('[data-slot="dialog-footer"]'),
+    ).toHaveClass("shrink-0");
     const evidence = screen.getByRole("button", { name: "View evidence" });
     await user.click(evidence);
     expect(screen.getByRole("heading", { name: "Where this came from" })).toBeInTheDocument();
@@ -1218,6 +1746,8 @@ describe("Plan surface", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "View evidence" })).toHaveFocus(),
     );
+    await user.keyboard("{Escape}");
+    expect(planActions.closeProposal).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Reject" }));
     expect(planActions.rejectProposal).toHaveBeenCalledWith(proposalId);
     await user.click(screen.getByRole("button", { name: "Approve" }));
@@ -1244,7 +1774,7 @@ describe("Plan surface", () => {
       "Keep 45 minutes and make it recovery.",
     );
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.getByRole("heading", { name: "Sunday recovery" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Endurance" })).toBeInTheDocument();
     const currentData = PlanActiveProjectionDataSchema.parse(state.data);
     const revisedProposalId = "00000000000000000000000007";
     const revisedState = {
@@ -1266,9 +1796,7 @@ describe("Plan surface", () => {
     act(() => {
       useEnduragentStore.getState().setPlanHydration({ status: "ready", state: revisedState });
     });
-    expect(
-      await screen.findByRole("heading", { name: "Sunday recovery · revised" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Endurance" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Your change")).not.toBeInTheDocument();
 
     const staleState = {
@@ -1345,7 +1873,7 @@ describe("Plan surface", () => {
     });
     expect(await screen.findByRole("heading", { name: "Proposal rejected" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Back to Plan" }));
-    expect(planActions.closeWorkout).toHaveBeenCalledOnce();
+    expect(planActions.closeProposal).toHaveBeenCalledTimes(2);
   });
 
   it("shows the outside-edit comparison and exposes explicit adopt or restore choices", async () => {
@@ -1497,8 +2025,10 @@ describe("Plan surface", () => {
     act(() => {
       useEnduragentStore.getState().setPlanHydration({ status: "ready", state: historyState });
     });
+    expect(screen.getByRole("heading", { name: "Plan history" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to Plan" })).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Plan history" })).toHaveFocus(),
+      expect(screen.getByRole("heading", { name: "Plan changes" })).toHaveFocus(),
     );
     expect(screen.getByText("Sunday adjustment applied")).toBeInTheDocument();
     expect(screen.getByText("Plan approved")).toBeInTheDocument();
@@ -1638,15 +2168,30 @@ describe("Plan surface", () => {
       planId,
       data: baseData,
     });
+    const historyState = planReadModel({
+      lifecycle: "active",
+      scenarioId: "PL-S005",
+      projection: "active",
+      planId,
+      data: baseData,
+    });
     useEnduragentStore.setState({
       plan: {
         ...EMPTY_PLAN_SURFACE,
-        hydration: { status: "ready", state: settingsState },
-        lastReady: settingsState,
+        hydration: { status: "ready", state: historyState },
+        lastReady: historyState,
       },
       planActions,
     });
     render(<PlanView />);
+
+    await user.click(screen.getByRole("button", { name: "Open settings" }));
+    expect(planActions.openPlanSettings).toHaveBeenCalledOnce();
+    act(() => {
+      useEnduragentStore.getState().setPlanHydration({ status: "ready", state: settingsState });
+    });
+    await user.click(screen.getByRole("button", { name: "Back to history" }));
+    expect(planActions.closePlanSettings).toHaveBeenCalledOnce();
 
     const autoApply = screen.getByRole("switch", { name: "Auto-apply" });
     const weeklyReview = screen.getByRole("switch", { name: "Weekly review" });
