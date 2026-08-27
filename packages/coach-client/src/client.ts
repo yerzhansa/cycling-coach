@@ -176,6 +176,10 @@ const COACH_RPC_CALL_TIMEOUT_MS: Record<CoachRpcMethodName, number> = {
   selfTest: 2 * 60_000,
   getPlanState: 30_000,
   executePlanTransition: 11 * 60_000,
+  createPlanningRequest: 30_000,
+  getPlanningRequest: 30_000,
+  retryPlanningRequest: 30_000,
+  resumePlanningRequests: 30_000,
 };
 
 function positiveSafeInteger(value: unknown): value is number {

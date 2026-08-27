@@ -62,6 +62,7 @@ import {
 } from "@enduragent/kernel/anchors";
 import {
   createAnchorRepository,
+  createChatPlanOutboxRepository,
   createChatAttachmentRepository,
   createAnalyticsCurveStateReader,
   createCanonicalActivityReader,
@@ -102,6 +103,7 @@ import {
   type ListArchivedConversationsRpcResult,
   type GetRuntimeConfigRpcResult,
   type PlanningReadOperations,
+  type PlanningRequestOperations,
   type PlanningOperations,
   type VerifyIntervalsCredentialRpcParams,
   type VerifyIntervalsCredentialRpcResult,
@@ -186,6 +188,11 @@ import { createPersistentOpenRouterModelMetadataCache } from "./openrouter-model
 import { createDocumentMediaAttachmentOperations } from "./document-media-attachment-operations.js";
 import { createAttachmentComposerOperations } from "./attachment-composer-operations.js";
 import { createPlanningReadService } from "./planning-read-service.js";
+import { createPlanningRequestDeliveryService } from "./planning-request-delivery.js";
+import {
+  createPlanningRequestRepository,
+  createPlanRepository,
+} from "@enduragent/kernel/planning";
 
 interface OAuthCredential extends StoredProfile {
   readonly type: "oauth";
@@ -198,7 +205,10 @@ interface OAuthCredential extends StoredProfile {
 
 export interface LocalCoachComposition {
   readonly engine: CoachEngine;
-  readonly operations: CoachOperations & PlanningReadOperations & PlanningOperations;
+  readonly operations: CoachOperations &
+    PlanningReadOperations &
+    PlanningRequestOperations &
+    PlanningOperations;
   readonly spendMeter: SpendMeterService;
   readonly confirmations: Pick<ConfirmationGate, "peek" | "confirm" | "cancel">;
   startInitialRefresh(): Promise<void>;
@@ -1978,6 +1988,18 @@ export async function createLocalCoachComposition(
         readiness,
       },
     );
+    const planRepository = createPlanRepository(input.context.store);
+    const planningRequestOperations = createPlanningRequestDeliveryService({
+      outbox: createChatPlanOutboxRepository(input.context.store, analysisCrypto),
+      requests: createPlanningRequestRepository(input.context.store, analysisCrypto),
+      identity: planningIdentity,
+      async resolveTarget() {
+        const latest = await planRepository.readLatest();
+        if (latest?.status === "active") return "active_plan";
+        if (latest?.status === "draft") return "draft";
+        return "plan_creation";
+      },
+    });
     const operations = {
       ...coachOperations,
       admitChatAttachment: async (request) => {
@@ -2071,8 +2093,12 @@ export async function createLocalCoachComposition(
       getActivityAnalysis: (request, signal) =>
         activityAnalysis.getActivityAnalysis(request, signal),
       exportTrainingFile: (request, signal) => trainingExport.export(request, signal),
+      ...planningRequestOperations,
       ...planningOperations,
-    } satisfies CoachOperations & PlanningReadOperations & PlanningOperations;
+    } satisfies CoachOperations &
+      PlanningReadOperations &
+      PlanningRequestOperations &
+      PlanningOperations;
     return {
       engine: reconfigurable.engine,
       operations,

@@ -185,6 +185,26 @@ const rpcDeadlineCases = [
     { transitionId: "PL-T01", commandId: "command-1", sourceConversationId: null },
     660_000,
   ],
+  [
+    "createPlanningRequest",
+    {
+      payload: {
+        requestId: "request-1",
+        kind: "plan_question",
+        intent: "Review the current week.",
+        source: { chatId: "chat-1", messageId: "message-1" },
+        sourceSnapshot: {
+          capturedAt: "1998-08-24T08:00:00.000Z",
+          attachment: null,
+          selectedWorkout: null,
+        },
+      },
+    },
+    30_000,
+  ],
+  ["getPlanningRequest", { requestId: "request-1" }, 30_000],
+  ["retryPlanningRequest", { requestId: "request-1" }, 30_000],
+  ["resumePlanningRequests", {}, 30_000],
 ] as const satisfies ReadonlyArray<readonly [CoachRpcMethodName, unknown, number]>;
 
 class ControllableSocket extends EventTarget {
@@ -1127,6 +1147,10 @@ describe("RPC receive and observers", () => {
           status: "unsupported-capability",
           capability: "planning",
         },
+        createPlanningRequest: { status: "rejected", reason: "invalid_request" },
+        getPlanningRequest: { status: "missing" },
+        retryPlanningRequest: { status: "missing" },
+        resumePlanningRequests: { deliveries: [] },
       };
       socket.emitMessage(
         serializeCoachRpcEnvelope({
